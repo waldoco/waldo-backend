@@ -284,7 +284,7 @@ describe('real owner-DO ingress in a sealed test world', () => {
 });
 
 it('transport persistence transaction commits final and alarm together, rollback keeps neither', async () => {
-  const { persistTransportWake } = await import('../src/scheduler/alarm-slot');
+  const { persistTransportWake, armAlarm } = await import('../src/scheduler/alarm-slot');
   await runInDurableObject(doStub(81101), async (_instance, state) => {
     const previous = await state.storage.getAlarm();
     const due = Date.now() + 10000;
@@ -293,7 +293,7 @@ it('transport persistence transaction commits final and alarm together, rollback
     expect(await state.storage.getAlarm()).not.toBeNull();
     await expect(state.storage.transaction(async txn => {
       await txn.put({ telegram_final_outbox_v1: [{ id: 'cut' }], telegram_final_outbox_due_v1: 999 });
-      await txn.setAlarm(Date.now() + 100000);
+      await armAlarm(txn, Date.now() + 100000);
       throw new Error('crash before commit');
     })).rejects.toThrow('crash before commit');
     expect(state.storage.kv.get('telegram_final_outbox_v1')).toEqual([]);

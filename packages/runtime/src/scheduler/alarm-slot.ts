@@ -3,7 +3,7 @@
 // registration flows through this single seam). This is the only `.setAlarm(` in the
 // repo — guard-setalarm exempts this exact file and blocks the call everywhere else.
 // setAlarm is awaited so the caller observes alarm registration completion, not fire-and-forget.
-export async function armAlarm(storage: DurableObjectStorage, scheduledTimeMs: number): Promise<void> {
+export async function armAlarm(storage: Pick<DurableObjectStorage, 'setAlarm'>, scheduledTimeMs: number): Promise<void> {
   await storage.setAlarm(scheduledTimeMs);
 }
 
@@ -22,7 +22,7 @@ export async function persistTransportWake(storage: DurableObjectStorage, record
     await txn.put({ telegram_final_outbox_v1: records, telegram_final_outbox_due_v1: due });
     if (due !== null) {
       const existing = await txn.getAlarm();
-      await txn.setAlarm(Math.max(Date.now() + 250, existing === null ? due : Math.min(existing, due)));
+      await armAlarm(txn, Math.max(Date.now() + 250, existing === null ? due : Math.min(existing, due)));
     }
   });
 }
