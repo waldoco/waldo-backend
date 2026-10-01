@@ -87,7 +87,7 @@ export const artifactBook = (sql: Sql, bodies: ArtifactBodies, clock: OwnerClock
     byId,
     async create(args, provenance) {
       const id = `art:${newId()}`;
-      const r2Key = `artifacts/${id}`;
+      const r2Key = `artifacts/${id}/r1/${crypto.randomUUID()}`;
       await bodies.put(r2Key, args.body_markdown);
       const now = clock.now().getTime();
       const meta: ArtifactMeta = {
@@ -107,16 +107,20 @@ export const artifactBook = (sql: Sql, bodies: ArtifactBodies, clock: OwnerClock
       if (current.revision !== args.expected_revision) return { status: 'conflict', current_revision: current.revision };
       // Bodies are immutable per revision: the new body lands under a new key BEFORE the row
       // moves, so a crash between the two never leaves the row pointing at a missing body.
-      const r2Key = `artifacts/${args.artifact_id}/r${current.revision + 1}`;
+      const r2Key = `artifacts/${args.artifact_id}/r${current.revision + 1}/${crypto.randomUUID()}`;
       await bodies.put(r2Key, args.body_markdown);
       const meta: ArtifactMeta = {
         ...current, revision: current.revision + 1,
         byte_size: new TextEncoder().encode(args.body_markdown).length,
         r2_key: r2Key, provenance, updated_at: clock.now().getTime(),
       };
+      // Recheck after body I/O and compare-and-swap in the same synchronous SQL operation.
+      const after = byId(args.artifact_id);
+      if (after === null) return { status: 'not_found' };
+      if (after.revision !== args.expected_revision) return { status: 'conflict', current_revision: after.revision };
       sql.exec(
-        'UPDATE artifacts SET revision = ?, byte_size = ?, r2_key = ?, provenance = ?, updated_at = ? WHERE id = ?',
-        meta.revision, meta.byte_size, meta.r2_key, meta.provenance, meta.updated_at, meta.id,
+        'UPDATE artifacts SET revision = ?, byte_size = ?, r2_key = ?, provenance = ?, updated_at = ? WHERE id = ? AND revision = ?',
+        meta.revision, meta.byte_size, meta.r2_key, meta.provenance, meta.updated_at, meta.id, args.expected_revision,
       );
       return { status: 'ok', meta };
     },

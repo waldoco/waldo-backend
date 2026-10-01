@@ -62,7 +62,7 @@ describe('artifact book (A5)', () => {
     expect(stale).toEqual({ status: 'conflict', current_revision: 1 });
     expect((await store.read(meta.id, 0, 8000))!.text).toBe(createArgs.body_markdown);
     const ok = await store.revise({ artifact_id: meta.id, expected_revision: 1, body_markdown: '# v2' }, 'tool:revise_artifact');
-    expect(ok).toMatchObject({ status: 'ok', meta: { revision: 2, r2_key: `artifacts/${meta.id}/r2` } });
+    expect(ok).toMatchObject({ status: 'ok', meta: { revision: 2, r2_key: expect.stringMatching(new RegExp(`^artifacts/${meta.id}/r2/`)) } });
     expect((await store.read(meta.id, 0, 8000))!.text).toBe('# v2');
     expect(store.byId(meta.id)!.byte_size).toBe(4);
   });

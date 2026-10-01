@@ -7,7 +7,7 @@ export type InboxBinding = { bot: string; subject: string; doName: string };
 export type InboxRecord = InboxBinding & {
   id: string; digest: string; sequence: number; updateId: number; body: string;
   admittedAt: number; state: 'admitted' | 'claimed' | 'awaiting_delivery' | 'consumed' | 'completed' | 'quarantined';
-  attempt?: string; runId?: string; deadline?: number; reason?: string;
+  attempt?: string; runId?: string; deadline?: number; reason?: string; closedAt?: number;
   control?: { kind: 'stop' | 'steer'; targetRun: string };
 };
 export type Admission = 'admitted' | 'duplicate' | 'conflict' | 'capacity';
@@ -45,6 +45,36 @@ export class TelegramOwnerInbox {
       if (!row || row.state !== 'admitted') return null;
       row.state = 'claimed'; row.attempt = attempt; row.runId = runId; row.deadline = deadline;
       await this.persist(txn, rows, this.due(rows)); return structuredClone(row);
+    });
+  }
+  // Caller work is restricted to this transaction. No provider I/O belongs here.
+  async commitIfLive(run: InboxRecord, work: (txn: DurableObjectTransaction) => void): Promise<boolean> {
+    return this.storage.transaction(async txn => {
+      const rows = (await txn.get<InboxRecord[]>(OWNER_INBOX_KEY)) ?? [];
+      const row = rows.find(r => r.id === run.id);
+      const subject = await txn.get<string>('telegram_subject');
+      const name = await txn.get<string>('do_name');
+      const unlinked = await txn.get<boolean>('telegram_unlinked');
+      if (!row || row.state !== 'claimed' || row.closedAt !== undefined || row.runId !== run.runId || row.attempt !== run.attempt
+        || row.bot !== run.bot || row.subject !== run.subject || row.doName !== run.doName
+        || subject !== run.subject || name !== run.doName || unlinked || !row.deadline || this.now() >= row.deadline) return false;
+      // Admission and issuance of transaction writes share one synchronous boundary.
+      // The callback must not await: delayed work must request a new fence.
+      const result = work(txn) as unknown;
+      if (result && typeof (result as { then?: unknown }).then === 'function') throw new Error('fenced commit must be synchronous');
+      return true;
+    });
+  }
+  async close(run: InboxRecord, reason: string): Promise<boolean> {
+    return this.storage.transaction(async txn => {
+      const rows = (await txn.get<InboxRecord[]>(OWNER_INBOX_KEY)) ?? [];
+      const row = rows.find(r => r.id === run.id);
+      if (!row || row.runId !== run.runId || row.attempt !== run.attempt) return false;
+      if (row.closedAt !== undefined) return true;
+      row.closedAt = this.now();
+      if (row.state === 'claimed') { row.state = 'quarantined'; row.body = ''; row.reason = reason; }
+      await this.persist(txn, rows, this.due(rows));
+      return true;
     });
   }
   async transition(id: string, attempt: string, state: 'awaiting_delivery' | 'consumed' | 'completed' | 'quarantined', reason?: string): Promise<boolean> {
