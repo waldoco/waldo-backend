@@ -171,7 +171,7 @@ describe('TelegramOwnerListener', () => {
     finish('late');
     await vi.advanceTimersByTimeAsync(10);
     const sends = calls.filter(([kind]) => kind === 'send').map(([, r]) => (r as { text: string }).text);
-    expect(sends).toEqual(['That took too long, so I stopped working on it. Try again, or split it into smaller asks.']);
+    expect(sends).toEqual(['That took too long. In-flight changes may still finish. Try again, or split it into smaller asks.']);
   });
 });
 

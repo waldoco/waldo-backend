@@ -7,6 +7,7 @@ const MAX_ATTEMPTS = 3;
 export type FinalPayload = Readonly<{ chat_id: number; text: string; parse_mode?: 'HTML' }>;
 export type FinalRecord = {
   id: string; trace: string; payload: FinalPayload; digest: string;
+  expiresAt?: number; bot?: string;
   receiptUrls?: string[]; ownerSubject: string; doName: string; status: 'pending' | 'attempting' | 'delivered' | 'quarantined' | 'blocked';
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; reason?: string;
   inbox?: { id: string; runId: string; attempt: string };
@@ -48,6 +49,26 @@ export class TelegramFinalOutbox {
     rows.push({ ...input, payload: { ...input.payload }, digest: hash, status: 'pending', dueAt: this.now() + 250, createdAt: this.now(), attempts: 0 });
     await this.save(rows);
   }
+  // Hash before entering the caller-owned atomic fence. The caller commits inbox closure
+  // in the same synchronous transaction as these outbox writes, then rearms the shared alarm.
+  async enqueueFenced(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>,
+    commit: (work: () => void) => void): Promise<void> {
+    const hash = await digest(input);
+    commit(() => {
+      let rows = this.records();
+      const known = rows.find(r => r.id === input.id);
+      if (known) { if (known.digest !== hash) throw new Error('final outbox identity conflict'); return; }
+      if (rows.length >= MAX_RECORDS) {
+        const index = rows.findIndex(r => (r.status === 'delivered' || r.status === 'blocked' || r.reason === 'expired_ambiguous_metadata') && r.settled);
+        if (index < 0) throw new Error('final outbox capacity');
+        rows = rows.filter((_, i) => i !== index);
+      }
+      rows.push({ ...input, payload: { ...input.payload }, digest: hash, status: 'pending', dueAt: this.now() + 250, createdAt: this.now(), attempts: 0 });
+      this.kv.put(FINAL_OUTBOX_KEY, rows);
+      const due = rows.flatMap(r => r.status === 'pending' || r.status === 'attempting' || !r.settled ? [r.dueAt] : []);
+      this.kv.put(FINAL_OUTBOX_DUE_KEY, due.length ? Math.min(...due) : null);
+    });
+  }
   async drain(options: {
     allowed(record: FinalRecord): Promise<boolean>;
     send(payload: FinalPayload): Promise<unknown>;
@@ -67,7 +88,7 @@ export class TelegramFinalOutbox {
     const row = rows.find(r => r.status === 'pending' && r.dueAt <= this.now());
     if (!row) return;
     let allowed = false;
-    try { allowed = await options.allowed(row); } catch { /* fail closed */ }
+    try { allowed = (row.expiresAt === undefined || this.now() < row.expiresAt) && await options.allowed(row); } catch { /* fail closed */ }
     if (!allowed) { row.status = 'blocked'; row.reason = 'owner_binding'; await this.save(rows); await options.settled(row); row.settled = true; await this.save(rows); return; }
     row.status = 'attempting'; row.attempts += 1;
     await this.save(rows);

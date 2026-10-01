@@ -54,3 +54,12 @@ it('async commit callbacks are rejected and their transaction writes roll back',
   expect(await state.storage.get('invalid')).toBeUndefined();
  });
 });
+it('a late artifact body is an orphan and cannot publish metadata after close',async()=>{
+ await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('fence-artifact-expiry')),async(_i,state)=>{
+  let live=true;const {ClosedRunError}=await import('../src/channels/run-effect-scope');const data=new Map<string,string>();const pause=deferred<void>();const entered=deferred<void>();
+  const scope={runId:'r',attempt:'a',deadline:2000,signal:new AbortController().signal,admit(){if(!live)throw new ClosedRunError();},commit<T>(w:()=>T){if(!live)throw new ClosedRunError();return state.storage.transactionSync(w);}};
+  const book=artifactBook(state.storage.sql,{get:async k=>data.get(k)??null,put:async(k,v)=>{entered.resolve();await pause.promise;data.set(k,v);}},{timezone:'UTC',now:()=>new Date()},()=> 'orphan');
+  const pending=book.create({name:'late',kind:'document',body_markdown:'ORPHAN'},'fixture',scope);const caught=pending.catch(e=>e);await entered.promise;live=false;pause.resolve();
+  expect(await caught).toBeInstanceOf(ClosedRunError);expect(book.list()).toEqual([]);expect(data.size).toBe(1);
+ });
+});

@@ -112,7 +112,9 @@ export async function runToolLoop(input: Readonly<{
       exit = round >= input.maxSteps || (input.budget !== undefined && input.budget.remaining <= 0) ? 'budget_exhausted' : 'withdrawn';
     }
     if (offer && input.budget !== undefined) input.budget.remaining -= 1;
+    input.ctx.runScope?.admit();
     const response = await input.step(offer ? tools : undefined, turns);
+    input.ctx.runScope?.admit();
     if (response.tool_calls === undefined) {
       input.onSettle?.(exit);
       return guardArtifactLinks(response.text, receiptUrls);
@@ -121,6 +123,7 @@ export async function runToolLoop(input: Readonly<{
     let anyGenuineFailure = false;
     let firstCall = true;
     for (const call of response.tool_calls) {
+      input.ctx.runScope?.admit();
       const started = Date.now();
       const key = `${call.name}\u0000${call.arguments}`;
       const stablePair = `${call.name}\u0000${stabilize(call.arguments)}`;
@@ -132,6 +135,7 @@ export async function runToolLoop(input: Readonly<{
         : noProgressBlocked.has(stablePair)
           ? { ok: false, error: 'No progress: this call keeps returning the same outcome apart from volatile ids/timestamps; stop retrying it and answer with what you have.', code: 'no_progress' as const }
           : await dispatch(call, input);
+      input.ctx.runScope?.admit();
       if (!result.ok && result.connect) {
         const offerKey = `${result.connect.service}:${result.connect.reason}`;
         if (!offered.has(offerKey)) {

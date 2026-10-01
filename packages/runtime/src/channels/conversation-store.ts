@@ -1,12 +1,13 @@
+import type { RunEffectScope } from './run-effect-scope';
 import type { ConversationEntry, ConversationTree } from '@waldo/contracts';
 import { redactSecretUrls } from './egress-guard';
 
 export type ConversationStore = Readonly<{
   load(): Promise<Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null }>>;
-  save(entries: readonly ConversationEntry[], leafId: string): Promise<void>;
+  save(entries: readonly ConversationEntry[], leafId: string, scope?: RunEffectScope): Promise<void>;
 }>;
 
-type KeyValueStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'>;
+type KeyValueStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & Partial<Pick<DurableObjectStorage, 'kv'>>;
 
 const entryKey = (seq: number) => `conv:${String(seq).padStart(10, '0')}`;
 
@@ -15,18 +16,20 @@ export const durableConversationStore = (storage: KeyValueStorage): Conversation
     const rows = await storage.list<ConversationEntry>({ prefix: 'conv:' });
     return { entries: [...rows.values()], leafId: (await storage.get<string>('conv-leaf')) ?? null };
   },
-  async save(entries, leafId) {
+  async save(entries, leafId, scope) {
     const count = (await storage.get<number>('conv-count')) ?? 0;
     const scrubbed = entries.map((entry) => {
       const model = redactSecretUrls(entry.modelPayload);
       const app = redactSecretUrls(entry.appPayload);
       return model.count + app.count > 0 ? { ...entry, modelPayload: model.text, appPayload: app.text } : entry;
     });
-    await storage.put<unknown>({
+    const writes = {
       ...Object.fromEntries(scrubbed.map((entry, index) => [entryKey(count + index), entry])),
       'conv-count': count + entries.length,
       'conv-leaf': leafId,
-    });
+    };
+    if (scope) { if (!storage.kv) throw new Error('fenced synchronous history store unavailable'); scope.commit(() => { for (const [key, value] of Object.entries(writes)) storage.kv!.put(key, value); }); }
+    else await storage.put<unknown>(writes);
   },
 });
 

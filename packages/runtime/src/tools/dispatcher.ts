@@ -1,3 +1,4 @@
+import type { RunEffectScope } from '../channels/run-effect-scope';
 import {
   TOOL_PERMISSIONS,
   ALWAYS_ON_TOOLS,
@@ -57,6 +58,7 @@ export type ToolDispatcherContext = HookRuntimeContext & {
   authenticatedUserId: string;
   turnId?: string;
   toolCallId?: string;
+  runScope?: RunEffectScope;
   session: SessionState;
 };
 
@@ -271,6 +273,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     // handler I/O. The digest therefore names the exact arguments that cross the adapter
     // boundary, while the durable intent is still committed first by RunLoopDO. Do not catch
     // this callback: a storage/programming fault must retain its original cause.
+    ctx.runScope?.admit();
     trustedEffect = await options.trustedEffect.prepare({ tool: tool.data, args });
   }
 
@@ -278,8 +281,10 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     if (trustedEffect !== undefined) {
       const executeOrReconcile = handler.executeOrReconcile;
       if (executeOrReconcile === undefined) throw new Error('trusted tool reconciler disappeared');
+      ctx.runScope?.admit();
       handlerResult = await executeOrReconcile(args, ctx, trustedEffect);
     } else {
+      ctx.runScope?.admit();
       handlerResult = await handler.handle(args, { ...ctx, toolCallId: call.id });
     }
   } catch (error) {

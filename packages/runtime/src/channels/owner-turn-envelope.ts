@@ -1,3 +1,4 @@
+import type { RunEffectScope } from './run-effect-scope';
 import type { LLMAttachment } from '@waldo/contracts';
 import type { TurnTimer } from './owner-turn-types';
 import type { turnControl } from './turn-control';
@@ -28,6 +29,7 @@ export type OwnerTurnEnvelope = Readonly<{
   attachment?: LLMAttachment;
   // Set by the channel host. When false, this turn skips its immediate memory write. Nightly consolidation and history indexing are separate and unaffected.
   memoryWrites?: boolean;
+  runScope?: RunEffectScope;
 }>;
 export type OwnerResponder = Readonly<{
   respond(turn: OwnerTurnEnvelope, time: TurnTimer): Promise<string>;

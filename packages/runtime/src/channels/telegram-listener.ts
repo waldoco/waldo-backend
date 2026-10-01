@@ -80,7 +80,12 @@ export class TelegramOwnerListener {
   async handle(turn: TelegramInboundTurn): Promise<TelegramTurnOutcome> {
     const owner = this.options.ownerTelegramId;
     if (turn.senderId !== owner || turn.chatId !== owner) return 'ignored';
-    const { api } = this.options;
+    const originalApi = this.options.api;
+    const api: TelegramOwnerApi = turn.runScope ? {
+      sendMessage: payload => { turn.runScope!.admit(); return originalApi.sendMessage(payload); },
+      setMessageReaction: payload => { turn.runScope!.admit(); return originalApi.setMessageReaction(payload); },
+      sendChatAction: payload => { turn.runScope!.admit(); return originalApi.sendChatAction(payload); },
+    } : originalApi;
     const now = this.options.now ?? Date.now;
     const trace = ownerTurnTrace(this.options.surface ?? 'telegram', turn.updateId);
     const log = (hop: string, ms: number, ok: boolean, error?: string, code?: string) =>
@@ -128,14 +133,16 @@ export class TelegramOwnerListener {
     const choice = message_id === null || !this.options.chooseReaction
       ? Promise.resolve(null)
       : time('choose_reaction', () => this.options.chooseReaction!(turn)).catch(() => null).then(value => { readyChoice = value; return value; });
-    const typing = () => api.sendChatAction({ chat_id, action: 'typing' }).catch(() => undefined);
+    const typing = async () => { try { await api.sendChatAction({ chat_id, action: 'typing' }); } catch { /* bounded UX only */ } };
     await time('typing', typing);
     const typingTimer = setInterval(typing, this.options.typingEveryMs ?? 4_000);
     const progressTimer = setTimeout(() => {
-      void time('progress', () => api.sendMessage({ chat_id, text: this.options.progressText ?? 'On it - still working on this, reply coming shortly.' })).catch(() => undefined);
+      void time('progress', async () => api.sendMessage({ chat_id, text: this.options.progressText ?? 'On it - still working on this, reply coming shortly.' })).catch(() => undefined);
     }, this.options.progressAfterMs ?? 8_000);
+    const clearRunTimers = () => { clearTimeout(progressTimer); clearInterval(typingTimer); };
+    turn.runScope?.signal.addEventListener('abort', clearRunTimers, { once: true });
     try {
-      const limit = this.options.turnTimeoutMs ?? TURN_TIMEOUT_MS;
+      const limit = turn.runScope ? Math.max(0, turn.runScope.deadline - now()) : this.options.turnTimeoutMs ?? TURN_TIMEOUT_MS;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new TurnTimeout(limit)), limit); });
       const text = (await time('respond', () => Promise.race([this.options.respond(turn, time), timeout]).finally(() => clearTimeout(timer)))).trim();
@@ -159,13 +166,16 @@ export class TelegramOwnerListener {
     } catch (error) {
       clearTimeout(progressTimer);
       const failure = error instanceof TurnTimeout
-        ? 'That took too long, so I stopped working on it. Try again, or split it into smaller asks.'
+        ? 'That took too long. In-flight changes may still finish. Try again, or split it into smaller asks.'
         : this.options.failureText ?? 'Sorry - I hit a problem answering that. Please try again in a moment.';
+      if (turn.runScope) throw error;
       await api.sendMessage({ chat_id, text: failure }).catch(() => undefined);
       await react('failed', this.options.failedEmoji ?? '😢');
       log('turn', now() - started, false, error instanceof Error ? error.message : String(error), turnFailureCode(error));
       return 'failed';
     } finally {
+      clearTimeout(progressTimer);
+      turn.runScope?.signal.removeEventListener('abort', clearRunTimers);
       this.options.clearTurnReceipts?.(trace);
       clearInterval(typingTimer);
     }

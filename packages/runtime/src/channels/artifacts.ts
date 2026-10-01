@@ -1,3 +1,4 @@
+import type { RunEffectScope } from './run-effect-scope';
 import {
   createArtifactArgsSchema, listArtifactsArgsSchema, readArtifactArgsSchema, reviseArtifactArgsSchema,
   TOOL_PERMISSIONS, triggerTypeSchema,
@@ -66,8 +67,8 @@ export type ReadResult = Readonly<{
 }>;
 
 export type ArtifactBook = Readonly<{
-  create(args: CreateArtifactArgs, provenance: string): Promise<ArtifactMeta>;
-  revise(args: ReviseArtifactArgs, provenance: string): Promise<ReviseResult>;
+  create(args: CreateArtifactArgs, provenance: string, scope?: RunEffectScope): Promise<ArtifactMeta>;
+  revise(args: ReviseArtifactArgs, provenance: string, scope?: RunEffectScope): Promise<ReviseResult>;
   list(kind?: ArtifactKind): readonly ArtifactMeta[];
   read(id: string, offset: number, length: number): Promise<ReadResult | null>;
   byId(id: string): ArtifactMeta | null;
@@ -85,9 +86,10 @@ export const artifactBook = (sql: Sql, bodies: ArtifactBodies, clock: OwnerClock
     sql.exec<ArtifactMeta>('SELECT * FROM artifacts WHERE id = ?', id).toArray()[0] ?? null;
   return {
     byId,
-    async create(args, provenance) {
+    async create(args, provenance, scope) {
       const id = `art:${newId()}`;
       const r2Key = `artifacts/${id}/r1/${crypto.randomUUID()}`;
+      scope?.admit();
       await bodies.put(r2Key, args.body_markdown);
       const now = clock.now().getTime();
       const meta: ArtifactMeta = {
@@ -95,19 +97,21 @@ export const artifactBook = (sql: Sql, bodies: ArtifactBodies, clock: OwnerClock
         byte_size: new TextEncoder().encode(args.body_markdown).length,
         r2_key: r2Key, provenance, taint: 'external', created_at: now, updated_at: now,
       };
-      sql.exec(
+      const commit = () => sql.exec(
         'INSERT INTO artifacts (id, name, kind, revision, byte_size, r2_key, provenance, taint, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         meta.id, meta.name, meta.kind, meta.revision, meta.byte_size, meta.r2_key, meta.provenance, meta.taint, meta.created_at, meta.updated_at,
       );
+      if (scope) scope.commit(commit); else commit();
       return meta;
     },
-    async revise(args, provenance) {
+    async revise(args, provenance, scope) {
       const current = byId(args.artifact_id);
       if (current === null) return { status: 'not_found' };
       if (current.revision !== args.expected_revision) return { status: 'conflict', current_revision: current.revision };
       // Bodies are immutable per revision: the new body lands under a new key BEFORE the row
       // moves, so a crash between the two never leaves the row pointing at a missing body.
       const r2Key = `artifacts/${args.artifact_id}/r${current.revision + 1}/${crypto.randomUUID()}`;
+      scope?.admit();
       await bodies.put(r2Key, args.body_markdown);
       const meta: ArtifactMeta = {
         ...current, revision: current.revision + 1,
@@ -118,10 +122,11 @@ export const artifactBook = (sql: Sql, bodies: ArtifactBodies, clock: OwnerClock
       const after = byId(args.artifact_id);
       if (after === null) return { status: 'not_found' };
       if (after.revision !== args.expected_revision) return { status: 'conflict', current_revision: after.revision };
-      sql.exec(
+      const commit = () => sql.exec(
         'UPDATE artifacts SET revision = ?, byte_size = ?, r2_key = ?, provenance = ?, updated_at = ? WHERE id = ? AND revision = ?',
         meta.revision, meta.byte_size, meta.r2_key, meta.provenance, meta.updated_at, meta.id, args.expected_revision,
       );
+      if (scope) scope.commit(commit); else commit();
       return { status: 'ok', meta };
     },
     list: (kind) => (kind === undefined
@@ -152,8 +157,9 @@ export const artifactHandlers = (book: ArtifactBook, deliver?: DeliverArtifact) 
     autonomy_gated: false,
     mutates_state: true,
     // A mutation ack (id + revision), not stored content: taint-null like the other write tools.
-    handle: async (args: CreateArtifactArgs) => {
-      const meta = await book.create(args, 'tool:create_artifact');
+    handle: async (args: CreateArtifactArgs, ctx?: ToolDispatcherContext) => {
+      const meta = await book.create(args, 'tool:create_artifact', ctx?.runScope);
+      ctx?.runScope?.admit();
       return { ok: true, data: { artifact_id: meta.id, revision: meta.revision, stored_chars: args.body_markdown.length, delivery: deliver ? await deliver(meta) : { status: 'saved_internal', url: null, audience: 'unverified' } }, source_taint: null };
     },
   } satisfies ToolHandler<CreateArtifactArgs, unknown, ToolDispatcherContext>,
@@ -164,10 +170,11 @@ export const artifactHandlers = (book: ArtifactBook, deliver?: DeliverArtifact) 
     trigger_allowlist: allowlist('revise_artifact'),
     autonomy_gated: false,
     mutates_state: true,
-    handle: async (args: ReviseArtifactArgs) => {
-      const result = await book.revise(args, 'tool:revise_artifact');
+    handle: async (args: ReviseArtifactArgs, ctx?: ToolDispatcherContext) => {
+      const result = await book.revise(args, 'tool:revise_artifact', ctx?.runScope);
       if (result.status === 'not_found') return { ok: false, code: 'not_found', error: 'No artifact with that id. Use list_artifacts to see what exists.' };
       if (result.status === 'conflict') return { ok: false, code: 'rejected', error: `Revision mismatch: the artifact is at revision ${result.current_revision}. Read it again and retry with expected_revision ${result.current_revision}.` };
+      ctx?.runScope?.admit();
       return { ok: true, data: { artifact_id: result.meta.id, revision: result.meta.revision, stored_chars: args.body_markdown.length, delivery: deliver ? await deliver(result.meta) : { status: 'saved_internal', url: null, audience: 'unverified' } }, source_taint: null };
     },
   } satisfies ToolHandler<ReviseArtifactArgs, unknown, ToolDispatcherContext>,
