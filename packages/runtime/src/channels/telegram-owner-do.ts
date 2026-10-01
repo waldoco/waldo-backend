@@ -42,7 +42,7 @@ import { healthLogBook, healthLogHandlers, healthSection } from './health-log';
 import { healthContextBook } from './health-context';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
 import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
-import { artifactDelivery, artifactPage, ARTIFACT_PATH } from './artifact-delivery';
+import { artifactDelivery, artifactPage, artifactReadAdmission, ARTIFACT_PATH } from './artifact-delivery';
 import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
 import { runBook } from './background-runs';
 import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
@@ -288,8 +288,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const session = await access.session(sessionCookie(request));
     if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401, headers: overviewRoute ? DASHBOARD_OVERVIEW_HEADERS : undefined });
     if (url.pathname.startsWith(`${ARTIFACT_PATH}/`)) {
-      if (this.env.RESPONSIBILITY_RATE_LIMITER && !(await this.env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `artifact-read:${this.ctx.id.toString()}` })).success) return new Response('too many requests', {status:429, headers:{'cache-control':'no-store'}});
-      if (!this.env.RESPONSIBILITY_RATE_LIMITER) return new Response('temporarily unavailable', {status:503, headers:{'cache-control':'no-store'}});
+      const denied = await artifactReadAdmission(this.env.RESPONSIBILITY_RATE_LIMITER, this.ctx.id.toString());
+      if (denied) return denied;
       if (!this.env.ARTIFACTS) return new Response('not found', {status:404, headers:{'cache-control':'no-store'}});
       const book = artifactBook(this.ctx.storage.sql, r2ArtifactBodies(this.env.ARTIFACTS, this.ctx.id.toString()), {timezone:'UTC',now:()=>new Date()}, () => crypto.randomUUID());
       return (await artifactPage(request, book)) ?? new Response('not found', {status:404});
