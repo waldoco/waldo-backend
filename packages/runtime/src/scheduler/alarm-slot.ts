@@ -12,7 +12,8 @@ export async function armAlarm(storage: Pick<DurableObjectStorage, 'setAlarm'>, 
 export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDue: number | null, now: number): Promise<void> {
   const outboxDue = (await storage.get<number | null>('telegram_final_outbox_due_v1')) ?? null;
   const inboxDue = (await storage.get<number | null>('telegram_owner_inbox_due_v1')) ?? null;
-  const bounds = [scheduleDue, outboxDue, inboxDue].filter((v): v is number => v !== null);
+  const linkDue = (await storage.get<number | null>('telegram_link_due_v1')) ?? null;
+  const bounds = [scheduleDue, outboxDue, inboxDue, linkDue].filter((v): v is number => v !== null);
   if (!bounds.length) { await storage.deleteAlarm(); return; }
   await armAlarm(storage, Math.max(Math.min(...bounds), now + 250));
 }

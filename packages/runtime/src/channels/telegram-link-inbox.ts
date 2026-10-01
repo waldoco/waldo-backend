@@ -6,9 +6,10 @@ export const LINK_DUE='telegram_link_due_v1';
 const RETENTION=25*60*60_000;
 const CAPACITY=512;
 export type LinkBinding={bot:string;subject:string;name:string};
-export type LinkRow={id:number;digest:string;hash?:string;at:number;state:'admitted'|'attempting'|'frozen'|'completed';text?:string};
+export type LinkRow={id:number;digest:string;hash?:string;at:number;state:'admitted'|'attempting'|'frozen'|'completed';text?:string;frozenAt?:number};
 export class TelegramLinkInbox{
  constructor(private readonly storage:DurableObjectStorage,private readonly now:()=>number=Date.now){}
+ async maintain():Promise<void>{await this.storage.transaction(async t=>{const rows=(await t.get<LinkRow[]>(LINK_ROWS)??[]).filter(r=>r.state!=='completed'||r.at+RETENTION>this.now());await this.save(t,rows)});}
  async records():Promise<LinkRow[]>{return await this.storage.get<LinkRow[]>(LINK_ROWS)??[]}
  private async save(t:DurableObjectTransaction,rows:LinkRow[]):Promise<void>{
   const due=rows.length?Math.min(...rows.map(r=>r.state==='completed'?r.at+RETENTION:this.now()+250)):null;
@@ -34,7 +35,7 @@ export class TelegramLinkInbox{
   // Credential removal is separate from response freeze so a later freeze failure
   // never strands redeemable data in a recovered tombstone.
   await this.storage.transaction(async t=>{const rows=await t.get<LinkRow[]>(LINK_ROWS)??[];const row=rows.find(r=>r.id===id);if(!row)return;delete row.hash;if(row.state==='admitted')row.state='attempting';await this.save(t,rows)});
-  await this.storage.transaction(async t=>{const rows=await t.get<LinkRow[]>(LINK_ROWS)??[];const row=rows.find(r=>r.id===id);if(!row||row.state==='completed'||row.state==='frozen')return;row.state='frozen';row.text=text;await this.save(t,rows)});
+  await this.storage.transaction(async t=>{const rows=await t.get<LinkRow[]>(LINK_ROWS)??[];const row=rows.find(r=>r.id===id);if(!row||row.state==='completed'||row.state==='frozen')return;row.state='frozen';row.text=text;row.frozenAt=this.now();await this.save(t,rows)});
  }
  async complete(id:number):Promise<void>{await this.storage.transaction(async t=>{const rows=(await t.get<LinkRow[]>(LINK_ROWS)??[]).filter(r=>r.state!=='completed'||r.at+RETENTION>this.now());const row=rows.find(r=>r.id===id);if(row){row.state='completed';delete row.hash;delete row.text;}await this.save(t,rows)});}
 }
