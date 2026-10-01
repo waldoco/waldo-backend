@@ -27,3 +27,22 @@ it('reconstructed routing mode alarm uses frozen generic transport without owner
   await state.storage.deleteAlarm();
  });
 });
+it('actual storage freeze-second-transaction cut keeps hash scrubbed and restart never redeems',async()=>{
+ const bot=env.TELEGRAM_BOT_TOKEN!.split(':')[0]!;const subject='999991';const name=`telegram-link:${bot}:${subject}`;const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+ await runInDurableObject(stub,async(instance,state)=>{
+  const inbox=new TelegramLinkInbox(state.storage);await inbox.admit({bot,subject,name},3,'d'.repeat(64),'a'.repeat(64));await inbox.begin(3);
+  let count=0;const broken={get:state.storage.get.bind(state.storage),transaction:async(work:any)=>{if(++count===2)throw Error('second freeze storage cut');return state.storage.transaction(work)}}as unknown as DurableObjectStorage;
+  await expect(new TelegramLinkInbox(broken).freeze(3,'must not persist')).rejects.toThrow('second freeze');expect((await inbox.records())[0]?.hash).toBeUndefined();expect((await inbox.records())[0]?.state).toBe('attempting');
+  const before=observed.redeem;await(instance as TelegramOwnerDO).alarm();expect(observed.redeem).toBe(before);expect((await inbox.records())[0]?.state).toBe('completed');
+  expect(JSON.stringify(state.storage.kv.get('telegram_final_outbox_v1'))).toContain('could not be confirmed');
+  await state.storage.deleteAlarm();
+ });
+});
+it('real persisted attempts representing committed/lost RPC and crashed-before-RPC both recover conservatively',async()=>{
+ const bot=env.TELEGRAM_BOT_TOKEN!.split(':')[0]!;const subject='999992';const name=`telegram-link:${bot}:${subject}`;const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+ await runInDurableObject(stub,async(instance,state)=>{
+  const inbox=new TelegramLinkInbox(state.storage);for(const id of [4,5]){await inbox.admit({bot,subject,name},id,String(id),'a'.repeat(64));await inbox.begin(id);}
+  const before=observed.redeem;await(instance as TelegramOwnerDO).alarm();await(instance as TelegramOwnerDO).alarm();expect(observed.redeem).toBe(before);expect((await inbox.records()).every(r=>r.hash===undefined&&r.state==='completed')).toBe(true);
+  const finals=state.storage.kv.get<any[]>('telegram_final_outbox_v1')!;expect(finals).toHaveLength(2);expect(finals.every(r=>r.payload.text.includes('could not be confirmed'))).toBe(true);await state.storage.deleteAlarm();
+ });
+});

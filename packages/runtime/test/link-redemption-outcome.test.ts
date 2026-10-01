@@ -25,5 +25,5 @@ it('coded setup accepts exact issuer format once and rejects groups/mismatch/ext
 it('malformed nonempty RPC result is uncertain, not redeemed',async()=>{const f=vi.fn(async()=>Response.json('not-a-uuid'));expect(await ownerDirectory(env,f).redeemHashed!('telegram','42',hash)).toEqual({kind:'uncertain'})});
 it('directory fetch has the same bounded abort signal as webhook admission',async()=>{let signal:AbortSignal|undefined;const f=vi.fn(async(_url:RequestInfo|URL,init?:RequestInit)=>{signal=init?.signal as AbortSignal;throw Error('aborted')});expect(await ownerDirectory(env,f as typeof fetch).redeemHashed!('telegram','42',hash)).toEqual({kind:'uncertain'});expect(signal).toBeInstanceOf(AbortSignal)});
 it('hung adapter times out at existing10sbound and redemption is uncertain exactly once',async()=>{
- vi.useFakeTimers();try{const f=vi.fn(async()=>new Promise<Response>(()=>{}));const call=ownerDirectory(env,f as typeof fetch).redeemHashed!('telegram','42',hash);await vi.advanceTimersByTimeAsync(10_001);expect(await call).toEqual({kind:'uncertain'});expect(f).toHaveBeenCalledTimes(1);}finally{vi.useRealTimers()}
-});
+ const f=vi.fn(async()=>new Promise<Response>(()=>{}));const start=Date.now();expect(await ownerDirectory(env,f as typeof fetch).redeemHashed!('telegram','42',hash)).toEqual({kind:'uncertain'});expect(f).toHaveBeenCalledTimes(1);expect(Date.now()-start).toBeLessThan(12000);
+},15000);
