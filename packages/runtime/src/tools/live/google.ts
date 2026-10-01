@@ -127,7 +127,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<GetCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'search_communication',
-    description: "Search the owner's Gmail by sender, subject or words, optionally in a date range. Returns matching messages with from, subject, snippet, time and thread_id. Use get_communication for 'what is new' instead, and read_thread to read one thread in full.",
+    description: "Search the owner's Gmail by sender, subject or words, optionally in a date range. Returns matching messages with from, subject, snippet, time and thread_id. Space-separated Gmail terms must all match; do not paste a full natural-language ask as the query. Start with distinctive sender/repository/topic terms. An empty match is not absence: try at most two narrower-term queries with the same date range, then report the search limit. Never rewrite a quoted or operator query silently. Use get_communication for 'what is new' instead, and read_thread to read one thread in full.",
     schema: searchCommunicationArgsSchema,
     trigger_allowlist: allowlist('search_communication'),
     autonomy_gated: false,
@@ -135,7 +135,14 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const clauses = [query];
       if (date_range?.from) clauses.push(`after:${Math.floor(Date.parse(date_range.from) / 1000)}`);
       if (date_range?.to) clauses.push(`before:${Math.floor(Date.parse(date_range.to) / 1000)}`);
-      return { query, messages: (await client.searchMail(clauses.join(' '), limit)).map(quarantineMailItem) };
+      const messages = (await client.searchMail(clauses.join(' '), limit)).map(quarantineMailItem);
+      return { query, messages, coverage: { scope: 'matching_query_one_adapter_account', complete: false, limitation: 'Bounded matching search, not a complete view of Gmail or all accounts.' },
+        ...(messages.length === 0 ? { recovery: {
+          status: 'empty_query_not_absence', attempt_budget: 2, preserve_date_range: true,
+          query_semantics: 'unquoted_terms_are_conjunctive',
+          next_step: 'Search fewer distinctive terms or a known sender/repository. Keep the same account and date range. Read returned subjects/snippets to check relevance.',
+        } } : {}),
+      };
     }),
   } satisfies ToolHandler<SearchCommunicationArgs, unknown, ToolDispatcherContext>,
   {
