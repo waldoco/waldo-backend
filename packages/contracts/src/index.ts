@@ -184,3 +184,4 @@ export * from './runtime/heartbeat';
 export * from './runtime/approval';
 export * from './runtime/activity';
 export * from './runtime/trusted-coordination';
+export * from './channels/imessage-v1';

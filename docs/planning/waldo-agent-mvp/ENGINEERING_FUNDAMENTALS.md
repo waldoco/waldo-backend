@@ -190,3 +190,6 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - The narrow inbox route verifies private sender/chat and immutable owner host before binding or effects. Concurrent first binding is checked inside admission transaction.
 - Claim before effects. Resume only unclaimed work; retain uncertain tombstones and quarantine recovered claims. Final delivery must settle its matching run, never adjacent work.
 - Control notes target one current run. Persist consumption before model exposure; a consumed or stopped note never replays as an independent later turn. Three due classes each get service within three alarms.
+
+### iMessage protocol scaffold
+- Reject empty outbound content, formatting outside text and path-bearing filenames at the versioned schema. Synthetic adversarial tests must reject these before native transport; local database evidence never means recipient delivery.
