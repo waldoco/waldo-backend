@@ -99,13 +99,23 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<QueryCalendarArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_communication',
-    description: "Read the owner's Gmail inbox - recent messages with from, subject, snippet and time. Defaults to the last 24 hours. Use when the owner asks about email or messages.",
+    description: "Read a sampled page from the connected Gmail account's Primary inbox category, not the entire inbox or all accounts. Defaults to a rolling 24-hour window, not today. Inspect the returned coverage; pagination is unknown and an empty page does not prove no mail in the requested range.",
     schema: getCommunicationArgsSchema,
     trigger_allowlist: allowlist('get_communication'),
     autonomy_gated: false,
     handle: ({ date_range }: GetCommunicationArgs) => withGoogle(google, 'mail', async (client) => {
       const since = date_range?.from ? Date.parse(date_range.from) : clock.now().getTime() - DAY_MS;
-      return { since: new Date(since).toISOString(), messages: (await client.newMail(since, 10)).map(quarantineMailItem) };
+      const to = date_range?.to ?? clock.now().toISOString();
+      const from = new Date(since).toISOString();
+      const fetched = await client.newMail(since, 10);
+      const messages = fetched.filter(item => { const at = Date.parse(item.at); return Number.isFinite(at) && at >= since && at < Date.parse(to); }).map(quarantineMailItem);
+      return { since: from, from: date_range?.from ?? from, to, timezone: clock.timezone, messages, coverage: {
+        scope: 'inbox_primary_category', account_selection: 'connected_adapter_account_not_all_accounts',
+        retrieval_window: date_range ? 'explicit_date_range' : 'rolling_24_hours', page_limit: 10,
+        fetched_count: fetched.length, returned_count: messages.length, pagination: 'unknown_not_returned_by_adapter',
+        upper_bound_applied_after_page: true, complete: false,
+        limitation: 'One sampled Primary-inbox page; pagination is unavailable. A newer page may exclude messages in an older requested window. Empty results do not prove the range is empty.',
+      } };
     }),
   } satisfies ToolHandler<GetCommunicationArgs, unknown, ToolDispatcherContext>,
   {

@@ -144,7 +144,7 @@ describe('google tools', () => {
         newMail: async (since: number, limit: number) => {
           seen.push(since);
           expect(limit).toBe(10);
-          return [{ id: 'm1', from: 'a@b.c', subject: 'hi', snippet: 'snip', at: '2026-09-24T10:00:00.000Z' }];
+          return [{ id: 'm1', from: 'a@b.c', subject: 'hi', snippet: 'snip', at: '2026-09-23T07:00:00.000Z' }];
         },
         draft: async () => ({}),
       } as never),
@@ -156,7 +156,7 @@ describe('google tools', () => {
     const data = result.data as { since: string; messages: unknown[] };
     expect(data.messages).toHaveLength(1);
     expect(Date.parse(data.since)).toBe(seen[0]);
-    expect(Date.now() - seen[0]!).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 5000);
+    expect(clock.now().getTime() - seen[0]!).toBe(24 * 60 * 60 * 1000);
   });
 
   it('E1: verification artifacts in mail are quarantined before the result reaches model context; ordinary mail flows', async () => {
@@ -164,9 +164,9 @@ describe('google tools', () => {
       client: async () => ({
         events: async () => [],
         newMail: async () => [
-          { id: 'm-otp', from: 'google-no-reply@accounts.google.com', subject: '123456 is your Google verification code', snippet: 'Enter 123456 to continue', at: '2026-09-25T09:00:00.000Z' },
-          { id: 'm-reset', from: 'no-reply@example.com', subject: 'Reset your password', snippet: 'Open https://app.example.com/auth/v1/verify?token=pkce_LIVESECRET&type=recovery to choose a new one', at: '2026-09-25T09:01:00.000Z' },
-          { id: 'm-receipt', from: 'receipts@amazon.com', subject: 'Your receipt from Amazon #112-3948572-1849561', snippet: 'Order total $12.34, arriving Thursday', at: '2026-09-25T09:02:00.000Z' },
+          { id: 'm-otp', from: 'google-no-reply@accounts.google.com', subject: '123456 is your Google verification code', snippet: 'Enter 123456 to continue', at: '2026-09-23T07:00:00.000Z' },
+          { id: 'm-reset', from: 'no-reply@example.com', subject: 'Reset your password', snippet: 'Open https://app.example.com/auth/v1/verify?token=pkce_LIVESECRET&type=recovery to choose a new one', at: '2026-09-23T07:01:00.000Z' },
+          { id: 'm-receipt', from: 'receipts@amazon.com', subject: 'Your receipt from Amazon #112-3948572-1849561', snippet: 'Order total $12.34, arriving Thursday', at: '2026-09-23T07:02:00.000Z' },
         ],
         draft: async () => ({}),
       } as never),
