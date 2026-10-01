@@ -5,6 +5,7 @@ import {
   type ToolHandler, type ToolName,
 } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
+import type { DeliverArtifact } from './artifact-delivery';
 import type { OwnerClock } from '../tools/live/get-context';
 
 // A5 (BUILD_PLAN_2026-09-25; the adaptation audit's typed-workspace answer): the agent's own
@@ -138,10 +139,10 @@ export const artifactBook = (sql: Sql, bodies: ArtifactBodies, clock: OwnerClock
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 
-export const artifactHandlers = (book: ArtifactBook) => [
+export const artifactHandlers = (book: ArtifactBook, deliver?: DeliverArtifact) => [
   {
     name: 'create_artifact',
-    description: "Save a working artifact (research brief, shortlist, half-built document, extracted data) with a name and kind. Returns an internal id, not a user-usable file link. It does not publish, share, verify a viewing audience or deliver a file. Never build a URL from the id or claim a usable private/public link. For a requested deliverable, say it is saved internally but delivery is unavailable. Use read_artifact to read it back and revise_artifact to update it later.",
+    description: "Save a working artifact with a name and kind. A verified delivery receipt may return an owner-authenticated viewing URL. Use only the exact URL returned by the tool. Never build a URL from the id. If delivery is unavailable, say it is saved internally only. The owner may need to sign in to open a private link; this does not share access with other people. Use read_artifact and revise_artifact to read or update it.",
     schema: createArtifactArgsSchema,
     trigger_allowlist: allowlist('create_artifact'),
     autonomy_gated: false,
@@ -149,7 +150,7 @@ export const artifactHandlers = (book: ArtifactBook) => [
     // A mutation ack (id + revision), not stored content: taint-null like the other write tools.
     handle: async (args: CreateArtifactArgs) => {
       const meta = await book.create(args, 'tool:create_artifact');
-      return { ok: true, data: { artifact_id: meta.id, revision: meta.revision, stored_chars: args.body_markdown.length, delivery: { status: 'saved_internal', url: null, audience: 'unverified' } }, source_taint: null };
+      return { ok: true, data: { artifact_id: meta.id, revision: meta.revision, stored_chars: args.body_markdown.length, delivery: deliver ? await deliver(meta) : { status: 'saved_internal', url: null, audience: 'unverified' } }, source_taint: null };
     },
   } satisfies ToolHandler<CreateArtifactArgs, unknown, ToolDispatcherContext>,
   {
@@ -163,7 +164,7 @@ export const artifactHandlers = (book: ArtifactBook) => [
       const result = await book.revise(args, 'tool:revise_artifact');
       if (result.status === 'not_found') return { ok: false, code: 'not_found', error: 'No artifact with that id. Use list_artifacts to see what exists.' };
       if (result.status === 'conflict') return { ok: false, code: 'rejected', error: `Revision mismatch: the artifact is at revision ${result.current_revision}. Read it again and retry with expected_revision ${result.current_revision}.` };
-      return { ok: true, data: { artifact_id: result.meta.id, revision: result.meta.revision, stored_chars: args.body_markdown.length, delivery: { status: 'saved_internal', url: null, audience: 'unverified' } }, source_taint: null };
+      return { ok: true, data: { artifact_id: result.meta.id, revision: result.meta.revision, stored_chars: args.body_markdown.length, delivery: deliver ? await deliver(result.meta) : { status: 'saved_internal', url: null, audience: 'unverified' } }, source_taint: null };
     },
   } satisfies ToolHandler<ReviseArtifactArgs, unknown, ToolDispatcherContext>,
   {
