@@ -1,3 +1,4 @@
+import { withRequestTimeout } from './request-timeout';
 import { linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv } from './owner-directory';
 
 export const SIGNUP_COOKIE = 'waldo_signup';
@@ -21,12 +22,14 @@ export type SignupAuth = Readonly<{
   collectPhone(progress: SignupProgress, phone: string): Promise<string | null>;
 }>;
 
-// This bounded email-proof cookie is not an owner session or an SMS proof. It never holds
-// Supabase tokens or the raw invite, and cannot provision an owner or consume an invite.
+// Readable signed bearer progress, not encrypted, device-bound or server-revocable.
+// No raw invite, OTP or Supabase tokens; no Waldo owner/session/consumption authority.
 export const signupAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): SignupAuth | null => {
   const { SUPABASE_PROJECT_URL: base, SUPABASE_PUBLISHABLE_KEY: key, WALDO_ROUTER_HMAC_SECRET: secret } = env;
-  const rpc = signedRpc(env, (input, init) => fetcher(input, { ...init, signal: AbortSignal.timeout(10_000) }), now);
+  const rpc = signedRpc(env, fetcher, now);
   if (!base || !key || !secret || !rpc) return null;
+  // Access eligibility also admits active members, regardless of the invite hash.
+  // It is not proof of invite validity.
   const eligible = async (email: string, hash: string) => (await rpc('signin_allowed', `signin.${email}.${hash}`, { p_email: email, p_code_hash: hash })) === true;
   const seal = async (progress: SignupProgress) => {
     const payload = btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(progress)))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
@@ -39,22 +42,27 @@ export const signupAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch
     },
     async sendCode(progress) {
       if (progress.expires <= Math.floor(now() / 1000) || !await eligible(progress.email, progress.inviteHash)) return false;
-      const response = await fetcher(`${base}/auth/v1/otp`, {
-        method: 'POST', headers: { apikey: key, 'content-type': 'application/json' },
-        body: JSON.stringify({ email: progress.email, create_user: true }), signal: AbortSignal.timeout(10_000),
+      return withRequestTimeout(async signal => {
+        const response = await fetcher(`${base}/auth/v1/otp`, {
+          method: 'POST', headers: { apikey: key, 'content-type': 'application/json' },
+          body: JSON.stringify({ email: progress.email, create_user: true }), signal,
+        });
+        if (!response.ok) throw new Error('email code unavailable');
+        return true;
       });
-      if (!response.ok) throw new Error('email code unavailable');
-      return true;
     },
     async verifyEmail(progress, otp) {
       const address = progress.email;
       if (progress.expires <= Math.floor(now() / 1000) || !await eligible(address, progress.inviteHash)) return null;
-      const response = await fetcher(`${base}/auth/v1/verify`, {
-        method: 'POST', headers: { apikey: key, 'content-type': 'application/json' },
-        body: JSON.stringify({ type: 'email', email: address, token: otp.trim() }), signal: AbortSignal.timeout(10_000),
+      const user = await withRequestTimeout(async signal => {
+        const response = await fetcher(`${base}/auth/v1/verify`, {
+          method: 'POST', headers: { apikey: key, 'content-type': 'application/json' },
+          body: JSON.stringify({ type: 'email', email: address, token: otp.trim() }), signal,
+        });
+        if (!response.ok) return null;
+        const { user } = await response.json() as { user?: { id?: string; email?: string; email_confirmed_at?: string } };
+        return user;
       });
-      if (!response.ok) return null;
-      const { user } = await response.json() as { user?: { id?: string; email?: string; email_confirmed_at?: string } };
       if (!user?.id || user.email?.toLowerCase() !== address || !user.email_confirmed_at) return null;
       return seal({ ...progress, authUser: user.id, emailVerified: true });
     },

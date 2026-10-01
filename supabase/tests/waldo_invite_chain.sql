@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(36);
+select plan(43);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -49,5 +49,16 @@ select throws_ok($$select waldo.issue_member_invite('root-do','x@test.invalid',r
 select is(has_function_privilege('service_role','waldo.issue_member_invite(text,text,text,bigint,text)','execute'),false,'service role not granted member issue');
 select is(has_function_privilege('anon','waldo.issue_member_invite(text,text,text,bigint,text)','execute'),true,'signed runtime can issue');
 select is((select count(*) from waldo.owners where email='other@test.invalid'),0::bigint,'expired code left no owner');
+-- Existing member access is not invite validity; these calls execute canonical SQL.
+insert into waldo.invites(code_hash,email,issued_by,expires_at,revoked_at) values
+ (repeat('7',64),'one@test.invalid',(select id from waldo.owners where do_name='root-do'),now()-interval '1 day',null),
+ (repeat('8',64),'one@test.invalid',(select id from waldo.owners where do_name='root-do'),now()+interval '1 day',now());
+select is(waldo.signin_allowed('one@test.invalid',pg_temp.at(),pg_temp.sig('signin.one@test.invalid.'||repeat('9',64)),repeat('9',64)),true,'active member access ignores arbitrary invite hash');
+select is(waldo.signin_allowed('one@test.invalid',pg_temp.at(),pg_temp.sig('signin.one@test.invalid.'||repeat('7',64)),repeat('7',64)),true,'active member access ignores expired invite hash');
+select is(waldo.signin_allowed('one@test.invalid',pg_temp.at(),pg_temp.sig('signin.one@test.invalid.'||repeat('8',64)),repeat('8',64)),true,'active member access ignores revoked invite hash');
+select is(waldo.signin_allowed('one@test.invalid',pg_temp.at(),pg_temp.sig('signin.one@test.invalid.'||repeat('a',64)),repeat('a',64)),true,'active member access ignores used invite hash');
+select is(waldo.owner_for_auth('00000000-0000-0000-0000-0000000000a1','one@test.invalid',pg_temp.at(),pg_temp.sig('owner.00000000-0000-0000-0000-0000000000a1.one@test.invalid..'||repeat('9',64)),'',repeat('9',64)),(select do_name from waldo.owners where auth_user_id='00000000-0000-0000-0000-0000000000a1'),'existing identity resolves with empty phone and arbitrary invite, without a new owner');
+select is((select used_at from waldo.invites where code_hash=repeat('7',64)),null::timestamptz,'member access leaves expired invite unused');
+select is((select used_at from waldo.invites where code_hash=repeat('8',64)),null::timestamptz,'member access leaves revoked invite unused');
 select * from finish();
 rollback;

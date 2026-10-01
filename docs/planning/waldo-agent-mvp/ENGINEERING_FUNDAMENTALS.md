@@ -214,3 +214,10 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 | 2026-10-01 | Signed continuation swallowed second invite/restart and hash-only navigation did not rerun entry | Retry/refresh | Synthetic Chrome second link, refresh and fragment clearing; console-signup.test.ts restart cookie clear/hashchange contract | Explicit reset and same-document fragment handling |
 | 2026-10-01 | First-send/provider/throttle error lost cleared invite context and could imply code delivery | Retry/failure | console-signup.test.ts send failure to refresh/resend and four throttle/error paths | Retain signed draft before attempts; unknown delivery remains unknown |
 - Inline TypeScript styles use semantic font shorthand; CSS font-weight declarations can collide with the raw-health guard's weight assignment detector. Run the unmodified health/architecture guards before publication; never weaken them for UI styles.
+
+### Invite signup review corrections (#499)
+
+- [ ] Bound Auth and signed directory requests across both fetch and required response decoding; abort alone is not a deadline when an adapter ignores it. Losing work may finish remotely, but callers cannot advance into owner/session effects after timeout.
+- [ ] Test canonical `signin_allowed` as access eligibility, not invite validity: active members remain admitted independently of arbitrary/expired/revoked/used invite text; unverified new signup still cannot create a Waldo owner, consume or open a session.
+- [ ] Distinguish Supabase Auth identity creation (`create_user:true`) from Waldo owner provisioning. Describe signup progress as a readable signed 15-minute bearer cookie with no device binding, encryption or server revocation; restart only clears this browser.
+- [ ] Associate visible legacy labels and inspect desktop/mobile, keyboard order/focus, error and progress states using synthetic data; these checks are not full accessibility certification.

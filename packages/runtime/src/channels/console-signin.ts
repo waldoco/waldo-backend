@@ -20,7 +20,7 @@ type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObje
 
 const esc = (value: string) => value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 const page = (body: string, status = 200) => new Response(
-  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo console</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;display:grid;place-items:center;min-height:100vh;margin:0}form{display:grid;gap:12px;width:min(320px,90vw)}input,button{font:inherit;font-size:17px;padding:12px;border-radius:10px;border:1px solid #ccc}button{border:0;background:#1A1A1A;color:#FAFAF8;cursor:pointer}</style></head><body>${body}</body></html>`,
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo console</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;display:grid;place-items:center;min-height:100vh;margin:0}form{display:grid;gap:12px;width:min(320px,90vw)}input,button{font:inherit;font-size:17px;padding:12px;border-radius:10px;border:1px solid #ccc}input:focus-visible,button:focus-visible,a:focus-visible{outline:3px solid #5267AF;outline-offset:3px}label{font:bold 1rem system-ui,sans-serif}button{border:0;background:#1A1A1A;color:#FAFAF8;cursor:pointer}</style></head><body>${body}</body></html>`,
   { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } },
 );
 // Legacy sign-in accepts a phone for compatibility, but cannot provision a new owner.
@@ -30,9 +30,9 @@ export const normalizePhone = (raw: string): string | null => {
   return /^\+[1-9]\d{6,14}$/.test(compact) ? compact : null;
 };
 
-const emailForm = (note = '') => page(`<form method="post" action="${CONSOLE_SIGNIN_PATH}"><h1>Sign in to Waldo</h1><p><a href="/console/signup">New member? Open your invite signup</a></p>${note ? `<p>${esc(note)}</p>` : ''}<input name="email" type="email" autocomplete="email" required placeholder="you@example.com"><input name="invite" autocomplete="off" placeholder="Invite code (new members)"><input name="phone" type="tel" autocomplete="tel" required placeholder="Phone, e.g. +91 98765 43210"><button>Email me a code</button></form>`);
+const emailForm = (note = '') => page(`<form method="post" action="${CONSOLE_SIGNIN_PATH}"><h1>Sign in to Waldo</h1><p><a href="/console/signup">New member? Open your invite signup</a></p>${note ? `<p role="alert">${esc(note)}</p>` : ''}<label for="signin-email">Email address</label><input id="signin-email" name="email" type="email" autocomplete="email" required placeholder="you@example.com"><label for="signin-invite">Invite code (optional for existing members)</label><input id="signin-invite" name="invite" autocomplete="off" placeholder="Invite code (new members)"><label for="signin-phone">Phone with country code (contact only, unverified)</label><input id="signin-phone" name="phone" type="tel" autocomplete="tel" required placeholder="Phone, e.g. +91 98765 43210"><button>Email me a code</button></form>`);
 // Retry forms retain entered fields; sign-in resolves existing owners only.
-const codeForm = (email: string, phone: string, invite: string, note = '') => page(`<form method="post" action="${CONSOLE_VERIFY_PATH}"><p>${note ? esc(note) : `If ${esc(email)} has access, a code is on its way.`}</p><input type="hidden" name="email" value="${esc(email)}"><input type="hidden" name="phone" value="${esc(phone)}"><input type="hidden" name="invite" value="${esc(invite)}"><input name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="Code"><button>Sign in</button></form>`);
+const codeForm = (email: string, phone: string, invite: string, note = '') => page(`<form method="post" action="${CONSOLE_VERIFY_PATH}"><p role="status">${note ? esc(note) : `If ${esc(email)} has access, an email code was requested. Delivery is not confirmed here.`}</p><input type="hidden" name="email" value="${esc(email)}"><input type="hidden" name="phone" value="${esc(phone)}"><input type="hidden" name="invite" value="${esc(invite)}"><label for="signin-code">Email sign-in code</label><input id="signin-code" name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="Code"><button>Sign in</button><a href="/console/signin">Request another email code</a></form>`);
 
 // With Supabase configured, the console signs in by email code (invite-required for new members) and a signed owner cookie picks the owner DO.
 // Returns null when Supabase is not configured; the caller keeps the Telegram one-time link sign-in.
@@ -77,7 +77,12 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
       event('console_signin', false, 'throttled');
       return finish(emailForm('Too many attempts. Try again in a few minutes.'));
     }
-    const sent = await auth.sendCode(email, invite);
+    let sent: boolean;
+    try { sent = await auth.sendCode(email, invite); }
+    catch {
+      event('console_signin', false, 'email_send_unconfirmed');
+      return finish(codeForm(email, phone, invite, 'We could not confirm an email code was sent. Retry a code you already received, or return to sign-in to request another.'));
+    }
     event('console_signin', sent, sent ? 'sent' : 'not_allowed');
     return finish(codeForm(email, phone, invite));
   }
@@ -113,7 +118,12 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
       event('console_verify', false, 'throttled');
       return finish(codeForm(email, phone, invite, 'Too many attempts. Try again in a few minutes.'));
     }
-    const doName = await auth.verify(email, String(form.get('code') ?? ''), phone, invite);
+    let doName: string | null;
+    try { doName = await auth.verify(email, String(form.get('code') ?? ''), phone, invite); }
+    catch {
+      event('console_verify', false, 'verification_unavailable');
+      return finish(codeForm(email, phone, invite, 'Verification is temporarily unavailable. Try again shortly.'));
+    }
     if (!doName) {
       event('console_verify', false, 'invalid');
       return finish(codeForm(email, phone, invite, 'That code did not work. Retry the code or open your invite signup link if you are a new member.'));

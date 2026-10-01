@@ -1,3 +1,4 @@
+import { withRequestTimeout } from './request-timeout';
 import { hex, linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv } from './owner-directory';
 
 export const OWNER_COOKIE = 'waldo_owner';
@@ -61,8 +62,11 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   const { SUPABASE_PROJECT_URL: base, SUPABASE_PUBLISHABLE_KEY: key, WALDO_ROUTER_HMAC_SECRET: secret } = env;
   const rpc = signedRpc(env, fetcher, now);
   if (!base || !key || !secret || !rpc) return null;
-  const auth = (path: string, body: object) => fetcher(`${base}/auth/v1/${path}`, {
-    method: 'POST', headers: { apikey: key, 'content-type': 'application/json' }, body: JSON.stringify(body),
+  const auth = <T>(path: string, body: object, decode: (response: Response) => T | Promise<T>) => withRequestTimeout(async signal => {
+    const response = await fetcher(`${base}/auth/v1/${path}`, {
+      method: 'POST', headers: { apikey: key, 'content-type': 'application/json' }, body: JSON.stringify(body), signal,
+    });
+    return decode(response);
   });
   const cookieSig = (doName: string, sessionId: string) => routerSignature(secret, 0, `cookie.${doName}.${sessionId}`);
   return {
@@ -74,15 +78,19 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       const address = email.trim().toLowerCase();
       const codeHash = code ? await linkCodeHash(code) : '';
       if (!(await rpc('signin_allowed', `signin.${address}.${codeHash}`, { p_email: address, p_code_hash: codeHash }))) return false;
-      const response = await auth('otp', { email: address, create_user: true });
-      if (!response.ok) throw new Error(`otp send ${response.status}`);
-      return true;
+      // Supabase may create an Auth identity here; this does not create a Waldo owner.
+      return auth('otp', { email: address, create_user: true }, response => {
+        if (!response.ok) throw new Error(`otp send ${response.status}`);
+        return true;
+      });
     },
     async verify(email, code, _phone, inviteCode = '') {
       const address = email.trim().toLowerCase();
-      const response = await auth('verify', { type: 'email', email: address, token: code.trim() });
-      if (!response.ok) return null;
-      const { user } = (await response.json()) as { user?: { id?: string; email?: string } };
+      const user = await auth('verify', { type: 'email', email: address, token: code.trim() }, async response => {
+        if (!response.ok) return null;
+        const { user } = (await response.json()) as { user?: { id?: string; email?: string } };
+        return user;
+      });
       if (!user?.id || user.email?.toLowerCase() !== address) return null;
       // Sign-in may only resolve an already-bound owner. Empty phone makes the canonical
       // RPC refuse new provisioning before invite consumption. Signup awaits phone proof.

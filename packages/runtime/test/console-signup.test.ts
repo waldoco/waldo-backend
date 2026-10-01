@@ -60,7 +60,7 @@ it('continues through email, phone pending, resend, refresh and repeated submit 
   expect(html).toContain('entered, not verified');
   expect(html).toContain('SMS verification is not configured');
   expect(html).toContain('value="+919876543210"');
-  expect(html).toContain('invite has not been consumed');
+  expect(html).toContain('This signup flow has not consumed an invite');
   expect(html).toContain("addEventListener('hashchange'");
   expect(html).not.toContain('never-retain');
   expect(pendingCookie).not.toContain('waldo_owner');

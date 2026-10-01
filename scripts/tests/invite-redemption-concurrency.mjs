@@ -3,6 +3,7 @@
 import { execFileSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 const container = process.argv[2];
 if (!container || !/^[a-zA-Z0-9_-]+$/.test(container)) throw new Error('Pass a local PostgreSQL Docker container name. No hosted connection is supported.');
 const database = `waldo_invite_race_${Date.now()}`;
@@ -13,8 +14,13 @@ const command = (args, options = {}) => {
 const sql = (text) => command(['psql', '-U', 'supabase_admin', '-d', database, '-XAt', '-v', 'ON_ERROR_STOP=1'], { input: text });
 command(['createdb', '-U', 'supabase_admin', database]);
 try {
-  const schema = command(['pg_dump', '-U', 'supabase_admin', '-d', 'postgres', '--schema-only', '--no-owner', '--no-privileges']);
+  const schema = command(['pg_dump', '-U', 'supabase_admin', '-d', 'postgres', '--schema-only', '--no-owner']);
   sql(schema);
+  const eligibility = sql(readFileSync(new URL('../../supabase/tests/waldo_invite_chain.sql', import.meta.url), 'utf8'));
+  assert.ok(eligibility.includes('1..43'), 'all canonical invite assertions must execute');
+  assert.ok(!/^not ok/m.test(eligibility), eligibility);
+  assert.equal((eligibility.match(/^ok /gm) ?? []).length, 43, 'canonical eligibility assertion count');
+  console.log('PASS: 43 canonical invite/active-member eligibility assertions in an isolated local database.');
   sql(`delete from vault.secrets where name='waldo_router_hmac'; select vault.create_secret('synthetic-invite-race-secret','waldo_router_hmac');
     insert into auth.users(id,email) values ('00000000-0000-0000-0000-0000000000a1','race@test.invalid');
     insert into waldo.owners(do_name,email,is_admin) values ('race-root','root@test.invalid',true);

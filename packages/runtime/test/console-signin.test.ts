@@ -296,3 +296,20 @@ describe('invite-gated signup', () => {
     expect(sendCode).not.toHaveBeenCalled();
   });
 });
+
+it('associates visible legacy labels and preserves a labelled OTP retry after transport failure', async () => {
+  const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
+  const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter };
+  const a = auth({ verify: vi.fn(async () => { throw new Error('synthetic timeout'); }) });
+  const html = await (await handleConsole(new Request('https://w.test/console/signin'), env, a))!.text();
+  for (const control of ['email', 'phone', 'invite']) {
+    expect(html).toContain(`<label for="signin-${control}">`);
+    expect(html).toContain(`id="signin-${control}" name="${control}"`);
+  }
+  const failed = (await handleConsole(form('/console/verify', { email: 'person@test.invalid', phone: '+14155550100', code: '123456' }), env, a))!;
+  expect(failed.headers.get('set-cookie')).toBeNull();
+  const retry = await failed.text();
+  expect(retry).toContain('<label for="signin-code">Email sign-in code</label>');
+  expect(retry).toContain('Verification is temporarily unavailable');
+  expect(a.ownerCookie).not.toHaveBeenCalled();
+});

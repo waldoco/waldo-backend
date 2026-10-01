@@ -16,7 +16,7 @@ describe('verified email signup continuation', () => {
   });
 });
 
-it.each(['expired', 'revoked', 'used', 'wrong-email'])('denies a %s invite before sending or verifying an OTP', async () => {
+it('denies access before sending or verifying an OTP when eligibility returns false (invite states are tested against canonical SQL)', async () => {
   const fetcher = vi.fn(async (_input: RequestInfo | URL) => json(false));
   const auth = signupAuth(env, fetcher as typeof fetch, now)!;
   const progress = (await auth.read(request(await auth.begin('person@example.com', 'ABCDEFGHJKLMNPQRSTUV'))))!;
@@ -69,4 +69,16 @@ it('supports resend with a hash, never leaking raw invite or Supabase session to
   expect(await auth.sendCode(initial)).toBe(true);
   expect(JSON.stringify(fetcher.mock.calls)).not.toContain('ABCDEFGHJKLMNPQRSTUV');
   expect(fetcher.mock.calls.filter(c => String(c[0]).endsWith('/otp'))).toHaveLength(2);
+});
+
+it('uses readable signed bearer progress that can be copied until expiry, without raw OTP or session tokens', async () => {
+  const fetcher = vi.fn().mockResolvedValueOnce(json(true)).mockResolvedValueOnce(json({ user: { id: 'u', email: 'person@example.com', email_confirmed_at: '2026-10-01Z' }, access_token: 'synthetic-access', refresh_token: 'synthetic-refresh' })).mockResolvedValueOnce(json(true));
+  const auth = signupAuth(env, fetcher as typeof fetch, now)!;
+  const draft = (await auth.read(request(await auth.begin('person@example.com', 'ABCDEFGHJKLMNPQRSTUV'))))!;
+  const emailProof = (await auth.verifyEmail(draft, '654321'))!;
+  const cookie = (await auth.collectPhone((await auth.read(request(emailProof)))!, '+14155550100'))!;
+  const payload = atob(cookie.split('.')[0]!.replaceAll('-', '+').replaceAll('_', '/'));
+  expect(JSON.parse(payload)).toMatchObject({ email: 'person@example.com', phone: '+14155550100', inviteHash: expect.stringMatching(/^[0-9a-f]{64}$/), complete: false });
+  for (const absent of ['654321', 'synthetic-access', 'synthetic-refresh', 'ABCDEFGHJKLMNPQRSTUV']) expect(payload).not.toContain(absent);
+  expect(await auth.read(new Request('https://w.test/console/signup', { headers: { cookie: `${SIGNUP_COOKIE}=${cookie}`, 'user-agent': 'another-synthetic-browser' } }))).toMatchObject({ emailVerified: true, phoneVerification: 'not_configured', complete: false });
 });
