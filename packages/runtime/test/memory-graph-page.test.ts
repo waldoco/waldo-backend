@@ -61,11 +61,16 @@ describe('Memory pagination and bounded pattern view', () => {
     expect(first.body.omitted_links).toBe(4);
     const shown = new Set((first.body.nodes as { local_id: number }[]).map((n) => n.local_id));
     let cursor = (first.body.expand as { next_cursor: string | null }).next_cursor;
+    let last: { body: Record<string, unknown> } = first;
     while (cursor) {
       const r = pageMemoryGraph(g, q({ view: 'pattern', id: hub, max_nodes: '3', max_links: '100', cursor }));
       for (const n of r.body.nodes as { local_id: number }[]) { expect(shown.has(n.local_id)).toBe(false); shown.add(n.local_id); }
       cursor = (r.body.expand as { next_cursor: string | null }).next_cursor;
+      last = r;
     }
+    expect(last.body.truncated).toBe(false);
+    expect(last.body.omitted_links).toBe(0);
+    expect(last.body.showing).toMatchObject({ nodes: 1, of_nodes: 7 });
     expect([...shown].sort()).toEqual([2, 3, 4, 5, 6, 7, 8]);
   });
   it('link cap is reported, not silent', () => {
@@ -73,7 +78,8 @@ describe('Memory pagination and bounded pattern view', () => {
     const r = pageMemoryGraph(g, q({ view: 'pattern', id: hub, max_nodes: '7', max_links: '2' }));
     expect(r.body.showing).toMatchObject({ links: 2, of_links: 7 });
     expect(r.body.truncated).toBe(true);
-    expect((r.body.expand as { links_capped: boolean }).links_capped).toBe(true);
+    expect(r.body.expand).toMatchObject({ links_capped: true, capped_links: 5, capped_links_recoverable: false, next_cursor: null });
+    expect(r.body.omitted_links).toBe(5);
   });
   it('pattern requires both bounds and a known node', () => {
     const g = graph(); const hub = g.nodes[0]!.id;

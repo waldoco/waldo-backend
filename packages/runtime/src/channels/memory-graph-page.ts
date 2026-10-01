@@ -77,18 +77,22 @@ export const pageMemoryGraph = (g: MemoryGraph, params: URLSearchParams, opts: P
     if (cursorRaw && (cursor === null || cursor.k !== `pattern:${id}`)) return bad('cursor_invalid');
     const pool = neighborIds.filter((n) => localId(n) > (cursor?.after ?? 0));
     const shownIds = pool.slice(0, maxNodes);
-    const shownSet = new Set([id, ...shownIds]);
-    const eligible = incident.filter((a) => shownSet.has(a.from) && shownSet.has(a.to));
+    const neighborOf = (a: { from: string; to: string }) => (a.from === id ? a.to : a.from);
+    const shownSet = new Set(shownIds);
+    const later = new Set(pool.slice(maxNodes));
+    const eligible = incident.filter((a) => shownSet.has(neighborOf(a)));
     const links = eligible.slice(0, maxLinks);
+    const cappedHere = eligible.length - links.length;
+    const remainingLinks = incident.filter((a) => later.has(neighborOf(a))).length;
     const lastShown = shownIds[shownIds.length - 1];
     const moreNodes = pool.length > shownIds.length && lastShown !== undefined;
-    const omittedLinks = incident.length - links.length;
     return { status: 200, body: {
       ...header(g), view, center, nodes: shownIds.map((n) => nodeById.get(n)), associations: links,
       showing: { nodes: shownIds.length, of_nodes: neighborIds.length, links: links.length, of_links: incident.length },
-      truncated: moreNodes || omittedLinks > 0,
-      omitted_links: omittedLinks,
-      expand: { next_cursor: moreNodes ? enc({ v: 1, k: `pattern:${id}`, after: localId(lastShown) }) : null, links_capped: eligible.length > links.length },
+      truncated: moreNodes || cappedHere > 0,
+      // Links still to come on later pages, plus links cut by max_links on this page.
+      omitted_links: remainingLinks + cappedHere,
+      expand: { next_cursor: moreNodes ? enc({ v: 1, k: `pattern:${id}`, after: localId(lastShown) }) : null, links_capped: cappedHere > 0, capped_links_recoverable: false, capped_links: cappedHere },
     } };
   }
   return bad('view_unknown');
