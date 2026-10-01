@@ -283,6 +283,7 @@ export const createOwnerResponder = (
   };
   return {
     async respond(turn, time) {
+      const memoryWrites = turn.memoryWrites !== false;
       await restored;
       await settling;
       const id = turn.traceId;
@@ -297,7 +298,7 @@ export const createOwnerResponder = (
         replyModelOverride = undefined;
       }
       const owner = [turn.text ?? '', ...control.end()].filter(Boolean).join('\n');
-      if (memory && !probeGuard?.suppressMemory) {
+      if (memory && memoryWrites && !probeGuard?.suppressMemory) {
         const started = Date.now();
         memory.beginSettle(id, new Date().toISOString());
         settling = ask(id, 'memory', MEMORY_INSTRUCTION, exchangeInput(memory, owner, media?.note ?? '', text), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel)

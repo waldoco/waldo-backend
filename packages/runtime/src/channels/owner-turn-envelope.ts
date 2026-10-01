@@ -11,6 +11,8 @@ export type OwnerTurnEnvelope = Readonly<{
   text: string;
   mediaNote?: string;
   attachment?: LLMAttachment;
+  // Authenticated host control, never inferred from owner prose or provider payload.
+  memoryWrites?: boolean;
 }>;
 export type OwnerResponder = Readonly<{
   respond(turn: OwnerTurnEnvelope, time: TurnTimer): Promise<string>;
