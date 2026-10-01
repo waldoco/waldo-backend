@@ -9,5 +9,5 @@ export function parseCodedSetup(value:unknown):CodedSetup|null {
  if(parts.length!==2||!['/start','/link'].includes(parts[0]!))return null;
  const code=parts[1]!.toUpperCase();
  if(!/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$/.test(code))return null;
- return {subject:String(m.from.id),updateId:Number(u.update_id),code};
+ return {subject:String(m.from!.id),updateId:Number(u.update_id),code};
 }

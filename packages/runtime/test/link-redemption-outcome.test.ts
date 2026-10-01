@@ -12,7 +12,7 @@ it('null is rejected but exception is uncertain and never retried',async()=>{
  const failed=vi.fn(async()=>{throw new Error('lost response')});expect(await ownerDirectory(env,failed).redeemHashed!('telegram','42',hash)).toEqual({kind:'uncertain'});expect(failed).toHaveBeenCalledTimes(1);
 });
 it('passes only normalized hash and never performs an implicit route read',async()=>{
- const f=vi.fn(async()=>Response.json('owner-id'));await ownerDirectory(env,f).redeemHashed!('telegram','42',hash);expect(f).toHaveBeenCalledTimes(1);expect(JSON.parse(String(f.mock.calls[0]?.[1]?.body))).toMatchObject({p_code_hash:hash,p_provider:'telegram',p_subject:'42'});
+ const f=vi.fn(async()=>Response.json('owner-id'));await ownerDirectory(env,f).redeemHashed!('telegram','42',hash);expect(f).toHaveBeenCalledTimes(1);expect(JSON.parse(String((f.mock.calls[0] as unknown as [string,RequestInit])[1].body))).toMatchObject({p_code_hash:hash,p_provider:'telegram',p_subject:'42'});
 });
 it('coded setup accepts exact issuer format once and rejects groups/mismatch/extra terms',()=>{
  const message=(text:string)=>({update_id:1,message:{from:{id:42},chat:{id:42,type:'private'},text}});
