@@ -11,7 +11,9 @@ export type OwnerDirectoryEnv = Readonly<{
 // Providers with a presence row: telegram (numeric chat id), whatsapp (E.164 digits).
 export type PresenceProvider = 'telegram' | 'whatsapp';
 
+export type RedemptionOutcome = { kind: 'redeemed' | 'rejected' | 'uncertain' };
 export type OwnerDirectory = Readonly<{
+  redeemHashed?(provider: PresenceProvider, subject: string, hash: string): Promise<RedemptionOutcome>;
   byPresence(provider: PresenceProvider, subject: string): Promise<OwnerRoute | null>;
   redeem(provider: PresenceProvider, subject: string, code: string): Promise<OwnerRoute | null>;
 }>;
@@ -35,6 +37,7 @@ const deployOwner = (env: OwnerDirectoryEnv): OwnerDirectory => ({
       ? { doName: subject, subject, timezone: env.WALDO_OWNER_TIMEZONE ?? null }
       : null,
   redeem: async () => null,
+  redeemHashed: async () => ({ kind: 'rejected' }),
 });
 // WhatsApp has no single-owner env fallback: routing a phone number requires a real presence row,
 // so the directory-backed path is the only one (deployOwner answers telegram only).
@@ -64,6 +67,15 @@ export const ownerDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = f
   };
   return {
     byPresence,
+    // A route lookup is intentionally separate. A successful redemption with a
+    // missing/lost route read must never be relabeled as an invalid code.
+    redeemHashed: async (provider, subject, hash) => {
+      if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('invalid link hash');
+      try {
+        const result = await call('redeem_link', `redeem.${hash}.${provider}.${subject}`, { p_code_hash: hash, p_provider: provider, p_subject: subject });
+        return { kind: result === null ? 'rejected' : typeof result === 'string' && result.length > 0 ? 'redeemed' : 'uncertain' };
+      } catch { return { kind: 'uncertain' }; }
+    },
     redeem: async (provider, subject, code) => {
       const hash = await linkCodeHash(code);
       const owner = await call('redeem_link', `redeem.${hash}.${provider}.${subject}`, { p_code_hash: hash, p_provider: provider, p_subject: subject });
