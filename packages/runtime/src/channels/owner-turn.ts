@@ -41,7 +41,7 @@ const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'resto
 const memoryReceipt = (outcome: ClaimOutcome): string => {
   const parts = [`stored ${outcome.written} new claim${outcome.written === 1 ? '' : 's'}${outcome.downgraded ? ` (${outcome.downgraded} kept only as inferred, not as the owner's stated fact)` : ''}`];
   if (outcome.held) parts.push(`held ${outcome.held} not stored${outcome.holdReasons.length ? ` (${outcome.holdReasons.join(', ')})` : ''}`);
-  if (outcome.forgot) parts.push(`forgot ${outcome.forgot} at the owner's request${outcome.purgeIncomplete.length ? `; removal incomplete in ${outcome.purgeIncomplete.join(', ')}` : '; removal verified'}`);
+  if (outcome.forgot) parts.push(`forgot ${outcome.forgot} at the owner's request${outcome.purgeIncomplete.length ? `; removal incomplete in ${outcome.purgeIncomplete.join(', ')}` : '; removed from stored memory (the saved conversation text is redacted separately and is not covered by this line)'}`);
   else if (outcome.forgetAllowed) parts.push('the owner asked to forget something but nothing was forgotten');
   return `${parts.join('; ')}.`;
 };
