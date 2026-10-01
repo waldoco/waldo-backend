@@ -49,7 +49,7 @@ export type ScheduleInput = {
   recurrence?: ScheduleRecurrence | null;
 };
 
-export type ScheduleExecutor = (entry: ScheduleEntry) => Promise<void>;
+export type ScheduleExecutor = (entry: ScheduleEntry) => Promise<void | 'delivery_pending'>;
 export type ScheduleExecutors = Partial<Record<ScheduleKind, ScheduleExecutor>>;
 
 export class Scheduler {
@@ -130,6 +130,8 @@ export class Scheduler {
     return row ? toEntry(row) : null;
   }
 
+  hasDue(): boolean { return this.dueEntries(this.deps.now()).length > 0; }
+
   async dispatchDue(executors: ScheduleExecutors): Promise<readonly ScheduleEntry[]> {
     const now = this.deps.now();
     this.reapQuarantine(now);
@@ -182,9 +184,9 @@ export class Scheduler {
             this.settleRun(runId, 'failed', 'scheduler_handoff', now);
             throw new Error(`no scheduler executor for ${bumped.kind}`);
           }
-          await executor(bumped);
+          const delivery = await executor(bumped);
           this.complete(bumped, now);
-          this.settleRun(runId, 'ok', null, now);
+          if (delivery !== 'delivery_pending') this.settleRun(runId, 'ok', null, now);
           dispatched.push(bumped);
         } catch (err) {
           if (isCrashInjectionError(err)) {
@@ -372,6 +374,10 @@ export class Scheduler {
       delivery,
       runId,
     );
+  }
+
+  settleDelivery(runId: string, delivered: boolean): void {
+    this.settleRun(runId, delivered ? 'ok' : 'quarantined', delivered ? null : 'delivery', this.deps.now());
   }
 
   private settleRun(runId: string, outcome: 'ok' | 'failed' | 'quarantined' | 'missed', errorClass: 'run' | 'scheduler_handoff' | 'delivery' | null, now: number): void {

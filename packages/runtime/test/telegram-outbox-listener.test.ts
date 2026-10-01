@@ -17,7 +17,7 @@ it.each([60_000, 120_000])('queues final after %sms response with old request bu
   await vi.advanceTimersByTimeAsync(delay + 1); expect(await pending).toBe('queued');
   expect(outbox.records()[0]?.status).toBe('pending'); expect(requestSend).toHaveBeenCalledTimes(1); // only progress
   await vi.advanceTimersByTimeAsync(300);
-  const freshSend = vi.fn(async () => ({ message_id: 9 }));
+  const freshSend = vi.fn(async () => ({ message_id: 9, chat: { id: 7 } }));
   await outbox.drain({ allowed: async () => true, send: freshSend, settled: async () => undefined });
   expect(outbox.records()[0]?.status).toBe('delivered'); expect(freshSend).toHaveBeenCalledTimes(1);
 });

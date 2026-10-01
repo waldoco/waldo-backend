@@ -21,7 +21,7 @@ describe('frozen Telegram final outbox', () => {
   it('fresh sender retries explicit rejection without rerunning response, then validates ACK', async () => {
     const f = fixture(); const respond = vi.fn(async () => f.input);
     await f.outbox.enqueue(await respond()); f.advance();
-    const send = vi.fn().mockRejectedValueOnce(new TelegramRejection(429, 'slow', 30)).mockResolvedValue({ message_id: 42 });
+    const send = vi.fn().mockRejectedValueOnce(new TelegramRejection(429, 'slow', 30)).mockResolvedValue({ message_id: 42, chat: { id: 7 } });
     await f.outbox.drain({ allowed: async () => true, send, settled: f.settled });
     expect(f.outbox.records()[0]!.status).toBe('pending'); f.advance();
     await new TelegramFinalOutbox(f.kv, f.now).drain({ allowed: async () => true, send, settled: f.settled });
@@ -56,9 +56,29 @@ describe('frozen Telegram final outbox', () => {
   });
 });
 it('ACK-before-lifecycle-persist resumes bookkeeping without another send', async () => {
-  const f = fixture(); await f.outbox.enqueue(f.input); f.advance(); const send = vi.fn(async () => ({ message_id: 99 }));
+  const f = fixture(); await f.outbox.enqueue(f.input); f.advance(); const send = vi.fn(async () => ({ message_id: 99, chat: { id: 7 } }));
   await expect(f.outbox.drain({ allowed: async () => true, send, settled: async () => { throw new Error('crash bookkeeping'); } })).rejects.toThrow('crash bookkeeping');
   expect(f.outbox.records()[0]?.status).toBe('delivered');
   await new TelegramFinalOutbox(f.kv, f.now).drain({ allowed: async () => true, send, settled: f.settled });
   expect(send).toHaveBeenCalledTimes(1); expect(f.outbox.records()[0]?.settled).toBe(true);
+});
+it.each([NaN, Infinity, -10, '300'])('bounds untrusted retry_after %s', async retry => {
+  const f = fixture(); await f.outbox.enqueue(f.input); f.advance();
+  await f.outbox.drain({ allowed: async () => true, send: async () => { throw new TelegramRejection(429, 'rate', retry as number); }, settled: f.settled });
+  expect(Number.isFinite(f.outbox.records()[0]?.dueAt)).toBe(true);
+  expect(f.outbox.records()[0]?.dueAt).toBe(f.now() + 30000);
+});
+it('matching message id with wrong chat is not delivery proof', async () => {
+  const f = fixture(); await f.outbox.enqueue(f.input); f.advance();
+  await f.outbox.drain({ allowed: async () => true, send: async () => ({ message_id: 88, chat: { id: 999 } }), settled: f.settled });
+  expect(f.outbox.records()[0]?.status).toBe('quarantined');
+});
+it('expired ambiguous content is scrubbed and only then eligible for capacity recovery', async () => {
+  const f = fixture(); await f.outbox.enqueue(f.input);
+  const rows = f.outbox.records(); const row = rows[0]!;
+  row.status = 'quarantined'; row.settled = true; row.createdAt = -90000000;
+  f.kv.put(FINAL_OUTBOX_KEY, Array.from({ length: 256 }, (_, i) => ({ ...row, id: `old-${i}`, payload: { chat_id: 7, text: 'sensitive old final' } })));
+  await f.outbox.enqueue({ ...f.input, id: 'fresh' });
+  expect(f.outbox.records()).toHaveLength(256);
+  expect(f.outbox.records().filter(r => r.status === 'quarantined').every(r => r.payload.text === '')).toBe(true);
 });

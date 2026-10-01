@@ -15,3 +15,14 @@ export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDu
   if (!bounds.length) { await storage.deleteAlarm(); return; }
   await armAlarm(storage, Math.max(Math.min(...bounds), now + 250));
 }
+
+// Commit transport data and its wake together. Preserve an earlier scheduled alarm.
+export async function persistTransportWake(storage: DurableObjectStorage, records: unknown, due: number | null): Promise<void> {
+  await storage.transaction(async txn => {
+    await txn.put({ telegram_final_outbox_v1: records, telegram_final_outbox_due_v1: due });
+    if (due !== null) {
+      const existing = await txn.getAlarm();
+      await txn.setAlarm(Math.max(Date.now() + 250, existing === null ? due : Math.min(existing, due)));
+    }
+  });
+}

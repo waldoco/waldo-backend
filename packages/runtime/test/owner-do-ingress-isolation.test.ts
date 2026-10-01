@@ -36,7 +36,7 @@ vi.mock('../src/channels/telegram-api', async (load) => {
     ...original,
     createTelegramCaller: () => async (method: string, body: object) => {
       outbox.push({ method, body: body as Record<string, unknown> });
-      return method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: outbox.length } : true;
+      return method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: outbox.length, chat: { id: (body as {chat_id?: number}).chat_id } } : true;
     },
   };
 });
@@ -280,5 +280,45 @@ describe('real owner-DO ingress in a sealed test world', () => {
     expect(captured.receipts).toHaveLength(3);
     expect(auditIsolatedWorld(fixture, evidence).status).toBe('consistent_fixture');
     expect(auditIsolatedWorld({ ...fixture, grants: [] }, evidence).errors).toContain('effect outside synthetic grant and branch');
+  });
+});
+
+it('transport persistence transaction commits final and alarm together, rollback keeps neither', async () => {
+  const { persistTransportWake } = await import('../src/scheduler/alarm-slot');
+  await runInDurableObject(doStub(81101), async (_instance, state) => {
+    const previous = await state.storage.getAlarm();
+    const due = Date.now() + 10000;
+    await persistTransportWake(state.storage, [], due);
+    expect(state.storage.kv.get('telegram_final_outbox_due_v1')).toBe(due);
+    expect(await state.storage.getAlarm()).not.toBeNull();
+    await expect(state.storage.transaction(async txn => {
+      await txn.put({ telegram_final_outbox_v1: [{ id: 'cut' }], telegram_final_outbox_due_v1: 999 });
+      await txn.setAlarm(Date.now() + 100000);
+      throw new Error('crash before commit');
+    })).rejects.toThrow('crash before commit');
+    expect(state.storage.kv.get('telegram_final_outbox_v1')).toEqual([]);
+    expect(state.storage.kv.get('telegram_final_outbox_due_v1')).toBe(due);
+    if (previous === null) await state.storage.deleteAlarm();
+  });
+});
+
+it('due transport backlog yields every second alarm to due scheduled work', async () => {
+  const { ensureSchema } = await import('../src/tracer/schema');
+  const { Scheduler } = await import('../src/scheduler/multiplexer');
+  const { productionDeps } = await import('../src/seams/deps');
+  await runInDurableObject(doStub(81101), async (instance, state) => {
+    ensureSchema(state.storage);
+    const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+    await scheduler.schedule({ id: 'fair-reminder', kind: 'reminder', dueAt: Date.now() - 100, occurrenceAt: Date.now() - 100, payloadRefs: { reminder_id: 'fair-reminder' } });
+    // A missing note still reaches the executor and settles its scheduler run.
+    const records = [1, 2].map(i => ({ id: `fair-${i}`, trace: `fair-${i}`, payload: { chat_id: 81101, text: 'fixture' }, digest: 'fixture',
+      ownerSubject: '81101', doName: state.storage.kv.get('do_name') ?? '', status: 'pending', dueAt: 0, createdAt: Date.now(), attempts: 0 }));
+    state.storage.kv.put('telegram_final_outbox_v1', records); state.storage.kv.put('telegram_final_outbox_due_v1', 0);
+    state.storage.kv.put('transport_last_alarm', false);
+    await instance.alarm();
+    expect(scheduler.read('fair-reminder')).not.toBeNull();
+    await instance.alarm();
+    expect(scheduler.read('fair-reminder')).toBeNull();
+    expect((state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? []).filter(r => r.status === 'pending')).toHaveLength(1);
   });
 });

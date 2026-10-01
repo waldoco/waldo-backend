@@ -1,3 +1,5 @@
+import { receiptUrl } from '../conversation/artifact-link-guard';
+import { persistTransportWake } from '../scheduler/alarm-slot';
 import { TelegramFinalOutbox, type FinalRecord } from './telegram-final-outbox';
 import { ownerTurnTrace } from './owner-turn-envelope';
 import { adminRead, adminAction } from './dashboard-admin';
@@ -95,7 +97,7 @@ type OwnerRuntime = Readonly<{
   scheduler: Scheduler;
   finalOutbox: TelegramFinalOutbox;
   settleFinal(record: FinalRecord): Promise<void>;
-  fire(entry: ScheduleEntry): Promise<void>;
+  fire(entry: ScheduleEntry): Promise<void | 'delivery_pending'>;
   beat(entry: ScheduleEntry): Promise<void>;
   nightly(entry: ScheduleEntry): Promise<void>;
   briefs(entry: ScheduleEntry): Promise<void>;
@@ -440,17 +442,20 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal, call, owner } = this.setup();
       await ready;
       // Transport gets a fresh invocation and never shares the response/tool budget.
-      if (finalOutbox.records().some(r => r.status === 'attempting' || (r.status === 'pending' && r.dueAt <= Date.now()) || (r.status !== 'pending' && !r.settled))) {
-        await finalOutbox.drain({
+      const preferSchedule = this.ctx.storage.kv.get<boolean>('transport_last_alarm') === true;
+      const dueSchedule = scheduler.hasDue();
+      if ((!preferSchedule || !dueSchedule) && finalOutbox.records().some(r => r.status === 'attempting' || (r.status === 'pending' && r.dueAt <= Date.now()) || (r.status !== 'pending' && !r.settled))) {
+        this.ctx.storage.kv.put('transport_last_alarm', true);
+        try { await finalOutbox.drain({
           allowed: async r => r.payload.chat_id === owner && r.ownerSubject === String(owner)
             && r.doName === (this.ctx.storage.kv.get<string>('do_name') ?? '')
             && this.ctx.storage.kv.get<boolean>('telegram_unlinked') !== true,
           send: payload => call('sendMessage', payload),
           settled: settleFinal,
-        });
-        await scheduler.rearm();
+        }); } finally { await scheduler.rearm(); }
         return;
       }
+      this.ctx.storage.kv.put('transport_last_alarm', false);
       const started = Date.now();
       let fired: readonly ScheduleEntry[];
       try {
@@ -668,7 +673,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const deps = productionDeps();
     const traces = traceBook(this.ctx.storage.sql);
     const captureText = resolveCaptureText(this.env);
+    const turnReceiptUrls = new Map<string, Set<string>>();
     const log = (entry: TurnLogEntry) => {
+      if (entry.hop === 'tool_create_artifact' || entry.hop === 'tool_revise_artifact') {
+        try {
+          const url = receiptUrl(entry.hop.slice(5), JSON.parse(entry.text?.output ?? 'null'));
+          if (url) { const urls = turnReceiptUrls.get(entry.trace) ?? new Set<string>(); urls.add(url); turnReceiptUrls.set(entry.trace, urls); }
+        } catch { /* malformed output grants no receipt */ }
+      }
       // Owner attribution lands on every surface: the DO trace table, the wrangler tail, and Langfuse.
       // The gate runs once here so free-form detail/error text reaches none of the sinks while
       // the capture switch is off; whitelisted hops keep their count/enum detail either way.
@@ -684,7 +696,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     ensureSchema(this.ctx.storage);
     const scheduler = new Scheduler(this.ctx.storage.sql, this.ctx.storage, deps);
-    const finalOutbox = new TelegramFinalOutbox(this.ctx.storage.kv, deps.now);
+    const finalOutbox = new TelegramFinalOutbox(this.ctx.storage.kv, deps.now, (rows, due) => persistTransportWake(this.ctx.storage, rows, due));
     const fallbackZone = this.env.WALDO_OWNER_TIMEZONE ?? 'UTC';
     // Supabase holds the editable settings when configured; the DO applies its copy only after that write lands.
     const saveSettings = async (settings: OwnerSettings): Promise<boolean> => {
@@ -1024,9 +1036,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         // Capture probes remain inert and exercise the original immediate mock path.
         if (probeCapture.current !== null) { await api.sendMessage(payload); return; }
         await finalOutbox.enqueue({ id: `turn:${turn.updateId}`, trace: ownerTurnTrace(channel, turn.updateId), payload: { ...payload, text: redactSecretUrls(payload.text).text },
+          receiptUrls: [...(turnReceiptUrls.get(ownerTurnTrace(channel, turn.updateId)) ?? [])],
           ownerSubject: String(owner), doName: identity.get<string>('do_name') ?? '',
           ...(turn.messageId === null ? {} : { reaction: { message_id: turn.messageId, emoji } }),
         });
+        turnReceiptUrls.delete(ownerTurnTrace(channel, turn.updateId));
         await scheduler.rearm();
       } } : {}),
       saveOffset: (offset) => this.ctx.storage.put(channel === 'whatsapp' ? 'wa_offset' : 'offset', offset),
@@ -1060,11 +1074,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (channel === 'telegram') {
           await finalOutbox.enqueue({ id: `reminder:${entry.id}:${entry.occurrence_at}`, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text },
             ownerSubject: String(owner), doName: identity.get<string>('do_name') ?? '',
-            reminder: { id: entry.id, occurrence: entry.occurrence_at, runId: run.id, once: entry.recurrence === null },
+            reminder: { id: entry.id, occurrence: entry.occurrence_at, runId: run.id, schedulerRunId: scheduler.runningRunId(entry.id, entry.occurrence_at), once: entry.recurrence === null },
           });
           await scheduler.rearm();
           log({ trace, hop: 'delivery_pending', ms: Date.now() - started, ok: true });
-          return;
+          return 'delivery_pending' as const;
         }
         await time('send', () => api.sendMessage({ chat_id: owner, text }));
         book.fired(entry);
@@ -1264,6 +1278,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (record.status === 'pending') return;
       if (!record.reminder) log({ trace: record.trace, hop: 'turn', ms: 0, ok: delivered, detail: delivered ? 'delivered' : 'delivery_unconfirmed' });
       if (record.reminder) {
+        if (record.reminder.schedulerRunId) scheduler.settleDelivery(record.reminder.schedulerRunId, delivered);
         if (delivered) {
           if (record.reminder.once) this.ctx.storage.sql.exec('DELETE FROM reminder_notes WHERE id = ?', record.reminder.id);
           runs.finish(record.reminder.runId, 'completed', 'reminder sent');

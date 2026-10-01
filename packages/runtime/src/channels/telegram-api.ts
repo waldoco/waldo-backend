@@ -22,8 +22,8 @@ export const createTelegramCaller = (token: string, fetcher: typeof fetch = fetc
       const json = await response.json() as { ok: boolean; result?: unknown; description?: string; error_code?: number; parameters?: { retry_after?: number } };
       // Only a structured Telegram rejection is definite. HTTP 5xx/parse/network are unknown.
       if (!response.ok && response.status >= 500) throw new Error('telegram transport unknown');
-      if (json.ok === false && Number.isInteger(json.error_code)) throw new TelegramRejection(json.error_code!, json.description ?? '', json.parameters?.retry_after, method);
-      if (json.ok !== true) throw new Error('telegram invalid acknowledgement');
+      if (json.ok === false && Number.isInteger(json.error_code)) throw new TelegramRejection(json.error_code!, json.description ?? '', typeof json.parameters?.retry_after === 'number' && Number.isFinite(json.parameters.retry_after) && json.parameters.retry_after >= 0 ? Math.min(3600, Math.ceil(json.parameters.retry_after)) : undefined, method);
+      if (!response.ok || json.ok !== true) throw new Error('telegram invalid acknowledgement');
       return json.result;
     } finally {
       clearTimeout(timer);
