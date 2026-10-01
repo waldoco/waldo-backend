@@ -66,12 +66,9 @@ describe('isolated Gmail pages',()=>{
   expect((await a.mailPage('in:inbox category:primary after:1791273599 before:1791273600',10)).messages).toHaveLength(0);
  });
 });
-it('fixture cursors expose no source bytes and invalidate after revision; selection precedes collection',async()=>{
- const w=fixture();
- const selected=await import('../scenarios/native-selected-source');
- const restricted=isolatedGoogleClient(selected.nativeSelectedSource(w,'a',{mail:['m1']}),'a');
+it('fixture cursors expose no source bytes and invalidate after revision',async()=>{
+ // Selected-source wrapper coverage stays with the separate native supervisor suite.
  const q='in:inbox category:primary after:1791244799 before:1791331200';
- expect((await restricted.mailPage(q,1)).messages[0]?.subject).toBe('Alpha');expect(w.accessLog('b')).toEqual([]);expect(w.accessLog('a').every(r=>r.id==='m1')).toBe(true);
  const many=new IsolatedSourceWorld({clock:'2026-10-06T09:00:00Z',owners:[{id:'a'},{id:'b'}],sources:{mail:[1,2].map(i=>({owner_id:'a',id:`m${i}`,thread_id:'t',from:'a@example.invalid',subject:'SECRET_SUBJECT',snippet:'s',body:'PRIVATE_BODY',at:`2026-10-06T0${i}:00:00Z`}))},revisions:[{at:'2026-10-06T10:00:00Z',owner_id:'a',source:'mail',id:'m1',patch:{snippet:'changed'}}]});
  const api=isolatedGoogleClient(many,'a');const first=await api.mailPage(q,1);expect(first.next_page_token).not.toBeNull();expect(decodeURIComponent(first.next_page_token!)).not.toContain('PRIVATE_BODY');expect(decodeURIComponent(first.next_page_token!)).not.toContain('SECRET_SUBJECT');many.advance('2026-10-06T10:00:00Z');await expect(api.mailPage(q,1,first.next_page_token!)).rejects.toThrow(/revision mismatch/);
 });
