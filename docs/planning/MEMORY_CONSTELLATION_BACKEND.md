@@ -41,3 +41,20 @@ Read path must not call claimStore() initialization (CREATE/ALTER/FTS). Missing 
 Suppress purging/forgotten payload; expose only count/status of unavailable support where safe. Do not overstate forget completeness. Confirm/dismiss/CAS actions are not authorized by this read-only plan. Read-only implementation scope independently recovered from original WhatsApp voice wamid.HBgMOTE3NTU4NjU5OTMxFQIAEhggQUM3ODNEMjMzQ0REQjRFNTM2QURDM0Q5M0VEMjZGQ0EA, runtime transcription job audiotxjob-01M3V8MJJHWX15RM3Q5X8AGF6S in the main chat at13:47. Both transcripts request actual backend logic for working constellation nodes. Final plan delta cleared at4a78189; only read-only projection code/tests released. Schema/migrations and correction mutations remain separately held.
 
 Add adversarial fixtures for identical source_ref across dates, legacy writer-asserted quotes, model-set last_confirmed, NaN/Infinity count/strength, claim/node ID collision, absent schema without writes, incomplete pagination, purging suppression and hostile content inert rendering.
+
+## Read contract: pagination and bounded exploration (2026-10-01, implemented in #506)
+
+Owner: the Memory page is a projection. It shows saved Memory; it does not decide what Waldo remembers. No remember/forget policy, writes or retry actions live here (`actions` is always empty).
+
+Route: `GET /console/dashboard/api/v1/memory`, same owner-session auth. Views via `?view=`:
+- `summary` (default): counts of claims, interpretations, associations.
+- `claims` / `interpretations`: `?limit=N` required, optional opaque `?cursor=`. Response `items[]` and `page {limit, returned, total, next_cursor|null}`, ordered by stable local id.
+- `detail`: `?id=` of a claim or interpretation, with linked ids and unavailable support count. Unknown id is 404.
+- `pattern`: `?id=<interpretation>&max_nodes=N&max_links=M`, optional cursor. Returns the center, neighbour nodes and links, `showing {nodes, of_nodes, links, of_links}`, `truncated`, `omitted_links`, and `expand {next_cursor, links_capped}`.
+
+Rules:
+- No silent drops. Anything cut by a bound is counted in `showing`/`omitted_links` and reachable by `next_cursor`, or flagged `links_capped`.
+- No invented caps. Limits are request parameters; a deployment ceiling can be injected and then returns 400 `*_over_ceiling`. A numeric ceiling is set only from measured aggregate size and latency, not guessed.
+- Every response carries `state` and `complete`; partial or unavailable state must be shown, never a blank graph.
+- Provenance stays honest: evidence is a writer note, source references are withheld and unverified, estimates are uncalibrated model estimates, associations are unverified.
+- Caveat: the read still loads all rows of the owner's Memory tables before slicing. Responses are bounded; the read is not. A bounded SQL read needs measured table sizes first.
