@@ -14,24 +14,55 @@ const { OPENAI_GPT_6_LUNA_MODEL } = await import('@waldo/contracts');
 
 // Owner-turn path, model-call fixture (synthetic values, scripted writer output, mocked provider):
 // owner message -> writer call (model + input) -> applyClaimOps -> next turn's reply prompt.
-// Observed: one owner turn made two writer calls (both on the memory model) and the reply model is also gpt-6-luna here, so this does not show writer/reply separation. Not covered: a real writer model deciding what to record; no live provider.
+// The two writer calls in one turn are traced below: the first writer output is halted by the
+// medical_gate (it contains a dose) and owner-turn re-asks with CLINICAL_REDIRECT. Not covered: a real writer model deciding what to record; no live provider.
 const SAID = 'my HbA1c was 9.1 last week and I take metformin 500mg';
-const op = (evidence: string) => JSON.stringify({ add: [{ kind: 'health', text: 'HbA1c was 9.1 last week; takes metformin 500mg', source: 'stated', evidence, touches_forgotten: false }], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null });
+const SAID_LAB = 'my HbA1c was 9.1 last week';
+const op = (evidence: string, text = 'HbA1c was 9.1 last week; takes metformin 500mg') => JSON.stringify({ add: [{ kind: 'health', text, source: 'stated', evidence, touches_forgotten: false }], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null });
 
-it('the writer sees the owner message, runs on the memory model, and the next reply prompt carries the exact values', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('owner-turn-health')), async (_i, state) => {
+const NOOP = JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null });
+const system = (): string => (JSON.parse(seen.replyInputs.at(-1)!) as { instructions: string }).instructions;
+const session = async (name: string, firstOp: string, said: string, work: (r: { store: ReturnType<typeof claimStore>; hops: string[]; turn2: () => Promise<void> }) => void | Promise<void>) => {
+  seen.writerInputs = []; seen.writerModels = []; seen.replyInputs = [];
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_i, state) => {
     const store = claimStore(state.storage.sql);
-    const responder = createOwnerResponder('fixture', undefined, store as never);
+    const hops: string[] = [];
+    const responder = createOwnerResponder('fixture', undefined, store as never, (entry) => { const e = entry as { hop: string; ok?: boolean; code?: string }; hops.push(`${e.hop}:${e.ok === true}:${e.code ?? ''}`); });
     const turn = (traceId: string, text: string) => responder.respond({ traceId, conversationRef: 'owner', surface: 'telegram', text }, (_n, work) => work());
-    seen.addOp = op(`owner, tg-1: "${SAID}"`);
-    await turn('tg-1', `I should note ${SAID}`);
-    expect(new Set(seen.writerModels)).toEqual(new Set([OPENAI_GPT_6_LUNA_MODEL]));
-    expect(seen.writerInputs[0]).toContain('HbA1c was 9.1');
-    seen.addOp = op('x');
-    seen.writerInputs = [];
-    await turn('tg-2', 'what was my HbA1c?');
-    const reply = seen.replyInputs.at(-1)!;
-    expect(reply).toContain('9.1');
-    expect(reply).toContain('metformin 500mg');
+    seen.addOp = firstOp;
+    await turn('tg-1', `I should note ${said}`);
+    await work({ store, hops, turn2: async () => { seen.addOp = NOOP; await turn('tg-2', 'what was my HbA1c?'); } });
   });
+};
+
+it('a writer output carrying a dose is halted by the medical gate twice; nothing is stored and the reply is told it may be partly stored', async () => {
+  let rows = -1; let hops: string[] = [];
+  await session('owner-turn-health-dose', op(`owner, tg-1: "${SAID}"`), SAID, ({ store, hops: h }) => { rows = store.claims().length; hops = [...h] });
+  expect(new Set(seen.writerModels)).toEqual(new Set([OPENAI_GPT_6_LUNA_MODEL]));
+  expect(seen.writerInputs[0]).toContain('HbA1c was 9.1');
+  expect(seen.writerInputs[1]).toContain('Answer again'); // CLINICAL_REDIRECT re-ask, second call of the turn
+  expect(hops.filter((h) => h.startsWith('llm_memory'))).toEqual(['llm_memory:false:forbidden:medical_gate', 'llm_memory_redirect:false:forbidden:medical_gate']);
+  expect(hops).toContain('memory:false:provider_error');
+  expect(rows).toBe(0);
+  expect(seen.replyInputs[0]).toContain('only partly stored'); expect(seen.replyInputs[0]).not.toContain('nothing was stored');
+});
+
+it('a lab-value-only claim is stored by the real writer path and a no-op writer turn still answers from the claim', async () => {
+  let stored: Array<{ kind: string; source: string; evidence: string }> = [];
+  let memorySection = '';
+  let ownerSection = '';
+  let noopWriterCalls = -1;
+  await session('owner-turn-health-lab', op(`owner, tg-1: "${SAID_LAB}"`, 'HbA1c was 9.1 last week'), SAID_LAB, async ({ store, turn2 }) => {
+    stored = store.claims().map((c) => ({ kind: c.kind, source: c.source, evidence: c.evidence }));
+    const before = seen.writerInputs.length;
+    await turn2();
+    noopWriterCalls = seen.writerInputs.length - before;
+    const sys = system();
+    memorySection = sys.slice(sys.indexOf('Owner memory'));
+    ownerSection = sys;
+  });
+  expect(stored).toEqual([{ kind: 'health', source: 'stated', evidence: `owner, tg-1: "${SAID_LAB}"` }]);
+  expect(noopWriterCalls).toBe(1); // turn 2's writer ran and was a strict no-op
+  expect(memorySection).toContain('HbA1c was 9.1 last week'); // system prompt memory section, from the store
+  expect(ownerSection).not.toContain('Answer again');
 });
