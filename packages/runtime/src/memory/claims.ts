@@ -418,7 +418,7 @@ export const memoryPrompt = (store: ClaimStore): string => {
     'Profile, built only from what the owner said or confirmed:',
     ...profile(claims).map((section) => `<profile section="${section.title}">\n${section.lines.map(fence).join('\n')}\n</profile>`),
     'Claims. stated = the owner said it; confirmed = the owner agreed with Waldo\'s read; inferred = Waldo\'s read, offer it as such. An unverified provenance label means a legacy claim, not an authenticated quote.',
-    ...claims.map((claim) => `<claim id="${claim.id}" kind="${claim.kind}" source="${claim.source}" provenance="${claim.verification_status ?? 'unverified'}" seen="${claim.seen_count}" last="${claim.last_seen_at.slice(0, 10)}">${fence(claim.text)} | evidence: ${fence(claim.evidence)}${claim.source_ref ? ` | source ref: ${fence(claim.source_ref)}` : ''}</claim>`),
+    ...claims.map((claim) => `<claim id="${claim.id}" kind="${claim.kind}" source="${claim.source}" provenance="${claim.verification_status ?? 'unverified'}" seen="${claim.seen_count}" last="${claim.last_seen_at.slice(0, 10)}">${fence(claim.text)} | evidence${evidenceLabel(claim)}: ${fence(claim.evidence)}${claim.source_ref ? ` | source ref: ${fence(claim.source_ref)}` : ''}</claim>`),
     ...nodes.map((node) => `<node id="${node.id}" domain="${node.domain}" strength="${node.strength}">${fence(node.label)}: ${fence(node.summary)}</node>`),
     ...store.edges().filter((edge) => byId.has(edge.from_id) && byId.has(edge.to_id)).map((edge) => `<edge>${fence(byId.get(edge.from_id)!)} ${edge.relation} ${fence(byId.get(edge.to_id)!)} (strength ${edge.strength})</edge>`),
   ].join('\n');
@@ -427,6 +427,15 @@ export const memoryPrompt = (store: ClaimStore): string => {
 // Chat uses a small stable profile plus bounded owner-scoped lexical recall. A miss is
 // explicit: no near-neighbor fact gets smuggled into the answer. This is intentionally
 // lexical only; semantic retrieval needs a held-out gain before another data service.
+// The evidence string is the writer's. Label it from the stored, code-written origin: 'agent' is
+// the ground() verdict at admission time - the quote matched neither the owner's nor the shared
+// content checked then. It is a historical admission fact, not a re-verification, and does not
+// claim absence from all owner words or history. Owner-grounded and legacy/unknown-origin rows
+// render as before; nothing is hidden or promoted. The label is applied by both renderers:
+// turnMemoryPrompt (its recall excludes 'untrusted' rows) and memoryPrompt (maps all active
+// claims with no origin filter, so it can render 'untrusted' rows; those stay unlabelled here).
+const evidenceLabel = (claim: Claim): string => claim.origin === 'agent' ? ' (writer-stated quote; at admission it matched neither the owner\'s nor the shared content checked then)' : '';
+
 export const turnMemoryPrompt = (store: ClaimStore, question: string): string => {
   const hits = store.recall(question, 8);
   const profileClaims = [...store.claims(), ...store.claims('promoted')].filter((claim) =>
@@ -439,7 +448,7 @@ export const turnMemoryPrompt = (store: ClaimStore, question: string): string =>
     ...profileClaims.map((claim) => `- [${claim.verification_status ?? 'unverified'}] ${fence(claim.text)}`),
     '</owner_profile>',
     hits.length ? '<relevant_claims>' : 'No relevant memory match; do not guess from another claim.',
-    ...hits.map((claim) => `<claim id="${claim.id}" kind="${claim.kind}" source="${claim.source}" provenance="${claim.verification_status ?? 'unverified'}">${fence(claim.text)} | evidence: ${fence(claim.evidence)}${claim.source_ref ? ` | source ref: ${fence(claim.source_ref)}` : ''}</claim>`),
+    ...hits.map((claim) => `<claim id="${claim.id}" kind="${claim.kind}" source="${claim.source}" provenance="${claim.verification_status ?? 'unverified'}">${fence(claim.text)} | evidence${evidenceLabel(claim)}: ${fence(claim.evidence)}${claim.source_ref ? ` | source ref: ${fence(claim.source_ref)}` : ''}</claim>`),
     ...(hits.length ? ['</relevant_claims>'] : []),
   ].join('\n');
 };
