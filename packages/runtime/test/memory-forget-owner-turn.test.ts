@@ -21,7 +21,7 @@ const system = (): string => (JSON.parse(seen.replyInputs.at(-1)!) as { instruct
 type Redact = (texts: readonly string[]) => Promise<{ rewritten: number; remaining: number }>;
 const session = async (name: string, work: (turn: (id: string, text: string, writer: string) => Promise<void>, store: ReturnType<typeof claimStore>, responder: ReturnType<typeof createOwnerResponder>) => Promise<void>, redact?: Redact) => {
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_i, state) => {
-    const store = claimStore(state.storage.sql);
+    const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
     const responder = createOwnerResponder('fixture', undefined, store as never, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, redact);
     await work(async (id, text, writer) => { seen.writerOps.push(writer); await responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text }, (_n, w) => w()); }, store, responder);
   });
@@ -120,10 +120,13 @@ it('a conversation redaction that leaves entries behind is stated, not reported 
     await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1] }));
     expect(receiptOf(system())).not.toContain('still contain');
   }, async () => ({ rewritten: 1, remaining: 0 }));
-  await session('forget-live-k', async (turn) => {
+  await session('forget-live-k', async (turn, store) => {
     await saved(turn);
     await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1] }));
+    expect(store.claims('purging').length).toBe(1); // KV survivors leave the claim purging, not removed
+    expect(receiptOf(system())).toContain('is pending');
     expect(receiptOf(system())).toContain('2 saved conversation entries still contain it');
+    expect(receiptOf(system())).not.toContain('removed 1 claim');
   }, async () => ({ rewritten: 0, remaining: 2 }));
 });
 
@@ -135,4 +138,28 @@ it('a failure after the writer applied ops yields the uncertain notice and no su
     expect(sys).toContain('only partly stored');
     expect(sys).not.toContain('Memory this turn');
   }, async () => { throw new Error('kv down'); });
+});
+
+it('a correction is listed as corrected', async () => {
+  await session('forget-live-m', async (turn, store) => {
+    await saved(turn);
+    await turn('tg-2', 'actually make it a ten-minute easy stretch', ops({ corrections: [{ old_id: 1, kind: 'preference', text: 'Prefers a ten-minute easy stretch before focus block', evidence: 'actually make it a ten-minute easy stretch' }] }));
+    expect(store.claims().map((c) => c.text)).toEqual(['Prefers a ten-minute easy stretch before focus block']);
+    expect(receiptOf(system())).toContain('corrected 1 claim');
+  });
+});
+
+it('a purge that fails verification is reported as tried and incomplete, never removed', async () => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-live-n')), async (_i, state) => {
+    const real = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
+    // Fault injection at the store seam: the purge runs, but verification reports a failed store.
+    const store = { ...real, purge: (ids: readonly number[], at: string) => ({ ...real.purge(ids, at), ready: false, failed: ['claim_recall'] }) };
+    const responder = createOwnerResponder('fixture', undefined, store as never);
+    const turn = async (id: string, text: string, writer: string) => { seen.writerOps.push(writer); await responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text }, (_n, w) => w()); };
+    await saved(turn);
+    await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1] }));
+    expect(receiptOf(system())).toContain('tried to remove 1 claim');
+    expect(receiptOf(system())).toContain('claim_recall(failed)');
+    expect(receiptOf(system())).not.toContain('removed 1 claim');
+  });
 });

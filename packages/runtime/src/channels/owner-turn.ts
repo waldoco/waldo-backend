@@ -46,7 +46,10 @@ const memoryReceipt = (outcome: ClaimOutcome, conversationLeft: number): string 
   if (outcome.confirmed) parts.push(`confirmed ${plural(outcome.confirmed, 'claim', 'claims')}`);
   if (outcome.dismissed) parts.push(`dismissed ${plural(outcome.dismissed, 'claim', 'claims')}`);
   if (outcome.forgetClaimsRemoved) {
-    parts.push(`removed ${plural(outcome.forgetClaimsRemoved, 'claim', 'claims')} from stored memory at the owner's request${conversationLeft ? `, but ${plural(conversationLeft, 'saved conversation entry still contains', 'saved conversation entries still contain')} it` : ''}`);
+    // 'Removed' only once settle succeeded; while saved conversation entries remain the claim stays pending.
+    parts.push(conversationLeft
+      ? `removal of ${plural(outcome.forgetClaimsRemoved, 'claim', 'claims')} is pending at the owner's request: the stored memory copies are redacted but ${plural(conversationLeft, 'saved conversation entry still contains', 'saved conversation entries still contain')} it`
+      : `removed ${plural(outcome.forgetClaimsRemoved, 'claim', 'claims')} from stored memory at the owner's request`);
   } else if (outcome.forgetClaimsAttempted) {
     parts.push(`tried to remove ${plural(outcome.forgetClaimsAttempted, 'claim', 'claims')} at the owner's request but removal is incomplete${outcome.purgeIncomplete.length ? ` in ${outcome.purgeIncomplete.join(', ')}` : ''}`);
   }
