@@ -21,7 +21,7 @@ it('reconstructed routing mode alarm uses frozen generic transport without owner
  const bot=env.TELEGRAM_BOT_TOKEN!.split(':')[0]!;const subject='888888';const name=`telegram-link:${bot}:${subject}`;const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
  await runInDurableObject(stub,async(instance,state)=>{
   const inbox=new TelegramLinkInbox(state.storage);await inbox.admit({bot,subject,name},2,'d'.repeat(64),'a'.repeat(64));
-  await(instance as TelegramOwnerDO).alarm();expect(observed.redeem).toBe(1);expect(observed.sends).toHaveLength(1);expect(observed.sends[0]).toMatchObject({chat_id:Number(subject),text:'That code did not work. Get a new one from your console.'});
+  await(instance as TelegramOwnerDO).alarm();expect(observed.redeem).toBe(1);await new Promise(r=>setTimeout(r,300));await(instance as TelegramOwnerDO).alarm();expect(observed.sends).toHaveLength(1);expect(observed.sends[0]).toMatchObject({chat_id:Number(subject),text:'That code did not work. Get a new one from your console.'});
   await(instance as TelegramOwnerDO).alarm();expect(observed.redeem).toBe(1);expect(observed.sends).toHaveLength(1);expect((await inbox.records())[0]?.hash).toBeUndefined();
   expect(await state.storage.get('do_name')).toBeUndefined();expect(await state.storage.get('webhook_updates')).toBeUndefined();expect(await state.storage.get('telegram_subject')).toBeUndefined();
   await state.storage.deleteAlarm();

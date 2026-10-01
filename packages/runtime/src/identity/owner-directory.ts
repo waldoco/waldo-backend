@@ -48,13 +48,24 @@ export const signedRpc = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch,
   if (!base || !key || !secret) return null;
   return async (fn: string, message: string, args: Record<string, string | number>): Promise<unknown> => {
     const at = Math.floor(now() / 1000);
-    const response = await fetcher(`${base}/rest/v1/rpc/${fn}`, {
-      method: 'POST',
-      headers: { apikey: key, 'content-profile': 'waldo', 'content-type': 'application/json' },
-      body: JSON.stringify({ ...args, p_at: at, p_sig: await routerSignature(secret, at, message) }),
-    });
-    if (!response.ok) throw new Error(`owner directory ${response.status}: ${(await response.text()).slice(0, 200)}`);
-    return response.json();
+    // Match the existing webhook-to-DO admission bound, including response body.
+    const signal = AbortSignal.timeout(10_000);
+    const work = (async () => {
+      const response = await fetcher(`${base}/rest/v1/rpc/${fn}`, {
+        method: 'POST', signal,
+        headers: { apikey: key, 'content-profile': 'waldo', 'content-type': 'application/json' },
+        body: JSON.stringify({ ...args, p_at: at, p_sig: await routerSignature(secret, at, message) }),
+      });
+      if (!response.ok) throw new Error(`owner directory ${response.status}`);
+      return response.json();
+    })();
+    // Fetch normally honors AbortSignal. The race also bounds an injected adapter
+    // or a stalled response decoder. Losing work cannot commit another effect.
+    let abort!: () => void;
+    const closed = new Promise<never>((_resolve,reject) => { abort=()=>reject(new Error('owner directory timeout')); signal.addEventListener('abort',abort,{once:true}); });
+    try { return await Promise.race([work,closed]); }
+    finally { signal.removeEventListener('abort',abort); }
+
   };
 };
 
@@ -73,7 +84,7 @@ export const ownerDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = f
       if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('invalid link hash');
       try {
         const result = await call('redeem_link', `redeem.${hash}.${provider}.${subject}`, { p_code_hash: hash, p_provider: provider, p_subject: subject });
-        return { kind: result === null ? 'rejected' : typeof result === 'string' && result.length > 0 ? 'redeemed' : 'uncertain' };
+        return { kind: result === null ? 'rejected' : typeof result === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(result) ? 'redeemed' : 'uncertain' };
       } catch { return { kind: 'uncertain' }; }
     },
     redeem: async (provider, subject, code) => {
