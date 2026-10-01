@@ -1,0 +1,3 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {previewName} from './runtime-preview-name.mjs';
+test('stable per branch across commits, bounded and incompatible with legacy state',()=>{assert.equal(previewName('feat/a'),previewName('feat/a'));assert.match(previewName('feat/a'),/^pr-v2-[a-f0-9]{24}$/);assert.notEqual(previewName('feat/a'),previewName('feat_a'));assert.notEqual(previewName('feat/a'),previewName('feat/b'));});
+test('reject release branches, detached head and hostile values',()=>{for(const x of ['','HEAD','main','beta-mvp','production','staging','greenfield/harness-foundation','a\nb','a b','x'.repeat(256),null])assert.throws(()=>previewName(x));});

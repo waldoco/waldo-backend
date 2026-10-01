@@ -23,7 +23,7 @@ For waldo-runtime-staging Previews Base only:
 
 The preview wrapper uses the project-local exact version, explicitly targets
 waldo-runtime-staging, requests ignoring dashboard Base configuration on preview creation,
-uses an explicit full-commit preview name rather than legacy branch state,
+uses a versioned stable feature-branch identity rather than legacy branch state,
 and permits no extra arguments. It invokes `wrangler preview`, never `deploy` or
 `versions deploy`. Do not replace the normal beta-mvp upload-only command.
 No production Worker or live staging promotion is part of this change.
@@ -63,3 +63,21 @@ An 800ms injected setup delay reproduced it. The test now parks the real platfor
 alarm one hour ahead, makes the persisted schedule due explicitly, then invokes the
 real alarm helper after eviction; numeric-heavy run ID, one delivery and durable
 DONE/acked assertions remain. No scheduler implementation or assertion is weakened.
+
+## Capacity repair (October 1)
+
+New previews use `pr-v2-<24-hex branch SHA256>`, one isolated state namespace set
+per feature branch rather than per commit. Exact full commit stays in WALDO_RELEASE;
+review must use the immutable Unique Deployment URL, never the moving Preview URL.
+WORKERS_CI_BRANCH supplies branch identity in Workers Builds; local feature branches
+use symbolic-ref. Release branches, detached HEAD without CI identity and malformed
+branch values fail closed. v2 never adopts legacy branch preview state. Feature
+branches must not be reused for a different owner or PR. This is development state,
+not a proof of clean per-commit runtime state; tests remain hermetic.
+
+The retirement planner admits only a closed same-repository PR whose live head/ref
+match the event. It selects the v2 identity and the exact current-head legacy
+isolated preview, never other old SHA records, unresolved previews or release state.
+The planner is deliberately not wired to write CI yet: future deletion execution,
+CI secret scope and reopen/close race handling require their own review. The October
+1 approved one-time cleanup is separate and does not grant automatic future deletion.

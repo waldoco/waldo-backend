@@ -1,0 +1,6 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {retirementNames} from './runtime-preview-retire.mjs';import {previewName} from './runtime-preview-name.mjs';
+const pr={number:7,state:'closed',base:{repo:{full_name:'waldoco/waldo-backend'}},head:{ref:'feat/a',sha:'a'.repeat(40),repo:{full_name:'waldoco/waldo-backend'}}};
+const event={action:'closed',repository:{full_name:'waldoco/waldo-backend'},pull_request:structuredClone(pr)};
+const inventory=[{name:previewName('feat/a')},{name:'isolated-'+pr.head.sha},{name:'isolated-'+('b'.repeat(40))},{name:'waldo-runtime-staging'},{name:'feat/a'},{name:previewName('feat/b')}];
+test('only stable versioned identity and current closed-head isolated record, no legacy sharing',()=>assert.deepEqual(retirementNames(event,pr,inventory),inventory.slice(0,2).map(x=>x.name)));
+test('reject open/reopened, cross-repo, fork, event/live head or branch mismatch',()=>{for(const edit of [p=>p.state='open',p=>p.head.sha='b'.repeat(40),p=>p.head.ref='feat/b',p=>p.head.repo.full_name='outsider/fork',p=>p.base.repo.full_name='other/repo',p=>p.number=8]){const p=structuredClone(pr);edit(p);assert.throws(()=>retirementNames(event,p,inventory));}assert.throws(()=>retirementNames({...event,action:'reopened'},pr,inventory));});

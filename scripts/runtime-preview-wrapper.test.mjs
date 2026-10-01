@@ -1,0 +1,2 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {readFileSync} from 'node:fs';
+test('preview deploy uses stable names, exact release SHA and no environment override',()=>{const s=readFileSync('scripts/deploy-runtime-preview.sh','utf8');assert.ok(s.includes('--name "${preview_name}"'));assert.ok(s.includes('runtime-preview-name.mjs'));assert.ok(s.includes('WALDO_RELEASE:${full_sha}'));assert.ok(s.includes('WORKERS_CI_BRANCH'));assert.ok(!s.includes('isolated-${full_sha}'));});
