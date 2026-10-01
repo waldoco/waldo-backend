@@ -29,3 +29,15 @@ Audit nightly promotion original-source independence, contradiction/staleness, a
 Red-first pure projection fixtures: malformed JSON, duplicated claims, same original source on different days, missing source_ref, legacy provenance, forgotten support, stale node, invalid count/strength, hostile HTML/instructions, dangling cross-owner edge. Actual DO read/auth tests verify isolation and no writes on projection. Correctability tests require CAS/replacement, purge-version competition, failed partial deletion, no accidental source removal on dismissal, no completed receipt until verified. Cross-store cleanup remains phase-based uncertainty, not rollback.
 
 Independent source/design review plus adversarial pass before coding or merge. Exact-head actual CI jobs and staging visual/live tests precede live-feature claims. A populated synthetic screenshot never counts as stored-context proof. Keep unimplemented correction/edge provenance gaps explicit on the issue.
+
+## Reviewer corrections and read-only gate
+
+The current promotion gate proves two distinct owner-origin claim IDs and dates, NOT independent observations. last_confirmed is saveNode(active)'s model-selected timestamp, NOT owner confirmation. seen_count is model operation count; edge evidence_count is model input clamped to >=1. strength is a clamped estimate, NOT confidence. UI labels must retain these meanings.
+
+Projection separates stored support links, node interpretations and unverified association edges. An evidence note is writer text, not an authenticated quote. Preserve agent/shared/untrusted/legacy NULL origin labels and source_ref validity. Identical source_ref on different dates cannot become independent support.
+
+Read path must not call claimStore() initialization (CREATE/ALTER/FTS). Missing schema is unavailable/partial, never a blank/empty graph that implies no context. Read adapters inspect existing schema without writes under the actual owner's auth boundary. IDs are table-local and must be qualified by owner scope plus kind; claim and node IDs can collide. No raw source_ref URLs become links. Resolve supports before pagination or mark support incomplete, never downgrade absent pages into missing evidence.
+
+Suppress purging/forgotten payload; expose only count/status of unavailable support where safe. Do not overstate forget completeness. Confirm/dismiss/CAS actions are not authorized by this read-only plan. Runtime implementation remains paused until original owner scope is recoverable or trusted-channel clarification confirms it.
+
+Add adversarial fixtures for identical source_ref across dates, legacy writer-asserted quotes, model-set last_confirmed, NaN/Infinity count/strength, claim/node ID collision, absent schema without writes, incomplete pagination, purging suppression and hostile content inert rendering.
