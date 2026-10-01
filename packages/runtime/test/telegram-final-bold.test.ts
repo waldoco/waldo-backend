@@ -1,0 +1,6 @@
+import{expect,it}from'vitest';import{telegramRichReply}from'../src/channels/rich-format';
+it('renders final bold around punctuation including bracketed repo and PR numbers',()=>{expect(telegramRichReply('- **[waldoco/waldo-backend] PR #495**').text).toBe('- <b>[waldoco/waldo-backend] PR #495</b>')});
+it('keeps raw HTML inert and link URL bytes unchanged',()=>{expect(telegramRichReply('**Hi <script>** [open](https://example.test/a?x=1&y=2)').text).toBe('<b>Hi &#60;script&#62;</b> <a href="https://example.test/a?x=1&#38;y=2">open</a>')});
+it('does not interpret bold inside inline code or URL or change unmatched delimiters',()=>{expect(telegramRichReply('`**literal**` **open').text).toBe('<code>**literal**</code> **open');expect(telegramRichReply('[x](https://example.test/**keep**)').text).toBe('<a href="https://example.test/**keep**">x</a>')});
+it('supports emphasis within link labels without exposing HTML',()=>{expect(telegramRichReply('[**View**](https://example.test)').text).toBe('<a href="https://example.test"><b>View</b></a>')});
+it('keeps inline and fenced code opaque to links/bold',()=>{expect(telegramRichReply('`[x](https://example.test)`').text).toBe('<code>[x](https://example.test)</code>');expect(telegramRichReply('```\n**bold** [x](https://example.test)\n```').text).toBe('<pre>**bold** [x](https://example.test)\n</pre>')});

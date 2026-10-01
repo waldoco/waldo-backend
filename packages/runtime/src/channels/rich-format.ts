@@ -17,13 +17,27 @@ export const renderArtifactBody=(kind:ArtifactKind,body:string):string=>{
 };
 // Applied only to already guarded final text. Convert existing HTTP(S) Markdown
 // link tokens without changing their URL bytes. Raw model HTML remains text.
+const telegramInline=(text:string):string=>{
+ // Tokenize before escaping. Code is opaque; HTML is never trusted. No style,
+ // images, autolinks or arbitrary markup are emitted.
+ const tokens=/`([^`\n]+)`|\*\*([^*\n]+)\*\*/g;let out='',start=0;
+ for(const m of text.matchAll(tokens)){
+  out+=escapeRich(text.slice(start,m.index));
+  out+=m[1]!==undefined?`<code>${escapeRich(m[1])}</code>`:`<b>${escapeRich(m[2]!)}</b>`;
+  start=m.index!+m[0].length;
+ }
+ return out+escapeRich(text.slice(start));
+};
 export const telegramRichReply=(text:string):Readonly<{text:string;parse_mode:'HTML'}>=>{
- const token=/\[([^\]\n]+)\]\((https?:\/\/[^\s<>"'`()]+)\)/g;let out='',start=0;
- for(const match of text.matchAll(token)){
-  const [whole,label,url]=match;
-  out+=escapeRich(text.slice(start,match.index));
-  out+=`<a href="${escapeRich(url!)}">${escapeRich(label!)}</a>`;
-  start=match.index!+whole.length;
+ // Code alternatives precede links, so markup inside code stays literal.
+ const token=/```(?:[^\n`]*\n)?([\s\S]*?)```|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/[^\s<>"'`()]+)\)|\*\*([^*\n]+)\*\*/g;let out='',start=0;
+ for(const m of text.matchAll(token)){
+  out+=escapeRich(text.slice(start,m.index));
+  if(m[1]!==undefined)out+=`<pre>${escapeRich(m[1])}</pre>`;
+  else if(m[2]!==undefined)out+=`<code>${escapeRich(m[2])}</code>`;
+  else if(m[3]!==undefined)out+=`<a href="${escapeRich(m[4]!)}">${telegramInline(m[3])}</a>`;
+  else out+=`<b>${escapeRich(m[5]!)}</b>`;
+  start=m.index!+m[0].length;
  }
  out+=escapeRich(text.slice(start));return{text:out,parse_mode:'HTML'};
 };
