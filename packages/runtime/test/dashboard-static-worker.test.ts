@@ -5,7 +5,8 @@ const ORIGIN = 'https://waldo.invalid';
 describe('dashboard worker dispatch', () => {
   it('does not disclose the shell to unauthenticated callers', async () => {
     const res = await worker.fetch(new Request(ORIGIN + '/console/dashboard'), env);
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toBe('/console/signin');
     expect(res.headers.get('cache-control')).toBe('private, no-store');
     expect(res.headers.get('x-frame-options')).toBe('DENY');
   });
