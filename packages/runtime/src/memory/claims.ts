@@ -360,10 +360,16 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         attempt('memory_backups', () => add('memory_backups', sql.exec<{ payload: string }>(`SELECT payload FROM memory_backups WHERE payload LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.payload)).length));
         if (hasSpots) attempt('legacy_spots', () => add('legacy_spots', sql.exec<{ text: string }>(`SELECT text FROM spots WHERE text LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.text)).length));
         if (hasRevisions) attempt('legacy_core_files', () => add('legacy_core_files', sql.exec<{ content: string }>(`SELECT content FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.content)).length));
-        if (hasCards) attempt('update_cards', () => add('update_cards', sql.exec<{ changes: string; text: string | null }>('SELECT changes, text FROM update_cards').toArray().filter((row) => {
-          const parsed = parsedJson(row.changes);
-          return [row.text ?? '', ...(parsed === undefined ? [row.changes] : stringsOf(parsed))].some(exact);
-        }).length));
+        if (hasCards) attempt('update_cards', () => {
+          const rows = sql.exec<{ changes: string; text: string | null }>('SELECT changes, text FROM update_cards').toArray();
+          add('update_cards', rows.filter((row) => {
+            const parsed = parsedJson(row.changes);
+            return [row.text ?? '', ...(parsed === undefined ? [row.changes] : stringsOf(parsed))].some(exact);
+          }).length);
+          // Raw absence cannot prove decoded absence (JSON escapes), so an unparseable payload is
+          // unverifiable: it lands in failed and the source stays purging.
+          if (rows.some((row) => parsedJson(row.changes) === undefined)) throw new Error('update_cards changes unparseable');
+        });
         if (hasPlan) attempt('day_plan', () => add('day_plan', sql.exec<{ reason: string }>(`SELECT reason FROM day_plan WHERE reason LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.reason)).length));
         attempt('constellation_nodes', () => add('constellation_nodes', sql.exec<{ label: string; summary: string }>(`SELECT label, summary FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).toArray().filter((row) => exact(row.label) || exact(row.summary)).length));
       }

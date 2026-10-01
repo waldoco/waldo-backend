@@ -57,6 +57,24 @@ it('a malformed card row does not stop cleanup of later valid cards, and nested 
     const rows = sql.exec<{ changes: string; text: string | null }>('SELECT changes, text FROM update_cards ORDER BY id').toArray();
     expect(JSON.stringify(rows)).not.toContain(MARKER);
     expect(rows[0]!.changes).toBe('{bad');
-    expect(result).toContain('purged');
+    // Unparseable payload cannot be verified clean: source stays purging, store reported failed.
+    expect(result).toContain('update_cards(failed)');
+    expect(sql.exec<{ status: string }>('SELECT status FROM claims WHERE id = ?', claimId).one().status).toBe('purging');
+  });
+});
+
+it('an unterminated JSON array hiding the phrase behind unicode escapes is not reported clean', async () => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-derived-unicode')), (_instance, state) => {
+    const sql = state.storage.sql;
+    const store = claimStore(sql);
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0)`);
+    const claimId = Number(sql.exec<{ id: number }>(`INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'stated', 'owner said so', ?, ?) RETURNING id`, CLAIM_TEXT, AT, AT).one().id);
+    const escaped = [...CLAIM_TEXT].map((c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`).join('');
+    const raw = `["${escaped}"`;
+    sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?, ?, ?, ?)', 1, '2026-09-26', raw, null);
+    const result = applyClaimOps(store, JSON.stringify({ add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: null }), AT, 'owner agreed', undefined, undefined, true);
+    expect(result).toContain('update_cards(failed)');
+    expect(sql.exec<{ status: string }>('SELECT status FROM claims WHERE id = ?', claimId).one().status).toBe('purging');
+    expect(sql.exec<{ changes: string }>('SELECT changes FROM update_cards').one().changes).toBe(raw);
   });
 });
