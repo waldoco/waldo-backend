@@ -144,6 +144,13 @@ export class Scheduler {
         if (fresh === null || fresh.status !== 'armed' || fresh.due_at > now + DUE_LOOKAHEAD_MS) {
           continue;
         }
+        // Telegram final already committed before a crash at executor-return/complete.
+        // Advance scheduling without replaying its model/tools; outbox owns delivery settlement.
+        const finals = this.storage.kv.get<readonly { reminder?: { id: string; occurrence: number } }[]>('telegram_final_outbox_v1') ?? [];
+        if (fresh.kind === 'reminder' && finals.some(r => r.reminder?.id === fresh.id && r.reminder.occurrence === fresh.occurrence_at)) {
+          this.complete(fresh, now);
+          continue;
+        }
         // C3 dedupe: an occurrence still running (or crashed-and-unsettled) blocks this fire.
         // The skip is recorded as a missed row, then the schedule advances past it.
         if (this.hasRunningRun(fresh.id, fresh.occurrence_at)) {

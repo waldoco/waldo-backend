@@ -335,7 +335,7 @@ it('crash after reminder final enqueue before schedule complete never repeats th
     let modelCalls = 0;
     await expect(scheduler.dispatchDue({ reminder: async entry => {
       modelCalls++;
-      await queue.enqueue({ id: `cut:${entry.id}:${entry.occurrence_at}`, trace: 'cut', payload: { chat_id: 81102, text: 'frozen' }, ownerSubject: '81102', doName: '' });
+      await queue.enqueue({ id: `cut:${entry.id}:${entry.occurrence_at}`, trace: 'cut', payload: { chat_id: 81102, text: 'frozen' }, ownerSubject: '81102', doName: '', reminder: { id: entry.id, occurrence: entry.occurrence_at, runId: 'fixture', schedulerRunId: scheduler.runningRunId(entry.id, entry.occurrence_at), once: true } });
       const error = new Error('crash-injection: after enqueue'); error.name = 'CrashInjectionError'; throw error;
     } })).rejects.toThrow('crash-injection: after enqueue');
     await scheduler.dispatchDue({ reminder: async () => { modelCalls++; } });
