@@ -1,0 +1,97 @@
+import { describe, expect, it } from 'vitest';
+import { exportArtifactArgsSchema } from '@waldo/contracts';
+import { artifactBook, inMemoryArtifactBodies, type ArtifactMeta } from '../src/channels/artifacts';
+import { artifactExports, exportArtifactHandler, inMemoryArtifactBinaries, r2ArtifactBinaries } from '../src/channels/artifact-exports';
+
+type Row = ArtifactMeta;
+const fakeSql = () => {
+  const rows = new Map<string, Row>();
+  const exportsRows: unknown[][] = [];
+  return {
+    rows,
+    exec(query: string, ...args: unknown[]) {
+      if (query.startsWith('CREATE TABLE')) return { toArray: () => [] as Row[] };
+      if (query.startsWith('INSERT INTO artifacts')) {
+        const [id, name, kind, revision, byte_size, r2_key, provenance, taint, created_at, updated_at] = args as [string, string, Row['kind'], number, number, string, string, string, number, number];
+        rows.set(id, { id, name, kind, revision, byte_size, r2_key, provenance, taint, created_at, updated_at });
+        return { toArray: () => [] as Row[] };
+      }
+      if (query.startsWith('UPDATE artifacts SET')) {
+        const [revision, byte_size, r2_key, provenance, updated_at, id] = args as [number, number, string, string, number, string];
+        const row = rows.get(id)!;
+        rows.set(id, { ...row, revision, byte_size, r2_key, provenance, updated_at });
+        return { toArray: () => [] as Row[] };
+      }
+      if (query.startsWith('SELECT * FROM artifacts WHERE id')) {
+        const row = rows.get(args[0] as string);
+        return { toArray: () => (row ? [row] : []) };
+      }
+      if (query.startsWith('SELECT * FROM artifacts WHERE kind')) {
+        return { toArray: () => [...rows.values()].filter((r) => r.kind === args[0]).sort((a, b) => b.updated_at - a.updated_at) };
+      }
+      if (query.startsWith('SELECT * FROM artifacts ORDER BY')) {
+        return { toArray: () => [...rows.values()].sort((a, b) => b.updated_at - a.updated_at) };
+      }
+      if (query.startsWith('INSERT INTO artifact_exports')) { exportsRows.push(args as never); return { toArray: () => [] as Row[] }; }
+      if (query.startsWith('SELECT * FROM artifact_exports')) return { toArray: () => exportsRows.filter((r) => (r as unknown[])[1] === args[0]).map((a) => { const [id, source_artifact_id, source_revision, format, mime_type, byte_size, sha256, r2_key, created_at] = a as unknown[]; return { id, source_artifact_id, source_revision, format, mime_type, byte_size, sha256, r2_key, created_at }; }) as never };
+      throw new Error(`unexpected query: ${query}`);
+    },
+  };
+};
+
+
+const clock = { timezone: 'Asia/Kolkata', now: () => new Date('2026-10-02T01:00:00Z') };
+const hex = async (b: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))].map((x) => x.toString(16).padStart(2, '0')).join('');
+const setup = async (body: string) => {
+  const sql = fakeSql(); const bodies = inMemoryArtifactBodies(); const bins = inMemoryArtifactBinaries();
+  const book = artifactBook(sql as never, bodies, clock, () => 'abc');
+  const meta = await book.create({ name: 'Brief', kind: 'note', body_markdown: body } as never, 'test');
+  const ex = artifactExports(sql as never, book, bodies, bins, clock, () => 'e1');
+  return { meta, ex, bins, handler: exportArtifactHandler(ex) };
+};
+const args = (id: string, rev = 1, format = 'pdf') => exportArtifactArgsSchema.parse({ artifact_id: id, expected_revision: rev, format });
+
+describe('export_artifact', () => {
+  it('unsupported format writes nothing', async () => {
+    const { meta, ex, bins, handler } = await setup('# Hi\n\n- a');
+    const r = await handler.handle(args(meta.id, 1, 'docx')) as { data: { status: string } };
+    expect(r.data.status).toBe('unsupported_format');
+    expect(ex.rows(meta.id)).toHaveLength(0);
+    expect(await bins.getBytes(`${meta.id}/r1/exp:e1`)).toBeNull();
+  });
+  it('revision mismatch and unknown id write nothing', async () => {
+    const { meta, ex, handler } = await setup('# Hi');
+    expect(await handler.handle(args(meta.id, 5))).toMatchObject({ ok: false, code: 'rejected' });
+    expect(await handler.handle(args('art:nope'))).toMatchObject({ ok: false, code: 'not_found' });
+    expect(ex.rows(meta.id)).toHaveLength(0);
+  });
+  it('too large and non-Latin text give a typed receipt and write nothing', async () => {
+    const big = await setup('x '.repeat(110_000));
+    expect(await big.handler.handle(args(big.meta.id))).toMatchObject({ data: { status: 'too_large' } });
+    const dev = await setup('# नमस्ते');
+    expect(await dev.handler.handle(args(dev.meta.id))).toMatchObject({ data: { status: 'render_failed' } });
+    expect(dev.ex.rows(dev.meta.id)).toHaveLength(0);
+    expect(await dev.bins.getBytes(`${dev.meta.id}/r1/exp:e1`)).toBeNull();
+  });
+  it('success stores real PDF bytes whose sha256 matches the receipt and the row', async () => {
+    const { meta, ex, bins, handler } = await setup('# Trip\n\n- Delhi to Mumbai\n\nBody text.');
+    const r = await handler.handle(args(meta.id)) as { ok: boolean; data: { status: string; sha256: string; bytes: number; delivery: { status: string; url: null } } };
+    expect(r.data.status).toBe('exported');
+    expect(r.data.delivery).toEqual({ status: 'saved_internal', url: null, audience: 'unverified' });
+    const [row] = ex.rows(meta.id);
+    const stored = (await bins.getBytes(row!.r2_key))!;
+    expect(new TextDecoder().decode(stored.slice(0, 4))).toBe('%PDF');
+    expect(await hex(stored)).toBe(r.data.sha256);
+    expect(row).toMatchObject({ sha256: r.data.sha256, byte_size: r.data.bytes, source_revision: 1 });
+    if (process.env.PDF_OUT) (await import('node:fs')).writeFileSync(process.env.PDF_OUT, stored);
+  });
+  it('owner-scoped R2 keys cannot read across owners', async () => {
+    const store = new Map<string, Uint8Array>();
+    const bucket = { put: async (k: string, v: Uint8Array) => { store.set(k, v); }, get: async (k: string) => (store.has(k) ? { arrayBuffer: async () => store.get(k)!.buffer } : null) } as never;
+    const a = r2ArtifactBinaries(bucket, 'owner-a'); const b = r2ArtifactBinaries(bucket, 'owner-b');
+    await a.putBytes('k', new Uint8Array([1, 2]));
+    expect(await b.getBytes('k')).toBeNull();
+    expect([...(await a.getBytes('k'))!]).toEqual([1, 2]);
+    expect(() => r2ArtifactBinaries(bucket, ' ')).toThrow();
+  });
+});

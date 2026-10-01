@@ -35,7 +35,7 @@ import {
   searchCommunicationArgsSchema,
   listArtifactsArgsSchema,
   readArtifactArgsSchema,
-  reviseArtifactArgsSchema,
+  reviseArtifactArgsSchema, exportArtifactArgsSchema,
   getContextArgsSchema,
   queryAvailabilityArgsSchema,
   readOwnerContextArgsSchema,
