@@ -108,6 +108,7 @@ describe('episode history', () => {
       expect(index.get(hit!.ref)!.text).toBe(full);
       expect(index.get('999999')).toBeNull();
       expect(index.get('1; DROP')).toBeNull();
+      for (const bad of ['0', '-1', '007', '1.5', '']) expect(index.get(bad)).toBeNull();
     });
   });
 

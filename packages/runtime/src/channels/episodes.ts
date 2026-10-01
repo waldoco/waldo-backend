@@ -36,7 +36,7 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
     count: () => sql.exec<{ n: number }>('SELECT count(*) AS n FROM episodes').one().n,
     get(ref) {
       const row = Number(ref);
-      if (!Number.isSafeInteger(row) || String(row) !== ref) return null;
+      if (!Number.isSafeInteger(row) || row < 1 || String(row) !== ref) return null;
       return sql.exec<Episode>('SELECT entry_id, speaker, at, text FROM episodes WHERE rowid = ?', row).toArray()[0] ?? null;
     },
     search(query, limit, from, to) {
