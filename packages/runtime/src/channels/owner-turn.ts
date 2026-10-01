@@ -16,7 +16,7 @@ import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
-import { CLINICAL_REDIRECT, messagingSystemPrompt, ownerClockLine } from '../prompt/messaging-behavior';
+import { CLINICAL_REDIRECT, messagingSystemPrompt, ownerClockLine, withOwnerSkillProcedures, OWNER_SKILL_SAFEGUARDS } from '../prompt/messaging-behavior';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { applyClaimOps, type ClaimOutcome, applyPromotion, CLAIM_OPS_SCHEMA, exchangeInput, MEMORY_INSTRUCTION, memoryPrompt, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
 import { restoreConversation, type ConversationStore } from './conversation-store';
@@ -181,8 +181,11 @@ export const createOwnerResponder = (
       shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength },
       text: { input, output: result.response.text || JSON.stringify(result.response.tool_calls), ...(reasoning ? { reasoning } : {}) },
     });
-    if (!result.ok && result.halted_by === 'medical_gate' && !system.endsWith(CLINICAL_REDIRECT)) {
-      return complete(trace, `${purpose}_redirect`, `${system}\n\n${CLINICAL_REDIRECT}`, content, format, attachments, tools, turns);
+    if (!result.ok && result.halted_by === 'medical_gate' && !system.includes(CLINICAL_REDIRECT)) {
+      const redirected = system.endsWith(OWNER_SKILL_SAFEGUARDS)
+        ? `${system.slice(0, -OWNER_SKILL_SAFEGUARDS.length)}${CLINICAL_REDIRECT}\n\n${OWNER_SKILL_SAFEGUARDS}`
+        : `${system}\n\n${CLINICAL_REDIRECT}`;
+      return complete(trace, `${purpose}_redirect`, redirected, content, format, attachments, tools, turns);
     }
     if (!result.ok && result.halted_by === 'medical_gate') return { ...CLINICAL_FALLBACK, model };
     if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.destination, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);
@@ -257,7 +260,7 @@ export const createOwnerResponder = (
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
           const ordersSection = standingOrders?.() ?? '';
           return complete(trace, 'reply',
-          [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory ? [turnMemoryPrompt(memory, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : []), ...(privateSystemSkills && request.skillPrompt ? [request.skillPrompt] : [])].join('\n\n'),
+          withOwnerSkillProcedures([messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory ? [turnMemoryPrompt(memory, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'), privateSystemSkills ? request.skillPrompt : undefined),
           entries,
           undefined,
           pending,
