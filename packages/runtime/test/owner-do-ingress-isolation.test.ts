@@ -322,3 +322,23 @@ it('due transport backlog yields every second alarm to due scheduled work', asyn
     expect((state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? []).filter(r => r.status === 'pending')).toHaveLength(1);
   });
 });
+
+it('crash after reminder final enqueue before schedule complete never repeats the model executor', async () => {
+  const { Scheduler } = await import('../src/scheduler/multiplexer');
+  const { productionDeps } = await import('../src/seams/deps');
+  const { TelegramFinalOutbox } = await import('../src/channels/telegram-final-outbox');
+  await runInDurableObject(doStub(81102), async (_instance, state) => {
+    const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+    const occurrence = Date.now() - 1000;
+    await scheduler.schedule({ id: 'cut-reminder', kind: 'reminder', dueAt: occurrence, occurrenceAt: occurrence, payloadRefs: { reminder_id: 'cut-reminder' } });
+    const queue = new TelegramFinalOutbox(state.storage.kv);
+    let modelCalls = 0;
+    await expect(scheduler.dispatchDue({ reminder: async entry => {
+      modelCalls++;
+      await queue.enqueue({ id: `cut:${entry.id}:${entry.occurrence_at}`, trace: 'cut', payload: { chat_id: 81102, text: 'frozen' }, ownerSubject: '81102', doName: '' });
+      const error = new Error('crash-injection: after enqueue'); error.name = 'CrashInjectionError'; throw error;
+    } })).rejects.toThrow('crash-injection: after enqueue');
+    await scheduler.dispatchDue({ reminder: async () => { modelCalls++; } });
+    expect(modelCalls).toBe(1); expect(queue.records()).toHaveLength(1);
+  });
+});

@@ -187,6 +187,7 @@ export class Scheduler {
           const delivery = await executor(bumped);
           this.complete(bumped, now);
           if (delivery !== 'delivery_pending') this.settleRun(runId, 'ok', null, now);
+          else { this.markHeartbeatDecision(runId, 'acted'); this.markDelivery(runId, 'pending'); }
           dispatched.push(bumped);
         } catch (err) {
           if (isCrashInjectionError(err)) {
@@ -377,6 +378,8 @@ export class Scheduler {
   }
 
   settleDelivery(runId: string, delivered: boolean): void {
+    this.markHeartbeatDecision(runId, 'acted');
+    this.markDelivery(runId, delivered ? 'sent' : 'failed');
     this.settleRun(runId, delivered ? 'ok' : 'quarantined', delivered ? null : 'delivery', this.deps.now());
   }
 

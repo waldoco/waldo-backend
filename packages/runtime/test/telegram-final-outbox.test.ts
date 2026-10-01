@@ -62,7 +62,7 @@ it('ACK-before-lifecycle-persist resumes bookkeeping without another send', asyn
   await new TelegramFinalOutbox(f.kv, f.now).drain({ allowed: async () => true, send, settled: f.settled });
   expect(send).toHaveBeenCalledTimes(1); expect(f.outbox.records()[0]?.settled).toBe(true);
 });
-it.each([NaN, Infinity, -10, '300'])('bounds untrusted retry_after %s', async retry => {
+it.each([NaN, -10, '300'])('bounds untrusted retry_after %s', async retry => {
   const f = fixture(); await f.outbox.enqueue(f.input); f.advance();
   await f.outbox.drain({ allowed: async () => true, send: async () => { throw new TelegramRejection(429, 'rate', retry as number); }, settled: f.settled });
   expect(Number.isFinite(f.outbox.records()[0]?.dueAt)).toBe(true);
@@ -81,4 +81,16 @@ it('expired ambiguous content is scrubbed and only then eligible for capacity re
   await f.outbox.enqueue({ ...f.input, id: 'fresh' });
   expect(f.outbox.records()).toHaveLength(256);
   expect(f.outbox.records().filter(r => r.status === 'quarantined').every(r => r.payload.text === '')).toBe(true);
+});
+
+it('excessive retry_after is quarantined, never shortened below provider wait', async () => {
+  const f = fixture(); await f.outbox.enqueue(f.input); f.advance();
+  await f.outbox.drain({ allowed: async () => true, send: async () => { throw new TelegramRejection(429, 'rate', 7200); }, settled: f.settled });
+  expect(f.outbox.records()[0]?.status).toBe('quarantined');
+});
+it('idle maintenance scrubs delivered and ambiguous text independently of enqueue', async () => {
+  const f = fixture(); await f.outbox.enqueue(f.input);
+  const rows = f.outbox.records(); rows[0]!.status = 'delivered'; rows[0]!.settled = true; rows[0]!.createdAt = -90000000;
+  f.kv.put(FINAL_OUTBOX_KEY, rows); await f.outbox.maintain();
+  expect(f.outbox.records()[0]?.payload.text).toBe(''); expect(f.kv.get(FINAL_OUTBOX_DUE_KEY)).toBeNull();
 });
