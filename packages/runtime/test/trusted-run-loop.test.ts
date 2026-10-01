@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { armAlarm } from '../src/scheduler/alarm-slot';
 import {
   evictDurableObject,
   runDurableObjectAlarm,
@@ -3581,7 +3582,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         const runId = await runLoop.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
         // Keep the host alarm from firing between setup and the explicit crash assertion.
         // runDurableObjectAlarm drives it explicitly; schedule due_at itself is unchanged.
-        await state.storage.setAlarm(Date.now() + 60_000);
+        await armAlarm(state.storage, Date.now() + 60_000);
         runLoop.__runLoopSetTestOverrides({
           gateway,
           contextComposer: frozenComposer().composer,
