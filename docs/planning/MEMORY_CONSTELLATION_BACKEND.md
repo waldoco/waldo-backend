@@ -38,11 +38,13 @@ Projection separates stored support links, node interpretations and unverified a
 
 Read path must not call claimStore() initialization (CREATE/ALTER/FTS). Missing schema is unavailable/partial, never a blank/empty graph that implies no context. Read adapters inspect existing schema without writes under the actual owner's auth boundary. IDs are table-local and must be qualified by owner scope plus kind; claim and node IDs can collide. No raw source_ref URLs become links. Resolve supports before pagination or mark support incomplete, never downgrade absent pages into missing evidence.
 
-Suppress purging/forgotten payload; expose only count/status of unavailable support where safe. Do not overstate forget completeness. Confirm/dismiss/CAS actions are not authorized by this read-only plan. Read-only implementation scope independently recovered from original WhatsApp voice wamid.HBgMOTE3NTU4NjU5OTMxFQIAEhggQUM3ODNEMjMzQ0REQjRFNTM2QURDM0Q5M0VEMjZGQ0EA, runtime transcription job audiotxjob-01M3V8MJJHWX15RM3Q5X8AGF6S in the main chat at13:47. Both transcripts request actual backend logic for working constellation nodes. Final plan delta cleared at4a78189; only read-only projection code/tests released. Schema/migrations and correction mutations remain separately held.
+Suppress purging/forgotten payload; expose only count/status of unavailable support where safe. Do not overstate forget completeness. Confirm/dismiss/CAS actions are not authorized by this read-only plan. Read-only implementation scope: the owner's WhatsApp voice note wamid.HBgMOTE3NTU4NjU5OTMxFQIAEhggQUM3ODNEMjMzQ0REQjRFNTM2QURDM0Q5M0VEMjZGQ0EA (2026-10-01 13:47 IST) exists in his own channel, but the archive holds only "transcript pending", so its content is not verified here; do not cite it as authority. The owner's own iMessage at 2026-10-01 22:02 (phonemsg-01M3W4YEBN65T46H8FNKK6JV2Q) says "Go ahead with memory plan for Waldo and all the other memory related research and finalizations". Final plan delta cleared at4a78189; only read-only projection code/tests released. Schema/migrations and correction mutations remain separately held.
 
 Add adversarial fixtures for identical source_ref across dates, legacy writer-asserted quotes, model-set last_confirmed, NaN/Infinity count/strength, claim/node ID collision, absent schema without writes, incomplete pagination, purging suppression and hostile content inert rendering.
 
-## Read contract: pagination and bounded exploration (2026-10-01, implemented in #506)
+## Read contract: pagination and bounded exploration (PROPOSED, sequenced after #506 merge)
+
+Status: proposed. The implementation is on draft #506 and is not merged or deployed. This section is the contract Codex builds against; amend it if review changes #506.
 
 Owner: the Memory page is a projection. It shows saved Memory; it does not decide what Waldo remembers. No remember/forget policy, writes or retry actions live here (`actions` is always empty).
 
@@ -50,11 +52,14 @@ Route: `GET /console/dashboard/api/v1/memory`, same owner-session auth. Views vi
 - `summary` (default): counts of claims, interpretations, associations.
 - `claims` / `interpretations`: `?limit=N` required, optional opaque `?cursor=`. Response `items[]` and `page {limit, returned, total, next_cursor|null}`, ordered by stable local id.
 - `detail`: `?id=` of a claim or interpretation, with linked ids and unavailable support count. Unknown id is 404.
-- `pattern`: `?id=<interpretation>&max_nodes=N&max_links=M`, optional cursor. Returns the center, neighbour nodes and links, `showing {nodes, of_nodes, links, of_links}`, `truncated`, `omitted_links`, and `expand {next_cursor, links_capped}`.
+- `pattern`: `?id=<interpretation>&max_nodes=N&max_links=M`, optional cursor. Returns the center, a page of neighbour nodes and their links to the center, `showing {nodes, of_nodes, links, of_links}`, `truncated`, `omitted_links`, and `expand {next_cursor, links_capped, capped_links, capped_links_recoverable}`.
 
-Rules:
-- No silent drops. Anything cut by a bound is counted in `showing`/`omitted_links` and reachable by `next_cursor`, or flagged `links_capped`.
-- No invented caps. Limits are request parameters; a deployment ceiling can be injected and then returns 400 `*_over_ceiling`. A numeric ceiling is set only from measured aggregate size and latency, not guessed.
+Rules and limits:
+- No invented caps. Limits are request parameters; a deployment ceiling can be injected and then returns 400 `*_over_ceiling`. A numeric ceiling is set only from measured aggregate size and latency.
+- `pattern` shows only links incident to the center. Links between two neighbours are not shown.
+- `truncated` and `omitted_links` are computed per page: links still to come on later pages plus links cut by `max_links` on this page. The last page has `next_cursor: null` and `truncated: false` unless links were capped.
+- Links cut by `max_links` are NOT recoverable. They have no cursor; the response reports `links_capped: true`, the count in `capped_links`, and `capped_links_recoverable: false`. To see them, call again with a higher `max_links`.
+- Cursors are unsigned and not snapshot-pinned. If Memory changes during pagination, pages can skip or repeat items. A client should restart from page 1 on `cursor_invalid` or when `total` changes.
 - Every response carries `state` and `complete`; partial or unavailable state must be shown, never a blank graph.
 - Provenance stays honest: evidence is a writer note, source references are withheld and unverified, estimates are uncalibrated model estimates, associations are unverified.
-- Caveat: the read still loads all rows of the owner's Memory tables before slicing. Responses are bounded; the read is not. A bounded SQL read needs measured table sizes first.
+- The read still loads all rows of the owner's Memory tables before slicing. Responses are bounded; the read is not. A bounded SQL read needs measured table sizes first.
