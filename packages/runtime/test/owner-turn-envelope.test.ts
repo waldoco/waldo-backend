@@ -22,7 +22,7 @@ describe('channel-neutral owner conversation seam', () => {
   it('WhatsApp compatibility adapter no longer labels persisted entries Telegram', async () => {
     const entries: ConversationEntry[] = [];
     const args: Parameters<typeof createTelegramResponder> = ['fixture-key', { load: async () => ({ entries: [], leafId: null }), save: async rows => { entries.push(...rows); } }];
-    args[22] = 'whatsapp';
+    args[20] = 'whatsapp';
     const responder = createTelegramResponder(...args);
     expect(await responder.respond({ updateId: 9000000000001, chatId: 777, text: 'hello' } as never, time)).toBe('pong');
     expect(entries[0]).toMatchObject({ id: 'whatsapp-9000000000001', chatId: 'whatsapp-777', surface: 'whatsapp' });
