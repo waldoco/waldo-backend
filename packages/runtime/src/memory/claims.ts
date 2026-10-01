@@ -236,7 +236,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     // leaves the search index, backups, and frozen legacy tables (redacted, preserving
     // unrelated content), constellation nodes stop quoting it and stop referencing its id,
     // and a barrier blocks re-admission. Fresh-state verification reports what survived.
-    purge(ids: readonly number[], at: string): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[] } {
+    purge(ids: readonly number[], at: string): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } } {
       const forgotten = ids.length
         ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
         : [];
@@ -269,6 +269,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const hasRevisions = tableExists(sql, 'core_file_revisions');
       const hasCards = tableExists(sql, 'update_cards');
       const hasPlan = tableExists(sql, 'day_plan');
+      const receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } = { deleted: {}, redacted: {}, terminalised: {} };
+      const hasRunCandidates = tableExists(sql, 'run_candidates');
+      const hasOutbox = tableExists(sql, 'outbox');
+      const hasHeld = tableExists(sql, 'held_candidates');
+      const hasSchedule = tableExists(sql, 'schedule');
       // SQLite LIKE is case-insensitive but replace() is case-sensitive: a casing variant of
       // the forgotten text would match the predicate yet survive the redaction. Fetch the
       // matching rows and redact in JS with a case-insensitive literal replace instead.
@@ -331,6 +336,68 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             if (redacted !== row.reason) sql.exec('UPDATE day_plan SET reason = ? WHERE rowid = ?', redacted, row.rid);
           }
         });
+        // Tracer and scheduler stores (docs/planning/FORGET_COVERAGE_AUDIT_2026-10-02.md). Policy,
+        // decided by the main agent under decide-and-log (not by the owner):
+        //  - Unsent copies that nothing else depends on are deleted: held candidates and ONE-SHOT
+        //    armed/quarantined schedule rows (both already have a delete path in their stores).
+        //  - An undelivered outbox row (pending or sent_unacked) is never delivered with a
+        //    placeholder: its run is terminalised through the journal's legal edge (any open state ->
+        //    FAILED) in the same transaction as the payload redaction, so no resume path re-drives
+        //    it and the journal/outbox pairing stays intact. A sent_unacked message may therefore
+        //    stay undelivered; the receipt says so.
+        //  - History is redacted in place and never deleted: run candidates, acked outbox rows,
+        //    recurring schedules and standing orders (quoted text only).
+        // Payloads are JSON, so they are redacted per parsed string value, not by raw substring.
+        const redactPayload = (raw: string) => {
+          const parsed = parsedJson(raw);
+          return parsed === undefined ? ci(raw) : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
+        };
+        const hits = (raw: string) => { const parsed = parsedJson(raw); return (parsed === undefined ? [raw] : stringsOf(parsed)).some((v) => v.toLowerCase().includes(text.toLowerCase())); };
+        const tally = (kind: keyof typeof receipt, store: string) => { receipt[kind][store] = (receipt[kind][store] ?? 0) + 1; };
+        if (hasRunCandidates) attempt('run_candidates', () => {
+          for (const row of sql.exec<{ run_id: string; candidate_json: string }>(`SELECT run_id, candidate_json FROM run_candidates WHERE candidate_json LIKE ? ESCAPE '\\'`, like).toArray()) {
+            if (!hits(row.candidate_json)) continue;
+            sql.exec('UPDATE run_candidates SET candidate_json = ? WHERE run_id = ?', redactPayload(row.candidate_json), row.run_id);
+            tally('redacted', 'run_candidates');
+          }
+        });
+        if (hasOutbox) attempt('outbox', () => {
+          for (const row of sql.exec<{ outbox_id: string; run_id: string; payload: string; status: string }>(`SELECT outbox_id, run_id, payload, status FROM outbox WHERE payload LIKE ? ESCAPE '\\'`, like).toArray()) {
+            if (!hits(row.payload)) continue;
+            // The outbox row schema only admits an opaque synthetic token as payload, so a payload that
+            // still held text is replaced whole by one: the row stays readable by the resume path.
+            sql.exec('UPDATE outbox SET payload = ? WHERE outbox_id = ?', 'synthetic-token-forgotten', row.outbox_id);
+            if (row.status !== 'acked' && tableExists(sql, 'journal')) {
+              // FAILED is a legal edge from every non-terminal state of the reduced FSM.
+              sql.exec(`UPDATE journal SET state = 'FAILED', updated_at = ? WHERE run_id = ? AND state NOT IN ('DONE', 'FAILED')`, Date.parse(at) || 0, row.run_id);
+              tally('terminalised', row.status === 'sent_unacked' ? 'outbox_sent_unacked' : 'outbox_pending');
+            } else tally('redacted', 'outbox');
+          }
+        });
+        if (hasHeld) attempt('held_candidates', () => {
+          // Redact in place: the run journal pairs a held run with its held row (push_class and
+          // event_id), so deleting the row would strand that run. The same redaction runs on the
+          // matching run_candidates row, which keeps the pair equal.
+          for (const row of sql.exec<{ user_id: string; event_id: string; candidate_json: string }>(`SELECT user_id, event_id, candidate_json FROM held_candidates WHERE candidate_json LIKE ? ESCAPE '\\'`, like).toArray()) {
+            if (!hits(row.candidate_json)) continue;
+            const redactedJson = redactPayload(row.candidate_json);
+            const redactedEvent = (JSON.parse(redactedJson) as { event_id?: string }).event_id ?? row.event_id;
+            sql.exec('UPDATE held_candidates SET candidate_json = ?, event_id = ? WHERE user_id = ? AND event_id = ?', redactedJson, redactedEvent, row.user_id, row.event_id);
+            tally('redacted', 'held_candidates');
+          }
+        });
+        if (hasSchedule) attempt('schedule', () => {
+          for (const row of sql.exec<{ id: string; payload_json: string; status: string; recurrence_json: string | null }>(`SELECT id, payload_json, status, recurrence_json FROM schedule WHERE payload_json LIKE ? ESCAPE '\\'`, like).toArray()) {
+            if (!hits(row.payload_json)) continue;
+            if (row.recurrence_json === null && (row.status === 'armed' || row.status === 'quarantined')) {
+              sql.exec('DELETE FROM schedule WHERE id = ?', row.id);
+              tally('deleted', 'schedule');
+            } else {
+              sql.exec('UPDATE schedule SET payload_json = ? WHERE id = ?', redactPayload(row.payload_json), row.id);
+              tally('redacted', 'schedule');
+            }
+          }
+        });
         attempt('constellation_nodes', () => {
           for (const row of sql.exec<{ id: number; label: string; summary: string }>(`SELECT id, label, summary FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).toArray()) {
             const redactedLabel = ci(row.label); const redactedSummary = ci(row.summary);
@@ -371,6 +438,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           if (rows.some((row) => parsedJson(row.changes) === undefined)) throw new Error('update_cards changes unparseable');
         });
         if (hasPlan) attempt('day_plan', () => add('day_plan', sql.exec<{ reason: string }>(`SELECT reason FROM day_plan WHERE reason LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.reason)).length));
+        const jsonHits = (raw: string) => { const parsed = parsedJson(raw); return (parsed === undefined ? [raw] : stringsOf(parsed)).some(exact); };
+        if (hasRunCandidates) attempt('run_candidates', () => add('run_candidates', sql.exec<{ candidate_json: string }>(`SELECT candidate_json FROM run_candidates WHERE candidate_json LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => jsonHits(row.candidate_json)).length));
+        if (hasOutbox) attempt('outbox', () => add('outbox', sql.exec<{ payload: string }>(`SELECT payload FROM outbox WHERE payload LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => jsonHits(row.payload)).length));
+        if (hasHeld) attempt('held_candidates', () => add('held_candidates', sql.exec<{ candidate_json: string }>(`SELECT candidate_json FROM held_candidates WHERE candidate_json LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => jsonHits(row.candidate_json)).length));
+        if (hasSchedule) attempt('schedule', () => add('schedule', sql.exec<{ payload_json: string }>(`SELECT payload_json FROM schedule WHERE payload_json LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => jsonHits(row.payload_json)).length));
         attempt('constellation_nodes', () => add('constellation_nodes', sql.exec<{ label: string; summary: string }>(`SELECT label, summary FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).toArray().filter((row) => exact(row.label) || exact(row.summary)).length));
       }
       // No deletion here: settlement is a separate step (settle()) the caller runs only after
@@ -378,7 +450,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // source on SQL verification alone would orphan a KV failure: the UI says incomplete
       // but the retry could no longer find the claim. Until settle() runs, the 'purging' row
       // and pending marker remain, so every retry path still works.
-      return { ready: failed.length === 0 && Object.keys(remaining).length === 0, remaining, texts, failed };
+      return { ready: failed.length === 0 && Object.keys(remaining).length === 0, remaining, texts, failed, receipt };
     },
 
     // Final step of a purge, run only once SQL AND the caller's KV stores verify clean.
