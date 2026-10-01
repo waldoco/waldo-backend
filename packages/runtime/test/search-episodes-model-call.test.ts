@@ -90,7 +90,13 @@ it('a large recovered turn is offloaded and its exact deep value is readable thr
   const [, second] = calls.inputs;
   expect(second).not.toContain('18.5k'); // the value is not in the first in-context envelope
   expect(third).toContain('18.5k');
-  const readOutput = third.slice(third.indexOf('call_id\":\"c2\",\"output'));
+  const request = JSON.parse(third) as { input: Array<{ type?: string; call_id?: string; output?: string }> };
+  const readIndex = request.input.findIndex(item => item.type === 'function_call_output' && item.call_id === 'c2');
+  expect(readIndex).toBeGreaterThanOrEqual(0);
+  const readOutput = request.input[readIndex]!.output;
+  expect(readOutput).toBeDefined();
+  const receipt = JSON.parse(readOutput!) as { ok?: boolean; source_taint?: string };
+  expect(receipt.ok).toBe(true);
+  expect(receipt.source_taint).toBe('external');
   expect(readOutput).toContain('18.5k');
-  expect(readOutput).toContain('source_taint');
 });
