@@ -1,6 +1,6 @@
 # Blocked skills v1 (text only, not loaded)
 
-These five procedures come from the reviewed skill pack v1. They are documents. Nothing in the runtime reads this folder, no skill is seeded, and no skill is usable until it passes a read-only trial on staging (see docs/planning/SKILL_BINDING_DESIGN_2026-10-02.md).
+These five procedures are copied from the skill pack v1 (generator output outside the repo, per #525). No review record for them is cited here. They are documents. Nothing in the runtime reads this folder, no skill is seeded, and no skill is usable until it passes a read-only trial on staging (see docs/planning/SKILL_BINDING_DESIGN_2026-10-02.md).
 
 | Skill | Blocked on |
 | --- | --- |
