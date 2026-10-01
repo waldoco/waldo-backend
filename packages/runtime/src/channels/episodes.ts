@@ -72,6 +72,10 @@ export const backfillEpisodes = async (store: ConversationStore, index: EpisodeI
   return entries.length;
 };
 
+// Nightly consolidation learns from what the owner and Waldo said. Machine-written entries
+// (reminder and scheduled prompts) are not the owner's words and never become memory.
+export const consolidationDay = (episodes: readonly Episode[]): readonly Episode[] => episodes.filter((episode) => episode.speaker !== 'system');
+
 export const NIGHTLY_ID = 'nightly-memory';
 export const NIGHTLY_TIME = '03:00';
 

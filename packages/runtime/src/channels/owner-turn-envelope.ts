@@ -11,6 +11,8 @@ export type OwnerTurnEnvelope = Readonly<{
   text: string;
   mediaNote?: string;
   attachment?: LLMAttachment;
+  // Set by the channel host. When false, this turn skips its immediate memory write. Nightly consolidation and history indexing are separate and unaffected.
+  memoryWrites?: boolean;
 }>;
 export type OwnerResponder = Readonly<{
   respond(turn: OwnerTurnEnvelope, time: TurnTimer): Promise<string>;

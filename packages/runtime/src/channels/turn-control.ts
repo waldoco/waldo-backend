@@ -21,6 +21,7 @@ export const turnControl = () => {
       running = false;
       return heard;
     },
+    heard: (): readonly string[] => heard,
     stop(): boolean {
       if (running) stopped = true;
       return running;

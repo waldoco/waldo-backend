@@ -126,7 +126,7 @@ export const SCENARIOS: readonly Scenario[] = [
       { match: /vegetarian/, rounds: [{ text: 'Noted.' }] },
     ],
     assert: {
-      hops: [{ hop: 'memory', ok: true, after: 'llm_reply' }],
+      hops: [{ hop: 'llm_reply', ok: true, after: 'memory' }],
       replies: [/Noted/],
     },
   },
@@ -184,10 +184,10 @@ export const SCENARIOS: readonly Scenario[] = [
       { match: /what time do I wake/, rounds: [{ text: '7:30.' }] },
     ],
     assert: {
-      // 96c7683: the next turn waits for the previous turn's post-turn memory writer.
+      // Record before reply: each turn's memory write lands before its own reply and so before the next turn.
       hops: [
-        { hop: 'memory', ok: true, trace: /tg-1$/, after: 'llm_reply', afterTrace: /tg-1$/ },
-        { hop: 'llm_reply', ok: true, trace: /tg-2$/, after: 'memory', afterTrace: /tg-1$/ },
+        { hop: 'llm_reply', ok: true, trace: /tg-1$/, after: 'memory', afterTrace: /tg-1$/ },
+        { hop: 'llm_reply', ok: true, trace: /tg-2$/, after: 'memory', afterTrace: /tg-2$/ },
       ],
     },
   },

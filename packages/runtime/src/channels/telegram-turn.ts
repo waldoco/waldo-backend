@@ -17,10 +17,10 @@ export const telegramTurnEnvelope = (turn: TelegramInboundTurn, surface = 'teleg
 type CoreArgs = Parameters<typeof createOwnerResponder>;
 type AdapterArgs = [key: CoreArgs[0], store?: CoreArgs[1], memory?: CoreArgs[2], log?: CoreArgs[3], readers?: MediaReaders, ...rest: CoreArgs extends [unknown, unknown?, unknown?, unknown?, ...infer Rest] ? Rest : never];
 export const createTelegramResponder = (...args: [...AdapterArgs, surface?: string]) => {
-  const surface = args[22] ?? 'telegram';
+  const surface = args[20] ?? 'telegram';
   const readers = args[4];
-  const coreArgs: CoreArgs = [args[0], args[1], args[2], args[3], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15], args[16], args[17], args[18], args[19], args[20], args[21]];
-  coreArgs[20] = coreArgs[20] ?? TELEGRAM_REACTIONS;
+  const coreArgs: CoreArgs = [args[0], args[1], args[2], args[3], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15], args[16], args[17], args[18], args[19]];
+  coreArgs[18] = coreArgs[18] ?? TELEGRAM_REACTIONS;
   const core = createOwnerResponder(...coreArgs);
   const envelope = (turn: TelegramInboundTurn) => telegramTurnEnvelope(turn, surface);
   const respond: TelegramOwnerListenerOptions['respond'] = async (turn, time) => {

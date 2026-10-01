@@ -86,18 +86,8 @@ export const createOwnerResponder = (
   // Memory-writer model (2026-09-27 staging receipt: nano hallucinated forget_claims that
   // wiped claims 1-6 and persisted a bare "yes" as a Gmail-fetch agreement). Memory writes
   // are durable state, so they escalate one rung under cheapest-passing: nano demonstrably
-  // does not pass for claim_ops. Bare affirmative/negative turns ("yes") escalate to it for
-  // the reply hop too - context-binding is where nano failed worst.
+  // does not pass for claim_ops.
   memoryModel: ModelName = OPENAI_GPT_6_LUNA_MODEL,
-  // Durable settle: the owner DO passes ctx.waitUntil here so an in-flight memory write
-  // survives the reply returning. Without it, hibernation kills the write silently
-  // (2026-09-28 staging receipt: three acknowledged corrections produced no memory hop).
-  background?: (work: Promise<unknown>) => void,
-  // Honest follow-up (ack-binding): the reply has already acknowledged the owner's turn by
-  // the time this write runs, so a failed memory write must correct the record instead of
-  // leaving the owner believing it stuck. Fires once per failure streak; the latch resets
-  // on the next successful settle. The owner DO wires this to a direct message.
-  onMemoryWriteFailed?: (error: unknown) => void,
   // Browse-tool egress: the owner DO passes the parsed WALDO_EGRESS_ALLOWLIST deploy config.
   // Undefined keeps the hook fail-closed - browse tools deny every destination until the owner
   // names hosts. The non-global-address blocks apply regardless.
@@ -224,17 +214,24 @@ export const createOwnerResponder = (
         step: async (tools, turns) => {
           const added = control.round();
           if (added === null) return { text: STOPPED_REPLY };
+          // Steered additions are recorded before the round that answers them.
+          const heard = control.heard();
+          if (turnWriting && heard.length > recordedHeard) {
+            const fresh = heard.slice(recordedHeard).join('\n');
+            recordedHeard = heard.length;
+            const status = await record(`${trace}-steer${recordedHeard}`, fresh, '');
+            if (status !== 'saved') turnNotice = MEMORY_NOTICES[status];
+          }
           const entries = [...request.messages];
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
           const ordersSection = standingOrders?.() ?? '';
           return complete(trace, 'reply',
-          [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(memory ? [turnMemoryPrompt(memory, entries[entries.length - 1]?.content ?? '')] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'),
+          [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memory ? [turnMemoryPrompt(memory, entries[entries.length - 1]?.content ?? '')] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'),
           entries,
           undefined,
           pending,
           tools,
           turns,
-          replyModelOverride,
           );
         },
         onTool: (event) => {
@@ -246,20 +243,17 @@ export const createOwnerResponder = (
     },
   }, tree, undefined, pathObservers);
   let parentId: string | null = null;
-  let settling: Promise<unknown> = Promise.resolve();
   // Set by converse() for the duration of one submit: delegate_task rides owner chat turns
   // only, never reminder/scheduled machine turns that flow through the same closure.
   let ownerTurnActive = false;
-  // Bare affirmative/negative turns ("yes", "ok", "nahi") are context-binding-heavy: the
-  // reply model must attach them to the pending question. The nano-tier reply model failed exactly this
-  // class on 2026-09-27 (a "yes" to the greeting-alignment question was answered with a
-  // hallucinated Gmail offer, with correct history in the prompt), so these turns escalate
-  // to memoryModel for their reply hop. Set by respond() for the duration of one submit.
-  let replyModelOverride: ModelName | undefined;
-  let memoryFailureNotified = false;
   // The reply this turn just sent, so chooseReaction reacts to the exchange (gist of what the
   // owner saw) instead of the owner's message alone - the 😢-on-stress class (2026-09-27 sweep).
   let lastReply: string | undefined;
+  // Per owner turn: whether memory writes are on, how many steered additions are already recorded,
+  // and an ephemeral system notice. The notice rides the system prompt only, never owner history.
+  let turnWriting = false;
+  let recordedHeard = 0;
+  let turnNotice = '';
   const restored = store ? restoreConversation(tree, store).then((leafId) => { parentId = leafId; }) : Promise.resolve();
   const converse = async (id: string, conversationRef: string, said: string, time: TurnTimer, fromOwner = false, surface = 'agent') => {
     traceId = id;
@@ -274,71 +268,74 @@ export const createOwnerResponder = (
     await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId);
     for (const entry of pendingToolOutputs.splice(0)) await toolLedger?.record(entry);
     parentId = publication.leafId;
-    // Self-name prefix strip (2026-09-27 staging receipt: 8 of 22 replies opened with
-    // "Waldo:"/"Waldo here." - a friend texting never signs their own messages, and the
-    // prefixed history taught the model to keep doing it).
-    const out = publication.text.replace(/^\s*waldo(?:\s+here)?\s*[:.,!\-]\s*/i, '');
+    const out = publication.text;
     lastReply = out;
     return out;
   };
+  // 'failed': the writer never produced ops, nothing changed. 'uncertain': ops were being applied
+  // or cleaned up when an error hit, so some of the write may have landed.
+  const MEMORY_NOTICES = {
+    failed: "Saving the owner's latest message to memory failed; nothing was stored. Say plainly that it was not saved.",
+    uncertain: "Saving the owner's latest message to memory hit an error partway; it may be only partly stored. Say plainly that it may not have saved and offer to check.",
+  } as const;
+  const record = async (id: string, owner: string, shared: string): Promise<'saved' | 'failed' | 'uncertain'> => {
+    if (!memory) return 'saved';
+    const started = Date.now();
+    memory.beginSettle(id, new Date().toISOString());
+    let stage: 'failed' | 'uncertain' = 'failed';
+    try {
+      const raw = await ask(id, 'memory', MEMORY_INSTRUCTION, exchangeInput(memory, owner, shared, ''), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
+      stage = 'uncertain';
+      let purged: readonly string[] = [];
+      let purgeIds: readonly number[] = [];
+      const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts, ids) => { purged = texts; purgeIds = ids; }, { owner, shared });
+      const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
+      // Settle only once the KV conversation/ledger stores verify clean too; a KV
+      // survivor leaves the claim 'purging' so a later retry can still find it.
+      if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
+      const interrupted = memory.sweepInterruptedSettles(new Date(started - 10 * 60 * 1000).toISOString());
+      log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}${interrupted ? ` interrupted${interrupted}` : ''}` });
+      return 'saved';
+    } catch (error) {
+      log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error', detail: stage });
+      return stage;
+    } finally {
+      memory.endSettle(id);
+    }
+  };
   return {
     async respond(turn, time) {
+      const memoryWrites = turn.memoryWrites !== false;
       await restored;
-      await settling;
       const id = turn.traceId;
       const media = turn.attachment || turn.mediaNote ? { attachment: turn.attachment, note: turn.mediaNote } : undefined;
       pending = media?.attachment ? [media.attachment] : undefined;
+      turnWriting = memory !== undefined && memoryWrites && !probeGuard?.suppressMemory;
+      recordedHeard = 0;
+      // Record before reply: the owner's words are written first, so the reply sees corrections
+      // and never acknowledges a save that did not happen. A failed write goes to the reply
+      // through the system prompt, not the owner's text, so history stays the owner's words.
+      const status = turnWriting ? await record(id, turn.text ?? '', media?.note ?? '') : 'saved';
+      turnNotice = status === 'saved' ? '' : MEMORY_NOTICES[status];
       const said = [turn.text, media?.note].filter(Boolean).join('\n');
-      replyModelOverride = /^\s*(yes|yeah|yep|yup|sure|ok(?:ay)?|no|nope|nah|haan?|nahi|accha|theek(?:\s+hai)?|done|right|correct|exactly)\b[.!…? ]*$/i.test(turn.text ?? '') ? memoryModel : undefined;
-      let text: string;
       try {
-        text = await converse(id, turn.conversationRef, said, time, true, turn.surface);
+        return await converse(id, turn.conversationRef, said, time, true, turn.surface);
       } finally {
-        replyModelOverride = undefined;
+        turnWriting = false;
+        turnNotice = '';
       }
-      const owner = [turn.text ?? '', ...control.end()].filter(Boolean).join('\n');
-      if (memory && !probeGuard?.suppressMemory) {
-        const started = Date.now();
-        memory.beginSettle(id, new Date().toISOString());
-        settling = ask(id, 'memory', MEMORY_INSTRUCTION, exchangeInput(memory, owner, media?.note ?? '', text), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel)
-          .then(async (raw) => {
-            let purged: readonly string[] = [];
-            let purgeIds: readonly number[] = [];
-            const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts, ids) => { purged = texts; purgeIds = ids; }, { owner, shared: media?.note ?? '', waldo: text });
-            const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
-            // Settle only once the KV conversation/ledger stores verify clean too; a KV
-            // survivor leaves the claim 'purging' so a later retry can still find it.
-            if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
-            const interrupted = memory.sweepInterruptedSettles(new Date(started - 10 * 60 * 1000).toISOString());
-            log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}${interrupted ? ` interrupted${interrupted}` : ''}` });
-            memoryFailureNotified = false;
-          })
-          .catch((error: unknown) => {
-            log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
-            if (!memoryFailureNotified) {
-              memoryFailureNotified = true;
-              try { onMemoryWriteFailed?.(error); } catch { /* the notifier must never break the turn */ }
-            }
-          })
-          .finally(() => memory.endSettle(id));
-        background?.(settling);
-      }
-      return text;
     },
     async remind(id, conversationRef, note, time, surface) {
       await restored;
-      await settling;
       pending = undefined;
       return converse(id, conversationRef, `[Reminder due now, set earlier by the owner: "${note}"] Send the reminder briefly in your own words. Do not add a sentence explaining that they asked for it.`, time, false, surface);
     },
     async prompt(id, conversationRef, said, time, surface) {
       await restored;
-      await settling;
       pending = undefined;
       return converse(id, conversationRef, said, time, false, surface);
     },
     async consolidate(trace, day, sides) {
-      await settling;
       if (!memory) return 'no memory';
       const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(memory, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
       let purged: readonly string[] = [];
@@ -364,7 +361,6 @@ export const createOwnerResponder = (
       return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
     },
     async promote(trace) {
-      await settling;
       if (!memory || memory.claims().length === 0) return 'no claims';
       const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(memory), { name: 'promotion', schema: PROMOTION_SCHEMA });
       return applyPromotion(memory, raw, new Date().toISOString(), (receipt) => log({
