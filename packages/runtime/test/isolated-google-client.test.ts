@@ -46,3 +46,32 @@ describe('isolated Google source adapter', () => {
     expect(world.outbox('a')).toHaveLength(2);
   });
 });
+
+describe('isolated Gmail pages',()=>{
+ const query='in:inbox category:primary after:1791244799 before:1791331200';
+ it('maps the actual handler page path and preserves owner isolation/metadata only',async()=>{
+  const w=fixture();const a=isolatedGoogleClient(w,'a');const page=await a.mailPage(query,1);
+  expect(page.messages).toEqual([{id:'m1',thread_id:'shared',from:'sender@example.invalid',subject:'Alpha',snippet:'first',at:'2026-10-06T08:00:00Z'}]);expect(page.next_page_token).toBeNull();expect(page.result_size_estimate).toBe(1);expect(w.accessLog('b')).toEqual([]);
+ });
+ it('paginates selected owner rows, binds query/limit/owner and rejects revisions/forged cursors',async()=>{
+  const w=new IsolatedSourceWorld({clock:'2026-10-06T09:00:00Z',owners:[{id:'a'},{id:'b'}],sources:{mail:[1,2,3].map(i=>({owner_id:'a',id:`m${i}`,thread_id:'t',from:'a@example.invalid',subject:`${i}`,snippet:'s',at:`2026-10-06T0${i}:00:00Z`}))}});
+  const a=isolatedGoogleClient(w,'a');const first=await a.mailPage(query,1);expect(first.messages[0]?.id).toBe('m3');expect(first.next_page_token).not.toBeNull();
+  const second=await isolatedGoogleClient(w,'a').mailPage(query,1,first.next_page_token!);expect(second.messages[0]?.id).toBe('m2');
+  for(const [q,n,owner,token] of [[query+' ',1,'a',first.next_page_token],[query,2,'a',first.next_page_token],[query,1,'b',first.next_page_token],[query,1,'a','forged']] as const)await expect(isolatedGoogleClient(w,owner).mailPage(q,n,token!)).rejects.toThrow();
+ });
+ it('rejects unsupported query/invalid bounds before collecting and honors [after,before)',async()=>{
+  const w=fixture();const a=isolatedGoogleClient(w,'a');
+  await expect(a.mailPage('subject:Alpha',10)).rejects.toThrow();expect(w.accessLog('a')).toEqual([]);
+  expect((await a.mailPage('in:inbox category:primary after:1791273600 before:1791273601',10)).messages).toHaveLength(1);
+  expect((await a.mailPage('in:inbox category:primary after:1791273599 before:1791273600',10)).messages).toHaveLength(0);
+ });
+});
+it('fixture cursors expose no source bytes and invalidate after revision; selection precedes collection',async()=>{
+ const w=fixture();
+ const selected=await import('../scenarios/native-selected-source');
+ const restricted=isolatedGoogleClient(selected.nativeSelectedSource(w,'a',{mail:['m1']}),'a');
+ const q='in:inbox category:primary after:1791244799 before:1791331200';
+ expect((await restricted.mailPage(q,1)).messages[0]?.subject).toBe('Alpha');expect(w.accessLog('b')).toEqual([]);expect(w.accessLog('a').every(r=>r.id==='m1')).toBe(true);
+ const many=new IsolatedSourceWorld({clock:'2026-10-06T09:00:00Z',owners:[{id:'a'},{id:'b'}],sources:{mail:[1,2].map(i=>({owner_id:'a',id:`m${i}`,thread_id:'t',from:'a@example.invalid',subject:'SECRET_SUBJECT',snippet:'s',body:'PRIVATE_BODY',at:`2026-10-06T0${i}:00:00Z`}))},revisions:[{at:'2026-10-06T10:00:00Z',owner_id:'a',source:'mail',id:'m1',patch:{snippet:'changed'}}]});
+ const api=isolatedGoogleClient(many,'a');const first=await api.mailPage(q,1);expect(first.next_page_token).not.toBeNull();expect(decodeURIComponent(first.next_page_token!)).not.toContain('PRIVATE_BODY');expect(decodeURIComponent(first.next_page_token!)).not.toContain('SECRET_SUBJECT');many.advance('2026-10-06T10:00:00Z');await expect(api.mailPage(q,1,first.next_page_token!)).rejects.toThrow(/revision mismatch/);
+});

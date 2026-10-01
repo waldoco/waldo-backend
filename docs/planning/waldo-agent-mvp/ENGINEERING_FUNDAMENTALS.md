@@ -181,3 +181,5 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 | 2026-10-01 | WhatsApp shared the responder but persisted conversation entries as surface telegram and telegram-prefixed chat IDs; core conversation/memory code depended on transport update IDs and media parsing | Channel boundaries | OwnerTurnEnvelope supplies trace/conversation/surface and loaded media; owner-turn owns the model/memory loop, Telegram adapter preserves legacy IDs and WA adapter labels its real surface; six regression tests cover core/adapter identity and approval parity | Channels: adapters carry transport details, core stores the real admitted surface |
 
 - Communication reads must expose the actual date range, category/account scope and pagination limits. Empty or filtered sampled pages are not complete inbox evidence.
+
+- A newly preferred provider page method must have a concrete isolated read mapping; a rejection-only stub breaks real-DO fixture source coverage. Query/cursor mapping must preserve owner/selection and expose no body bytes.
