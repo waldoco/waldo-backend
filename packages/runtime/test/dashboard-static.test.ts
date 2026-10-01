@@ -9,7 +9,8 @@ describe('dashboard static adapter', () => {
   it('gates the index through the exact same owner-scoped API session and never fetches assets for unsigned owners', async () => {
     const asset = assets(); const verify = auth(401);
     const response = await serveDashboard(url('/console/dashboard'), asset, verify);
-    expect(response?.status).toBe(401);
+    expect(response?.status).toBe(303);
+    expect(response?.headers.get('location')).toBe('/console/signin');
     expect(response?.headers.get('cache-control')).toBe('private, no-store');
     expect(response?.headers.get('x-frame-options')).toBe('DENY');
     expect(response?.headers.get('referrer-policy')).toBe('no-referrer');
@@ -17,6 +18,18 @@ describe('dashboard static adapter', () => {
     expect(new URL((verify.mock.calls[0] as unknown as [Request])[0].url).pathname).toBe(DASHBOARD_OVERVIEW_PATH);
     const unavailable = await serveDashboard(url('/console/dashboard/'), assets(), auth(503));
     expect(unavailable?.status).toBe(503);
+  });
+  it('serves the new root and authenticates HEAD via GET without stealing ticket, notice, JSON or POST routes', async () => {
+    for (const method of ['GET', 'HEAD']) {
+      const verify = auth();
+      expect((await serveDashboard(url('/console', method), assets(), verify))?.status).toBe(200);
+      expect((verify.mock.calls[0] as unknown as [Request])[0].method).toBe('GET');
+    }
+    for (const path of ['/console?t=one-use', '/console?m=invalid', '/console/legacy', '/console/waiting']) {
+      expect(await serveDashboard(url(path), assets(), auth())).toBeNull();
+    }
+    expect(await serveDashboard(url('/console', 'POST'), assets(), auth())).toBeNull();
+    expect(await serveDashboard(new Request(root + '/console', { headers: { accept: 'application/json' } }), assets(), auth())).toBeNull();
   });
   it('serves only the authenticated shell HTML, with no-store and anti-framing headers', async () => {
     const asset = assets(); const verify = auth();

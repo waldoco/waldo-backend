@@ -605,7 +605,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     // Page routing: /console serves the overview; /console/<slug> serves one page. Action,
     // google, file, runs and admin paths were matched above, so only page slugs remain.
-    const pageSlug = url.pathname === CONSOLE_PATH ? '' : url.pathname.startsWith(`${CONSOLE_PATH}/`) ? url.pathname.slice(CONSOLE_PATH.length + 1) : null;
+    const pageSlug = url.pathname === CONSOLE_PATH || url.pathname === `${CONSOLE_PATH}/legacy` ? '' : url.pathname.startsWith(`${CONSOLE_PATH}/`) ? url.pathname.slice(CONSOLE_PATH.length + 1) : null;
     if (pageSlug === null || !CONSOLE_PAGES.some((item) => item.slug === pageSlug)) return new Response('not found', { status: 404 });
     const mKey = url.searchParams.get('m') ?? '';
     const dynamicNotice = NOTICES[mKey] ?? (mKey.length > 0 && mKey.length <= 200 ? mKey : null);

@@ -60,7 +60,7 @@ export function DashboardNavigation({ route, waitingCount, onNavigate, isAdmin =
     <nav className="account-nav" aria-label="Account and sessions">
       <a href="/console/account" onClick={onNavigate}>Account</a>
       <a href="/console/connections" onClick={onNavigate}>Sessions &amp; sign out</a>
-      <a href="/console" onClick={onNavigate}>Original console <span aria-hidden="true">↗</span></a>
+      <a href="/console/legacy" onClick={onNavigate}>Existing controls <span aria-hidden="true">↗</span></a>
     </nav>
     <p className="sidebar-note">Invites let someone join Waldo. They do not share your data.</p>
   </div>;

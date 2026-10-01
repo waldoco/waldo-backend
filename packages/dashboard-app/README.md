@@ -1,5 +1,7 @@
 # Waldo React dashboard
 
+Normal browser visits to `/console` serve the authenticated React dashboard; `/console/dashboard` remains a compatible alias. Existing control pages and the old overview at `/console/legacy` remain protected and reachable. Root JSON, ticket redemption and action receipts retain their existing handlers. Signed-out shell visits redirect to the fixed `/console/signin` route.
+
 The authenticated React dashboard reads only `/console/dashboard/api/v1/overview` on the same origin, with same-origin credentials and no-store requests. It does not read the full `/console` JSON (which includes memory and CSRF). The Worker gates the HTML shell through the same owner-session read; only content-hashed JS/CSS are served as public immutable assets. Unknown static paths do not fall back to the app.
 
 Today replaces the visible Overview destination; old `#/overview` links still resolve to Today. Waiting and Patrol remain narrow summaries. Memory details are unavailable here. Connections show saved Google grants, not verified live tool use. The desktop sidebar and mobile modal drawer expose contextual links and protected controls. Memory has Spots / Constellation / Profile subviews; Your day groups timing, pins, timezone, quiet hours and volume through the existing controls. These links open the existing protected owner-console pages for real details/actions. Calendar review controls remain there; email/message sends still require the exact review card in chat. This slice adds no effect action and does not certify the approval-to-execution wiring.
