@@ -146,7 +146,7 @@ export const createOwnerResponder = (
     ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
   };
   const handlers = [getContextHandler(clock), ownerContextHandler(memory), ...tools, ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
-  const complete = async (trace: string, purpose: string, system: string, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName) => {
+  const complete = async (trace: string, purpose: string, system: string, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, clinicalRetried = false) => {
     privateRunScope?.admit();
     const started = Date.now();
     let reasoning: string | undefined;
@@ -181,11 +181,11 @@ export const createOwnerResponder = (
       shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength },
       text: { input, output: result.response.text || JSON.stringify(result.response.tool_calls), ...(reasoning ? { reasoning } : {}) },
     });
-    if (!result.ok && result.halted_by === 'medical_gate' && !system.includes(CLINICAL_REDIRECT)) {
+    if (!result.ok && result.halted_by === 'medical_gate' && !clinicalRetried) {
       const redirected = system.endsWith(OWNER_SKILL_SAFEGUARDS)
         ? `${system.slice(0, -OWNER_SKILL_SAFEGUARDS.length)}${CLINICAL_REDIRECT}\n\n${OWNER_SKILL_SAFEGUARDS}`
         : `${system}\n\n${CLINICAL_REDIRECT}`;
-      return complete(trace, `${purpose}_redirect`, redirected, content, format, attachments, tools, turns);
+      return complete(trace, `${purpose}_redirect`, redirected, content, format, attachments, tools, turns, modelOverride, true);
     }
     if (!result.ok && result.halted_by === 'medical_gate') return { ...CLINICAL_FALLBACK, model };
     if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.destination, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);

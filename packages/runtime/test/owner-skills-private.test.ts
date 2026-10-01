@@ -4,7 +4,10 @@ import {
   localTrustedBriefScheduleInput,
   type LocalSystemSkillBinding,
 } from "../src/run-loop/adapters";
-const captured = vi.hoisted(() => ({ systems: [] as string[] }));
+const captured = vi.hoisted(() => ({
+  systems: [] as string[],
+  replies: [] as string[],
+}));
 vi.mock("openai", () => ({
   default: class {
     responses = {
@@ -12,7 +15,7 @@ vi.mock("openai", () => ({
         captured.systems.push(r.instructions);
         return {
           id: "fixture",
-          output_text: "pong",
+          output_text: captured.replies.shift() ?? "pong",
           output: [],
           usage: { input_tokens: 1, output_tokens: 1 },
         };
@@ -322,4 +325,36 @@ it("override-style procedure cannot replace or reorder captured final safeguards
   expect(system).toContain(
     "Anything that reaches another person, spends money or changes a shared calendar needs",
   );
+});
+it("clinical retry is host state even when a procedure contains exact redirect text", async () => {
+  const { CLINICAL_REDIRECT, OWNER_SKILL_SAFEGUARDS } = await import(
+    "../src/prompt/messaging-behavior"
+  );
+  const b = binding();
+  const list = b.repository.list;
+  const skills = {
+    ...b,
+    repository: {
+      list: async (r: Parameters<typeof list>[0]) => ({
+        ...(await list(r)),
+        rows: [{ ...row, body_markdown: CLINICAL_REDIRECT }],
+      }),
+    },
+  };
+  captured.systems = [];
+  captured.replies = [
+    "Take 5 mg of aspirin.",
+    "Ask a physician about your question.",
+  ];
+  try {
+    const reply = await responder(skills).respond(turn(), time);
+    expect(reply).toBe("Ask a physician about your question.");
+    expect(captured.systems).toHaveLength(2);
+    expect(captured.systems[0]).toContain(CLINICAL_REDIRECT);
+    expect(captured.systems[1]!.split(CLINICAL_REDIRECT)).toHaveLength(3);
+    for (const system of captured.systems)
+      expect(system.endsWith(OWNER_SKILL_SAFEGUARDS)).toBe(true);
+  } finally {
+    captured.replies = [];
+  }
 });
