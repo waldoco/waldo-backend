@@ -4,7 +4,7 @@ Status: DESIGN ONLY. No code, no DO edits, no deploy, nothing run. Layer is SOUR
 
 ## 1. Browser-task adapter (prepare-only, staging)
 
-What exists: `browse_page` (read-only, public pages) and `browse_act` in `tools/live/browser.ts`, Stagehand hosted API, keys server-side, provider diagnostics never relayed. `browse_act` submits go through `approvals.proposeBrowserSubmit`, so a submit becomes an owner approval card rather than executing. The skill `browser-task` is blocked in the audit because it "needs vault, test account".
+What exists: `browse_page` (read-only, public pages) and `browse_act` in `tools/live/browser.ts`, Stagehand hosted API, keys server-side, provider diagnostics never relayed. `browse_act` submits go through `approvals.proposeBrowserSubmit`, so a submit becomes an owner approval card rather than executing. The wiring audit (`waldo-wiring-audit-2026-10-02.md`, section 4, "The five blocked skills" line) lists `browser-task` as blocked with "needs vault, test account" (section 8 repeats "vault for browser-task").
 
 Proposal, prepare-only:
 1. Scope: the adapter drives a page up to, never through, the final submit. Output is a typed prepared-action record (target origin, field values entered, the exact submit control identified, a screenshot reference). The record is shown on the existing approval card. Executing the submit stays the owner's Do it on that card, as today.
@@ -26,10 +26,7 @@ Unknown: the exact code seam in the owner-turn path (Codex-owned files); not tra
 
 ## 3. Manifest permissions
 
-I could not find a "manifest permissions" spec. What I read: skills are loaded by `skills/loader.ts` (imports `TOOL_PERMISSIONS`, `skillSchema`, a connector filter by `connectedConnectors`), and the audit says five skills are blocked because the tool they need does not exist. I did not trace the exact admission check.
-Reading A (proposed unless corrected): a skill manifest declares the tools and connectors it requires; admission requires every declared tool to exist in the trigger's ACL and every connector to be connected, otherwise the skill is excluded with a reason. That would make "blocked because the tool does not exist" a recorded exclusion instead of a silent gap.
-Reading B: manifest permissions mean what a skill may grant itself (tools beyond the ACL). Not proposed: a skill must never widen the ACL.
-Question for the requester: which reading, or is this about something else (for example the native36 manifest `grants`)?
+Reading A is already current behavior, not a proposal: `skills/loader.ts` `exclusionReason` (around lines 312-330) excludes a skill with `acl_violation` when any `required_tools` entry is not in `TOOL_PERMISSIONS[trigger]`, and with `missing_connector` when a `required_connectors` entry is not connected. So a skill can never widen the ACL. What remains open is intent: whether "manifest permissions" means only this existing check or something more (for example a manifest field that declares effects a skill may prepare, or the native36 manifest `grants`). The main agent decided, under decide-and-log (not owner-approved), to treat it as Reading A; Reading B (a skill grants itself tools beyond the ACL) stays rejected.
 
 ## Decisions needed
-- Owner: test account and vault entry for browser-task; option (a) vs (b) confirmation for production; which reading of manifest permissions.
+- Owner: test account and vault entry for browser-task; option (a) vs (b) confirmation for production; whether manifest permissions means anything beyond the existing loader check.
