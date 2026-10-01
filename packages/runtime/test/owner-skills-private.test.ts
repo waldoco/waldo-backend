@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { acceptTrustedInvocation, skillRowSchema } from "@waldo/contracts";
+import { acceptTrustedInvocation, skillRowSchema, WALDO_CHAT_MODEL } from "@waldo/contracts";
 import {
   localTrustedBriefScheduleInput,
   type LocalSystemSkillBinding,
@@ -256,14 +256,14 @@ it("closing after model starts cannot persist its resumed reply", async () => {
         ok: true,
         response: {
           text: "late fixture",
-          model: "gpt-5-nano",
+          model: WALDO_CHAT_MODEL,
           input_tokens: 1,
           output_tokens: 1,
           cache_read_input_tokens: 0,
           latency_ms: 1,
         },
         usage: {
-          model: "gpt-5-nano",
+          model: WALDO_CHAT_MODEL,
           input_tokens: 1,
           output_tokens: 1,
           cache_read_input_tokens: 0,
