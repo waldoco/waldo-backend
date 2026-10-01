@@ -63,6 +63,6 @@ it('evidence label follows code-written origin: agent is labelled, owner-with-re
   expect(await rendered('owner', 'owner, tg-1')).not.toContain('writer-stated');
   expect(await rendered(undefined)).toContain(`| ${quote}`);
   expect(await rendered(undefined)).not.toContain('writer-stated');
-  expect(await rendered('agent')).toContain('evidence (writer-stated quote, not found in the owner\'s words or shared content): owner, tg-1');
+  expect(await rendered('agent')).toContain('evidence (writer-stated quote; at admission it matched neither the owner\'s nor the shared content checked then): owner, tg-1');
   expect(await rendered('untrusted')).toBeUndefined(); // recall already excludes untrusted rows
 });

@@ -427,11 +427,14 @@ export const memoryPrompt = (store: ClaimStore): string => {
 // Chat uses a small stable profile plus bounded owner-scoped lexical recall. A miss is
 // explicit: no near-neighbor fact gets smuggled into the answer. This is intentionally
 // lexical only; semantic retrieval needs a held-out gain before another data service.
-// The evidence string is the writer's. Label it from the code-written origin (ground() verdict),
-// never from its text: 'agent' = the quote was found in neither the owner's words nor shared
-// content. Owner-grounded and legacy/unknown-origin rows render as before; nothing is hidden or
-// promoted. ('untrusted' rows never reach this prompt: recall excludes them.)
-const evidenceLabel = (claim: Claim): string => claim.origin === 'agent' ? ' (writer-stated quote, not found in the owner\'s words or shared content)' : '';
+// The evidence string is the writer's. Label it from the stored, code-written origin: 'agent' is
+// the ground() verdict at admission time - the quote matched neither the owner's nor the shared
+// content checked then. It is a historical admission fact, not a re-verification, and does not
+// claim absence from all owner words or history. Owner-grounded and legacy/unknown-origin rows
+// render as before; nothing is hidden or promoted. The label is applied by both renderers:
+// turnMemoryPrompt (its recall excludes 'untrusted' rows) and memoryPrompt (maps all active
+// claims with no origin filter, so it can render 'untrusted' rows; those stay unlabelled here).
+const evidenceLabel = (claim: Claim): string => claim.origin === 'agent' ? ' (writer-stated quote; at admission it matched neither the owner\'s nor the shared content checked then)' : '';
 
 export const turnMemoryPrompt = (store: ClaimStore, question: string): string => {
   const hits = store.recall(question, 8);
