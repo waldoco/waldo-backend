@@ -46,3 +46,12 @@ it('real persisted attempts representing committed/lost RPC and crashed-before-R
   const finals=state.storage.kv.get<any[]>('telegram_final_outbox_v1')!;expect(finals).toHaveLength(2);expect(finals.every(r=>r.payload.text.includes('could not be confirmed'))).toBe(true);await state.storage.deleteAlarm();
  });
 });
+it('expired frozen reply and bot replacement never send or redeem',async()=>{
+ const bot=env.TELEGRAM_BOT_TOKEN!.split(':')[0]!;const subject='999993';const name=`telegram-link:${bot}:${subject}`;const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+ await runInDurableObject(stub,async(instance,state)=>{
+  const inbox=new TelegramLinkInbox(state.storage);await inbox.admit({bot,subject,name},6,'d'.repeat(64),'a'.repeat(64));await inbox.freeze(6,'generic expired');
+  const rows=await inbox.records();rows[0]!.frozenAt=Date.now()-6*60_000;await state.storage.put(LINK_ROWS,rows);
+  const sent=observed.sends.length;const redeem=observed.redeem;await(instance as TelegramOwnerDO).alarm();await new Promise(r=>setTimeout(r,300));await(instance as TelegramOwnerDO).alarm();expect(observed.sends).toHaveLength(sent);expect(observed.redeem).toBe(redeem);
+  await state.storage.put(LINK_MODE,{bot:'8',subject,name});await inbox.admit({bot:'8',subject,name},7,'d7','b'.repeat(64));await(instance as TelegramOwnerDO).alarm();expect(observed.redeem).toBe(redeem);expect(observed.sends).toHaveLength(sent);expect((await inbox.records()).find(r=>r.id===7)?.hash).toBeUndefined();await state.storage.deleteAlarm();
+ });
+});
