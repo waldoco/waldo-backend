@@ -1,0 +1,15 @@
+import{describe,it,expect}from'vitest';
+import{renderArtifactBody,telegramRichReply}from'../src/channels/rich-format';
+describe('inert artifact rich rendering',()=>{
+ it('renders document headings and read-only checklist without active controls',()=>{const h=renderArtifactBody('document','# Reset\n\n- [ ] Water\n- [x] Done\n\n**Easy** movement');expect(h).toContain('<h2>Reset</h2>');expect(h).toContain('☐ Water');expect(h).toContain('☑ Done');expect(h).toContain('<strong>Easy</strong>');expect(h).not.toContain('<input');});
+ it('escapes raw HTML and link schemes instead of interpreting body-derived active content',()=>{const h=renderArtifactBody('document','<script>alert(1)</script>\n<img src=x onerror=x>\n[bad](javascript:alert(1))\n[remote](https://evil.invalid)');expect(h).not.toMatch(/<(script|img|a|iframe|svg|style)\b/);expect(h).toContain('&#60;script');expect(h).toContain('javascript:');});
+ it('data artifacts remain literal; fenced Markdown code is escaped',()=>{expect(renderArtifactBody('data','# hi\n<script>x</script>')).toContain('<pre>');expect(renderArtifactBody('data','# hi')).not.toContain('<h2>');expect(renderArtifactBody('document','```html\n<img src=x>\n```')).toContain('<pre><code>&#60;img');});
+});
+describe('Telegram final formatting after link guard',()=>{
+ it('formats an existing exact HTTP link using escaped HTML, never expands URLs',()=>{const url='https://staging.invalid/console/artifacts/art%3Atest?revision=1&v=2';const r=telegramRichReply(`Made [Open the private file](${url}) <script>x</script>`);expect(r.parse_mode).toBe('HTML');expect(r.text).toContain(`<a href="https://staging.invalid/console/artifacts/art%3Atest?revision=1&#38;v=2">Open the private file</a>`);expect(r.text).toContain('&#60;script');});
+ it('never activates non-http schemes or raw model HTML',()=>{const r=telegramRichReply('[x](javascript:alert(1)) <a href="https://evil.invalid">evil</a>');expect(r.text).not.toContain('<a ');expect(r.text).toContain('&#60;a');});
+ it('uses literal escaped text for malformed markdown',()=>{expect(telegramRichReply('[broken](https://').text).toContain('[broken]');});
+});
+import{createTelegramOwnerApi}from'../src/channels/telegram-api';
+it('actual owner transport formats only an existing guarded link and preserves channel ID',async()=>{let sent:unknown;await createTelegramOwnerApi(async(method,body)=>{sent={method,body};}).sendMessage({chat_id:12,text:'[File](https://staging.invalid/console/artifacts/art%3Atest?revision=1)'});expect(sent).toEqual({method:'sendMessage',body:{chat_id:12,parse_mode:'HTML',text:'<a href="https://staging.invalid/console/artifacts/art%3Atest?revision=1">File</a>'}});});
+it('table/image/HTML instructions cannot create network-active artifact nodes',()=>{for(const payload of ['![pixel](https://evil.invalid/collect)','<svg onload=alert(1)>','<style>body{background:url(https://evil.invalid)}</style>','<iframe srcdoc="<script>x</script>">','[x](data:text/html,x)','<form action="https://evil.invalid">']){expect(renderArtifactBody('research',payload)).not.toMatch(/<(img|svg|script|style|iframe|form|a)\b/);}});
