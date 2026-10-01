@@ -28,6 +28,7 @@ export type TelegramOwnerListenerOptions = Readonly<{
   surface?: 'telegram' | 'whatsapp';
   api: TelegramOwnerApi;
   respond(turn: TelegramInboundTurn, time: TurnTimer): Promise<string>;
+  queueFinal?(turn: TelegramInboundTurn, payload: Readonly<{ chat_id: number; text: string; parse_mode?: 'HTML' }>, reaction: string): Promise<void>;
   turnTimeoutMs?: number;
   reactionTimeoutMs?: number;
   chooseReaction?(turn: TelegramInboundTurn): Promise<string | null>;
@@ -44,7 +45,7 @@ export type TelegramOwnerListenerOptions = Readonly<{
   unsupportedText?: string;
 }>;
 
-export type TelegramTurnOutcome = 'answered' | 'failed' | 'ignored' | 'unsupported';
+export type TelegramTurnOutcome = 'queued' | 'answered' | 'failed' | 'ignored' | 'unsupported';
 
 export class TelegramOwnerListener {
   constructor(private readonly options: TelegramOwnerListenerOptions) {
@@ -122,9 +123,10 @@ export class TelegramOwnerListener {
       return Promise.race([attempt, bounded]).finally(() => clearTimeout(timer));
     };
     await react('receipt', ack);
+    let readyChoice: string | null = null;
     const choice = message_id === null || !this.options.chooseReaction
       ? Promise.resolve(null)
-      : time('choose_reaction', () => this.options.chooseReaction!(turn)).catch(() => null);
+      : time('choose_reaction', () => this.options.chooseReaction!(turn)).catch(() => null).then(value => { readyChoice = value; return value; });
     const typing = () => api.sendChatAction({ chat_id, action: 'typing' }).catch(() => undefined);
     await time('typing', typing);
     const typingTimer = setInterval(typing, this.options.typingEveryMs ?? 4_000);
@@ -141,6 +143,13 @@ export class TelegramOwnerListener {
       // The responder has already applied current-turn artifact receipt admission.
       // Rich formatting is confined to this final reply, never progress/events/errors.
       const rich = telegramRichReply(text);
+      if (this.options.queueFinal) {
+        const chosen = telegramReaction(readyChoice);
+        const finalReaction = chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌';
+        await time('outbox_enqueue', () => this.options.queueFinal!(turn, { chat_id, ...(rich.text === text ? { text } : rich) }, finalReaction));
+        this.options.log?.({ trace, hop: 'delivery_pending', ms: now() - started, ok: true });
+        return 'queued';
+      }
       await time('send', () => api.sendMessage({ chat_id, ...(rich.text===text ? {text} : rich) }));
       const chosen = telegramReaction(await choice);
       await react('resolved', chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌');

@@ -6,3 +6,12 @@
 export async function armAlarm(storage: DurableObjectStorage, scheduledTimeMs: number): Promise<void> {
   await storage.setAlarm(scheduledTimeMs);
 }
+
+// One arbiter for schedule and Telegram transport. Every scheduler rearm includes
+// persisted transport due time, including an empty schedule (formerly deleteAlarm).
+export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDue: number | null, now: number): Promise<void> {
+  const outboxDue = (await storage.get<number | null>('telegram_final_outbox_due_v1')) ?? null;
+  const bounds = [scheduleDue, outboxDue].filter((v): v is number => v !== null);
+  if (!bounds.length) { await storage.deleteAlarm(); return; }
+  await armAlarm(storage, Math.max(Math.min(...bounds), now + 250));
+}

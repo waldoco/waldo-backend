@@ -36,7 +36,7 @@ vi.mock('../src/channels/telegram-api', async (load) => {
     ...original,
     createTelegramCaller: () => async (method: string, body: object) => {
       outbox.push({ method, body: body as Record<string, unknown> });
-      return method === 'getMe' ? { username: 'fixture_bot' } : true;
+      return method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: outbox.length } : true;
     },
   };
 });
@@ -72,6 +72,12 @@ const send = async (subject: number, text: string, updateId: number, replyTo?: R
     body: JSON.stringify({ update_id: updateId, message: { message_id: updateId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text, ...(replyTo ? { reply_to_message: replyTo } : {}) } }),
   }), env, (work) => pending.push(work), directory);
   await Promise.all(pending);
+  await runInDurableObject(doStub(subject), async (instance, state) => {
+    const rows = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
+    for (const row of rows) if (row.status === 'pending') row.dueAt = 0;
+    state.storage.kv.put('telegram_final_outbox_v1', rows);
+    await instance.alarm();
+  });
   return response;
 };
 const callback = async (subject: number, from: number, data: string, updateId: number) => {

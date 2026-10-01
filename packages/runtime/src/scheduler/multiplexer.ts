@@ -11,13 +11,13 @@ import {
   type ScheduleRecurrence,
 } from '@waldo/contracts';
 import type { Deps } from '../seams/deps';
-import { armAlarm } from './alarm-slot';
+import { rearmSharedAlarm } from './alarm-slot';
 
 const MAX_MISSED_CHAIN = 64;
 // Minimum spacing for an immediate re-arm (next row already due). Live turns are unaffected
 // (due work still fires within DUE_LOOKAHEAD_MS); the pacing lets a long missed-run drain
 // yield the isolate between deliveries instead of starving sibling work back-to-back.
-const MIN_REARM_DELAY_MS = 250;
+
 const DUE_LOOKAHEAD_MS = 1_000;
 const MAX_DUE_PER_ALARM = 8;
 const PRODUCT_RETRY_DELAY_MS = 30_000;
@@ -509,15 +509,11 @@ export class Scheduler {
     );
   }
 
-  private async rearm(): Promise<void> {
+  async rearm(): Promise<void> {
     const bound = nextWakeBound(
       this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule').toArray().map(toEntry),
     );
-    if (bound === null) {
-      await this.storage.deleteAlarm();
-      return;
-    }
-    await armAlarm(this.storage, Math.max(bound, this.deps.now() + MIN_REARM_DELAY_MS));
+    await rearmSharedAlarm(this.storage, bound, this.deps.now());
   }
 }
 

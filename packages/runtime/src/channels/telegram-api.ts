@@ -4,6 +4,13 @@ import type { TelegramOwnerApi } from './telegram-listener';
 // connection never completed) must reject, or a single wedged egress stalls the whole turn.
 export const TELEGRAM_API_TIMEOUT_MS = 15_000;
 
+export class TelegramRejection extends Error {
+  constructor(readonly errorCode: number, description: string, readonly retryAfter?: number, method?: string) {
+    super(method ? `telegram ${method} failed: ${errorCode} ${description}` : `telegram rejected: ${errorCode} ${description}`);
+  }
+  get retryable(): boolean { return this.errorCode === 429; }
+}
+
 export const createTelegramCaller = (token: string, fetcher: typeof fetch = fetch, timeoutMs = TELEGRAM_API_TIMEOUT_MS) =>
   async (method: string, body: object): Promise<unknown> => {
     const controller = new AbortController();
@@ -12,8 +19,11 @@ export const createTelegramCaller = (token: string, fetcher: typeof fetch = fetc
       const response = await fetcher(`https://api.telegram.org/bot${token}/${method}`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal,
       });
-      const json = await response.json() as { ok: boolean; result?: unknown; description?: string; error_code?: number };
-      if (!json.ok) throw new Error(`telegram ${method} failed: ${json.error_code} ${json.description}`);
+      const json = await response.json() as { ok: boolean; result?: unknown; description?: string; error_code?: number; parameters?: { retry_after?: number } };
+      // Only a structured Telegram rejection is definite. HTTP 5xx/parse/network are unknown.
+      if (!response.ok && response.status >= 500) throw new Error('telegram transport unknown');
+      if (json.ok === false && Number.isInteger(json.error_code)) throw new TelegramRejection(json.error_code!, json.description ?? '', json.parameters?.retry_after, method);
+      if (json.ok !== true) throw new Error('telegram invalid acknowledgement');
       return json.result;
     } finally {
       clearTimeout(timer);
