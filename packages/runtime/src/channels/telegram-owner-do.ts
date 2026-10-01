@@ -27,7 +27,7 @@ import { redactConversationEntries, durableConversationStore, scrubConversationH
 import { egressGuardedCaller } from './egress-guard';
 import { parseEgressAllowlistEnv } from '../hooks/egress-policy';
 import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
-import { armNightly, backfillEpisodes, episodeIndex, indexedConversationStore, transcript } from './episodes';
+import { armNightly, backfillEpisodes, consolidationDay, episodeIndex, indexedConversationStore, transcript } from './episodes';
 import { nightlyDiagnostic } from './nightly-diagnostic';
 import { armBriefSweep, eventBriefs } from './event-briefs';
 import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
@@ -1119,7 +1119,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const started = Date.now();
       try {
         await migrateCoreFiles(`${trace}:migration`);
-        const day = episodes.since(entry.occurrence_at - 24 * 60 * 60_000, 40_000);
+        const day = consolidationDay(episodes.since(entry.occurrence_at - 24 * 60 * 60_000, 40_000));
         if (day.length === 0) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, detail: 'quiet day' });
         else {
           try {
