@@ -44,3 +44,19 @@ it('clears card changes whose forgotten text contains JSON-escaped characters', 
     expect(result).toContain('purged');
   });
 });
+
+it('a malformed card row does not stop cleanup of later valid cards, and nested strings are verified', async () => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-derived-bad')), (_instance, state) => {
+    const sql = state.storage.sql;
+    const store = claimStore(sql);
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0)`);
+    const claimId = Number(sql.exec<{ id: number }>(`INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'stated', 'owner said so', ?, ?) RETURNING id`, CLAIM_TEXT, AT, AT).one().id);
+    sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?, ?, ?, ?)', 1, '2026-09-26', '{bad', null);
+    sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?, ?, ?, ?)', 2, '2026-09-26', JSON.stringify([{ source: 'chat', nested: { detail: [`deep ${CLAIM_TEXT}`] } }]), `later ${CLAIM_TEXT}`);
+    const result = applyClaimOps(store, JSON.stringify({ add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: null }), AT, 'owner agreed', undefined, undefined, true);
+    const rows = sql.exec<{ changes: string; text: string | null }>('SELECT changes, text FROM update_cards ORDER BY id').toArray();
+    expect(JSON.stringify(rows)).not.toContain(MARKER);
+    expect(rows[0]!.changes).toBe('{bad');
+    expect(result).toContain('purged');
+  });
+});
