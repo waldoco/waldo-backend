@@ -11,7 +11,7 @@ export type OwnerTurnEnvelope = Readonly<{
   text: string;
   mediaNote?: string;
   attachment?: LLMAttachment;
-  // Authenticated host control, never inferred from owner prose or provider payload.
+  // Set by the channel host. When false the turn does not write memory.
   memoryWrites?: boolean;
 }>;
 export type OwnerResponder = Readonly<{

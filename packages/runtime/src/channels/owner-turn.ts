@@ -214,11 +214,19 @@ export const createOwnerResponder = (
         step: async (tools, turns) => {
           const added = control.round();
           if (added === null) return { text: STOPPED_REPLY };
+          // Steered additions are recorded before the round that answers them.
+          const heard = control.heard();
+          if (turnWriting && heard.length > recordedHeard) {
+            const fresh = heard.slice(recordedHeard).join('\n');
+            recordedHeard = heard.length;
+            const status = await record(`${trace}-steer${recordedHeard}`, fresh, '');
+            if (status !== 'saved') turnNotice = MEMORY_NOTICES[status];
+          }
           const entries = [...request.messages];
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
           const ordersSection = standingOrders?.() ?? '';
           return complete(trace, 'reply',
-          [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(memory ? [turnMemoryPrompt(memory, entries[entries.length - 1]?.content ?? '')] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'),
+          [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memory ? [turnMemoryPrompt(memory, entries[entries.length - 1]?.content ?? '')] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'),
           entries,
           undefined,
           pending,
@@ -241,6 +249,11 @@ export const createOwnerResponder = (
   // The reply this turn just sent, so chooseReaction reacts to the exchange (gist of what the
   // owner saw) instead of the owner's message alone - the 😢-on-stress class (2026-09-27 sweep).
   let lastReply: string | undefined;
+  // Per owner turn: whether memory writes are on, how many steered additions are already recorded,
+  // and an ephemeral system notice. The notice rides the system prompt only, never owner history.
+  let turnWriting = false;
+  let recordedHeard = 0;
+  let turnNotice = '';
   const restored = store ? restoreConversation(tree, store).then((leafId) => { parentId = leafId; }) : Promise.resolve();
   const converse = async (id: string, conversationRef: string, said: string, time: TurnTimer, fromOwner = false, surface = 'agent') => {
     traceId = id;
@@ -259,12 +272,20 @@ export const createOwnerResponder = (
     lastReply = out;
     return out;
   };
-  const record = async (id: string, owner: string, shared: string): Promise<boolean> => {
-    if (!memory) return true;
+  // 'failed': the writer never produced ops, nothing changed. 'uncertain': ops were being applied
+  // or cleaned up when an error hit, so some of the write may have landed.
+  const MEMORY_NOTICES = {
+    failed: "Saving the owner's latest message to memory failed; nothing was stored. Say plainly that it was not saved.",
+    uncertain: "Saving the owner's latest message to memory hit an error partway; it may be only partly stored. Say plainly that it may not have saved and offer to check.",
+  } as const;
+  const record = async (id: string, owner: string, shared: string): Promise<'saved' | 'failed' | 'uncertain'> => {
+    if (!memory) return 'saved';
     const started = Date.now();
     memory.beginSettle(id, new Date().toISOString());
+    let stage: 'failed' | 'uncertain' = 'failed';
     try {
       const raw = await ask(id, 'memory', MEMORY_INSTRUCTION, exchangeInput(memory, owner, shared, ''), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
+      stage = 'uncertain';
       let purged: readonly string[] = [];
       let purgeIds: readonly number[] = [];
       const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts, ids) => { purged = texts; purgeIds = ids; }, { owner, shared });
@@ -274,10 +295,10 @@ export const createOwnerResponder = (
       if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
       const interrupted = memory.sweepInterruptedSettles(new Date(started - 10 * 60 * 1000).toISOString());
       log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}${interrupted ? ` interrupted${interrupted}` : ''}` });
-      return true;
+      return 'saved';
     } catch (error) {
-      log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
-      return false;
+      log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error', detail: stage });
+      return stage;
     } finally {
       memory.endSettle(id);
     }
@@ -289,16 +310,20 @@ export const createOwnerResponder = (
       const id = turn.traceId;
       const media = turn.attachment || turn.mediaNote ? { attachment: turn.attachment, note: turn.mediaNote } : undefined;
       pending = media?.attachment ? [media.attachment] : undefined;
-      const writing = memory !== undefined && memoryWrites && !probeGuard?.suppressMemory;
+      turnWriting = memory !== undefined && memoryWrites && !probeGuard?.suppressMemory;
+      recordedHeard = 0;
       // Record before reply: the owner's words are written first, so the reply sees corrections
-      // and never acknowledges a save that did not happen. A failed write goes into the turn so
-      // the reply says so plainly.
-      const saved = writing ? await record(id, turn.text ?? '', media?.note ?? '') : true;
-      const said = [turn.text, media?.note, saved ? '' : '[Saving this to memory failed. Say plainly that it was not saved.]'].filter(Boolean).join('\n');
-      const text = await converse(id, turn.conversationRef, said, time, true, turn.surface);
-      const steered = control.end().join('\n');
-      if (writing && steered) await record(`${id}-steer`, steered, '');
-      return text;
+      // and never acknowledges a save that did not happen. A failed write goes to the reply
+      // through the system prompt, not the owner's text, so history stays the owner's words.
+      const status = turnWriting ? await record(id, turn.text ?? '', media?.note ?? '') : 'saved';
+      turnNotice = status === 'saved' ? '' : MEMORY_NOTICES[status];
+      const said = [turn.text, media?.note].filter(Boolean).join('\n');
+      try {
+        return await converse(id, turn.conversationRef, said, time, true, turn.surface);
+      } finally {
+        turnWriting = false;
+        turnNotice = '';
+      }
     },
     async remind(id, conversationRef, note, time, surface) {
       await restored;
