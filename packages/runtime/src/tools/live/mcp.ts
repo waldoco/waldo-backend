@@ -6,19 +6,24 @@ class ToolExecutionError extends Error {}
 // token, or 'google' - the owner's connected Google account supplies the OAuth bearer. Vault-backed
 // accounts keep the token edge-side: the runtime sends server/tool/args and the edge attaches it.
 import type { ProxyIntent } from '../../connectors/proxy-intent';
+import { isGoogleFeature, type GoogleFeature } from '../../connectors/google';
 import { callMcpToolArgsSchema, triggerTypeSchema, TOOL_PERMISSIONS, type CallMcpToolArgs, type ToolHandler, type ToolName, type ToolResult } from '@waldo/contracts';
 import type { McpCallProposal } from '../../channels/approvals';
 import { callMcpTransport, McpAuthError, McpToolError, type McpTransportServer } from '../../connectors/mcp-transport';
 import type { ToolDispatcherContext } from '../dispatcher';
 
-export type McpServerConfig = McpTransportServer & Readonly<{ name: string; auth?: 'google' }>;
+// requires: the Google feature the serving grant must hold (drive = read-only). allow_tools: the only
+// tool names callable on this server; a server with requires must list them (fail closed).
+export type McpServerConfig = McpTransportServer & Readonly<{ name: string; auth?: 'google'; requires?: GoogleFeature; allow_tools?: readonly string[] }>;
 
 // Server registry is deploy config for alpha (env JSON); per-owner servers ride the vault later.
 export const mcpServers = (raw: string | undefined): readonly McpServerConfig[] => {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as McpServerConfig[];
-    return Array.isArray(parsed) ? parsed.filter((s) => s && typeof s.name === 'string' && typeof s.url === 'string') : [];
+    return Array.isArray(parsed) ? parsed.filter((s) => s && typeof s.name === 'string' && typeof s.url === 'string'
+      && (s.requires === undefined || (typeof s.requires === 'string' && isGoogleFeature(s.requires)))
+      && (s.allow_tools === undefined || (Array.isArray(s.allow_tools) && s.allow_tools.every((t) => typeof t === 'string')))) : [];
   } catch {
     return [];
   }
@@ -29,7 +34,7 @@ export const mcpServers = (raw: string | undefined): readonly McpServerConfig[] 
 // to the runtime, so the connector-proxy edge executes the call with the connection id instead.
 export type McpGoogleResolution = Readonly<{ mode: 'bearer'; token: string } | { mode: 'proxy'; connection: string }>;
 export type McpGoogleAuth = Readonly<{
-  resolve(intent?: ProxyIntent): Promise<McpGoogleResolution | null>;
+  resolve(intent?: ProxyIntent, feature?: GoogleFeature): Promise<McpGoogleResolution | null>;
   proxy(serverUrl: string, tool: string, args: Record<string, unknown>, connection: string, intent?: ProxyIntent): Promise<unknown>;
 }>;
 
@@ -51,9 +56,14 @@ export const callMcp = async (server: McpTransportServer, tool: string, args: Re
 // One execution path for both entry points (turn tool + approved card): resolves the server's
 // auth mode and runs the call, throwing McpConnectError for owner-actionable auth states.
 export const executeMcp = async (server: McpServerConfig, tool: string, args: Record<string, unknown>, googleAuth?: McpGoogleAuth, fetcher: typeof fetch = fetch, intent?: ProxyIntent): Promise<{ content: unknown; protocolVersion: string }> => {
+  if (server.allow_tools !== undefined && !server.allow_tools.includes(tool)) throw new ToolExecutionError(`tool "${tool}" is not allowed on MCP server "${server.name}"`);
+  if (server.requires !== undefined) {
+    if (server.allow_tools === undefined) throw new ToolExecutionError(`MCP server "${server.name}" requires an explicit tool allowlist`);
+    if (server.auth !== 'google') throw new ToolExecutionError(`MCP server "${server.name}" requires a google-auth server`);
+  }
   if (server.auth === 'google') {
     if (!googleAuth) throw new McpConnectError('not_connected', 'Google is not connected');
-    const resolved = await googleAuth.resolve(intent);
+    const resolved = await googleAuth.resolve(intent, server.requires);
     if (resolved === null) throw new McpConnectError('not_connected', 'Google is not connected');
     if (resolved.mode === 'proxy') {
       try {
