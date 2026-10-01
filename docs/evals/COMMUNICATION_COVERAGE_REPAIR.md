@@ -56,3 +56,10 @@ nothing about who authored an inbound message or a notification display name.
 No new account API, owner-DO mutation, hook or sanitiser rule is introduced. Other
 model/prose/log destinations retain their current privacy rules; no full end-to-end
 model reply or live account metadata trial is claimed.
+
+Lower query admission now uses the previous epoch second before requested from,
+then filters actual message timestamps to [from,to). This avoids relying on Gmail
+after: equality semantics for exact-second or fractional-second lower boundaries.
+A provider-strict-after fixture demonstrates boundary inclusion. Broadening may
+produce excluded rows/pages, so completeness remains conservative when filtered
+rows exist. It is semantic query widening, not a new arbitrary limit.

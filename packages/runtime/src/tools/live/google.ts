@@ -108,13 +108,14 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const since = date_range?.from ? Date.parse(date_range.from) : clock.now().getTime() - DAY_MS;
       const to = date_range?.to ?? clock.now().toISOString();
       const from = new Date(since).toISOString();
-      const query=`in:inbox category:primary after:${Math.floor(since/1000)} before:${Math.ceil(Date.parse(to)/1000)}`;
+      const query=`in:inbox category:primary after:${Math.floor(since/1000)-1} before:${Math.ceil(Date.parse(to)/1000)}`;
       const paged=typeof client.mailPage==='function';
       if(page_token&&!paged)throw new Error('Gmail pagination adapter unavailable');
       const page=paged?await client.mailPage(query,limit,page_token):null;
       const fetched=page? page.messages : await client.newMail(since,limit);
       const messages = fetched.filter(item => { const at = Date.parse(item.at); return Number.isFinite(at) && at >= since && at < Date.parse(to); }).map(quarantineMailItem);
       return { since: from, from: date_range?.from ?? from, to, timezone: clock.timezone, messages, query, next_page_token:page?.next_page_token??null,result_size_estimate:page?.result_size_estimate??null, coverage: {
+        lower_bound_query: 'previous_epoch_second_then_exact_timestamp_filter',
         cursor_query_binding: page_token?'caller_supplied_window_not_authenticated_to_cursor':'first_page',
         scope: 'inbox_primary_category', account_selection: 'connected_adapter_account_not_all_accounts',
         retrieval_window: date_range ? 'explicit_date_range' : 'rolling_24_hours', page_limit: limit,

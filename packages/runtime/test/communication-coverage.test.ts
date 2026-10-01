@@ -25,7 +25,7 @@ it('requests the exact bounded page and exposes provider pagination rather than 
  const handler=googleHandlers({client:async()=>({mailPage:async(...args:unknown[])=>{requests.push(args);return {messages:[messages[1]],next_page_token:'page-2',result_size_estimate:17};}} as never)},desk,clock).find(h=>h.name==='get_communication')!;
  const args=getCommunicationArgsSchema.parse({date_range:{from:'2026-09-30T00:00:00Z',to:'2026-10-01T00:00:00Z'},limit:20,page_token:'page-1'});
  const result=await handler.handle(args as never);
- expect(requests).toEqual([['in:inbox category:primary after:1790726400 before:1790812800',20,'page-1']]);
+ expect(requests).toEqual([['in:inbox category:primary after:1790726399 before:1790812800',20,'page-1']]);
  expect(result).toMatchObject({ok:true,data:{next_page_token:'page-2',result_size_estimate:17,coverage:{pagination:'provider_page',complete:false,upper_bound_applied_after_page:false,page_limit:20}}});
 });
 it('requires a pinned window for cursor continuation and keeps changed/invalid rows incomplete',async()=>{
@@ -33,4 +33,13 @@ it('requires a pinned window for cursor continuation and keeps changed/invalid r
  const handler=googleHandlers({client:async()=>({mailPage:async()=>({messages:[messages[3]],next_page_token:null,result_size_estimate:1})} as never)},desk,clock).find(h=>h.name==='get_communication')!;
  const result=await handler.handle({date_range:{from:'2026-09-30T00:00:00Z',to:'2026-10-01T00:00:00Z'}} as never);
  expect(result).toMatchObject({ok:true,data:{messages:[],coverage:{complete:false}}});
+});
+it.each(['2026-09-30T00:00:00.000Z','2026-09-30T00:00:00.250Z'])('broadens lower provider second then includes exact requested boundary %s',async(from)=>{
+ const at=Date.parse(from);const rows=[at-1,at,at+1,Date.parse('2026-09-30T00:00:01Z')].map((time,i)=>({...messages[1]!,id:`b${i}`,at:new Date(time).toISOString()}));
+ const handler=googleHandlers({client:async()=>({mailPage:async(q:string)=>{
+  const bound=Number(q.match(/after:(\d+)/)![1])*1000;
+  return {messages:rows.filter(r=>Date.parse(r.at)>bound),next_page_token:null,result_size_estimate:4};
+ }}) as never},desk,clock).find(h=>h.name==='get_communication')!;
+ const result=await handler.handle({date_range:{from,to:'2026-09-30T00:00:01Z'}} as never);
+ expect(result).toMatchObject({ok:true,data:{messages:[rows[1],rows[2]],coverage:{complete:false}}});
 });
