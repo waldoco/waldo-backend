@@ -208,9 +208,9 @@ export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: 
       }
       const message = error instanceof Error ? error.message : String(error);
       // A read has no ledger, so an intent error here means the edge could not run it (for example a revoked or missing grant). Retrying would not change that.
-      if (error instanceof ProxyIntentError) return { ok: false, code: 'rejected', error: 'The read could not be run right now. Nothing was read.', source_taint: 'external' };
+      if (error instanceof ProxyIntentError) return { ok: false, code: 'rejected', error: 'The connector could not run this read.', source_taint: 'external' };
       // The edge's stable code for a read it refused (unregistered server or tool, malformed id). Exact match on a code, not text parsing.
-      if ((error as { status?: number }).status === 400 && message === 'mcp_read_rejected') return { ok: false, code: 'rejected', error: 'The read was refused by the connector service. Nothing was read.', source_taint: 'external' };
+      if ((error as { status?: number }).status === 400 && message === 'mcp_read_rejected') return { ok: false, code: 'rejected', error: 'The connector refused this read.', source_taint: 'external' };
       return { ok: false, code: error instanceof ToolExecutionError ? 'rejected' : 'transient', error: message, source_taint: 'external' };
     }
   },
