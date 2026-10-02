@@ -29,6 +29,10 @@ Adversarial QA reproduced a stale-clock bug: an approval waiting on a budget loc
 
 Independent security and QA reviews passed this disabled slice. They reviewed source and independently ran the 58 runtime fixtures; the database execution evidence belongs to the implementation lane. A broader local pgTAP attempt failed existing public health-helper grant expectations in the disposable bootstrap (`schema_contract.sql`); this is not a full SQL verification pass. The standard all-guards runner also stops at its Linux PostgreSQL bootstrap on this macOS host; the Docker fixture runner supplies the focused SQL evidence instead. Canonical CI remains a required release gate.
 
+CI follow-up: head `ca2e05e` passed all four runtime shards and canonical Supabase migrate-from-zero/pgTAP. Its core guard failed because the plain-PostgreSQL shim omitted `auth.users.email_confirmed_at`. The local-only correction adds a nullable timestamp with no default; all 373 SQL assertions then passed in a fresh plain cluster inside the pinned local Postgres image, including confirmed/unconfirmed phone eligibility. The earlier stale 37-migration staging fixture was corrected with an exact preceding-history regression; its 67 workflow/preflight tests passed locally and in CI. No full core-green claim is made until the shim correction is published and canonical CI reruns.
+
+Further pushes are held by the owner's preview pause. The local shim correction is reviewable but unpublished. External Cloudflare build metadata shows failure without annotations/error text; its dashboard requires sign-in, so the cause remains blocked behind account access. This lane does not change preview settings, deploy or bypass that boundary.
+
 ## Required decisions before activation
 
 1. User creates the Twilio account, enters their own password, verifies their own Indian signup number and accepts current legal terms. No account has been created or personal signup data submitted by this lane. Marketing consent stays optional. Google signup would introduce a separate grant and is not used.
