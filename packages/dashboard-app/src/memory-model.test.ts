@@ -25,6 +25,8 @@ describe('owner Memory read client',()=>{
   await fetchMemory(new URLSearchParams('view=claims&limit=25'));
   expect(fetch).toHaveBeenCalledWith('/console/dashboard/api/v1/memory?view=claims&limit=25',expect.objectContaining({credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}}));
   fetch.mockResolvedValueOnce(new Response('',{status:401}));await expect(fetchMemory(new URLSearchParams())).rejects.toBeInstanceOf(SignInRequired);
+  fetch.mockResolvedValueOnce(new Response('{"error":"memory_unavailable"}',{status:503}));await expect(fetchMemory(new URLSearchParams())).rejects.toMatchObject({code:'memory_unavailable'});
+  expect(fetch.mock.calls.every((call)=>!call[1]?.method||call[1].method==='GET')).toBe(true);
   fetch.mockResolvedValueOnce(new Response('{"error":"cursor_invalid"}',{status:400}));await expect(fetchMemory(new URLSearchParams())).rejects.toMatchObject({code:'cursor_invalid'});
  });
  it('encodes opaque scoped item references in deep links',()=>expect(memoryItemLink('spots','scope:claim:1&extra=1')).toBe('#/memory/spots?id=scope%3Aclaim%3A1%26extra%3D1'));

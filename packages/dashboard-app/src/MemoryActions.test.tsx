@@ -18,8 +18,8 @@ describe('Memory action review and transport',()=>{
  it('uses the protected same-origin item read and separates sign-in from unavailable',async()=>{
   const fetcher=vi.fn().mockResolvedValueOnce(Response.json(wire)).mockResolvedValueOnce(new Response(null,{status:401})).mockResolvedValueOnce(new Response(null,{status:503}));vi.stubGlobal('fetch',fetcher);
   expect(await fetchMemoryControls(id)).toEqual(readMemoryControls(wire,id));
-  expect(fetcher.mock.calls[0][0]).toBe('/console/dashboard/api/v1/memory-controls?id=owner%3Aclaim%3A5');
-  expect(fetcher.mock.calls[0][1]).toMatchObject({credentials:'same-origin',cache:'no-store',redirect:'error'});
+  expect(fetcher.mock.calls[0]?.[0]).toBe('/console/dashboard/api/v1/memory-controls?id=owner%3Aclaim%3A5');
+  expect(fetcher.mock.calls[0]?.[1]).toMatchObject({credentials:'same-origin',cache:'no-store',redirect:'error'});
   await expect(fetchMemoryControls(id)).rejects.toBeInstanceOf(SignInRequired);await expect(fetchMemoryControls(id)).rejects.toThrow('could not load');
  });
  it('replays a lost Memory response with its original target, revision and request identity',async()=>{

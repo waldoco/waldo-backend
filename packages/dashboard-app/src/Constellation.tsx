@@ -1,3 +1,4 @@
+import {buildMemoryDestination,type MemoryListDestination} from './destinations';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { fetchMemory, memoryItemLink, type Claim, type Interpretation, type MemoryPattern } from './memory-model';
 import { SignInRequired } from './model';
@@ -90,7 +91,7 @@ function useSettledScene(nodes: SceneNode[], reduced: boolean) {
 const origin = (value: string) => value === 'shared' || value === 'untrusted' ? `${value} · untrusted provenance` : value;
 const shortLabel = (value: string) => value.length > 29 ? `${value.slice(0, 28)}…` : value;
 
-export function PatternExplorer({ data, onNext, onRestart }: { data: MemoryPattern; onNext: () => void; onRestart: () => void }) {
+export function PatternExplorer({ data, onNext, onRestart, returnTo }: { returnTo?:MemoryListDestination; data: MemoryPattern; onNext: () => void; onRestart: () => void }) {
   const [focusId, setFocusId] = useState(data.center.id);
   const [selectedId, setSelectedId] = useState(data.center.id);
   const [supportRetry, setSupportRetry] = useState(0);
@@ -119,7 +120,7 @@ export function PatternExplorer({ data, onNext, onRestart }: { data: MemoryPatte
   const choose = (node: SceneNode) => { setSelectedId(node.id); if (node.kind === 'pattern') setFocusId(node.id); };
   const declared = [...new Set(focused.support.claim_ids)].length;
   return <>
-    <a href={memoryItemLink('constellation', data.center.id)}>← Back to pattern details</a>
+    <a href={memoryItemLink('constellation', data.center.id, returnTo)}>← Back to pattern details</a>
     <div className="constellation-toolbar"><div><span className="eyebrow">Saved support · opt-in exploration</span><h2>{data.center.label}</h2><p>{data.showing.nodes} of {data.showing.of_nodes} returned neighboring patterns · {data.showing.links} of {data.showing.of_links} saved associations on this page</p></div><button onClick={onRestart}>Restart exploration</button></div>
     {(data.state !== 'available' || !data.complete) && <div className="memory-read-notice" role="status"><p>This Memory read is {data.state}. Missing or withheld records are not an empty Memory or completed removal.</p>{data.unavailable_claim_count > 0 && <p>{data.unavailable_claim_count} claims withheld during removal.</p>}</div>}
     <p className="constellation-guide">Hexagons are tentative patterns. Circles are returned Spots from the selected pattern’s saved support. Lines describe stored links—not truth, causation or verified independent observations.</p>
@@ -141,8 +142,8 @@ export function PatternExplorer({ data, onNext, onRestart }: { data: MemoryPatte
         })}
       </svg><p className="muted">Select a saved branch to inspect it. Keyboard: Tab, then Enter or Space. The returned branches also appear in the list below.</p></div>
       <aside className="panel constellation-inspector" aria-label="Selected saved item">
-        {selectedSpot ? <><span className="eyebrow">Saved supporting Spot</span><h3>{selectedSpot.text}</h3><p>Kind: {selectedSpot.kind} · Source: {selectedSpot.source} · Origin: {origin(selectedSpot.origin)} · Status: {selectedSpot.status}</p><p>{selectedSpot.evidence.text}</p><p className="muted">Writer evidence note, not an original-message link or proof. Writer seen count: {selectedSpot.writer_seen_count ?? 'unavailable'}.</p><a href={memoryItemLink('spots', selectedSpot.id)}>Inspect this Spot</a></>
-          : <><span className="eyebrow">Tentative pattern · {focused.domain}</span><h3>{focused.label}</h3><p>{focused.summary}</p><p>Stored status: {focused.stored_status}</p><p className="muted">Uncalibrated model estimate: {focused.estimate ?? 'unavailable'}. Independent observations remain unverified.</p><a href={memoryItemLink('constellation', focused.id)}>Inspect pattern details</a><p><a href={`${memoryItemLink('constellation', focused.id)}&explore=1`}>Explore from this pattern</a></p></>}
+        {selectedSpot ? <><span className="eyebrow">Saved supporting Spot</span><h3>{selectedSpot.text}</h3><p>Kind: {selectedSpot.kind} · Source: {selectedSpot.source} · Origin: {origin(selectedSpot.origin)} · Status: {selectedSpot.status}</p><p>{selectedSpot.evidence.text}</p><p className="muted">Writer evidence note, not an original-message link or proof. Writer seen count: {selectedSpot.writer_seen_count ?? 'unavailable'}.</p><a href={memoryItemLink('spots', selectedSpot.id, returnTo)}>Inspect this Spot</a></>
+          : <><span className="eyebrow">Tentative pattern · {focused.domain}</span><h3>{focused.label}</h3><p>{focused.summary}</p><p>Stored status: {focused.stored_status}</p><p className="muted">Uncalibrated model estimate: {focused.estimate ?? 'unavailable'}. Independent observations remain unverified.</p><a href={memoryItemLink('constellation', focused.id, returnTo)}>Inspect pattern details</a><p><a href={buildMemoryDestination({kind:'explore',id:focused.id,...(returnTo?{returnTo}:{})})}>Explore from this pattern</a></p></>}
         <div className="constellation-support"><h4>Saved supporting Spots</h4><p>{scene.claims.length} returned of {declared} declared saved support IDs · {focused.support.unavailable_count} unavailable in the pattern read</p>
           {!activeSupport || activeSupport.kind === 'loading' ? <p role="status">Reading up to six supporting Spots…</p> : <>
             {activeSupport.read.failed > 0 && <p role="alert">{activeSupport.read.failed} selected supporting Spot reads unavailable. Missing details are not proof of an empty support set.</p>}
@@ -157,7 +158,7 @@ export function PatternExplorer({ data, onNext, onRestart }: { data: MemoryPatte
       </aside>
     </div>
     <section className="panel constellation-list"><h3>Saved branches · list fallback</h3><div className="constellation-pattern-list">{scene.nodes.filter(node => node.kind === 'pattern').map(node => <button key={node.id} aria-pressed={node.id === selected} onClick={() => choose(node)}>{node.label}</button>)}</div>
-      <ul>{scene.links.filter(link => link.kind === 'association').map((link, index) => <li key={index}><a href={memoryItemLink('constellation', link.from)}>{patterns.find(pattern => pattern.id === link.from)?.label}</a> → <a href={memoryItemLink('constellation', link.to)}>{patterns.find(pattern => pattern.id === link.to)?.label}</a><p>{link.relation} · Unverified association</p></li>)}</ul>{!data.associations.length && <p>No saved associations returned on this page.</p>}
+      <ul>{scene.links.filter(link => link.kind === 'association').map((link, index) => <li key={index}><a href={memoryItemLink('constellation', link.from, returnTo)}>{patterns.find(pattern => pattern.id === link.from)?.label}</a> → <a href={memoryItemLink('constellation', link.to, returnTo)}>{patterns.find(pattern => pattern.id === link.to)?.label}</a><p>{link.relation} · Unverified association</p></li>)}</ul>{!data.associations.length && <p>No saved associations returned on this page.</p>}
     </section>
     <nav className="memory-pagination" aria-label="Saved connection pages"><button onClick={onRestart}>First page</button><button disabled={!data.expand.next_cursor} onClick={onNext}>Next neighboring patterns</button></nav>
   </>;

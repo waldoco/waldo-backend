@@ -1,9 +1,26 @@
-import {describe,expect,it} from 'vitest';
+import {afterEach,describe,expect,it,vi} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
-import {MemoryList,MemoryDetailView,PatternExplorer} from './Memory';
+import {MemoryPanel,MemoryList,MemoryDetailView,PatternExplorer} from './Memory';
 import {readMemory,type MemoryPage,type MemoryDetail,type MemoryPattern} from './memory-model';
 import {response} from './memory-test-fixtures';
+afterEach(()=>vi.unstubAllGlobals());
 describe('modern Memory presentation',()=>{
+ it('keeps originating list context in detail, exploration and supporting-item links',()=>{
+  const origin={view:'spots' as const,cursor:'saved-page'};
+  const page=renderToStaticMarkup(<MemoryList data={readMemory(response('view=claims&limit=25')) as MemoryPage} returnTo={origin} onNext={()=>{}} onRestart={()=>{}}/>);
+  expect(page).toContain('returnView=spots&amp;returnCursor=saved-page');
+  const detail=renderToStaticMarkup(<MemoryDetailView data={readMemory(response('view=detail&id=synthetic-owner:node:1')) as MemoryDetail} returnTo={origin}/>);
+  expect(detail).toContain('#/memory/spots?cursor=saved-page');
+  expect(detail).toContain('Back to Spots');
+  const spot=renderToStaticMarkup(<MemoryDetailView data={readMemory(response('view=detail&id=synthetic-owner:claim:1')) as MemoryDetail} returnTo={{view:'constellation'}}/>);
+  expect(spot).toContain('Back to patterns');
+  expect(detail).toContain('explore=1&amp;returnView=spots&amp;returnCursor=saved-page');
+ });
+ it('renders invalid Memory selectors as recovery without action controls or network requests',()=>{
+  const fetch=vi.fn();vi.stubGlobal('fetch',fetch);vi.stubGlobal('window',{location:{hash:'#/memory/spots?id=1&owner=other'}});
+  const html=renderToStaticMarkup(<MemoryPanel subview="spots"/>);
+  expect(html).toContain('Memory link unavailable');expect(html).toContain('Return to Spots');expect(html).not.toContain('Loading');expect(html).not.toContain('Review actions');expect(fetch).not.toHaveBeenCalled();
+ });
  it('renders returned Spots directly with honest origin and in-shell detail links',()=>{
   const html=renderToStaticMarkup(<MemoryList data={readMemory(response('view=claims&limit=25')) as MemoryPage} onNext={()=>{}} onRestart={()=>{}}/>);
   expect(html).toContain('&lt;script&gt;claim&lt;/script&gt;');expect(html).not.toContain('<script>');expect(html).toContain('Shared');expect(html).toContain('Waldo’s inference');expect(html).toContain('#/memory/spots?id=');expect(html).toContain('1 returned');expect(html).not.toContain('Open Spots');

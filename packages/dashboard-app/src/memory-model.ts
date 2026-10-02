@@ -1,3 +1,4 @@
+import {buildMemoryDestination,type MemoryListDestination} from './destinations';
 import { SignInRequired } from './model';
 export type MemoryStatus = { version: 1; state: 'available'|'partial'|'unavailable'; complete: boolean; unavailable_claim_count: number };
 export type Claim = { id:string; kind:string; text:string; source:string; origin:string; status:string; evidence:{kind:'writer_note';text:string}; source_reference:{state:'unavailable'|'unverified';link:null}; recorded_at:string; writer_seen_count:number|null };
@@ -52,4 +53,4 @@ export async function fetchMemory(params:URLSearchParams,signal?:AbortSignal) {
  if(!response.ok){let error='unavailable';try{const v=await response.json();if(obj(v)&&str(v.error))error=v.error;}catch{}throw new MemoryReadError(error);}
  try{return readMemory(await response.json());}catch(e){if(e instanceof MemoryReadError)throw e;throw new MemoryReadError('unsupported');}
 }
-export const memoryItemLink=(view:'spots'|'constellation',id:string)=>`#/memory/${view}?id=${encodeURIComponent(id)}`;
+export const memoryItemLink=(view:'spots'|'constellation',id:string,returnTo?:MemoryListDestination)=>buildMemoryDestination({kind:'detail',view,id,...(returnTo?{returnTo}:{})});

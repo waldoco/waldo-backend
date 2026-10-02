@@ -1,3 +1,4 @@
+import {parseMemoryDestination} from './destinations';
 import {WorkspacePanel} from './Workspace';
 import {OwnerControlsPanel} from './OwnerControls';
 import {ControlsPanel} from './Controls';
@@ -16,6 +17,9 @@ const routes = [
   { key: 'connections', label: 'Connections' }, { key: 'day', label: 'Your day' },
 ] as const;
 export const resolveRoute = (raw: string): Route => {
+  const memory = parseMemoryDestination(raw);
+  if(memory.kind==='invalid-memory')return 'memory';
+  if(memory.kind==='valid-memory'){const d=memory.destination;return d.kind==='profile'?'memory/profile':d.kind==='explore'?'memory/constellation':`memory/${d.view}`;}
   const value = raw.split('?')[0];
   if (value === 'admin' || value==='files'||value==='usage'||value==='setup'||value==='invites'||value==='account'||value==='files/workspace') return value;
   if (value === 'memory/spots' || value === 'memory/constellation' || value === 'memory/profile') return value;

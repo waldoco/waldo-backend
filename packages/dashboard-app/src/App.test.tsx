@@ -45,9 +45,13 @@ describe('dashboard routing and overview boundaries', () => {
     expect(renderToStaticMarkup(<DashboardNavigation route="today"/>)).not.toContain('0 waiting decisions');
   });
   it('preserves sibling routes with hash query strings', () => {
-    for (const route of ['today', 'waiting', 'patrol', 'connections', 'day', 'files', 'usage', 'setup', 'admin', 'memory/spots', 'memory/constellation', 'memory/profile'] as const) {
+    for (const route of ['today', 'waiting', 'patrol', 'connections', 'day', 'files', 'usage', 'setup', 'admin'] as const) {
       expect(resolveRoute(`${route}?id=scope%3Aclaim%3A1&owner=other&explore=1`)).toBe(route);
     }
+    expect(resolveRoute('memory/spots?id=scope%3Aclaim%3A1')).toBe('memory/spots');
+    expect(resolveRoute('memory/constellation?id=scope%3Anode%3A1&explore=1')).toBe('memory/constellation');
+    expect(resolveRoute('memory/profile')).toBe('memory/profile');
+    for(const value of ['memory/spots?owner=other','memory/profile?id=1','memory/unknown'])expect(resolveRoute(value)).toBe('memory');
     expect(resolveRoute('')).toBe('today');
     expect(resolveRoute('overview?owner=other')).toBe('today');
     expect(resolveRoute('unknown?view=waiting')).toBe('today');
