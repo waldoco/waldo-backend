@@ -9,8 +9,8 @@ The earlier text in #520 that describes a do_name / constant-tenant staging desi
 ## Policy
 
 1. Identity source. A verified canonical owner UUID read from the authenticated directory, inside the owner host. Never from a message, request parameter, transport or model.
-2. Mapping. `principal_ref = prn_<32hex(uuid)>` and `tenant_ref = ten_<same 32hex>`. Both are opaque refs per `verifiedInvocationAuthoritySchema` (contracts/src/runtime/invocation.ts). One personal owner per tenant.
-3. Verification ref. `verification_ref` (`ver_...`) records the directory row and revision that proved the UUID, so a ref is more than a label.
+2. Mapping, as stated by the admission lane: `principal_ref = prn_<32hex(uuid)>` and `tenant_ref = ten_<same 32hex>`. DISAGREEMENT, raised to Codex: these are not opaque. The two refs are identical apart from the prefix and the UUID is recoverable from either, so it flows into every trace, context record and log that carries a ref. The contract calls them opaque refs (`verifiedInvocationAuthoritySchema`, contracts/src/runtime/invocation.ts). Core proposes one of: (a) `prn_` and `ten_` are per-purpose HMAC-SHA-256 labels over the UUID with a host-private key, truncated to 32 hex, so they differ from each other and cannot be reversed; or (b) state plainly that the UUID is non-secret and drop the word "opaque" everywhere. Core prefers (a). Until Codex decides, this document does not claim opacity. One personal owner per tenant.
+3. Verification ref. `verification_ref` must match `ver_<32hex>`. Proposed definition: the first 32 hex of SHA-256 over the canonical string `owner-verification:v1:<directory_row_id>:<directory_revision>`. "Revision" is not defined today: `RouteRow` in owner-directory.ts has do_name, subject and timezone only. Proposal: the directory function returns a monotonically increasing integer `revision` that changes whenever the row's link, status or owner mapping changes. Until the directory has it, no `ver_` ref can be minted and admission fails closed.
 4. Fresh checks. Lifecycle (linked, unlinked, closed, revoked) is re-read before any disclosure or effect, and again after every awaited read and after resume of a run. A failed or unavailable check fails closed.
 5. Conversation. The canonical conversation is a fresh source with an explicit label (a closed enum in the context source record, not free text). Legacy rows are preserved and labelled as legacy; they are not rewritten.
 6. Default and production callers are unchanged and get no skills.
@@ -51,6 +51,8 @@ The earlier text in #520 that describes a do_name / constant-tenant staging desi
 - The A1 helper is not visible in the repo yet. This amendment describes it only from the relay.
 - `RouteRow` in `owner-directory.ts` has do_name, subject and timezone only. Whether the directory can return a canonical UUID today is unconfirmed. If it cannot, step 2 has no source.
 - Where the owner's current grant state is read from is unresolved.
+- The directory has no lifecycle or status field either (RouteRow carries do_name, subject, timezone). The "fresh lifecycle check" rule has no source until the directory exposes status and revision. Today the DO's own `telegram_unlinked` flag is the only lifecycle signal, and it is DO-local, not directory state.
+- CI note: "Workers Builds: waldo-runtime-staging" must be checked on this PR before any merge; it was pending at push time.
 
 ## Follow-up: verification receipt, canonical vs legacy label, grants (proposal)
 
