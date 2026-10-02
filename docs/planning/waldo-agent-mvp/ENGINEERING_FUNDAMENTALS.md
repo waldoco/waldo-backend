@@ -36,6 +36,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 ### Concurrency and ordering
 - Writes that belong to one turn settle before the next turn reads them.
+- A native fixture settles the exact durably admitted inbox turn through bounded real alarms and its delivered, settled final record; an idle private queue is not completion. Missing admission, custody mismatch, quarantine and step exhaustion fail explicitly before trace capture.
 - Anything that reads and then writes shared state runs inside the DO's serial queue or one transaction.
 - External writes use a version check (etag / If-Match) so we never overwrite a change the owner made meanwhile.
 
@@ -109,6 +110,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 | Date | Bug | Class | Test added | Checklist line |
 |---|---|---|---|---|
+| 2026-10-02 | Native supervisor waited an idle queue after webhook admission, then read an uninitialized trace table | Fixture settlement | native-owner-settle.test.ts and owner-do-native-trial.ts scripted supervisor | Exact admitted turn settles through bounded real alarms before capture |
 | 2026-09-30 | Owner-local artifact metadata used shared R2 body keys based on short IDs; two owners with the same ID overwrote and read each other | Trust boundaries | artifacts.test.ts: same-ID shared bucket create/revise/restart, missing namespace, percent/slash namespace collision, no legacy fallback | Shared object-storage keys include immutable owner scope |
 | 2026-09-30 | Browser binding extraction failures became empty approvals; old-key-only lowercase comparison missed additional facts and case-sensitive recipient drift | Trust boundaries | browse-act.test.ts: failed/empty/malformed extraction and old approvals, added/removed facts, exact recipient case, key-order success; original source fails 6/32 tests | Browser approvals need valid nonempty evidence and exact complete-set comparison |
 | 2026-09-26 | Forget deleted the claim row but left the forgotten text live in five stores: the episodes FTS index (search_episodes could resurface it), memory_backups payloads, the frozen legacy spots and core_file_revisions tables, and constellation nodes kept quoting it and referencing its id in supporting_spots; the console forget path added a re-admission barrier while the model-facing path did not. Found by the forget-coverage audit: red-first survivor scan showed {episodes:1, backups:1, spots:1, revisions:1, nodes:1} after a forget | Memory / trust boundaries | forget-coverage.test.ts: marker planted in all six stores, forgotten through the real applyClaimOps path, fresh-state scan asserts zero everywhere, node stops quoting the claim and drops its id, barrier blocks re-admission, absent legacy tables skip cleanly, result reports purged vs purge-incomplete:<stores> | Deletes that the owner asked for are real across every store, proven by a fresh-state re-scan |
