@@ -565,7 +565,7 @@ const CLAIM_RULES = [
   'Sources stay sources: a claim about something that lives in a connected source (an email, an event, a file) records what it means for the owner and a pointer to where it lives, never a copy of its contents. Current state of those sources is read live at ask time, not recalled from a claim.',
   'Mark an added claim touches_forgotten when it is about anything the owner asked to forget.',
   'Health routines and how the owner says they feel are fine. Never record a diagnosis Waldo inferred.',
-  'aliases: up to 5 short words or phrases the owner might use later for the same thing in different words (for example "bedtime" for a claim about sleeping at 11:30). They are only used to find the claim again, are not facts and not evidence. Leave empty when the claim\'s own words are enough.',
+  'aliases: up to 5 short words or phrases the owner might use later for the same thing in different words (for example "bedtime" for a claim about sleeping at 11:30). They are only used to find the claim again, are not facts and not evidence. Leave empty when the claim\'s own words are enough. Set aliases_touch_forgotten true when any alias mentions something the owner asked to forget; those aliases are then dropped.',
 ];
 
 export const MEMORY_INSTRUCTION = [
@@ -592,8 +592,8 @@ export const MIGRATION_INSTRUCTION = [
 export const CLAIM_OPS_SCHEMA = {
   type: 'object', additionalProperties: false, required: ['add', 'corrections', 'seen', 'confirm', 'dismiss', 'forget_claims', 'forget_nodes', 'forget_topic'],
   properties: {
-    add: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['kind', 'text', 'source', 'evidence', 'touches_forgotten', 'aliases'],
-      properties: { kind: { type: 'string', enum: [...CLAIM_KINDS] }, text: { type: 'string' }, source: { type: 'string', enum: ['stated', 'inferred'] }, evidence: { type: 'string' }, touches_forgotten: { type: 'boolean' }, aliases: { type: 'array', maxItems: MAX_ALIASES, items: { type: 'string' } } } } },
+    add: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['kind', 'text', 'source', 'evidence', 'touches_forgotten', 'aliases', 'aliases_touch_forgotten'],
+      properties: { kind: { type: 'string', enum: [...CLAIM_KINDS] }, text: { type: 'string' }, source: { type: 'string', enum: ['stated', 'inferred'] }, evidence: { type: 'string' }, touches_forgotten: { type: 'boolean' }, aliases_touch_forgotten: { type: 'boolean' }, aliases: { type: 'array', maxItems: MAX_ALIASES, items: { type: 'string' } } } } },
     corrections: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['old_id', 'kind', 'text', 'evidence'], properties: { old_id: { type: 'integer' }, kind: { type: 'string', enum: [...CLAIM_KINDS] }, text: { type: 'string' }, evidence: { type: 'string' } } } },
     seen: { type: 'array', items: { type: 'integer' } },
     confirm: { type: 'array', items: { type: 'integer' } },
@@ -675,7 +675,7 @@ const correctionMatches = (old: Claim, replacement: { kind: string; text: string
     [...current].filter((word) => !previous.has(word)).every((word) => observed.has(word));
 };
 
-type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null }>;
+type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean; aliases_touch_forgotten?: boolean })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null }>;
 
 // What this application of claim ops actually did, as counts the caller can report truthfully.
 export type ClaimOutcome = Readonly<{ written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[] }>;
@@ -778,7 +778,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
       }
     }
     // An alias that is itself a forgotten topic is dropped, not stored.
-    const aliases = (claim.aliases ?? []).filter((alias) => typeof alias === 'string' && !barrierHashes.has(textFingerprint(alias.trim())));
+    const aliases = claim.aliases_touch_forgotten ? [] : (claim.aliases ?? []).filter((alias) => typeof alias === 'string' && !barrierHashes.has(textFingerprint(alias.trim())));
     store.add({ kind: claim.kind, text: claim.text.trim(), source, evidence: claim.evidence.trim(), aliases, origin: origin ?? undefined, source_ref: origin === 'owner' && evidence.startsWith('owner, ') && !evidence.includes('day of') ? evidence : undefined }, at);
     written += 1;
   }

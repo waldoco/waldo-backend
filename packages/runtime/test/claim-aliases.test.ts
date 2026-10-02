@@ -106,4 +106,12 @@ describe('aliases through the claim admission gate', () => {
       expect(state.storage.sql.exec<{ text: string; aliases: string }>('SELECT text, aliases FROM claims').toArray()).toEqual([{ text: 'Goes to bed around 11:30pm', aliases: 'bedtime' }]);
     });
   });
+  it('aliases the writer flags as touching a forgotten topic are dropped while the claim itself is kept', async () => {
+    const { applyClaimOps } = await import('../src/memory/claims');
+    await runInDurableObject(owner('alias-touch-forgotten'), (_i, state) => {
+      const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
+      applyClaimOps(store, ops([{ kind: 'routine', text: 'Goes to bed around 11:30pm', source: 'stated', evidence: `owner, tg-1: "${SAID}"`, touches_forgotten: false, aliases_touch_forgotten: true, aliases: ['bedtime after zebracillin'] }]), AT2, 'owner agreed', undefined, { owner: SAID });
+      expect(state.storage.sql.exec<{ text: string; aliases: string | null }>('SELECT text, aliases FROM claims').toArray()).toEqual([{ text: 'Goes to bed around 11:30pm', aliases: null }]);
+    });
+  });
 });
