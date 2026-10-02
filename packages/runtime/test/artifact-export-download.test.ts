@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderMarkdownPdf } from '../src/channels/artifact-export';
-import { artifactExports, inMemoryArtifactBinaries, type ArtifactBinaries, type ExportRow } from '../src/channels/artifact-exports';
+import { artifactExports, inMemoryArtifactBinaries, r2ArtifactBinaries, type ArtifactBinaries, type ExportRow } from '../src/channels/artifact-exports';
 import { ARTIFACT_EXPORT_MAX_BYTES, ARTIFACT_EXPORT_PATH, artifactExportDownload } from '../src/channels/artifact-export-download';
 
 const sha = async (b: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))].map((x) => x.toString(16).padStart(2, '0')).join('');
@@ -154,5 +154,21 @@ describe('artifact export download', () => {
     const ex = artifactExports(sql as never, {} as never, {} as never, inMemoryArtifactBinaries(), { timezone: 'UTC', now: () => new Date(0) }, () => 'x');
     expect(ex.byId('exp:e9')).toEqual(row);
     expect(ex.byId('exp:none')).toBeNull();
+  });
+});
+
+describe('read bound', () => {
+  it('in-memory binaries refuse an object over maxBytes', async () => {
+    const b = inMemoryArtifactBinaries();
+    await b.putBytes('k', new Uint8Array(10));
+    await expect(b.getBytes('k', 9)).rejects.toThrow('read bound');
+    expect((await b.getBytes('k', 10))?.length).toBe(10);
+  });
+  it('r2 binaries refuse before reading the body', async () => {
+    let read = false;
+    const bucket = { get: async () => ({ size: 100, arrayBuffer: async () => { read = true; return new ArrayBuffer(100); } }) } as unknown as R2Bucket;
+    const b = r2ArtifactBinaries(bucket, 'o1');
+    await expect(b.getBytes('k', 50)).rejects.toThrow('read bound');
+    expect(read).toBe(false);
   });
 });

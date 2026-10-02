@@ -11,7 +11,8 @@ import { artifactReadAdmission } from './artifact-delivery';
 import type { ArtifactBinaries, ExportRow } from './artifact-exports';
 
 export const ARTIFACT_EXPORT_PATH = '/console/exports';
-// Matches the renderer's own ceiling with headroom; anything bigger is never read into a response.
+// Matches the renderer's own ceiling with headroom. The cap bounds the store read itself (getBytes maxBytes),
+// not only the response, so an oversized stored object is refused before its body is read.
 export const ARTIFACT_EXPORT_MAX_BYTES = 5 * 1024 * 1024;
 const EXPORT_ID = /^exp:[a-zA-Z0-9_-]{1,128}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -45,6 +46,7 @@ const validRow = (row: ExportRow): boolean =>
   && typeof row.sha256 === 'string' && SHA256.test(row.sha256)
   && typeof row.r2_key === 'string' && row.r2_key.length > 0;
 
+// Magic-byte check only ("%PDF-" prefix). It is not PDF validation; integrity comes from the size and sha256 match.
 const isPdf = (bytes: Uint8Array): boolean => bytes.length >= 5 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46 && bytes[4] === 0x2d;
 
 // Returns null when the path is not an export path, so a host can fall through to other handlers.
@@ -63,7 +65,7 @@ export const artifactExportDownload = async (request: Request, deps: ArtifactExp
   if (row === null) return fail(404, 'not found');
   if (!validRow(row)) return fail(503, 'temporarily unavailable');
   let bytes: Uint8Array | null;
-  try { bytes = await deps.binaries.getBytes(row.r2_key); } catch { return fail(503, 'temporarily unavailable'); }
+  try { bytes = await deps.binaries.getBytes(row.r2_key, ARTIFACT_EXPORT_MAX_BYTES); } catch { return fail(503, 'temporarily unavailable'); }
   if (bytes === null) return fail(404, 'not found');
   if (bytes.length > ARTIFACT_EXPORT_MAX_BYTES || bytes.length !== row.byte_size || !isPdf(bytes)) return fail(503, 'temporarily unavailable');
   let digest: string;
