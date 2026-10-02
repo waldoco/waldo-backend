@@ -23,11 +23,21 @@ export const workspaceReadArgsSchema = z.strictObject({
 });
 export type WorkspaceReadArgs = z.infer<typeof workspaceReadArgsSchema>;
 
+// UTF-8 byte length without TextEncoder (this package has no DOM/node lib).
+function utf8Bytes(v: string): number {
+  let n = 0;
+  for (const ch of v) {
+    const c = ch.codePointAt(0) as number;
+    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+  }
+  return n;
+}
+
 // Compare-and-swap like revise_artifact: expected_revision 0 creates, N replaces revision N.
 export const workspaceWriteArgsSchema = z.strictObject({
   path: z.string().min(1).max(300),
   // The cap is in UTF-8 bytes (the store's unit), not characters.
-  text: z.string().min(1).refine((v) => new TextEncoder().encode(v).byteLength <= WORKSPACE_TEXT_MAX_BYTES, { message: 'text exceeds the byte cap' }),
+  text: z.string().min(1).refine((v) => utf8Bytes(v) <= WORKSPACE_TEXT_MAX_BYTES, { message: 'text exceeds the byte cap' }),
   mime: z.enum(['text/plain', 'text/markdown']),
   expected_revision: z.int().nonnegative(),
 });
