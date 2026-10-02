@@ -636,17 +636,33 @@ describe('production responsibility RunLoopDO RPC', () => {
         authenticatedSessionId,
       });
       const requests = session === 0 ? 59 : 60;
-      for (let request = 0; request < requests; request += 1) {
-        await stub.readResponsibilityProjectionFromWorker({
-          routedOwnerId: ownerId, ...projectionInput,
-        }, projectionIngress);
-      }
+      await stub.readResponsibilityProjectionFromWorker({
+        routedOwnerId: ownerId, ...projectionInput,
+      }, projectionIngress);
+      // Exercise each session's RPC seam once; batch the remaining real admissions so
+      // transport latency is not multiplied by the owner ceiling.
+      await runInDurableObject(stub, async (instance) => {
+        for (let request = 1; request < requests; request += 1) {
+          await instance.readResponsibilityProjectionFromWorker({
+            routedOwnerId: ownerId, ...projectionInput,
+          }, projectionIngress);
+        }
+      });
     }
     const overflow = await signedProjectionIngress(ownerId, projectionInput, {
       authenticatedSessionId: `authenticated_session_${'f'.repeat(64)}`,
     });
-    await runInDurableObject(stub, async (instance, state) => {
-      const authorityBefore = {
+    const authorityBefore = await runInDurableObject(stub, async (_instance, state) => {
+      expect(state.storage.sql.exec<{ rate_key: string; count: number }>(
+        'SELECT rate_key, count FROM responsibility_ingress_rate ORDER BY rate_key',
+      ).toArray()).toEqual([
+        { rate_key: 'owner', count: 240 },
+        ...[0, 1, 2, 3].map(session => ({
+          rate_key: `session:authenticated_session_${String(session).repeat(64)}`,
+          count: 60,
+        })),
+      ]);
+      return {
         root: state.storage.sql.exec('SELECT * FROM owner_roots').toArray(),
         presences: state.storage.sql.exec('SELECT * FROM presence_registrations').toArray(),
         sessions: state.storage.sql.exec('SELECT * FROM presence_sessions ORDER BY authenticated_session_id').toArray(),
@@ -654,9 +670,13 @@ describe('production responsibility RunLoopDO RPC', () => {
           'SELECT * FROM responsibility_ingress_rate ORDER BY rate_key, bucket',
         ).toArray(),
       };
-      await expect(Promise.resolve().then(() => instance.readResponsibilityProjectionFromWorker({
+    });
+    await expect(Promise.resolve().then(async () => {
+      await stub.readResponsibilityProjectionFromWorker({
         routedOwnerId: ownerId, ...projectionInput,
-      }, overflow))).rejects.toThrow('rate limited');
+      }, overflow);
+    })).rejects.toThrow('rate limited');
+    await runInDurableObject(stub, async (_instance, state) => {
       expect({
         root: state.storage.sql.exec('SELECT * FROM owner_roots').toArray(),
         presences: state.storage.sql.exec('SELECT * FROM presence_registrations').toArray(),

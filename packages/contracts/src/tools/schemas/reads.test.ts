@@ -12,7 +12,7 @@ import {
   getMasterMetricsArgsSchema,
   getTasksArgsSchema,
   healthMetricSelectorSchema,
-  queryCalendarArgsSchema,
+  calendarPageSchema, queryCalendarArgsSchema,
   readDocumentArgsSchema,
   readDocumentResultSchema,
   readMemoryArgsSchema,
@@ -67,7 +67,7 @@ describe('healthMetricSelector', () => {
 
 describe('queryCalendarArgs', () => {
   it('defaults include_declined false and limit 20', () => {
-    expect(queryCalendarArgsSchema.parse({})).toEqual({ include_declined: false, limit: 20 });
+    expect(queryCalendarArgsSchema.parse({})).toEqual({ calendar_id:'primary', include_declined: false, limit: 20 });
   });
 
   it('rejects a date_range that ends before it starts', () => {
@@ -348,5 +348,25 @@ describe('dedicated source reads',()=>{
  it('owner context requires a bounded topic; no owner ID, approval or mutation argument',()=>{
   expect(readOwnerContextArgsSchema.parse({topic:'gym'})).toEqual({topic:'gym',limit:8});
   for(const bad of [{topic:'',limit:8},{topic:'gym',owner_id:'other'},{topic:'gym',approve:true},{topic:'gym',limit:13}])expect(readOwnerContextArgsSchema.safeParse(bad).success).toBe(false);
+ });
+});
+
+
+describe('Calendar pagination arguments',()=>{
+ it('requires an explicit advancing window and bounded cursor/calendar identifiers',()=>{
+  const date_range={from:'2026-11-01T00:00:00-04:00',to:'2026-11-02T00:00:00-05:00'};
+  expect(queryCalendarArgsSchema.parse({date_range,calendar_id:'work',page_token:'cursor'})).toMatchObject({calendar_id:'work',page_token:'cursor'});
+  for(const args of [{page_token:'cursor'},{date_range:{from:date_range.from,to:date_range.from}},{date_range,page_token:'x'.repeat(4097)},{calendar_id:''},{calendar_id:'x'.repeat(255)},{unknown:'value'}])expect(queryCalendarArgsSchema.safeParse(args).success).toBe(false);
+ });
+});
+
+
+describe('Calendar page receipts',()=>{
+ const page={events:[],next_page_token:null,fetched_count:0,account:{connection_id:null,email:null},observed_at:'2026-10-02T12:00:00Z'};
+ it('admits empty exhausted pages with explicitly unavailable account metadata',()=>{
+  expect(calendarPageSchema.parse(page)).toEqual(page);
+ });
+ it('rejects invalid observation, count, cursor, account and event times',()=>{
+  for(const receipt of [null,{...page,observed_at:'yesterday'},{...page,fetched_count:-1},{...page,next_page_token:''},{...page,account:{connection_id:123,email:null}},{...page,events:[{id:'event',title:'Title',start:'2026-02-30',end:'2026-03-01',all_day:true}],fetched_count:1}])expect(calendarPageSchema.safeParse(receipt).success).toBe(false);
  });
 });

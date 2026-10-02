@@ -313,3 +313,70 @@ it('associates visible legacy labels and preserves a labelled OTP retry after tr
   expect(retry).toContain('Verification is temporarily unavailable');
   expect(a.ownerCookie).not.toHaveBeenCalled();
 });
+
+it('keeps editable details after a send refusal without retaining an OTP', async () => {
+  const response = await handleConsole(form('/console/signin', {
+    email: 'person@test.invalid', phone: 'bad phone', invite: 'A<"B', code: 'synthetic-secret-otp',
+  }), { TELEGRAM_OWNER_DO: owners().ns }, auth());
+  const html = await response!.text();
+  expect(html).toContain('value="person@test.invalid"');
+  expect(html).toContain('value="bad phone"');
+  expect(html).toContain('value="A&#60;&#34;B"');
+  expect(html).not.toContain('synthetic-secret-otp');
+});
+
+it('opens populated resend details without requesting or checking a code', async () => {
+  const a = auth();
+  const limit = vi.fn(async () => ({ success: true }));
+  const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit } as unknown as RateLimit };
+  const html = await (await handleConsole(form('/console/verify', { email: 'person@test.invalid', phone: '+14155550100', invite: 'ABC', code: 'synthetic-secret-otp' }), env, a))!.text();
+  expect(html).toContain('name="intent" value="edit"');
+  expect(html).not.toContain('href="/console/signin"');
+  expect(html).not.toContain('synthetic-secret-otp');
+  vi.clearAllMocks();
+  const edited = await (await handleConsole(form('/console/signin', { intent: 'edit', email: 'person@test.invalid', phone: '+14155550100', invite: 'ABC' }), env, a))!.text();
+  expect(edited).toContain('id="signin-email" name="email" value="person@test.invalid"');
+  expect(edited).toContain('id="signin-phone" name="phone" value="+14155550100"');
+  expect(edited).toContain('id="signin-invite" name="invite" value="ABC"');
+  expect(a.sendCode).not.toHaveBeenCalled();
+  expect(a.verify).not.toHaveBeenCalled();
+  expect(a.throttle).not.toHaveBeenCalled();
+  expect(limit).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['email', { email: 'invalid', phone: '+14155550100', invite: 'ABC' }, 'email'],
+  ['phone', { email: 'person@test.invalid', phone: 'bad', invite: 'ABC' }, 'phone'],
+  ['limiter absent', { email: 'person@test.invalid', phone: '+14155550100', invite: 'ABC' }, 'absent'],
+  ['binding throttle', { email: 'person@test.invalid', phone: '+14155550100', invite: 'ABC' }, 'binding'],
+  ['durable throttle', { email: 'person@test.invalid', phone: '+14155550100', invite: 'ABC' }, 'durable'],
+])('retains details on %s refusal', async (_name, details, mode) => {
+  const a = auth({ throttle: vi.fn(async () => mode !== 'durable') });
+  const env = { TELEGRAM_OWNER_DO: owners().ns, ...(mode === 'absent' ? {} : { RESPONSIBILITY_RATE_LIMITER: { limit: vi.fn(async () => ({ success: mode !== 'binding' })) } as unknown as RateLimit }) };
+  const html = await (await handleConsole(form('/console/signin', details), env, a))!.text();
+  for (const value of Object.values(details)) expect(html).toContain(`value="${value}"`);
+  expect(a.sendCode).not.toHaveBeenCalled();
+});
+
+it('offers explicit loading messages on request, verify and edit forms', async () => {
+  const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as RateLimit };
+  const start = await (await handleConsole(new Request('https://w.test/console/signin'), env, auth()))!.text();
+  expect(start).toContain('data-pending="Requesting an email code…"');
+  const retry = await (await handleConsole(form('/console/verify', { email: 'person@test.invalid', phone: '+14155550100', code: '000000' }), env, auth()))!.text();
+  expect(retry).toContain('data-pending="Checking your code…"');
+  expect(retry).toContain('data-pending="Opening your details…"');
+});
+
+it.each(['send unavailable', 'verify unavailable', 'invalid or expired code', 'invalid verify phone'])('%s preserves retry details and omits the submitted OTP', async mode => {
+  const fields = { email: 'person@test.invalid', phone: mode === 'invalid verify phone' ? 'bad phone' : '+14155550100', invite: 'ABC', code: 'synthetic-secret-otp' };
+  const a = auth({
+    sendCode: async () => { throw new Error('synthetic send unavailable'); },
+    verify: async () => { if (mode === 'verify unavailable') throw new Error('synthetic verify unavailable'); return null; },
+  });
+  const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as RateLimit };
+  const response = (await handleConsole(form(mode === 'send unavailable' ? '/console/signin' : '/console/verify', fields), env, a))!;
+  const html = await response.text();
+  for (const value of [fields.email, fields.phone, fields.invite]) expect(html).toContain(`value="${value}"`);
+  expect(html).not.toContain(fields.code);
+  expect(response.headers.get('set-cookie')).toBeNull();
+});
