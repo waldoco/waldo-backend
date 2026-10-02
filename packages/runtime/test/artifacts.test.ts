@@ -62,7 +62,7 @@ describe('artifact book (A5)', () => {
     expect(stale).toEqual({ status: 'conflict', current_revision: 1 });
     expect((await store.read(meta.id, 0, 8000))!.text).toBe(createArgs.body_markdown);
     const ok = await store.revise({ artifact_id: meta.id, expected_revision: 1, body_markdown: '# v2' }, 'tool:revise_artifact');
-    expect(ok).toMatchObject({ status: 'ok', meta: { revision: 2, r2_key: `artifacts/${meta.id}/r2` } });
+    expect(ok).toMatchObject({ status: 'ok', meta: { revision: 2, r2_key: expect.stringMatching(new RegExp(`^artifacts/${meta.id}/r2/`)) } });
     expect((await store.read(meta.id, 0, 8000))!.text).toBe('# v2');
     expect(store.byId(meta.id)!.byte_size).toBe(4);
   });
@@ -92,8 +92,24 @@ describe('artifact handlers (A5)', () => {
 
   it('create returns a taint-null mutation ack with the id and revision', async () => {
     const result = await byName('create_artifact').handle(createArgs as never);
-    expect(result).toMatchObject({ ok: true, data: { artifact_id: 'art:abc123', revision: 1 }, source_taint: null });
+    expect(result).toMatchObject({ ok: true, data: { artifact_id: 'art:abc123', revision: 1, delivery: { status: 'saved_internal', url: null, audience: 'unverified' } }, source_taint: null });
     expect(JSON.stringify(result)).not.toContain('Early flight');
+  });
+
+  it('keeps internal storage distinct from publication for create and revise', async () => {
+    const store = book();
+    const hs = artifactHandlers(store);
+    const create = hs.find(h => h.name === 'create_artifact')!;
+    const revise = hs.find(h => h.name === 'revise_artifact')!;
+    const created = await create.handle(createArgs as never);
+    const revised = await revise.handle({artifact_id:'art:abc123',expected_revision:1,body_markdown:'updated'} as never);
+    for (const result of [created,revised]) {
+      expect(result).toMatchObject({ok:true,data:{delivery:{status:'saved_internal',url:null,audience:'unverified'}}});
+      expect(JSON.stringify(result)).not.toContain('https://');
+    }
+    expect(create.description).toContain('Never build a URL');
+    expect(create.description).toContain('delivery is unavailable');
+    expect((await store.read('art:abc123',0,100))!.text).toBe('updated');
   });
 
   it('read stamps every result external and never leaks a body on the failure arm', async () => {

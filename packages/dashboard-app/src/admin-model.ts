@@ -42,5 +42,11 @@ export async function submitInvite(data: AdminRecord, action: 'invite.create'|'i
   try { receipt=await response.json(); }
   catch { throw new Error('The receipt is unavailable. Refresh records before retrying; a code cannot be recovered.'); }
   if(!obj(receipt)||typeof receipt.message!=='string'||(action==='invite.create'&&typeof receipt.code!=='string'))throw new Error('The receipt is unavailable. Refresh records before retrying; a code cannot be recovered.');
-  return {message:receipt.message,code:typeof receipt.code==='string'?receipt.code:null};
+  let link: string | null = null;
+  if (typeof receipt.link === 'string') {
+    const url = new URL(receipt.link, location.origin);
+    if (url.origin !== location.origin || url.pathname !== '/console/signup' || url.search || !url.hash) throw new Error('The invite link receipt is unavailable. Refresh before retrying.');
+    link = url.href;
+  }
+  return {message:receipt.message,code:typeof receipt.code==='string'?receipt.code:null,link};
 }

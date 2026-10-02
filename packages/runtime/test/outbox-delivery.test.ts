@@ -11,10 +11,10 @@ import type { TracerDO } from '../src/tracer/tracer-do';
 const KIND = 'fetch_alert';
 const USER = 'user-outbox-01';
 
-// Keep the schedule inside the scheduler's due-work lookahead while still avoiding a past alarm that
-// workerd could auto-fire before the manual runDurableObjectAlarm() call.
+// Keep the real platform alarm outside the test window; SQLite is made due separately.
+// A 500ms alarm races the manual crash inspection on slower Workers CI.
 function futureOccurrence(): number {
-  return Date.now() + 500;
+  return Date.now() + 60 * 60 * 1_000;
 }
 
 beforeEach(() => {
@@ -33,6 +33,14 @@ type CrashPoint =
   | 'post_attempt_pre_send'
   | 'post_sink_pre_ack'
   | 'post_ack_pre_return';
+
+async function controlledAlarm(stub: DurableObjectStub<TracerDO>) {
+  try {
+    return await runDurableObjectAlarm(stub);
+  } finally {
+    await runInDurableObject(stub, (_instance, state) => state.storage.deleteAlarm());
+  }
+}
 
 async function poke(stub: DurableObjectStub<TracerDO>, point: CrashPoint) {
   await runInDurableObject(stub, (instance) => {
@@ -88,7 +96,15 @@ async function readOutbox(stub: DurableObjectStub<TracerDO>): Promise<OutboxDura
 }
 
 async function schedule(stub: DurableObjectStub<TracerDO>) {
-  return stub.schedule({ userId: USER, trigger: KIND, occurrenceAt: futureOccurrence() });
+  const runId = await stub.startRun({ userId: USER, trigger: KIND, occurrenceAt: Date.now() });
+  await stub.scheduleRun({ runId, dueAt: futureOccurrence() });
+  await runInDurableObject(stub, (_instance, state) => {
+    const now = Date.now();
+    state.storage.sql.exec(
+      'UPDATE schedule SET due_at = ?, updated_at = ?', now, now,
+    );
+  });
+  return runId;
 }
 
 // The next wake after a crash consumed the alarm slot: re-enter alarm() directly on the
@@ -112,6 +128,32 @@ async function makeScheduleDue(stub: DurableObjectStub<TracerDO>) {
 }
 
 describe('SLICE-3a golden proof: exactly-once delivery at the durable layer', () => {
+  it('slow crash inspection cannot race a platform retry into an extra attempt', async () => {
+    const sink = new FakeSink();
+    const stub = freshStub();
+    await schedule(stub);
+    await poke(stub, 'post_sink_pre_ack');
+    // Deliberately exceed the old 500ms occurrence and the 250ms scheduler rearm.
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    await expect(controlledAlarm(stub)).rejects.toThrow('post_sink_pre_ack');
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect((await readOutbox(stub)).attempts).toBe(1);
+    expect(sink.observedSendAttempts()).toBe(1);
+    expect(sink.observedDeliveries()).toBe(1);
+    await evictDurableObject(stub);
+    await resume(stub);
+    const acked = await readOutbox(stub);
+    expect(acked.status).toBe('acked');
+    expect(acked.attempts).toBe(2);
+    expect(acked.acked_at).not.toBeNull();
+    expect(acked.next_retry_at).toBeNull();
+    expect(acked.outboxRows).toBe(1);
+    expect(acked.journalState).toBe('DONE');
+    expect(sink.observedSendAttempts()).toBe(2);
+    expect(new Set(sink.observedKeys()).size).toBe(1);
+    expect(sink.observedDeliveries()).toBe(1);
+  });
+
   it('resumes after post-send/pre-ack eviction without a second physical delivery', async () => {
     const sink = new FakeSink();
     const stub = freshStub();
@@ -120,7 +162,7 @@ describe('SLICE-3a golden proof: exactly-once delivery at the durable layer', ()
     await poke(stub, 'post_sink_pre_ack');
     // First alarm: GATED commits, the send attempt is durably marked, the sink physically
     // delivers once, then the handler dies before the ack transaction.
-    await expect(runDurableObjectAlarm(stub)).rejects.toThrow('post_sink_pre_ack');
+    await expect(controlledAlarm(stub)).rejects.toThrow('post_sink_pre_ack');
 
     // The in-doubt state was committed BEFORE the send, so it survives the crash: the row
     // says "attempted, unacked, retry due" while the ack is absent.
@@ -166,7 +208,7 @@ describe('SLICE-3a golden proof: exactly-once delivery at the durable layer', ()
 
     await schedule(stub);
     await poke(stub, 'post_ack_pre_return');
-    await expect(runDurableObjectAlarm(stub)).rejects.toThrow('post_ack_pre_return');
+    await expect(controlledAlarm(stub)).rejects.toThrow('post_ack_pre_return');
     expect(sink.observedSendAttempts()).toBe(1);
 
     const atAck = await readOutbox(stub);
@@ -189,7 +231,7 @@ describe('SLICE-3a golden proof: exactly-once delivery at the durable layer', ()
 
     await schedule(stub);
     await poke(stub, 'post_attempt_pre_send');
-    await expect(runDurableObjectAlarm(stub)).rejects.toThrow('post_attempt_pre_send');
+    await expect(controlledAlarm(stub)).rejects.toThrow('post_attempt_pre_send');
 
     // The attempt is durably marked but the sink was never reached: the row is in-doubt
     // with zero physical deliveries — the marker commits strictly before the side effect.
@@ -218,7 +260,7 @@ describe('SLICE-3a golden proof: exactly-once delivery at the durable layer', ()
     FakeSink.failNextSend('sink unavailable');
     // The scheduler records the executor failure and rearms the journal handoff; the outbox keeps
     // the durable in-doubt marker so the next due wake retries with the same idempotency key.
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await controlledAlarm(stub)).toBe(true);
 
     const failed = await readOutbox(stub);
     expect(failed.status).toBe('sent_unacked');
@@ -244,7 +286,7 @@ describe('SLICE-3a red proofs: the guard and the durable marker are load-bearing
     const stub = freshStub();
 
     await schedule(stub);
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await controlledAlarm(stub)).toBe(true);
     expect(sink.observedSendAttempts()).toBe(1);
 
     // Forge the journal back to SINK_SENT while the outbox row stays acked — the state a
@@ -266,7 +308,7 @@ describe('SLICE-3a red proofs: the guard and the durable marker are load-bearing
     const stub = freshStub();
 
     await schedule(stub);
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await controlledAlarm(stub)).toBe(true);
 
     await runInDurableObject(stub, (_i, state) => {
       state.storage.sql.exec("UPDATE outbox SET status = 'CORRUPT_STATUS'");

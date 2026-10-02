@@ -5,13 +5,14 @@ import {
   callMcpToolResultSchema,
   executeActionArgsSchema,
   getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema,
+  queryAvailabilityArgsSchema, readOwnerContextArgsSchema,
   getContextArgsSchema,
   getCrsArgsSchema,
   getHealthArgsSchema,
   getMasterMetricsArgsSchema,
   getTasksArgsSchema,
   healthMetricSelectorSchema,
-  queryCalendarArgsSchema,
+  calendarPageSchema, queryCalendarArgsSchema,
   readDocumentArgsSchema,
   readDocumentResultSchema,
   readMemoryArgsSchema,
@@ -66,7 +67,7 @@ describe('healthMetricSelector', () => {
 
 describe('queryCalendarArgs', () => {
   it('defaults include_declined false and limit 20', () => {
-    expect(queryCalendarArgsSchema.parse({})).toEqual({ include_declined: false, limit: 20 });
+    expect(queryCalendarArgsSchema.parse({})).toEqual({ calendar_id:'primary', include_declined: false, limit: 20 });
   });
 
   it('rejects a date_range that ends before it starts', () => {
@@ -158,6 +159,16 @@ describe('searchEpisodesArgs', () => {
       query: 'travel week',
       limit: 5,
     });
+  });
+
+  it('takes exactly one of query or ref, and date_range only with query', () => {
+    expect(searchEpisodesArgsSchema.parse({ ref: '9' })).toEqual({ ref: '9', limit: 5 });
+    expect(searchEpisodesArgsSchema.safeParse({}).success).toBe(false);
+    expect(searchEpisodesArgsSchema.safeParse({ query: 'q', ref: '9' }).success).toBe(false);
+    expect(searchEpisodesArgsSchema.safeParse({ ref: '' }).success).toBe(false);
+    expect(
+      searchEpisodesArgsSchema.safeParse({ ref: '9', date_range: { from: '2026-09-01T00:00:00Z', to: '2026-10-01T00:00:00Z' } }).success,
+    ).toBe(false);
   });
 
   it('rejects an empty query and limit over 20', () => {
@@ -325,4 +336,37 @@ describe('searchCommunicationArgs / readThreadArgs (A1)', () => {
     expect(readThreadArgsSchema.safeParse({}).success).toBe(false);
     expect(readThreadArgsSchema.safeParse({ thread_id: '' }).success).toBe(false);
   });
+});
+
+// New source-read contracts never accept a caller-selected owner or hidden authority.
+describe('dedicated source reads',()=>{
+ it('availability requires explicit range/duration and rejects duplicate calendars, naive times and unknown fields',()=>{
+  const good={date_range:{from:'2026-10-05T09:00:00+05:30',to:'2026-10-05T17:00:00+05:30'},duration_minutes:30};
+  expect(queryAvailabilityArgsSchema.parse(good).calendar_ids).toEqual(['primary']);
+  for(const bad of [{...good,owner_id:'other'},{...good,calendar_ids:['primary','primary']},{...good,date_range:{from:'2026-10-05T09:00:00',to:good.date_range.to}},{...good,duration_minutes:0}])expect(queryAvailabilityArgsSchema.safeParse(bad).success).toBe(false);
+ });
+ it('owner context requires a bounded topic; no owner ID, approval or mutation argument',()=>{
+  expect(readOwnerContextArgsSchema.parse({topic:'gym'})).toEqual({topic:'gym',limit:8});
+  for(const bad of [{topic:'',limit:8},{topic:'gym',owner_id:'other'},{topic:'gym',approve:true},{topic:'gym',limit:13}])expect(readOwnerContextArgsSchema.safeParse(bad).success).toBe(false);
+ });
+});
+
+
+describe('Calendar pagination arguments',()=>{
+ it('requires an explicit advancing window and bounded cursor/calendar identifiers',()=>{
+  const date_range={from:'2026-11-01T00:00:00-04:00',to:'2026-11-02T00:00:00-05:00'};
+  expect(queryCalendarArgsSchema.parse({date_range,calendar_id:'work',page_token:'cursor'})).toMatchObject({calendar_id:'work',page_token:'cursor'});
+  for(const args of [{page_token:'cursor'},{date_range:{from:date_range.from,to:date_range.from}},{date_range,page_token:'x'.repeat(4097)},{calendar_id:''},{calendar_id:'x'.repeat(255)},{unknown:'value'}])expect(queryCalendarArgsSchema.safeParse(args).success).toBe(false);
+ });
+});
+
+
+describe('Calendar page receipts',()=>{
+ const page={events:[],next_page_token:null,fetched_count:0,account:{connection_id:null,email:null},observed_at:'2026-10-02T12:00:00Z'};
+ it('admits empty exhausted pages with explicitly unavailable account metadata',()=>{
+  expect(calendarPageSchema.parse(page)).toEqual(page);
+ });
+ it('rejects invalid observation, count, cursor, account and event times',()=>{
+  for(const receipt of [null,{...page,observed_at:'yesterday'},{...page,fetched_count:-1},{...page,next_page_token:''},{...page,account:{connection_id:123,email:null}},{...page,events:[{id:'event',title:'Title',start:'2026-02-30',end:'2026-03-01',all_day:true}],fetched_count:1}])expect(calendarPageSchema.safeParse(receipt).success).toBe(false);
+ });
 });

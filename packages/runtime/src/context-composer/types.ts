@@ -254,6 +254,8 @@ export type ContextCompositionResult =
   | Readonly<{
       ok: true;
       prompt: string;
+      // Provider-ready admitted skill section, never parsed back out of prompt text.
+      skillPrompt?: string;
       checkpoint: RuntimeContextCheckpoint;
       evidence: ContextCompositionEvidence;
     }>

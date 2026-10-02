@@ -70,6 +70,15 @@ export const looksTransient = (text: string): boolean => {
 };
 const tableExists = (sql: Sql, name: string) => sql.exec('SELECT 1 FROM sqlite_master WHERE name = ?', name).toArray().length > 0;
 
+const parsedJson = (raw: string): unknown => {
+  try { return JSON.parse(raw) as unknown; } catch { return undefined; }
+};
+// Every string value at any depth, so verification sees what the recursive redaction rewrites.
+const stringsOf = (value: unknown): string[] =>
+  typeof value === 'string' ? [value]
+    : Array.isArray(value) ? value.flatMap(stringsOf)
+      : value !== null && typeof value === 'object' ? Object.values(value).flatMap(stringsOf) : [];
+
 export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS claims (
     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, evidence TEXT NOT NULL,
@@ -227,7 +236,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     // leaves the search index, backups, and frozen legacy tables (redacted, preserving
     // unrelated content), constellation nodes stop quoting it and stop referencing its id,
     // and a barrier blocks re-admission. Fresh-state verification reports what survived.
-    purge(ids: readonly number[], at: string): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[] } {
+    purge(ids: readonly number[], at: string): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } } {
       const forgotten = ids.length
         ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
         : [];
@@ -258,6 +267,13 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const hasEpisodes = tableExists(sql, 'episodes');
       const hasSpots = tableExists(sql, 'spots');
       const hasRevisions = tableExists(sql, 'core_file_revisions');
+      const hasCards = tableExists(sql, 'update_cards');
+      const hasPlan = tableExists(sql, 'day_plan');
+      const receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } = { deleted: {}, redacted: {}, terminalised: {} };
+      const hasRunCandidates = tableExists(sql, 'run_candidates');
+      const hasOutbox = tableExists(sql, 'outbox');
+      const hasHeld = tableExists(sql, 'held_candidates');
+      const hasSchedule = tableExists(sql, 'schedule');
       // SQLite LIKE is case-insensitive but replace() is case-sensitive: a casing variant of
       // the forgotten text would match the predicate yet survive the redaction. Fetch the
       // matching rows and redact in JS with a case-insensitive literal replace instead.
@@ -299,6 +315,89 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             if (redactedText !== row.text || redactedEvidence !== row.evidence) sql.exec('UPDATE claims SET text = ?, evidence = ? WHERE id = ?', redactedText, redactedEvidence, row.rid);
           }
         });
+        // Derived text the model reads back (unfolded update cards, day-plan reasons). Rows and
+        // their send state stay; only the forgotten text is rewritten. Card changes are JSON, so
+        // they are redacted per parsed value, not by raw substring (JSON escapes quotes).
+        if (hasCards) attempt('update_cards', () => {
+          for (const row of sql.exec<{ id: number; changes: string; text: string | null }>('SELECT id, changes, text FROM update_cards').toArray()) {
+            const redactedText = row.text === null ? null : ci(row.text);
+            // A malformed row is redacted as plain text and never aborts the other rows.
+            const parsed = parsedJson(row.changes);
+            const redactedChanges = parsed === undefined
+              ? ci(row.changes)
+              : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
+            const changed = parsed === undefined ? redactedChanges !== row.changes : redactedChanges !== JSON.stringify(parsed);
+            if (changed || redactedText !== row.text) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', changed ? redactedChanges : row.changes, redactedText, row.id);
+          }
+        });
+        if (hasPlan) attempt('day_plan', () => {
+          for (const row of sql.exec<{ rid: number; reason: string }>(`SELECT rowid AS rid, reason FROM day_plan WHERE reason LIKE ? ESCAPE '\\'`, like).toArray()) {
+            const redacted = ci(row.reason);
+            if (redacted !== row.reason) sql.exec('UPDATE day_plan SET reason = ? WHERE rowid = ?', redacted, row.rid);
+          }
+        });
+        // Tracer and scheduler stores (docs/planning/FORGET_COVERAGE_AUDIT_2026-10-02.md). Policy,
+        // decided by the main agent under decide-and-log (not by the owner):
+        //  - Unsent copies that nothing else depends on are deleted: held candidates and ONE-SHOT
+        //    armed/quarantined schedule rows (both already have a delete path in their stores).
+        //  - An undelivered outbox row (pending or sent_unacked) is never delivered with a
+        //    placeholder: its run is terminalised through the journal's legal edge (any open state ->
+        //    FAILED) in the same transaction as the payload redaction, so no resume path re-drives
+        //    it and the journal/outbox pairing stays intact. A sent_unacked message may therefore
+        //    stay undelivered; the receipt says so.
+        //  - History is redacted in place and never deleted: run candidates, acked outbox rows,
+        //    recurring schedules and standing orders (quoted text only).
+        // Payloads are JSON, so they are redacted per parsed string value, not by raw substring.
+        const redactPayload = (raw: string) => {
+          const parsed = parsedJson(raw);
+          return parsed === undefined ? ci(raw) : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
+        };
+        const hits = (raw: string) => { const parsed = parsedJson(raw); return (parsed === undefined ? [raw] : stringsOf(parsed)).some((v) => v.toLowerCase().includes(text.toLowerCase())); };
+        const tally = (kind: keyof typeof receipt, store: string) => { receipt[kind][store] = (receipt[kind][store] ?? 0) + 1; };
+        if (hasRunCandidates) attempt('run_candidates', () => {
+          for (const row of sql.exec<{ run_id: string; candidate_json: string }>(`SELECT run_id, candidate_json FROM run_candidates WHERE candidate_json LIKE ? ESCAPE '\\'`, like).toArray()) {
+            if (!hits(row.candidate_json)) continue;
+            sql.exec('UPDATE run_candidates SET candidate_json = ? WHERE run_id = ?', redactPayload(row.candidate_json), row.run_id);
+            tally('redacted', 'run_candidates');
+          }
+        });
+        if (hasOutbox) attempt('outbox', () => {
+          for (const row of sql.exec<{ outbox_id: string; run_id: string; payload: string; status: string }>(`SELECT outbox_id, run_id, payload, status FROM outbox WHERE payload LIKE ? ESCAPE '\\'`, like).toArray()) {
+            if (!hits(row.payload)) continue;
+            // The outbox row schema only admits an opaque synthetic token as payload, so a payload that
+            // still held text is replaced whole by one: the row stays readable by the resume path.
+            sql.exec('UPDATE outbox SET payload = ? WHERE outbox_id = ?', 'synthetic-token-forgotten', row.outbox_id);
+            if (row.status !== 'acked' && tableExists(sql, 'journal')) {
+              // FAILED is a legal edge from every non-terminal state of the reduced FSM.
+              sql.exec(`UPDATE journal SET state = 'FAILED', updated_at = ? WHERE run_id = ? AND state NOT IN ('DONE', 'FAILED')`, Date.parse(at) || 0, row.run_id);
+              tally('terminalised', row.status === 'sent_unacked' ? 'outbox_sent_unacked' : 'outbox_pending');
+            } else tally('redacted', 'outbox');
+          }
+        });
+        if (hasHeld) attempt('held_candidates', () => {
+          // Redact in place: the run journal pairs a held run with its held row (push_class and
+          // event_id), so deleting the row would strand that run. The same redaction runs on the
+          // matching run_candidates row, which keeps the pair equal.
+          for (const row of sql.exec<{ user_id: string; event_id: string; candidate_json: string }>(`SELECT user_id, event_id, candidate_json FROM held_candidates WHERE candidate_json LIKE ? ESCAPE '\\'`, like).toArray()) {
+            if (!hits(row.candidate_json)) continue;
+            const redactedJson = redactPayload(row.candidate_json);
+            const redactedEvent = (JSON.parse(redactedJson) as { event_id?: string }).event_id ?? row.event_id;
+            sql.exec('UPDATE held_candidates SET candidate_json = ?, event_id = ? WHERE user_id = ? AND event_id = ?', redactedJson, redactedEvent, row.user_id, row.event_id);
+            tally('redacted', 'held_candidates');
+          }
+        });
+        if (hasSchedule) attempt('schedule', () => {
+          for (const row of sql.exec<{ id: string; payload_json: string; status: string; recurrence_json: string | null }>(`SELECT id, payload_json, status, recurrence_json FROM schedule WHERE payload_json LIKE ? ESCAPE '\\'`, like).toArray()) {
+            if (!hits(row.payload_json)) continue;
+            if (row.recurrence_json === null && (row.status === 'armed' || row.status === 'quarantined')) {
+              sql.exec('DELETE FROM schedule WHERE id = ?', row.id);
+              tally('deleted', 'schedule');
+            } else {
+              sql.exec('UPDATE schedule SET payload_json = ? WHERE id = ?', redactPayload(row.payload_json), row.id);
+              tally('redacted', 'schedule');
+            }
+          }
+        });
         attempt('constellation_nodes', () => {
           for (const row of sql.exec<{ id: number; label: string; summary: string }>(`SELECT id, label, summary FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).toArray()) {
             const redactedLabel = ci(row.label); const redactedSummary = ci(row.summary);
@@ -328,6 +427,22 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         attempt('memory_backups', () => add('memory_backups', sql.exec<{ payload: string }>(`SELECT payload FROM memory_backups WHERE payload LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.payload)).length));
         if (hasSpots) attempt('legacy_spots', () => add('legacy_spots', sql.exec<{ text: string }>(`SELECT text FROM spots WHERE text LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.text)).length));
         if (hasRevisions) attempt('legacy_core_files', () => add('legacy_core_files', sql.exec<{ content: string }>(`SELECT content FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.content)).length));
+        if (hasCards) attempt('update_cards', () => {
+          const rows = sql.exec<{ changes: string; text: string | null }>('SELECT changes, text FROM update_cards').toArray();
+          add('update_cards', rows.filter((row) => {
+            const parsed = parsedJson(row.changes);
+            return [row.text ?? '', ...(parsed === undefined ? [row.changes] : stringsOf(parsed))].some(exact);
+          }).length);
+          // Raw absence cannot prove decoded absence (JSON escapes), so an unparseable payload is
+          // unverifiable: it lands in failed and the source stays purging.
+          if (rows.some((row) => parsedJson(row.changes) === undefined)) throw new Error('update_cards changes unparseable');
+        });
+        if (hasPlan) attempt('day_plan', () => add('day_plan', sql.exec<{ reason: string }>(`SELECT reason FROM day_plan WHERE reason LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.reason)).length));
+        const jsonHits = (raw: string) => { const parsed = parsedJson(raw); return (parsed === undefined ? [raw] : stringsOf(parsed)).some(exact); };
+        if (hasRunCandidates) attempt('run_candidates', () => add('run_candidates', sql.exec<{ candidate_json: string }>(`SELECT candidate_json FROM run_candidates WHERE candidate_json LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => jsonHits(row.candidate_json)).length));
+        if (hasOutbox) attempt('outbox', () => add('outbox', sql.exec<{ payload: string }>(`SELECT payload FROM outbox WHERE payload LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => jsonHits(row.payload)).length));
+        if (hasHeld) attempt('held_candidates', () => add('held_candidates', sql.exec<{ candidate_json: string }>(`SELECT candidate_json FROM held_candidates WHERE candidate_json LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => jsonHits(row.candidate_json)).length));
+        if (hasSchedule) attempt('schedule', () => add('schedule', sql.exec<{ payload_json: string }>(`SELECT payload_json FROM schedule WHERE payload_json LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => jsonHits(row.payload_json)).length));
         attempt('constellation_nodes', () => add('constellation_nodes', sql.exec<{ label: string; summary: string }>(`SELECT label, summary FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).toArray().filter((row) => exact(row.label) || exact(row.summary)).length));
       }
       // No deletion here: settlement is a separate step (settle()) the caller runs only after
@@ -335,7 +450,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // source on SQL verification alone would orphan a KV failure: the UI says incomplete
       // but the retry could no longer find the claim. Until settle() runs, the 'purging' row
       // and pending marker remain, so every retry path still works.
-      return { ready: failed.length === 0 && Object.keys(remaining).length === 0, remaining, texts, failed };
+      return { ready: failed.length === 0 && Object.keys(remaining).length === 0, remaining, texts, failed, receipt };
     },
 
     // Final step of a purge, run only once SQL AND the caller's KV stores verify clean.
@@ -375,7 +490,7 @@ export const memoryPrompt = (store: ClaimStore): string => {
     'Profile, built only from what the owner said or confirmed:',
     ...profile(claims).map((section) => `<profile section="${section.title}">\n${section.lines.map(fence).join('\n')}\n</profile>`),
     'Claims. stated = the owner said it; confirmed = the owner agreed with Waldo\'s read; inferred = Waldo\'s read, offer it as such. An unverified provenance label means a legacy claim, not an authenticated quote.',
-    ...claims.map((claim) => `<claim id="${claim.id}" kind="${claim.kind}" source="${claim.source}" provenance="${claim.verification_status ?? 'unverified'}" seen="${claim.seen_count}" last="${claim.last_seen_at.slice(0, 10)}">${fence(claim.text)} | evidence: ${fence(claim.evidence)}${claim.source_ref ? ` | source ref: ${fence(claim.source_ref)}` : ''}</claim>`),
+    ...claims.map((claim) => `<claim id="${claim.id}" kind="${claim.kind}" source="${claim.source}" provenance="${claim.verification_status ?? 'unverified'}" seen="${claim.seen_count}" last="${claim.last_seen_at.slice(0, 10)}">${fence(claim.text)} | evidence${evidenceLabel(claim)}: ${fence(claim.evidence)}${claim.source_ref ? ` | source ref: ${fence(claim.source_ref)}` : ''}</claim>`),
     ...nodes.map((node) => `<node id="${node.id}" domain="${node.domain}" strength="${node.strength}">${fence(node.label)}: ${fence(node.summary)}</node>`),
     ...store.edges().filter((edge) => byId.has(edge.from_id) && byId.has(edge.to_id)).map((edge) => `<edge>${fence(byId.get(edge.from_id)!)} ${edge.relation} ${fence(byId.get(edge.to_id)!)} (strength ${edge.strength})</edge>`),
   ].join('\n');
@@ -384,6 +499,15 @@ export const memoryPrompt = (store: ClaimStore): string => {
 // Chat uses a small stable profile plus bounded owner-scoped lexical recall. A miss is
 // explicit: no near-neighbor fact gets smuggled into the answer. This is intentionally
 // lexical only; semantic retrieval needs a held-out gain before another data service.
+// The evidence string is the writer's. Label it from the stored, code-written origin: 'agent' is
+// the ground() verdict at admission time - the quote matched neither the owner's nor the shared
+// content checked then. It is a historical admission fact, not a re-verification, and does not
+// claim absence from all owner words or history. Owner-grounded and legacy/unknown-origin rows
+// render as before; nothing is hidden or promoted. The label is applied by both renderers:
+// turnMemoryPrompt (its recall excludes 'untrusted' rows) and memoryPrompt (maps all active
+// claims with no origin filter, so it can render 'untrusted' rows; those stay unlabelled here).
+const evidenceLabel = (claim: Claim): string => claim.origin === 'agent' ? ' (writer-stated quote; at admission it matched neither the owner\'s nor the shared content checked then)' : '';
+
 export const turnMemoryPrompt = (store: ClaimStore, question: string): string => {
   const hits = store.recall(question, 8);
   const profileClaims = [...store.claims(), ...store.claims('promoted')].filter((claim) =>
@@ -396,7 +520,7 @@ export const turnMemoryPrompt = (store: ClaimStore, question: string): string =>
     ...profileClaims.map((claim) => `- [${claim.verification_status ?? 'unverified'}] ${fence(claim.text)}`),
     '</owner_profile>',
     hits.length ? '<relevant_claims>' : 'No relevant memory match; do not guess from another claim.',
-    ...hits.map((claim) => `<claim id="${claim.id}" kind="${claim.kind}" source="${claim.source}" provenance="${claim.verification_status ?? 'unverified'}">${fence(claim.text)} | evidence: ${fence(claim.evidence)}${claim.source_ref ? ` | source ref: ${fence(claim.source_ref)}` : ''}</claim>`),
+    ...hits.map((claim) => `<claim id="${claim.id}" kind="${claim.kind}" source="${claim.source}" provenance="${claim.verification_status ?? 'unverified'}">${fence(claim.text)} | evidence${evidenceLabel(claim)}: ${fence(claim.evidence)}${claim.source_ref ? ` | source ref: ${fence(claim.source_ref)}` : ''}</claim>`),
     ...(hits.length ? ['</relevant_claims>'] : []),
   ].join('\n');
 };
@@ -529,7 +653,10 @@ const correctionMatches = (old: Claim, replacement: { kind: string; text: string
 
 type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null }>;
 
-export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean): string => {
+// What this application of claim ops actually did, as counts the caller can report truthfully.
+export type ClaimOutcome = Readonly<{ written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[] }>;
+
+export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean, onOutcome?: (outcome: ClaimOutcome) => void): string => {
   // Destructive ops need an explicit forget request in the text under review (see
   // FORGET_INTENT above). Callers that pass no override derive it from the grounding owner
   // section; migration-style callers with no live owner voice pass false explicitly.
@@ -645,6 +772,15 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   }
   for (const id of forgetsAllowed ? ops.forget_nodes.filter((id) => nodes.has(id)) : []) store.forgetNode(id);
   const leftover = purge ? [...Object.keys(purge.remaining), ...purge.failed.map((store) => `${store}(failed)`)] : [];
+  onOutcome?.({
+    written, held: held.length, holdReasons: [...holdReasons], downgraded, corrected: corrected.size,
+    confirmed: new Set(ops.confirm.filter((id) => known.has(id))).size,
+    dismissed: new Set(ops.dismiss.filter((id) => known.has(id) && !correctionIds.has(id))).size,
+    // Unique ids, so a repeated id counts once; removed only when every store verified clean.
+    forgetClaimsAttempted: new Set(forgetIds).size, forgetClaimsRemoved: purge?.ready ? new Set(forgetIds).size : 0,
+    forgetNodes: forgetsAllowed ? new Set(ops.forget_nodes.filter((id) => nodes.has(id))).size : 0,
+    forgetAllowed: forgetsAllowed, purgeIncomplete: leftover,
+  });
   const reasons = holdReasons.size ? `(${[...holdReasons].join(',')})` : '';
   const blockedForgets = forgetsAllowed ? 0 : ops.forget_claims.length + ops.forget_nodes.length + (ops.forget_topic?.trim() ? 1 : 0);
   return `+${written} held${held.length}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${corrected.size ? ` corrected${corrected.size}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;

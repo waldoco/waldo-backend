@@ -34,7 +34,7 @@ const triggersGranting = (tool: string): readonly string[] =>
   );
 
 describe('toolName', () => {
-  it('is exactly the 55 canonical tools, in order', () => {
+  it('is exactly the 59 canonical tools, in order', () => {
     expect(toolNameSchema.options).toEqual([
       'get_crs',
       'get_health',
@@ -45,6 +45,8 @@ describe('toolName', () => {
       'get_tasks',
       'get_master_metrics',
       'get_context',
+      'query_availability',
+      'read_owner_context',
       'read_memory',
       'update_memory',
       'search_episodes',
@@ -56,11 +58,13 @@ describe('toolName', () => {
       'list_artifacts',
       'read_artifact',
       'call_mcp_tool',
+      'read_mcp_tool',
       'write_task',
       'update_task',
       'draft_document',
       'create_artifact',
       'revise_artifact',
+      'export_artifact',
       'draft_email',
       'send_email',
       'search_connector',
@@ -134,6 +138,8 @@ describe('TOOL_PERMISSIONS', () => {
         'get_tasks',
         'get_master_metrics',
         'get_context',
+        'query_availability',
+        'read_owner_context',
         'read_memory',
         'search_episodes',
         'search_connector',
@@ -153,6 +159,8 @@ describe('TOOL_PERMISSIONS', () => {
         'get_tasks',
         'get_master_metrics',
         'get_context',
+        'query_availability',
+        'read_owner_context',
         'read_memory',
         'search_episodes',
         'search_connector',
@@ -168,6 +176,8 @@ describe('TOOL_PERMISSIONS', () => {
         'get_tasks',
         'get_master_metrics',
         'get_context',
+        'query_availability',
+        'read_owner_context',
         'read_memory',
         'search_episodes',
         'search_connector',
@@ -212,6 +222,8 @@ describe('TOOL_PERMISSIONS', () => {
         'get_tasks',
         'get_master_metrics',
         'get_context',
+        'query_availability',
+        'read_owner_context',
         'read_memory',
         'update_memory',
         'search_episodes',
@@ -224,11 +236,13 @@ describe('TOOL_PERMISSIONS', () => {
         'list_artifacts',
         'read_artifact',
         'call_mcp_tool',
+        'read_mcp_tool',
         'write_task',
         'update_task',
         'draft_document',
         'create_artifact',
         'revise_artifact',
+        'export_artifact',
         'draft_email',
         'send_email',
         'propose_schedule',
@@ -271,16 +285,20 @@ describe('TOOL_PERMISSIONS', () => {
     });
   });
 
-  it('grants no trigger the full surface — user_message tops out at 54 of 55', () => {
+  it('grants no trigger the full surface — user_message tops out at 58 of 59', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(TOOL_PERMISSIONS[trigger].length).toBeLessThan(toolNameSchema.options.length);
     }
-    expect(TOOL_PERMISSIONS.user_message).toHaveLength(54);
+    expect(TOOL_PERMISSIONS.user_message).toHaveLength(58);
   });
 
   it("keeps 'execute_code' typed but dispatchable nowhere (ADR-0050)", () => {
     expect(toolNameSchema.options).toContain('execute_code');
     expect(triggersGranting('execute_code')).toEqual([]);
+  });
+
+  it("grants 'read_mcp_tool' only in user_message, a read-only allowlisted bridge that is not privileged", () => {
+    expect(triggersGranting('read_mcp_tool')).toEqual(['user_message']);
   });
 
   it("grants 'call_mcp_tool' only in user_message — MCP is a gated bridge, not a bypass (ADR-0049)", () => {

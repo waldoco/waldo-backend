@@ -10,24 +10,24 @@ select is(
    where table_schema = 'public' and table_type = 'BASE TABLE'),
   array[
     'agent_logs', 'chat_messages', 'chat_threads', 'crs_scores',
-    'feedback_signals', 'health_daily', 'notification_log', 'oauth_tokens',
+    'feedback_signals', 'health_context_daily', 'health_daily', 'notification_log', 'oauth_tokens',
     'one_time_tokens', 'patrol_entries', 'spots', 'subscriptions',
     'user_baselines', 'user_consents', 'user_devices', 'users'
   ]::text[],
-  'public tables match the canonical 16-table contract'
+  'public tables match the canonical 17-table contract'
 );
 
 select is(
   (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
    where n.nspname = 'public' and c.relkind = 'r' and c.relrowsecurity),
-  16::bigint,
+  17::bigint,
   'RLS is enabled on every public table'
 );
 
 select is(
   (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
    where n.nspname = 'public' and c.relkind = 'r' and c.relforcerowsecurity),
-  16::bigint,
+  17::bigint,
   'RLS is forced on every public table'
 );
 
@@ -38,7 +38,7 @@ select is(
      and privilege_type = 'SELECT'),
   array[
     'chat_messages', 'chat_threads', 'crs_scores', 'feedback_signals',
-    'health_daily', 'patrol_entries', 'spots', 'subscriptions',
+    'health_context_daily', 'health_daily', 'patrol_entries', 'spots', 'subscriptions',
     'user_baselines', 'user_consents', 'user_devices', 'users'
   ]::text[],
   'authenticated SELECT grants match client-readable tables'
@@ -49,7 +49,7 @@ select is(
    from pg_policies where schemaname = 'public'),
   array[
     'chat_messages', 'chat_threads', 'crs_scores', 'feedback_signals',
-    'health_daily', 'patrol_entries', 'spots', 'subscriptions',
+    'health_context_daily', 'health_daily', 'patrol_entries', 'spots', 'subscriptions',
     'user_baselines', 'user_consents', 'user_devices', 'users'
   ]::text[],
   'only client-readable tables have policies'
@@ -158,6 +158,7 @@ select is_empty(
   $$with expected(table_name, privilege_type) as (values
       ('users', 'SELECT'), ('users', 'INSERT'), ('users', 'UPDATE'), ('users', 'DELETE'),
       ('user_consents', 'SELECT'), ('user_consents', 'INSERT'),
+      ('health_context_daily', 'SELECT'), ('health_context_daily', 'INSERT'), ('health_context_daily', 'UPDATE'),
       ('health_daily', 'SELECT'), ('health_daily', 'INSERT'), ('health_daily', 'UPDATE'), ('health_daily', 'DELETE'),
       ('crs_scores', 'SELECT'), ('crs_scores', 'INSERT'), ('crs_scores', 'UPDATE'), ('crs_scores', 'DELETE'),
       ('user_baselines', 'SELECT'), ('user_baselines', 'INSERT'), ('user_baselines', 'UPDATE'), ('user_baselines', 'DELETE'),

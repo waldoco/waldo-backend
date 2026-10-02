@@ -1,4 +1,5 @@
-import type { ModelUsage } from '../llm/pricing';
+import {telegramRichReply} from './rich-format';
+import { ownerTurnTrace } from './owner-turn-envelope';
 import { telegramReaction } from './reactions';
 import type { TelegramInboundTurn, TelegramPollingAdapter, TelegramUnsupportedTurn } from './telegram-polling';
 
@@ -16,17 +17,19 @@ class TurnTimeout extends Error {
 export type TelegramOwnerApi = Readonly<{
   setMessageReaction(request: Readonly<{ chat_id: number; message_id: number; reaction: readonly Readonly<{ type: 'emoji'; emoji: string }>[] }>): Promise<unknown>;
   sendChatAction(request: Readonly<{ chat_id: number; action: 'typing' }>): Promise<unknown>;
-  sendMessage(request: Readonly<{ chat_id: number; text: string }>): Promise<unknown>;
+  sendMessage(request: Readonly<{ chat_id: number; text: string; parse_mode?: 'HTML' }>): Promise<unknown>;
 }>;
 
-export type TurnLogEntry = Readonly<{ trace: string; hop: string; owner?: string; ms: number; ok: boolean; error?: string; detail?: string; code?: string; guard?: string; usage?: ModelUsage; shape?: Readonly<{ system_bytes: number; request_bytes: number }>; text?: TurnText }>;
-export type TurnText = Readonly<{ input: string; output?: string; reasoning?: string }>;
-export type TurnTimer = <T>(hop: string, work: () => Promise<T>) => Promise<T>;
+export type { TurnLogEntry, TurnText, TurnTimer } from './owner-turn-types';
+import type { TurnLogEntry, TurnTimer } from './owner-turn-types';
 
 export type TelegramOwnerListenerOptions = Readonly<{
   ownerTelegramId: number;
+  surface?: 'telegram' | 'whatsapp';
   api: TelegramOwnerApi;
   respond(turn: TelegramInboundTurn, time: TurnTimer): Promise<string>;
+  queueFinal?(turn: TelegramInboundTurn, payload: Readonly<{ chat_id: number; text: string; parse_mode?: 'HTML' }>, reaction: string): Promise<void>;
+  clearTurnReceipts?(trace: string): void;
   turnTimeoutMs?: number;
   reactionTimeoutMs?: number;
   chooseReaction?(turn: TelegramInboundTurn): Promise<string | null>;
@@ -43,7 +46,7 @@ export type TelegramOwnerListenerOptions = Readonly<{
   unsupportedText?: string;
 }>;
 
-export type TelegramTurnOutcome = 'answered' | 'failed' | 'ignored' | 'unsupported';
+export type TelegramTurnOutcome = 'queued' | 'answered' | 'failed' | 'ignored' | 'unsupported';
 
 export class TelegramOwnerListener {
   constructor(private readonly options: TelegramOwnerListenerOptions) {
@@ -66,7 +69,7 @@ export class TelegramOwnerListener {
     if (turn.senderId !== owner || turn.chatId !== owner) return 'ignored';
     const { api } = this.options;
     const chat_id = turn.chatId;
-    this.options.log?.({ trace: `tg-${turn.updateId}`, hop: 'unsupported', ms: 0, ok: true, ...(turn.note === undefined ? {} : { detail: turn.note }) });
+    this.options.log?.({ trace: ownerTurnTrace(this.options.surface ?? 'telegram', turn.updateId), hop: 'unsupported', ms: 0, ok: true, ...(turn.note === undefined ? {} : { detail: turn.note }) });
     await api.sendMessage({ chat_id, text: this.options.unsupportedText ?? 'I can read text, photos, documents and voice notes here. Videos, stickers, forwards and some formatting do not come through yet.' }).catch(() => undefined);
     if (turn.messageId !== null) {
       await api.setMessageReaction({ chat_id, message_id: turn.messageId, reaction: [{ type: 'emoji', emoji: '🤷' }] }).catch(() => undefined);
@@ -77,9 +80,14 @@ export class TelegramOwnerListener {
   async handle(turn: TelegramInboundTurn): Promise<TelegramTurnOutcome> {
     const owner = this.options.ownerTelegramId;
     if (turn.senderId !== owner || turn.chatId !== owner) return 'ignored';
-    const { api } = this.options;
+    const originalApi = this.options.api;
+    const api: TelegramOwnerApi = turn.runScope ? {
+      sendMessage: payload => { turn.runScope!.admit(); return originalApi.sendMessage(payload); },
+      setMessageReaction: payload => { turn.runScope!.admit(); return originalApi.setMessageReaction(payload); },
+      sendChatAction: payload => { turn.runScope!.admit(); return originalApi.sendChatAction(payload); },
+    } : originalApi;
     const now = this.options.now ?? Date.now;
-    const trace = `tg-${turn.updateId}`;
+    const trace = ownerTurnTrace(this.options.surface ?? 'telegram', turn.updateId);
     const log = (hop: string, ms: number, ok: boolean, error?: string, code?: string) =>
       this.options.log?.(error === undefined ? { trace, hop, ms, ok } : { trace, hop, ms, ok, error, ...(code === undefined ? {} : { code }) });
     const time: TurnTimer = async (hop, work) => {
@@ -121,23 +129,36 @@ export class TelegramOwnerListener {
       return Promise.race([attempt, bounded]).finally(() => clearTimeout(timer));
     };
     await react('receipt', ack);
+    let readyChoice: string | null = null;
     const choice = message_id === null || !this.options.chooseReaction
       ? Promise.resolve(null)
-      : time('choose_reaction', () => this.options.chooseReaction!(turn)).catch(() => null);
-    const typing = () => api.sendChatAction({ chat_id, action: 'typing' }).catch(() => undefined);
+      : time('choose_reaction', () => this.options.chooseReaction!(turn)).catch(() => null).then(value => { readyChoice = value; return value; });
+    const typing = async () => { try { await api.sendChatAction({ chat_id, action: 'typing' }); } catch { /* bounded UX only */ } };
     await time('typing', typing);
     const typingTimer = setInterval(typing, this.options.typingEveryMs ?? 4_000);
     const progressTimer = setTimeout(() => {
-      void time('progress', () => api.sendMessage({ chat_id, text: this.options.progressText ?? 'On it - still working on this, reply coming shortly.' })).catch(() => undefined);
+      void time('progress', async () => api.sendMessage({ chat_id, text: this.options.progressText ?? 'On it - still working on this, reply coming shortly.' })).catch(() => undefined);
     }, this.options.progressAfterMs ?? 8_000);
+    const clearRunTimers = () => { clearTimeout(progressTimer); clearInterval(typingTimer); };
+    turn.runScope?.signal.addEventListener('abort', clearRunTimers, { once: true });
     try {
-      const limit = this.options.turnTimeoutMs ?? TURN_TIMEOUT_MS;
+      const limit = turn.runScope ? Math.max(0, turn.runScope.deadline - now()) : this.options.turnTimeoutMs ?? TURN_TIMEOUT_MS;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new TurnTimeout(limit)), limit); });
       const text = (await time('respond', () => Promise.race([this.options.respond(turn, time), timeout]).finally(() => clearTimeout(timer)))).trim();
       if (text.length === 0) throw new Error('empty reply');
       clearTimeout(progressTimer);
-      await time('send', () => api.sendMessage({ chat_id, text }));
+      // The responder has already applied current-turn artifact receipt admission.
+      // Rich formatting is confined to this final reply, never progress/events/errors.
+      const rich = telegramRichReply(text);
+      if (this.options.queueFinal) {
+        const chosen = telegramReaction(readyChoice);
+        const finalReaction = chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌';
+        await time('outbox_enqueue', () => this.options.queueFinal!(turn, { chat_id, ...(rich.text === text ? { text } : rich) }, finalReaction));
+        this.options.log?.({ trace, hop: 'delivery_pending', ms: now() - started, ok: true });
+        return 'queued';
+      }
+      await time('send', () => api.sendMessage({ chat_id, ...(rich.text===text ? {text} : rich) }));
       const chosen = telegramReaction(await choice);
       await react('resolved', chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌');
       this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, text: { input: turn.text, output: text } });
@@ -145,13 +166,17 @@ export class TelegramOwnerListener {
     } catch (error) {
       clearTimeout(progressTimer);
       const failure = error instanceof TurnTimeout
-        ? 'That took too long, so I stopped working on it. Try again, or split it into smaller asks.'
+        ? 'That took too long. In-flight changes may still finish. Try again, or split it into smaller asks.'
         : this.options.failureText ?? 'Sorry - I hit a problem answering that. Please try again in a moment.';
+      if (turn.runScope) throw error;
       await api.sendMessage({ chat_id, text: failure }).catch(() => undefined);
       await react('failed', this.options.failedEmoji ?? '😢');
       log('turn', now() - started, false, error instanceof Error ? error.message : String(error), turnFailureCode(error));
       return 'failed';
     } finally {
+      clearTimeout(progressTimer);
+      turn.runScope?.signal.removeEventListener('abort', clearRunTimers);
+      this.options.clearTurnReceipts?.(trace);
       clearInterval(typingTimer);
     }
   }

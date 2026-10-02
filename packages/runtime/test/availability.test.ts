@@ -1,0 +1,6 @@
+import {expect,it} from 'vitest';
+import {availabilityWindows} from '../src/tools/live/availability';
+const range={from:'2026-10-05T09:00:00+05:30',to:'2026-10-05T17:00:00+05:30'};
+it('merges overlapping busy intervals and only returns duration-fitting openings',()=>{expect(availabilityWindows(range,[{start:'2026-10-05T10:00:00+05:30',end:'2026-10-05T12:00:00+05:30'},{start:'2026-10-05T11:00:00+05:30',end:'2026-10-05T13:00:00+05:30'}],[],90)).toEqual([{start:'2026-10-05T07:30:00.000Z',end:'2026-10-05T11:30:00.000Z'}]);});
+it('explicit workwindows constrain gaps; adjacent busy boundaries create no fake opening',()=>{expect(availabilityWindows(range,[{start:'2026-10-05T10:00:00+05:30',end:'2026-10-05T11:00:00+05:30'},{start:'2026-10-05T11:00:00+05:30',end:'2026-10-05T12:00:00+05:30'}],[{start:'2026-10-05T10:00:00+05:30',end:'2026-10-05T13:00:00+05:30'}],60)).toEqual([{start:'2026-10-05T06:30:00.000Z',end:'2026-10-05T07:30:00.000Z'}]);});
+it('invalid, naive or reversed times and malformed busy coverage reject rather than free',()=>{for(const r of [{from:'tomorrow',to:range.to},{from:'2026-10-05T09:00:00',to:range.to},{from:range.to,to:range.from}])expect(()=>availabilityWindows(r,[],[],30)).toThrow();expect(()=>availabilityWindows(range,[{start:'bad',end:range.to}],[],30)).toThrow();});

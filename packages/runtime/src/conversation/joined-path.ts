@@ -1,3 +1,4 @@
+import type { RunEffectScope } from '../channels/run-effect-scope';
 import {
   ConversationTree,
   type ConversationEntry,
@@ -10,12 +11,14 @@ import { windowModelMessages, type ConversationWindowStats } from './window';
 export type JoinedConversationModel = Readonly<{
   complete(request: Readonly<{
     system: string;
+    skillPrompt?: string;
     messages: readonly ConversationModelMessage[];
     tools: readonly string[];
   }>): Promise<string>;
 }>;
 
 export type JoinedConversationRequest = Readonly<{
+  runScope?: RunEffectScope;
   authenticatedOwnerId: string;
   invocation: TrustedInvocationEnvelope;
   context: RuntimeOwnedContextInputs;
@@ -51,6 +54,7 @@ export class JoinedConversationPath {
     const existing = this.publications.get(request.assistantEntryId);
     if (existing) return existing;
 
+    request.runScope?.admit();
     this.tree.append({ ...request.userEntry, role: 'user' });
     const composition = await this.composer.compose(request.invocation, request.context);
     if (!composition.ok) throw new Error(`conversation context failed: ${composition.failure.code}`);
@@ -58,8 +62,10 @@ export class JoinedConversationPath {
     // otherwise, and provider-side overflow is a failed turn (paper audit, arXiv 2609.20804).
     const windowed = windowModelMessages(this.tree.modelContext(request.userEntry.id));
     this.observers?.onWindow?.(windowed.stats);
+    request.runScope?.admit();
     const text = await this.model.complete({
       system: composition.prompt,
+      ...(composition.skillPrompt ? { skillPrompt: composition.skillPrompt } : {}),
       messages: windowed.messages,
       tools: composition.evidence.tool_acl,
     });
@@ -76,6 +82,7 @@ export class JoinedConversationPath {
       modelProjection: { mode: 'include' },
       role: 'assistant',
     };
+    request.runScope?.admit();
     this.tree.append(assistantEntry);
     const publication = Object.freeze({
       ownerId: assistantEntry.ownerId,

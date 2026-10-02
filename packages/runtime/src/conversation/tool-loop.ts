@@ -1,3 +1,4 @@
+import { guardArtifactLinks, receiptUrl } from './artifact-link-guard';
 import { toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn } from '@waldo/contracts';
 import { dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import type { ToolOutputStore } from './tool-output-store';
@@ -92,6 +93,8 @@ export async function runToolLoop(input: Readonly<{
   const offered = new Set<string>();
   const noProgressTriples = new Map<string, number>();
   const noProgressBlocked = new Set<string>();
+  // Delivery URLs returned by successful tool receipts this loop; the final reply may show no other artifact link.
+  const receiptUrls = new Set<string>();
   // Mutation-resets-streak: a state change landing between repeats makes the next identical
   // call a new experiment, not a loop. Waldo's mutation class is the autonomy-gated/privileged
   // set (ADR-0049: direct external mutation or send) plus desk-routed state mutations
@@ -109,15 +112,18 @@ export async function runToolLoop(input: Readonly<{
       exit = round >= input.maxSteps || (input.budget !== undefined && input.budget.remaining <= 0) ? 'budget_exhausted' : 'withdrawn';
     }
     if (offer && input.budget !== undefined) input.budget.remaining -= 1;
+    input.ctx.runScope?.admit();
     const response = await input.step(offer ? tools : undefined, turns);
+    input.ctx.runScope?.admit();
     if (response.tool_calls === undefined) {
       input.onSettle?.(exit);
-      return response.text;
+      return guardArtifactLinks(response.text, receiptUrls);
     }
     let anyOk = false;
     let anyGenuineFailure = false;
     let firstCall = true;
     for (const call of response.tool_calls) {
+      input.ctx.runScope?.admit();
       const started = Date.now();
       const key = `${call.name}\u0000${call.arguments}`;
       const stablePair = `${call.name}\u0000${stabilize(call.arguments)}`;
@@ -129,6 +135,7 @@ export async function runToolLoop(input: Readonly<{
         : noProgressBlocked.has(stablePair)
           ? { ok: false, error: 'No progress: this call keeps returning the same outcome apart from volatile ids/timestamps; stop retrying it and answer with what you have.', code: 'no_progress' as const }
           : await dispatch(call, input);
+      input.ctx.runScope?.admit();
       if (!result.ok && result.connect) {
         const offerKey = `${result.connect.service}:${result.connect.reason}`;
         if (!offered.has(offerKey)) {
@@ -138,6 +145,8 @@ export async function runToolLoop(input: Readonly<{
         }
       }
       seen.add(key);
+      const receipt = receiptUrl(call.name, result);
+      if (receipt !== null) receiptUrls.add(receipt);
       if (result.ok && mutationTools.has(call.name as never)) {
         noProgressTriples.clear();
         noProgressBlocked.clear();

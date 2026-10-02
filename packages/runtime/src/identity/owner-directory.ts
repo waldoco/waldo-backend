@@ -1,3 +1,5 @@
+import { withRequestTimeout } from './request-timeout';
+
 export type OwnerRoute = Readonly<{ doName: string; subject: string; timezone: string | null }>;
 
 export type OwnerDirectoryEnv = Readonly<{
@@ -10,9 +12,12 @@ export type OwnerDirectoryEnv = Readonly<{
 
 // Providers with a presence row: telegram (numeric chat id), whatsapp (E.164 digits).
 export type PresenceProvider = 'telegram' | 'whatsapp';
+export type PresenceLookupProvider = PresenceProvider | 'imessage';
 
+export type RedemptionOutcome = { kind: 'redeemed' | 'rejected' | 'uncertain' };
 export type OwnerDirectory = Readonly<{
-  byPresence(provider: PresenceProvider, subject: string): Promise<OwnerRoute | null>;
+  redeemHashed?(provider: PresenceProvider, subject: string, hash: string): Promise<RedemptionOutcome>;
+  byPresence(provider: PresenceLookupProvider, subject: string): Promise<OwnerRoute | null>;
   redeem(provider: PresenceProvider, subject: string, code: string): Promise<OwnerRoute | null>;
 }>;
 
@@ -35,6 +40,7 @@ const deployOwner = (env: OwnerDirectoryEnv): OwnerDirectory => ({
       ? { doName: subject, subject, timezone: env.WALDO_OWNER_TIMEZONE ?? null }
       : null,
   redeem: async () => null,
+  redeemHashed: async () => ({ kind: 'rejected' }),
 });
 // WhatsApp has no single-owner env fallback: routing a phone number requires a real presence row,
 // so the directory-backed path is the only one (deployOwner answers telegram only).
@@ -45,25 +51,38 @@ export const signedRpc = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch,
   if (!base || !key || !secret) return null;
   return async (fn: string, message: string, args: Record<string, string | number>): Promise<unknown> => {
     const at = Math.floor(now() / 1000);
-    const response = await fetcher(`${base}/rest/v1/rpc/${fn}`, {
-      method: 'POST',
-      headers: { apikey: key, 'content-profile': 'waldo', 'content-type': 'application/json' },
-      body: JSON.stringify({ ...args, p_at: at, p_sig: await routerSignature(secret, at, message) }),
+    return withRequestTimeout(async signal => {
+      const signature = await routerSignature(secret, at, message);
+      signal.throwIfAborted();
+      const response = await fetcher(`${base}/rest/v1/rpc/${fn}`, {
+        method: 'POST', signal,
+        headers: { apikey: key, 'content-profile': 'waldo', 'content-type': 'application/json' },
+        body: JSON.stringify({ ...args, p_at: at, p_sig: signature }),
+      });
+      if (!response.ok) throw new Error(`owner directory ${response.status}`);
+      return response.json();
     });
-    if (!response.ok) throw new Error(`owner directory ${response.status}: ${(await response.text()).slice(0, 200)}`);
-    return response.json();
   };
 };
 
 export const ownerDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): OwnerDirectory => {
   const call = signedRpc(env, fetcher, now);
   if (!call) return deployOwner(env);
-  const byPresence = async (provider: PresenceProvider, subject: string): Promise<OwnerRoute | null> => {
+  const byPresence = async (provider: PresenceLookupProvider, subject: string): Promise<OwnerRoute | null> => {
     const [row] = (await call('route_presence', `route.${provider}.${subject}`, { p_provider: provider, p_subject: subject })) as RouteRow[];
     return row ? { doName: row.do_name, subject: row.subject, timezone: row.timezone } : null;
   };
   return {
     byPresence,
+    // A route lookup is intentionally separate. A successful redemption with a
+    // missing/lost route read must never be relabeled as an invalid code.
+    redeemHashed: async (provider, subject, hash) => {
+      if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('invalid link hash');
+      try {
+        const result = await call('redeem_link', `redeem.${hash}.${provider}.${subject}`, { p_code_hash: hash, p_provider: provider, p_subject: subject });
+        return { kind: result === null ? 'rejected' : typeof result === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(result) ? 'redeemed' : 'uncertain' };
+      } catch { return { kind: 'uncertain' }; }
+    },
     redeem: async (provider, subject, code) => {
       const hash = await linkCodeHash(code);
       const owner = await call('redeem_link', `redeem.${hash}.${provider}.${subject}`, { p_code_hash: hash, p_provider: provider, p_subject: subject });

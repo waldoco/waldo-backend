@@ -43,3 +43,14 @@ it('labels a lost transport response as unknown outcome rather than retryable fa
  const original=globalThis.fetch;globalThis.fetch=vi.fn(async()=>{throw new TypeError('Failed to fetch');});
  try{await expect(submitInvite(admin,'invite.create','a@test.invalid')).rejects.toThrow('Refresh records before retrying; a code cannot be recovered');}finally{globalThis.fetch=original;}
 });
+
+it('keeps a prepared signup link in the one-time receipt and rejects foreign link origins', async () => {
+ const original = globalThis.fetch;
+ vi.stubGlobal('location', { origin: 'https://w.test' });
+ try {
+  globalThis.fetch = vi.fn(async () => Response.json({ code: 'ABC', message: 'Prepared', link: 'https://w.test/console/signup#email=a%40test.invalid&invite=ABC' }));
+  expect((await submitInvite(admin, 'invite.create', 'a@test.invalid')).link).toContain('/console/signup#');
+  globalThis.fetch = vi.fn(async () => Response.json({ code: 'ABC', message: 'Prepared', link: 'https://foreign.test/console/signup#invite=ABC' }));
+  await expect(submitInvite(admin, 'invite.create', 'a@test.invalid')).rejects.toThrow('link receipt is unavailable');
+ } finally { globalThis.fetch = original; vi.unstubAllGlobals(); }
+});

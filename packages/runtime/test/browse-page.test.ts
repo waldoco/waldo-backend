@@ -121,13 +121,13 @@ describe('browse_page', () => {
     expect(model.modelName).toBe(start?.body.modelName);
     expect(model.apiKey).toBe('model-key');
   });
-  it('a JSON failure body message is surfaced on the error', async () => {
+  it('a JSON failure body stays private while HTTP status is surfaced', async () => {
     const { fetcher } = stagehand({ navigate: new Response(JSON.stringify({ success: false, message: 'url must be absolute' }), { status: 400 }) });
     const result = await browsePageHandler('k', 'p', undefined, fetcher).handle(args, ctx);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain('HTTP 400');
-    expect(result.error).toContain('url must be absolute');
+    expect(result.error).not.toContain('url must be absolute');
   });
 
   it('failure bodies never leak keys, project ids or session ids', async () => {
@@ -139,8 +139,8 @@ describe('browse_page', () => {
     expect(rendered).not.toContain('bb-secret');
     expect(rendered).not.toContain('bb-proj');
     expect(rendered).not.toContain('123e4567-e89b-12d3-a456-426614174000');
-    expect(result.error).toContain('[redacted]');
-    expect(result.error).toContain('[session]');
+    expect(result.error).toContain('HTTP 400');
+    expect(result.error).not.toContain('bad key');
   });
 });
 

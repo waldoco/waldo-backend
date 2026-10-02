@@ -6,14 +6,29 @@
 const AUTH = 'https://www.googleapis.com/auth/';
 export const GOOGLE_FEATURE_SCOPES = {
   calendar: [`${AUTH}calendar.events`],
+  availability: [`${AUTH}calendar.events.freebusy`],
   mail: [`${AUTH}gmail.readonly`, `${AUTH}gmail.send`, `${AUTH}gmail.compose`],
   tasks: [`${AUTH}tasks`],
+  // Read-only Workspace scopes for Google's MCP servers (draft: takes effect only when the owner deploys it
+  // and reconnects). Write scopes stay out until a separate approval-gated slice.
+  drive: [`${AUTH}drive.readonly`],
+  docs: [`${AUTH}drive.readonly`, `${AUTH}documents.readonly`],
+  sheets: [`${AUTH}drive.readonly`, `${AUTH}spreadsheets.readonly`],
+  slides: [`${AUTH}drive.readonly`, `${AUTH}presentations.readonly`],
 } as const;
 export type GoogleFeature = keyof typeof GOOGLE_FEATURE_SCOPES;
+// Never granted implicitly: legacy null-scope grants do not hold these.
+const WORKSPACE_READ_FEATURES: readonly GoogleFeature[] = ['drive', 'docs', 'sheets', 'slides'];
+// Features whose only scopes are read-only (GOOGLE_FEATURE_SCOPES lists no write scope for them).
+export const isReadOnlyGoogleFeature = (feature: GoogleFeature): boolean => WORKSPACE_READ_FEATURES.includes(feature);
 export const isGoogleFeature = (value: string): value is GoogleFeature => Object.hasOwn(GOOGLE_FEATURE_SCOPES, value);
-// null is a grant from before per-feature scopes, made under the broad consent, so it covers every feature.
+// Legacy null grants retain old features, never a newly introduced availability scope.
 export const googleHas = (scopes: readonly string[] | null | undefined, feature: GoogleFeature): boolean =>
-  scopes === null || GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false);
+  feature === 'availability'
+    ? ['calendar.events.freebusy','calendar.freebusy','calendar.readonly','calendar'].some(scope => scopes?.includes(`${AUTH}${scope}`) ?? false)
+    : WORKSPACE_READ_FEATURES.includes(feature)
+      ? GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false)
+      : scopes === null || GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false);
 
 export const GOOGLE_CALLBACK_PATH = '/oauth/google/callback';
 
@@ -64,7 +79,7 @@ export async function readConsentState(secret: string, state: string): Promise<R
   return (await sign(secret, `${owner}.${nonce}`)) === mac ? { owner, nonce } : null;
 }
 
-export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks];
+export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.availability, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks, ...new Set([...GOOGLE_FEATURE_SCOPES.drive, ...GOOGLE_FEATURE_SCOPES.docs, ...GOOGLE_FEATURE_SCOPES.sheets, ...GOOGLE_FEATURE_SCOPES.slides])];
 
 export function googleConsentUrl(app: GoogleApp, state: string, codeChallenge: string): string {
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
@@ -145,7 +160,22 @@ export type TaskStatusFilter = 'todo' | 'in_progress' | 'done' | 'all';
 export type TaskItem = Readonly<{ id: string; title: string; status: 'todo' | 'done'; due?: string; updated?: string }>;
 type GoogleTask = Readonly<{ id: string; title?: string; status: string; due?: string; updated?: string }>;
 
+// Provider calendars are untrusted even when transport returned HTTP 200.
+export const validFreeBusyCalendar = (row: unknown): row is FreeBusyResult['calendars'][string] => {
+  const object = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const instant = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/.test(v) && Number.isFinite(Date.parse(v));
+  if (!object(row) || !Array.isArray(row.busy)) return false;
+  if (Object.hasOwn(row, 'errors') && (!Array.isArray(row.errors) || !row.errors.every(e => object(e) && typeof e.reason === 'string' && e.reason.length > 0 && (!Object.hasOwn(e,'domain') || typeof e.domain === 'string')))) return false;
+  return row.busy.every(b => object(b) && instant(b.start) && instant(b.end) && Date.parse(b.start) < Date.parse(b.end));
+};
+
+export type FreeBusyResult=Readonly<{from:string;to:string;calendars:Readonly<Record<string,Readonly<{busy:readonly Readonly<{start:string;end:string}>[];errors?:readonly Readonly<{reason?:string}>[]}>>>}>;
+
+export type CalendarPage = Readonly<{ events: readonly CalendarItem[]; next_page_token: string | null; fetched_count: number; account: Readonly<{connection_id: string | null; email: string | null}>; observed_at: string }>;
+
 export type GoogleClient = Readonly<{
+  calendarPage?(calendarId: string, from: string, to: string, limit: number, includeDeclined: boolean, pageToken?: string): Promise<CalendarPage>;
+  freeBusy(from:string,to:string,calendarIds:readonly string[],timezone:string):Promise<FreeBusyResult>;
   events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<readonly CalendarItem[]>;
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
   sendRaw(raw: string, threadId?: string): Promise<Readonly<{ message_id: string; thread_id?: string }>>;
@@ -155,6 +185,7 @@ export type GoogleClient = Readonly<{
   moveEvent(id: string, start: string, end: string, etag?: string): Promise<CalendarItem>;
   cancelEvent(id: string, etag?: string): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
+  mailPage(query:string,limit:number,pageToken?:string):Promise<Readonly<{messages:readonly MailItem[];next_page_token:string|null;result_size_estimate:number|null}>>;
   newMail(since: number, limit: number): Promise<readonly MailItem[]>;
   searchMail(query: string, limit: number): Promise<readonly MailItem[]>;
   readThread(threadId: string, limit: number): Promise<readonly ThreadMessage[]>;
@@ -164,7 +195,7 @@ export type GoogleClient = Readonly<{
 // Single source for the connector-proxy allowlist: the runtime's vault client and the Supabase
 // connector-proxy Edge Function both build from this list, so a method added to GoogleClient but
 // missed here fails `satisfies` / the parity test instead of breaking live calls on Vault installs.
-export const GOOGLE_METHODS = ['events', 'draft', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail', 'searchMail', 'readThread', 'tasks'] as const satisfies readonly (keyof GoogleClient)[];
+export const GOOGLE_METHODS = ['calendarPage','mailPage','freeBusy', 'events', 'draft', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail', 'searchMail', 'readThread', 'tasks'] as const satisfies readonly (keyof GoogleClient)[];
 export type GoogleMethod = (typeof GOOGLE_METHODS)[number];
 
 const b64urlDecode = (data: string): string => {
@@ -199,7 +230,7 @@ export async function googleAccessToken(app: GoogleApp, tokens: GoogleTokens, fe
 }
 
 // health hears '' after a good refresh and the error after a failed one, so the console can offer a reconnect.
-export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void): GoogleClient {
+export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void, account: CalendarPage['account'] = {connection_id: null, email: tokens.email ?? null}): GoogleClient & Required<Pick<GoogleClient, 'calendarPage'>> {
   let access: { token: string; until: number } | null = null;
   const bearer = async () => {
     if (access && access.until > Date.now()) return access.token;
@@ -234,11 +265,50 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     return { id, thread_id: message.threadId ?? '', from: header('From'), subject: header('Subject'), snippet: message.snippet ?? '', at: new Date(Number(message.internalDate ?? 0)).toISOString() };
   }));
   return {
+    freeBusy:async(from,to,calendarIds,timezone)=>{
+      if(![from,to].every(s=>typeof s==='string'&&/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/.test(s)&&Number.isFinite(Date.parse(s)))||Date.parse(from)>=Date.parse(to)||!Array.isArray(calendarIds)||!calendarIds.length||calendarIds.length>50||calendarIds.some(id=>typeof id!=='string'||!id.trim()||id.length>256)||new Set(calendarIds).size!==calendarIds.length)throw new Error('invalid freebusy request');
+      const data=await call('https://www.googleapis.com/calendar/v3/freeBusy',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({timeMin:from,timeMax:to,timeZone:timezone,calendarExpansionMax:50,items:calendarIds.map(id=>({id}))})});
+      const result=data as {timeMin?:string;timeMax?:string;calendars?:FreeBusyResult['calendars']};
+      if(!result||typeof result!=='object'||!result.calendars||typeof result.calendars!=='object'||Array.isArray(result.calendars)||!Object.values(result.calendars).every(validFreeBusyCalendar)||Date.parse(result.timeMin??'')!==Date.parse(from)||Date.parse(result.timeMax??'')!==Date.parse(to))throw new Error('freebusy coverage differs');
+      return {from:result.timeMin!,to:result.timeMax!,calendars:result.calendars};
+    },
     event: async (id) => toItem(await call(`${EVENTS}/${encodeURIComponent(id)}`) as unknown as GoogleEvent),
     createEvent: ({ title, start, end }) => send(EVENTS, 'POST', { summary: title, start: { dateTime: start }, end: { dateTime: end } }),
     moveEvent: (id, start, end, etag) => send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { start: { dateTime: start }, end: { dateTime: end } }, etag),
     async cancelEvent(id, etag) {
       await call(`${EVENTS}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: match(etag) });
+    },
+    async calendarPage(calendarId, from, to, limit, includeDeclined, pageToken) {
+      if (typeof calendarId !== 'string' || !calendarId.trim() || calendarId.length > 254 || ![from,to].every(v => validCalendarInstant(v)) || Date.parse(from) >= Date.parse(to) || !Number.isSafeInteger(limit) || limit < 1 || limit > 50 || typeof includeDeclined !== 'boolean' || (pageToken !== undefined && (typeof pageToken !== 'string' || !pageToken || pageToken.length > 4096))) throw new Error('invalid Calendar page request');
+      const binding = JSON.stringify([account.connection_id, calendarId, from, to, limit, includeDeclined]);
+      const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(tokens.refresh_token), {name:'HMAC',hash:'SHA-256'}, false, ['sign']);
+      const signature = async (payload: string) => [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${binding}.${payload}`)))].map(b => b.toString(16).padStart(2,'0')).join('');
+      let providerToken: string | undefined;
+      if (pageToken !== undefined) {
+        try {
+          const parts = pageToken.split('.');
+          if (parts.length !== 2) throw new Error();
+          const expected = await signature(parts[0]!);
+          let mismatch = expected.length ^ parts[1]!.length;
+          for (let i=0;i<expected.length;i++) mismatch |= expected.charCodeAt(i) ^ (parts[1]!.charCodeAt(i)||0);
+          if (mismatch) throw new Error();
+          const cursor = JSON.parse(b64urlDecode(parts[0]!)) as {v?:unknown;token?:unknown};
+          if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor) || Object.keys(cursor).length !== 2 || cursor.v !== 1 || typeof cursor.token !== 'string' || !cursor.token || cursor.token.length > 2048) throw new Error();
+          providerToken = cursor.token;
+        } catch { throw new Error('invalid Calendar cursor or query binding'); }
+      }
+      const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`);
+      url.search = new URLSearchParams({timeMin:from,timeMax:to,singleEvents:'true',orderBy:'startTime',maxResults:String(limit),...(providerToken?{pageToken:providerToken}:{})}).toString();
+      const data = await call(url.toString(), {signal:AbortSignal.timeout(30_000)});
+      if (!data || typeof data !== 'object' || Array.isArray(data) || data.kind !== 'calendar#events' || Object.hasOwn(data, 'error') || (data.items !== undefined && !Array.isArray(data.items)) || (data.nextPageToken !== undefined && (typeof data.nextPageToken !== 'string' || !data.nextPageToken || data.nextPageToken.length > 2048))) throw new Error('invalid Calendar page response');
+      const items = (data.items ?? []) as GoogleEvent[];
+      if (items.length > limit || !items.every(validCalendarEvent)) throw new Error('invalid Calendar page response');
+      let continuation: string | null = null;
+      if (data.nextPageToken) {
+        const payload = b64url(new TextEncoder().encode(JSON.stringify({v:1,token:data.nextPageToken})));
+        continuation = `${payload}.${await signature(payload)}`;
+      }
+      return {events: items.filter(e => e.status !== 'cancelled').filter(e => includeDeclined || e.attendees?.find(a => a.self)?.responseStatus !== 'declined').map(toItem).map(e=>({...e,title:e.title.slice(0,2000),...(e.location?{location:e.location.slice(0,2000)}:{})})), next_page_token: continuation, fetched_count: items.length, account, observed_at: new Date().toISOString()};
     },
     async events(from, to, limit, includeDeclined) {
       const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
@@ -256,6 +326,13 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       return (json.items ?? [])
         .filter((event) => event.attendees?.find((a) => a.self)?.responseStatus !== 'declined')
         .map((event) => ({ ...toItem({ ...event, start: event.start ?? {}, end: event.end ?? {} }), status: event.status ?? 'confirmed', created: event.created ?? '' }));
+    },
+    async mailPage(query,limit,pageToken) {
+      if(typeof query!=='string'||!query.trim()||!Number.isSafeInteger(limit)||limit<1||limit>500||(pageToken!==undefined&&(typeof pageToken!=='string'||!pageToken)))throw new Error('invalid Gmail page request');
+      const url=new URL(GMAIL);url.search=new URLSearchParams({q:query,maxResults:String(limit),...(pageToken?{pageToken}:{})}).toString();
+      const data=await call(url.toString()) as {messages?:{id:string}[];nextPageToken?:string;resultSizeEstimate?:number};
+      if(!data||typeof data!=='object'||Array.isArray(data)||(data.messages!==undefined&&(!Array.isArray(data.messages)||data.messages.some(m=>!m||typeof m.id!=='string'||!m.id)))||(data.nextPageToken!==undefined&&(typeof data.nextPageToken!=='string'||!data.nextPageToken))||(data.resultSizeEstimate!==undefined&&(!Number.isSafeInteger(data.resultSizeEstimate)||data.resultSizeEstimate<0)))throw new Error('invalid Gmail page response');
+      return {messages:await mailItems((data.messages??[]).map(m=>m.id)),next_page_token:data.nextPageToken??null,result_size_estimate:data.resultSizeEstimate??null};
     },
     async newMail(since, limit) {
       return mailItems(await listIds(`in:inbox category:primary after:${Math.floor(since / 1000)}`, limit));
@@ -319,6 +396,28 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     },
   };
 }
+
+// Kept self-contained: this connector also runs in the Deno edge function, without
+// a workspace package import map. Calendar query bounds must be offset-bearing instants.
+const validCalendarInstant = (value: unknown): value is string => {
+  if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(value) || !Number.isFinite(Date.parse(value))) return false;
+  const day = value.slice(0,10);
+  return Number.isFinite(Date.parse(day)) && new Date(day).toISOString().slice(0,10) === day;
+};
+
+const validCalendarEvent = (value: unknown): value is GoogleEvent => {
+  const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+  if (!object(value) || typeof value.id !== 'string' || !value.id || value.id.length > 1024) return false;
+  if (value.status === 'cancelled') return true;
+  const endpoint = (v: unknown) => {
+    if (!object(v) || (v.date !== undefined && v.dateTime !== undefined)) return null;
+    if (typeof v.dateTime === 'string' && validCalendarInstant(v.dateTime)) return {allDay:false,at:Date.parse(v.dateTime)};
+    if (typeof v.date === 'string' && /^\d{4}-\d\d-\d\d$/.test(v.date) && Number.isFinite(Date.parse(v.date)) && new Date(v.date).toISOString().slice(0,10) === v.date) return {allDay:true,at:Date.parse(v.date)};
+    return null;
+  };
+  const start=endpoint(value.start),end=endpoint(value.end);
+  return !!start && !!end && start.allDay===end.allDay && start.at<end.at && ['summary','location','description','etag'].every(k => value[k] === undefined || typeof value[k] === 'string') && (value.attendees === undefined || (Array.isArray(value.attendees) && value.attendees.every(a => object(a) && (a.self === undefined || typeof a.self === 'boolean') && (a.responseStatus === undefined || typeof a.responseStatus === 'string'))));
+};
 
 const toItem = (event: GoogleEvent): CalendarItem => ({
   id: event.id, title: event.summary ?? '(no title)',

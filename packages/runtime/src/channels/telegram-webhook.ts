@@ -1,5 +1,6 @@
 import { ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
-import { createTelegramCaller } from './telegram-api';
+import {parseCodedSetup} from './telegram-link-command';
+import {linkCodeHash} from '../identity/owner-directory';
 
 export type TelegramWebhookEnv = Readonly<{
   TELEGRAM_OWNER_DO?: DurableObjectNamespace;
@@ -19,6 +20,7 @@ export type TelegramWebhookEnv = Readonly<{
   BRAVE_SEARCH_API_KEY?: string;
   // A5 artifact bodies; absent in tests/local, bound in wrangler (r2_buckets).
   ARTIFACTS?: R2Bucket;
+  RESPONSIBILITY_RATE_LIMITER?: RateLimit;
   BROWSERBASE_API_KEY?: string;
   BROWSERBASE_PROJECT_ID?: string;
   ELEVENLABS_API_KEY?: string;
@@ -54,12 +56,6 @@ const sender = (update: SenderUpdate): string | null => {
   return id === undefined ? null : String(id);
 };
 
-const linkCode = (update: SenderUpdate): string | null => {
-  if (update.message?.chat?.type !== 'private') return null;
-  const [command, code] = (update.message.text ?? '').trim().split(/\s+/, 2);
-  return (command === '/start' || command === '/link') && code ? code : null;
-};
-
 // The webhook resolves which owner a Telegram sender belongs to and wakes only that owner's Durable Object.
 // A sender with no owner can only redeem a one-time link code issued from the console.
 export const handleTelegramWebhook = async (
@@ -76,25 +72,45 @@ export const handleTelegramWebhook = async (
     return new Response('forbidden', { status: 403 });
   }
   const body = await request.text();
-  const update = JSON.parse(body) as SenderUpdate;
+  let update: SenderUpdate;
+  try { update = JSON.parse(body) as SenderUpdate; } catch { return new Response('bad request', { status: 400 }); }
+  if (!update || typeof update !== 'object') return new Response('ok');
   const subject = sender(update);
   if (!subject) return new Response('ok');
   const owners = env.TELEGRAM_OWNER_DO;
   const origin = new URL(request.url).origin;
-  waitUntil((async () => {
-    const route = await directory.byPresence('telegram', subject);
-    if (route) {
-      const headers: Record<string, string> = { 'x-waldo-origin': origin, 'x-waldo-telegram-subject': route.subject };
-      if (route.timezone) headers['x-waldo-timezone'] = route.timezone;
-      return owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/turn', { method: 'POST', body, headers });
-    }
-    const code = linkCode(update);
-    if (!code || !env.TELEGRAM_BOT_TOKEN) return undefined;
-    const linked = await directory.redeem('telegram', subject, code).catch(() => null);
-    return createTelegramCaller(env.TELEGRAM_BOT_TOKEN)('sendMessage', {
-      chat_id: Number(subject),
-      text: linked ? 'Linked. This chat now talks to your Waldo.' : 'That code did not work. Get a new one from your console.',
-    });
-  })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'telegram_route', ok: false, error: String(error) }))));
+  const coded = parseCodedSetup(update);
+  if (coded) {
+    const bot = env.TELEGRAM_BOT_TOKEN?.split(':')[0];
+    if (!bot || !/^\d+$/.test(bot) || !env.RESPONSIBILITY_RATE_LIMITER) return new Response('admission unavailable', { status: 503 });
+    try {
+      // Edge guard necessarily precedes durable duplicate lookup/DO allocation.
+      const senderOk = (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `telegram-link-sender:${bot}:${coded.subject}` })).success;
+      const botOk = (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `telegram-link-bot:${bot}` })).success;
+      if (!senderOk || !botOk) return new Response('too many requests', { status: 429 });
+      const name = `telegram-link:${bot}:${coded.subject}`;
+      const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(body)))].map(x=>x.toString(16).padStart(2,'0')).join(''); // exact full-update digest
+      const hash = await linkCodeHash(coded.code);
+      const admission = await owners.get(owners.idFromName(name)).fetch('https://telegram-link/enqueue-link', {
+        method: 'POST', signal: AbortSignal.timeout(10_000),
+        headers: { 'x-waldo-inbox-secret': secret },
+        body: JSON.stringify({ bot, subject: coded.subject, name, id: coded.updateId, digest, hash }),
+      });
+      return new Response(admission.ok ? 'ok' : 'admission unavailable', { status: admission.ok ? 200 : admission.status === 409 ? 409 : 503 });
+    } catch { return new Response('admission unavailable', { status: 503 }); }
+  }
+  let route;
+  try { route = await directory.byPresence('telegram', subject); }
+  catch { return new Response('route unavailable', { status: 503 }); }
+  if (route) {
+    const headers: Record<string, string> = { 'x-waldo-origin': origin, 'x-waldo-telegram-subject': route.subject,
+      'x-waldo-do-name': route.doName, 'x-waldo-inbox-secret': secret };
+    if (route.timezone) headers['x-waldo-timezone'] = route.timezone;
+    try {
+      const admission = await owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/enqueue', { method: 'POST', body, headers, signal: AbortSignal.timeout(10_000) });
+      return new Response(admission.ok ? 'ok' : 'admission unavailable', { status: admission.ok ? 200 : admission.status === 409 ? 409 : 503 });
+    } catch { return new Response('admission unavailable', { status: 503 }); }
+  }
+  // Unknown non-coded/unsupported setup is ignored, never model input.
   return new Response('ok');
 };

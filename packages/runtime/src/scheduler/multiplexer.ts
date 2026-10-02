@@ -11,13 +11,13 @@ import {
   type ScheduleRecurrence,
 } from '@waldo/contracts';
 import type { Deps } from '../seams/deps';
-import { armAlarm } from './alarm-slot';
+import { rearmSharedAlarm } from './alarm-slot';
 
 const MAX_MISSED_CHAIN = 64;
 // Minimum spacing for an immediate re-arm (next row already due). Live turns are unaffected
 // (due work still fires within DUE_LOOKAHEAD_MS); the pacing lets a long missed-run drain
 // yield the isolate between deliveries instead of starving sibling work back-to-back.
-const MIN_REARM_DELAY_MS = 250;
+
 const DUE_LOOKAHEAD_MS = 1_000;
 const MAX_DUE_PER_ALARM = 8;
 const PRODUCT_RETRY_DELAY_MS = 30_000;
@@ -49,7 +49,7 @@ export type ScheduleInput = {
   recurrence?: ScheduleRecurrence | null;
 };
 
-export type ScheduleExecutor = (entry: ScheduleEntry) => Promise<void>;
+export type ScheduleExecutor = (entry: ScheduleEntry) => Promise<void | 'delivery_pending'>;
 export type ScheduleExecutors = Partial<Record<ScheduleKind, ScheduleExecutor>>;
 
 export class Scheduler {
@@ -130,6 +130,8 @@ export class Scheduler {
     return row ? toEntry(row) : null;
   }
 
+  hasDue(): boolean { return this.dueEntries(this.deps.now()).length > 0; }
+
   async dispatchDue(executors: ScheduleExecutors): Promise<readonly ScheduleEntry[]> {
     const now = this.deps.now();
     this.reapQuarantine(now);
@@ -140,6 +142,14 @@ export class Scheduler {
       for (const entry of due) {
         let fresh = this.read(entry.id);
         if (fresh === null || fresh.status !== 'armed' || fresh.due_at > now + DUE_LOOKAHEAD_MS) {
+          continue;
+        }
+        // Telegram final already committed before a crash at executor-return/complete.
+        // Advance scheduling without replaying its model/tools; outbox owns delivery settlement.
+        const finals = this.storage.kv.get<readonly { reminder?: { id: string; occurrence: number } }[]>('telegram_final_outbox_v1') ?? [];
+        const committedId = fresh.id, committedOccurrence = fresh.occurrence_at;
+        if (fresh.kind === 'reminder' && finals.some(r => r.reminder?.id === committedId && r.reminder.occurrence === committedOccurrence)) {
+          this.complete(fresh, now);
           continue;
         }
         // C3 dedupe: an occurrence still running (or crashed-and-unsettled) blocks this fire.
@@ -182,9 +192,10 @@ export class Scheduler {
             this.settleRun(runId, 'failed', 'scheduler_handoff', now);
             throw new Error(`no scheduler executor for ${bumped.kind}`);
           }
-          await executor(bumped);
+          const delivery = await executor(bumped);
           this.complete(bumped, now);
-          this.settleRun(runId, 'ok', null, now);
+          if (delivery !== 'delivery_pending') this.settleRun(runId, 'ok', null, now);
+          else { this.markHeartbeatDecision(runId, 'acted'); this.markDelivery(runId, 'pending'); }
           dispatched.push(bumped);
         } catch (err) {
           if (isCrashInjectionError(err)) {
@@ -374,6 +385,12 @@ export class Scheduler {
     );
   }
 
+  settleDelivery(runId: string, delivered: boolean): void {
+    this.markHeartbeatDecision(runId, 'acted');
+    this.markDelivery(runId, delivered ? 'sent' : 'failed');
+    this.settleRun(runId, delivered ? 'ok' : 'quarantined', delivered ? null : 'delivery', this.deps.now());
+  }
+
   private settleRun(runId: string, outcome: 'ok' | 'failed' | 'quarantined' | 'missed', errorClass: 'run' | 'scheduler_handoff' | 'delivery' | null, now: number): void {
     this.sql.exec(
       `UPDATE schedule_runs
@@ -509,15 +526,11 @@ export class Scheduler {
     );
   }
 
-  private async rearm(): Promise<void> {
+  async rearm(): Promise<void> {
     const bound = nextWakeBound(
       this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule').toArray().map(toEntry),
     );
-    if (bound === null) {
-      await this.storage.deleteAlarm();
-      return;
-    }
-    await armAlarm(this.storage, Math.max(bound, this.deps.now() + MIN_REARM_DELAY_MS));
+    await rearmSharedAlarm(this.storage, bound, this.deps.now());
   }
 }
 

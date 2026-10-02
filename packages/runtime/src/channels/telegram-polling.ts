@@ -1,3 +1,5 @@
+import type { RunEffectScope } from './run-effect-scope';
+import { REPLY_QUOTE_LIMIT, type ReplyContext } from './owner-turn-envelope';
 import { telegramMessageUpdateSchema, telegramUnsupportedMessageSchema, type TelegramMessageUpdate } from '@waldo/contracts';
 
 export type TelegramPollingClient = Readonly<{
@@ -20,6 +22,8 @@ export type TelegramInboundTurn = Readonly<{
   sentAt: number | null;
   text: string;
   media?: TelegramMedia;
+  replyTo?: ReplyContext;
+  runScope?: RunEffectScope;
 }>;
 
 export type TelegramUnsupportedTurn = Omit<TelegramInboundTurn, 'text' | 'sentAt' | 'media'> & Readonly<{ note?: string }>;
@@ -119,6 +123,16 @@ export class TelegramPollingAdapter {
       chatId: message.chat.id,
       sentAt: message.date === undefined ? null : message.date * 1000,
       text: message.text ?? message.caption ?? '',
+      ...(message.reply_to_message ? { replyTo: Object.freeze({
+        surface: 'telegram',
+        messageId: String(message.reply_to_message.message_id),
+        conversationRef: message.reply_to_message.chat ? `telegram-${message.reply_to_message.chat.id}` : null,
+        authorId: message.reply_to_message.from ? String(message.reply_to_message.from.id) : null,
+        authorIsBot: message.reply_to_message.from?.is_bot ?? null,
+        text: (message.reply_to_message.text ?? message.reply_to_message.caption ?? '').slice(0, REPLY_QUOTE_LIMIT),
+        truncated: (message.reply_to_message.text ?? message.reply_to_message.caption ?? '').length > REPLY_QUOTE_LIMIT,
+        sourceTaint: 'external' as const,
+      }) } : {}),
       ...(media ? { media: Object.freeze(media) } : {}),
     });
   }

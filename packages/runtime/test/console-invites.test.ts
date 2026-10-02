@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderMemberInvites } from '../src/channels/console-invites';
-import { newInviteCode } from '../src/identity/invite-code';
+import { newInviteCode, inviteLink } from '../src/identity/invite-code';
 
 describe('member invites', () => {
   it('shows remaining slots, escapes source data and never shows stored hashes', () => {
@@ -18,5 +18,15 @@ describe('member invites', () => {
     const codes = Array.from({ length: 100 }, newInviteCode);
     expect(new Set(codes).size).toBe(100);
     expect(codes.every((code) => /^[A-HJ-NP-Z2-9]{20}$/.test(code))).toBe(true);
+  });
+});
+
+describe('invite links', () => {
+  it('keeps recipient and bearer code out of the HTTP URL', () => {
+    const link = new URL(inviteLink('https://w.test/console/action?ignored=1', 'Person+tag@example.com', 'ABCDEFGHJKLMNPQRSTUV'));
+    expect(link.pathname).toBe('/console/signup');
+    expect(link.search).toBe('');
+    expect(new URLSearchParams(link.hash.slice(1)).get('invite')).toBe('ABCDEFGHJKLMNPQRSTUV');
+    expect(new URLSearchParams(link.hash.slice(1)).get('email')).toBe('person+tag@example.com');
   });
 });

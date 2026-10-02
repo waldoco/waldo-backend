@@ -1,3 +1,4 @@
+import type { RunEffectScope } from '../channels/run-effect-scope';
 import {
   TOOL_PERMISSIONS,
   ALWAYS_ON_TOOLS,
@@ -57,6 +58,7 @@ export type ToolDispatcherContext = HookRuntimeContext & {
   authenticatedUserId: string;
   turnId?: string;
   toolCallId?: string;
+  runScope?: RunEffectScope;
   session: SessionState;
 };
 
@@ -271,6 +273,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     // handler I/O. The digest therefore names the exact arguments that cross the adapter
     // boundary, while the durable intent is still committed first by RunLoopDO. Do not catch
     // this callback: a storage/programming fault must retain its original cause.
+    ctx.runScope?.admit();
     trustedEffect = await options.trustedEffect.prepare({ tool: tool.data, args });
   }
 
@@ -278,8 +281,10 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     if (trustedEffect !== undefined) {
       const executeOrReconcile = handler.executeOrReconcile;
       if (executeOrReconcile === undefined) throw new Error('trusted tool reconciler disappeared');
+      ctx.runScope?.admit();
       handlerResult = await executeOrReconcile(args, ctx, trustedEffect);
     } else {
+      ctx.runScope?.admit();
       handlerResult = await handler.handle(args, { ...ctx, toolCallId: call.id });
     }
   } catch (error) {
@@ -290,6 +295,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return failDispatch(call.id, tool.data, 'tool handler failed', 'transient', 'handler_failed');
   }
 
+  ctx.runScope?.admit();
   if (
     trustedEffect !== undefined &&
     trustedToolEffectReceiptUnavailableSchema.safeParse(handlerResult).success
@@ -322,6 +328,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
   if (parsedHandlerResult.ok && options.offload !== undefined) {
     const full = JSON.stringify(parsedHandlerResult.data);
     if (full.length > (options.maxResultJsonChars ?? DEFAULT_MAX_RESULT_JSON_CHARS)) {
+      ctx.runScope?.admit();
       const offloaded = offloadResult(call.id, tool.data, full, ctx, options.offload);
       if (!offloaded.ok) return withTrustedEffect(offloaded.result, settledTrustedEffect);
       effectiveHandlerResult = { ...parsedHandlerResult, data: offloaded.data };
@@ -335,6 +342,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     latency_ms: Math.max(0, Date.now() - startedAt),
   };
   try {
+    ctx.runScope?.admit();
     const nextPayload = await runTerminalHooks(
       'PostToolUse',
       postToolPayload,
@@ -359,6 +367,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return withTrustedEffect(hookFailure(call.id, tool.data, error), settledTrustedEffect);
   }
 
+  ctx.runScope?.admit();
   const finalResult = parseToolResult(postToolPayload.result, tool.data);
   if (finalResult === null) {
     return withTrustedEffect(failDispatch(
@@ -406,6 +415,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
   if (resultSize > (options.maxResultJsonChars ?? DEFAULT_MAX_RESULT_JSON_CHARS)) {
     if (options.offload !== undefined) {
       const full = JSON.stringify(finalResult.data);
+      ctx.runScope?.admit();
       const offloaded = offloadResult(call.id, tool.data, full, ctx, options.offload);
       if (!offloaded.ok) return withTrustedEffect(offloaded.result, settledTrustedEffect);
       return withTrustedEffect({
@@ -539,6 +549,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     latency_ms: 0,
   };
   try {
+    input.ctx.runScope?.admit();
     const nextPayload = await runTerminalHooks(
       'PostToolUse',
       postToolPayload,
@@ -559,6 +570,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     if (!(error instanceof HookHaltError)) throw error;
     return withTrustedEffect(hookFailure(input.callRef, tool.data, error), input.effect);
   }
+  input.ctx.runScope?.admit();
   const finalResult = parseToolResult(postToolPayload.result, tool.data);
   if (finalResult === null) {
     return withTrustedEffect(failDispatch(

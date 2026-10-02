@@ -97,6 +97,8 @@ export const GENERAL_AGENT_TOOLS: readonly ToolName[] = [
 // the complete set here makes a null taint stamp unrepresentable at the dispatcher boundary.
 export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'query_calendar',
+  'query_availability',
+  'read_owner_context',
   'get_communication',
   'search_communication',
   'read_thread',
@@ -104,9 +106,15 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'web_search',
   'read_document',
   'call_mcp_tool',
+  'read_mcp_tool',
   'search_connector',
   'read_tool_output',
   'read_artifact',
+  // search_episodes: stored history can hold Waldo replies and machine rows that quoted email or
+  // web text, so hits and recovered turns are data, never instructions or owner authority.
+  'search_episodes',
+  'browse_page',
+  'browse_act',
   // delegate_task: child handbacks carry whatever the child read (web, connector text), so the
   // summary - and its failure text - is externally influenced and stamped 'external' end-to-end.
   'delegate_task',

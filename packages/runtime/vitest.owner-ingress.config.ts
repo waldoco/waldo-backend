@@ -3,7 +3,7 @@ import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  test: { include: ['test/owner-do-ingress-isolation.test.ts'] },
+  test: { include: ['test/owner-do-ingress-isolation.test.ts', 'test/run-fence-owner-do.test.ts'] },
   plugins: [cloudflareTest({
     miniflare: { bindings: {
       WALDO_ENV: 'test', RUN_LOOP_PROVIDER_MODE: 'fake',

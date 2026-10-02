@@ -13,8 +13,25 @@ name: deploy-staging
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: Read-only inspection, reviewed migration apply, or Worker deployment
+        required: true
+        type: choice
+        default: deploy
+        options:
+          - preflight
+          - migration-apply
+          - deploy
+      expected_source_sha:
+        description: Exact reviewed 40-character source SHA (preflight requires this)
+        required: false
+        type: string
+      reviewed_pending_sha256:
+        description: SHA256 of exact pending byte manifest from reviewed preflight (apply only)
+        required: false
+        type: string
       run_migrations:
-        description: 'Apply supabase migrations to staging before the worker deploy'
+        description: 'Legacy input must remain false; use migration-apply separately'
         required: true
         type: boolean
         default: false
@@ -23,7 +40,54 @@ permissions:
   contents: read
 
 jobs:
+  migration-preflight:
+    if: inputs.operation == 'preflight'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: staging
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+      - name: Boundary tests
+        run: node --test scripts/staging-migration-preflight.test.mjs
+      - name: Read pinned staging migration history (GET only)
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          SUPABASE_PROJECT_ID: togdshayyxycitzckpqv
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: node scripts/staging-migration-preflight.mjs
+      - name: Print sanitized receipt
+        run: cat staging-migration-preflight.json
+  migration-apply:
+    if: inputs.operation == 'migration-apply'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    concurrency:
+      group: staging-migration-apply
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@008330803749db0355799c700092d9a85fd074e9
+        with:
+          version: 10.34.4
+      - name: Boundary tests
+        run: node --test scripts/staging-migration-preflight.test.mjs scripts/staging-migration-apply.test.mjs
+      - name: Apply exact reviewed pending bytes to pinned staging only
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          REVIEWED_PENDING_SHA256: ${{ inputs.reviewed_pending_sha256 }}
+          SUPABASE_PROJECT_ID: togdshayyxycitzckpqv
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: node scripts/staging-migration-apply.mjs
   deploy:
+    if: inputs.operation == 'deploy'
     runs-on: ubuntu-latest
     environment: staging
     steps:
@@ -40,21 +104,17 @@ jobs:
         with:
           version: 10.34.4
 
-      - name: Install (frozen lockfile, release-age policy active)
+      - name: Install (frozen lockfile)
         run: pnpm install --frozen-lockfile
 
       - name: Verify gates stay green on the exact head being deployed
         run: pnpm -r typecheck
 
-      - name: Apply supabase migrations to staging (opt-in per run)
+      - name: Reject legacy combined migration/deploy path
         if: inputs.run_migrations
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_STAGING_PROJECT_ID }}
         run: |
-          pnpm dlx supabase@2.109.1 link --project-ref "$SUPABASE_PROJECT_ID" --password "$SUPABASE_DB_PASSWORD"
-          pnpm dlx supabase@2.109.1 db push --linked
+          echo 'Use the separate reviewed migration-apply operation; deploy performs no SQL writes.'
+          exit 1
 
       - name: Deploy worker to staging (release-stamped to the checked-out SHA)
         env:
@@ -75,4 +135,18 @@ jobs:
 #   1. Secrets above are set on the repo (staging-scoped token, not account-wide).
 #   2. The staging wrangler environment exists in packages/runtime/wrangler.toml.
 #   3. He has said the word on the first run. Then - and only then - trigger
-#      Actions -> deploy-staging -> Run workflow with run_migrations=false.
+#      Actions -> deploy-staging -> Run workflow on beta-mvp with
+#      operation=deploy and run_migrations=false.
+
+# Read-only recipe (explicit ref and operation are required):
+#   gh workflow run deploy-staging.yml --repo waldoco/waldo-backend --ref beta-mvp \
+#     -f operation=preflight -f expected_source_sha=<reviewed40charSHA> \
+#     -f run_migrations=false
+# Do not omit --ref: default main still contains the old deploy-capable workflow.
+# Preflight never runs the deploy job, regardless of run_migrations input.
+# Reviewed apply recipe: only after source review, exact-head CI and fresh read-only
+# preflight packet review. This recipe is not owner authorization for SQL effects.
+#   gh workflow run deploy-staging.yml --repo waldoco/waldo-backend --ref beta-mvp \
+#     -f operation=migration-apply -f expected_source_sha=<reviewed40charSHA> \
+#     -f reviewed_pending_sha256=<packetPendingManifestSha256> -f run_migrations=false
+# Application and Worker promotion are distinct operations. No hosted run yet.

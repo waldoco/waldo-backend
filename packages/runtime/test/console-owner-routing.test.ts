@@ -46,3 +46,12 @@ describe('console owner-DO routing', () => {
     expect(await res.text()).toBe('do:5458446350');
   });
 });
+
+it('routes a private artifact path through the same owner gate, never a public body route',async()=>{
+ vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify([{do_name:'owner-artifact',subject:'5458446350',timezone:null}]))));
+ const request=new Request('https://waldo.invalid/console/artifacts/art%3Aabc?revision=1',{headers:{cookie:'waldo_console=ticket'}});
+ const result=await worker.fetch(request,{...baseEnv,...supabaseEnv} as unknown as Cloudflare.Env);
+ expect(await result.text()).toBe('do:owner-artifact');
+ const signedOut=await worker.fetch(new Request(request.url),{...baseEnv,...supabaseEnv} as unknown as Cloudflare.Env);
+ expect(signedOut.status).toBe(303);expect(signedOut.headers.get('location')).toBe('/console/signin');
+});

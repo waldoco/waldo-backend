@@ -27,6 +27,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - A refusal precedes any one-use consumption: validate first, then spend the invite, token or code. An error branch re-rendering a form puts the error in the note, never in a data field.
 
 ### Idempotency and retries
+- Sign-in retries retain escaped email/contact/invite details only in form responses, never OTP values in restored pages or storage. Test send refusals, edit-before-resend, repeated submits, history restoration and explicit stop-waiting recovery; interrupted requests may already have completed.
 - Every webhook, callback, scheduled fire and migration can run twice without a second effect. Store the offset or the key before or atomically with the effect.
 - Every button press is safe when pressed twice or late ("Already handled", "expired").
 - Retries have a bound and a backoff. A failed step logs and leaves state that the next run can resume.
@@ -170,3 +171,68 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 ### Dashboard admin receipts
 - A successful HTTP status is not a readable action receipt. A truncated JSON receipt or lost response must say the outcome is unavailable, require a read before retry, and explain that a one-time invite code cannot be recovered. `Admin.test.tsx` tests both transport loss and malformed successful receipts.
 - Malformed action bodies fail with a structured invalid-action response before any signed RPC. `dashboard-admin.test.ts` tests malformed multipart alongside session, CSRF and cross-owner rejection.
+
+### Derived health migration ACLs
+- Restoring historical health DDL preserves its bytes; normalize Supabase default table/function ACLs in a new additive migration. The exact schema matrix must still deny anon access and client writes, and the real migrated-table tests must prove owner isolation, rejected-write zero delta, and trigger operation without direct helper EXECUTE.
+- A health writer's table grant is not consent authority. Verify the companion app's authenticated versus service-role paths and disclose consent/schema conflicts without adding client writes or rewriting legal audit records to accommodate them.
+- Exercise additive hardening with existing synthetic rows and compare row/schema preservation. Supabase CLI runs pgTAP in a container: assemble the actual migration between transaction fixtures rather than assuming a host-only SQL include is accessible there.
+- The plain PostgreSQL shim must preserve Supabase role semantics, including trusted service BYPASSRLS. Keep explicit role-attribute assertions and owner/anon isolation tests so test fidelity cannot become an RLS exemption.
+
+| 2026-10-01 | Runtime shard failures were hidden by job-level continue-on-error, so an aggregate green badge did not prove tests passed | Gates | Remove the soft-failure override; guard-ci-failure and fixture tests reject decoded truthy or dynamic overrides at job and step level, including escaped YAML keys and aliases | CI: a failing verification must fail its workflow |
+| 2026-10-01 | WhatsApp shared the responder but persisted conversation entries as surface telegram and telegram-prefixed chat IDs; core conversation/memory code depended on transport update IDs and media parsing | Channel boundaries | OwnerTurnEnvelope supplies trace/conversation/surface and loaded media; owner-turn owns the model/memory loop, Telegram adapter preserves legacy IDs and WA adapter labels its real surface; six regression tests cover core/adapter identity and approval parity | Channels: adapters carry transport details, core stores the real admitted surface |
+
+- Communication reads must expose the actual date range, category/account scope and pagination limits. Empty or filtered sampled pages are not complete inbox evidence.
+
+- A newly preferred provider page method must have a concrete isolated read mapping; a rejection-only stub breaks real-DO fixture source coverage. Query/cursor mapping must preserve owner/selection and expose no body bytes.
+
+### Telegram durable admission regression (1 October 2026)
+- Webhook success follows atomic owner inbox record plus alarm commit, not background invocation start. Test record/alarm rollback in actual Workers storage.
+- Dedupe uses bot/channel/update identity plus content digest. Never use a high-water offset to exclude already admitted lower IDs or callbacks.
+- The narrow inbox route verifies private sender/chat and immutable owner host before binding or effects. Concurrent first binding is checked inside admission transaction.
+- Claim before effects. Resume only unclaimed work; retain uncertain tombstones and quarantine recovered claims. Final delivery must settle its matching run, never adjacent work.
+- Control notes target one current run. Persist consumption before model exposure; a consumed or stopped note never replays as an independent later turn. Three due classes each get service within three alarms.
+
+### iMessage protocol scaffold
+- Reject empty outbound content, formatting outside text and path-bearing filenames at the versioned schema. Synthetic adversarial tests must reject these before native transport; local database evidence never means recipient delivery.
+- At admitted plural-media seams, reject singleton/array ambiguity and let the existing model schema reject excess files before memory/model effects; never silently drop or reorder attachments. Keep source references separate from loaded bytes and test the mocked model boundary.
+- Recheck durable command identity/digest/state inside the journal transaction after any awaited capability probe; test delayed concurrent identical and conflicting requests so one immutable command never executes twice.
+- Gate sticker files separately from ordinary files, and carry a trusted explicit audience discriminator instead of guessing opaque GUIDs. Group bindings remain rejected until owner membership/audience policy exists.
+- Relay ACK/cursor follows atomic storage commit; SQLite write-fault tests must show zero event/nonce/cursor delta. Timeout/crash quarantine survives reopen and late callbacks, while independent account/read lanes remain available.
+- Copy/freeze the validated owner route before awaited media work; an adapter retaining its returned object must not redirect final admission. Test route mutation during content loading.
+- Reject identical and conflicting duplicate opaque attachment references before directory/media work. Validate loaded bytes independently of the content adapter's mutable input.
+- Disposable SQL runners must wait for final TCP readiness, initialize Auth with its owning migration role, preserve existing provider verification fixtures and assert zero owned resources after cleanup. Candidate rollback/catalog/role proof is distinct from baseline CI and activation authority.
+
+### Invite signup and pending proof
+- Collected phone never means verified phone. New signup must not consume an invite, provision an owner or grant console access before the approved email-and-phone proof contract. Test both the invite route and legacy signin bypass, plus the canonical empty-phone refusal.
+- Fragment entry handles initial navigation AND hashchange, clears secrets before other navigation, and restarts explicitly when a previous signed continuation exists. Restart clears the old cookie; desktop/mobile rendered checks exercise same-document second links.
+- Browser POST Origin depends on Referrer-Policy. Test real form navigation with CSP and headers: fragment custody plus same-origin referrers retains the Origin check without third-party disclosure. Synthetic Chrome caught Origin:null under no-referrer; GET/HEAD tests also pin same-origin policy.
+- Seal the email/invite-hash draft before throttles or provider attempts. First-send failure, throttle, resend failure and refresh retain bounded retry context; failure copy never claims a code was sent. Never retain raw invite or Supabase tokens in continuation state. Operational failures log only a content-free category.
+
+| Date | Bug found | Surface | Adversarial proof | Checklist change |
+| --- | --- | --- | --- | --- |
+| 2026-10-01 | Existing signup passed unverified phone to provisioning and granted console after email alone | Signup proof | console-auth.test.ts legacy empty-phone regression; console-signup-auth/test pending no provisioning; waldo_invite_chain.sql empty-phone no delta | Both proof requirements gate new-owner completion |
+| 2026-10-01 | Chrome form POST under no-referrer supplied Origin:null; direct Request tests missed it | Browser headers | Synthetic Chrome POST reached OTP after same-origin fix; console-signup.test.ts policy and cross-origin rejection | Verify browser Origin and fragment custody together |
+| 2026-10-01 | Signed continuation swallowed second invite/restart and hash-only navigation did not rerun entry | Retry/refresh | Synthetic Chrome second link, refresh and fragment clearing; console-signup.test.ts restart cookie clear/hashchange contract | Explicit reset and same-document fragment handling |
+| 2026-10-01 | First-send/provider/throttle error lost cleared invite context and could imply code delivery | Retry/failure | console-signup.test.ts send failure to refresh/resend and four throttle/error paths | Retain signed draft before attempts; unknown delivery remains unknown |
+- Inline TypeScript styles use semantic font shorthand; CSS font-weight declarations can collide with the raw-health guard's weight assignment detector. Run the unmodified health/architecture guards before publication; never weaken them for UI styles.
+
+### Invite signup review corrections (#499)
+
+- [ ] Bound Auth and signed directory requests across both fetch and required response decoding; abort alone is not a deadline when an adapter ignores it. Losing work may finish remotely, but callers cannot advance into owner/session effects after timeout.
+- [ ] Test canonical `signin_allowed` as access eligibility, not invite validity: active members remain admitted independently of arbitrary/expired/revoked/used invite text; unverified new signup still cannot create a Waldo owner, consume or open a session.
+- [ ] Distinguish Supabase Auth identity creation (`create_user:true`) from Waldo owner provisioning. Describe signup progress as a readable signed 15-minute bearer cookie with no device binding, encryption or server revocation; restart only clears this browser.
+- [ ] Associate visible legacy labels and inspect desktop/mobile, keyboard order/focus, error and progress states using synthetic data; these checks are not full accessibility certification.
+
+| 2026-10-02 | Console resend GET and send refusals lost email/contact/invite details; submit locking could strand an interrupted request | Console retries | console-signin.test.ts field retention/escaping and effect-free edit; console-signin-browser.test.ts submit lock, OTP clearing, stop-waiting recovery; synthetic Chrome fixture | Preserve retry context separately from OTP, and provide explicit recovery for uncertain navigation |
+
+- [ ] Retry POSTs must not become document-history entries: keep phase-only history, preserve details only in the running page, clear OTP before transport/restoration, and invalidate late results on cancellation or navigation. Test request counters across Back/Forward/refresh and verify the existing success cookies/303 through browser fetch. No-JavaScript native POST fallback remains an explicit limitation.
+
+| 2026-10-02 | Native console retry POST history prompted resubmission on Back/Forward; stopping a fetch needed protection against late content/redirects | Console retry navigation | console-signin-browser.test.ts same-origin async submission, phase-only history, cancellation/generation, unexpected redirects and uncertain errors; synthetic Chrome send/verify counters and existing cookie/303 success | No POST document history with script enabled; late results never revive cancelled work |
+
+- [ ] Back-edit-Forward must retain the outstanding code's original email/phone/invite; unsent details belong only to the details phase. A newly requested code replaces that phase's recipient context.
+
+| 2026-10-02 | Broadcasting Back edits to cached code form retargeted an outstanding code without requesting another | Console history recipient | Distinct A/B email/phone/invite edit-before-Forward regression and native Chrome; each phase retains its own details | Unsent edits never retarget an existing code |
+
+- [ ] Rate-ceiling integration tests must preserve all real authenticated admissions and exact persisted counts without multiplying RPC transport overhead by the ceiling. Keep per-session boundary calls and overflow rejection; verify failed admission leaves authority and rate state unchanged.
+
+| 2026-10-02 | Owner-global rate test timed out after 239 sequential projection RPCs; controlled per-call latency reproduced the baseline failure | Rate-limit test transport | responsibility-public-do.test.ts batches real signed admissions inside the DO, retains each session RPC and overflow RPC, asserts owner240/session60 counts and unchanged rejection state | Test security behavior rather than cumulative transport latency; retain the five-second timeout |

@@ -257,6 +257,8 @@ describe('external-origin tool classification — ADR-0049', () => {
   it('covers every connector, calendar, communication, task, web, document, and MCP result', () => {
     expect(EXTERNAL_ORIGIN_TOOLS).toEqual([
       'query_calendar',
+      'query_availability',
+      'read_owner_context',
       'get_communication',
       'search_communication',
       'read_thread',
@@ -264,9 +266,13 @@ describe('external-origin tool classification — ADR-0049', () => {
       'web_search',
       'read_document',
       'call_mcp_tool',
+      'read_mcp_tool',
       'search_connector',
       'read_tool_output',
       'read_artifact',
+      'search_episodes',
+      'browse_page',
+      'browse_act',
       'delegate_task',
     ]);
   });

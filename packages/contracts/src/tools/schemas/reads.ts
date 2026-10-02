@@ -46,10 +46,26 @@ export type GetHealthArgs = z.infer<typeof getHealthArgsSchema>;
 // 'query_calendar' is the ADR-0040 rename of the legacy schedule read.
 export const queryCalendarArgsSchema = z.strictObject({
   date_range: dateRangeSchema.optional(),
+  calendar_id: z.string().min(1).max(254).default('primary'),
+  page_token: z.string().min(1).max(4096).optional(),
   include_declined: z.boolean().default(false),
   limit: z.int().min(1).max(50).default(20),
-});
+}).refine(args => !args.page_token || Boolean(args.date_range), {error:'page_token requires the same explicit date_range',path:['date_range']}).refine(args => !args.date_range || Date.parse(args.date_range.from) < Date.parse(args.date_range.to), {error:'Calendar range must advance',path:['date_range']});
 export type QueryCalendarArgs = z.infer<typeof queryCalendarArgsSchema>;
+
+// Provider receipt validation is also used after the proxy boundary, before claiming coverage.
+export const calendarPageSchema = z.strictObject({
+  events: z.array(z.strictObject({
+    id:z.string().min(1).max(1024),title:z.string().max(2000),start:z.string().min(1).max(64),end:z.string().min(1).max(64),all_day:z.boolean(),
+    location:z.string().max(2000).optional(),description:z.string().max(2000).optional(),attendees:z.int().min(0).optional(),etag:z.string().max(1024).optional(),
+  }).refine(event => {
+    const time = event.all_day ? z.iso.date() : iso8601Schema;
+    return time.safeParse(event.start).success && time.safeParse(event.end).success && Date.parse(event.start) < Date.parse(event.end);
+  }, 'invalid Calendar event range')).max(50),
+  next_page_token:z.string().min(1).max(4096).nullable(), fetched_count:z.int().min(0).max(50),
+  account:z.strictObject({connection_id:z.string().min(1).max(1024).nullable(),email:z.string().min(1).max(320).nullable()}),
+  observed_at:iso8601Schema,
+}).refine(page=>page.fetched_count>=page.events.length,'returned events exceed fetched count');
 
 // Connect intent is its own tool, never a side effect of a failed service call: the consent
 // URL must be reachable on demand (owner direction 2026-09-24).
@@ -60,7 +76,9 @@ export type ConnectServiceArgs = z.infer<typeof connectServiceArgsSchema>;
 
 export const getCommunicationArgsSchema = z.strictObject({
   date_range: dateRangeSchema.optional(),
-});
+  limit: z.int().min(1).max(500).default(10),
+  page_token: z.string().min(1).optional(),
+}).refine(args=>!args.page_token||Boolean(args.date_range),{error:'page_token requires the same explicit date_range',path:['date_range']});
 export type GetCommunicationArgs = z.infer<typeof getCommunicationArgsSchema>;
 
 // A1 gmail parity: free-text mail search (Gmail q passthrough; the handler appends
@@ -110,11 +128,25 @@ export type ReadMemoryArgs = z.infer<typeof readMemoryArgsSchema>;
 
 // The model-facing bound of the episode FTS5 leg — episodeSearchArgsSchema (memory/episode)
 // is the internal gateway shape; this seam additionally caps what the model may request.
-export const searchEpisodesArgsSchema = z.strictObject({
-  query: z.string().min(1).max(500),
-  limit: z.int().min(1).max(20).default(5),
-  date_range: dateRangeSchema.optional(),
-});
+// Two distinct modes. Search takes `query` (with optional limit and date_range). Exact-source
+// takes `ref`, a value copied from a prior search hit, and returns that stored turn in
+// full. The two never mix: a request names exactly one, and date_range is search-only.
+// (limit carries a schema default, so it is inert in exact-source mode, not rejected.)
+export const searchEpisodesArgsSchema = z
+  .strictObject({
+    query: z.string().min(1).max(500).optional(),
+    ref: z.string().min(1).max(200).optional(),
+    limit: z.int().min(1).max(20).default(5),
+    date_range: dateRangeSchema.optional(),
+  })
+  .superRefine((args, ctx) => {
+    if ((args.query === undefined) === (args.ref === undefined)) {
+      ctx.addIssue({ code: 'custom', message: 'provide exactly one of query or ref', path: ['query'] });
+    }
+    if (args.ref !== undefined && args.date_range !== undefined) {
+      ctx.addIssue({ code: 'custom', message: 'date_range applies to query searches only', path: ['date_range'] });
+    }
+  });
 export type SearchEpisodesArgs = z.infer<typeof searchEpisodesArgsSchema>;
 
 // execute_action runs only a previously proposed-and-confirmed action: the confirmation
@@ -213,3 +245,14 @@ export const callMcpToolResultSchema = z.strictObject({
   source_taint: externalTaintSchema,
 });
 export type CallMcpToolResult = z.infer<typeof callMcpToolResultSchema>;
+
+// Explicit provider availability, not a calendar-event pagination heuristic.
+export const queryAvailabilityArgsSchema=z.strictObject({
+ date_range:z.strictObject({from:iso8601Schema,to:iso8601Schema}).refine(r=>Date.parse(r.from)<Date.parse(r.to),'range must advance'),
+ calendar_ids:z.array(z.string().min(1).max(254)).min(1).max(50).default(['primary']).refine(ids=>new Set(ids).size===ids.length,'duplicate calendar IDs'),
+ duration_minutes:z.int().min(1).max(1440),
+ work_windows:z.array(z.strictObject({start:iso8601Schema,end:iso8601Schema}).refine(w=>Date.parse(w.start)<Date.parse(w.end),'window must advance')).max(100).default([]),
+});
+export type QueryAvailabilityArgs=z.infer<typeof queryAvailabilityArgsSchema>;
+export const readOwnerContextArgsSchema=z.strictObject({topic:z.string().min(1).max(200),limit:z.int().min(1).max(12).default(8)});
+export type ReadOwnerContextArgs=z.infer<typeof readOwnerContextArgsSchema>;
