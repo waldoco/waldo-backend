@@ -72,4 +72,18 @@ describe('workspace tools through the real dispatcher', () => {
     expect(out).toMatchObject({ ok: false });
     expect(state().files).toHaveLength(0);
   });
+
+  it('a run that closes while the store opens reaches no store: write, list and read are all fenced', async () => {
+    const w = await fresh();
+    let closed = false;
+    const scope = { runId: 'r', attempt: 'a', deadline: Date.now() + 60000, signal: new AbortController().signal, admit: () => { if (closed) throw new Error('run is closed or expired'); }, commit: <T,>(work: () => T): T => { if (closed) throw new Error('run is closed or expired'); return work(); } };
+    const handlers = workspaceToolHandlers(async () => { closed = true; return w.store; });
+    for (const [name, args] of [['workspace_write', { path: 'late.md', text: 'x', mime: 'text/markdown', expected_revision: 0 }], ['workspace_list', {}], ['workspace_read', { file_id: id(7), revision: 1 }]] as const) {
+      closed = false;
+      const out = await dispatchTool({ id: `c-${name}`, name, args }, { ...context(), toolCallId: undefined, runScope: scope } as never, { handlers });
+      expect(out).toMatchObject({ ok: false });
+    }
+    expect(w.state().files).toHaveLength(0);
+    expect(w.state().operations).toHaveLength(0);
+  });
 });
