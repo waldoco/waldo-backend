@@ -34,7 +34,7 @@ const triggersGranting = (tool: string): readonly string[] =>
   );
 
 describe('toolName', () => {
-  it('is exactly the 59 canonical tools, in order', () => {
+  it('is exactly the 62 canonical tools, in order', () => {
     expect(toolNameSchema.options).toEqual([
       'get_crs',
       'get_health',
@@ -95,6 +95,9 @@ describe('toolName', () => {
       'set_standing_order',
       'list_standing_orders',
       'cancel_standing_order',
+      'workspace_list',
+      'workspace_read',
+      'workspace_write',
     ]);
   });
 
@@ -186,6 +189,8 @@ describe('TOOL_PERMISSIONS', () => {
         'read_document',
         'list_artifacts',
         'read_artifact',
+        'workspace_list',
+        'workspace_read',
         'search_tools',
       ],
       handoff_plan: ['get_crs', 'get_health', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action'],
@@ -270,6 +275,9 @@ describe('TOOL_PERMISSIONS', () => {
         'set_standing_order',
         'list_standing_orders',
         'cancel_standing_order',
+        'workspace_list',
+        'workspace_read',
+        'workspace_write',
       ],
       dreaming_mode: ['read_memory', 'update_memory', 'search_episodes'],
       pre_activity_spot: [
@@ -285,11 +293,11 @@ describe('TOOL_PERMISSIONS', () => {
     });
   });
 
-  it('grants no trigger the full surface — user_message tops out at 58 of 59', () => {
+  it('grants no trigger the full surface — user_message tops out at 61 of 62', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(TOOL_PERMISSIONS[trigger].length).toBeLessThan(toolNameSchema.options.length);
     }
-    expect(TOOL_PERMISSIONS.user_message).toHaveLength(58);
+    expect(TOOL_PERMISSIONS.user_message).toHaveLength(61);
   });
 
   it("keeps 'execute_code' typed but dispatchable nowhere (ADR-0050)", () => {
