@@ -260,3 +260,5 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 | 2026-10-02 | A new currentness await delayed capture of host memoryWrites, permitting caller mutation before use | Owner responder | Existing opt-out mutation regression red, then green with scoped sibling case | Capture host controls synchronously and carry them into scoped continuation |
 | 2026-10-02 | Canonical pgTAP required a seed only the private upgrade runner created | Owner revision test portability | Exact CI test1 returned NULL; canonical column assertion and separate mandatory preseed backfill proof | Canonical tests must not depend on private runner fixtures; keep upgrade proof explicit and non-vacuous |
+
+| 2026-10-02 | Legacy hermetic ingress fixtures expected provider effects without supplying current owner authority | Authenticated owner ingress tests |22 focused cases reproduced12 failures, then explicit synthetic constructor hosts restored existing effect checks with canonical owner cache/history assertions | Positive fixtures supply exact private authority; retain missing-host/revocation rejection and never add runtime fallback |
