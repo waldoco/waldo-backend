@@ -4,7 +4,7 @@ Status: proposal for the Core + Dalda build team. Layer: SOURCE audit, no live c
 
 ## What changed since the sheet's snapshot (8ef75e8)
 
-Merged, SOURCE + CI only: #552 read_mcp_tool names and reconnect message (ec553ab), #553 Drive-only consent design (5958a8f), #556 context lineage v3 + tool ACL intersection (e9a45fc), #558 ACL denial reasons, findings and metadata analysis (eb48ced). Open drafts: #555 admission amendment (Codex branch), #564 inert PDF export download helper (bbbe181), dashboard #562 (Dalda). Staging release was 8ef75e8 with read_tools applied as of 15 Oct 2 08:15 IST; it does not include #552 or later until Codex releases.
+Merged, SOURCE + CI only: #552 read_mcp_tool names and reconnect message (ec553ab), #553 Drive-only consent design (5958a8f), #556 context lineage v3 + tool ACL intersection (e9a45fc), #558 ACL denial reasons, findings and metadata analysis (eb48ced). Open drafts: #555 admission amendment (Codex branch), #564 inert PDF export download helper (bbbe181), dashboard #562 (Dalda). Staging release was 8ef75e8 with read_tools applied as of Oct 2 08:15 IST; it does not include #552 or later until Codex releases.
 
 ## Gap rows, in the sheet's priority order
 
