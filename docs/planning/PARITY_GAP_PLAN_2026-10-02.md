@@ -1,6 +1,6 @@
 # Parity gap plan against the owner's landscape sheet
 
-Status: proposal for the Core + Dalda build team. Layer: SOURCE audit, no live claims. Basis: the owner's parity workbook (Overview, Matrix, Waldo Gaps, Wedge, Evidence; reviewed 2026-10-02 12:00, Waldo snapshot beta-mvp 8ef75e8) read on 2026-10-02 17:27 IST, plus Core's own merges since. beta-mvp is now eb48ced. The sheet's rule applies here: source presence and passing tests do not establish live acceptance, and "Not established" cells are research questions, not facts about competitors.
+Status: proposal for the Core + Dalda build team. Layer: SOURCE audit, no live claims. Basis: the owner's parity workbook (Overview, Matrix, Waldo Gaps, Wedge, Evidence; reviewed 2026-10-02 12:00, Waldo snapshot beta-mvp 8ef75e8) read on 2026-10-02 17:27 IST, plus Core's own merges since. beta-mvp is now de43da6 (#561 Calendar coverage and sign-in retries, Codex, merged; staging verification of it is reported underway by Dalda, unverified here). The sheet's rule applies here: source presence and passing tests do not establish live acceptance, and "Not established" cells are research questions, not facts about competitors.
 
 ## What changed since the sheet's snapshot (8ef75e8)
 
@@ -33,7 +33,15 @@ Merged, SOURCE + CI only: #552 read_mcp_tool names and reconnect message (ec553a
 
 ## Still the owner's
 
-Spend (any model run), secrets and keys (vault links only), production changes, and approval of the exact Google consent screen. Today's consent screen requests Gmail send and compose and Tasks write along with Drive read; main relayed at 17:26 that the owner said yes to Dalda's asks (relay only, not independently verified here), and nothing in it names that screen, so Core still needs his words on it, or the incremental flow from #553 to ship.
+Spend is split in two. Model-run spend for native36 was relayed by main (5:31) as approved in small chunks with actual spend reported after each; it is not a cap and not blanket approval for other spend. Provider keys already live as Worker secrets on staging (doc claim, not live-verified); a key for a local run goes only through a vault link. Production changes, and approval of the exact Google consent screen. Today's consent screen requests Gmail send and compose and Tasks write along with Drive read; main relayed at 17:26 that the owner said yes to Dalda's asks (relay only, not independently verified here), and nothing in it names that screen, so Core still needs his words on it, or the incremental flow from #553 to ship.
+
+## Open points from Dalda's review (2026-10-02 17:39, relayed by main, unverified)
+
+- Dashboard: Dalda's #562 (visual revision) and a split between projection (Core, pure functions over owner state) and visual layer (Dalda). Accepted as the split above.
+- Health/capacity: the owner's sheet rates it a tested enhancer. Dalda asks for first-class permissioned health. Not changed here: moving it ahead of the foundational rows is the owner's call, since the sheet sets the order.
+- Google/Drive state: updated above to the live facts (auth_failed, drive scope absent, consent not approved). Staging is not yet at #552.
+- Interop/proactivity priority: the sheet marks proactivity first wedge and delegation a strategic pilot. Dalda wants both core. Kept as sheet order, flagged for the owner.
+- Dalda's order (owner-turn/Drive proof, then memory + skill, then durable follow-through) matches steps 1 to 3 below, with Drive proof first.
 
 ## Order of work (proposal)
 
