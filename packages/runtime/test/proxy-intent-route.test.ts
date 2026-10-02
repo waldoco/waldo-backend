@@ -29,6 +29,15 @@ it('5001 read-only intents do not pin rows or break a later approval',async()=>{
   expect(pinProxyIntentRoute(state.storage.sql,{id:'approval:after:apply'},'mcp:google',[a,b],a)).toEqual(b);
  });
 });
+it('readOnly is honored only for mcpread: ids and ignores requireRoute',async()=>{
+ const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('intent-read-prefix'));
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const a={id:'a',rail:'proxy' as const};const b={id:'b',rail:'proxy' as const};
+  expect(pinProxyIntentRoute(state.storage.sql,{id:'mcpread:x',readOnly:true,requireRoute:true},'mcp:google',[a,b],a)).toEqual(a);
+  expect(pinProxyIntentRoute(state.storage.sql,{id:'approval:y:apply',readOnly:true},'mcp:google',[a,b],a)).toEqual(a);
+  expect(pinProxyIntentRoute(state.storage.sql,{id:'approval:y:apply',readOnly:true},'mcp:google',[a,b],b)).toEqual(a);
+ });
+});
 import {approvalDesk} from '../src/channels/approvals';
 import type {GoogleClient} from '../src/connectors/google';
 it('calendar proposal read, apply and undo all retain account A after independent health reorder',async()=>{

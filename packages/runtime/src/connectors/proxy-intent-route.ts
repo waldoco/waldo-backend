@@ -6,7 +6,8 @@ export const pinProxyIntentRoute = <T extends IntentRoute>(sql: Pick<SqlStorage,
   if(!intent)return preferred??null;
   if(!/^[a-zA-Z0-9:_-]{1,240}$/.test(intent.id))throw new ProxyIntentError('intent_required');
   // Read-only intents are per-call and unique: pinning them would fill the 5000-row cap shared with effects.
-  if(intent.readOnly)return preferred??null;
+  // Honored only for host-issued read ids; requireRoute is ignored for them. Unpinned reads may use a different healthy connection on retry (a duplicate idempotent read).
+  if(intent.readOnly&&intent.id.startsWith('mcpread:'))return preferred??null;
   // Calendar undo belongs to the connection used for apply, never today's healthy account.
   const key=intent.id.replace(/:undo$/,':apply');
   sql.exec('CREATE TABLE IF NOT EXISTS proxy_intent_routes (intent_id TEXT PRIMARY KEY, purpose TEXT NOT NULL, connection TEXT NOT NULL, rail TEXT NOT NULL)');
