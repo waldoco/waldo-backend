@@ -5,6 +5,7 @@ class ToolExecutionError extends Error {}
 // also used by the connector-proxy Edge Function). Server auth modes: a static deploy-config
 // token, or 'google' - the owner's connected Google account supplies the OAuth bearer. Vault-backed
 // accounts keep the token edge-side: the runtime sends server/tool/args and the edge attaches it.
+import { sha256Hex } from '../../connectors/google';
 import type { ProxyIntent } from '../../connectors/proxy-intent';
 import { isGoogleFeature, isReadOnlyGoogleFeature, type GoogleFeature } from '../../connectors/google';
 import { callMcpToolArgsSchema, triggerTypeSchema, TOOL_PERMISSIONS, type CallMcpToolArgs, type ToolHandler, type ToolName, type ToolResult } from '@waldo/contracts';
@@ -158,6 +159,8 @@ const readMcpToolDescription = (serversRaw: string | undefined): string => {
 
 // A missing or insufficient Google grant is reported with closed enums only (feature and reason), so the
 // model can tell the owner what to fix. The reconnect button itself is the typed connect intent, never text.
+// Metadata and listing reads only. read_file_content is held (no Drive text into the intent ledger).
+const INTENT_READ_TOOLS: readonly string[] = ['list_recent_files', 'search_files', 'get_file_metadata'];
 const readAuthText = (reason: 'not_connected' | 'reauth_needed' | 'scope_missing', feature: GoogleFeature | undefined): string => {
   const what = feature ?? 'Google';
   const state = reason === 'not_connected' ? `${what} is not connected` : reason === 'reauth_needed' ? `the ${what} grant expired` : `${what} is not authorized for this account yet`;
@@ -170,7 +173,7 @@ export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: 
   schema: callMcpToolArgsSchema,
   trigger_allowlist: allowlist('read_mcp_tool'),
   autonomy_gated: false,
-  handle: async ({ server, tool, args }: CallMcpToolArgs): Promise<ToolResult<unknown>> => {
+  handle: async ({ server, tool, args }: CallMcpToolArgs, ctx?: ToolDispatcherContext): Promise<ToolResult<unknown>> => {
     const servers = mcpServers(serversRaw);
     const found = servers.find((s) => s.name === server);
     if (!found) {
@@ -183,8 +186,16 @@ export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: 
     if (!found.read_tools.includes(tool) || !found.allow_tools.includes(tool)) {
       return { ok: false, code: 'forbidden', error: `tool "${tool}" is not on the read allowlist of MCP server "${server}"`, source_taint: 'external' };
     }
+    // The proxy rail requires a host-derived intent on every MCP call. A read gets one from the turn
+    // and tool-call identity (same shape as draft_email), never from model args. Reads whose result
+    // is file text stay off this path until the ledger's storage of that text is confirmed.
+    if (!INTENT_READ_TOOLS.includes(tool)) {
+      return { ok: false, code: 'forbidden', error: `tool "${tool}" is not enabled for owner-button-free reads yet.`, source_taint: 'external' };
+    }
+    if (!ctx?.turnId || !ctx.toolCallId) return { ok: false, code: 'rejected', error: 'Read invocation identity is unavailable.', source_taint: 'external' };
+    const intent: ProxyIntent = { id: `mcpread:${await sha256Hex(JSON.stringify([ctx.authenticatedUserId, ctx.turnId, ctx.toolCallId]))}` };
     try {
-      const { content, protocolVersion } = await executeMcp(found, tool, args, googleAuth);
+      const { content, protocolVersion } = await executeMcp(found, tool, args, googleAuth, fetch, intent);
       return { ok: true, data: { output: content, protocol: protocolVersion, source_taint: 'external' as const }, source_taint: 'external' };
     } catch (error) {
       if (error instanceof McpConnectError) {
