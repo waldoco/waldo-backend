@@ -15,7 +15,7 @@ Staging proof on 8ef75e8 (2026-10-02 08:19 IST): `read_mcp_tool` on server `driv
 ## Proposal
 
 1. `googleConsentUrl` takes an optional `feature`. With a feature, `scope` is `openid email` plus `GOOGLE_FEATURE_SCOPES[feature]` only. Without one, behaviour is unchanged (first connect keeps the combined set, per the owner's 2026-09-24 ruling).
-2. Keep `include_granted_scopes=true`. Google then returns a token covering earlier grants plus the new one, and the consent screen lists only the new permission (Drive read). Callback storage already records the returned `scope` string; `googleHas` is unchanged.
+2. Keep `include_granted_scopes=true`. Google then returns a token covering earlier grants plus the new one, and the consent screen should show only the new permission (Drive read); this is Google's behaviour and must be verified on the real screen. Callback storage already records the returned `scope` string; `googleHas` is unchanged.
 3. The offer seam passes `connect.feature` through when it starts the flow. The signed state does not change shape; the requested feature rides in the DO's nonce record next to the PKCE verifier, so a replayed link cannot widen scope.
 4. The completion page names what was added ("Google Drive, read only") from the closed feature enum.
 5. Feature set is closed: only the four read-only features (`drive`, `docs`, `sheets`, `slides`) are allowed on the incremental path. A write feature always uses the full flow and the owner desk.
