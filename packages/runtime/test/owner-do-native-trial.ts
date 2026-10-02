@@ -94,7 +94,7 @@ it('captures each admitted actual-model owner turn, adapter custody and usage wi
   const capture={observed,isolation:{owners:[manifest.candidate_owner,manifest.control_owner] as readonly [string,string],candidate_owner:manifest.candidate_owner},receipts,world_evidence:JSON.parse(adapters.artifacts.final_state_readback.bytes).data.world_evidence,actual_model_calls:attempts.length,scripted_model:scripted,observed_cost_usd:null,runner_usage:[...sdkUsage],provider_usage:usage};
   // Native suite filesystem/grading belongs in Node supervisor, not workerd.
   const result={status:scripted?'scripted_diagnostic':'captured_ungraded',native_score:null};
-  console.log('WALDO_NATIVE_CAPTURE '+JSON.stringify({kind:scripted?'scripted-supervisor-diagnostic':'actual-model-synthetic-native-capture',native_score:null,bundle_digest:input.digest,control_storage:{before:controlBefore,after:controlAfter},case_id:identity.case_id,seed,result,capture,receipt_key_digests:Object.fromEntries(Object.entries(keys).map(([role,key])=>[role,createHash('sha256').update(key).digest('hex')]))}));
+  console.log('WALDO_NATIVE_CAPTURE '+JSON.stringify({kind:scripted?'scripted-supervisor-diagnostic':'actual-model-synthetic-native-capture',native_score:null,model_budget:{tokens_spent:transport.tokens_spent()},bundle_digest:input.digest,control_storage:{before:controlBefore,after:controlAfter},case_id:identity.case_id,seed,result,capture,receipt_key_digests:Object.fromEntries(Object.entries(keys).map(([role,key])=>[role,createHash('sha256').update(key).digest('hex')]))}));
   vi.unstubAllGlobals();
   if(attempts.length===0||usage.length!==sdkUsage.length||attempts.some(a=>a.outcome!=='captured'))throw new Error('native capture transport incomplete, stop chunk before further spend');
  }
