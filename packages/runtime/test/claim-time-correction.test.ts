@@ -61,6 +61,11 @@ describe('correcting a time or number fact', () => {
     const r2 = await run('the Posterbot standup is at 09:30 UTC');
     expect(r2.out).not.toContain('corrected1');
   });
+  it('does not ground a time from two separate numbers in the owner words', async () => {
+    const r = await run('I booked 09 rooms and 10 chairs for the Posterbot offsite');
+    expect(r.out).not.toContain('corrected1');
+    expect(r.active).toEqual(['Project Posterbot standup is at 08:40 UTC']);
+  });
   it('applies a time-only correction that does not repeat the project name', async () => {
     expect((await run('actually 09:10 UTC')).out).toContain('corrected1');
   });

@@ -24,6 +24,28 @@ describe('forgetting a topic whose claim is already gone', () => {
       expect(store.barriers().length).toBeGreaterThan(0);
     });
   });
+  it('ignores a writer-invented topic that is not in the owner words of the turn', async () => {
+    await run('forget-topic-invented', (sql, tx) => {
+      const store = claimStore(sql, tx);
+      const episodes = episodeIndex(sql);
+      episodes.add('tg-1', 'owner', 'Posterbot standup moved to 09:10 UTC', 1);
+      applyClaimOps(store, ops({ forget_topic: 'Posterbot' }), AT, 'owner, tg-3', undefined, { owner: 'please forget my lunch order' });
+      const texts = sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY rowid').toArray().map((r) => r.text);
+      expect(texts.join(' ')).toMatch(/posterbot/i);
+      expect(store.barriers().length).toBe(0);
+    });
+  });
+  it('still forgets a topic the owner named, in any casing', async () => {
+    await run('forget-topic-named', (sql, tx) => {
+      const store = claimStore(sql, tx);
+      const episodes = episodeIndex(sql);
+      episodes.add('tg-1', 'owner', 'Posterbot standup moved to 09:10 UTC', 1);
+      applyClaimOps(store, ops({ forget_topic: 'Posterbot' }), AT, 'owner, tg-3', undefined, { owner: 'Forget POSTERBOT please' });
+      const texts = sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY rowid').toArray().map((r) => r.text);
+      expect(texts.join(' ')).not.toMatch(/posterbot/i);
+      expect(store.barriers().length).toBeGreaterThan(0);
+    });
+  });
   it('ignores a topic shorter than three characters', async () => {
     await run('forget-topic-short', (sql, tx) => {
       const store = claimStore(sql, tx);
