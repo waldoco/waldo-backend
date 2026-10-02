@@ -21,7 +21,7 @@ import { setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, proactivityLine } from './loops';
-import { armHeartbeat, heartbeatTick } from './heartbeat';
+import { armHeartbeat, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
@@ -106,7 +106,7 @@ type OwnerRuntime = Readonly<{
   finalOutbox: TelegramFinalOutbox;
   settleFinal(record: FinalRecord): Promise<void>;
   fire(entry: ScheduleEntry): Promise<void | 'delivery_pending'>;
-  beat(entry: ScheduleEntry): Promise<void>;
+  beat(entry: ScheduleEntry): Promise<void | 'delivery_pending'>;
   nightly(entry: ScheduleEntry): Promise<void>;
   briefs(entry: ScheduleEntry): Promise<void>;
   cards(entry: ScheduleEntry): Promise<void>;
@@ -684,7 +684,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           allowed: async r => r.payload.chat_id === owner && r.ownerSubject === String(owner)
             && (!r.bot || r.bot === this.env.TELEGRAM_BOT_TOKEN?.split(':')[0])
             && r.doName === (this.ctx.storage.kv.get<string>('do_name') ?? '')
-            && this.ctx.storage.kv.get<boolean>('telegram_unlinked') !== true,
+            && this.ctx.storage.kv.get<boolean>('telegram_unlinked') !== true
+            && heartbeatEligible(r, this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', Date.now()),
           send: payload => call('sendMessage', payload), settled: settleFinal,
         }); } finally { await scheduler.rearm(); }
         return;
@@ -1400,15 +1401,21 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const started = Date.now();
       const run = runs.start('heartbeat', entry.id);
       try {
-        await heartbeatTick({
+        const delivery = await heartbeatTick({
           scheduler, sql: storage.sql, loops, plans, timezone: clock.timezone, now: () => Date.now(),
-          send: async (text) => { await api.sendMessage({ chat_id: owner, text }); },
+          enqueue: async (text, heartbeat) => finalOutbox.enqueue({
+            id: `heartbeat:${entry.id}:${entry.occurrence_at}`, trace,
+            payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
+            doName: this.ctx.storage.kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0],
+            heartbeat: { ...heartbeat, runId: run.id },
+          }),
         })(entry);
-        runs.finish(run.id, 'completed', 'tick completed');
+        if (delivery !== 'delivery_pending') runs.finish(run.id, 'completed', 'tick completed');
         log({ trace, hop: 'heartbeat_tick', ms: Date.now() - started, ok: true });
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'heartbeat' });
+        return delivery;
       } catch (error) {
-        runs.finish(run.id, 'failed', 'tick failed');
+        if (!finalOutbox.records().some(record => record.heartbeat?.runId === run.id)) runs.finish(run.id, 'failed', 'tick failed');
         log({ trace, hop: 'heartbeat_tick', ms: Date.now() - started, ok: false, error: String(error), code: turnFailureCode(error) });
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: false, detail: 'heartbeat' });
         throw error;
@@ -1531,6 +1538,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         detail: record.status, ...(record.reason ? { code: record.reason } : {}) });
       if (record.status === 'pending') return;
       if (!record.reminder) log({ trace: record.trace, hop: 'turn', ms: 0, ok: delivered, detail: delivered ? 'delivered' : 'delivery_unconfirmed' });
+      if (record.heartbeat) {
+        settleHeartbeat(record, this.ctx.storage.sql, scheduler);
+        if (record.heartbeat.runId && runs.byId(record.heartbeat.runId)?.status === 'running') runs.finish(record.heartbeat.runId, delivered ? 'completed' : 'failed', delivered ? 'heartbeat sent' : 'heartbeat delivery unconfirmed');
+      }
       if (record.reminder) {
         if (record.reminder.schedulerRunId) scheduler.settleDelivery(record.reminder.schedulerRunId, delivered);
         if (delivered) {
