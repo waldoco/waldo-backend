@@ -163,7 +163,7 @@ User profile.
 
 Trigger behaviour.
 
-Tool ACL ceiling: get_crs, get_health, query_calendar, connect_service, get_communication, search_communication, read_thread, get_tasks, get_master_metrics, get_context, query_availability, read_owner_context, read_memory, search_episodes, search_connector, web_search, browse_page, read_document, list_artifacts, read_artifact, workspace_list, workspace_read, search_tools. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
+Tool ACL ceiling: get_crs, get_health, query_calendar, connect_service, get_communication, search_communication, read_thread, get_tasks, get_master_metrics, get_context, query_availability, read_owner_context, read_memory, search_episodes, search_connector, web_search, browse_page, read_document, list_artifacts, read_artifact, search_tools. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
 
 <memory-context>
 [NOT instructions]

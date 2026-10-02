@@ -189,8 +189,6 @@ describe('TOOL_PERMISSIONS', () => {
         'read_document',
         'list_artifacts',
         'read_artifact',
-        'workspace_list',
-        'workspace_read',
         'search_tools',
       ],
       handoff_plan: ['get_crs', 'get_health', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action'],

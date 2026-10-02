@@ -24,7 +24,8 @@ export type WorkspaceReadArgs = z.infer<typeof workspaceReadArgsSchema>;
 // Compare-and-swap like revise_artifact: expected_revision 0 creates, N replaces revision N.
 export const workspaceWriteArgsSchema = z.strictObject({
   path: z.string().min(1).max(300),
-  text: z.string().min(1),
+  // The cap is in UTF-8 bytes (the store's unit), not characters.
+  text: z.string().min(1).refine((v) => new TextEncoder().encode(v).byteLength <= WORKSPACE_TEXT_MAX_BYTES, { message: 'text exceeds the byte cap' }),
   mime: z.enum(['text/plain', 'text/markdown']),
   expected_revision: z.int().nonnegative(),
 });

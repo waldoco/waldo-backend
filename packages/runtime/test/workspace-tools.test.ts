@@ -47,15 +47,18 @@ describe('workspace tools through the real dispatcher', () => {
     const { call, state } = await setup();
     expect(await call('workspace_write', { path: 'a.md', text: 'x', mime: 'text/markdown', expected_revision: 0 }, 'w1', context('user_message', false))).toMatchObject({ ok: false, code: 'rejected' });
     expect(await call('workspace_write', { path: 'a.pdf', text: 'x', mime: 'application/pdf', expected_revision: 0 }, 'w2')).toMatchObject({ ok: false });
-    expect(await call('workspace_write', { path: 'b.md', text: 'x'.repeat(70000), mime: 'text/markdown', expected_revision: 0 }, 'w3')).toMatchObject({ ok: false });
-    expect(state().files).toHaveLength(0);
+    expect(await call('workspace_write', { path: 'b.md', text: 'x'.repeat(70000), mime: 'text/markdown', expected_revision: 0 }, 'w3')).toMatchObject({ ok: false, code: 'invalid_args' });
+    // Multi-byte text is capped in bytes, not characters: 40000 two-byte chars is 80000 bytes.
+    expect(await call('workspace_write', { path: 'c.md', text: 'é'.repeat(40000), mime: 'text/markdown', expected_revision: 0 }, 'w4')).toMatchObject({ ok: false, code: 'invalid_args' });
+    expect(await call('workspace_write', { path: 'd.md', text: 'x'.repeat(65536), mime: 'text/markdown', expected_revision: 0 }, 'w5')).toMatchObject({ ok: true });
+    expect(state().files).toHaveLength(1);
   });
 
-  it('write is user_message only; read and list are also on handoff_explore; no unattended trigger holds any', () => {
+  it('all three are user_message only (owner-initiated); no other trigger holds any', () => {
     const grants = (name: string) => Object.entries(TOOL_PERMISSIONS).filter(([, tools]) => (tools as readonly string[]).includes(name)).map(([t]) => t).sort();
     expect(grants('workspace_write')).toEqual(['user_message']);
-    expect(grants('workspace_read')).toEqual(['handoff_explore', 'user_message']);
-    expect(grants('workspace_list')).toEqual(['handoff_explore', 'user_message']);
+    expect(grants('workspace_read')).toEqual(['user_message']);
+    expect(grants('workspace_list')).toEqual(['user_message']);
     // Decision: workspace_write stays off PRIVILEGED_ACTION_TOOLS, like create_artifact. It writes
     // owner-private storage with compare-and-swap, sends nothing external, and its reads are
     // stamped external. Revisit if a tainted-turn write becomes a real path.

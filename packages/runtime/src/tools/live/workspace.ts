@@ -1,7 +1,7 @@
 import { TOOL_PERMISSIONS, triggerTypeSchema, workspaceListArgsSchema, workspaceReadArgsSchema, workspaceWriteArgsSchema, type ToolHandler, type ToolName, type ToolResult, type WorkspaceListArgs, type WorkspaceReadArgs, type WorkspaceWriteArgs } from '@waldo/contracts';
 import { workspaceHandlers, type WorkspaceStore } from '@waldo/workspace';
 import type { ToolDispatcherContext } from '../dispatcher';
-import { sha256Hex } from '../../connectors/google';
+const sha256Hex = async (value: string): Promise<string> => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))].map((b) => b.toString(16).padStart(2, '0')).join('');
 
 // Files slice: the agent's list/read/write over the owner-private workspace store. Registration
 // into the owner DO is the host's job; this file only adapts. The model never supplies
