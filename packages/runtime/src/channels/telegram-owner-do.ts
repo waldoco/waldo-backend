@@ -1,3 +1,7 @@
+import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerControlsRead,ownerControlsAction} from './dashboard-owner-controls';
+import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
+import {CONTROLS_PATH,readControlsQuery,projectControls} from './dashboard-controls';
+import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt} from './dashboard-control-actions';
 import { MEMORY_GRAPH_PATH, readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
 import {TelegramLinkInbox,LINK_MODE,type LinkBinding} from './telegram-link-inbox';
@@ -16,7 +20,7 @@ import { ProxyIntentError, type ProxyIntent } from '../connectors/proxy-intent';
 import { eventAdmission } from './event-admission';
 import { DurableObject } from 'cloudflare:workers';
 import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
-import { workspaceDownload, workspacePage } from './console-workspace';
+import { workspaceDownload, workspacePage, workspaceRead } from './console-workspace';
 import { setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, claimStore, profile } from '../memory/claims';
@@ -488,8 +492,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const access = consoleAccess(this.ctx.storage);
     const url = new URL(request.url);
     const memoryRoute = url.pathname === MEMORY_GRAPH_PATH;
-    const overviewRoute = url.pathname === DASHBOARD_OVERVIEW_PATH || memoryRoute;
-    if (overviewRoute && request.method !== 'GET') return new Response('method not allowed', { status: 405, headers: DASHBOARD_OVERVIEW_HEADERS });
+    const ownerControlsRoute=url.pathname===OWNER_CONTROLS_PATH,ownerActionsRoute=url.pathname===OWNER_CONTROLS_ACTION_PATH;
+    const memoryControlsRoute=url.pathname===MEMORY_CONTROL_PATH,controlsRoute=url.pathname===CONTROLS_PATH||memoryControlsRoute||ownerControlsRoute,actionsRoute=url.pathname===CONTROL_ACTION_PATH||ownerActionsRoute;
+    const overviewRoute = url.pathname === DASHBOARD_OVERVIEW_PATH || memoryRoute || controlsRoute || actionsRoute;
+    if ((overviewRoute && !actionsRoute && request.method !== 'GET') || (actionsRoute && request.method !== 'POST')) return new Response('method not allowed', { status: 405, headers: DASHBOARD_OVERVIEW_HEADERS });
     const link = url.pathname === CONSOLE_PATH ? url.searchParams.get('t') : null;
     if (link && request.method === 'GET') return signInPage(link);
     const posted = url.pathname === CONSOLE_PATH && request.method === 'POST' ? String((await request.formData()).get('t') ?? '') : '';
@@ -510,7 +516,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (url.pathname === '/console/workspace' || url.pathname.startsWith('/console/workspace/')) {
       return workspaceRequest(request, session.csrf,
         () => workspaceOwnerHost(this.env, this.ctx.storage, this.ctx.id.toString(), this.ctx.storage.kv.get<string>('do_name')),
-        workspacePage, () => workspaceUploadLease(this.ctx.storage, () => workspaceOwnerHost(this.env, this.ctx.storage, this.ctx.id.toString(), this.ctx.storage.kv.get<string>('do_name'))), workspaceDownload);
+        request.headers.get('accept')==='application/json'?workspaceRead:workspacePage, () => workspaceUploadLease(this.ctx.storage, () => workspaceOwnerHost(this.env, this.ctx.storage, this.ctx.id.toString(), this.ctx.storage.kv.get<string>('do_name'))), workspaceDownload);
     }
     // Narrow owner-authenticated scheduler receipt. No arbitrary id or SQL.
     if (url.pathname === `${CONSOLE_PATH}/diagnostics/nightly` && request.method === 'GET') {
@@ -525,6 +531,78 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       } catch {
         return Response.json({error:'memory_unavailable'}, {status:503,headers:DASHBOARD_OVERVIEW_HEADERS});
       }
+    }
+    if(controlsRoute||actionsRoute){
+      try{
+        return await this.serial(async()=>{
+          const session=await access.session(sessionCookie(request));
+          if(!session)return Response.json({error:'sign_in_required'},{status:401,headers:DASHBOARD_OVERVIEW_HEADERS});
+          const counterKey=`console:controls-rate:${actionsRoute?'action':'read'}`,now=Date.now(),counter=this.ctx.storage.kv.get<{start:number;count:number}>(counterKey);
+          const current=counter&&now-counter.start<60000?counter:{start:now,count:0};
+          if(current.count>=(actionsRoute?20:90))return Response.json({error:'rate_limited'},{status:429,headers:{...DASHBOARD_OVERVIEW_HEADERS,'retry-after':'60'}});
+          this.ctx.storage.kv.put(counterKey,{...current,count:current.count+1});
+          if(ownerControlsRoute||ownerActionsRoute){
+            const deps={owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,auth:consoleAuth(this.env),requestUrl:request.url,store:this.ctx.storage,sessions:()=>access.list(),eraseOwnerStorage:()=>this.ctx.storage.deleteAll()};
+            let response:Response;
+            if(ownerControlsRoute){const view=ownerControlsView(url.searchParams);if(!view)return Response.json({error:'invalid_query'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});response=await ownerControlsRead(view,deps);}
+            else {let form:FormData;try{form=await request.formData();}catch{return Response.json({error:'invalid_action'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});}response=await ownerControlsAction(form,deps);}
+            if((await response.clone().json() as {receipt?:{signed_out?:boolean}}).receipt?.signed_out){const headers=new Headers(response.headers);for(const name of [CONSOLE_COOKIE,'waldo_owner'])headers.append('set-cookie',`${name}=; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`);return new Response(response.body,{status:response.status,headers});}
+            return response;
+          }
+          const runtime=this.setup();await runtime.ready;
+          if(controlsRoute){
+            if(memoryControlsRoute){
+              if([...url.searchParams.keys()].some(key=>key!=='id')||url.searchParams.getAll('id').length!==1||(url.searchParams.get('id')?.length??0)>256)return Response.json({error:'invalid_query'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});
+              const projection=projectMemoryControl(await runtime.view(session,null),this.ctx.id.toString(),url.searchParams.get('id')!);
+              return projection?Response.json({...projection,revision:await controlRevision(projection)},{headers:DASHBOARD_OVERVIEW_HEADERS}):Response.json({error:'not_found'},{status:404,headers:DASHBOARD_OVERVIEW_HEADERS});
+            }
+            const query=readControlsQuery(url.searchParams);
+            if(!query)return Response.json({error:'invalid_query'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});
+            let source=await runtime.view(session,null,query.page),pending=0;
+            if(query.view==='profile'){pending=this.ctx.storage.sql.exec<{count:number}>('SELECT COUNT(*) AS count FROM purge_pending').toArray()[0]?.count??0;if(pending>0)source={...source,profile:[]};}
+            let projection=projectControls(source,query.view);
+            if(query.view==='profile'){const profile=projectControls(source,'profile');projection={...profile,data:{...profile.data,removal:{state:pending>0||source.forgettingSpots.length?'incomplete':'none_recorded',pending_count:Math.max(pending,source.forgettingSpots.length),items:source.forgettingSpots.map(claim=>({id:`${this.ctx.id.toString()}:claim:${claim.id}`,status:'purging' as const}))}}} as typeof projection;}
+            return Response.json({...projection,revision:await controlRevision(projection)},{headers:DASHBOARD_OVERVIEW_HEADERS});
+          }
+          let form:FormData;try{form=await request.formData();}catch{return Response.json({error:'invalid_action'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});}
+          let built:ConsoleView|undefined;
+          const read=async()=>built??(built=await runtime.view(session,null));
+          const result=await controlAction(form,{csrf:session.csrf,expires:session.expires,sessions:()=>access.list(),store:this.ctx.storage,view:read,
+            projection:async(selected,id)=>{if(selected==='memory')return projectMemoryControl(await read(),this.ctx.id.toString(),id??'');const query=readControlsQuery(new URLSearchParams({view:selected}));return query?projectControls(await read(),query.view):null;},
+            act:async(action)=>{
+              if(['spot.confirm','spot.dismiss','spot.forget','node.forget'].includes(action.action)){const resolved=resolveMemoryAction(await read(),this.ctx.id.toString(),action);return resolved?runtime.act(resolved):false;}
+              if(action.action==='google.connect'){
+                const ticket=isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'console'):null;
+                if(!ticket)return {state:'rejected' as const,message:NOTICES['google.connect.failed']!};
+                const destination=new URL(ticket);if(destination.origin!==url.origin||!/^\/c\/[A-Za-z0-9_-]{22}$/.test(destination.pathname)||destination.search||destination.hash)return {state:'rejected' as const,message:'Google connect returned an unavailable destination. Try again later.'};
+                return {state:'recorded' as const,message:'Google connect is ready to begin. Access has not been granted or tested.',navigation:destination.pathname};
+              }
+              if(action.action==='telegram.link'){
+                const name=this.ctx.storage.kv.get<string>('do_name'),code=name?await consoleAuth(this.env)?.issueLinkCode(name):null;
+                return code?{state:'recorded' as const,message:`Send this to the Waldo bot on Telegram within 10 minutes: /link ${code}`}:{state:'rejected' as const,message:'Linking Telegram needs account sign-in, which is not configured on this server.'};
+              }
+              if(action.action==='telegram.unlink'){
+                const name=this.ctx.storage.kv.get<string>('do_name'),done=name?await consoleAuth(this.env)?.unlinkTelegram(name):false;
+                if(done)this.ctx.storage.kv.put('telegram_unlinked',true);return !!done;
+              }
+              if(action.action==='session.signout'||action.action==='session.signout.all'){
+                if(action.action==='session.signout.all')await access.signOutAll();else await access.signOut(session.token);
+                return {state:'recorded' as const,message:'Signed out. Sign in again to open your console.',signed_out:true};
+              }
+              if(action.action.startsWith('approval.')){
+                const decision=action.action==='approval.approve'?'a':action.action==='approval.skip'?'s':'u';
+                const outcome=await runtime.desk.decide(action.id,decision,'console:approval');
+                return approvalControlReceipt(outcome);
+              }
+              return runtime.act(action);
+            }});
+          if((await result.clone().json() as {receipt?:{signed_out?:boolean}}).receipt?.signed_out){
+            const headers=new Headers(result.headers);for(const name of [CONSOLE_COOKIE,'waldo_owner'])headers.append('set-cookie',`${name}=; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`);
+            return new Response(result.body,{status:result.status,headers});
+          }
+          return result;
+        });
+      }catch{return Response.json({error:'controls_unavailable'},{status:503,headers:DASHBOARD_OVERVIEW_HEADERS});}
     }
     if (overviewRoute) {
       try {
@@ -1621,7 +1699,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           memory.barrier(node.label, new Date(now).toISOString());
           const conv = await redactConversationEntries(this.ctx.storage, [node.label], FORGOTTEN);
           await redactToolOutputLedger(this.ctx.storage, [node.label], FORGOTTEN);
-          if (conv.remaining > 0) log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: 'node.forget conversation redaction incomplete' });
+          if (conv.remaining > 0) {
+            log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: 'node.forget conversation redaction incomplete' });
+            return 'node.forget.incomplete';
+          }
         } else if (action === 'file.remove') {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {

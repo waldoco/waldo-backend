@@ -92,3 +92,37 @@ Branch `codex/dashboard-console-entry`, base `ba4d4a1`. Normal browser GET/HEAD 
 The old overview remains available at `/console/legacy`. Root JSON, ticket previews/redemption, and `?m=` action receipts continue through the original handlers. Every individual action and eligibility in the preservation map stays unchanged. Existing controls sidebar points to the legacy alias, avoiding a home-to-home loop. The ticket fallback canonicalizes its owner routing header before invoking the selected owner DO. No Memory DTO or sign-in handler edits: #505/#506 retains those contracts.
 
 Verification: red-first static root/redirect tests and spoofed-owner-header regression; 27 dashboard tests; focused runtime suites plus actual owner-DO session coverage for ticket reuse, shell, JSON/legacy CSRF parity, notices, invalid-action nonmutation and cross-owner denial. Workspace typechecks, dashboard build and asset checks pass. Source QA/security review pass after canonical-header correction. Rendered synthetic Chrome320×640: Enter and Space open Menu, Shift+Tab wraps to Existing controls, Tab wraps back, Escape closes/restores Menu; clientWidth/scrollWidth320/320. Desktop sidebar shows the correct legacy link. These are synthetic UI and local DO checks, not live deployment, delivery or chat-continuity proof. Full verification results and exact head belong in the draft PR receipt.
+
+## End-to-end migration follow-up (October1)
+
+User acceptance found gateways insufficient: routine actions leave the modern shell. Branch codex/dashboard-memory-controls starts at61a7d07 with #522 entry included. Before replacing Memory: `/console/spots` list/item/evidence/confirm/dismiss/forget/retry must stay reachable until modern read AND action equivalents verified; `/console/constellation` list/item/support/confirm/dismiss/forget must stay reachable; Profile sections and do-not-relearn remain chat-correctable. New owner-scoped Memory GET contract supplies paginated claims/interpretations/detail/pattern only; actions:[] means no mutation authorization. UI must not infer eligibility from local_id. Pattern graph opt-in, bounded; saved associations remain unverified, capped omitted links are not silently recovered by paging. Profile and action projections are dependencies, not empty states.
+
+The remaining route/action inventory and modern projection/action migration is being audited before replacement. Existing controls remain reachable until verified.
+
+Before replacing day/connections/waiting: `/console/day` maps to `#/day` with each unsent card today's time, pin and existing unpin; timezone, quiet hours and volume use existing validators/executors. `/console/connections` maps to `#/connections`: per-account Google connect/reconnect/disconnect, Telegram link/unlink, current signout and multiple-session signout-all remain session/CSRF protected. Google connect starts a first-party single-use ticket, never a GET mutation. `/console/waiting` maps to `#/waiting` only with full existing reviews: eligible calendar approve/skip and supported done-calendar undo; open/review-only email/message dismissal; send approvals remain exact chat review cards. New control reads are narrow whitelisted projections, not the wholesale legacy ConsoleView. New receipts bind the current read revision and a durable request identity, serialize in the same owner DO, preserve unknown outcomes and partial failures, and retain replay protection until the owning session expires. Legacy routes remain accessible during verification.
+
+
+## Full migration additions — current working slice (2026-10-02)
+
+This section supersedes the historical gateway destinations above. All old routes remain reachable until rendered and owner acceptance are complete.
+
+| Existing destination / individual action | New in-shell destination and authoritative eligibility |
+| --- | --- |
+| Waiting full review / calendar approve, skip, undo; send dismissal | `#/waiting`; typed full review required, existing approval desk executes; email/message approval remains exact chat card |
+| Spots detail / inferred confirm, active dismiss/forget, purging retry | `#/memory/spots`; opaque same-owner ID resolved server-side; current action review bound to content and source/status revision |
+| Constellation / node forget | `#/memory/constellation`; list/detail first, optional bounded saved-link/support exploration; forget only authoritative node; partial redaction disclosed |
+| Profile / incomplete claim removal retry / held and do-not-relearn counts | `#/memory/profile`; profile withheld during incomplete removal, opaque pending targets only; correction stays in chat |
+| Connections / Google connect, reconnect, per-account disconnect / Telegram link, unlink / signout, signout-all | `#/connections`; existing executors and eligibility; first-party OAuth ticket, saved permissions distinct from successful tool use |
+| Day / today's unsent card time, pin, existing unpin / timezone, device fill / quiet hours, volume | `#/day`; owner-local date participates in revision; existing timing validators/executors |
+| Activity / trace and run pagination / ledger | `#/patrol`; independent cursors, recorded reason/outcome summaries, no raw traces or invented resume targets |
+| Files / Telegram reference open, remove-from-list | `#/files`; existing authenticated download and reference removal |
+| Private workspace / list, upload, revision-bound download/remove, pagination | `#/files` private workspace subview in integration; reuse existing workspace host, request parsing, lifecycle admission, upload operation IDs and cleanup verdict |
+| Setup / connect and quiet-hour checklist destinations | `#/setup`; recorded settings only, modern navigation |
+| Usage / model counts and estimated cost | `#/usage`; no verified billing claim |
+| Member invites / email-bound creation below five total issued | `#/invites`; existing signed RPC, all used/revoked/expired count, 14 days; one-time code never stored in action journal, no resend/email/sharing |
+| Account / typed deletion confirmation | `#/account`; existing owner-directory deletion and local-store removal; retained-byte purge not certified |
+| Admin create/revoke and tables | Existing modern admin panel unchanged, same restricted gating |
+
+New reads/actions use existing owner/session/CSRF protection. Content-free action journals retain exact duplicate/unknown receipts, cap admission, and survive live session renewal. Each queued read/action revalidates its session inside the owner serialization boundary. No policy, memory inference, sharing, health or commitments capability is added.
+
+Verification in progress: component and real-handler results will be recorded at the final reviewed head. Browser access to the current local preview was denied; current pixels, mobile and keyboard behavior are not certified. Historical rendered evidence above belongs to older slices.

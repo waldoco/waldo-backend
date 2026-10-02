@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { workspaceDownload, workspacePage } from '../src/channels/console-workspace';
+import { workspaceDownload, workspacePage, workspaceRead } from '../src/channels/console-workspace';
 import type { FileMeta } from '../../workspace/src/store';
 const meta:FileMeta={file_id:'fixture',path:'<script>alert(1)</script>.txt',revision:1,mime:'text/html',byte_size:3,sha256:'fixture',provenance:'owner_upload',source_taint:'external',created_at:0,updated_at:0,state:'ready'};
 it('uses private opaque attachment with encoded filename, no executable MIME or public link',async()=>{
@@ -8,3 +8,5 @@ it('uses private opaque attachment with encoded filename, no executable MIME or 
 it('escapes hostile paths and renders pure controls and empty state',async()=>{
  const r=workspacePage([meta], 'token<canary>', 'cursor');const html=await r.text();expect(html).toContain('&lt;script&gt;');expect(html).not.toContain('<script>');expect(html).toContain('action="/console/workspace/upload"');expect(html).toContain('token&lt;canary&gt;');expect(html).toContain('/console/workspace?cursor=cursor');expect(r.headers.get('content-security-policy')).toContain("form-action 'self'");expect(r.headers.get('content-security-policy')).not.toContain('sandbox');expect(html).not.toContain('<script');expect(await workspacePage([], 'csrf', null).text()).toContain('No retained files.');
 });
+
+it('projects only admitted workspace metadata for the dashboard without storage custody internals',async()=>{const response=workspaceRead([{...meta,sha256:'never-public-digest'}],'csrf','next');expect(response.headers.get('cache-control')).toBe('private, no-store');const body=await response.json() as {files:unknown[]};expect(body).toMatchObject({version:1,csrf:'csrf',next_cursor:'next',files:[{file_id:'fixture',revision:1,path:meta.path}]});expect(JSON.stringify(body)).not.toContain('never-public-digest');expect(body.files).toHaveLength(1);});
