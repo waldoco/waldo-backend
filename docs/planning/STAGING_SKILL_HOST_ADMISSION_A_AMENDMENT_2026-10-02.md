@@ -51,3 +51,36 @@ The earlier text in #520 that describes a do_name / constant-tenant staging desi
 - The A1 helper is not visible in the repo yet. This amendment describes it only from the relay.
 - `RouteRow` in `owner-directory.ts` has do_name, subject and timezone only. Whether the directory can return a canonical UUID today is unconfirmed. If it cannot, step 2 has no source.
 - Where the owner's current grant state is read from is unresolved.
+
+## Follow-up: verification receipt, canonical vs legacy label, grants (proposal)
+
+Source: second relay from the Codex admission lane via main, 2026-10-02 14:41 IST. Engineering coordination only, not an owner decision. Types below are proposals; none exists yet.
+
+### 1. Verification receipt
+
+Existing: `verification_ref` is only `opaqueRef('ver')` inside `verifiedInvocationAuthoritySchema` (contracts/src/runtime/invocation.ts line 55). No evidence contract stores or looks it up by that ref.
+
+Recommendation: Core needs no receipt type. The receipt stays private to the host helper (immutable directory row and revision captured at admission, compared by `assertCurrent()`). A contract would only add a place for it to leak. Core's part is a test: the `ver_` ref and the row digest never appear in a context checkpoint, prompt, tool result or log.
+
+If a durable receipt is wanted later, the proposed type is `OwnerVerificationReceiptV1` in `packages/contracts/src/runtime/owner-admission.ts`, a strict object: `receipt_version: 1`, `verification_ref: opaqueRef('ver')`, `principal_ref`, `tenant_ref`, `directory_row_digest` (sha256 hex), `directory_revision` (non-negative int), `verified_at` (int). It is host-private, never part of any serialized checkpoint.
+
+### 2. Canonical vs legacy label
+
+Existing: `runtimeContextSourceSchema.scope` (invocation, principal, tenant, thread, system) says where a source applies. It says nothing about lineage, so it cannot carry this label.
+
+Proposal, in `packages/contracts/src/runtime/invocation.ts`:
+- Add to `runtimeContextSourceSchema` the field `lineage: z.enum(['canonical_v1', 'legacy_preserved'])`.
+- Bump the checkpoint to `context_version: 3`. In v3 `lineage` is required on every source. v2 parsing is unchanged, so old records still read.
+- Checkpoint rule (superRefine): a v3 checkpoint admitted through canonical authority rejects any source with `lineage: 'legacy_preserved'`. Legacy rows are stored and never become context. Their bytes are preserved, not rewritten.
+- The label is never authority. A row is `canonical_v1` only when the host's check shows it was written under the same `principal_ref` and `tenant_ref` as the invocation (equality, not a string on the row). A row with a mismatched or missing ancestry is denied and its bytes kept. The enum only records the outcome of that check for audit.
+- Surface to surface: a same-owner claim across surfaces still needs the directory mapping, not label or string equality.
+
+Tests (red first): legacy source in canonical checkpoint rejected; v2 record still parses; row with other principal denied and unchanged; missing lineage in v3 rejected; label cannot be set from message text.
+
+### 3. Grants not integrated: fail closed
+
+`packages/contracts/src/tools/acl-intersection.ts` (new), proposal:
+- Input `{ handlers: ToolName[], trigger, grants: { status: 'available', tools: ToolName[] } | { status: 'unavailable' }, connectors: { status: 'available', features: GoogleFeature[] } | { status: 'unavailable' } }`.
+- Output is the intersection of handlers, `TOOL_PERMISSIONS[trigger]` and grants. When `grants.status` is `unavailable` the result is the empty set. When `connectors.status` is `unavailable`, every connector-backed tool is removed.
+- No default-allow and no fallback to the old static list. While the owner grants source is not integrated, the admitted ACL is empty for effect-capable tools, and the host reports the reason as a closed enum (`grants_unavailable`, `connectors_unavailable`).
+- Tests: unavailable grants gives an empty set; a tool in handlers and trigger but not in grants is removed; the result is never wider than any single input.
