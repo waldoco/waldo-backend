@@ -101,7 +101,8 @@ export const redactToolOutputLedger = async (storage: KeyValueStorage, texts: re
   const writes: Record<string, unknown> = {};
   // Case-insensitive literal match, same rule as the conversation store: a casing variant of a
   // forgotten text surviving into next-turn context is the leak returning.
-  const redact = literalJsonTextRedactor(texts, marker, 'tool_result');
+  // Summaries are capped display data; tool/ok/taint authority stays on the ledger entry.
+  const redact = literalJsonTextRedactor(texts, marker, 'data');
   for (const [key, entry] of rows) {
     if (key === 'toolout-count') continue;
     const summary = redact(entry.summary);
