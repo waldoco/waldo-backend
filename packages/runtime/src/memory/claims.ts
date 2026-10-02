@@ -679,9 +679,10 @@ const refForCorrection = (evidence: string): string | undefined => /^owner, tg-[
 // Exact topic anchors keep a model from using an unrelated old claim id, while
 // requiring a concrete replacement word in the owner's message stops a grounded
 // quotation being paired with an invented new value. False negatives hold for review.
-// Digits count at any length: a changed time or amount (08:40 to 09:10) is the whole point of the correction and must
+// A number or time is one whole value (09:10, 3.5), so two separate numbers in the owner's words ("09 rooms and 10 chairs")
+// cannot ground an invented 09:10. Digits count at any length: a changed time or amount (08:40 to 09:10) is the whole point of the correction and must
 // appear in the owner's own words.
-const correctionWords = (text: string): Set<string> => new Set((normalizeForGrounding(text).match(/[\p{L}\p{N}]+/gu) ?? []).filter((word) => word.length >= 3 || /\p{N}/u.test(word))
+const correctionWords = (text: string): Set<string> => new Set((text.toLowerCase().match(/[\p{L}\p{N}]+(?:[:.,][\p{N}]+)*/gu) ?? []).filter((word) => word.length >= 3 || /\p{N}/u.test(word))
   .filter((word) => !['the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'was', 'are', 'has', 'have', 'now', 'back', 'instead', 'owner', 'usually', 'lives', 'likes', 'moved', 'prefers'].includes(word)));
 const correctionTopicMatches = (old: Claim, replacement: { kind: string; text: string }): boolean => {
   if (old.kind !== replacement.kind) return false;
@@ -716,7 +717,10 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   // Claims mid-scrub (a previous purge left survivors) are forgettable too: that is the retry path.
   const forgettable = new Set([...known, ...store.claims('purging').map((claim) => claim.id)]);
   const nodes = new Set(store.nodes().map((node) => node.id));
-  const topic = forgetsAllowed ? ops.forget_topic?.trim() : undefined;
+  // The topic drives destructive cleanup of retained text, so it must be the owner's own words of this turn, not a writer's
+  // invention. A caller with no owner grounding (migration-style) keeps the explicit forgetAllowed decision.
+  const topicRaw = forgetsAllowed ? ops.forget_topic?.trim() : undefined;
+  const topic = topicRaw && grounding?.owner !== undefined && !normalizeForGrounding(grounding.owner).includes(normalizeForGrounding(topicRaw)) ? undefined : topicRaw;
   if (topic) store.barrier(topic, at);
   const barrierHashes = new Set(store.barriers().map((barrier) => barrier.topic_hash).filter(Boolean));
   const holdReasons = new Set<string>();
