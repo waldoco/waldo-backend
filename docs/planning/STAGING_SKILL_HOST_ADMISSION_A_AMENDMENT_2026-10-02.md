@@ -81,8 +81,13 @@ Tests (red first): legacy source in canonical checkpoint rejected; v2 record sti
 
 ### 3. Grants not integrated: fail closed
 
-`packages/contracts/src/tools/acl-intersection.ts` (new), proposal:
-- Input `{ handlers: ToolName[], trigger, grants: { status: 'available', tools: ToolName[] } | { status: 'unavailable' }, connectors: { status: 'available', features: GoogleFeature[] } | { status: 'unavailable' } }`.
-- Output is the intersection of handlers, `TOOL_PERMISSIONS[trigger]` and grants. When `grants.status` is `unavailable` the result is the empty set. When `connectors.status` is `unavailable`, every connector-backed tool is removed.
-- No default-allow and no fallback to the old static list. While the owner grants source is not integrated, the admitted ACL is empty for effect-capable tools, and the host reports the reason as a closed enum (`grants_unavailable`, `connectors_unavailable`).
-- Tests: unavailable grants gives an empty set; a tool in handlers and trigger but not in grants is removed; the result is never wider than any single input.
+Implemented as a draft in #556: `packages/contracts/src/tools/acl-intersection.ts`, `intersectToolAcl`.
+- Input: `{ trigger, handlers, grants, connectors, connector_backed }`. `grants` and `connectors` are each `{ status: 'available', tools: ToolName[] }` or `{ status: 'unavailable' }`. `connector_backed` is the list of tools that need a live connector, supplied by the host. Connectors are tool lists, not feature names.
+- Result is the intersection of handlers, `TOOL_PERMISSIONS[trigger]` and grants, in handler order with duplicates removed.
+- When `grants.status` is `unavailable` the result is `{ status: 'denied', reason: 'grants_unavailable', tools: [] }`: ALL tools are denied, not only effect-capable ones.
+- When `connectors.status` is `unavailable`, tools in `connector_backed` are removed, the rest stay, and the result carries `degraded: 'connectors_unavailable'`. A connector-backed tool is also removed when connectors are available but do not list it.
+- No default-allow and no fallback to the static list. An empty available grant set admits nothing and is not the same as unavailable.
+
+### Required test in the next host slice
+
+A test that a stored row whose principal_ref or tenant_ref differs from the invocation's (or lacks ancestry) can never be given `lineage: 'canonical_v1'`. The label is only the recorded outcome of the host's ancestry check; the contract does not perform that check. This test belongs with the A1 adapter and the DO/owner-turn slice, not with #556.
