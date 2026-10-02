@@ -141,7 +141,7 @@ export const normalizePhone = (raw: string): string | null => {
 };
 
 type SigninDetails = Readonly<{ email: string; phone: string; invite: string }>;
-const emailForm = (note = '', details: SigninDetails = { email: '', phone: '', invite: '' }) => page(`<form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Requesting an email code…"><h1>Sign in to Waldo</h1><p><a href="/console/signup">New member? Open your invite signup</a></p>${note ? `<p role="alert">${esc(note)}</p>` : ''}<label for="signin-email">Email address</label><input id="signin-email" name="email" value="${esc(details.email)}" type="email" autocomplete="email" required placeholder="you@example.com"><label for="signin-invite">Invite code (optional for existing members)</label><input id="signin-invite" name="invite" value="${esc(details.invite)}" autocomplete="off" placeholder="Invite code (new members)"><label for="signin-phone">Phone with country code (contact only, unverified)</label><input id="signin-phone" name="phone" value="${esc(details.phone)}" type="tel" autocomplete="tel" required placeholder="Phone, e.g. +91 98765 43210"><button>Email me a code</button></form>`);
+const emailForm = (note = '', details: SigninDetails = { email: '', phone: '', invite: '' }) => page(`<form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Requesting an email code…"><h1>Sign in to Waldo</h1><p><a href="/console/signup">New member? Open your invite signup</a></p>${note ? `<p role="alert">${esc(note)}</p>` : ''}<label for="signin-email">Email address</label><input id="signin-email" name="email" value="${esc(details.email)}" type="email" autocomplete="email" required placeholder="you@example.com"><label for="signin-invite">Invite code (optional for existing members)</label><input id="signin-invite" name="invite" value="${esc(details.invite)}" autocomplete="off" placeholder="Invite code (new members)"><label for="signin-phone">Phone with country code (optional, contact only, unverified)</label><input id="signin-phone" name="phone" value="${esc(details.phone)}" type="tel" autocomplete="tel" placeholder="Phone, e.g. +91 98765 43210"><button>Email me a code</button></form>`);
 // Retry forms retain entered fields; sign-in resolves existing owners only.
 const codeForm = (email: string, phone: string, invite: string, note = '') => page(`<form method="post" action="${CONSOLE_VERIFY_PATH}" data-pending="Checking your code…"><p role="status">${note ? esc(note) : `If ${esc(email)} has access, an email code was requested. Delivery is not confirmed here.`}</p><input type="hidden" name="email" value="${esc(email)}"><input type="hidden" name="phone" value="${esc(phone)}"><input type="hidden" name="invite" value="${esc(invite)}"><label for="signin-code">Email sign-in code</label><input id="signin-code" name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="Code"><button>Sign in</button></form><form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Opening your details…"><input type="hidden" name="intent" value="edit"><input type="hidden" name="email" value="${esc(email)}"><input type="hidden" name="phone" value="${esc(phone)}"><input type="hidden" name="invite" value="${esc(invite)}"><button>Request another email code / edit details</button></form>`);
 
@@ -160,12 +160,12 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     const form = await request.formData();
     const email = String(form.get('email') ?? '').trim().toLowerCase();
     const rawPhone = String(form.get('phone') ?? '');
-    const phone = normalizePhone(rawPhone);
+    const phone = rawPhone.trim() === '' ? '' : normalizePhone(rawPhone);
     const invite = String(form.get('invite') ?? '').trim().toUpperCase();
     const details = { email, phone: rawPhone, invite };
     if (form.get('intent') === 'edit') return finish(emailForm('Check your details, then request another email code.', details));
     if (!email.includes('@')) return finish(emailForm('Enter your email address.', details));
-    if (!phone) return finish(emailForm('Enter your phone number with country code, e.g. +91 98765 43210.', details));
+    if (phone === null) return finish(emailForm('Enter your phone number with country code, e.g. +91 98765 43210.', details));
     // OTP bombing guard: per-email and per-IP throttle, fail-closed: a public signup endpoint
     // without its limiter refuses codes rather than spraying OTPs.
     if (!env.RESPONSIBILITY_RATE_LIMITER) {
@@ -204,10 +204,10 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     const form = await request.formData();
     const email = String(form.get('email') ?? '');
     const rawPhone = String(form.get('phone') ?? '');
-    const phone = normalizePhone(rawPhone);
+    const phone = rawPhone.trim() === '' ? '' : normalizePhone(rawPhone);
     const invite = String(form.get('invite') ?? '').trim().toUpperCase();
     const details = { email, phone: rawPhone, invite };
-    if (!phone) return finish(emailForm('Enter your phone number with country code, e.g. +91 98765 43210.', details));
+    if (phone === null) return finish(emailForm('Enter your phone number with country code, e.g. +91 98765 43210.', details));
     // A verification code is guessable, so verify attempts are throttled like code sends,
     // fail-closed: without the limiter this public endpoint refuses rather than allowing
     // unlimited guesses.

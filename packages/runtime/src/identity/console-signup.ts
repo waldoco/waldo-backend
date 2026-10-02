@@ -15,6 +15,7 @@ export type SignupProgress = Readonly<{
   complete: false;
 }>;
 export type SignupAuth = Readonly<{
+  complete(progress: SignupProgress, phone: string): Promise<string | null>;
   begin(email: string, invite: string): Promise<string>;
   sendCode(progress: SignupProgress): Promise<boolean>;
   verifyEmail(progress: SignupProgress, otp: string): Promise<string | null>;
@@ -23,7 +24,8 @@ export type SignupAuth = Readonly<{
 }>;
 
 // Readable signed bearer progress, not encrypted, device-bound or server-revocable.
-// No raw invite, OTP or Supabase tokens; no Waldo owner/session/consumption authority.
+// No raw invite, OTP or Supabase tokens. Verified progress authorizes invite completion
+// until expiry; restarting clears this browser only, not any copied bearer cookie.
 export const signupAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): SignupAuth | null => {
   const { SUPABASE_PROJECT_URL: base, SUPABASE_PUBLISHABLE_KEY: key, WALDO_ROUTER_HMAC_SECRET: secret } = env;
   const rpc = signedRpc(env, fetcher, now);
@@ -36,6 +38,16 @@ export const signupAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch
     return `${payload}.${await routerSignature(secret, 0, `signup.${payload}`)}`;
   };
   return {
+    async complete(progress, phone) {
+      if (!progress.emailVerified || !progress.authUser || progress.expires <= Math.floor(now() / 1000)
+        || (phone !== '' && !/^\+[1-9]\d{6,14}$/.test(phone))) return null;
+      // Distinct admission RPC leaves legacy sign-in existing-owner-only. SQL rechecks
+      // confirmed Auth email, identity and exact live invite atomically; retries resolve
+      // the same bound owner without replaying an already-consumed email OTP.
+      const result = await rpc('signup_owner_for_auth', `signup.owner.${progress.authUser}.${progress.email}.${phone}.${progress.inviteHash}`,
+        { p_auth_user: progress.authUser, p_email: progress.email, p_phone: phone, p_code_hash: progress.inviteHash });
+      return typeof result === 'string' && result.length > 0 ? result : null;
+    },
     async begin(email, invite) {
       return seal({ authUser: null, emailVerified: false, csrf: crypto.randomUUID(), email: email.trim().toLowerCase(), inviteHash: await linkCodeHash(invite),
         expires: Math.floor(now() / 1000) + SIGNUP_TTL_SECONDS, phone: null, phoneVerification: 'not_configured', complete: false });
@@ -86,8 +98,8 @@ export const signupAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch
       } catch { return null; } // Malformed client cookie is an invalid continuation, not a server fault.
     },
     async collectPhone(progress, phone) {
-      if (!progress.emailVerified || !progress.authUser || !/^\+[1-9]\d{6,14}$/.test(phone) || progress.expires <= Math.floor(now() / 1000) || !await eligible(progress.email, progress.inviteHash)) return null;
-      return seal({ ...progress, phone, phoneVerification: 'not_configured', complete: false });
+      if (!progress.emailVerified || !progress.authUser || (phone !== '' && !/^\+[1-9]\d{6,14}$/.test(phone)) || progress.expires <= Math.floor(now() / 1000) || !await eligible(progress.email, progress.inviteHash)) return null;
+      return seal({ ...progress, phone: phone || null, phoneVerification: 'not_configured', complete: false });
     },
   };
 };
