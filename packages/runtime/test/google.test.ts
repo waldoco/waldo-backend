@@ -9,7 +9,7 @@ const fakeFetch = (calls: { url: string; init?: RequestInit }[]) => (async (inpu
   const url = String(input);
   calls.push({ url, init });
   if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
-  if (url.includes('/calendar/v3/')) return Response.json({ items: [
+  if (url.includes('/calendar/v3/')) return Response.json({ kind:'calendar#events', items: [
     { id: 'e1', summary: 'Gym', description: '  Leg day  ', start: { dateTime: '2026-09-23T18:00:00+05:30' }, end: { dateTime: '2026-09-23T19:00:00+05:30' } },
     { id: 'e2', status: 'cancelled', start: { date: '2026-09-23' }, end: { date: '2026-09-24' } },
     { id: 'e3', summary: 'Declined sync', attendees: [{ self: true, responseStatus: 'declined' }, {}], start: { dateTime: '2026-09-23T20:00:00+05:30' }, end: { dateTime: '2026-09-23T20:30:00+05:30' } },

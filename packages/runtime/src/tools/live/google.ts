@@ -2,11 +2,11 @@ import { availabilityWindows } from './availability';
 import type { ProxyIntent } from '../../connectors/proxy-intent';
 import { artifactMarker, extractArtifacts, quarantineArtifacts, type ArtifactKind, type ExtractedArtifact } from '../../security/artifact-hygiene';
 import {
-  queryAvailabilityArgsSchema, type QueryAvailabilityArgs,
+  calendarPageSchema, queryAvailabilityArgsSchema, type QueryAvailabilityArgs,
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { b64url, buildMime, validFreeBusyCalendar, GoogleError, sha256Hex, type GoogleClient, type GoogleFeature } from '../../connectors/google';
+import { b64url, buildMime, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature } from '../../connectors/google';
 import { EmailProposalError, type EmailSendProposal } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
@@ -87,15 +87,35 @@ ${item.body}`);
 export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay) => [
   {
     name: 'query_calendar',
-    description: "Read the owner's Google Calendar events in a time range (defaults to now through the next 24 hours).",
+    description: "Read a bounded page from one connected Google account and calendar (primary by default), now through the next 24 hours by default. Inspect coverage and next_page_token. Continue with the exact explicit date_range, calendar_id, limit and include_declined. Each result contains only its current page: an exhausted continuation does not make that result a complete window. Legacy adapters report unknown account and incomplete coverage. This is event enumeration, not availability.",
     schema: queryCalendarArgsSchema,
     trigger_allowlist: allowlist('query_calendar'),
     autonomy_gated: false,
-    handle: ({ date_range, include_declined, limit }: QueryCalendarArgs) => withGoogle(google, 'calendar', async (client) => {
+    handle: ({ date_range, include_declined, limit, calendar_id = 'primary', page_token }: QueryCalendarArgs) => withGoogle(google, 'calendar', async (client) => {
       const now = clock.now().getTime();
       const from = date_range?.from ?? new Date(now).toISOString();
       const to = date_range?.to ?? new Date(now + DAY_MS).toISOString();
-      return { timezone: clock.timezone, from, to, events: await client.events(from, to, limit, include_declined) };
+      let page: CalendarPage | null = null;
+      if (typeof client.calendarPage === 'function') {
+        try { page = calendarPageSchema.parse(await client.calendarPage(calendar_id, from, to, limit, include_declined, page_token));
+          if (page.fetched_count > limit) throw new Error('Calendar page exceeds requested limit'); }
+        catch (error) {
+          if (!(error instanceof GoogleError && error.status === 404 && error.message === 'unknown operation') || page_token || calendar_id !== 'primary') throw error;
+        }
+      }
+      if (!page && (page_token || calendar_id !== 'primary')) throw new Error('Calendar pagination or selected calendar adapter unavailable');
+      const events = page?.events ?? await client.events(from,to,limit,include_declined);
+      return {
+        timezone: clock.timezone, from, to, events,
+        observed_at: page?.observed_at ?? clock.now().toISOString(), next_page_token: page?.next_page_token ?? null,
+        coverage: {
+          account: page?.account ?? {connection_id:null,email:null}, calendar_id, window:{from,to}, include_declined, page_limit:limit,
+          fetched_count:page?.fetched_count ?? null, returned_count:events.length,
+          pagination:page?'provider_page':'unknown_not_returned_by_adapter', page_exhausted:page? page.next_page_token === null : null,
+          complete: Boolean(page && !page_token && page.next_page_token === null), result_scope:'current_page',
+          limitation:page?'One account and calendar. Each result contains only its current page. A local null connection_id means host canonical mapping is unavailable; email is grant metadata, not permission.':'Legacy sampled primary-calendar read; account and pagination are unknown. Empty does not prove absence.',
+        },
+      };
     }),
   } satisfies ToolHandler<QueryCalendarArgs, unknown, ToolDispatcherContext>,
   {

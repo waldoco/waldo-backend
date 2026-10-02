@@ -97,12 +97,13 @@ const handle = async (body: Body): Promise<Response> => {
     const access = await db('proxy_access', { p_do_name: body.do_name, p_connection: body.connection }) as {secret:string;scopes:unknown}[];
     const grant=Array.isArray(access)?access[0]:undefined;
     if(!grant||typeof grant.secret!=='string'||!grant.secret)return fail(body.intent_id?503:401,body.intent_id?'intent_unavailable':'connection unavailable');
+    if(body.method==='calendarPage'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar'))return fail(403,'insufficient scopes');
     if(body.method==='freeBusy'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'availability'))return fail(403,'insufficient scopes');
     const required = body.method==='sendRaw' ? 'gmail.send' : body.method==='draft' ? 'gmail.compose' : ['createEvent','moveEvent','cancelEvent'].includes(body.method!) ? 'calendar.events' : null;
     if(required && (!Array.isArray(grant.scopes)||!grant.scopes.includes(`https://www.googleapis.com/auth/${required}`)))return fail(body.intent_id?503:403,body.intent_id?'intent_unavailable':'insufficient scopes');
     const token=grant.secret;
     let refreshError = '';
-    const client = googleClient(app, { refresh_token: token }, fetch, (error) => { refreshError = error; });
+    const client = googleClient(app, { refresh_token: token }, fetch, (error) => { refreshError = error; }, {connection_id:body.connection,email:null});
     try {
       const dispatch=async()=> (await (client[body.method as Method] as (...args: unknown[]) => Promise<unknown>)(...(body.args ?? [])))??null;
       const data = ['draft','sendRaw','createEvent','moveEvent','cancelEvent'].includes(body.method!) ? await intentDispatch(body,dispatch) : await dispatch();

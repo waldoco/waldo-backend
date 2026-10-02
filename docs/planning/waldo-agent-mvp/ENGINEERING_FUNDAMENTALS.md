@@ -24,10 +24,10 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Every code-based sign-in proves in a real run that the code actually arrives: the email template must carry `{{ .Token }}`, which Supabase's default does not.
 - Every public attempt endpoint (code send AND code verify) carries a per-email and per-IP throttle and fails closed without its limiter. A verification code is guessable, so verify throttles like send.
 - A signed RPC's canonical data covers every parameter the function stores; an unsigned stored parameter is a tamperable write.
-- SQL authentication requires an explicit true result (`IS DISTINCT FROM TRUE` rejects false and NULL). Test NULL signature and timestamp inputs; `IF NOT verifier(...)` can silently skip rejection on NULL.
 - A refusal precedes any one-use consumption: validate first, then spend the invite, token or code. An error branch re-rendering a form puts the error in the note, never in a data field.
 
 ### Idempotency and retries
+- Sign-in retries retain escaped email/contact/invite details only in form responses, never OTP values in restored pages or storage. Test send refusals, edit-before-resend, repeated submits, history restoration and explicit stop-waiting recovery; interrupted requests may already have completed.
 - Every webhook, callback, scheduled fire and migration can run twice without a second effect. Store the offset or the key before or atomically with the effect.
 - Every button press is safe when pressed twice or late ("Already handled", "expired").
 - Retries have a bound and a backoff. A failed step logs and leaves state that the next run can resume.
@@ -210,7 +210,6 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 | Date | Bug found | Surface | Adversarial proof | Checklist change |
 | --- | --- | --- | --- | --- |
-| 2026-10-02 | Nullable signed-RPC verifier bypassed rejection in the new admission proposal; existing routing shares the class | Owner admission SQL preparation | NULL signature/time failed red, then passed with explicit-true check in owner-admission-a1/lookup-tests.sql; isolated baseline route witness remains separately unresolved | Require explicit true SQL auth and NULL regressions |
 | 2026-10-01 | Existing signup passed unverified phone to provisioning and granted console after email alone | Signup proof | console-auth.test.ts legacy empty-phone regression; console-signup-auth/test pending no provisioning; waldo_invite_chain.sql empty-phone no delta | Both proof requirements gate new-owner completion |
 | 2026-10-01 | Chrome form POST under no-referrer supplied Origin:null; direct Request tests missed it | Browser headers | Synthetic Chrome POST reached OTP after same-origin fix; console-signup.test.ts policy and cross-origin rejection | Verify browser Origin and fragment custody together |
 | 2026-10-01 | Signed continuation swallowed second invite/restart and hash-only navigation did not rerun entry | Retry/refresh | Synthetic Chrome second link, refresh and fragment clearing; console-signup.test.ts restart cookie clear/hashchange contract | Explicit reset and same-document fragment handling |
@@ -223,6 +222,20 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - [ ] Test canonical `signin_allowed` as access eligibility, not invite validity: active members remain admitted independently of arbitrary/expired/revoked/used invite text; unverified new signup still cannot create a Waldo owner, consume or open a session.
 - [ ] Distinguish Supabase Auth identity creation (`create_user:true`) from Waldo owner provisioning. Describe signup progress as a readable signed 15-minute bearer cookie with no device binding, encryption or server revocation; restart only clears this browser.
 - [ ] Associate visible legacy labels and inspect desktop/mobile, keyboard order/focus, error and progress states using synthetic data; these checks are not full accessibility certification.
+
+| 2026-10-02 | Console resend GET and send refusals lost email/contact/invite details; submit locking could strand an interrupted request | Console retries | console-signin.test.ts field retention/escaping and effect-free edit; console-signin-browser.test.ts submit lock, OTP clearing, stop-waiting recovery; synthetic Chrome fixture | Preserve retry context separately from OTP, and provide explicit recovery for uncertain navigation |
+
+- [ ] Retry POSTs must not become document-history entries: keep phase-only history, preserve details only in the running page, clear OTP before transport/restoration, and invalidate late results on cancellation or navigation. Test request counters across Back/Forward/refresh and verify the existing success cookies/303 through browser fetch. No-JavaScript native POST fallback remains an explicit limitation.
+
+| 2026-10-02 | Native console retry POST history prompted resubmission on Back/Forward; stopping a fetch needed protection against late content/redirects | Console retry navigation | console-signin-browser.test.ts same-origin async submission, phase-only history, cancellation/generation, unexpected redirects and uncertain errors; synthetic Chrome send/verify counters and existing cookie/303 success | No POST document history with script enabled; late results never revive cancelled work |
+
+- [ ] Back-edit-Forward must retain the outstanding code's original email/phone/invite; unsent details belong only to the details phase. A newly requested code replaces that phase's recipient context.
+
+| 2026-10-02 | Broadcasting Back edits to cached code form retargeted an outstanding code without requesting another | Console history recipient | Distinct A/B email/phone/invite edit-before-Forward regression and native Chrome; each phase retains its own details | Unsent edits never retarget an existing code |
+
+- [ ] Rate-ceiling integration tests must preserve all real authenticated admissions and exact persisted counts without multiplying RPC transport overhead by the ceiling. Keep per-session boundary calls and overflow rejection; verify failed admission leaves authority and rate state unchanged.
+
+| 2026-10-02 | Owner-global rate test timed out after 239 sequential projection RPCs; controlled per-call latency reproduced the baseline failure | Rate-limit test transport | responsibility-public-do.test.ts batches real signed admissions inside the DO, retains each session RPC and overflow RPC, asserts owner240/session60 counts and unchanged rejection state | Test security behavior rather than cumulative transport latency; retain the five-second timeout |
 
 ### Owner admission custody epochs
 
