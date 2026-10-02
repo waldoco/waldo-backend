@@ -59,6 +59,12 @@ jobs:
         working-directory: packages/runtime
         run: npx vitest run --config vitest.owner-ingress.config.ts
 
+      - name: Native supervisor hermetic diagnostic (no model calls)
+        working-directory: packages/runtime
+        run: |
+          npx tsc --project tsconfig.native-trial.json --noEmit
+          npx vitest run --config vitest.native-supervisor-smoke.config.ts
+
   # Matches the in-lane gate exactly: 4 shards, each a small process that exits cleanly.
   # Falsifier for coverage: the shard totals must sum to the full runtime test count.
   verify-runtime:

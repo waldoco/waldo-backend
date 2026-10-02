@@ -1,0 +1,37 @@
+import {readFileSync} from 'node:fs';
+import {expect,it} from 'vitest';
+import {parseNativeCaseBundle} from '../evals/native-case-bundle';
+import {inspectNativeManifest} from '../evals/native-manifest';
+import {inspectNativeExecutionSupport} from '../evals/native-execution-readiness';
+import {loadNativeSuite} from '../evals/waldo-native-suite';
+import {IsolatedSourceWorld} from '../scenarios/isolated-source-world';
+import {nativeSelectedSource} from '../scenarios/native-selected-source';
+import {isolatedGoogleClient} from '../scenarios/isolated-google-client';
+const path=new URL('../evals/fixtures/native36-core/v1/W06.json',import.meta.url);
+it('independent W06 is contract-conformant with byte-exact pins and complete source content',()=>{
+ const {bundle:b}=parseNativeCaseBundle(readFileSync(path,'utf8'));
+ expect(inspectNativeManifest(b.manifest).status).toBe('ready_for_isolated_trial');
+ expect(inspectNativeExecutionSupport(b,{source_families:['calendar','mail','tasks'],effect_kinds:[],turn_kinds:['owner_text','provider_event'],production_tools:['query_calendar','get_communication','read_thread']})).toEqual([]);
+ const spec=loadNativeSuite().find(s=>s.id==='W06')!;
+ expect((b.decisions[0]!.synthetic_value as {pinned_facts:string[]}).pinned_facts).toEqual(spec.fixture.facts);
+ expect(b.manifest.visible_prompt).toBe(spec.user_prompt);
+ expect(b.manifest.world.clock).toBe(spec.fixture.now);
+ expect(b.required_effect_kinds).toEqual([]);
+ expect(b.turns[1]?.source_decision_id).toBe('followthrough');
+});
+it('real mapped tools expose full draft and feedback without control/denied data; readback stays unchanged',async()=>{
+ const {bundle:b}=parseNativeCaseBundle(readFileSync(path,'utf8'));const w=new IsolatedSourceWorld(b.manifest.world);
+ const api=isolatedGoogleClient(nativeSelectedSource(w,b.manifest.candidate_owner,b.selected_source_ids),b.manifest.candidate_owner);
+ const mail=await api.readThread('pitch-prep',20);
+ expect(mail).toHaveLength(5);expect(mail[0]!.body).toContain('Threadline');
+ expect(mail.filter(m=>m.body.includes('could not identify the customer problem'))).toHaveLength(2);
+ expect(JSON.stringify(mail)).not.toContain('CONTROL_');
+ const day=await api.events('2026-10-05T09:00:00+05:30','2026-10-05T17:00:00+05:30',20,false);
+ expect(day).toHaveLength(3);expect(day[0]!.end).toBe('2026-10-05T12:00:00+05:30');expect(day[1]!.start).toBe('2026-10-05T12:20:00+05:30');
+ expect((await api.events('2026-10-09T00:00:00+05:30','2026-10-10T00:00:00+05:30',20,false))[0]!.title).toBe('Friday pitch');
+ const restricted=nativeSelectedSource(w,b.manifest.candidate_owner,b.selected_source_ids);
+ expect(()=>restricted.read(b.manifest.candidate_owner,'private_recordings','private-recording')).toThrow();
+ expect(()=>restricted.read(b.manifest.control_owner,'mail','draft-v1')).toThrow();
+ expect(w.accessLog(b.manifest.control_owner)).toEqual([]);
+ expect(w.outbox(b.manifest.candidate_owner)).toEqual([]);expect(w.outbox(b.manifest.control_owner)).toEqual([]);
+});

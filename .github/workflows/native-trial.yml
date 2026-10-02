@@ -1,4 +1,4 @@
-name: Opt-in W06 synthetic native capture on runner branch
+name: Opt-in native synthetic capture
 on:
   workflow_dispatch:
     inputs:
@@ -7,6 +7,12 @@ on:
         required: true
         type: boolean
         default: false
+      case_id:
+        description: 'Reviewed core-owned case (W06 only)'
+        required: true
+        type: choice
+        options:
+          - W06
 permissions:
   contents: read
 jobs:

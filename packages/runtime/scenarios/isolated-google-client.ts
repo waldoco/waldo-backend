@@ -9,7 +9,7 @@ const day = (date: string): number => Date.parse(date);
 const rejectEffect = (): never => { throw new Error('fixture effect requires a separate intercepted approval path'); };
 const rejectRead = (): never => { throw new Error('fixture source not implemented'); };
 
-export const isolatedGoogleClient = (world: IsolatedSourceWorld, owner: string): GoogleClient => ({
+export const isolatedGoogleClient = (world: Pick<IsolatedSourceWorld, 'read' | 'list' | 'now'>, owner: string): GoogleClient => ({
   freeBusy: async()=>rejectRead(),
   calendarPage: async(calendarId,from,to,limit,includeDeclined,pageToken)=>{
     if(calendarId!=='primary'||![from,to].every(v=>iso8601Schema.safeParse(v).success)||day(from)>=day(to)||!Number.isSafeInteger(limit)||limit<1||limit>50||typeof includeDeclined!=='boolean'||(pageToken!==undefined&&(typeof pageToken!=='string'||!pageToken||pageToken.length>4096)))throw new Error('unsupported fixture Calendar page request');
