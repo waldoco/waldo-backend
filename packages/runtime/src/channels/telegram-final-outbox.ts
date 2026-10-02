@@ -5,12 +5,14 @@ export const FINAL_OUTBOX_DUE_KEY = 'telegram_final_outbox_due_v1';
 const MAX_RECORDS = 256;
 const MAX_ATTEMPTS = 3;
 export type FinalPayload = Readonly<{ chat_id: number; text: string; parse_mode?: 'HTML' }>;
+export type HeartbeatReceipt = { id: string; occurrence: number; schedulerRunId: string; runId?: string; loops: { id: string; due: string }[] };
 export type FinalRecord = {
   id: string; trace: string; payload: FinalPayload; digest: string;
   expiresAt?: number; bot?: string;
   receiptUrls?: string[]; ownerSubject: string; doName: string; status: 'pending' | 'attempting' | 'delivered' | 'quarantined' | 'blocked';
-  dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; reason?: string;
+  dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; deliveredAt?: number; reason?: string;
   inbox?: { id: string; runId: string; attempt: string };
+  heartbeat?: HeartbeatReceipt;
   reaction?: { message_id: number; emoji: string };
   reminder?: { id: string; occurrence: number; runId: string; schedulerRunId: string | null; once: boolean };
 };
@@ -100,7 +102,7 @@ export class TelegramFinalOutbox {
       const messageId = ack?.message_id;
       if (!Number.isSafeInteger(messageId) || (messageId as number) <= 0 || ack?.chat?.id !== row.payload.chat_id) {
         row.status = result === undefined ? 'blocked' : 'quarantined'; row.reason = result === undefined ? 'egress_blocked' : 'invalid_ack';
-      } else { row.status = 'delivered'; row.messageId = messageId as number; }
+      } else { row.status = 'delivered'; row.messageId = messageId as number; row.deliveredAt = this.now(); }
     } catch (error) {
       if (error instanceof TelegramRejection && error.retryable && !(typeof error.retryAfter === 'number' && error.retryAfter > 3600) && row.attempts < MAX_ATTEMPTS) {
         row.status = 'pending'; row.reason = 'provider_rejected';

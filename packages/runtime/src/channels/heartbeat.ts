@@ -3,6 +3,7 @@ import type { Scheduler, ScheduleExecutor } from '../scheduler/multiplexer';
 import type { DayPlanBook } from './day-cards';
 import { isQuiet, type Loop, type LoopBook } from './loops';
 import { localIso } from './reminders';
+import type { FinalRecord, HeartbeatReceipt } from './telegram-final-outbox';
 
 // H1 of the heartbeat/cron plan: a periodic check-in tick that scans due work, stays silent when
 // nothing needs attention, and records every tick in schedule_runs. The tick is deterministic -
@@ -11,8 +12,8 @@ import { localIso } from './reminders';
 // Run history is the scheduler-owned schedule_runs table (the one run-history record): the
 // Scheduler writes the row before dispatch, and the tick records its DECISION
 // (heartbeat_result: quiet vs acted) and the SEND (delivery: pending -> sent/failed) on it.
-// A crash between acting and confirming leaves delivery 'pending' - recoverable, never treated
-// as delivered. Terminal delivery states ('sent'/'failed') are never re-sent on retry.
+// Frozen outbox intent owns delivery after the producer completes. Ambiguous attempts are
+// quarantined; only a validated provider ACK settles delivery and the loop cooldown.
 //
 // H1+H1b scope: past-due open loops, plus release of quiet-hours-held day cards (H1b). A card
 // held at its planned time (day_plan sent=2) is re-armed here once quiet ends; the real send
@@ -46,7 +47,7 @@ export type HeartbeatDeps = Readonly<{
   plans: Pick<DayPlanBook, 'heldToday'>;
   timezone: string;
   now: () => number;
-  send: (text: string) => Promise<void>;
+  enqueue: (text: string, receipt: HeartbeatReceipt) => Promise<void>;
 }>;
 
 // One tick: quiet hours suppress sends entirely. Due work comes from a bounded index-backed scan
@@ -110,18 +111,33 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
     const listed = notify.slice(0, MAX_LISTED_LOOPS);
     const lines = listed.map((loop) => `- ${loop.title}${loop.due ? ` (due ${loop.due.replace('T', ' ')})` : ''}`);
     const more = notify.length > listed.length ? `\n…and ${notify.length - listed.length} more on your list.` : '';
-    try {
-      await deps.send(`From your list, past due:\n${lines.join('\n')}${more}`);
-    } catch (error) {
-      deps.scheduler.markDelivery(runId, 'failed');
-      throw error;
-    }
-    for (const loop of notify) {
-      deps.sql.exec(
-        'INSERT INTO heartbeat_notified (loop_id, due, notified_at) VALUES (?, ?, ?) ON CONFLICT (loop_id, due) DO UPDATE SET notified_at = excluded.notified_at',
-        loop.id, loop.due, firedAt,
-      );
-    }
-    deps.scheduler.markDelivery(runId, 'sent');
+    await deps.enqueue(`From your list, past due:\n${lines.join('\n')}${more}`, {
+      id: entry.id, occurrence: entry.occurrence_at, schedulerRunId: runId,
+      loops: notify.map(loop => ({ id: loop.id, due: loop.due! })),
+    });
+    return 'delivery_pending';
   };
+};
+
+export const heartbeatEligible = (record: FinalRecord, sql: Sql, loops: LoopBook, timezone: string, now: number): boolean => {
+  if (!record.heartbeat) return true;
+  if (isQuiet(loops.proactivity(), now, timezone)) return false;
+  const localNow = localIso(now, timezone).slice(0, 16);
+  return record.heartbeat.loops.length > 0 && record.heartbeat.loops.every(loop => sql.exec(
+    `SELECT 1 FROM loops l WHERE l.id = ? AND l.status = 'open' AND l.due = ? AND l.due <= ?
+      AND NOT EXISTS (SELECT 1 FROM heartbeat_notified n WHERE n.loop_id = l.id AND n.due = l.due AND n.notified_at >= ?)`,
+    loop.id, loop.due, localNow, now - RENOTIFY_COOLDOWN_MS,
+  ).toArray().length > 0);
+};
+
+export const settleHeartbeat = (record: FinalRecord, sql: Sql, scheduler: Scheduler): void => {
+  if (!record.heartbeat || record.status === 'pending') return;
+  if (record.status === 'delivered') {
+    if (record.deliveredAt === undefined) throw new Error('heartbeat ACK timestamp missing');
+    for (const loop of record.heartbeat.loops) sql.exec(
+      'INSERT INTO heartbeat_notified (loop_id, due, notified_at) VALUES (?, ?, ?) ON CONFLICT (loop_id, due) DO UPDATE SET notified_at = max(heartbeat_notified.notified_at, excluded.notified_at)',
+      loop.id, loop.due, record.deliveredAt,
+    );
+  }
+  scheduler.settleDelivery(record.heartbeat.schedulerRunId, record.status === 'delivered');
 };
