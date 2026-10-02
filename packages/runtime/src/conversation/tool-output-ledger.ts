@@ -48,6 +48,21 @@ const admitsForPrompt = (summary: string, taint: SourceTaint): boolean => {
   return prepared.ok && prepared.value === summary;
 };
 
+// Summary text is disposable display data, not tool authority. During an active
+// forget, neutralize malformed Unicode-escaped displays rather than guess at a
+// partial JSON string. Valid JSON uses the existing decoded-value redactor.
+const summaryRedactor = (texts: readonly string[], marker: string) => {
+  const active = texts.some(text => text.trim());
+  const redact = literalJsonTextRedactor(texts, marker, 'data');
+  return (summary: string): string => {
+    if (!active) return summary;
+    try {
+      if (/\\u/i.test(summary)) JSON.parse(summary);
+      return redact(summary);
+    } catch { return marker; }
+  };
+};
+
 export const toolOutputLedger = (storage: KeyValueStorage) => ({
   async record(entry: Omit<ToolOutputEntry, 'at'> & { at: number }, scope?: RunEffectScope): Promise<void> {
     const summary = entry.summary.length > MAX_SUMMARY_CHARS ? `${entry.summary.slice(0, MAX_SUMMARY_CHARS)}...` : entry.summary;
@@ -63,7 +78,14 @@ export const toolOutputLedger = (storage: KeyValueStorage) => ({
     // Ring: drop the oldest once we exceed the cap.
     if (count + 1 > MAX_KEPT) await storage.delete([entryKey(count - MAX_KEPT)]);
   },
-  async recent(): Promise<readonly ContextFragment[]> {
+  // Verification covers every retained row, not just the six staged fragments.
+  async remaining(texts: readonly string[]): Promise<number> {
+    const redact = summaryRedactor(texts, '[forgotten]');
+    const rows = await storage.list<ToolOutputEntry>({ prefix: 'toolout:' });
+    return [...rows.values()].filter(entry => redact(entry.summary) !== entry.summary).length;
+  },
+  async recent(texts: readonly string[] = []): Promise<readonly ContextFragment[]> {
+    const redact = summaryRedactor(texts, '[forgotten]');
     const rows = await storage.list<ToolOutputEntry>({ prefix: 'toolout:' });
     const entries = [...rows.entries()]
       .filter(([key]) => key !== 'toolout-count')
@@ -80,7 +102,7 @@ export const toolOutputLedger = (storage: KeyValueStorage) => ({
     });
     if (poisonedKeys.length > 0) await storage.delete(poisonedKeys);
     return clean.map(([, entry]) => entry).map((entry) => ({
-      text: `${entry.tool} ${entry.ok ? 'succeeded' : 'failed'}: ${entry.summary}`,
+      text: `${entry.tool} ${entry.ok ? 'succeeded' : 'failed'}: ${redact(entry.summary)}`,
       source: {
         source_key: `tool_output:${entry.tool}:${entry.at}`,
         source_kind: 'tool_result' as const,
@@ -102,7 +124,7 @@ export const redactToolOutputLedger = async (storage: KeyValueStorage, texts: re
   // Case-insensitive literal match, same rule as the conversation store: a casing variant of a
   // forgotten text surviving into next-turn context is the leak returning.
   // Summaries are capped display data; tool/ok/taint authority stays on the ledger entry.
-  const redact = literalJsonTextRedactor(texts, marker, 'data');
+  const redact = summaryRedactor(texts, marker);
   for (const [key, entry] of rows) {
     if (key === 'toolout-count') continue;
     const summary = redact(entry.summary);

@@ -14,7 +14,14 @@ import { webSearchArgsSchema } from '@waldo/contracts';
 
 // Real registered two-argument owner DO and its fenced inbox/listener/responder path.
 // Only the model SDK and Telegram transport are scripted. No live provider or source service.
-const seen = vi.hoisted(() => ({ writer: '{}', requests: [] as unknown[], fetches: [] as string[], replyText: 'Recorded fixture response.', reasoning: undefined as string | undefined, offloads: [] as import('../src/conversation/tool-output-store').ToolOutputStore[], onReply: undefined as undefined | (() => unknown[] | undefined) }));
+const seen = vi.hoisted(() => ({ writer: '{}', requests: [] as unknown[], fetches: [] as string[], replyText: 'Recorded fixture response.', reasoning: undefined as string | undefined, toolSuppliers: [] as (() => Promise<readonly import('../src/context-composer/types').ContextFragment[]>)[], offloads: [] as import('../src/conversation/tool-output-store').ToolOutputStore[], onReply: undefined as undefined | (() => unknown[] | undefined) }));
+vi.mock('../src/run-loop/adapters', async load => {
+ const actual = await load<typeof import('../src/run-loop/adapters')>();
+ return { ...actual, resolveRunLoopAdapters: (...args: Parameters<typeof actual.resolveRunLoopAdapters>) => {
+  if (args[1]?.toolOutputs) seen.toolSuppliers.push(args[1].toolOutputs);
+  return actual.resolveRunLoopAdapters(...args);
+ } };
+});
 vi.mock('../src/conversation/tool-output-store', async load => {
   const real = await load<typeof import('../src/conversation/tool-output-store')>();
   return { ...real, inMemoryToolOutputStore: () => { const store = real.inMemoryToolOutputStore(); seen.offloads.push(store); return store; } };
@@ -54,7 +61,7 @@ const turn = async (name: string, id: number, text: string, writer: string) => {
   });
 };
 beforeEach(() => {
-  seen.requests.length = 0; seen.fetches.length = 0; seen.offloads.length = 0; seen.onReply = undefined; seen.replyText = 'Recorded fixture response.'; seen.reasoning = undefined;
+  seen.requests.length = 0; seen.fetches.length = 0; seen.toolSuppliers.length = 0; seen.offloads.length = 0; seen.onReply = undefined; seen.replyText = 'Recorded fixture response.'; seen.reasoning = undefined;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => { seen.fetches.push(String(input)); throw new Error('unmocked network is forbidden'); });
 });
 afterEach(() => { vi.unstubAllGlobals(); expect(seen.fetches).toEqual([]); });
@@ -151,6 +158,10 @@ for (const fault of ['survivor', 'throw'] as const) {
       expect(request().includes(FORGET)).toBe(false);
       expect(request()).not.toContain('removed 1 claim');
       expect(request()).toContain(fault === 'throw' ? 'only partly stored' : 'is pending');
+      if (fault === 'survivor') {
+        expect(request()).toContain('1 saved conversation entry still contain it');
+        expect(request()).not.toContain('2 saved conversation entries still contain it');
+      }
       expect(memory.claims('purging')).toHaveLength(1);
       expect(JSON.stringify(await kv.load())).toContain(FORGET); // fault really left durable bytes
       await direct('t3', 'What is relevant to my reading desk?', ops());
@@ -508,4 +519,93 @@ it('the exact live forget settles with a capped retained read-owner-context ledg
   await evictDurableObject(stub(name));
   await turn(name, 3, 'What preference remains?', ops());
   expect(request()).not.toContain(needle); expect(request()).toContain(KEEP);
+});
+
+it.each(['literal','unicode','capped unicode'])('topic-only %s forget survives KV failure and recreation then verifies retry', async encoding => {
+ await runInDurableObject(stub('forget-topic-only-recovery-'+encoding), async (_instance, state) => {
+  const TOPIC = 'Synthetic cobalt paper workshop';
+  let memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+  const kv = durableConversationStore(state.storage); const ledger = toolOutputLedger(state.storage);
+  let failKv = true;
+  const args: Parameters<typeof createOwnerResponder> = ['fixture', kv, memory];
+  args[8] = ledger; args[11] = async texts => {
+   if (failKv) throw new Error('fictional KV unavailable');
+   const result = await redactConversationEntries(state.storage, texts, FORGOTTEN);
+   const {redactToolOutputLedger} = await import('../src/conversation/tool-output-ledger');
+   await redactToolOutputLedger(state.storage, texts, FORGOTTEN); return result;
+  };
+  let responder = createOwnerResponder(...args);
+  const direct = (id:string,text:string,writes=true) => responder.respond({traceId:id,conversationRef:'owner',surface:'telegram',text,memoryWrites:writes},(_hop,work)=>work());
+  seen.writer = ops({add:[add(KEEP)]}); await direct('t1', `${TOPIC}; ${KEEP}`);
+  const summary = encoding === 'literal' ? `${TOPIC}; ${KEEP}` : JSON.stringify({keep:KEEP,text:TOPIC,...(encoding==='capped unicode'?{padding:'x'.repeat(900)}:{})}).replace('Synthetic','\\u0053ynthetic');
+  await ledger.record({tool:'fixture_read',ok:true,at:1,taint:'external',summary});
+  await ledger.record({tool:'fixture_keep',ok:true,at:2,taint:'external',summary:KEEP});
+  seen.writer = ops({forget_topic:TOPIC}); await direct('t2', `Forget ${TOPIC}.`);
+  expect(memory.claims('purging')).toEqual([]); expect(memory.pendingTopics()).toEqual([TOPIC]);
+  expect(JSON.stringify(await kv.load())).toContain(TOPIC); expect(JSON.stringify(await ledger.recent())).toContain('cobalt paper workshop');
+  memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work)); args[2] = memory;
+  responder = createOwnerResponder(...args); seen.writer = ops(); await direct('t3','What remains relevant?',false);
+  expect(request()).not.toContain(TOPIC); expect(request()).toContain(KEEP);
+  expect(JSON.stringify(await seen.toolSuppliers.at(-1)!())).not.toContain('cobalt paper workshop');
+  expect(JSON.stringify(await seen.toolSuppliers.at(-1)!())).toContain(KEEP);
+  expect(memory.pendingTopics()).toEqual([TOPIC]);
+  expect(JSON.stringify(await kv.load())).toContain(TOPIC); expect(JSON.stringify(await ledger.recent())).toContain('cobalt paper workshop');
+  failKv = false; await direct('t4','Check the retained preference.',false);
+  expect(memory.pendingTopics()).toEqual([]);
+  expect(JSON.stringify(await kv.load())).not.toContain(TOPIC); expect(JSON.stringify(await ledger.recent())).not.toContain('cobalt paper workshop');
+  expect(request()).not.toContain(TOPIC); expect(request()).toContain(KEEP);
+ });
+});
+it('topic-only settlement rejects a false-clean conversation receipt while the ledger survives',async()=>{
+ await runInDurableObject(stub('forget-topic-ledger-survivor'),async(_instance,state)=>{
+  const TOPIC='Synthetic indigo receipt workshop'; const memory=claimStore(state.storage.sql);
+  const kv=durableConversationStore(state.storage); const ledger=toolOutputLedger(state.storage);
+  const args:Parameters<typeof createOwnerResponder>=['fixture',kv,memory]; args[8]=ledger;
+  args[11]=texts=>redactConversationEntries(state.storage,texts,FORGOTTEN);
+  const responder=createOwnerResponder(...args);
+  const direct=(id:string,text:string,writes=true)=>responder.respond({traceId:id,conversationRef:'owner',surface:'telegram',text,memoryWrites:writes},(_hop,work)=>work());
+  seen.writer=ops();await direct('t1',`${TOPIC}; ${KEEP}`);
+  await ledger.record({tool:'fixture_read',ok:true,at:1,taint:'external',summary:`${TOPIC}; ${KEEP}`});
+  seen.writer=ops({forget_topic:TOPIC});await direct('t2',`Forget ${TOPIC}.`);
+  expect(JSON.stringify(await kv.load())).not.toContain(TOPIC);expect(JSON.stringify(await ledger.recent())).toContain(TOPIC);
+  expect(memory.pendingTopics()).toEqual([TOPIC]);expect(request()).toContain('pending');
+  await direct('t3','What remains relevant?',false);
+  expect(memory.pendingTopics()).toEqual([TOPIC]);expect(JSON.stringify(await seen.toolSuppliers.at(-1)!())).not.toContain(TOPIC);
+ });
+});
+it.each(['conversation','ledger'])('keeps topic pending when independent %s verification fails despite clean writes',async failing=>{
+ await runInDurableObject(stub('forget-topic-readback-'+failing),async(_instance,state)=>{
+  const TOPIC='Synthetic violet readback workshop';const memory=claimStore(state.storage.sql);const kv=durableConversationStore(state.storage);const ledger=toolOutputLedger(state.storage);
+  let failVerify=false;const reads:string[]=[];const logs:import('../src/channels/owner-turn-types').TurnLogEntry[]=[];
+  const args:Parameters<typeof createOwnerResponder>=['fixture',{...kv,load:async()=>{reads.push('conversation');if(failVerify&&failing==='conversation')throw new Error('PRIVATE_KV_VERIFY_FAILURE');return kv.load();}},memory,entry=>logs.push(entry)];
+  args[8]={...ledger,remaining:async texts=>{reads.push('ledger');if(failVerify&&failing==='ledger')throw new Error('PRIVATE_KV_VERIFY_FAILURE');return ledger.remaining(texts);}};
+  args[11]=async texts=>{const receipt=await redactConversationEntries(state.storage,texts,FORGOTTEN);const {redactToolOutputLedger}=await import('../src/conversation/tool-output-ledger');await redactToolOutputLedger(state.storage,texts,FORGOTTEN);return receipt;};
+  const responder=createOwnerResponder(...args);const direct=(id:string,text:string,writes=true)=>responder.respond({traceId:id,conversationRef:'owner',surface:'telegram',text,memoryWrites:writes},(_hop,work)=>work());
+  seen.writer=ops();await direct('t1',`${TOPIC}; ${KEEP}`);await ledger.record({tool:'fixture_read',ok:true,at:1,taint:'external',summary:`${TOPIC}; ${KEEP}`});
+  failVerify=true;reads.length=0;seen.writer=ops({forget_topic:TOPIC});await direct('t2',`Forget ${TOPIC}.`);
+  expect(reads).toEqual(expect.arrayContaining(['conversation','ledger']));expect(memory.pendingTopics()).toEqual([TOPIC]);
+  expect(JSON.stringify(await kv.load())).not.toContain(TOPIC);expect(JSON.stringify(await ledger.recent())).not.toContain(TOPIC);
+  expect(JSON.stringify(logs)).not.toContain('PRIVATE_KV_VERIFY_FAILURE');expect(request()).toContain('only partly stored');expect(request()).not.toContain('Memory this turn');
+  failVerify=false;await direct('t3','Check the unrelated preference.',false);expect(memory.pendingTopics()).toEqual([]);
+ });
+});
+
+it('explains a rejected topic-only custody write without claiming pending cleanup or automatic retry',async()=>{
+ await runInDurableObject(stub('forget-topic-custody-receipt'),async(_instance,state)=>{
+  const TOPIC='Synthetic cobalt custody workshop';let failInsert=false;
+  const sql={exec:((query:string,...values:unknown[])=>{
+   if(failInsert&&query.startsWith('INSERT OR IGNORE INTO topic_purge_pending'))throw new Error('PRIVATE_INSERT_FAILURE');
+   return state.storage.sql.exec(query,...values as SqlStorageValue[]);
+  }) as SqlStorage['exec']};
+  const memory=claimStore(sql,work=>state.storage.transactionSync(work));const kv=durableConversationStore(state.storage);
+  const responder=createOwnerResponder('fixture',kv,memory);
+  const direct=(id:string,text:string)=>responder.respond({traceId:id,conversationRef:'owner',surface:'telegram',text},(_hop,work)=>work());
+  seen.writer=ops();await direct('t1',TOPIC);
+  failInsert=true;seen.writer=ops({forget_topic:TOPIC});await direct('t2',`Forget ${TOPIC}.`);
+  expect(memory.pendingTopics()).toEqual([]);expect(JSON.stringify(await kv.load())).toContain(TOPIC);
+  expect(request()).toContain('topic cleanup could not be accepted');
+  expect(request()).toContain('ask the owner to retry');
+  expect(request()).not.toContain('requested topic cleanup is pending');
+  expect(request()).not.toContain('PRIVATE_INSERT_FAILURE');
+ });
 });

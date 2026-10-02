@@ -4,7 +4,7 @@ import type { createOwnerMessageContextAdapter } from './owner-message-context-a
 import type { OwnerTurnEnvelope } from './owner-turn-envelope';
 import { ownerContextHandler } from '../tools/live/owner-context';
 import {
-  literalJsonTextRedactor, literalTextRedactor, sanitiseResultSchema, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
+  literalJsonTextRedactor, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
@@ -43,7 +43,7 @@ import { toolOutputLedger } from '../conversation/tool-output-ledger';
 const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'restore_message']);
 // Facts only, from the applied outcome. Nothing here is model-written.
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-const memoryReceipt = (outcome: ClaimOutcome, conversationLeft: number, conversationRedacted: number): string => {
+const memoryReceipt = (outcome: ClaimOutcome, conversationLeft: number, conversationRedacted: number, topicCleanup?: 'pending' | 'settled'): string => {
   const parts = [`stored ${plural(outcome.written, 'new claim', 'new claims')}${outcome.downgraded ? ` (${outcome.downgraded} kept only as inferred, not as the owner's stated fact)` : ''}`];
   if (outcome.held) parts.push(`held ${outcome.held} not stored${outcome.holdReasons.length ? ` (${outcome.holdReasons.join(', ')})` : ''}`);
   if (outcome.corrected) parts.push(`corrected ${plural(outcome.corrected, 'claim', 'claims')}`);
@@ -52,14 +52,17 @@ const memoryReceipt = (outcome: ClaimOutcome, conversationLeft: number, conversa
   if (outcome.forgetClaimsRemoved) {
     // 'Removed' only once settle succeeded; while saved conversation entries remain the claim stays pending.
     parts.push(conversationLeft
-      ? `removal of ${plural(outcome.forgetClaimsRemoved, 'claim', 'claims')} is pending at the owner's request: the stored memory copies are redacted but ${plural(conversationLeft, 'saved conversation entry still contains', 'saved conversation entries still contain')} it`
+      ? `removal of ${plural(outcome.forgetClaimsRemoved, 'claim', 'claims')} is pending at the owner's request: the stored memory copies are redacted but ${plural(conversationLeft, 'saved conversation entry', 'saved conversation entries')} still contain it or could not be verified clean`
       : `removed ${plural(outcome.forgetClaimsRemoved, 'claim', 'claims')} from stored memory at the owner's request`);
   } else if (outcome.forgetClaimsAttempted) {
     parts.push(`tried to remove ${plural(outcome.forgetClaimsAttempted, 'claim', 'claims')} at the owner's request but removal is incomplete${outcome.purgeIncomplete.length ? ` in ${outcome.purgeIncomplete.join(', ')}` : ''}`);
   }
   if (conversationRedacted) parts.push(`redacted ${plural(conversationRedacted, 'saved conversation entry', 'saved conversation entries')} that quoted it`);
   if (outcome.forgetNodes) parts.push(`asked the store to delete ${plural(outcome.forgetNodes, 'pattern node', 'pattern nodes')} (not separately verified)`);
-  if (outcome.forgetAllowed && !outcome.forgetClaimsAttempted && !outcome.forgetNodes) parts.push('the owner asked to forget something but nothing was forgotten');
+  if (topicCleanup) parts.push(topicCleanup === 'pending' ? 'the requested topic cleanup is pending until retained context copies are verified clean' : 'the requested topic was removed from retained context copies');
+  const topicCustodyFailed = outcome.purgeIncomplete.includes('pending_topic(failed)');
+  if (topicCustodyFailed) parts.push('a requested topic cleanup could not be accepted because its retry state could not be stored; its source was preserved; ask the owner to retry the request');
+  if (!topicCustodyFailed && !topicCleanup && outcome.forgetAllowed && !outcome.forgetClaimsAttempted && !outcome.forgetNodes) parts.push('the owner asked to forget something but nothing was forgotten');
   return `${parts.join('; ')}.`;
 };
 
@@ -158,7 +161,12 @@ export const createOwnerResponder = (
   const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;
   let traceId = '';
-  const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' }, { ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: async () => toolLedger?.recent() ?? [], ...(health === undefined ? {} : { health: () => health(traceId) }) });
+  const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' }, { ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: async () => {
+    refreshPendingRedaction();
+    const fragments = await toolLedger?.recent([...forgottenTexts]) ?? [];
+    refreshPendingRedaction();
+    return fragments.map(fragment => ({ ...fragment, text: forgetJsonText(fragment.text, 'data') }));
+  }, ...(health === undefined ? {} : { health: () => health(traceId) }) });
   // Tool outputs from the current turn; flushed to the ledger when the turn's entries persist.
   const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external'; summary: string }> = [];
   const circuitBreaker = new InMemoryCircuitBreaker();
@@ -179,7 +187,7 @@ export const createOwnerResponder = (
   let forgetOverflow = false;
   let forgetUnsafe = false;
   const forgetText = (value: string) => literalTextRedactor([...forgottenTexts], FORGOTTEN)(value);
-  const forgetJsonText = (value: string, mode: 'arguments' | 'tool_result' = 'arguments') => literalJsonTextRedactor([...forgottenTexts], FORGOTTEN, mode)(value);
+  const forgetJsonText = (value: string, mode: 'arguments' | 'tool_result' | 'data' = 'arguments') => literalJsonTextRedactor([...forgottenTexts], FORGOTTEN, mode)(value);
   const protocolKeys = new Set(['id', 'call_id', 'name', 'type', 'role', 'status']);
   const forgetPrior = (value: unknown): unknown => typeof value === 'string' ? forgetText(value)
     : Array.isArray(value) ? value.map(forgetPrior)
@@ -196,8 +204,7 @@ export const createOwnerResponder = (
   const complete = async (trace: string, purpose: string, system: string, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, clinicalRetried = false) => {
     await assertCurrent();
     if (forgetUnsafe) throw new Error('forget context sanitisation failed');
-    const purging = memory?.claims('purging').map(claim => claim.text) ?? [];
-    if (purging.length) redactLoaded(purging);
+    refreshPendingRedaction();
     if (forgetOverflow) throw new Error('forget context exceeded safe transient bound');
     turns = turns?.map(forgetToolTurn);
     const started = Date.now();
@@ -278,6 +285,55 @@ export const createOwnerResponder = (
     for (const text of combined) forgottenTexts.add(text);
     forgetUnsafe = false;
   };
+  const refreshPendingRedaction = () => {
+    try {
+      const claims = memory?.claims('purging') ?? [];
+      const topics = memory?.pendingTopics() ?? [];
+      const texts = [...new Set([...claims.map(claim => claim.text), ...topics])];
+      if (texts.length) redactLoaded(texts);
+      return { ids: claims.map(claim => claim.id), topics, texts };
+    } catch (error) {
+      if (error instanceof ClosedRunError) throw error;
+      forgetUnsafe = true;
+      throw new Error('forget context sanitisation failed');
+    }
+  };
+  const cleanupRetained = async (texts: readonly string[], ids: readonly number[], topics: readonly string[]) => {
+    let rewritten = 0;
+    let remaining = 0;
+    let failed = false;
+    if (texts.length && redactConversation) {
+      try {
+        const receipt = await redactConversation(texts, privateRunScope);
+        rewritten = receipt.rewritten;
+        // The callback also covers retained legacy rows omitted by ConversationStore.load().
+        remaining += receipt.remaining;
+      }
+      catch (error) { if (error instanceof ClosedRunError) throw error; failed = true; }
+    }
+    const callbackRemaining = remaining;
+    const redact = literalTextRedactor(texts, FORGOTTEN);
+    // Each store is read back independently even when another cleanup/read failed.
+    if (store) {
+      try {
+        const verifiedRemaining = (await store.load()).entries.filter(entry => JSON.stringify(redactConversationEntry(entry, redact)) !== JSON.stringify(entry)).length;
+        // The callback and load can describe the same rows; either positive count blocks settlement.
+        remaining = Math.max(callbackRemaining, verifiedRemaining);
+      }
+      catch (error) { if (error instanceof ClosedRunError) throw error; failed = true; }
+    }
+    if (toolLedger) {
+      try { remaining += await toolLedger.remaining(texts); }
+      catch (error) { if (error instanceof ClosedRunError) throw error; failed = true; }
+    }
+    await assertCurrent();
+    const settled = !failed && remaining === 0;
+    if (settled && (ids.length || topics.length)) {
+      privateRunScope?.admit();
+      memory?.settle(ids, topics);
+    }
+    return { rewritten, remaining, settled, failed };
+  };
   let pending: readonly LLMAttachment[] | undefined;
   // F1 receipt: the window observer fires only when history was actually dropped (content-free).
   const pathObservers = { onWindow: (stats: { kept: number; dropped: number; estimated_tokens: number; budget_tokens: number }) => { if (stats.dropped > 0) log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `kept ${stats.kept} dropped ${stats.dropped} ~${stats.estimated_tokens}/${stats.budget_tokens} tokens` }); } };
@@ -301,8 +357,7 @@ export const createOwnerResponder = (
   const path = new JoinedConversationPath(binding?.adapter.composer ?? adapters.contextComposer!, {
     complete: async (request) => {
       await assertCurrent();
-      const purging = memory?.claims('purging').map(claim => claim.text) ?? [];
-      if (purging.length) redactLoaded(purging);
+      refreshPendingRedaction();
       const trace = traceId;
       // Capture-mode probe turns run on the stripped handler set; delegation wraps that
       // same set so probe confinement applies to children too (children are read-only by
@@ -418,7 +473,20 @@ export const createOwnerResponder = (
     }
   };
   let restorePromise: Promise<void> | undefined;
-  const restored = () => restorePromise ??= store ? restoreConversation(tree, store).then((leafId) => { parentId = leafId; }) : Promise.resolve();
+  const restored = async () => {
+    if (forgetUnsafe) throw new Error('forget context sanitisation failed');
+    const pending = refreshPendingRedaction();
+    if (memory && (pending.ids.length || pending.topics.length)) {
+      await assertCurrent();
+      const purge = memory.purge(pending.ids, new Date().toISOString(), pending.topics);
+      redactLoaded(purge.texts);
+      await cleanupRetained(purge.texts, purge.ready ? pending.ids : [], purge.ready ? pending.topics : []);
+    }
+    await (restorePromise ??= store ? restoreConversation(tree, store).then(leafId => { parentId = leafId; }) : Promise.resolve());
+    // A failed durable scrub cannot put the pending bytes back into fresh provider history.
+    refreshPendingRedaction();
+    tree.redact([...forgottenTexts], FORGOTTEN);
+  };
   const converse = async (id: string, conversationRef: string, said: string, time: TurnTimer, fromOwner = false, surface = 'agent') => {
     if (forgetUnsafe) throw new Error('forget context sanitisation failed');
     traceId = id;
@@ -464,23 +532,19 @@ export const createOwnerResponder = (
       stage = 'uncertain';
       let purged: readonly string[] = [];
       let purgeIds: readonly number[] = [];
+      let purgeTopics: readonly string[] = [];
       let outcome: ClaimOutcome | undefined;
       privateRunScope?.admit();
-      const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts, ids) => { purged = texts; purgeIds = ids; redactLoaded(texts); }, { owner, shared }, undefined, (result) => { outcome = result; });
-      const conv = purged.length && redactConversation ? await redactConversation(purged, privateRunScope) : null;
-      // Settle only once the KV conversation/ledger stores verify clean too; a KV
-      // survivor leaves the claim 'purging' so a later retry can still find it.
-      const settled = purgeIds.length === 0 || (conv === null || conv.remaining === 0);
-      privateRunScope?.admit();
-      await assertCurrent();
-      if (purgeIds.length && settled) memory.settle(purgeIds);
+      const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts, ids, topics = []) => { purged = texts; purgeIds = ids; purgeTopics = topics; redactLoaded(texts); }, { owner, shared }, undefined, (result) => { outcome = result; });
+      const conv = purged.length ? await cleanupRetained(purged, purgeIds, purgeTopics) : null;
+      const settled = conv?.settled ?? true;
       // The receipt is emitted only now, after redaction and settle, so it can state what is true.
       const interrupted = memory.sweepInterruptedSettles(new Date(started - 10 * 60 * 1000).toISOString());
-      log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}${interrupted ? ` interrupted${interrupted}` : ''}` });
+      log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}${conv.failed ? ' verification incomplete' : ''}` : ''}${interrupted ? ` interrupted${interrupted}` : ''}` });
       // Emitted last, after redaction, settle and logging: an error above returns 'uncertain' with no receipt.
       const o = outcome as ClaimOutcome | undefined;
-      if (o !== undefined && (o.written || o.held || o.downgraded || o.corrected || o.confirmed || o.dismissed || o.forgetClaimsAttempted || o.forgetNodes || o.forgetAllowed)) memoryReceipts.push(memoryReceipt(o, purgeIds.length > 0 && !settled ? conv?.remaining ?? 0 : 0, conv?.rewritten ?? 0));
-      return 'saved';
+      if (!conv?.failed && o !== undefined && (o.written || o.held || o.downgraded || o.corrected || o.confirmed || o.dismissed || o.forgetClaimsAttempted || o.forgetNodes || o.forgetAllowed)) memoryReceipts.push(memoryReceipt(o, !settled ? Math.max(conv?.remaining ?? 0, 1) : 0, conv?.rewritten ?? 0, purgeTopics.length || memory.pendingTopics().length ? settled && purgeTopics.length ? 'settled' : 'pending' : undefined));
+      return conv?.failed ? 'uncertain' : 'saved';
     } catch (error) {
       log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error', detail: stage });
       return stage;
@@ -547,13 +611,13 @@ export const createOwnerResponder = (
         const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(memory, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
         let purged: readonly string[] = [];
         let purgeIds: readonly number[] = [];
+        let purgeTopics: readonly string[] = [];
         // With speaker-split sides the full gate runs at night too (self-report holds, shared
         // taint, origin classes). Without them the mixed transcript is a fabrication check only.
         const grounding = sides ? { owner: sides.owner, waldo: sides.waldo } : { owner: day };
-        const summary = applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, (texts, ids) => { purged = texts; purgeIds = ids; redactLoaded(texts); }, grounding);
-        const conv = purged.length && redactConversation ? await redactConversation(purged, privateRunScope) : null;
-        if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
-        return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
+        const summary = applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, (texts, ids, topics = []) => { purged = texts; purgeIds = ids; purgeTopics = topics; redactLoaded(texts); }, grounding);
+        const conv = purged.length ? await cleanupRetained(purged, purgeIds, purgeTopics) : null;
+        return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}${conv.failed ? ' verification incomplete' : ''}` : ''}`;
       } finally { clearForgotten(); }
     },
     async migrate(trace, input) {
@@ -563,12 +627,12 @@ export const createOwnerResponder = (
         const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
         let purged: readonly string[] = [];
         let purgeIds: readonly number[] = [];
+        let purgeTopics: readonly string[] = [];
         // Migration admits legacy facts only: the file payload can mention past forgets, so the
         // forget-intent gate is pinned shut here - nothing purges during a migration.
-        const summary = applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', (texts, ids) => { purged = texts; purgeIds = ids; redactLoaded(texts); }, { owner: input }, false);
-        const conv = purged.length && redactConversation ? await redactConversation(purged, privateRunScope) : null;
-        if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
-        return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
+        const summary = applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', (texts, ids, topics = []) => { purged = texts; purgeIds = ids; purgeTopics = topics; redactLoaded(texts); }, { owner: input }, false);
+        const conv = purged.length ? await cleanupRetained(purged, purgeIds, purgeTopics) : null;
+        return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}${conv.failed ? ' verification incomplete' : ''}` : ''}`;
       } finally { clearForgotten(); }
     },
     async promote(trace) {
