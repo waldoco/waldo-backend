@@ -17,6 +17,6 @@ test('only GET, redirects refused, errors reveal status not body',async()=>{
 });
 test('auth absent cannot make request',async()=>await assert.rejects(readHistory('','togdshayyxycitzckpqv',()=>{throw Error('should not call');}),/auth_missing/));
 test('oversize history rejected',async()=>await assert.rejects(readHistory('fictional-token','togdshayyxycitzckpqv',async()=>new Response(' '.repeat(128*1024+1))),/history_oversize/));
-test('real committed manifest has digests and37 entries',()=>{const m=localManifest(new URL('../supabase/migrations/',import.meta.url));assert.equal(m.length,37);assert.ok(m.every(x=>/^[a-f0-9]{64}$/.test(x.sha256)&&x.byteLength>0));});
+test('real committed manifest has digests and38 entries',()=>{const m=localManifest(new URL('../supabase/migrations/',import.meta.url));assert.equal(m.length,38);assert.ok(m.every(x=>/^[a-f0-9]{64}$/.test(x.sha256)&&x.byteLength>0));});
 
 test('malformed provider content does not leak in parse error',async()=>await assert.rejects(readHistory('fictional-token','togdshayyxycitzckpqv',async()=>new Response('do-not-print-this-value')),/history_json/));

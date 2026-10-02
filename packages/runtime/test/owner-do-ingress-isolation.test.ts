@@ -11,6 +11,20 @@ import { captureFixtureAdapters } from '../evals/fixture-adapter-capture';
 import { auditIsolatedWorld } from '../evals/isolated-world-audit';
 import type { NativeManifest } from '../evals/native-manifest';
 
+vi.mock('../src/channels/telegram-owner-do', async load => {
+  const original = await load<typeof import('../src/channels/telegram-owner-do')>();
+  const { admittedOwnerHost } = await import('./fixtures/admitted-owner-host');
+  const { OpenAIResponsesAdapter } = await import('../src/llm/openai');
+  return { ...original, TelegramOwnerDO: class extends original.TelegramOwnerDO {
+    constructor(state: DurableObjectState, bindings: typeof env) {
+      const subject = [81101, 81102].find(value => bindings.TELEGRAM_OWNER_DO!.idFromName(`hermetic-owner-${value}`).toString() === state.id.toString());
+      const host = subject === undefined ? undefined : admittedOwnerHost(`hermetic-owner-${subject}`, String(subject),
+        new OpenAIResponsesAdapter({ apiKey: bindings.OPENAI_API_KEY }), ['get_communication', 'propose_calendar_change']);
+      super(state, bindings, { mode: 'canonical', host });
+    }
+  } };
+});
+
 const outbox: { method: string; body: Record<string, unknown> }[] = [];
 const modelInputs: unknown[] = [];
 const unexpectedFetches: string[] = [];
@@ -131,6 +145,11 @@ describe('real owner-DO ingress in a sealed test world', () => {
     expect(replyInputs).toEqual(expect.arrayContaining([expect.stringContaining('cedar'), expect.stringContaining('birch')]));
     expect(replyInputs.filter((input) => input.includes('cedar')).every((input) => !input.includes('birch'))).toBe(true);
     expect(replyInputs.filter((input) => input.includes('birch')).every((input) => !input.includes('cedar'))).toBe(true);
+    for (const [subject, word] of [[81101, 'cedar'], [81102, 'birch']] as const) {
+      const own = modelInputs.filter(input => JSON.stringify(input).includes(`My private fixture is ${word}.`)) as { prompt_cache_key?: string }[];
+      expect(own.length).toBeGreaterThan(0);
+      expect(own.every(input => input.prompt_cache_key === `waldo:prn_10000000000000000000${String(subject).padStart(12, '0')}`)).toBe(true);
+    }
     expect(outbox.every((item) => item.method === 'setWebhook' || [81101, 81102].includes(Number(item.body.chat_id)))).toBe(true);
     const before = outbox.length;
     expect((await send(81101, 'My private fixture is cedar.', update)).status).toBe(200);

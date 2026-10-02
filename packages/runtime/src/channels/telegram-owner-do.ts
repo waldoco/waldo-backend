@@ -1,3 +1,9 @@
+import { ownerMessageAdmission, type OwnerMessageAdmission } from '../identity/owner-message-admission';
+import { createOwnerMessageContextAdapter } from './owner-message-context-adapter';
+import { ownerCanonicalHistory } from './owner-canonical-history';
+import type { OwnerResponderHost } from './owner-turn';
+import type { ContextComposerDependencies } from '../context-composer';
+import type { LLMGatewayAdapter } from '../llm/provider';
 import { MEMORY_GRAPH_PATH, readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
 import {TelegramLinkInbox,LINK_MODE,type LinkBinding} from './telegram-link-inbox';
@@ -151,7 +157,30 @@ export const resolveOwnerTelegramId = (
 
 type ChannelKind = 'telegram' | 'whatsapp';
 
+export type TelegramOwnerPrivateHost = Readonly<{
+  environment: string;
+  namespace: string;
+  allowedDoNames: readonly string[];
+  lookup(provider: 'telegram', subject: string): Promise<unknown>;
+  context(admission: OwnerMessageAdmission): ContextComposerDependencies;
+  access: Parameters<typeof createOwnerMessageContextAdapter>[0]['access'];
+  connectorBacked(handler: Parameters<OwnerResponderHost['prepare']>[1][number]): boolean;
+  gateway: LLMGatewayAdapter;
+}>;
+
+// Private construction selects canonical preparation independently of supplier availability.
+// Wrangler uses the unchanged two-argument deployed constructor.
+export type TelegramOwnerPreparation = Readonly<{ mode: 'canonical'; host?: TelegramOwnerPrivateHost }>;
+
 export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
+  private readonly canonicalPreparation: boolean;
+  private readonly ownerHost: TelegramOwnerPrivateHost | undefined;
+  constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, preparation?: TelegramOwnerPreparation) {
+    super(ctx, env);
+    if (preparation !== undefined && (!preparation || preparation.mode !== 'canonical')) throw new Error('invalid owner preparation mode');
+    this.canonicalPreparation = preparation !== undefined;
+    this.ownerHost = preparation?.host;
+  }
   private runtimes: Partial<Record<ChannelKind, OwnerRuntime>> = {};
   private queue: Promise<unknown> = Promise.resolve();
   private readonly inbox = new TelegramOwnerInbox(this.ctx.storage, persistInboxWake);
@@ -159,6 +188,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private activeInbox: InboxRecord | null = null;
   private activeScope: RunEffectScope | undefined;
   private activeAbort: AbortController | undefined;
+  private activeOwnerContext: ReturnType<typeof createOwnerMessageContextAdapter> | undefined;
 
   private closeRunAtomic(run: InboxRecord, reason: string, awaitingDelivery = false): void {
     this.ctx.storage.transactionSync(() => {
@@ -297,7 +327,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         }));
       }
       } catch { console.error('fixed failure notice unavailable'); } finally {
-      if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; }
+      if (this.activeScope === scope) { this.activeScope = undefined; this.activeOwnerContext = undefined; this.activeAbort = undefined; }
       try {
       for (const child of await this.inbox.records()) if (child.control?.targetRun === runId && child.attempt) {
         await this.inbox.transition(child.id, child.attempt, 'quarantined', child.state === 'consumed' ? 'consumed_target_outcome_uncertain' : 'not_consumed');
@@ -1249,11 +1279,27 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` });
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, undefined, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); return result; }), undefined,
+      }), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerHost?.gateway, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); return result; }), undefined,
       () => standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
-      undefined, channel,
+      undefined, channel, this.canonicalPreparation ? { prepare: async (turn, handlers, scope) => {
+        const host = this.ownerHost;
+        const occurrence = this.activeInbox;
+        if (!host || channel !== 'telegram' || !occurrence || !turn.text || turn.attachment || turn.mediaNote
+          || !this.env.TELEGRAM_OWNER_DO || scope !== this.activeScope) throw new Error('owner host unavailable');
+        const admission = await ownerMessageAdmission({
+          lookup: host.lookup.bind(host), scope,
+          locator: { environment: host.environment, namespace: host.namespace, doName: occurrence.doName, doId: this.ctx.id.toString() },
+          actualDoId: this.ctx.id.toString(), expectedDoId: name => this.env.TELEGRAM_OWNER_DO!.idFromName(name).toString(),
+          allowedDoNames: host.allowedDoNames, provider: 'telegram', subject: occurrence.subject, text: turn.text,
+          occurrenceKey: occurrence.id, occurredAt: occurrence.admittedAt, now: Date.now,
+        });
+        const adapter = createOwnerMessageContextAdapter({ admission, scope, dependencies: host.context(admission),
+          registeredHandlers: handlers.map(handler => handler.name), connectorBacked: handlers.filter(handler => host.connectorBacked(handler)).map(handler => handler.name), access: host.access.bind(host) });
+        this.activeOwnerContext = adapter;
+        return { admission, adapter, store: ownerCanonicalHistory(storage, admission, adapter) };
+      } } : undefined,
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
@@ -1269,12 +1315,17 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const listener = owner > 0 ? new TelegramOwnerListener({
       ownerTelegramId: owner, surface: channel, api, ...responder, log,
-      chooseReaction: turn => { const capability = turn.runScope; if (capability) capability.admit(); return responder.chooseReaction(turn); },
+      chooseReaction: turn => {
+        if (this.canonicalPreparation && turn.runScope) return Promise.resolve(null);
+        turn.runScope?.admit();
+        return responder.chooseReaction(turn);
+      },
       respond: (turn, time) => {
         if (turn.media) files.record(turn.media, turn.text ?? '', Date.now());
         return responder.respond(turn, time);
       },
       ...(channel === 'telegram' ? { queueFinal: async (turn: import('./telegram-polling').TelegramInboundTurn, payload: import('./telegram-final-outbox').FinalPayload, emoji: string) => {
+        if (this.canonicalPreparation && turn.runScope) { if (!this.activeOwnerContext) throw new Error('owner context unavailable'); await this.activeOwnerContext.assertCurrent(); }
         // Capture probes remain inert and exercise the original immediate mock path.
         if (probeCapture.current !== null) { await api.sendMessage(payload); return; }
         const captured = this.activeInbox;

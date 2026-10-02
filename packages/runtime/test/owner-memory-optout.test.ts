@@ -20,3 +20,12 @@ it('captures host control before any awaited reply',async()=>{
  const responder=createOwnerResponder(...args);const turn={traceId:'mutation',conversationRef:'owner',surface:'telegram',text:'Synthetic hello',memoryWrites:false};
  const replying=responder.respond(turn,(_name,work)=>work());turn.memoryWrites=true;await replying;expect(calls.writer).toBe(0);
 });
+
+
+it('captures host control before entering a scoped responder',async()=>{
+ calls.writer=0;const args:Parameters<typeof createOwnerResponder>=['fixture',undefined,memory as never];
+ const responder=createOwnerResponder(...args);
+ const runScope={runId:'fixture-run',attempt:'fixture-attempt',deadline:Date.now()+30_000,signal:new AbortController().signal,admit:()=>{},commit:<T>(work:()=>T)=>work()};
+ const turn={traceId:'scoped-mutation',conversationRef:'owner',surface:'telegram',text:'Synthetic hello',memoryWrites:false,runScope};
+ const replying=responder.respond(turn,(_name,work)=>work());turn.memoryWrites=true;await replying;expect(calls.writer).toBe(0);
+});

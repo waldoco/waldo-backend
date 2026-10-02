@@ -237,6 +237,37 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 | 2026-10-02 | Owner-global rate test timed out after 239 sequential projection RPCs; controlled per-call latency reproduced the baseline failure | Rate-limit test transport | responsibility-public-do.test.ts batches real signed admissions inside the DO, retains each session RPC and overflow RPC, asserts owner240/session60 counts and unchanged rejection state | Test security behavior rather than cumulative transport latency; retain the five-second timeout |
 
+### Owner admission custody epochs
+
+- [ ] Preserve an admission epoch across same-row presence unlink/reactivation and locator away/back; state_version alone cannot detect these ABA changes.
+- [ ] Lock affected owners in UUID order with NO KEY UPDATE for non-key epoch writes; presence transfers already hold destination FK KEY SHARE. Exercise opposing transfers and concurrent owner-state updates.
+- [ ] Reject direct caller epoch edits and unrelated unprivileged nested triggers, while existing service-role custody writes allocate privately.
+
+| Date | Bug found | Surface | Adversarial proof | Checklist change |
+| --- | --- | --- | --- | --- |
+| 2026-10-02 | State-only and presence-ID receipts miss same-row unlink/reactivation and locator ABA | Owner admission custody | waldo_owner_admission_revision.sql persisted receipt regressions | Require custody epoch for currentness |
+| 2026-10-02 | FOR UPDATE owner locking deadlocked opposing presence transfers against destination FK KEY SHARE | Owner revision preparation | prove-local.mjs concurrent transfers/lifecycle; preserved red receipt, then 100 monotonic epochs | Use compatible non-key locks in deterministic UUID order |
+
+### Owner admission integration gates
+- An admitted composer result must reach the actual provider system prompt. Its tool availability statement and model/dispatcher handlers must agree on current grants. An explicitly labelled trigger ACL ceiling may be broader than the current function list; it grants no callable tools. Preserve canonical composed bytes and their digest at delivery. A helper/composer-only pass cannot prove this provider boundary.
+- Fresh canonical history has its own namespace and row lineage. Legacy memory, standing orders and tool ledgers remain excluded until owner-bound suppliers and canonical forget/redaction are reviewed together.
+
+| Date | Bug found | Surface | Adversarial proof | Checklist change |
+| --- | --- | --- | --- | --- |
+| 2026-10-02 | Existing responder discards composed system; private composer renders trigger ACL before host grants | Canonical owner turn integration, Core-gated | Actual DO reply exists, then unique admitted-material provider assertion fails; evidence/owner-turn/material-delivery-red.log | Require provider-system delivery and rendered/evidence/dispatch ACL agreement |
+
+| 2026-10-02 | A ceiling was incorrectly treated as a current-tool grant, causing an unnecessary Core renderer blocker | Local owner-turn material follow-up | Existing ceiling wording inspected at 1d938b63; actual DO material assertion red then green through public compose result | Verify precise producer wording before requesting reserved ownership; deliver canonical request.system unchanged |
+
+| 2026-10-02 | A new currentness await delayed capture of host memoryWrites, permitting caller mutation before use | Owner responder | Existing opt-out mutation regression red, then green with scoped sibling case | Capture host controls synchronously and carry them into scoped continuation |
+| 2026-10-02 | Canonical pgTAP required a seed only the private upgrade runner created | Owner revision test portability | Exact CI test1 returned NULL; canonical column assertion and separate mandatory preseed backfill proof | Canonical tests must not depend on private runner fixtures; keep upgrade proof explicit and non-vacuous |
+
+| 2026-10-02 | Legacy hermetic ingress fixtures expected provider effects without supplying current owner authority | Authenticated owner ingress tests |22 focused cases reproduced12 failures, then explicit synthetic constructor hosts restored existing effect checks with canonical owner cache/history assertions | Positive fixtures supply exact private authority; retain missing-host/revocation rejection and never add runtime fallback |
+
+- [ ] Private canonical-preparation construction must select the mode separately from supplier availability. Test the actual deployed two-argument constructor through authenticated inbox text, photo, document and voice to a fenced final; explicit canonical construction without a supplier still rejects without model fallback. Keep currentness, history, reaction and final-publication requirements in the same mode.
+
+| 2026-10-02 | Private canonical prepare was installed for normal deployed owner DOs and quarantined ordinary text/media before reply | Owner DO construction | owner-do-deployed-mode.test.ts red on exact 49ce for four content types; explicit canonical missing-host/currentness/revocation tests retained | Test both deployed construction and explicit private canonical rejection |
+
+| 2026-10-02 | A single alarm served a prior outbox while a corrupt-history continuation stayed admitted, making its rejection assertion premature | Canonical owner fixture | Ready-outbox ordering reproduced red; at most three real alarms require the exact update's closed outcome, quarantine, unchanged history and no new reply | Drive the real scheduling boundary to a bounded observed result; never replace rejection assertions or sleep until lucky |
 ### Heartbeat delivery receipts
 - Scheduled nudges commit frozen outbox intent before transport. A resolved send is not delivery proof: undefined or wrong-chat ACK must leave cooldown untouched. Test attempted-send restart quarantine, definite-rejection same-byte retries and ACK-before-bookkeeping replay.
 - An older crashed schedule attempt stays as audit evidence, but a later successful or terminal-delivery attempt of the same occurrence must not suppress future occurrences. An unresolved older occurrence still blocks overlap. Select the latest attempt numerically across 9→10; ACK-bookkeeping replay preserves the first background completion time, and enqueue-commit crashes leave delivery pending.
