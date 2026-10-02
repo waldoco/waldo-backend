@@ -123,4 +123,14 @@ describe('aliases through the claim admission gate', () => {
       expect(state.storage.sql.exec<{ aliases: string }>('SELECT aliases FROM claims').one().aliases).toBe('zebra cillin / bedtime');
     });
   });
+
+  it('drops aliases that match a capitalised barrier topic', async () => {
+    const { applyClaimOps } = await import('../src/memory/claims');
+    await runInDurableObject(owner('alias-capital-barrier'), (_i, state) => {
+      const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
+      store.barrier('Zebracillin', AT2);
+      applyClaimOps(store, ops([{ kind: 'routine', text: 'Goes to bed around 11:30pm', source: 'stated', evidence: `owner, tg-1: "${SAID}"`, touches_forgotten: false, aliases: ['zebracillin', 'Zebra  Cillin', 'bedtime'] }]), AT2, 'owner agreed', undefined, { owner: SAID });
+      expect(state.storage.sql.exec<{ aliases: string }>('SELECT aliases FROM claims').one().aliases).toBe('zebra cillin / bedtime');
+    });
+  });
 });

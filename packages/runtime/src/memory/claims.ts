@@ -218,9 +218,13 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // forget_topic is model-supplied free text, and barriers go back to the model in every
       // memory pass: persisting the words would be the leak returning. Store the marker +
       // fingerprint only (the fingerprint is what blocks re-admission), and dedupe on it.
-      const hash = textFingerprint(topic.trim());
-      const existing = sql.exec<{ n: number }>('SELECT count(*) AS n FROM forget_barriers WHERE topic_hash = ?', hash).one().n;
-      if (existing === 0) sql.exec('INSERT INTO forget_barriers (topic, topic_hash, created_at) VALUES (?, ?, ?)', FORGOTTEN, hash, at);
+      // Also store the lower-cased, space-collapsed form: alias forms are normalised, so a capitalised
+      // topic must still match them. The as-given hash stays for exact claim-text blocking.
+      const given = topic.trim();
+      for (const hash of new Set([textFingerprint(given), textFingerprint(given.toLowerCase().replace(/\s+/g, ' '))])) {
+        const existing = sql.exec<{ n: number }>('SELECT count(*) AS n FROM forget_barriers WHERE topic_hash = ?', hash).one().n;
+        if (existing === 0) sql.exec('INSERT INTO forget_barriers (topic, topic_hash, created_at) VALUES (?, ?, ?)', FORGOTTEN, hash, at);
+      }
     },
     recordHold(kind: string, reason: string, text: string, at: string): void {
       sql.exec('INSERT INTO claim_holds (kind, reason, fingerprint, created_at) VALUES (?, ?, ?, ?)', kind, reason, textFingerprint(text.trim()), at);
