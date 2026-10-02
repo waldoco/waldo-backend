@@ -26,8 +26,8 @@ Merged, SOURCE + CI only: #552 read_mcp_tool names and reconnect message (ec553a
 
 ## Proposed split
 
-- Core: contracts, loader, memory and verification harnesses, artifacts, native36, audit and review of every PR.
-- Dalda: dashboard (#562 and the bounded visual revision), proactivity harness, resumable-task design with Core.
+- Core: dashboard implementation (projections and visual layer), contracts, loader, memory and verification harnesses, artifacts, native36, audit and review of every PR.
+- Dalda: review (dashboard and others), coordination, proactivity harness, resumable-task design with Core.
 - Codex: staging deploys, `telegram-owner-do.ts` and `console-signin.ts` edits, host slice for admission. Overlapping edits are coordinated with Codex first.
 - Merges follow the existing rules: independent review plus exact-head green CI.
 
@@ -38,7 +38,7 @@ Spend is split in two. Model-run spend for native36 was relayed by main (5:31) a
 ## Reconciled with Dalda's review (2026-10-02 17:39 and 17:54, relayed by main, unverified claims checked against source)
 
 Applied:
-- Dashboard: Dalda keeps #562 and the visual layer, plus coordination and review, proactivity and resumable state. Core supplies pure projections, contracts, helpers and tests, and reviews every dashboard PR.
+- Dashboard: Dalda declined the visual implementation (17:56) and offers review. Core now owns the dashboard implementation, including #562's visual layer and the projections, with Dalda reviewing. Dalda keeps coordination and review, proactivity and resumable state.
 - Google/Drive: Tools/MCP row states the live facts (auth_failed, drive scope absent, consent unapproved). Staging is at de43da6 (healthz 200, checked 17:51), which includes #552 only if Codex's release carried it; confirm before the Drive proof.
 - Durable follow-through: WorkUnit exists as contract schemas and fixtures only (packages/contracts/src; no reference in packages/runtime/src on beta-mvp), so production WorkUnit execution is not enabled. That matches Dalda's claim. The final outbox (channels/telegram-final-outbox.ts) is a Telegram payload record (chat_id, text, attempts, status, digest), so reuse for durable send needs a generic payload seam, not a copy. Background & persistence row: reuse the outbox's identity, digest and retry model; any DO hookup is a narrow seam coordinated with Codex (single writer of telegram-owner-do.ts).
 
