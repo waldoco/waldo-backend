@@ -101,6 +101,16 @@ describe('read_mcp_tool through the real dispatcher', () => {
     expect(out).not.toHaveProperty('connect');
   });
 
+  it('every Drive read asks for no content snippets, whatever the model passes', async () => {
+    const got: Array<Record<string, unknown>> = [];
+    const spy: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async (_u, _t, a) => { got.push(a); return [{ text: 'ok' }]; } };
+    for (const [tool, args] of [['list_recent_files', {}], ['search_files', { query: 'x', excludeContentSnippets: false }], ['get_file_metadata', { fileId: 'f', excludeContentSnippets: false }]] as const) {
+      await dispatchTool({ id: `s-${tool}`, name: 'read_mcp_tool', args: { server: 'drive', tool, args } }, context(), { handlers: [readMcpToolHandler(SERVERS, spy, true)] });
+    }
+    expect(got).toHaveLength(3);
+    for (const a of got) expect(a.excludeContentSnippets).toBe(true);
+  });
+
   it('the staging Drive entry declares exactly the four read tools in read_tools', () => {
     const drive = mcpServers(SERVERS).find((s) => s.name === 'drive');
     expect(drive?.read_tools).toEqual(['search_files', 'list_recent_files', 'get_file_metadata', 'read_file_content']);

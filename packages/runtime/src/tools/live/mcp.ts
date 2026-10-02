@@ -198,9 +198,12 @@ export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: 
       return { ok: false, code: 'forbidden', error: `tool "${tool}" is not enabled for owner-button-free reads yet.`, source_taint: 'external' };
     }
     if (!ctx?.turnId || !ctx.toolCallId) return { ok: false, code: 'rejected', error: 'Read invocation identity is unavailable.', source_taint: 'external' };
+    // Drive's list/search/metadata tools return a generated contentSnippet about the file body unless excludeContentSnippets is true
+    // (https://developers.google.com/workspace/drive/api/reference/mcp/tools_list/list_recent_files). Reads here are metadata only,
+    // so the host sets it after the model's args, and the model cannot turn snippets back on.
     const intent: ProxyIntent = { id: `mcpread:${await sha256Hex(JSON.stringify([ctx.authenticatedUserId, ctx.turnId, ctx.toolCallId]))}`, readOnly: true };
     try {
-      const { content, protocolVersion } = await executeMcp(found, tool, args, googleAuth, fetch, intent);
+      const { content, protocolVersion } = await executeMcp(found, tool, { ...args, excludeContentSnippets: true }, googleAuth, fetch, intent);
       return { ok: true, data: { output: content, protocol: protocolVersion, source_taint: 'external' as const }, source_taint: 'external' };
     } catch (error) {
       if (error instanceof McpConnectError) {
