@@ -26,6 +26,17 @@ describe('forgetting a claim also redacts the owner words it was grounded on', (
       expect(texts).toContain('unrelated lunch plan');
     });
   });
+  it('ignores a quoted span on an agent-origin claim, so a common phrase cannot wipe unrelated owner text', async () => {
+    await run('forget-evidence-agent', (sql, tx) => {
+      const store = claimStore(sql, tx);
+      const episodes = episodeIndex(sql);
+      store.add({ kind: 'fact', text: 'Owner is polite', source: 'inferred', evidence: 'saw "thank you very much" in a note', origin: 'agent' }, AT);
+      episodes.add('tg-1', 'owner', 'Thank you very much for the lift', 1);
+      const id = store.claims()[0]!.id;
+      applyClaimOps(store, ops({ forget_claims: [id] }), AT, 'owner, tg-3', undefined, { owner: 'forget that I am polite' });
+      expect(sql.exec<{ text: string }>('SELECT text FROM episodes').toArray()[0]!.text).toBe('Thank you very much for the lift');
+    });
+  });
   it('ignores a short or unquoted evidence string such as a bare citation', async () => {
     await run('forget-evidence-short', (sql, tx) => {
       const store = claimStore(sql, tx);
