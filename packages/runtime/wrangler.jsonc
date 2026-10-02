@@ -17,7 +17,7 @@
   // (never copied from staging); empty string keeps the single-owner fallback disabled there.
   // WALDO_EGRESS_ALLOWLIST: browse-tool egress host list. Empty in production = fail-closed;
   // staging names a demo set. guard-wrangler-local-bindings requires the key in both.
-  "vars": { "WALDO_ENVIRONMENT": "production", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "", "LANGFUSE_CAPTURE_TEXT": "false", "WALDO_EGRESS_ALLOWLIST": "" },
+  "vars": { "WALDO_ENVIRONMENT": "production", "WALDO_OWNER_DO_NAMESPACE": "", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "", "LANGFUSE_CAPTURE_TEXT": "false", "WALDO_EGRESS_ALLOWLIST": "" },
   "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },
   "durable_objects": {
     "bindings": [
@@ -45,7 +45,7 @@
   // Fail-closed PR infrastructure preview: isolated DOs, no external storage/provider secrets.
   // Preview vars/bindings are not inherited. Assets and migrations stay top-level.
   "previews": {
-    "vars": { "WALDO_ENVIRONMENT": "preview", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "", "LANGFUSE_CAPTURE_TEXT": "false", "WALDO_EGRESS_ALLOWLIST": "" },
+    "vars": { "WALDO_ENVIRONMENT": "preview", "WALDO_OWNER_DO_NAMESPACE": "", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "", "LANGFUSE_CAPTURE_TEXT": "false", "WALDO_EGRESS_ALLOWLIST": "" },
     "observability": {
       "enabled": true,
       "logs": { "enabled": true, "invocation_logs": false },
