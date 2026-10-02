@@ -27,6 +27,7 @@ vi.mock('../src/channels/telegram-owner-do', async load => {
 
 const outbox: { method: string; body: Record<string, unknown> }[] = [];
 const modelInputs: unknown[] = [];
+let onFixtureReply: (() => Promise<void>) | undefined;
 const unexpectedFetches: string[] = [];
 let sourceWorld: IsolatedSourceWorld | null = null;
 let interceptCalendarEffects = false;
@@ -59,6 +60,7 @@ vi.mock('openai', () => ({
     responses = { create: async (body: unknown) => {
       modelInputs.push(body);
       const name = (body as { text?: { format?: { name?: string } } }).text?.format?.name;
+      if (!name && onFixtureReply) { const hook = onFixtureReply; onFixtureReply = undefined; await hook(); }
       const text = name === 'claim_ops'
         ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}'
         : 'Synthetic answer from the model adapter.';
@@ -452,4 +454,106 @@ it('target execution throw after consumed steer never completes the child',async
     internal.turn=async()=>{const target=internal.activeInbox!;await inbox.admit(binding,993345,'steer',{kind:'steer',targetRun:target.runId!});const child=(await inbox.records()).find(r=>r.updateId===993345)!;childId=child.id;await inbox.claim(child.id,'consumed-child','control',Date.now()+180000);await inbox.transition(child.id,'consumed-child','consumed');throw new Error('target execution failed');};
     await internal.drainInbox();expect((await inbox.records()).find(r=>r.id===childId)?.state).toBe('quarantined');expect((await inbox.records()).find(r=>r.id===childId)?.reason).toBe('consumed_target_outcome_uncertain');internal.turn=original;await state.storage.deleteAlarm();
   });
+});
+
+it.each([false, true])('accepted concurrent forget after the final model round has a consumed or visible child outcome (target stopped=%s)', async (stopped) => {
+  const subject = 81101;
+  const parentId = stopped ? 994421 : 994411;
+  const childId = parentId + 1;
+  let acceptedSteer: boolean | undefined;
+  const marker = 'FORGET-CONCURRENT-SYNTHETIC';
+  const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+  const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
+  await runInDurableObject(doStub(subject), async (instance, state) => {
+    const binding = { bot: 'hermetic-test-bot-token', subject: String(subject), doName: route(subject).doName };
+    await state.storage.put({ telegram_subject: String(subject), do_name: route(subject).doName });
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit(binding, parentId, JSON.stringify({ update_id: parentId, message: { message_id: parentId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: 'Synthetic first request with one final answer.' } }));
+    onFixtureReply = async () => {
+      const internal = instance as unknown as { activeInbox: { runId: string }; runtimes: { telegram: { control: import('../src/channels/turn-control').TurnControl } } };
+      const control = internal.runtimes.telegram.control;
+      if (stopped) expect(control.stopTarget(internal.activeInbox.runId)).toBe(true);
+      const original = control.steerTarget.bind(control);
+      control.steerTarget = (...args) => { acceptedSteer = original(...args); return acceptedSteer; };
+      const response = await instance.fetch(new Request('https://telegram-owner/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'hermetic-test-webhook-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': route(subject).doName }, body: JSON.stringify({ update_id: childId, message: { message_id: childId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: `Forget ${marker}.` } }) }));
+      expect(response.status).toBe(200);
+      control.steerTarget = original;
+    };
+    await (instance as unknown as { drainInbox(): Promise<void> }).drainInbox();
+    await instance.alarm();
+    const child = (await inbox.records()).find(row => row.updateId === childId)!;
+    const finals = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
+    expect(acceptedSteer).toBe(!stopped);
+    const consumed = child.state === 'consumed' || child.state === 'completed';
+    const visibleOutcome = finals.some(row => row.trace === `tg-${childId}`);
+    expect(consumed || visibleOutcome, JSON.stringify({ state: child.state, reason: child.reason, seenByModel: JSON.stringify(modelInputs).includes(marker), acceptedSteer, visibleOutcome, parentNotice: finals.some(row => row.trace === `tg-${parentId}`) })).toBe(true);
+    await state.storage.deleteAlarm();
+  });
+});
+
+it('late steering to a closed target becomes one ordinary FIFO turn with unchanged admission identity',async()=>{
+ const subject=81102;await runInDurableObject(doStub(subject),async(instance,state)=>{
+  const {TelegramOwnerInbox}=await import('../src/channels/telegram-owner-inbox');const {persistInboxWake}=await import('../src/scheduler/alarm-slot');
+  const inbox=new TelegramOwnerInbox(state.storage,persistInboxWake);const binding={bot:'hermetic-test-bot-token',subject:String(subject),doName:route(subject).doName};
+  await state.storage.put({telegram_subject:String(subject),do_name:binding.doName});
+  const body=JSON.stringify({update_id:994501,message:{message_id:994501,from:{id:subject,is_bot:false},chat:{id:subject,type:'private'},text:'LATE_STEER_ORDINARY_FIXTURE'}});
+  await inbox.admit(binding,994501,body,{kind:'steer',targetRun:'closed-target'});const before=(await inbox.records()).find(row=>row.updateId===994501)!;
+  await (instance as unknown as {drainInbox():Promise<void>}).drainInbox();
+  const after=(await inbox.records()).find(row=>row.id===before.id)!;expect(after.control).toBeUndefined();expect(after.digest).toBe(before.digest);expect(after.sequence).toBe(before.sequence);
+  expect(modelInputs.some(input=>JSON.stringify(input).includes('LATE_STEER_ORDINARY_FIXTURE'))).toBe(true);
+  const count=modelInputs.length;expect(await inbox.admit(binding,994501,body)).toBe('duplicate');await instance.alarm();expect(modelInputs).toHaveLength(count);await state.storage.deleteAlarm();
+ });
+});
+
+it.each(['false','missing'])('durable child consumption %s halts before hearing or exposing steering text',async fault=>{
+ const subject=fault==='false'?81101:81102;await runInDurableObject(doStub(subject),async(instance,state)=>{
+  const {TelegramOwnerInbox}=await import('../src/channels/telegram-owner-inbox');const {persistInboxWake}=await import('../src/scheduler/alarm-slot');
+  const inbox=new TelegramOwnerInbox(state.storage,persistInboxWake);const binding={bot:'hermetic-test-bot-token',subject:String(subject),doName:route(subject).doName};
+  await state.storage.put({telegram_subject:String(subject),do_name:binding.doName});
+  const internal=instance as unknown as {activeInbox:import('../src/channels/telegram-owner-inbox').InboxRecord;inbox:import('../src/channels/telegram-owner-inbox').TelegramOwnerInbox;turn:()=>Promise<void>;drainInbox:()=>Promise<void>;runtimes:{telegram:{control:import('../src/channels/turn-control').TurnControl}}};
+  const originalTurn=internal.turn;const originalTransition=internal.inbox.transition.bind(internal.inbox);
+  await inbox.admit(binding,994601,'{}');let used=false;
+  internal.turn=async()=>{
+   const target=internal.activeInbox.runId!;const control=internal.runtimes.telegram.control;control.begin(true);
+   if(fault==='false'){await inbox.admit(binding,994602,'fictional steer',{kind:'steer',targetRun:target});await inbox.claim('hermetic-test-bot-token:telegram:994602','child','child-run',Date.now()+180000);}
+   internal.inbox.transition=async(...args)=>args[2]==='consumed'?false:originalTransition(...args);
+   expect(control.steerTarget(target,994602,'NEVER_EXPOSED_STEER')).toBe(true);
+   await expect(control.roundAsync()).rejects.toThrow();expect(control.heard()).toEqual([]);used=true;control.end();
+  };
+  await internal.drainInbox();expect(used).toBe(true);expect(JSON.stringify(modelInputs)).not.toContain('NEVER_EXPOSED_STEER');
+  internal.turn=originalTurn;internal.inbox.transition=originalTransition;await state.storage.deleteAlarm();
+ });
+});
+
+it('late consumed-child recovery preserves a durable notice wake through outbox failure and dedupes its outcome',async()=>{
+ const subject=81102;await runInDurableObject(doStub(subject),async(instance,state)=>{
+  const {TelegramOwnerInbox}=await import('../src/channels/telegram-owner-inbox');const {persistInboxWake}=await import('../src/scheduler/alarm-slot');
+  const inbox=new TelegramOwnerInbox(state.storage,persistInboxWake);const binding={bot:'hermetic-test-bot-token',subject:String(subject),doName:route(subject).doName};
+  await state.storage.put({telegram_subject:String(subject),do_name:binding.doName});
+  await inbox.admit(binding,994701,'consumed fixture',{kind:'steer',targetRun:'old-parent'});const child=(await inbox.records()).find(row=>row.updateId===994701)!;
+  await inbox.claim(child.id,'old-child-attempt','child-run',Date.now()-10*60000);await inbox.transition(child.id,'old-child-attempt','consumed');await inbox.recover(new Set());
+  const internal=instance as unknown as {setup():{finalOutbox:import('../src/channels/telegram-final-outbox').TelegramFinalOutbox};notifyUncertainSteering():Promise<void>};
+  const outbox=internal.setup().finalOutbox;const enqueue=outbox.enqueueFenced.bind(outbox);outbox.enqueueFenced=async()=>{throw new Error('fictional outbox capacity');};
+  await expect(internal.notifyUncertainSteering()).rejects.toThrow('outbox capacity');
+  const retained=(await inbox.records()).find(row=>row.id===child.id)!;expect(retained.state).toBe('quarantined');expect(retained.outcomeNoticeQueued).not.toBe(true);
+  expect(state.storage.kv.get<number>('telegram_owner_inbox_due_v1')).toBeGreaterThan(Date.now()-1000);
+  outbox.enqueueFenced=enqueue;await internal.notifyUncertainSteering();await internal.notifyUncertainSteering();
+  const notices=outbox.records().filter(row=>row.trace==='tg-994701');expect(notices).toHaveLength(1);expect(notices[0]!.expiresAt).toBeUndefined();
+  expect((await inbox.records()).find(row=>row.id===child.id)).toMatchObject({state:'quarantined',body:'',outcomeNoticeQueued:true});
+  expect(await inbox.claim(child.id,'retry','replacement-run',Date.now()+10000)).toBeNull();await state.storage.deleteAlarm();
+ });
+});
+
+
+it('legacy erased never-consumed steering gets one truthful not-processed notice without replay or repeated wake',async()=>{
+ const subject=81101;await runInDurableObject(doStub(subject),async(instance,state)=>{
+  const {TelegramOwnerInbox}=await import('../src/channels/telegram-owner-inbox');const {persistInboxWake}=await import('../src/scheduler/alarm-slot');
+  const inbox=new TelegramOwnerInbox(state.storage,persistInboxWake);const binding={bot:'hermetic-test-bot-token',subject:String(subject),doName:route(subject).doName};
+  await state.storage.put({telegram_subject:String(subject),do_name:binding.doName});await inbox.admit(binding,994801,'old erased message',{kind:'steer',targetRun:'old-run'});
+  const child=(await inbox.records()).find(row=>row.updateId===994801)!;await inbox.claim(child.id,'old-attempt','old-control',Date.now()-10*60000);await inbox.transition(child.id,'old-attempt','quarantined','not_consumed');
+  const internal=instance as unknown as {notifyUncertainSteering():Promise<void>;setup():{finalOutbox:import('../src/channels/telegram-final-outbox').TelegramFinalOutbox}};
+  await internal.notifyUncertainSteering();await internal.notifyUncertainSteering();const notices=internal.setup().finalOutbox.records().filter(row=>row.trace==='tg-994801');
+  expect(notices).toHaveLength(1);expect(notices[0]!.payload.text).toContain('not processed');expect(notices[0]!.payload.text).not.toContain('was used');
+  expect(await inbox.claim(child.id,'retry','replacement',Date.now()+10000)).toBeNull();expect((await inbox.records()).find(row=>row.id===child.id)?.outcomeNoticeQueued).toBe(true);await state.storage.deleteAlarm();
+ });
 });
