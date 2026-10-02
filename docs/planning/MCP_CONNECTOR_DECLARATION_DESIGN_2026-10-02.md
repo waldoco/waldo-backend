@@ -11,21 +11,30 @@ Status: design for review, source layer only. Follows #570 (handler-declared `re
 
 ## Options
 
-A. Mark the handler from config at registration. The factory sets `requires_connector: true` only when every configured server it can serve is `auth: 'google'`. Mixed or non-Google config leaves it unmarked. No contract change; one factory change per handler. `read_mcp_tool` is all-Google by construction (its server filter), so it is always marked when any readable server exists. `call_mcp_tool` is marked only when all configured servers are Google-auth.
+A. Mark the handler from config at registration. No contract change; one factory change. Applies to `read_mcp_tool` only (all-Google by construction). See the recommendation for why `call_mcp_tool` is excluded.
 B. Split the ACL entry per server (`read_mcp_tool:<server>`). Exact, but changes the `ToolName` union, grants and manifests. A contract change with host fallout. Not needed while the config holds one MCP server.
 C. A dynamic declaration (a function on the handler returning the server names that need a connector) plus a per-server finding in the ACL result. Exact without renaming tools, but adds a second declaration channel next to the boolean.
 
 ## Recommendation
 
-Do A now. It closes the omission risk with the smallest change, and its failure mode is conservative in the right direction for read tools: marking can only degrade a call when the connector is unavailable. Treat a mixed `call_mcp_tool` config as an open finding, not a silent default: the handler stays unmarked and the typed reconnect path above still gives the owner the right card. Move to B when a second, non-Google MCP server is actually configured, and not before.
+Do A for `read_mcp_tool` only. It is all-Google by construction (its server filter), so the handler is marked whenever it is offered, and a marked read tool can only be removed when the connector is unavailable, which is the right outcome for a read that would fail anyway.
+
+`call_mcp_tool` stays unmarked, on purpose. With a desk wired in (`mcp.ts`, the `if (desk)` branch) the handler only proposes: it stores a proposal and returns `applied: false`, and no Google connector is touched until the owner approves the card. Marking it would remove the proposal path whenever connectors are down, and the owner could no longer be asked. Execution after approval already surfaces a typed `McpConnectError` failure line. Without a desk the handler calls `executeMcp` directly and fails with the typed reconnect error; that surface (tests, console) does not need the ACL flag. Revisit if a desk-less production surface for `call_mcp_tool` appears.
+
+Per-server ACL entries (B) wait until a non-Google MCP server is actually configured.
+
+## Host-slice requirement (Codex seam, not in this PR)
+
+The ACL `connectors` input is a list of tool names, not Google features. The host must list `read_mcp_tool` as available only when the required feature of at least one readable server (drive today) is actually granted on the connected account, and must leave it out when the grant lacks that feature. Passing "Google connected" alone would admit `read_mcp_tool` for an account that has no Drive scope, which is today's staging state. The host also passes `connectorBackedTools(handlers)` as `connector_backed`.
 
 ## Tests (for the implementing PR)
 
-1. Config with only a Drive server: both handlers marked, so `connectorBackedTools` lists `call_mcp_tool` and `read_mcp_tool`.
-2. Config with a Drive server plus a non-Google server: `read_mcp_tool` marked, `call_mcp_tool` unmarked.
-3. No servers configured: neither handler is offered, and neither is marked.
-4. The #571 probe guard extended to the MCP handlers: any handler whose execution reaches `googleAuth.resolve` must be marked, using a stub that records the call.
-5. Existing `read_tools`, `allow_tools` and typed-reconnect tests stay green.
+1. Config with a Drive server and a desk: `read_mcp_tool` marked, `call_mcp_tool` not marked, so `connectorBackedTools` lists only `read_mcp_tool`.
+2. No servers configured: neither handler is offered, and neither is marked.
+3. A Drive server plus a non-Google server: `read_mcp_tool` still marked (it only serves Google servers), `call_mcp_tool` unmarked.
+4. With the connector unavailable, the ACL result removes `read_mcp_tool` and keeps `call_mcp_tool`, so the proposal path survives.
+5. The #571 probe guard extended to `read_mcp_tool`: a stub that records `googleAuth.resolve` must be reached only by a marked handler.
+6. Existing `read_tools`, `allow_tools` and typed-reconnect tests stay green.
 
 ## Not in scope
 
