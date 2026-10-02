@@ -1,6 +1,6 @@
 # Files and artifacts flow: state and bounded first slice (proposal)
 
-Status: proposal for review. Layer: SOURCE reading of beta-mvp f29c104. Nothing deployed or run live. Core owns the flow (delegated by Dalda via main on 2026-10-02 7:34 PM, accepted by Core in principle). Console, Durable Object and sign-in files stay Codex's single-writer files; every change there is a seam ask below.
+Status: proposal for review. Layer: SOURCE reading of beta-mvp f29c104. Nothing deployed or run live. Core takes the flow as an engineering-merit decision under the owner's standing "decide on merit, log it" grant, after Dalda's relay via main on 2026-10-02 7:34 PM. This is not an owner approval of the scope. Console, Durable Object and sign-in files stay Codex's single-writer files; every change there is a seam ask below.
 
 ## What already exists (verified in source)
 Two stores, not one:
@@ -24,6 +24,13 @@ Goal: the agent can list, read and write workspace files through registered tool
 4. Docs: a section tying artifacts and workspace together (which tool for which job) in the prompt-facing tool descriptions, with no behavior rules by text matching.
 
 Files (all Core): `packages/contracts/src/tools/permissions.ts` (+test), a new contracts schema file, `packages/runtime/src/tools/live/workspace.ts` (new), its tests, `docs/`.
+
+## Implementation notes to fold into the slice
+- `operation_id`: strip any model-supplied value and derive it from dispatcher ctx (user, turn, tool call). The model never chooses it.
+- Decide on purpose whether `workspace_write` joins `PRIVILEGED_ACTION_TOOLS` (reviewer suggests yes) or is limited to the `user_message` trigger. Record the choice and the reason in the PR.
+- Trigger names must match the real trigger enum; "owner-initiated" means `user_message`. The tool allowlist must match `TOOL_PERMISSIONS` exactly.
+- Add `workspace_list` and `workspace_read` to `EXTERNAL_ORIGIN_TOOLS`.
+- Update the `permissions.test` pins deliberately, in the same PR, not by loosening them.
 
 ## Seam asks for Codex (via main)
 - Register the three handlers in the owner DO tool list and pass the workspace store (`workspaceOwnerHost`) into them. Only this wiring is Codex's.
