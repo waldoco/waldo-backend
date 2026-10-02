@@ -3,7 +3,7 @@ import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { ResolvedInvocationInput } from '../context-composer/types';
 
 type PresenceBinding = Readonly<{
-  owner_id: string; do_name: string; state_version: number;
+  owner_id: string; do_name: string; state_version: number; admission_revision: string;
   presence_id: string; provider: 'telegram'; subject: string;
 }>;
 type Locator = Readonly<{ environment: string; namespace: string; doName: string; doId: string }>;
@@ -46,11 +46,12 @@ const binding = (value: unknown): PresenceBinding => {
   const r = value as Record<string, unknown>;
   if (Object.getPrototypeOf(r) !== Object.prototype || Object.getOwnPropertySymbols(r).length
     || Object.values(Object.getOwnPropertyDescriptors(r)).some(d => !('value' in d))
-    || Object.getOwnPropertyNames(r).sort().join(',') !== 'do_name,owner_id,presence_id,provider,state_version,subject'
+    || Object.getOwnPropertyNames(r).sort().join(',') !== 'admission_revision,do_name,owner_id,presence_id,provider,state_version,subject'
     || typeof r.owner_id !== 'string' || !uuid.test(r.owner_id) || typeof r.presence_id !== 'string' || !uuid.test(r.presence_id)
     || typeof r.do_name !== 'string' || !r.do_name || r.provider !== 'telegram' || typeof r.subject !== 'string' || !/^\d+$/.test(r.subject)
+    || typeof r.admission_revision !== 'string' || !/^[1-9][0-9]{0,18}$/.test(r.admission_revision) || BigInt(r.admission_revision) > 9223372036854775807n
     || typeof r.state_version !== 'number' || !Number.isSafeInteger(r.state_version) || r.state_version < 0) throw new OwnerAdmissionError('rejected');
-  return Object.freeze({ owner_id: r.owner_id.toLowerCase(), do_name: r.do_name, state_version: r.state_version,
+  return Object.freeze({ owner_id: r.owner_id.toLowerCase(), do_name: r.do_name, state_version: r.state_version, admission_revision: r.admission_revision,
     presence_id: r.presence_id.toLowerCase(), provider: r.provider, subject: r.subject });
 };
 
@@ -79,12 +80,14 @@ export async function ownerMessageAdmission(options: Options): Promise<OwnerMess
   };
   const initial = await resolve();
   const ownerHex = initial.owner_id.replaceAll('-', '').toLowerCase();
+  // Non-secret stable evidence identifier; current lookup remains the authority check.
+  const verification = await digest(`owner-verification:v1:${initial.owner_id}:${initial.admission_revision}`);
   const contentDigest = `sha256:${await digest(text)}`;
   const occurrence = await digest(JSON.stringify([locator.environment, locator.namespace, locator.doName, initial.owner_id, provider, subject, occurrenceKey]));
   scope.admit();
   const accepted = acceptTrustedInvocation({
     admission_source: 'authenticated_ingress',
-    verified_authority: { principal_ref: `prn_${ownerHex}`, tenant_ref: `ten_${ownerHex}`, verification_ref: `ver_${ref()}` },
+    verified_authority: { principal_ref: `prn_${ownerHex}`, tenant_ref: `ten_${ownerHex}`, verification_ref: `ver_${verification.slice(0, 32)}` },
     input_refs: [{ input_ref: `inp_${occurrence.slice(0, 32)}`, content_digest: contentDigest }],
     intent: { kind: 'respond_to_user' },
     occurrence: { occurrence_ref: `occ_${occurrence.slice(0, 32)}`, occurred_at: occurredAt },

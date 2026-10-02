@@ -6,7 +6,7 @@ import type { ContextComposerDependencies } from '../src/context-composer';
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
 async function setup() {
     const scope: RunEffectScope = { runId: 'run', attempt: 'attempt', deadline: Date.now() + 30000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() };
-    const lookup = vi.fn(async () => ({ owner_id: '10000000-0000-0000-0000-000000000001', presence_id: '20000000-0000-0000-0000-000000000001', state_version: 0, do_name: 'owner', provider: 'telegram', subject: '1001' }));
+    const lookup = vi.fn(async () => ({ owner_id: '10000000-0000-0000-0000-000000000001', presence_id: '20000000-0000-0000-0000-000000000001', state_version: 0, admission_revision: '1', do_name: 'owner', provider: 'telegram', subject: '1001' }));
     const admission = await ownerMessageAdmission({ lookup, scope, locator: { environment: 'staging', namespace: 'ns', doName: 'owner', doId: 'do' }, actualDoId: 'do', expectedDoId: () => 'do', allowedDoNames: ['owner'], provider: 'telegram', subject: '1001', text: 'Plan the Bengaluru demo on October 15.', occurrenceKey: 'update:1', occurredAt: Date.now() - 1, now: Date.now });
     const source = (key: string, kind: 'runtime_metadata' = 'runtime_metadata', scope: 'system' | 'principal' = 'system') => ({ source_key: key.toLowerCase().replaceAll(' ', '-'), source_kind: kind, scope, source_taint: null, produced_at: admission.snapshot.snapshot_at });
     const attestation = { ...admission.snapshot, revision_ref: 'rev_11111111111111111111111111111111' };

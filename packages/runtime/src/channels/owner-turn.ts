@@ -1,4 +1,7 @@
 import type { RunEffectScope } from './run-effect-scope';
+import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
+import type { createOwnerMessageContextAdapter } from './owner-message-context-adapter';
+import type { OwnerTurnEnvelope } from './owner-turn-envelope';
 import { ownerContextHandler } from '../tools/live/owner-context';
 import {
   sanitiseResultSchema, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
@@ -76,6 +79,16 @@ const CLINICAL_FALLBACK = {
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
+export type OwnerResponderBinding = Readonly<{
+  admission: OwnerMessageAdmission;
+  adapter: ReturnType<typeof createOwnerMessageContextAdapter>;
+  store: ConversationStore;
+}>;
+export type OwnerResponderHost = Readonly<{
+  prepare(turn: OwnerTurnEnvelope, handlers: DispatchToolOptions<ToolDispatcherContext>['handlers'], scope: RunEffectScope): Promise<OwnerResponderBinding>;
+}>;
+type PrivateOwner = Readonly<{ host?: OwnerResponderHost; binding?: OwnerResponderBinding }>;
+
 export const createOwnerResponder = (
   openaiApiKey: string,
   store?: ConversationStore,
@@ -122,11 +135,25 @@ export const createOwnerResponder = (
   privateRunScope?: RunEffectScope,
   // Private host dependency only. No channel/env/request repository selection or seed.
   privateSystemSkills?: LocalSystemSkillBinding,
+  privateOwner?: PrivateOwner,
 ): OwnerResponder => {
-  const fixture = localTrustedBriefScheduleInput();
-  const accepted = acceptTrustedInvocation(fixture.admission);
-  if (!accepted.ok) throw new Error('fixture admission failed');
-  const invocation = accepted.value;
+  const binding = privateOwner?.binding;
+  const invocation = binding?.admission.invocation ?? (() => {
+    const accepted = acceptTrustedInvocation(localTrustedBriefScheduleInput().admission);
+    if (!accepted.ok) throw new Error('fixture admission failed');
+    return accepted.value;
+  })();
+  store = binding?.store ?? store;
+  // Canonical owner memory needs its own reviewed supplier and forget/redaction lifecycle.
+  // This bounded binding admits fresh conversation only; legacy memory is never promoted.
+  if (binding) {
+    memory = undefined;
+    standingOrders = undefined;
+    toolLedger = undefined;
+    offload = false;
+    health = undefined;
+  }
+  const assertCurrent = async () => { privateRunScope?.admit(); await binding?.adapter.assertCurrent(); privateRunScope?.admit(); };
   const ownerId = invocation.verified_authority.principal_ref;
   const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;
@@ -147,7 +174,7 @@ export const createOwnerResponder = (
   };
   const handlers = [getContextHandler(clock), ownerContextHandler(memory), ...tools, ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
   const complete = async (trace: string, purpose: string, system: string, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, clinicalRetried = false) => {
-    privateRunScope?.admit();
+    await assertCurrent();
     const started = Date.now();
     let reasoning: string | undefined;
     const effectivePolicy = modelOverride === undefined || modelOverride === model ? policy
@@ -161,7 +188,13 @@ export const createOwnerResponder = (
       ...(attachments && index === texts.length - 1 ? { attachments: attachments.map((file) => `${file.kind}:${file.filename}`) } : {}),
     }));
     const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
-    const result = await new RuntimeLLMProvider({ gateway: adapter, circuitBreaker }).complete({
+    const admittedGateway: LLMGatewayAdapter = binding ? { complete: async request => {
+      await assertCurrent();
+      const result = await adapter.complete(request);
+      await assertCurrent();
+      return result;
+    } } : adapter;
+    const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker }).complete({
       ...(privateRunScope ? { runScope: privateRunScope } : {}),
       trigger: 'user_message',
       policy: effectivePolicy,
@@ -172,6 +205,7 @@ export const createOwnerResponder = (
         ...(tools ? { tools: [...tools] } : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
       }),
     }, safety);
+    await assertCurrent();
     privateRunScope?.admit();
     const input = JSON.stringify([{ role: 'system', content: system }, ...userMessages, ...(turns ?? [])]);
     if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason].filter(Boolean).join(':'), shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength }, text: { input } });
@@ -197,15 +231,18 @@ export const createOwnerResponder = (
   let pending: readonly LLMAttachment[] | undefined;
   // F1 receipt: the window observer fires only when history was actually dropped (content-free).
   const pathObservers = { onWindow: (stats: { kept: number; dropped: number; estimated_tokens: number; budget_tokens: number }) => { if (stats.dropped > 0) log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `kept ${stats.kept} dropped ${stats.dropped} ~${stats.estimated_tokens}/${stats.budget_tokens} tokens` }); } };
-  const path = new JoinedConversationPath(adapters.contextComposer!, {
-    complete: (request) => {
+  const path = new JoinedConversationPath(binding?.adapter.composer ?? adapters.contextComposer!, {
+    complete: async (request) => {
+      await assertCurrent();
       const trace = traceId;
       // Capture-mode probe turns run on the stripped handler set; delegation wraps that
       // same set so probe confinement applies to children too (children are read-only by
       // construction, and the strip list is not widened here).
+      const admittedHandlers = binding ? handlers.filter(handler => request.tools.includes(handler.name)) : handlers;
+      const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => binding ? { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => { await assertCurrent(); const result = await handler.handle(args, ctx); await assertCurrent(); return result; } } : handler);
       const activeHandlers = probeGuard?.stripLiveTools
-        ? handlers.filter((handler) => !PROBE_STRIPPED_TOOLS.includes(handler.name))
-        : handlers;
+        ? guardedHandlers.filter((handler) => !PROBE_STRIPPED_TOOLS.includes(handler.name))
+        : guardedHandlers;
       // Subagent orchestration v1: the delegate_task handler is built per turn so the spawn
       // counter resets each turn and the spawner closes over this turn's LLM step. The child
       // runs a nested tool loop on the read-only subset (CHILD_TOOL_NAMES) with its own round
@@ -236,7 +273,7 @@ export const createOwnerResponder = (
           throw error;
         }
       });
-      const turnHandlers = withDelegation(activeHandlers, delegate, ownerTurnActive);
+      const turnHandlers = withDelegation(activeHandlers, delegate, ownerTurnActive).filter(handler => !binding || request.tools.includes(handler.name));
       return runToolLoop({
         handlers: turnHandlers,
         budget: turnBudget,
@@ -317,7 +354,8 @@ export const createOwnerResponder = (
       return unavailable;
     }
   };
-  const restored = store ? restoreConversation(tree, store).then((leafId) => { parentId = leafId; }) : Promise.resolve();
+  let restorePromise: Promise<void> | undefined;
+  const restored = () => restorePromise ??= store ? restoreConversation(tree, store).then((leafId) => { parentId = leafId; }) : Promise.resolve();
   const converse = async (id: string, conversationRef: string, said: string, time: TurnTimer, fromOwner = false, surface = 'agent') => {
     traceId = id;
     ownerTurnActive = fromOwner;
@@ -325,14 +363,16 @@ export const createOwnerResponder = (
     const publication = await time('joined_path', () => path.submit({
       ...(privateRunScope ? { runScope: privateRunScope } : {}),
       authenticatedOwnerId: ownerId, invocation,
-      context: { ...localTrustedBriefTurnSnapshot(), canary_tokens: CANARIES, replay_context_ref: null },
+      context: { ...(binding?.admission.snapshot ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null },
       userEntry: { id, ownerId, chatId: conversationRef, parentId, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' } },
       assistantEntryId: `${id}-reply`,
     })).finally(() => { ownerTurnActive = false; control.end(); });
     privateRunScope?.admit();
+    await assertCurrent();
     await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId, privateRunScope);
     for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record(entry, privateRunScope); }
     privateRunScope?.admit();
+    await assertCurrent();
     parentId = publication.leafId;
     const out = publication.text;
     lastReply = out;
@@ -348,10 +388,12 @@ export const createOwnerResponder = (
     if (!memory) return 'saved';
     privateRunScope?.admit();
     const started = Date.now();
+    await assertCurrent();
     memory.beginSettle(id, new Date().toISOString());
     let stage: 'failed' | 'uncertain' = 'failed';
     try {
       const raw = await ask(id, 'memory', MEMORY_INSTRUCTION, exchangeInput(memory, owner, shared, ''), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
+      await assertCurrent();
       stage = 'uncertain';
       let purged: readonly string[] = [];
       let purgeIds: readonly number[] = [];
@@ -363,6 +405,7 @@ export const createOwnerResponder = (
       // survivor leaves the claim 'purging' so a later retry can still find it.
       const settled = purgeIds.length === 0 || (conv === null || conv.remaining === 0);
       privateRunScope?.admit();
+      await assertCurrent();
       if (purgeIds.length && settled) memory.settle(purgeIds);
       // The receipt is emitted only now, after redaction and settle, so it can state what is true.
       const interrupted = memory.sweepInterruptedSettles(new Date(started - 10 * 60 * 1000).toISOString());
@@ -381,14 +424,18 @@ export const createOwnerResponder = (
   return {
     async respond(turn, time) {
       if (turn.runScope && privateRunScope !== turn.runScope) {
-        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills);
+        const prepared = privateOwner?.host ? await privateOwner.host.prepare(turn, handlers, turn.runScope) : undefined;
+        if (privateOwner && !prepared) throw new Error('owner host unavailable');
+        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, prepared ? { binding: prepared } : undefined);
         control.route(scoped.control);
         try { return await scoped.respond(turn, time); }
         finally { control.unroute(scoped.control); }
       }
       privateRunScope?.admit();
+      await assertCurrent();
+      if (binding && (await binding.admission.readInput()).text !== turn.text) throw new Error('owner input mismatch');
       const memoryWrites = turn.memoryWrites !== false;
-      await restored;
+      await restored();
       const id = turn.traceId;
       const media = turn.attachment || turn.mediaNote ? { attachment: turn.attachment, note: turn.mediaNote } : undefined;
       pending = ownerTurnAttachments(turn);
@@ -412,13 +459,13 @@ export const createOwnerResponder = (
       }
     },
     async remind(id, conversationRef, note, time, surface) {
-      await restored;
+      await restored();
       pending = undefined;
       memoryReceipts.length = 0;
       return converse(id, conversationRef, `[Reminder due now, set earlier by the owner: "${note}"] Send the reminder briefly in your own words. Do not add a sentence explaining that they asked for it.`, time, false, surface);
     },
     async prompt(id, conversationRef, said, time, surface) {
-      await restored;
+      await restored();
       pending = undefined;
       memoryReceipts.length = 0;
       return converse(id, conversationRef, said, time, false, surface);

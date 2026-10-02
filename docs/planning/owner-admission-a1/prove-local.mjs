@@ -60,7 +60,7 @@ try {
   if(end<0 || candidate.slice(end).trim()!=='rollback;')throw new Error('proposal transaction changed');
   const output=sql(candidate.slice(0,end)+tests+candidate.slice(end)+"select case when to_regprocedure('waldo.owner_message_binding(text,text,text,text,text,text,text,bigint,text)') is null and not exists(select 1 from waldo.owners where do_name='owner-a1') then 'PASS proposal rollback' else 'FAIL proposal rollback' end;\n");
   console.log(output);
-  if(output.includes('not ok') || !output.includes('1..18') || !output.includes('PASS proposal rollback'))throw new Error('proposal proof failed');
+  if(output.includes('not ok') || !output.includes('1..22') || !output.includes('PASS proposal rollback'))throw new Error('proposal proof failed');
 
 } finally {
   for (const id of containers()) run(['rm', '-f', '-v', id]);

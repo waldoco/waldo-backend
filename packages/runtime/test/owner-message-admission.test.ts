@@ -5,7 +5,7 @@ import type { RunEffectScope } from '../src/channels/run-effect-scope';
 
 const owner = '10000000-0000-0000-0000-000000000001';
 const presence = '20000000-0000-0000-0000-000000000001';
-const row = () => ({ owner_id: owner, do_name: 'owner-demo', state_version: 0, presence_id: presence, provider: 'telegram', subject: '1001' });
+const row = () => ({ owner_id: owner, do_name: 'owner-demo', state_version: 0, admission_revision: '1', presence_id: presence, provider: 'telegram', subject: '1001' });
 const scope = (): RunEffectScope => ({ runId: 'run-one', attempt: 'attempt-one', deadline: Date.now() + 30_000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() });
 const options = (lookup: (provider: 'telegram', subject: string) => Promise<unknown> = vi.fn(async () => row())) => ({
   lookup, scope: scope(), locator: { environment: 'staging', namespace: 'owner-staging', doName: 'owner-demo', doId: 'actual-do' },
@@ -162,5 +162,36 @@ it('mutating host option objects and the original receipt cannot rebind admitted
   setup.text = 'replacement'; setup.locator.doName = 'different'; setup.allowedDoNames.length = 0;
   expect((await admitted.readInput()).text).toContain('Bengaluru');
   receipt.owner_id = '10000000-0000-0000-0000-000000000002';
+  await expect(admitted.readInput()).rejects.toMatchObject({ code: 'rejected' });
+});
+
+
+it('rejects noncanonical or out-of-range private revision receipts without lossy number conversion', async () => {
+  for (const admission_revision of [undefined, null, 1, 1n, '', '0', '-1', '01', '+1', '1.0', ' 1', '1 ', '1e3', '1\n', '1\r', '1\r\n', '1\u2028', '1\u2029', '9223372036854775808']) {
+    await expect(ownerMessageAdmission(options(vi.fn().mockResolvedValue({ ...row(), admission_revision })))).rejects.toMatchObject({ code: 'rejected' });
+  }
+  await expect(ownerMessageAdmission(options(vi.fn().mockResolvedValue({ ...row(), admission_revision: '9223372036854775807' })))).resolves.toBeDefined();
+});
+
+it('same owner and private revision produce a stable verification receipt across retries', async () => {
+  const first = await ownerMessageAdmission(options());
+  const retry = await ownerMessageAdmission(options());
+  const expected = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`owner-verification:v1:${owner}:1`)))].map(b => b.toString(16).padStart(2, '0')).join('');
+  expect(first.invocation.verified_authority.verification_ref).toBe(`ver_${expected.slice(0, 32)}`);
+  expect(retry.invocation.verified_authority.verification_ref).toBe(first.invocation.verified_authority.verification_ref);
+  const changed = await ownerMessageAdmission(options(vi.fn().mockResolvedValue({ ...row(), admission_revision: '2' })));
+  expect(changed.invocation.verified_authority.verification_ref).not.toBe(first.invocation.verified_authority.verification_ref);
+});
+
+it('a custody change and reversal invalidates old authority even when every other receipt field is restored', async () => {
+  const lookup = vi.fn().mockResolvedValueOnce(row()).mockResolvedValue({ ...row(), admission_revision: '9007199254740993' });
+  const admitted = await ownerMessageAdmission(options(lookup));
+  await expect(admitted.assertCurrent()).rejects.toMatchObject({ code: 'rejected' });
+  await expect(admitted.readInput()).rejects.toMatchObject({ code: 'rejected' });
+});
+
+it('revision comparison remains exact above JavaScript safe integer range', async () => {
+  const lookup = vi.fn().mockResolvedValueOnce({ ...row(), admission_revision: '9007199254740992' }).mockResolvedValue({ ...row(), admission_revision: '9007199254740993' });
+  const admitted = await ownerMessageAdmission(options(lookup));
   await expect(admitted.readInput()).rejects.toMatchObject({ code: 'rejected' });
 });

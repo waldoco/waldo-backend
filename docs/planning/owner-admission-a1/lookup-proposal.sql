@@ -19,6 +19,7 @@ begin
     raise exception 'unsigned router call' using errcode='42501';
   end if;
   select jsonb_build_object('owner_id',o.id,'do_name',o.do_name,'state_version',o.state_version,
+    'admission_revision',o.admission_revision::text,
     'presence_id',p.id,'provider',p.provider,'subject',p.subject) into v_binding
     from waldo.owners o join waldo.presences p on p.owner_id=o.id
     where o.do_name=p_do_name and o.state='active' and p.provider=p_provider
