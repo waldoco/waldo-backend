@@ -4,6 +4,7 @@ Layer: external facts from vendor help pages fetched 2026-10-02 (cited); Waldo c
 
 Sources:
 - ChatGPT Memory: https://help.openai.com/en/articles/8590148-memory-in-chatgpt
+- Claude incognito chats: https://support.claude.com/en/articles/12260368-use-incognito-chats (cited for M7 from the memory article's wording; this page itself was not fetched, so treat its details as unverified)
 - Claude chat search and memory: https://support.claude.com/en/articles/11817273-use-claude-s-chat-search-and-memory-to-build-on-previous-context
 
 ## What mature agents do (stated by the vendors)
@@ -11,13 +12,13 @@ Sources:
 | # | Behaviour | Source says |
 |---|---|---|
 | M1 | Ask "what do you remember about me" | ChatGPT: "You can also ask ChatGPT what it remembers about you"; a memory summary with edit and delete |
-| M2 | Show where a personalised answer came from | ChatGPT shows Sources under a response (past chat, saved memory, file, email); user can open, correct or delete the source |
-| M3 | Correct a remembered fact | ChatGPT: tell it a memory is wrong, or edit it; "Don't mention this again" reduces use without deleting the source |
+| M2 | Show where a personalised answer came from | Exact lines (OpenAI memory page): "When ChatGPT uses relevant personal context, Sources may appear below the response." and "Sources may not show every factor that shaped a response." Sources are not guaranteed on every answer |
+| M3 | Correct a remembered fact | Exact lines: "You can tell ChatGPT that remembered information is incorrect or outdated." and "Don't mention this again reduces future references to the information. It does not delete the original source." The option appears "when available" |
 | M4 | Delete is honest about scope | ChatGPT: deleting a chat does not delete a separate saved memory; remove it from summary, saved memories, chats, files, connected apps; propagation takes time |
 | M5 | Save on request and on its own | Claude: saves topics as you chat; "remember this" saves directly |
-| M6 | Search past conversations as a visible tool call | Claude: RAG search that "will appear as tool calls" |
-| M7 | Per-chat opt out | Claude: incognito chat and a per-chat Memory toggle |
-| M8 | Scoped memory | Claude: each project has separate memory |
+| M6 | Search past conversations as a visible tool call | Exact line (Claude page): "These searches use Retrieval-Augmented Generation (RAG) and will appear as tool calls during your conversations." Paid plans only per the page |
+| M7 | Per-chat opt out | Exact lines: "Click the ghost icon ... a temporary conversation that isn't saved to your chat history" and "open a new chat, click the + menu, and turn off Memory." (Claude memory page) |
+| M8 | Scoped memory | Exact line: "Each project has its own separate memory space and dedicated project summary." (Claude memory page) |
 
 ## Waldo today (verify rows have no staging receipt)
 
