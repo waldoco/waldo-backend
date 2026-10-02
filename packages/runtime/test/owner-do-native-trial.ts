@@ -8,7 +8,7 @@ import { IsolatedSourceWorld } from '../scenarios/isolated-source-world';
 import {advanceNativeSourceEvent} from '../scenarios/native-source-event';
 import {nativeSelectedSource} from '../scenarios/native-selected-source';
 import { isolatedGoogleClient } from '../scenarios/isolated-google-client';
-import { settleSmokeOwner } from '../scenarios/smoke-settle';
+import { settleNativeOwnerTurn } from '../scenarios/native-owner-settle';
 import { nativeModelBoundary } from '../evals/native-model-boundary';
 import { captureFixtureAdapters } from '../evals/fixture-adapter-capture';
 import { assembleIsolatedCapture } from '../evals/isolated-capture';
@@ -38,7 +38,7 @@ vi.mock('../src/connectors/google',async(load)=>{const original=await load<typeo
  const restricted=nativeSelectedSource(w,tokens.email,b.selected_source_ids);
  return isolatedGoogleClient(restricted,tokens.email);
  }};});
-vi.mock('../src/channels/telegram-api',async(load)=>{const original=await load<typeof import('../src/channels/telegram-api')>();return {...original,createTelegramCaller:()=>async(method:string,body:object)=>{sends.push({method,body:body as Record<string,unknown>});return method==='getMe'?{username:'fixture_bot'}:method==='sendMessage'?{message_id:sends.length}:true;}};});
+vi.mock('../src/channels/telegram-api',async(load)=>{const original=await load<typeof import('../src/channels/telegram-api')>();return {...original,createTelegramCaller:()=>async(method:string,body:object)=>{sends.push({method,body:body as Record<string,unknown>});return method==='getMe'?{username:'fixture_bot'}:method==='sendMessage'?{message_id:sends.length,chat:{id:(body as {chat_id?:number}).chat_id}}:true;}};});
 const {handleTelegramWebhook}=await import('../src/channels/telegram-webhook');
 afterEach(()=>{world=null;bundle=null;vi.unstubAllGlobals();});
 it('captures each admitted actual-model owner turn, adapter custody and usage without official score',async()=>{
@@ -72,8 +72,10 @@ it('captures each admitted actual-model owner turn, adapter custody and usage wi
    world.advance(turn.at);
    const previous=sends.length;const pending:Promise<unknown>[]=[];
    const response=await handleTelegramWebhook(new Request('https://fixture.invalid/telegram/webhook',{method:'POST',headers:{'x-telegram-bot-api-secret-token':'fictional-native-secret'},body:JSON.stringify({update_id:index+1,message:{message_id:index+1,from:{id:subject,is_bot:false},chat:{id:subject,type:'private'},text:turn.text}})}),env,work=>pending.push(work),directory);
-   await Promise.all(pending);await runInDurableObject(stub,async(instance)=>settleSmokeOwner(instance as unknown as {queue:Promise<unknown>},transport));
+   await Promise.all(pending);
    if(response.status!==200)throw new Error('native ingress rejected');
+   await runInDurableObject(stub,async(instance,state)=>settleNativeOwnerTurn(instance,state.storage.kv,transport,
+    {bot:env.TELEGRAM_BOT_TOKEN!.split(':')[0]!,subject:String(subject),doName,updateId:index+1},()=>Date.parse(world!.now())));
    transcript.push({id:turn.id,at:turn.at,owner_text:turn.text,channel_sends:sends.slice(previous)});
   }
   for(const event of bundle.turns.filter(t=>t.kind==='provider_event')){const payload=event.payload as {source:string;id:string};if(!world.revisionLog(manifest.candidate_owner).some(r=>r.source===payload.source&&r.id===payload.id&&Date.parse(r.at)===Date.parse(event.at)))throw new Error('native event revision not captured');}
