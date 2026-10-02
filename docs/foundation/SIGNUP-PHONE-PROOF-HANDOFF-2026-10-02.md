@@ -31,7 +31,7 @@ Independent security and QA reviews passed this disabled slice. They reviewed so
 
 CI follow-up: head `ca2e05e` passed all four runtime shards and canonical Supabase migrate-from-zero/pgTAP. Its core guard failed because the plain-PostgreSQL shim omitted `auth.users.email_confirmed_at`. The local-only correction adds a nullable timestamp with no default; all 373 SQL assertions then passed in a fresh plain cluster inside the pinned local Postgres image, including confirmed/unconfirmed phone eligibility. The earlier stale 37-migration staging fixture was corrected with an exact preceding-history regression; its 67 workflow/preflight tests passed locally and in CI. No full core-green claim is made until the shim correction is published and canonical CI reruns.
 
-Further pushes are held by the owner's preview pause. The local shim correction is reviewable but unpublished. External Cloudflare build metadata shows failure without annotations/error text; its dashboard requires sign-in, so the cause remains blocked behind account access. This lane does not change preview settings, deploy or bypass that boundary.
+The owner's preview pause initially held the shim correction locally. The owner subsequently authorized publication even if preview-toggle verification remains unavailable, while retaining merge/deploy authority in the release lane. External Cloudflare build metadata shows failure without annotations/error text; its dashboard requires sign-in, so the cause and toggle setting remain blocked behind account access. Publication does not authorize this lane to change preview settings, manually create previews, deploy or activate SMS.
 
 ## Required decisions before activation
 
