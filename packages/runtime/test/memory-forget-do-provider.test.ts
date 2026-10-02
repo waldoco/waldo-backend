@@ -459,3 +459,29 @@ it('an offload produced after steered forget is not retained for a later range r
     expect(memory.claims().map(row => row.text)).toEqual([KEEP]);
   });
 });
+
+it('the exact live synthetic typographic correction reaches the same-turn provider and survives eviction', async () => {
+  const name = 'correction-live-typographic';
+  const oldText = "For project WBX-20261002-M1, the workshop start time is 08:40 UTC; this is temporary fictional test context, not the owner's real schedule.";
+  const replacement = "For project WBX-20261002-M1, the fictional workshop start time is 09:10 UTC; this is disposable test context, not the owner's real schedule.";
+  const first = 'Waldo staging acceptance WBX-20261002-M1. Remember this temporary fictional test-project preference: for project WBX-20261002-M1, the workshop start time is 08:40 UTC. This is disposable test context, not my real schedule. Do not create any event, reminder, file or external message. Confirm only what you actually saved.';
+  await turn(name, 1, first, ops());
+  await runInDurableObject(stub(name), (_instance, state) => {
+    claimStore(state.storage.sql, work => state.storage.transactionSync(work)).add({ kind: 'preference', text: oldText, source: 'stated', evidence: first, origin: 'owner', source_ref: 'owner, tg-904957878' }, '2026-10-02T18:21:58Z', 75);
+  });
+  const owner = 'WBX-20261002-M1 correction: replace that fictional project workshop preference with 09:10 UTC. The previous time is no longer current. Keep this as disposable test memory only, with no calendar, reminder, file or external-message action. What is the current saved preference now?';
+  const evidence = 'Owner: “WBX-20261002-M1 correction: replace that fictional project workshop preference with 09:10 UTC. The previous time is no longer current. Keep this as disposable test memory only”';
+  await turn(name, 2, owner, ops({ corrections: [{ old_id: 75, kind: 'preference', text: replacement, evidence }] }));
+  const instructions = () => (seen.requests.at(-1) as { instructions: string }).instructions;
+  expect(instructions()).toContain('corrected 1 claim');
+  expect(instructions()).toContain(replacement); expect(instructions()).not.toContain(oldText);
+  await runInDurableObject(stub(name), (_instance, state) => {
+    const memory = claimStore(state.storage.sql);
+    expect(memory.claims()).toHaveLength(1);
+    expect(memory.claims()[0]).toMatchObject({ text: replacement, supersedes_id: 75, origin: 'owner' });
+    expect(memory.claims('superseded')[0]).toMatchObject({ id: 75, text: oldText });
+  });
+  await evictDurableObject(stub(name));
+  await turn(name, 3, 'What is the current saved WBX-20261002-M1 preference?', ops());
+  expect(instructions()).toContain(replacement); expect(instructions()).not.toContain(oldText);
+});

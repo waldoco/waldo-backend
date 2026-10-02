@@ -640,10 +640,10 @@ const normalizeForGrounding = (text: string): string => text.toLowerCase().repla
 // span, not the citation prefix. Unquoted evidence is a paraphrase and checks as a whole.
 const groundingTargets = (evidence: string): readonly string[] => {
   const spans: string[] = [];
-  const re = /"([^"]+)"/g;
+  const re = /"([^"]+)"|“([^”]+)”/g;
   let match = re.exec(evidence);
   while (match !== null) {
-    const normalized = normalizeForGrounding(match[1] ?? '');
+    const normalized = normalizeForGrounding(match[1] ?? match[2] ?? '');
     if (normalized.length >= 12) spans.push(normalized);
     match = re.exec(evidence);
   }
