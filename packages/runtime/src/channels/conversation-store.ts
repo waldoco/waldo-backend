@@ -64,6 +64,12 @@ export const scrubConversationHistory = async (storage: KeyValueStorage): Promis
 // entry (owner-canonical-history.ts). load() requires row and witness to be identical, so both are rewritten together.
 const CANONICAL_PREFIX = 'canonical-owner-v1:';
 type Witness = { entry: ConversationEntry } & Record<string, unknown>;
+// Row kind from the key structure, not substring luck: canonical-owner-v1:<principal>:<tenant>:(conv|witness):<rest>.
+const canonicalKind = (key: string): 'conv' | 'witness' | null => {
+  if (!key.startsWith(CANONICAL_PREFIX)) return null;
+  const kind = key.slice(CANONICAL_PREFIX.length).split(':')[2];
+  return kind === 'conv' || kind === 'witness' ? kind : null;
+};
 const entryText = (entry: ConversationEntry): string => `${entry.modelPayload}\n${entry.appPayload}\n${entry.modelProjection.mode === 'replace' ? entry.modelProjection.payload : ''}`.toLowerCase();
 
 export const redactConversationEntries = async (
@@ -84,11 +90,11 @@ export const redactConversationEntries = async (
     if (JSON.stringify(next) !== JSON.stringify(entry)) { writes[key] = next; rewritten += 1; }
   }
   for (const [key, value] of canonical) {
-    if (key.includes(':conv:')) {
+    if (canonicalKind(key) === 'conv') {
       const entry = value as ConversationEntry;
       const next = redactConversationEntry(entry, redact);
       if (JSON.stringify(next) !== JSON.stringify(entry)) { writes[key] = next; rewritten += 1; }
-    } else if (key.includes(':witness:')) {
+    } else if (canonicalKind(key) === 'witness') {
       const witness = value as Witness;
       if (!witness?.entry) continue;
       const next = redactConversationEntry(witness.entry, redact);
@@ -97,7 +103,30 @@ export const redactConversationEntries = async (
   }
   if (Object.keys(writes).length > 0) {
     if (scope) { if (!storage.kv) throw new Error('fenced redaction store unavailable'); scope.commit(() => { for (const [key, value] of Object.entries(writes)) storage.kv!.put(key, value); }); }
-    else await storage.put(writes);
+    else {
+      // Durable Object put takes at most 128 keys, and a failure between puts must never leave a redacted canonical row next to
+      // an old-text witness (load() throws on a mismatch). So a conv row and its witness are one unit and always share a put;
+      // units are packed up to 100 keys; legacy rows stand alone.
+      const units: string[][] = [];
+      const taken = new Set<string>();
+      for (const [key, value] of Object.entries(writes)) {
+        if (taken.has(key)) continue;
+        const unit = [key];
+        if (canonicalKind(key) === 'conv') {
+          const witnessKey = `${key.split(':').slice(0, 3).join(':')}:witness:${(value as ConversationEntry).id}`;
+          if (witnessKey in writes) unit.push(witnessKey);
+        }
+        for (const k of unit) taken.add(k);
+        units.push(unit);
+      }
+      let chunk: string[] = [];
+      const flush = async () => { if (chunk.length) await storage.put(Object.fromEntries(chunk.map((k) => [k, writes[k]]))); chunk = []; };
+      for (const unit of units) {
+        if (chunk.length + unit.length > 100) await flush();
+        chunk.push(...unit);
+      }
+      await flush();
+    }
   }
   const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryText(entry).includes(needle.toLowerCase()));
   const afterLegacy = rewritten > 0 ? await storage.list<ConversationEntry>({ prefix: 'conv:' }) : legacy;
@@ -105,8 +134,8 @@ export const redactConversationEntries = async (
   let remaining = 0;
   for (const [, entry] of afterLegacy) if (hit(entry)) remaining += 1;
   for (const [key, value] of afterCanonical) {
-    if (key.includes(':conv:') && hit(value as ConversationEntry)) remaining += 1;
-    else if (key.includes(':witness:') && (value as Witness)?.entry && hit((value as Witness).entry)) remaining += 1;
+    if (canonicalKind(key) === 'conv' && hit(value as ConversationEntry)) remaining += 1;
+    else if (canonicalKind(key) === 'witness' && (value as Witness)?.entry && hit((value as Witness).entry)) remaining += 1;
   }
   return { rewritten, remaining };
 };
