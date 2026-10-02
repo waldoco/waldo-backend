@@ -8,7 +8,10 @@
 export class McpAuthError extends Error {
   constructor(public readonly status: number, message: string) { super(message); this.name = 'McpAuthError'; }
 }
-export class McpToolError extends Error {}
+import { mcpErrorDiagnostic, type McpErrorDiagnostic } from './mcp-error-diagnostic.ts';
+export class McpToolError extends Error {
+  constructor(message: string, public readonly diagnostic?: McpErrorDiagnostic) { super(message); }
+}
 
 export type McpTransportServer = Readonly<{ url: string; token?: string }>;
 
@@ -54,7 +57,7 @@ export const callMcpTransport = async (server: McpTransportServer, tool: string,
   const parsed = JSON.parse(extractPayload(await called.response.text())) as { result?: { content?: unknown; isError?: boolean }; error?: { message?: string } };
   if (parsed.error) throw new Error(`mcp error: ${parsed.error.message ?? 'unknown'}`);
   const result = parsed.result ?? {};
-  if (result.isError) throw new McpToolError(`mcp tool error: ${JSON.stringify(result.content).slice(0, 200)}`);
+  if (result.isError) throw new McpToolError(`mcp tool error: ${JSON.stringify(result.content).slice(0, 200)}`, mcpErrorDiagnostic(result));
   return { content: result.content ?? result, protocolVersion };
 };
 
