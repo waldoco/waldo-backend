@@ -24,6 +24,9 @@ Recommendation: A. It removes the stored data instead of bounding it, and it nee
 - Log only op, tool and outcome as today; never arguments or results.
 - Test: a registered read does not create a row; a non-registered MCP tool still does; a draft/send is untouched; a revoked connection still denies.
 
+## Authority note for option A
+The edge registry is read-only and vetted: exact match on server host and path, the three Drive reads only (list_recent_files, search_files, get_file_metadata), and any omission fails closed to today's ledger path. Two copies of the read list would exist (the runtime `read_tools` and the edge registry). Add a test that the two agree, so a tool added to one without the other fails CI instead of silently taking the stored path or skipping the ledger.
+
 ## Not decided here
 - `read_file_content` stays refused until the edge change lands, because it returns file text.
-- Owner decision on unattended Drive reads stays open; the 08:11 AM yes covered read_tools only.
+- Owner decision on unattended Drive reads stays open. The owner's own 8:11:06 AM "1. Yes" answered "drive reads without an approve button (read_tools)". He was NOT told that Drive metadata (names, owners, snippets) would be stored with no expiry, which supports option A before any release.
