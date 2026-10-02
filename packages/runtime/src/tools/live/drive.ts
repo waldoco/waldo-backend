@@ -17,7 +17,7 @@ export const projectDriveFile = (raw: unknown): DriveFileMeta => {
   const f = (raw ?? {}) as Record<string, unknown>;
   return { id: str(f.id), name: str(f.name), mimeType: str(f.mimeType), modifiedTime: strOrNull(f.modifiedTime), webViewLink: strOrNull(f.webViewLink), size: strOrNull(f.size) };
 };
-const projectPage = (page: DriveFilePage): { files: DriveFileMeta[]; nextPageToken: string | null } => ({ files: (Array.isArray(page?.files) ? page.files : []).map(projectDriveFile), nextPageToken: strOrNull(page?.nextPageToken) });
+const projectPage = (page: DriveFilePage): { files: DriveFileMeta[]; nextPageToken: string | null; incompleteSearch: boolean } => ({ files: (Array.isArray(page?.files) ? page.files : []).map(projectDriveFile), nextPageToken: strOrNull(page?.nextPageToken), incompleteSearch: page?.incompleteSearch === true });
 
 export const readDriveHandler = (google: GoogleAccess, enabled = false): ToolHandler<ReadDriveArgs, unknown, ToolDispatcherContext> => ({
   name: 'read_drive',

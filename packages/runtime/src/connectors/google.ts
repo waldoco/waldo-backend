@@ -176,7 +176,7 @@ export type CalendarPage = Readonly<{ events: readonly CalendarItem[]; next_page
 // Drive metadata only (REST, drive.readonly or narrower). Exactly these fields cross the boundary: no body, description,
 // snippet, owner or permission data. The runtime re-projects any reply to this shape.
 export type DriveFileMeta = Readonly<{ id: string; name: string; mimeType: string; modifiedTime: string | null; webViewLink: string | null; size: string | null }>;
-export type DriveFilePage = Readonly<{ files: readonly DriveFileMeta[]; nextPageToken: string | null }>;
+export type DriveFilePage = Readonly<{ files: readonly DriveFileMeta[]; nextPageToken: string | null; incompleteSearch: boolean }>;
 
 export type GoogleClient = Readonly<{
   driveListFiles?(input: Readonly<{ pageSize?: number; pageToken?: string }>): Promise<DriveFilePage>;
