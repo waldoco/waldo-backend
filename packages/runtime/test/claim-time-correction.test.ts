@@ -42,6 +42,18 @@ describe('correcting a time or number fact', () => {
     expect(r.out).toContain('corrected1');
     expect(r.active).toEqual(['Project Posterbot standup is at 09:10 UTC']);
   });
+  it('does not retire the owner claim when the matching active row is untrusted', async () => {
+    const r = await withSql((sql, tx) => {
+      const store = claimStore(sql, tx);
+      store.add({ kind: 'fact', text: 'Project Posterbot standup is at 08:40 UTC', source: 'stated', evidence: '"standup at 08:40 UTC"', origin: 'owner' }, AT);
+      store.add({ kind: 'fact', text: 'Project Posterbot standup is at 09:10 UTC', source: 'inferred', evidence: 'shared note', origin: 'untrusted' }, AT);
+      const old = store.claims().find((c) => c.text.includes('08:40'))!;
+      const out = applyClaimOps(store, ops({ corrections: [{ old_id: old.id, kind: 'fact', text: 'Project Posterbot standup is at 09:10 UTC', evidence: '"the Posterbot standup is now at 09:10 UTC"' }] }), AT, 'owner, tg-1', undefined, { owner: 'the Posterbot standup is now at 09:10 UTC' });
+      return { out, active: store.claims().map((c) => `${c.origin}:${c.text}`) };
+    });
+    expect(r.out).not.toContain('corrected1');
+    expect(r.active).toContain('owner:Project Posterbot standup is at 08:40 UTC');
+  });
   it('applies a time-only correction that does not repeat the project name', async () => {
     expect((await run('actually 09:10 UTC')).out).toContain('corrected1');
   });

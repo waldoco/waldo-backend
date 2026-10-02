@@ -199,9 +199,12 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         if (!old) return false;
         // A prior independent mention may already have created the replacement. Do not
         // retire one row only to insert a second active copy of that same fact.
-        // If the same fact is already active, the owner's change is already recorded: retire only the old claim.
-        if (sql.exec<Claim>("SELECT * FROM claims WHERE status = 'active' AND id != ?", id).toArray()
-          .some((active) => normalizeForGrounding(active.text) === normalizeForGrounding(claim.text))) {
+        // Same fact already active. Only an owner-origin, stated row (origin 'owner' is written by the grounding gate) means the owner's change is already
+        // recorded, so retire only the old claim. An untrusted or inferred twin is not the owner's fact: refuse as before.
+        const twin = sql.exec<Claim>("SELECT * FROM claims WHERE status = 'active' AND id != ?", id).toArray()
+          .find((active) => normalizeForGrounding(active.text) === normalizeForGrounding(claim.text));
+        if (twin) {
+          if (twin.origin !== 'owner' || twin.source !== 'stated') return false;
           const retiredOnly = sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active'", at, id);
           if (retiredOnly.rowsWritten !== 1) throw new Error('correction conflict');
           return true;
