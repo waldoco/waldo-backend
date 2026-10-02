@@ -218,9 +218,11 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 ### Invite signup review corrections (#499)
 
 - [ ] Read expiry time after every relevant transaction lock has been acquired. Concurrent fixtures must queue send and approval operations across their deadlines and prove zero late provider reservation or approved evidence.
+- [ ] Adding a migration updates every canonical manifest pin, including staging preflight fixtures. Test that an exact preceding history exposes only the new pending migration before publishing.
 - [ ] Cancellation may retain and quarantine an expired immutable attempt. Test the runtime and SQL boundaries together; cancellation never releases uncertain recipient custody or grants proof.
 
 | 2026-10-02 | Phone-proof approval could wait on a budget lock beyond expiry while using an earlier clock | Signup phone proof | Disposable concurrent SQL reproduces late approval, then rejects both approval and send after lock waits | Recheck deadlines after locks |
+| 2026-10-02 | Staging preflight fixture still pinned 37 migrations after the phone-proof addition | Migration preflight | CI red count assertion; exact preceding canonical history returns only the new phone-proof migration | Update and run all canonical manifest pins |
 | 2026-10-02 | Runtime cancellation rejected expired continuation despite SQL permitting immutable quarantine | Signup cancellation | Expired-cancel fixture reaches signed cancel without provider effects | Align expired cancellation boundaries |
 
 - [ ] Bound Auth and signed directory requests across both fetch and required response decoding; abort alone is not a deadline when an adapter ignores it. Losing work may finish remotely, but callers cannot advance into owner/session effects after timeout.
