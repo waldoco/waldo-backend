@@ -19,7 +19,8 @@ const QUALIFIERS = ['home', 'office', 'travel', 'weekday', 'weekend', 'summer', 
 const CATEGORIES = BASES.flatMap((base) => QUALIFIERS.map((q) => `${q} ${base}`));
 const VALUES = ['alder', 'birch', 'cedar', 'dune', 'ember', 'fjord', 'grove', 'harbor', 'iris', 'juniper', 'kelp', 'lagoon', 'mesa', 'nettle', 'onyx', 'prairie', 'quartz', 'ridge', 'sorrel', 'tundra'];
 // One everyday synonym phrase per base category, sharing no word with the stored text.
-const SYNONYMS: Record<string, string> = { 'coffee order': 'usual caffeine drink', 'running route': 'jogging path', 'gym time': 'workout hour', 'morning brief hour': 'daily summary slot', 'flight seat': 'plane window or aisle', 'hotel chain': 'preferred place to stay', 'commute mode': 'way I get to work', 'lunch spot': 'midday restaurant', 'book genre': 'reading style', podcast: 'audio show', 'tea blend': 'hot leaf drink', 'weekend hobby': 'free-time pastime', 'phone plan': 'mobile subscription', 'dentist day': 'teeth checkup weekday', 'laundry day': 'washing chore day', 'grocery store': 'food shopping shop', 'pet food brand': 'kibble maker', 'wifi network': 'wireless connection name', 'sleep time': 'bedtime', 'standing meeting': 'recurring catch-up' };
+const SYNONYMS: Record<string, string> = { 'coffee order': 'usual caffeine drink', 'running route': 'jogging path', 'gym time': 'workout hour', 'morning brief hour': 'daily summary slot', 'flight seat': 'plane window or aisle', 'hotel chain': 'preferred place to stay', 'commute mode': 'way I get to work', 'lunch spot': 'midday restaurant', 'book genre': 'reading style', podcast: 'audio show', 'tea blend': 'hot leaf drink', 'weekend hobby': 'free-time pastime', 'phone plan': 'mobile subscription', 'dentist day': 'teeth checkup', 'laundry day': 'washing chore', 'grocery store': 'food shopping shop', 'pet food brand': 'kibble maker', 'wifi network': 'wireless connection name', 'sleep time': 'bedtime', 'standing meeting': 'recurring catch-up' };
+const QUALIFIER_SYNONYMS: Record<string, string> = { home: 'house', office: 'workplace', travel: 'trip', weekday: 'workday', weekend: 'saturday', summer: 'warm-season', winter: 'cold-season', backup: 'spare' };
 const FACTS_PER_SESSION = 4;
 const CHECKPOINTS = [10, 30, 100];
 const wordCost = (text: string) => Math.ceil(new TextEncoder().encode(text).byteLength / 4);
@@ -79,42 +80,48 @@ describe('memory long-thread development harness', () => {
     for (const row of rows) { expect(row.staleLeaks).toBe(0); expect(row.untrustedLeaks).toBe(0); }
   });
 
-  it('reports paraphrase recall: partial wording and synonym-only questions at each thread length', async () => {
-    const rows = await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-long-thread-para')), (_instance, state) => {
+  // Both retrieval options use ORACLE words (a model that always supplies exactly the right extra words), so
+  // these numbers are upper bounds for the option, not an estimate of real model behaviour. Option 1
+  // (read-time terms): the question carries extra literal terms (still simulated). Option 2 (write-time
+  // aliases): the claim is stored with the real aliases field and indexed in the aliases FTS column.
+  it('reports synonym recall with zero shared words, and the oracle upper bound of each retrieval option', async () => {
+    const synonymOf = (category: string) => { const q = category.split(' ')[0]!; return `${QUALIFIER_SYNONYMS[q]!} ${SYNONYMS[category.slice(q.length + 1)]!}`; };
+    const run = (name: string, aliases: boolean) => runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), (_instance, state) => {
       const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
-      const live = new Map<string, { id: number; value: string }>();
+      const live = new Map<string, number>();
       const stale = new Map<string, number[]>();
-      const out: Record<string, unknown>[] = [];
+      const out: Record<string, number>[] = [];
       let seq = 0;
       for (let session = 1; session <= CHECKPOINTS[CHECKPOINTS.length - 1]!; session++) {
         const at = new Date(Date.UTC(2026, 0, 1) + session * 86_400_000).toISOString();
         for (let f = 0; f < FACTS_PER_SESSION; f++) {
           const category = CATEGORIES[(session * 7 + f * 3) % CATEGORIES.length]!;
-          const value = `${VALUES[(seq * 11 + session) % VALUES.length]!}-${seq}`;
-          store.add({ kind: 'preference', text: `Favourite ${category} is ${value}`, source: 'stated', evidence: 'synthetic owner turn', origin: 'owner', source_ref: `owner, long-thread-${session}` }, at);
-          const created = store.claims().find((claim) => claim.text === `Favourite ${category} is ${value}`)!;
+          const text = `Favourite ${category} is ${VALUES[(seq * 11 + session) % VALUES.length]!}-${seq}`;
+          store.add({ kind: 'preference', text, source: 'stated', evidence: 'synthetic owner turn', origin: 'owner', source_ref: `owner, long-thread-${session}`, ...(aliases ? { aliases: [synonymOf(category)] } : {}) }, at);
+          const created = store.claims().find((claim) => claim.text === text)!;
           const previous = live.get(category);
-          if (previous) { store.setStatus(previous.id, 'superseded'); stale.set(category, [...(stale.get(category) ?? []), previous.id]); }
-          live.set(category, { id: created.id, value });
+          if (previous !== undefined) { store.setStatus(previous, 'superseded'); stale.set(category, [...(stale.get(category) ?? []), previous]); }
+          live.set(category, created.id);
           seq++;
         }
         if (!CHECKPOINTS.includes(session)) continue;
-        const levels = { partial: { hits: 0, stale: 0 }, synonym: { hits: 0, stale: 0 } };
+        let strict = 0; let readTerms = 0; let leaks = 0;
         for (const [category, winner] of live) {
-          const qualifier = category.split(' ')[0]!;
-          const base = category.slice(qualifier.length + 1);
-          const questions = { partial: `${qualifier} ${base.split(' ')[0]}?`, synonym: `What is my ${qualifier} ${SYNONYMS[base]!}?` };
-          for (const level of ['partial', 'synonym'] as const) {
-            const recalled = store.recall(questions[level], 8).map((claim) => claim.id);
-            if (recalled.includes(winner.id)) levels[level].hits++;
-            levels[level].stale += (stale.get(category) ?? []).filter((id) => recalled.includes(id)).length;
-          }
+          const question = `What is my ${synonymOf(category)}?`;
+          const plain = store.recall(question, 8).map((claim) => claim.id);
+          const withTerms = store.recall(`${question} ${category}`, 8).map((claim) => claim.id);
+          if (plain.includes(winner)) strict++;
+          if (withTerms.includes(winner)) readTerms++;
+          leaks += (stale.get(category) ?? []).filter((id) => plain.includes(id) || withTerms.includes(id)).length;
         }
-        out.push({ sessions: session, probes: live.size, partialRecall: `${levels.partial.hits}/${live.size}`, synonymRecall: `${levels.synonym.hits}/${live.size}`, staleLeaks: levels.partial.stale + levels.synonym.stale });
+        out.push({ sessions: session, probes: live.size, strict, readTerms, leaks });
       }
       return out;
     });
-    console.log('MEMORY_LONG_THREAD_PARAPHRASE ' + JSON.stringify(rows));
+    const base = await run('memory-long-thread-syn-plain', false);
+    const aliased = await run('memory-long-thread-syn-alias', true);
+    const rows = base.map((row, i) => ({ sessions: row.sessions, probes: row.probes, synonymOnly: `${row.strict}/${row.probes}`, option1ReadTermsOracle: `${row.readTerms}/${row.probes}`, option2AliasesOracle: `${aliased[i]!.strict}/${aliased[i]!.probes}`, staleLeaks: row.leaks! + aliased[i]!.leaks! }));
+    console.log('MEMORY_LONG_THREAD_SYNONYM ' + JSON.stringify(rows));
     expect(rows).toHaveLength(CHECKPOINTS.length);
     for (const row of rows) expect(row.staleLeaks).toBe(0);
   });
