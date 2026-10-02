@@ -34,6 +34,7 @@ export type TelegramWebhookEnv = Readonly<{
   WHATSAPP_PHONE_NUMBER_ID?: string;
   WALDO_MCP_SERVERS?: string;
   MCP_READ_INTENTS?: string;
+  DRIVE_READS?: string;
   WALDO_EGRESS_ALLOWLIST?: string;
 }> & OwnerDirectoryEnv;
 
