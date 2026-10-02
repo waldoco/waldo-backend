@@ -4,6 +4,12 @@ import { Dashboard, DashboardNavigation, DashboardFeedback, resolveRoute } from 
 import type { OverviewV1 } from './model';
 const empty: OverviewV1 = { version: 1, as_of: '2026-09-29T07:40:00Z', timezone: 'Asia/Kolkata', brief: { status: 'not_sent', at: null }, waiting: { count: 0, first: null }, next_card: null, latest_activity: null, services: [] };
 describe('dashboard read-only copy', () => {
+  it('exposes private retained workspace separately from Telegram references', () => {
+    const html = renderToStaticMarkup(<DashboardNavigation route="today" />);
+    expect(html).toMatch(/href="\/console\/workspace"[^>]*>Private workspace/);
+    expect(html).toContain('Retained files &amp; downloads');
+    expect(html).toMatch(/href="\/console\/files"[^>]*>Files <small>Telegram references/);
+  });
   it('labels Account accurately and locates sessions at Connections', () => {
     const html = renderToStaticMarkup(<DashboardNavigation route="connections" />);
     expect(html).not.toContain('Account &amp; sign out');

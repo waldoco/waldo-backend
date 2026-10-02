@@ -52,6 +52,7 @@ export function DashboardNavigation({ route, waitingCount, onNavigate, isAdmin =
     ))}</nav>
     <nav className="secondary-nav" aria-label="More console controls">
       <a href="/console/files" onClick={onNavigate}>Files <small>Telegram references</small></a>
+      <a href="/console/workspace" onClick={onNavigate}>Private workspace <small>Retained files &amp; downloads</small></a>
       <a href="/console/usage" onClick={onNavigate}>Usage &amp; estimated cost</a>
       <a href="/console/setup" onClick={onNavigate}>Setup checklist</a>
       <a href="/console/invites" onClick={onNavigate}>Invite someone</a>
