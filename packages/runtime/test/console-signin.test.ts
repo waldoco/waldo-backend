@@ -220,14 +220,14 @@ describe('invite-gated signup', () => {
     expect(verify).toHaveBeenCalledWith('new@example.com', '123456', '+919876543210', '');
   });
 
-  it('refuses code send without a phone, and refuses an un-normalizable phone', async () => {
+  it('allows code send without a phone, and refuses an un-normalizable supplied phone', async () => {
     const sendCode = vi.fn(async () => true);
     const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit };
     const missing = await handleConsole(form('/console/signin', { email: 'a@b.com' }), env, auth({ sendCode }));
-    expect(await missing!.text()).toContain('Enter your phone number');
+    expect(await missing!.text()).toContain('Email sign-in code');
     const bad = await handleConsole(form('/console/signin', { email: 'a@b.com', phone: 'call me maybe' }), env, auth({ sendCode }));
     expect(await bad!.text()).toContain('Enter your phone number');
-    expect(sendCode).not.toHaveBeenCalled();
+    expect(sendCode).toHaveBeenCalledTimes(1);
   });
 
   it('a tampered verify form with an invalid hidden phone never reaches auth.verify', async () => {
