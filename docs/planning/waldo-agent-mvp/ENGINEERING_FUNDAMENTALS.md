@@ -48,6 +48,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 ### Data and migrations
 - Owner correction evidence recognizes matched straight and typographic double quotes; require every substantive quoted span to ground in owner text and retain shared/agent rejection.
+- Capped ledger summaries are display data with provenance on their outer entry; redact exact and JSON-escaped text without applying typed tool-protocol validation to an intentionally truncated display.
 - Owner forget suppresses known exact forgotten data before the current provider call, including already-loaded history, replacement projections, pending/captured tool text, ephemeral offload caches and cached publication replay. Partial cleanup stays pending; unsafe or over-budget transient context blocks provider and replay without changing trusted safeguards. Test normal DO, steering, eviction and dirty-store recovery.
 - Every migration takes a backup first, is idempotent, and leaves the old data in place until a later cleanup.
 - Schema changes on existing Durable Object storage are additive (new table, `ADD COLUMN`) and tolerate the column already existing.
@@ -299,3 +300,5 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 | 2026-10-02 | Non-retaining MCP read bypass exposed provider error content to response-error logs; unsupported read flags could silently fall back to retained effect receipts | Connector reads / observability | connector-proxy-entry.test.ts signed metadata read, registry mismatch zero hops, current owner/grant checks, provider-error canaries and unchanged effect replay | Explicit read registry; no retaining fallback; closed failure codes and log allowlist |
 
 | 2026-10-02 | A live synthetic correction used typographic quotation marks; the quote extractor fell back to the entire Owner-prefixed citation, so grounded correction was silently rejected | Owner memory/provenance | claims.test.ts exact live payload red, ASCII-only control green, paired quote and shared/Waldo/mixed/mismatched negatives; normal-DO provider/eviction proof | Citation punctuation must not change grounded owner authority; recognize paired formats while preserving all provenance and correction gates |
+
+| 2026-10-02 | Forget failed after SQL purge because a capped read-owner-context ledger display was validated as whole tool-result JSON; legacy unwrapped displays could also retain text | Owner memory/privacy | tool-output-ledger.test.ts raw-capped, escaped and legacy summary red proofs; normal-DO exact forget receipt, ledger cleanup and eviction | Sanitize at the actual data boundary while retaining outer provenance and strict provider protocol validation |

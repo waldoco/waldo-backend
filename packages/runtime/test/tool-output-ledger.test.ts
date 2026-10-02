@@ -13,6 +13,27 @@ const fakeStorage = () => {
 };
 
 describe('tool output ledger', () => {
+  it.each(['capped', 'legacy', 'escaped'])('forgets exact text in a %s display summary while retaining ledger provenance', async (shape) => {
+    const storage = fakeStorage();
+    const needle = shape === 'escaped' ? 'Synthetic workshop "azure" context' : "For project WBX-20261002-M1, the workshop start time is 08:40 UTC; this is temporary fictional test context, not the owner's real schedule.";
+    const keep = 'Unrelated synthetic reading preference';
+    const data = { keep, text: needle, padding: 'x'.repeat(900) };
+    const summary = JSON.stringify(shape === 'legacy' ? { events: [{ keep, text: needle }] } : { ok: true, data, source_taint: 'external' });
+    const ledger = toolOutputLedger(storage as never);
+    await ledger.record({ tool: 'read_owner_context', ok: true, at: 1000, taint: 'external', summary });
+    const keys = [...storage.data.keys()];
+    const before = [...storage.data.values()].find(value => typeof value === 'object') as { summary: string };
+    if (shape !== 'legacy') { expect(before.summary).toHaveLength(503); expect(() => JSON.parse(before.summary)).toThrow(); }
+    const { redactToolOutputLedger } = await import('../src/conversation/tool-output-ledger');
+    expect(await redactToolOutputLedger(storage as never, [needle], '[forgotten]')).toBe(1);
+    const row = [...storage.data.values()].find(value => typeof value === 'object') as { tool: string; ok: boolean; taint: string; summary: string };
+    expect(row).toMatchObject({ tool: 'read_owner_context', ok: true, at: 1000, taint: 'external' });
+    expect([...storage.data.keys()]).toEqual(keys);
+    expect(row.summary).toContain(keep); expect(row.summary).toContain('[forgotten]');
+    expect(row.summary).not.toContain(needle); expect(row.summary).not.toContain(JSON.stringify(needle).slice(1, -1));
+    expect(JSON.stringify(await ledger.recent())).not.toContain('08:40');
+  });
+
   it('forget redaction removes casing variants of the forgotten text, not just the exact string', async () => {
     const storage = fakeStorage();
     const ledger = toolOutputLedger(storage);
