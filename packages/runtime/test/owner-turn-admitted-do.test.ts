@@ -114,7 +114,20 @@ it('owner custody ABA during awaited provider denies canonical memory and final 
   });
 });
 
-it('unavailable grants fail closed in actual provider discovery', async () => { await proof(async h => { h.unavailable(); await h.send('Hello with unavailable grants.'); const replies = h.requests.filter(r => !r.response_format); expect(replies.length).toBeGreaterThan(0); expect(replies.every(r => !r.tools?.length)).toBe(true); }); });
+it('unavailable grants fail closed in actual provider discovery', async () => {
+  await proof(async h => {
+    h.unavailable();
+    await h.send('Hello with unavailable grants.');
+    const replies = h.requests.filter(r => !r.response_format);
+    expect(replies.length).toBeGreaterThan(0);
+    for (const reply of replies) {
+      expect(reply.tools?.length ?? 0).toBe(0);
+      expect(reply.system).toContain('ADMITTED_MATERIAL_OWNER_BOUND_CANVAS');
+      expect(reply.system).toContain("Call only tools in this request's function list");
+      expect(reply.system).not.toContain('Tools available in this chat:');
+    }
+  });
+});
 it('grant revocation during awaited provider denies publication', async () => {
   await proof(async h => {
     const resume = await h.pause(); const sending = h.send('Do not publish after grant revocation.');
@@ -164,4 +177,19 @@ it('missing trusted host supplier denies scoped user turn without model fixture 
     expect((await h.state.storage.list({ prefix: 'canonical-owner-v1:' })).size).toBe(0);
     expect(h.state.storage.kv.get<{ state: string }[]>('telegram_owner_inbox_v1')!.at(-1)!.state).toBe('quarantined');
   }, true);
+});
+
+it('admitted materials reach the actual provider system while only granted handlers are callable', async () => {
+  await proof(async h => {
+    await h.send('Prove admitted material delivery.');
+    const replies = h.requests.filter(r => !r.response_format);
+    expect(replies.length).toBeGreaterThan(0);
+    for (const reply of replies) {
+      expect(reply.system).toContain('ADMITTED_MATERIAL_OWNER_BOUND_CANVAS');
+      expect(reply.system).toContain('Tool ACL ceiling:');
+      expect(reply.system).toContain("Call only tools in this request's function list");
+      expect(reply.tools?.map(tool => tool.name)).toEqual(['get_context']);
+      expect(reply.system).not.toContain('memory records it automatically');
+    }
+  });
 });

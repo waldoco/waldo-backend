@@ -236,9 +236,11 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 | 2026-10-02 | FOR UPDATE owner locking deadlocked opposing presence transfers against destination FK KEY SHARE | Owner revision preparation | prove-local.mjs concurrent transfers/lifecycle; preserved red receipt, then 100 monotonic epochs | Use compatible non-key locks in deterministic UUID order |
 
 ### Owner admission integration gates
-- An admitted composer result must reach the actual provider system prompt. Its rendered tool list, evidence ACL, prompt digest and model/dispatcher handlers must agree on current grants. A helper/composer-only pass cannot prove this provider boundary.
+- An admitted composer result must reach the actual provider system prompt. Its tool availability statement and model/dispatcher handlers must agree on current grants. An explicitly labelled trigger ACL ceiling may be broader than the current function list; it grants no callable tools. Preserve canonical composed bytes and their digest at delivery. A helper/composer-only pass cannot prove this provider boundary.
 - Fresh canonical history has its own namespace and row lineage. Legacy memory, standing orders and tool ledgers remain excluded until owner-bound suppliers and canonical forget/redaction are reviewed together.
 
 | Date | Bug found | Surface | Adversarial proof | Checklist change |
 | --- | --- | --- | --- | --- |
 | 2026-10-02 | Existing responder discards composed system; private composer renders trigger ACL before host grants | Canonical owner turn integration, Core-gated | Actual DO reply exists, then unique admitted-material provider assertion fails; evidence/owner-turn/material-delivery-red.log | Require provider-system delivery and rendered/evidence/dispatch ACL agreement |
+
+| 2026-10-02 | A ceiling was incorrectly treated as a current-tool grant, causing an unnecessary Core renderer blocker | Local owner-turn material follow-up | Existing ceiling wording inspected at 1d938b63; actual DO material assertion red then green through public compose result | Verify precise producer wording before requesting reserved ownership; deliver canonical request.system unchanged |

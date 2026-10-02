@@ -297,7 +297,7 @@ export const createOwnerResponder = (
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
           const ordersSection = standingOrders?.() ?? '';
           return complete(trace, 'reply',
-          withOwnerSkillProcedures([messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory ? [turnMemoryPrompt(memory, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'), privateSystemSkills ? request.skillPrompt : undefined),
+          binding ? request.system : withOwnerSkillProcedures([messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory ? [turnMemoryPrompt(memory, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'), privateSystemSkills ? request.skillPrompt : undefined),
           entries,
           undefined,
           pending,
