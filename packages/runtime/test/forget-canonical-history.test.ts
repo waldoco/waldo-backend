@@ -36,4 +36,24 @@ describe('forget reaches the canonical owner history', () => {
       expect((await redactConversationEntries(state.storage, ['lunch'], '[forgotten]', scope as never)).rewritten).toBe(1);
     });
   });
+  it('redacts more than 128 keys at once without hitting the storage put limit', async () => {
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-canonical-many')), async (_i, state) => {
+      const rows: Record<string, unknown> = {};
+      for (let i = 0; i < 70; i += 1) {
+        const e = entry(`e${i}`, `SYNTH ${i}: my zebra code word is plum`);
+        rows[`${P}conv:${String(i).padStart(10, '0')}`] = e;
+        rows[`${P}witness:e${i}`] = { lineage: 'canonical_v1', principal_ref: 'prn_x', tenant_ref: 'ten_x', entry: e };
+      }
+      for (const chunk of Object.entries(rows).reduce<Array<Record<string, unknown>>>((acc, kv, i) => { (acc[Math.floor(i / 100)] ??= {})[kv[0]] = kv[1]; return acc; }, [])) await state.storage.put(chunk);
+      expect(await redactConversationEntries(state.storage, ['zebra code word'], '[forgotten]')).toEqual({ rewritten: 70, remaining: 0 });
+    });
+  });
+  it('does not treat a legacy or foreign key that merely contains ":conv:" as canonical history', async () => {
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-canonical-foreign')), async (_i, state) => {
+      const e = entry('x1', 'my zebra code word is plum');
+      await state.storage.put(`canonical-owner-v1:prn_x:ten_x:other:conv:0`, e);
+      const receipt = await redactConversationEntries(state.storage, ['zebra code word'], '[forgotten]');
+      expect(receipt.rewritten).toBe(0);
+    });
+  });
 });
