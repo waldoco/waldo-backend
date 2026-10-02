@@ -45,6 +45,11 @@ describe('Memory destination contract', () => {
     expect(parseMemoryDestination(link)).toEqual({ kind: 'valid-memory', destination });
   });
 
+  it('round trips maximum-length valid selectors after percent-encoding expands them', () => {
+    const destination: MemoryDestination = { kind: 'explore', id: '雪'.repeat(256), cursor: '雪'.repeat(512), returnTo: { view: 'spots', cursor: '雪'.repeat(512) } };
+    expect(parseMemoryDestination(buildMemoryDestination(destination))).toEqual({ kind: 'valid-memory', destination });
+  });
+
   it.each([
     '#/memory/unknown', '#/memory/spots/', '#/memory/spots?id=',
     '#/memory/spots?id=a&id=b', '#/memory/spots?id=a&%69d=b',

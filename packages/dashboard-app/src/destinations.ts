@@ -14,6 +14,10 @@ export type MemoryDestinationResult =
 // cursors remain server-owned list positions; decoding them here grants nothing.
 const ID_LENGTH = 256;
 const CURSOR_LENGTH = 512;
+// A UTF-16 unit can expand to nine characters in query encoding. This covers
+// one maximum ID, two cursors and the fixed path/keys without rejecting valid
+// selectors during link rendering after they passed response validation.
+const FRAGMENT_LENGTH = (ID_LENGTH + 2 * CURSOR_LENGTH) * 9 + 128;
 const invalid = (): MemoryDestinationResult => ({ kind: 'invalid-memory' });
 const listView = (value: unknown): value is MemoryListView => value === 'spots' || value === 'constellation';
 const selector = (value: unknown, maximum: number): value is string => {
@@ -30,7 +34,7 @@ export function parseMemoryDestination(raw: string): MemoryDestinationResult {
   const question = route.indexOf('?');
   const path = question < 0 ? route : route.slice(0, question);
   if (path !== 'memory' && !path.startsWith('memory/')) return { kind: 'non-memory' };
-  if (!['memory', 'memory/spots', 'memory/constellation', 'memory/profile'].includes(path) || route.includes('#') || route.length > 2400) return invalid();
+  if (!['memory', 'memory/spots', 'memory/constellation', 'memory/profile'].includes(path) || route.includes('#') || route.length > FRAGMENT_LENGTH) return invalid();
   const query = question < 0 ? '' : route.slice(question + 1);
   // URLSearchParams tolerates malformed escapes. Reject them before it can
   // replace invalid UTF-8 or leave a broken percent escape in a selector.
