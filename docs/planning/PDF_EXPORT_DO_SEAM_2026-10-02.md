@@ -18,8 +18,8 @@ Use the same bodies store instance as the book. Do not create a second one, or t
 ## Seam 2: serve the download, in the console routing (~line 533, next to the `ARTIFACT_PATH` block)
 After the session check and before the artifact route, add: `const exported = await artifactExportDownload(request, { exports: <store with byId(id) over the exports table>, binaries, limiter: this.env.RESPONSIBILITY_RATE_LIMITER, ownerScope: this.ctx.id.toString() }); if (exported) return exported;`. The `exports` store is the `byId` of the `artifactExports` instance (check its table name in `artifact-exports.ts`; it must be the owner DO's own SQL). Same session/CSRF posture as the artifact page: no public URL, no new auth path.
 
-## Open question (do not guess; needs main/Codex)
-`exportArtifactHandler` returns `delivery: { status: 'saved_internal', url: null }`. Nothing yet gives the owner a verified link to `/console/exports/<id>`. Options: (a) extend `artifactDelivery` to mint the same kind of owner-authenticated link for an export id, (b) the model tells the owner the export is saved and to open it from the console. Choose before claiming "I sent you the PDF". Until then the model must not say it delivered a file.
+## Delivery wording (main'"'"'s decision under the owner'"'"'s overnight delegation)
+`exportArtifactHandler` returns `delivery: { status: 'saved_internal', url: null }`. Until `artifactDelivery` mints a verified owner-authenticated link for an export id, the model says the PDF is saved and points the owner to the console. It never claims it sent or delivered a file. Minting the link is a later slice.
 
 ## Tests (DO side, extend the existing artifact export tests)
 - The tool appears only for user_message triggers and only when ARTIFACTS is bound.
