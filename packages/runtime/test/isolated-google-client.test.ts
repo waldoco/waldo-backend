@@ -72,3 +72,22 @@ it('fixture cursors expose no source bytes and invalidate after revision',async(
  const many=new IsolatedSourceWorld({clock:'2026-10-06T09:00:00Z',owners:[{id:'a'},{id:'b'}],sources:{mail:[1,2].map(i=>({owner_id:'a',id:`m${i}`,thread_id:'t',from:'a@example.invalid',subject:'SECRET_SUBJECT',snippet:'s',body:'PRIVATE_BODY',at:`2026-10-06T0${i}:00:00Z`}))},revisions:[{at:'2026-10-06T10:00:00Z',owner_id:'a',source:'mail',id:'m1',patch:{snippet:'changed'}}]});
  const api=isolatedGoogleClient(many,'a');const first=await api.mailPage(q,1);expect(first.next_page_token).not.toBeNull();expect(decodeURIComponent(first.next_page_token!)).not.toContain('PRIVATE_BODY');expect(decodeURIComponent(first.next_page_token!)).not.toContain('SECRET_SUBJECT');many.advance('2026-10-06T10:00:00Z');await expect(api.mailPage(q,1,first.next_page_token!)).rejects.toThrow(/revision mismatch/);
 });
+import { googleHandlers } from '../src/tools/live/google';
+import { queryCalendarArgsSchema, type QueryCalendarArgs } from '@waldo/contracts';
+it('maps Calendar pages to the real handler and fences fixture owner, query and revision',async()=>{
+ const world=new IsolatedSourceWorld({clock:'2026-10-06T09:00:00Z',owners:[{id:'a'},{id:'b'}],sources:{calendar:[1,2].map(i=>({owner_id:'a',id:`event-${i}`,title:'PRIVATE_TITLE',start:`2026-10-06T1${i}:00:00Z`,end:`2026-10-06T1${i}:30:00Z`,all_day:false}))},revisions:[{at:'2026-10-06T10:00:00Z',owner_id:'a',source:'calendar',id:'event-1',patch:{title:'changed'}}]});
+ const client=isolatedGoogleClient(world,'a');
+ const range={from:'2026-10-06T09:00:00Z',to:'2026-10-06T15:00:00Z'};
+ expect(typeof client.calendarPage).toBe('function');
+ const handler=googleHandlers({client:async()=>client},{propose:async()=>'',proposeSendEmail:async()=>'',record:()=>{}},{timezone:'UTC',now:()=>new Date(world.now())})[0]! as {handle(args:QueryCalendarArgs):Promise<unknown>};
+ const first=await handler.handle(queryCalendarArgsSchema.parse({date_range:range,limit:1})) as any;
+ expect(first.data.events).toHaveLength(1);
+ expect(first.data.observed_at).toBe(world.now());
+ const token=first.data.next_page_token;expect(token).toEqual(expect.any(String));expect(decodeURIComponent(token)).not.toContain('PRIVATE_TITLE');
+ expect((await client.calendarPage!('primary',range.from,range.to,1,false,token)).events[0]?.id).toBe('event-2');
+ for(const api of [isolatedGoogleClient(world,'b')])await expect(api.calendarPage!('primary',range.from,range.to,1,false,token)).rejects.toThrow(/mismatch/);
+ await expect(client.calendarPage!('primary',range.from,range.to,2,false,token)).rejects.toThrow(/mismatch/);
+ world.advance('2026-10-06T10:00:00Z');
+ await expect(client.calendarPage!('primary',range.from,range.to,1,false,token)).rejects.toThrow(/revision mismatch/);
+ await expect(client.calendarPage!('work',range.from,range.to,1,false)).rejects.toThrow(/unsupported/);
+});
