@@ -4,7 +4,7 @@ Task `/root/owner_revision`; branch `codex/owner-admission-revision`, based on A
 
 ## Counter contract
 
-`owners.admission_revision` is an opaque positive bigint epoch, allocated on owner creation and changed on actual owner `id`, `state`, `do_name`, or `auth_user_id` changes. Presence INSERT/DELETE and changes to `id`, `owner_id`, `provider`, `subject`, or `state` change affected owner epochs. Transfers change both old/new owners once, in sorted UUID order. No-op edits and other metadata preserve the epoch. Deleting the Auth user nulls its binding through the existing FK and changes the epoch. Owner deletion removes the row; a recreated UUID receives a fresh epoch.
+`owners.admission_revision` is a non-secret positive bigint epoch, allocated on owner creation and changed on actual owner `id`, `state`, `do_name`, or `auth_user_id` changes. Presence INSERT/DELETE and changes to `id`, `owner_id`, `provider`, `subject`, or `state` change affected owner epochs. Transfers change both old/new owners once, in sorted UUID order. No-op edits and other metadata preserve the epoch. Deleting the Auth user nulls its binding through the existing FK and changes the epoch. Owner deletion removes the row; a recreated UUID receives a fresh epoch.
 
 A private, noncycling sequence supplies values across owner incarnations. A per-row `old + 1` counter would reset after deletion/reuse and allow ABA if a UUID is recreated. Values increase monotonically but are not consecutive: other owners and rolled-back transactions consume allocations. Exhaustion fails the mutation instead of wrapping. Reads must retain bigint precision; any future JSON receipt must serialize the epoch as an exact decimal string rather than a JavaScript number.
 
@@ -27,7 +27,7 @@ The initial transfer fixture exposed a real deadlock: destination foreign-key KE
 
 Receipts are retained outside Git at `../evidence/owner-revision/`: `proof.log`, `proof-transfer-deadlock-red.log`, `proof-first-test-fixture-failure.log`, `guards-tests.log`, `guards.log`. The first fixture failure refreshed both saved owner epochs before its second assertion; the corrected helper refreshes only the checked owner. The concurrent red receipt was an implementation failure, fixed by compatible lock strength.
 
-The migration-list and JavaScript syntax checks passed, as did 66 workflow/staging source tests. Architecture guards passed through migration-fixture synchronization and health-leak checks; the full guard runner stopped at OpenAPI freshness because the isolated worktree lacks the contracts vitest dependency. Temporary cached yaml/typescript symlinks were used for checks and removed before commit.
+The migration-list and JavaScript syntax checks passed, as did 66 workflow/staging source tests. The full guard runner passed through OpenAPI freshness, OTP-template and owner-wire HMAC checks using cached yaml/typescript/contracts dependencies. It then failed at pgtap-gate: its bundled bootstrap requires Linux `/etc/os-release` and `dpkg`, absent on this macOS host; the attempted home-directory PGDG source write was sandbox-denied. The disposable pinned PostgreSQL proof above passes independently. Temporary dependency symlinks were removed. No network install or shared database reset was performed.
 
 No full `pnpm verify` ran: it resets shared Supabase, outside authorization. No hosted/live/CI behavior is claimed. Source remains reviewable for the canonical SQL owner and parent release lane.
 
