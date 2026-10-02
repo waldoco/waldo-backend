@@ -110,9 +110,11 @@ describe('claims', () => {
         { old_id: old.id, kind: 'fact', text: 'Lives in Mumbai', evidence: '"actually I am back in Mumbai"' },
       ], add: [{ kind: 'fact', text: 'Lives in Mumbai', source: 'stated', evidence: '"actually I am back in Mumbai"', touches_forgotten: false }] }),
       AT, 'owner, tg-mumbai', undefined, { owner: 'actually I am back in Mumbai' });
-      expect(detail).not.toContain('corrected1');
+      // Behaviour change (deliberate): the replacement is already active, so the correction retires the old claim only.
+      expect(detail).toContain('corrected1');
       expect(store.claims().filter((claim) => claim.text === 'Lives in Mumbai')).toHaveLength(1);
-      expect(store.claims('superseded')).toEqual([]);
+      expect(store.claims().some((claim) => claim.text === 'Lives in Pune')).toBe(false);
+      expect(store.claims('superseded').map((claim) => claim.text)).toEqual(['Lives in Pune']);
     });
   });
 
