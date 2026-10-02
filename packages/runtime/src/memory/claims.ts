@@ -125,6 +125,9 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
   // Durable scrub intent: a claim's purge survives here until every store settles, so a
   // failed purge can resume from the claim row instead of losing the source text.
   sql.exec('CREATE TABLE IF NOT EXISTS purge_pending (claim_id INTEGER PRIMARY KEY, fingerprint TEXT NOT NULL, created_at TEXT NOT NULL)');
+  // A topic-only forget (no claim left to carry retry state) keeps its exact owner-evidenced words here, only until the
+  // caller confirms every store is clean and settles it. No permanent plaintext list: settle(ids, topics) deletes the row.
+  sql.exec('CREATE TABLE IF NOT EXISTS topic_purge_pending (fingerprint TEXT PRIMARY KEY, topic TEXT NOT NULL, created_at TEXT NOT NULL)');
   if (!sql.exec("SELECT name FROM pragma_table_info('forget_barriers')").toArray().some((col) => (col as { name: string }).name === 'topic_hash')) {
     sql.exec('ALTER TABLE forget_barriers ADD COLUMN topic_hash TEXT');
   }
@@ -289,11 +292,20 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // owner's literal words an OWNER-origin claim was grounded on, at least 12 characters like the admission rule; an agent-origin quote could be any common phrase and would wipe unrelated owner text) is redacted too, so
       // a forget reaches the conversation and episodes that actually quote it. Bare citations and short strings are ignored.
       const quotedEvidence = forgotten.filter((claim) => claim.origin === 'owner').flatMap((claim) => quotedSpans(claim.evidence).map((span) => span.trim()).filter((span) => span.length >= 12));
-      const texts = [...new Set([...forgotten.map((claim) => claim.text.trim()), ...quotedEvidence, ...topics.map((topic) => topic.trim()).filter((topic) => topic.length >= 3)].filter(Boolean))];
       const failed: string[] = [];
       const attempt = (store: string, op: () => void) => {
         try { op(); } catch { failed.push(store); }
       };
+      // Custody before destruction: a topic is redacted only after its pending row is durably written. If that write fails the
+      // topic is NOT redacted this pass (the purge reports not ready), so the owner's source words are never destroyed while the
+      // only retry state is lost.
+      const durableTopics: string[] = [];
+      for (const topic of topics.map((t) => t.trim()).filter((t) => t.length >= 3)) {
+        let written = true;
+        try { sql.exec('INSERT OR IGNORE INTO topic_purge_pending (fingerprint, topic, created_at) VALUES (?, ?, ?)', textFingerprint(topic), topic, at); } catch { written = false; failed.push('pending_topic'); }
+        if (written) durableTopics.push(topic);
+      }
+      const texts = [...new Set([...forgotten.map((claim) => claim.text.trim()), ...quotedEvidence, ...durableTopics].filter(Boolean))];
       const idList = forgotten.map((claim) => claim.id);
       const notPurging = idList.length ? ` AND id NOT IN (${idList.map(() => '?').join(',')})` : '';
       const existingHashes = new Set(sql.exec<{ topic_hash: string | null }>('SELECT topic_hash FROM forget_barriers').toArray().map((row) => row.topic_hash));
@@ -505,7 +517,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     // Final step of a purge, run only once SQL AND the caller's KV stores verify clean.
     // Idempotent: already-deleted rows are no-ops. Only 'purging' rows are removed, so a
     // claim re-admitted after a failed attempt is never swept away by a late settle.
-    settle(ids: readonly number[]): void {
+    pendingTopics(): string[] {
+      return sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending ORDER BY created_at, fingerprint').toArray().map((row) => row.topic);
+    },
+    settle(ids: readonly number[], topics: readonly string[] = []): void {
+      for (const topic of topics) sql.exec('DELETE FROM topic_purge_pending WHERE fingerprint = ?', textFingerprint(topic.trim()));
       for (const id of ids) {
         sql.exec("DELETE FROM claims WHERE id = ? AND status = 'purging'", id);
         sql.exec('DELETE FROM purge_pending WHERE claim_id = ?', id);
@@ -704,7 +720,7 @@ type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolea
 // What this application of claim ops actually did, as counts the caller can report truthfully.
 export type ClaimOutcome = Readonly<{ written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[] }>;
 
-export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean, onOutcome?: (outcome: ClaimOutcome) => void): string => {
+export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[], topics?: readonly string[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean, onOutcome?: (outcome: ClaimOutcome) => void): string => {
   // Destructive ops need an explicit forget request in the text under review (see
   // FORGET_INTENT above). Callers that pass no override derive it from the grounding owner
   // section; migration-style callers with no live owner voice pass false explicitly.
@@ -824,14 +840,17 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   for (const id of ops.confirm.filter((id) => known.has(id))) store.confirm(id, evidence, at);
   for (const id of ops.dismiss.filter((id) => known.has(id) && !correctionIds.has(id))) store.setStatus(id, 'dismissed');
   const forgetIds = forgetsAllowed ? ops.forget_claims.filter((id) => forgettable.has(id) && !correctionIds.has(id)) : [];
-  const purge = forgetIds.length || topic ? store.purge(forgetIds, at, topic ? [topic] : []) : null;
+  // A topic still pending from an earlier turn is retried here with no new intent needed: its owner evidence was
+  // checked when it was first recorded.
+  const purgeTopics = [...new Set([...(topic ? [topic] : []), ...store.pendingTopics()])];
+  const purge = forgetIds.length || purgeTopics.length ? store.purge(forgetIds, at, purgeTopics) : null;
   if (purge && purge.texts.length > 0) {
     if (onPurged === undefined) {
       // No KV consumer: SQL verification is the whole settlement, so settle now. A caller
       // WITH a KV store settles itself once its redaction verifies (see telegram-turn).
-      if (purge.ready) store.settle(forgetIds);
+      if (purge.ready) store.settle(forgetIds, purgeTopics);
     } else {
-      onPurged(purge.texts, purge.ready ? forgetIds : []);
+      onPurged(purge.texts, purge.ready ? forgetIds : [], purge.ready ? purgeTopics : []);
     }
   }
   for (const id of forgetsAllowed ? ops.forget_nodes.filter((id) => nodes.has(id)) : []) store.forgetNode(id);
