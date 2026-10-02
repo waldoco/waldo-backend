@@ -71,9 +71,10 @@ export const literalJsonTextRedactor = (
         if (redact(key) !== key) return failure();
         return [key, key === 'data' ? visit(item) : key === 'error' ? visit(item, true) : item];
       }));
-      return JSON.stringify(result) + suffix;
+      return JSON.stringify(result) === JSON.stringify(parsed) ? value : JSON.stringify(result) + suffix;
     }
-    return JSON.stringify(visit(parsed, mode === 'arguments')) + suffix;
+    const clean = JSON.stringify(visit(parsed, mode === 'arguments'));
+    return clean === JSON.stringify(parsed) ? value : clean + suffix;
   };
 };
 

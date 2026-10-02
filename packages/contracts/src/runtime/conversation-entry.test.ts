@@ -105,3 +105,10 @@ describe('ConversationTree', () => {
   });
 
 });
+
+it('preserves exact tool argument bytes when forgetting changes no content', () => {
+  const original = '{\n  "path": "notes/fixture.txt", "text": "\\u0939"\n}';
+  for (const texts of [[], ['unrelated forgotten text']]) {
+    expect(literalJsonTextRedactor(texts, '[forgotten]', 'arguments')(original)).toBe(original);
+  }
+});
