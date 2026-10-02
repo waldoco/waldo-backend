@@ -7,6 +7,8 @@ describe('dashboard read-only copy', () => {
   it('labels Account accurately and locates sessions at Connections', () => {
     const html = renderToStaticMarkup(<DashboardNavigation route="connections" />);
     expect(html).not.toContain('Account &amp; sign out');
+    expect(html).toContain('href="/console/legacy"');
+    expect(html).not.toContain('Original console');
     expect(html).toMatch(/href="\/console\/connections"[^>]*>Sessions &amp; sign out/);
     expect(html).toMatch(/href="\/console\/account"[^>]*>Account</);
   });

@@ -8,7 +8,9 @@ Source checked at base: `channels/console.ts:90,190–214,242–278,298–367,46
 
 | Destination/action | Existing renderer eligibility and details | Modern entry / preserved destination |
 | --- | --- | --- |
-| `/console` overview | Existing owner overview | Sidebar Original console; old URL unchanged |
+| `/console` browser entry | New authenticated React home for GET/HEAD; ticket GET/POST and JSON stay on existing handlers | Today shell; `/console/dashboard` remains an alias |
+| `/console/legacy` overview | Existing overview and JSON, unchanged session/CSRF | Sidebar Existing controls; every deep route/action below remains reachable |
+| `/console?m=...` action receipts | Existing notice text and eligible controls | Existing overview retained for notice-bearing root requests; no receipt discarded |
 | React `#/overview` | Overview DTO | Alias to Today |
 | `/console/waiting` full details | Matching typed review renders exact calendar/email/message details; unsupported/missing detail has no fabricated full review | Waiting → Open full proposals |
 | `approval.approve` | Open `calendar_change`, authoritative `consoleMayApprove`, matching non-null calendar review | Protected Waiting only; no React approve |
@@ -82,3 +84,11 @@ Other dependencies remain full Waiting queue/typed attention, modern memory read
 Same-owner chat-to-console continuity, real two-owner access, live session/CSRF checks and stale/duplicate action receipts remain live acceptance work on the protected legacy surfaces. Approval-to-execution wiring is in flight; this UI cannot certify it. No merge or deployment performed. Rollback the bounded UI commit; existing console routes remain usable.
 
 Checklist for this UI bug class: labels must name the actual destination and session controls; adversarial link tests must cover sibling routes. Mobile modal navigation must contain keyboard focus, restore it on close, and release the modal on desktop resize; manual rendered verification above catches the initial native focus-wrap gap. Canonical Engineering Fundamentals follow-up remains outside the lane packet's file ownership and must accompany any shipping acceptance. Draft review is not shipping acceptance.
+
+## Console entry migration
+
+Branch `codex/dashboard-console-entry`, base `ba4d4a1`. Normal browser GET/HEAD `/console` and `/console/` now serve the existing protected React shell. `/console/dashboard` remains compatible, and assets/API retain their original paths. Unauthenticated shell requests redirect only to `/console/signin`; successful existing email verification already returns to `/console`. No arbitrary return parameter or alternate auth authority is introduced. Configured email authentication renders its existing form; ticket-only deployments retain the existing Telegram `/console` link instructions.
+
+The old overview remains available at `/console/legacy`. Root JSON, ticket previews/redemption, and `?m=` action receipts continue through the original handlers. Every individual action and eligibility in the preservation map stays unchanged. Existing controls sidebar points to the legacy alias, avoiding a home-to-home loop. The ticket fallback canonicalizes its owner routing header before invoking the selected owner DO. No Memory DTO or sign-in handler edits: #505/#506 retains those contracts.
+
+Verification: red-first static root/redirect tests and spoofed-owner-header regression; 27 dashboard tests; focused runtime suites plus actual owner-DO session coverage for ticket reuse, shell, JSON/legacy CSRF parity, notices, invalid-action nonmutation and cross-owner denial. Workspace typechecks, dashboard build and asset checks pass. Source QA/security review pass after canonical-header correction. Rendered synthetic Chrome320×640: Enter and Space open Menu, Shift+Tab wraps to Existing controls, Tab wraps back, Escape closes/restores Menu; clientWidth/scrollWidth320/320. Desktop sidebar shows the correct legacy link. These are synthetic UI and local DO checks, not live deployment, delivery or chat-continuity proof. Full verification results and exact head belong in the draft PR receipt.

@@ -122,6 +122,15 @@ export class RuntimeProbeDO extends DurableObject<Env> {
   }
 }
 
+const forwardTicketConsole = async (request: Request, env: Env): Promise<Response> => {
+  if (!env.TELEGRAM_OWNER_DO || !env.WALDO_OWNER_TELEGRAM_ID) return new Response('unauthorized', { status: 401 });
+  const ownerRoute = await ownerDirectory(env).byPresence('telegram', env.WALDO_OWNER_TELEGRAM_ID);
+  const doName = ownerRoute?.doName ?? env.WALDO_OWNER_TELEGRAM_ID;
+  const forwarded = new Request(request);
+  forwarded.headers.set('x-waldo-do-name', doName);
+  return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(doName)).fetch(forwarded);
+};
+
 export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     if (new URL(request.url).pathname === '/healthz') {
@@ -141,7 +150,7 @@ export default {
     }
     // The authenticated dashboard API is still owned by handleConsole/owner DO.
     // This adapter handles only the read-only shell and content-hashed static assets.
-    const dashboard = await serveDashboard(request, env.ASSETS, (authRequest) => handleConsole(authRequest, env).then((result) => result ?? new Response('unauthorized', { status: 401 })));
+    const dashboard = await serveDashboard(request, env.ASSETS, (authRequest) => handleConsole(authRequest, env).then((result) => result ?? forwardTicketConsole(authRequest, env)));
     if (dashboard) return dashboard;
     const consoleRequest = new URL(request.url).pathname.startsWith(CONSOLE_PATH);
     const consoleRequestTrace = consoleRequest ? consoleTrace() : null;
@@ -156,9 +165,7 @@ export default {
       // served an empty shell DO: one-time links minted in the turn DO never redeemed (403),
       // and account.delete would have wiped the wrong DO. Directory errors propagate loudly;
       // no fallback to a possibly-wrong DO beyond the designed no-directory single-owner path.
-      const ownerRoute = await ownerDirectory(env).byPresence('telegram', env.WALDO_OWNER_TELEGRAM_ID);
-      const consoleDoName = ownerRoute?.doName ?? env.WALDO_OWNER_TELEGRAM_ID;
-      const response = await env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(consoleDoName)).fetch(request);
+      const response = await forwardTicketConsole(request, env);
       if (consoleRequestTrace) {
         consoleLog(consoleRequestTrace, 'console_route', response.ok, response.ok ? 'forwarded' : 'forward_failed');
         return withConsoleTrace(response, consoleRequestTrace);
