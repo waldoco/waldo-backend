@@ -115,7 +115,7 @@ export const readDriveArgsSchema = z.strictObject({
   name_contains: z.string().min(1).max(200).optional(),
   file_id: z.string().regex(/^[A-Za-z0-9_-]{10,128}$/).optional(),
   page_size: z.int().min(1).max(50).default(10),
-  page_token: z.string().min(1).max(512).optional(),
+  page_token: z.string().min(1).max(2048).optional(),
 }).refine((a) => (a.action !== 'search' || a.name_contains !== undefined) && (a.action !== 'get' || a.file_id !== undefined), { message: 'search needs name_contains and get needs file_id' });
 export type ReadDriveArgs = z.infer<typeof readDriveArgsSchema>;
 
