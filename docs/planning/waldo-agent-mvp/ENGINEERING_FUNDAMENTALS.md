@@ -273,3 +273,13 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - An older crashed schedule attempt stays as audit evidence, but a later successful or terminal-delivery attempt of the same occurrence must not suppress future occurrences. An unresolved older occurrence still blocks overlap. Select the latest attempt numerically across 9→10; ACK-bookkeeping replay preserves the first background completion time, and enqueue-commit crashes leave delivery pending.
 
 | 2026-10-02 | Heartbeat discarded blocked Telegram sends and started cooldown; send-before-cooldown crashes could duplicate nudges; stale crashed attempts could suppress later ticks | Heartbeat / scheduler | heartbeat-outbox.test.ts frozen intent, ACK truth, fresh eligibility, transport/receipt crashes and same-byte429; schedule-runs.test.ts recovered occurrence liveness and unresolved controls | Commit intent before I/O, settle from ACK, preserve audit without wedging future ticks |
+
+### Migration executor configuration
+- [ ] Distinguish verified CLI outputs from execution inputs before excluding anything from configuration drift checks. Exclude only the regular `.temp/cli-latest` upgrade-hint file; retain project-ref, pooler URL, configuration, migrations and unknown-file checks, plus symlink/directory rejection.
+- [ ] Non-interactive migration children use the supplied environment credentials with `SUPABASE_NO_KEYRING=1`; never modify Keychain permissions or persist replacement credentials to avoid prompts.
+
+| Date | Bug found | Surface | Adversarial proof | Checklist change |
+| --- | --- | --- | --- | --- |
+| 2026-10-02 | Supabase dry-run added only `.temp/cli-latest`, causing the reviewed executor to reject benign output as configuration drift; sanitized child environment also omitted the supported no-keyring control | Migration apply helper | Real-filesystem fake CLI reproduces cache addition, retains rejection of target/config/migration/unknown-file drift, and checks process-local keyring disablement with unchanged supplied credentials | Trace pinned CLI producers/consumers; narrowly separate output cache from effective inputs |
+
+Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabase/cli/blob/v2.109.1/apps/cli-go/cmd/root.go#L242-L268), [process-scoped keyring control](https://github.com/supabase/cli/blob/v2.109.1/apps/cli/src/legacy/auth/legacy-credentials.layer.ts#L326-L335). Source and synthetic executor checks do not prove hosted migration application.
