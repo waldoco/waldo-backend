@@ -24,6 +24,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Every code-based sign-in proves in a real run that the code actually arrives: the email template must carry `{{ .Token }}`, which Supabase's default does not.
 - Every public attempt endpoint (code send AND code verify) carries a per-email and per-IP throttle and fails closed without its limiter. A verification code is guessable, so verify throttles like send.
 - A signed RPC's canonical data covers every parameter the function stores; an unsigned stored parameter is a tamperable write.
+- SQL authentication requires an explicit true result (`IS DISTINCT FROM TRUE` rejects false and NULL). Test NULL signature and timestamp inputs; `IF NOT verifier(...)` can silently skip rejection on NULL.
 - A refusal precedes any one-use consumption: validate first, then spend the invite, token or code. An error branch re-rendering a form puts the error in the note, never in a data field.
 
 ### Idempotency and retries
@@ -209,6 +210,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 | Date | Bug found | Surface | Adversarial proof | Checklist change |
 | --- | --- | --- | --- | --- |
+| 2026-10-02 | Nullable signed-RPC verifier bypassed rejection in the new admission proposal; existing routing shares the class | Owner admission SQL preparation | NULL signature/time failed red, then passed with explicit-true check in owner-admission-a1/lookup-tests.sql; isolated baseline route witness remains separately unresolved | Require explicit true SQL auth and NULL regressions |
 | 2026-10-01 | Existing signup passed unverified phone to provisioning and granted console after email alone | Signup proof | console-auth.test.ts legacy empty-phone regression; console-signup-auth/test pending no provisioning; waldo_invite_chain.sql empty-phone no delta | Both proof requirements gate new-owner completion |
 | 2026-10-01 | Chrome form POST under no-referrer supplied Origin:null; direct Request tests missed it | Browser headers | Synthetic Chrome POST reached OTP after same-origin fix; console-signup.test.ts policy and cross-origin rejection | Verify browser Origin and fragment custody together |
 | 2026-10-01 | Signed continuation swallowed second invite/restart and hash-only navigation did not rerun entry | Retry/refresh | Synthetic Chrome second link, refresh and fragment clearing; console-signup.test.ts restart cookie clear/hashchange contract | Explicit reset and same-document fragment handling |
