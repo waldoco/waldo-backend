@@ -232,3 +232,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - [ ] Back-edit-Forward must retain the outstanding code's original email/phone/invite; unsent details belong only to the details phase. A newly requested code replaces that phase's recipient context.
 
 | 2026-10-02 | Broadcasting Back edits to cached code form retargeted an outstanding code without requesting another | Console history recipient | Distinct A/B email/phone/invite edit-before-Forward regression and native Chrome; each phase retains its own details | Unsent edits never retarget an existing code |
+
+- [ ] Rate-ceiling integration tests must preserve all real authenticated admissions and exact persisted counts without multiplying RPC transport overhead by the ceiling. Keep per-session boundary calls and overflow rejection; verify failed admission leaves authority and rate state unchanged.
+
+| 2026-10-02 | Owner-global rate test timed out after 239 sequential projection RPCs; controlled per-call latency reproduced the baseline failure | Rate-limit test transport | responsibility-public-do.test.ts batches real signed admissions inside the DO, retains each session RPC and overflow RPC, asserts owner240/session60 counts and unchanged rejection state | Test security behavior rather than cumulative transport latency; retain the five-second timeout |
