@@ -20,14 +20,16 @@ const context = () => ({
 });
 const seen: Array<{ tool: string }> = [];
 const intents: Array<string | undefined> = [];
-const auth: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async (_url, tool, _args, _conn, intent) => { seen.push({ tool }); intents.push(intent?.id); return [{ text: 'ok' }]; } };
+const readOnlyFlags: Array<boolean | undefined> = [];
+const auth: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async (_url, tool, _args, _conn, intent) => { seen.push({ tool }); intents.push(intent?.id); readOnlyFlags.push(intent?.readOnly); return [{ text: 'ok' }]; } };
 const run = (server: string, tool: string) => dispatchTool({ id: `r-${server}-${tool}`, name: 'read_mcp_tool', args: { server, tool, args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, auth)] });
 
 describe('read_mcp_tool through the real dispatcher', () => {
   it('passes a host-derived intent for metadata reads and never one from model args', async () => {
-    seen.length = 0; intents.length = 0;
+    seen.length = 0; intents.length = 0; readOnlyFlags.length = 0;
     for (const tool of ['list_recent_files', 'search_files', 'get_file_metadata']) expect(await run('drive', tool)).toMatchObject({ ok: true });
     expect(intents).toHaveLength(3);
+    expect(readOnlyFlags).toEqual([true, true, true]);
     for (const id of intents) expect(id).toMatch(/^mcpread:[0-9a-f]{64}$/);
     expect(new Set(intents).size).toBe(3);
     const withArgIntent = await dispatchTool({ id: 'x', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: { intent: { id: 'model-chosen' } } } }, context(), { handlers: [readMcpToolHandler(SERVERS, auth)] });

@@ -47,3 +47,9 @@ Finding (source, beta-mvp 739e1b3): the proxy rail's `mcpCall` throws `intent_re
 Decision (main's decision under the owner's overnight delegation, not owner-approved): `read_mcp_tool` derives `mcpread:<sha256 of [user, turn, toolCall]>` from the dispatcher context, the same shape `draft_email` uses, and never takes an intent from model args. It requires `turnId` and `toolCallId` and refuses without them.
 
 Held: only `list_recent_files`, `search_files` and `get_file_metadata` take this path. `read_file_content` stays refused (`forbidden`) until the intent ledger's storage of results is confirmed not to persist Drive file text. `call_mcp_tool` and its desk path are unchanged.
+
+Route custody: read intents carry `readOnly: true`, so `pinProxyIntentRoute` writes no `proxy_intent_routes` row for them. Pinning every read would fill the 5000-row cap shared with approvals, calendar and mail effects and make all intent calls return `intent_unavailable`. Effects keep full custody. A test runs 5001 reads and then an approval pin.
+
+Still open, not decided here:
+- Edge storage of read results. Whether the connector proxy's intent ledger stores `mcp_call` results (file names, owners, snippets) is unconfirmed (asked of Codex). Do not enable this path on staging until answered.
+- Owner decision on unattended Drive reads (no owner button) is listed open. The 2026-10-02 08:11 AM "Yes" covered read_tools; this note adds no new owner authority.

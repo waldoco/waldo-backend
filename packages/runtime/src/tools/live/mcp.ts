@@ -193,7 +193,7 @@ export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: 
       return { ok: false, code: 'forbidden', error: `tool "${tool}" is not enabled for owner-button-free reads yet.`, source_taint: 'external' };
     }
     if (!ctx?.turnId || !ctx.toolCallId) return { ok: false, code: 'rejected', error: 'Read invocation identity is unavailable.', source_taint: 'external' };
-    const intent: ProxyIntent = { id: `mcpread:${await sha256Hex(JSON.stringify([ctx.authenticatedUserId, ctx.turnId, ctx.toolCallId]))}` };
+    const intent: ProxyIntent = { id: `mcpread:${await sha256Hex(JSON.stringify([ctx.authenticatedUserId, ctx.turnId, ctx.toolCallId]))}`, readOnly: true };
     try {
       const { content, protocolVersion } = await executeMcp(found, tool, args, googleAuth, fetch, intent);
       return { ok: true, data: { output: content, protocol: protocolVersion, source_taint: 'external' as const }, source_taint: 'external' };
