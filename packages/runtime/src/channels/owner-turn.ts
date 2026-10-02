@@ -60,7 +60,9 @@ const memoryReceipt = (outcome: ClaimOutcome, conversationLeft: number, conversa
   if (conversationRedacted) parts.push(`redacted ${plural(conversationRedacted, 'saved conversation entry', 'saved conversation entries')} that quoted it`);
   if (outcome.forgetNodes) parts.push(`asked the store to delete ${plural(outcome.forgetNodes, 'pattern node', 'pattern nodes')} (not separately verified)`);
   if (topicCleanup) parts.push(topicCleanup === 'pending' ? 'the requested topic cleanup is pending until retained context copies are verified clean' : 'the requested topic was removed from retained context copies');
-  if (!topicCleanup && outcome.forgetAllowed && !outcome.forgetClaimsAttempted && !outcome.forgetNodes) parts.push('the owner asked to forget something but nothing was forgotten');
+  const topicCustodyFailed = outcome.purgeIncomplete.includes('pending_topic(failed)');
+  if (topicCustodyFailed) parts.push('a requested topic cleanup could not be accepted because its retry state could not be stored; its source was preserved; ask the owner to retry the request');
+  if (!topicCustodyFailed && !topicCleanup && outcome.forgetAllowed && !outcome.forgetClaimsAttempted && !outcome.forgetNodes) parts.push('the owner asked to forget something but nothing was forgotten');
   return `${parts.join('; ')}.`;
 };
 

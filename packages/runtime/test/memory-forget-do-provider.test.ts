@@ -585,3 +585,23 @@ it.each(['conversation','ledger'])('keeps topic pending when independent %s veri
   failVerify=false;await direct('t3','Check the unrelated preference.',false);expect(memory.pendingTopics()).toEqual([]);
  });
 });
+
+it('explains a rejected topic-only custody write without claiming pending cleanup or automatic retry',async()=>{
+ await runInDurableObject(stub('forget-topic-custody-receipt'),async(_instance,state)=>{
+  const TOPIC='Synthetic cobalt custody workshop';let failInsert=false;
+  const sql={exec:((query:string,...values:unknown[])=>{
+   if(failInsert&&query.startsWith('INSERT OR IGNORE INTO topic_purge_pending'))throw new Error('PRIVATE_INSERT_FAILURE');
+   return state.storage.sql.exec(query,...values as SqlStorageValue[]);
+  }) as SqlStorage['exec']};
+  const memory=claimStore(sql,work=>state.storage.transactionSync(work));const kv=durableConversationStore(state.storage);
+  const responder=createOwnerResponder('fixture',kv,memory);
+  const direct=(id:string,text:string)=>responder.respond({traceId:id,conversationRef:'owner',surface:'telegram',text},(_hop,work)=>work());
+  seen.writer=ops();await direct('t1',TOPIC);
+  failInsert=true;seen.writer=ops({forget_topic:TOPIC});await direct('t2',`Forget ${TOPIC}.`);
+  expect(memory.pendingTopics()).toEqual([]);expect(JSON.stringify(await kv.load())).toContain(TOPIC);
+  expect(request()).toContain('topic cleanup could not be accepted');
+  expect(request()).toContain('ask the owner to retry');
+  expect(request()).not.toContain('requested topic cleanup is pending');
+  expect(request()).not.toContain('PRIVATE_INSERT_FAILURE');
+ });
+});
