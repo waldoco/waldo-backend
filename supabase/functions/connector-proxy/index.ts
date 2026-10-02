@@ -1,6 +1,7 @@
 // Typed connector proxy. The only place a Google token is read, refreshed or used: the runtime
 // sends a connection id and a typed operation, signed with the router secret, and gets data back.
 import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, googleHas, GoogleError, type GoogleClient, type GoogleMethod } from '../../../packages/runtime/src/connectors/google.ts';
+import { driveRestClient, DRIVE_REST_METHODS, DriveRestError, type DriveRestMethod } from '../../../packages/runtime/src/connectors/drive-rest.ts';
 import { googleAccessToken } from '../../../packages/runtime/src/connectors/google.ts';
 import { executeProxyIntent, ProxyIntentError, type IntentClaim } from '../../../packages/runtime/src/connectors/proxy-intent.ts';
 import { callMcpTransport, McpAuthError, McpToolError } from '../../../packages/runtime/src/connectors/mcp-transport.ts';
@@ -14,8 +15,9 @@ declare const Deno: {env:{get(name:string):string|undefined};serve(handler:(requ
 
 const env = (name: string) => Deno.env.get(name) ?? '';
 const url=env('SUPABASE_URL'), service=env('SUPABASE_SERVICE_ROLE_KEY'), router=env('WALDO_ROUTER_HMAC_SECRET'), clientId=env('GOOGLE_CLIENT_ID'), clientSecret=env('GOOGLE_CLIENT_SECRET');
-const METHODS = GOOGLE_METHODS;
+const METHODS = [...GOOGLE_METHODS, ...DRIVE_REST_METHODS];
 type Method = GoogleMethod;
+const driveRead = (body: Body) => body.op === 'call' && DRIVE_REST_METHODS.includes(body.method as DriveRestMethod);
 
 const hex = (bytes: ArrayBuffer) => [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 const sha256 = async (text: string) => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
@@ -124,6 +126,21 @@ const handle = async (body: Body): Promise<Response> => {
     const access = await db('proxy_access', { p_do_name: body.do_name, p_connection: body.connection }) as {secret:string;scopes:unknown}[];
     const grant=Array.isArray(access)?access[0]:undefined;
     if(!grant||typeof grant.secret!=='string'||!grant.secret)return fail(body.intent_id?503:401,body.intent_id?'intent_unavailable':'connection unavailable');
+    if (driveRead(body)) {
+      const scopes = Array.isArray(grant.scopes) ? grant.scopes : [];
+      if (!['drive.readonly','drive.metadata.readonly'].some(scope => scopes.includes(`https://www.googleapis.com/auth/${scope}`))) return fail(403, 'drive_scope_missing');
+      if (!Array.isArray(body.args) || body.args.length !== 1) return fail(400, 'drive_invalid_request');
+      let refreshFailed = false;
+      const client = driveRestClient(fetch, () => googleAccessToken(app, { refresh_token: grant.secret }, fetch, error => { refreshFailed = Boolean(error); }));
+      try {
+        const data = await (client[body.method as DriveRestMethod] as (args: unknown) => Promise<unknown>)(body.args[0]);
+        await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' }).catch(() => { console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'})); });
+        return reply({ data });
+      } catch (error) {
+        if (refreshFailed) await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: 'google_refresh_failed' }).catch(() => { console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'})); });
+        return fail(refreshFailed ? 401 : error instanceof DriveRestError ? error.status : 502, refreshFailed ? 'drive_auth_failed' : error instanceof DriveRestError ? error.code : 'drive_read_failed');
+      }
+    }
     if(body.method==='calendarPage'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar'))return fail(403,'insufficient scopes');
     if(body.method==='freeBusy'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'availability'))return fail(403,'insufficient scopes');
     const required = body.method==='sendRaw' ? 'gmail.send' : body.method==='draft' ? 'gmail.compose' : ['createEvent','moveEvent','cancelEvent'].includes(body.method!) ? 'calendar.events' : null;
@@ -142,6 +159,7 @@ const handle = async (body: Body): Promise<Response> => {
       return fail(refreshError ? 401 : error instanceof GoogleError ? error.status : 502, error instanceof Error ? error.message : String(error));
     }
   } catch (error) {
+    if (driveRead(body)) return fail(502, 'drive_read_failed');
     if (body.op === 'mcp_call' && body.read_only === true) return fail(502, 'mcp_read_failed');
     return fail(502, error instanceof Error ? error.message : String(error));
   }
