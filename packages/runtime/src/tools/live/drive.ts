@@ -6,7 +6,7 @@ import type { GoogleAccess } from './google';
 // Drive metadata reads over the explicit REST adapter (Drive v3 files.list / files.get through the connector proxy).
 // No MCP, no fallback to it. Why REST: the field list is fixed at the edge and again here, so file text, snippets,
 // owners and permissions cannot reach the model even if a reply carried them; and a provider failure keeps its HTTP status.
-// Off unless `enabled` (the deploy flag), like the other owner-button-free reads.
+// Off unless `enabled` (the deploy flag). The owner DO will register it behind that flag; until it is registered the model is never offered this tool.
 const CONNECT_SENT_TEXT = 'A reconnect button is in the chat (or was just sent). Tell the owner to tap it - never quote or retype any link yourself.';
 const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('read_drive'));
 
