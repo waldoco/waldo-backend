@@ -77,6 +77,10 @@ export const toolNameSchema = z.enum([
   'set_standing_order',
   'list_standing_orders',
   'cancel_standing_order',
+  // workspace 50-52 (files slice): owner-private file store, owner-initiated (user_message) only; list/read stamped external.
+  'workspace_list',
+  'workspace_read',
+  'workspace_write',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -231,6 +235,9 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'set_standing_order',
     'list_standing_orders',
     'cancel_standing_order',
+    'workspace_list',
+    'workspace_read',
+    'workspace_write',
   ],
   dreaming_mode: ['read_memory', 'update_memory', 'search_episodes'],
   // Always carries send_message — a Spot is never silent (ADR-0042).
