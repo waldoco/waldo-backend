@@ -38,6 +38,8 @@ export const artifactExports = (sql: Sql, book: ArtifactBook, bodies: ArtifactBo
     id TEXT PRIMARY KEY, source_artifact_id TEXT NOT NULL, source_revision INTEGER NOT NULL, format TEXT NOT NULL,
     mime_type TEXT NOT NULL, byte_size INTEGER NOT NULL, sha256 TEXT NOT NULL, r2_key TEXT NOT NULL, created_at INTEGER NOT NULL)`);
   return {
+    // Exact-id lookup for the download helper. Returns the stored row or null; callers validate it.
+    byId: (id: string): ExportRow | null => sql.exec<ExportRow>('SELECT * FROM artifact_exports WHERE id = ?', id).toArray()[0] ?? null,
     rows: (artifactId: string) => sql.exec<ExportRow>('SELECT * FROM artifact_exports WHERE source_artifact_id = ?', artifactId).toArray(),
     async exportPdf(args: ExportArtifactArgs) {
       if (args.format !== 'pdf') return { ok: false as const, code: 'unsupported_format' };
