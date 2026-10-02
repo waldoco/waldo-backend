@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { applyClaimOps, claimStore, FORGOTTEN } from '../src/memory/claims';
+import { applyClaimOps, claimStore, FORGOTTEN, MEMORY_INSTRUCTION } from '../src/memory/claims';
 import { episodeIndex } from '../src/channels/episodes';
 
 const ops = (partial: Record<string, unknown>) => JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null, ...partial });
@@ -56,3 +56,23 @@ describe('forgetting a topic whose claim is already gone', () => {
     });
   });
 });
+
+describe('forgetting by the exact identifier the owner named', () => {
+  it('tells the writer to keep an owner-named literal as forget_topic', () => {
+    expect(MEMORY_INSTRUCTION).toContain('when the owner names an exact code, id or phrase to forget, forget_topic is that text exactly as the owner wrote it');
+  });
+  it('a literal marker topic cleans the request and the assistant reply that repeated it', async () => {
+    await run('forget-topic-literal', (sql, tx) => {
+      const store = claimStore(sql, tx);
+      const episodes = episodeIndex(sql);
+      episodes.add('tg-1', 'owner', 'Remember workshop note DLD-20261002-M3 is Friday', 1);
+      episodes.add('tg-1-reply', 'waldo', 'Saved: workshop note DLD-20261002-M3 is Friday.', 2);
+      episodes.add('tg-2', 'owner', 'unrelated lunch plan', 3);
+      applyClaimOps(store, ops({ forget_topic: 'DLD-20261002-M3' }), AT, 'owner, tg-3', undefined, { owner: 'forget everything about DLD-20261002-M3' });
+      const texts = sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY rowid').toArray().map((r) => r.text);
+      expect(texts.join(' ')).not.toContain('DLD-20261002-M3');
+      expect(texts).toContain('unrelated lunch plan');
+    });
+  });
+});
+
