@@ -62,7 +62,10 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     }])) as unknown as GoogleClient,
     mcpCall: async (doName, connection, serverUrl, tool, args, intent) => {
       if(!intent)throw new ProxyIntentError('intent_required');
-      return(await post({ do_name: doName, op: 'mcp_call', connection, server_url: serverUrl, tool, args: [args], intent_id:intent.id })).data;
+      // A host-derived read intent says so on the wire. The edge must still match server and tool against its own
+      // read registry before it skips the ledger; this flag alone never lets a call skip anything.
+      const readOnly = intent.readOnly === true && intent.id.startsWith('mcpread:');
+      return(await post({ do_name: doName, op: 'mcp_call', connection, server_url: serverUrl, tool, args: [args], intent_id:intent.id, ...(readOnly ? { read_only: true } : {}) })).data;
     },
     revoke: async (doName, connection) => (await rpc('connection_revoke', `connrevoke.${doName}.${connection}`, { p_do_name: doName, p_connection: connection })) === true,
   };
