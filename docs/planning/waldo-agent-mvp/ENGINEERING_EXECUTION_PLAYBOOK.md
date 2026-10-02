@@ -1,6 +1,6 @@
 # Waldo Engineering Execution Playbook
 
-Version 1 · 2 October 2026 · Maintainers: Dalda and Core (Instinct)
+Version 1.1 · 2 October 2026 · Maintainers: Dalda and Core (Instinct)
 
 Build the smallest usable change, verify its real behavior, and improve the loop from observed failures. This playbook records the working direction for Waldo engineering. The process below is reusable; the dated checkpoint is historical evidence, not a permanent statement of readiness. Proposed CI improvements remain proposals until implemented and verified.
 
@@ -12,6 +12,14 @@ Build the smallest usable change, verify its real behavior, and improve the loop
 - **Release execution:** Use the existing authorized credentialed executor and reviewed artifacts. A disconnected executor blocks its steps; independent implementation and acceptance preparation can continue
 
 Start with the user outcome and observed problem. Inspect existing code, tests, and relevant mature implementations before adding a custom mechanism. Prefer an established library or typed contract when it fits Waldo's requirements. Explain any necessary difference.
+
+### Product and engineering responsibilities
+
+- **PM:** Define the user outcome, priority, scope, and acceptance threshold
+- **SWE:** Own contracts, implementation, deterministic tests, operational recovery, and release evidence
+- **AI engineering:** Own context assembly, prompts, tool selection, action budgets, and behavioral evaluations
+
+These are responsibilities, not additional approval layers; the named component owners coordinate them.
 
 ## The execution loop
 
@@ -55,7 +63,35 @@ Track **source prepared**, **tests**, **merged SHA**, **deployed version**, **mi
 
 Run the actual user path against the serving version. Mark each case PASS, FAIL, BLOCKED, or NOT RUN, with evidence and a narrow claim. One blocked provider must not erase an independently verified workspace result. A shared authorization failure can block every dependent case.
 
+For each selected end-to-end case, follow the user request through the actual tool call, effect and authoritative readback, then the response. Add later-turn or recovery checks when the case demands them; every test need not run the full matrix.
+
 Trace failures, repair the responsible boundary, redeploy when authorized, and retest. Record test-data cleanup separately. “Forget” is incomplete while retained topic content remains retrievable. Later-turn readback proves that case; it does not prove eviction/restart durability.
+
+## AI engineering evaluation
+
+Maintain a small representative task set, adding regressions from actual failures:
+
+- Context relevance, missing evidence, conflicting facts, and truncation
+- Prompt paraphrases and punctuation; correct tool selection, arguments, and avoiding unnecessary calls
+- Memory save, correction, forget, and later-turn retrieval
+- Provider errors, partial effects, bounded retries, and recovery
+
+Record model/version, prompt/context configuration, and task inputs. Separate deterministic fixtures, actual-model runs with fake providers, and real-provider end-to-end runs; each proves different behavior. Diagnose model behavior, source/context quality, and provider/infrastructure failure separately; leave unlocalized causes unknown. Use observable requests, tool traces, outputs, and readbacks as evidence.
+
+Set explicit latency, cost, and action budgets before comparison. Measure wall time, tokens, tool calls, retries, and cost or a labeled pricing estimate. Compare outcomes and budget adherence; report repeated-run variability where relevant. Do not invent performance improvements.
+
+## Evaluate mature implementations before reuse
+
+For each candidate pattern:
+
+1. State the concrete problem and required behavior
+2. Inspect official upstream documentation and the relevant version, commit, or source file
+3. Check functional fit, maintenance, dependencies, and licensing obligations
+4. Identify Waldo-specific differences, especially ownership, permissions, state, and recovery
+5. Adapt narrowly and prove the behavior with Waldo regression and acceptance cases
+6. Record adopt, adapt, defer, or reject, with evidence
+
+Do not copy blindly. Upstream tests or reputation do not prove Waldo's adapted implementation.
 
 ## Boundaries that remain mandatory
 
