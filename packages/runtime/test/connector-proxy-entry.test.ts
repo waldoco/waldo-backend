@@ -136,7 +136,7 @@ it('unsupported flagged reads reject before both transport and result ledger; or
   const call=kind==='tool'?{...input,tool:'synthetic_write'}:kind==='content'?{...input,tool:'read_file_content'}:kind==='server'?{...input,server_url:'https://fixture.googleapis.com/mcp'}:kind==='approval'?{...input,intent_id:'approval:mcp'}:{...input,intent_id:'mcpread:not-a-host-id'};
   expect(await(await serve(await request(call))).json()).toMatchObject({error:{message:'mcp_read_rejected'}});expect(f.hops).toEqual([]);expect(f.rows.size).toBe(0);
  }
- const f=fixture();const input=await readBody();expect(await(await serve(await request({...input,read_only:undefined}))).json()).toHaveProperty('data');expect(f.hops).toContain('proxy_idem_claim');expect(f.hops).toContain('proxy_idem_store');
+ for(const flag of [undefined,false]){const f=fixture();const input=await readBody();expect(await(await serve(await request({...input,read_only:flag}))).json()).toHaveProperty('data');expect(f.hops).toContain('proxy_idem_claim');expect(f.hops).toContain('proxy_idem_store');}
 });
 it('bounded metadata requires explicit readonly scope and signed admission',async()=>{
  for(const scope of [null,[],['https://www.googleapis.com/auth/gmail.readonly']]){
@@ -196,4 +196,31 @@ it('provider read authentication failures retain typed 401 and 403 without opaqu
   const logs=vi.spyOn(console,'log').mockImplementation(()=>{});const out=await(await serve(await request(await readBody()))).json();
   expect(out).toMatchObject({error:{status,message:status===401?'google_reauth_needed':'google_scope_missing'}});expect(JSON.stringify({out,logs:logs.mock.calls})).not.toContain(canary);expect(f.rows.size).toBe(0);expect(f.effects()).toBe(0);logs.mockRestore();
  }
+});
+const realSignedProxy=()=>googleProxy({SUPABASE_PROJECT_URL:'https://edge.invalid',SUPABASE_PUBLISHABLE_KEY:'fictional-public',WALDO_ROUTER_HMAC_SECRET:cfg.WALDO_ROUTER_HMAC_SECRET!},async(input,init)=>serve(new Request(input,init)))!;
+const dispatchActualRead=async()=>{
+ const proxy=realSignedProxy();const handlers=[readMcpToolHandler(JSON.stringify([{name:'drive',url:'https://drivemcp.googleapis.com/mcp/v1',auth:'google',requires:'drive',allow_tools:['search_files'],read_tools:['search_files']}]),{resolve:async()=>({mode:'proxy' as const,connection:'conn'}),proxy:(url,tool,args,connection,intent)=>proxy.mcpCall('owner',connection,url,tool,args,intent)},true)];
+ return dispatchTool({id:'fixture-read-call',name:'read_mcp_tool',args:{server:'drive',tool:'search_files',args:{query:'fictional'}}},{authenticatedUserId:'owner',turnId:'fixture-turn',trigger:'user_message',session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:1}),hasApproval:()=>false,sourceTaint:null,toolArgSourceTaint:null,sanitise},{handlers});
+};
+it('actual dispatcher-wire-Edge provider 401/403 reaches typed reconnect without storing read results',async()=>{
+ for(const status of [401,403]){
+  const f=fixture();f.scope(['https://www.googleapis.com/auth/drive.readonly']);const provider=fetch;
+  vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>String(input)==='https://drivemcp.googleapis.com/mcp/v1'?new Response('PRIVATE_WIRE_AUTH_CANARY',{status}):provider(input,init)));
+  const out=await dispatchActualRead();expect(out).toMatchObject({ok:false,code:'auth_failed',source_taint:'external',connect:{status:'auth_required',service:'google',reason:status===401?'reauth_needed':'scope_missing',feature:'drive'}});expect(JSON.stringify(out)).not.toContain('PRIVATE_WIRE_AUTH_CANARY');expect(f.rows.size).toBe(0);expect(f.effects()).toBe(0);
+ }
+});
+it('actual signed wire read rejection is a stable non-auth 400, not a reconnect or intent-uncertainty error',async()=>{
+ const f=fixture();f.scope(['https://www.googleapis.com/auth/drive.readonly']);f.providerError('PRIVATE_WIRE_REJECTION_CANARY');
+ await expect(realSignedProxy().mcpCall('owner','conn','https://drivemcp.googleapis.com/mcp/v1','search_files',{}, {id:`mcpread:${'a'.repeat(64)}`,readOnly:true})).rejects.toMatchObject({status:400,message:'mcp_read_rejected'});expect(f.rows.size).toBe(0);
+});
+
+it('all three exact metadata tools skip storage and body tampering cannot change signed read authority',async()=>{
+ for(const tool of ['list_recent_files','search_files','get_file_metadata']){
+  const f=fixture();f.scope(['https://www.googleapis.com/auth/drive.readonly']);expect(await(await serve(await request({...await readBody(),tool}))).json()).toHaveProperty('data');expect(f.rows.size).toBe(0);expect(f.hops).not.toContain('proxy_idem_store');
+ }
+ const f=fixture();const input=await readBody();const signed=await request(input);
+ for(const changed of [{...input,connection:'foreign'},{...input,args:[{query:'changed'}]},{...input,tool:'synthetic_write'},{...input,server_url:'https://fixture.googleapis.com/mcp'},{...input,read_only:false}]){
+  const tampered=new Request('https://edge.invalid',{method:'POST',headers:signed.headers,body:JSON.stringify(changed)});expect(await(await serve(tampered)).json()).toMatchObject({error:{message:'unsigned proxy call'}});
+ }
+ expect(f.hops).toEqual([]);expect(f.rows.size).toBe(0);
 });
