@@ -91,6 +91,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: queryCalendarArgsSchema,
     trigger_allowlist: allowlist('query_calendar'),
     autonomy_gated: false,
+    requires_connector: true,
     handle: ({ date_range, include_declined, limit, calendar_id = 'primary', page_token }: QueryCalendarArgs) => withGoogle(google, 'calendar', async (client) => {
       const now = clock.now().getTime();
       const from = date_range?.from ?? new Date(now).toISOString();
@@ -124,6 +125,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: getCommunicationArgsSchema,
     trigger_allowlist: allowlist('get_communication'),
     autonomy_gated: false,
+    requires_connector: true,
     handle: ({ date_range,limit=10,page_token }: GetCommunicationArgs) => withGoogle(google, 'mail', async (client) => {
       const since = date_range?.from ? Date.parse(date_range.from) : clock.now().getTime() - DAY_MS;
       const to = date_range?.to ?? clock.now().toISOString();
@@ -162,6 +164,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: searchCommunicationArgsSchema,
     trigger_allowlist: allowlist('search_communication'),
     autonomy_gated: false,
+    requires_connector: true,
     handle: ({ query, date_range, limit }: SearchCommunicationArgs) => withGoogle(google, 'mail', async (client) => {
       const clauses = [query];
       if (date_range?.from) clauses.push(`after:${Math.floor(Date.parse(date_range.from) / 1000)}`);
@@ -182,6 +185,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: readThreadArgsSchema,
     trigger_allowlist: allowlist('read_thread'),
     autonomy_gated: false,
+    requires_connector: true,
     handle: ({ thread_id, limit }: ReadThreadArgs) => withGoogle(google, 'mail', async (client) => ({
       thread_id,
       messages: await Promise.all((await client.readThread(thread_id, limit)).map((message) => relayThreadMessage(message, relayArtifact))),
@@ -193,6 +197,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: getTasksArgsSchema,
     trigger_allowlist: allowlist('get_tasks'),
     autonomy_gated: false,
+    requires_connector: true,
     handle: ({ status, limit }: GetTasksArgs) => withGoogle(google, 'tasks', async (client) => ({
       status,
       tasks: await client.tasks(status, limit),
@@ -216,6 +221,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: draftEmailArgsSchema,
     trigger_allowlist: allowlist('draft_email'),
     autonomy_gated: false,
+    requires_connector: true,
     mutates_state: true,
     // The draft receipt is a mutation ack, not provider-controlled content, so the result is
     // restamped taint-null: EXTERNAL_ORIGIN_TOOLS covers reads, and the dispatcher rejects a
@@ -241,6 +247,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: sendEmailArgsSchema,
     trigger_allowlist: allowlist('send_email'),
     autonomy_gated: false,
+    requires_connector: true,
     mutates_state: true,
     // The tool only proposes: it canonicalizes the MIME bytes, binds them with a sha256 digest
     // and hands both to the approval desk. The desk replays the stored bytes on approval
@@ -286,7 +293,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<SendEmailArgs, unknown, ToolDispatcherContext>,
   {
     name:'query_availability',description:'Find duration-fitting free windows across explicit connected calendar IDs and supplied work windows. Reports unknown coverage instead of assuming inaccessible calendars are free. Read-only, no booking.',
-    schema:queryAvailabilityArgsSchema,trigger_allowlist:allowlist('query_availability'),autonomy_gated:false,
+    schema:queryAvailabilityArgsSchema,trigger_allowlist:allowlist('query_availability'),autonomy_gated:false,requires_connector:true,
     handle:(args:QueryAvailabilityArgs)=>withGoogle(google,'availability',async client=>{
       const {date_range:range,calendar_ids:ids,work_windows:windows,duration_minutes:duration}=args;
       const observed=await client.freeBusy(range.from,range.to,ids,clock.timezone);

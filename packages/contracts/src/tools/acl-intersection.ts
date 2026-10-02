@@ -61,3 +61,8 @@ export function intersectToolAcl(input: ToolAclInput): ToolAclResult {
     : undefined;
   return degraded === undefined ? { status: 'admitted', tools, removed, findings } : { status: 'admitted', tools, removed, findings, degraded };
 }
+
+// Derives the connector-backed tool names from handler declarations. A handler that omits the flag is not connector-backed,
+// so the flag lives on the handler next to its Google call, not in a separate host list.
+export const connectorBackedTools = (handlers: readonly Readonly<{ name: ToolName; requires_connector?: true }>[]): ToolName[] =>
+  [...new Set(handlers.filter((h) => h.requires_connector === true).map((h) => h.name))].sort();
