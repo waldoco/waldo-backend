@@ -285,7 +285,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // The owner's forget topic is redacted from retained text like a claim's text, so forgetting a topic whose claim is
       // already gone still clears episodes and backups. Literal, case-insensitive; a hard floor of 3 characters keeps a
       // stray short word from redacting everything.
-      const texts = [...new Set([...forgotten.map((claim) => claim.text.trim()), ...topics.map((topic) => topic.trim()).filter((topic) => topic.length >= 3)].filter(Boolean))];
+      // A claim's text is usually a paraphrase; retained history holds the owner's own words. The quoted evidence span (the
+      // owner's literal words an OWNER-origin claim was grounded on, at least 12 characters like the admission rule; an agent-origin quote could be any common phrase and would wipe unrelated owner text) is redacted too, so
+      // a forget reaches the conversation and episodes that actually quote it. Bare citations and short strings are ignored.
+      const quotedEvidence = forgotten.filter((claim) => claim.origin === 'owner').flatMap((claim) => quotedSpans(claim.evidence).map((span) => span.trim()).filter((span) => span.length >= 12));
+      const texts = [...new Set([...forgotten.map((claim) => claim.text.trim()), ...quotedEvidence, ...topics.map((topic) => topic.trim()).filter((topic) => topic.length >= 3)].filter(Boolean))];
       const failed: string[] = [];
       const attempt = (store: string, op: () => void) => {
         try { op(); } catch { failed.push(store); }
@@ -649,15 +653,10 @@ const normalizeForGrounding = (text: string): string => text.toLowerCase().repla
 
 // Quote-aware targets: evidence like `owner, tg-1: "gym usually 11am"` grounds on the quoted
 // span, not the citation prefix. Unquoted evidence is a paraphrase and checks as a whole.
+// The quoted spans of an evidence string, raw: straight or curly double quotes.
+const quotedSpans = (evidence: string): readonly string[] => [...evidence.matchAll(/"([^"]+)"|“([^”]+)”/g)].map((match) => match[1] ?? match[2] ?? '');
 const groundingTargets = (evidence: string): readonly string[] => {
-  const spans: string[] = [];
-  const re = /"([^"]+)"|“([^”]+)”/g;
-  let match = re.exec(evidence);
-  while (match !== null) {
-    const normalized = normalizeForGrounding(match[1] ?? match[2] ?? '');
-    if (normalized.length >= 12) spans.push(normalized);
-    match = re.exec(evidence);
-  }
+  const spans = quotedSpans(evidence).map(normalizeForGrounding).filter((span) => span.length >= 12);
   const whole = normalizeForGrounding(evidence);
   return spans.length > 0 ? spans : whole ? [whole] : [];
 };
