@@ -31,6 +31,7 @@ export * from './tools/permissions';
 export * from './tools/handler';
 export * from './tools/acl-intersection';
 export * from './tools/schemas/artifacts';
+export * from './tools/schemas/workspace';
 export * from './tools/schemas/reads';
 export * from './tools/schemas/writes';
 export * from './tools/schemas/delegate';
