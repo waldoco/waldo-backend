@@ -62,3 +62,16 @@ it('target-scoped stop and steer cannot hit the next running turn after an await
   const control=turnControl();control.bindTarget('first');control.begin(true);control.end();control.bindTarget('second');control.begin(true);
   expect(control.stopTarget('first')).toBe(false);expect(control.steerTarget('first',1,'old')).toBe(false);expect(await control.roundAsync()).toBe('');expect(control.stopTarget('second')).toBe(true);expect(await control.roundAsync()).toBeNull();
 });
+
+it('reports steers that arrived after the last round as unconsumed, so the host can answer them', () => {
+  const control = turnControl();
+  control.begin(true);
+  control.round();
+  control.steer(2, 'seen');
+    control.round();
+    control.steer(3, 'forget the rooms topic');
+    control.end();
+    expect(control.unconsumed()).toEqual([{ id: 3, text: 'forget the rooms topic' }]);
+    control.begin(true);
+    expect(control.unconsumed()).toEqual([]);
+});
