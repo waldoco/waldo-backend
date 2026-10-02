@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 select no_plan();
-select ok((select admission_revision > 0 from waldo.owners where do_name='pre-revision-owner'),'existing owner backfilled with a positive epoch');
+select col_not_null('waldo','owners','admission_revision','owner admission revision is required');
 insert into auth.users(id) values ('30000000-0000-0000-0000-000000000001');
 insert into waldo.owners(id,do_name) values
  ('10000000-0000-0000-0000-000000000001','revision-a'),

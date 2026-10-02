@@ -53,9 +53,14 @@ try {
     const bytes = readFileSync(join(root, 'supabase/migrations', filename));
     sql(bytes); console.log('PASS baseline ' + filename + ' sha256=' + createHash('sha256').update(bytes).digest('hex'));
   }
+  const backfill = sql("select count(*) = 1 and coalesce(bool_and(admission_revision > 0), false) from waldo.owners where do_name='pre-revision-owner';").trim();
+  if (backfill !== 't') throw new Error('seeded pre-migration owner backfill not proved');
+  console.log('PASS backfill: exactly one seeded pre-migration owner has a positive epoch.');
+  // Prove the canonical suite has no dependency on the private upgrade fixture.
+  sql("delete from waldo.owners where do_name='pre-revision-owner';");
   const output=sql(readFileSync(join(root, 'supabase/tests/waldo_owner_admission_revision.sql'),'utf8'));
   console.log(output);
-  if (/^not ok/m.test(output) || !/^1\.\.[0-9]+$/m.test(output)) throw new Error('admission revision assertions failed');
+  if (/^not ok/m.test(output) || !/^1\.\.41$/m.test(output)) throw new Error('admission revision assertions failed');
 
   // Separate committed sessions exercise opposite transfers plus owner state edits.
   sql(`create table public.revision_concurrency_audit(old_revision bigint, new_revision bigint);

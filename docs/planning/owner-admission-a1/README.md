@@ -1,5 +1,9 @@
 # A1 local admission preparation
 
+## Exact CI correction
+
+The initial draft PR563 head `19a9c39` failed runtime shard4 on existing host-control mutation coverage and both core/schema jobs on revision test1's private backfill seed. The responder now captures `memoryWrites` before any currentness/host await and passes the captured control to its scoped continuation; the existing mutation test and added scoped sibling pass. Canonical pgTAP no longer assumes the private upgrade seed; the disposable runner separately requires exactly one positive backfilled seed, removes it, then runs the41 canonical assertions. Corrected local bounded checks:128 tests/8 files, worker/integration typechecks, node syntax and diff whitespace PASS. Corrected SQL execution remains NOT RUN locally after automatic approval review rejected it under the earlier SQL-execution restriction; normal requested PR CI supplies the isolated canonical-suite result. No guard bypass or security/authentication probe was attempted.
+
 ## Bounded release evidence completion
 
 The actual DO local fixture now explicitly checks authenticated-ingress admission, canonical owner/tenant, `user_message` trigger, exact real-input SHA, persisted inbox occurrence timestamp, provider context/input/function schemas, synthetic reply payload committed to the owner outbox and the matching closed inbox run. Additional actual-DO cases prove a newly verified owner in the same physical DO cannot restore the previous owner history and a foreign-owner material source is rejected before the reply provider/publication. Twelve DO cases pass with existing stale custody/grant/run regressions. These are synthetic private host/provider fixtures through the actual DO class and inbox code, not an installed Cloudflare live host supplier or external webhook deployment proof. No publication; preview-off confirmation and existing security/release gates remain required.

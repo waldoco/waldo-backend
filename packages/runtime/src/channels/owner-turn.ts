@@ -423,18 +423,19 @@ export const createOwnerResponder = (
   };
   return {
     async respond(turn, time) {
+      const memoryWrites = turn.memoryWrites !== false;
       if (turn.runScope && privateRunScope !== turn.runScope) {
-        const prepared = privateOwner?.host ? await privateOwner.host.prepare(turn, handlers, turn.runScope) : undefined;
+        const capturedTurn = { ...turn, memoryWrites };
+        const prepared = privateOwner?.host ? await privateOwner.host.prepare(capturedTurn, handlers, turn.runScope) : undefined;
         if (privateOwner && !prepared) throw new Error('owner host unavailable');
         const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, prepared ? { binding: prepared } : undefined);
         control.route(scoped.control);
-        try { return await scoped.respond(turn, time); }
+        try { return await scoped.respond(capturedTurn, time); }
         finally { control.unroute(scoped.control); }
       }
       privateRunScope?.admit();
       await assertCurrent();
       if (binding && (await binding.admission.readInput()).text !== turn.text) throw new Error('owner input mismatch');
-      const memoryWrites = turn.memoryWrites !== false;
       await restored();
       const id = turn.traceId;
       const media = turn.attachment || turn.mediaNote ? { attachment: turn.attachment, note: turn.mediaNote } : undefined;
