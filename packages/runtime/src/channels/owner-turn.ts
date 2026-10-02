@@ -52,7 +52,7 @@ const memoryReceipt = (outcome: ClaimOutcome, conversationLeft: number, conversa
   if (outcome.forgetClaimsRemoved) {
     // 'Removed' only once settle succeeded; while saved conversation entries remain the claim stays pending.
     parts.push(conversationLeft
-      ? `removal of ${plural(outcome.forgetClaimsRemoved, 'claim', 'claims')} is pending at the owner's request: the stored memory copies are redacted but saved context copies remain or could not be verified clean`
+      ? `removal of ${plural(outcome.forgetClaimsRemoved, 'claim', 'claims')} is pending at the owner's request: the stored memory copies are redacted but ${plural(conversationLeft, 'saved conversation entry', 'saved conversation entries')} still contain it or could not be verified clean`
       : `removed ${plural(outcome.forgetClaimsRemoved, 'claim', 'claims')} from stored memory at the owner's request`);
   } else if (outcome.forgetClaimsAttempted) {
     parts.push(`tried to remove ${plural(outcome.forgetClaimsAttempted, 'claim', 'claims')} at the owner's request but removal is incomplete${outcome.purgeIncomplete.length ? ` in ${outcome.purgeIncomplete.join(', ')}` : ''}`);
@@ -300,16 +300,26 @@ export const createOwnerResponder = (
   };
   const cleanupRetained = async (texts: readonly string[], ids: readonly number[], topics: readonly string[]) => {
     let rewritten = 0;
+    let remaining = 0;
     let failed = false;
     if (texts.length && redactConversation) {
-      try { rewritten = (await redactConversation(texts, privateRunScope)).rewritten; }
+      try {
+        const receipt = await redactConversation(texts, privateRunScope);
+        rewritten = receipt.rewritten;
+        // The callback also covers retained legacy rows omitted by ConversationStore.load().
+        remaining += receipt.remaining;
+      }
       catch (error) { if (error instanceof ClosedRunError) throw error; failed = true; }
     }
-    let remaining = 0;
+    const callbackRemaining = remaining;
     const redact = literalTextRedactor(texts, FORGOTTEN);
     // Each store is read back independently even when another cleanup/read failed.
     if (store) {
-      try { remaining += (await store.load()).entries.filter(entry => JSON.stringify(redactConversationEntry(entry, redact)) !== JSON.stringify(entry)).length; }
+      try {
+        const verifiedRemaining = (await store.load()).entries.filter(entry => JSON.stringify(redactConversationEntry(entry, redact)) !== JSON.stringify(entry)).length;
+        // The callback and load can describe the same rows; either positive count blocks settlement.
+        remaining = Math.max(callbackRemaining, verifiedRemaining);
+      }
       catch (error) { if (error instanceof ClosedRunError) throw error; failed = true; }
     }
     if (toolLedger) {
@@ -533,7 +543,7 @@ export const createOwnerResponder = (
       log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}${conv.failed ? ' verification incomplete' : ''}` : ''}${interrupted ? ` interrupted${interrupted}` : ''}` });
       // Emitted last, after redaction, settle and logging: an error above returns 'uncertain' with no receipt.
       const o = outcome as ClaimOutcome | undefined;
-      if (o !== undefined && (o.written || o.held || o.downgraded || o.corrected || o.confirmed || o.dismissed || o.forgetClaimsAttempted || o.forgetNodes || o.forgetAllowed)) memoryReceipts.push(memoryReceipt(o, !settled ? Math.max(conv?.remaining ?? 0, 1) : 0, conv?.rewritten ?? 0, purgeTopics.length || memory.pendingTopics().length ? settled && purgeTopics.length ? 'settled' : 'pending' : undefined));
+      if (!conv?.failed && o !== undefined && (o.written || o.held || o.downgraded || o.corrected || o.confirmed || o.dismissed || o.forgetClaimsAttempted || o.forgetNodes || o.forgetAllowed)) memoryReceipts.push(memoryReceipt(o, !settled ? Math.max(conv?.remaining ?? 0, 1) : 0, conv?.rewritten ?? 0, purgeTopics.length || memory.pendingTopics().length ? settled && purgeTopics.length ? 'settled' : 'pending' : undefined));
       return conv?.failed ? 'uncertain' : 'saved';
     } catch (error) {
       log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error', detail: stage });

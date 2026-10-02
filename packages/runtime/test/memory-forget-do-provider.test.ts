@@ -158,6 +158,10 @@ for (const fault of ['survivor', 'throw'] as const) {
       expect(request().includes(FORGET)).toBe(false);
       expect(request()).not.toContain('removed 1 claim');
       expect(request()).toContain(fault === 'throw' ? 'only partly stored' : 'is pending');
+      if (fault === 'survivor') {
+        expect(request()).toContain('1 saved conversation entry still contain it');
+        expect(request()).not.toContain('2 saved conversation entries still contain it');
+      }
       expect(memory.claims('purging')).toHaveLength(1);
       expect(JSON.stringify(await kv.load())).toContain(FORGET); // fault really left durable bytes
       await direct('t3', 'What is relevant to my reading desk?', ops());
@@ -581,7 +585,7 @@ it.each(['conversation','ledger'])('keeps topic pending when independent %s veri
   failVerify=true;reads.length=0;seen.writer=ops({forget_topic:TOPIC});await direct('t2',`Forget ${TOPIC}.`);
   expect(reads).toEqual(expect.arrayContaining(['conversation','ledger']));expect(memory.pendingTopics()).toEqual([TOPIC]);
   expect(JSON.stringify(await kv.load())).not.toContain(TOPIC);expect(JSON.stringify(await ledger.recent())).not.toContain(TOPIC);
-  expect(JSON.stringify(logs)).not.toContain('PRIVATE_KV_VERIFY_FAILURE');expect(request()).toContain('pending');
+  expect(JSON.stringify(logs)).not.toContain('PRIVATE_KV_VERIFY_FAILURE');expect(request()).toContain('only partly stored');expect(request()).not.toContain('Memory this turn');
   failVerify=false;await direct('t3','Check the unrelated preference.',false);expect(memory.pendingTopics()).toEqual([]);
  });
 });

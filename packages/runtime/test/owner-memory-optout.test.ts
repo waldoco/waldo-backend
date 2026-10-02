@@ -5,7 +5,7 @@ vi.mock('openai',()=>({default:class {responses={create:async(body:unknown)=>{
  return {id:'fixture',output_text:writer?'{}':'pong',output:[],usage:{input_tokens:1,output_tokens:1,input_tokens_details:{cached_tokens:0}}};
 }};}}));
 const {createOwnerResponder}=await import('../src/channels/owner-turn');
-const memory={claims:()=>[],recall:()=>[],nodes:()=>[],edges:()=>[],barriers:()=>[],beginSettle:()=>{},endSettle:()=>{},settle:()=>{},sweepInterruptedSettles:()=>0};
+const memory={pendingTopics:()=>[],claims:()=>[],recall:()=>[],nodes:()=>[],edges:()=>[],barriers:()=>[],beginSettle:()=>{},endSettle:()=>{},settle:()=>{},sweepInterruptedSettles:()=>0};
 it('host-selected memoryWrites:false blocks writer independent of owner prose',async()=>{
  calls.writer=0;const args:Parameters<typeof createOwnerResponder>=['fixture',undefined,memory as never];
  const responder=createOwnerResponder(...args);expect(await responder.respond({traceId:'optout',conversationRef:'owner',surface:'telegram',text:'Synthetic hello',memoryWrites:false},(_name,work)=>work())).toBe('pong');expect(calls.writer).toBe(0);
