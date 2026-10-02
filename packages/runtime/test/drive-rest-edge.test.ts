@@ -1,4 +1,9 @@
 import {afterAll,afterEach,beforeAll,expect,it,vi} from 'vitest';
+import {buildSessionState} from '@waldo/contracts';
+import {googleProxy} from '../src/connectors/connections';
+import {readDriveHandler} from '../src/tools/live/drive';
+import {dispatchTool} from '../src/tools/dispatcher';
+import {sanitise} from '../src/scribe/sanitiser';
 import {routerSignature} from '../src/identity/owner-directory';
 let serve:(r:Request)=>Promise<Response>;
 const cfg:Record<string,string>={SUPABASE_URL:'https://db.invalid',SUPABASE_SERVICE_ROLE_KEY:'fixture-service',WALDO_ROUTER_HMAC_SECRET:'fixture-router',GOOGLE_CLIENT_ID:'fixture-client',GOOGLE_CLIENT_SECRET:'fixture-secret'};
@@ -43,4 +48,22 @@ it.each([401,403])('provider %i remains typed, redacted and no result or private
 });
 it('structured API-disabled 403 is actionable without claiming scope failure',async()=>{
  const f=fixture(undefined,403,{error:{message:'PRIVATE_CANARY',errors:[{reason:'accessNotConfigured'}]}});const r=await serve(await signed(input));expect(await r.json()).toEqual({error:{status:403,message:'drive_service_disabled'}});expect(JSON.stringify(f.log.mock.calls)).toContain('drive_service_disabled');expect(f.hops).toEqual(['proxy_access','token','drive']);
+});
+
+const runtimeRead=async(args:unknown)=>{
+ const proxy=googleProxy({SUPABASE_PROJECT_URL:'https://edge.invalid',SUPABASE_PUBLISHABLE_KEY:'fixture-key',WALDO_ROUTER_HMAC_SECRET:cfg.WALDO_ROUTER_HMAC_SECRET},async(raw,init)=>serve(new Request(raw,init)))!;
+ const handler=readDriveHandler({client:async()=>proxy.client('owner','conn')},true);
+ return dispatchTool({id:'drive-wire',name:'read_drive',args},{authenticatedUserId:'owner',turnId:'drive-turn',trigger:'user_message',session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:1}),hasApproval:()=>false,sourceTaint:null,toolArgSourceTaint:null,sanitise},{handlers:[handler]});
+};
+it.each(['recent','search','get'])('actual dispatcher→Core handler→signed GoogleProxy→Edge→HTTP %s metadata read',async action=>{
+ const f=fixture(undefined,200,action==='get'?{id:'f'.repeat(12),name:'Report',mimeType:'text/plain',contentSnippet:'PRIVATE_CANARY'}:undefined);
+ const result=await runtimeRead({action,...(action==='search'?{name_contains:'Report'}:action==='get'?{file_id:'f'.repeat(12)}:{})});
+ expect(result).toMatchObject({ok:true,source_taint:'external'});expect(JSON.stringify(result)).not.toContain('PRIVATE_CANARY');expect(f.hops).toEqual(['proxy_access','token','drive','proxy_health']);
+});
+it.each([401,403])('actual wire provider %i maps meaningfully with external taint and no false consent',async status=>{
+ const f=fixture(undefined,status,{error:{message:'PRIVATE_CANARY',errors:status===403?[{reason:'accessNotConfigured'}]:[]}});
+ const result=await runtimeRead({action:'recent'});
+ expect(result).toMatchObject(status===401?{ok:false,code:'auth_failed',connect:{reason:'reauth_needed',feature:'drive'},source_taint:'external'}:{ok:false,code:'rejected',source_taint:'external'});
+ if(status===403){expect(result).not.toHaveProperty('connect');expect(result).toMatchObject({error:expect.stringContaining('drive_service_disabled')});}
+ expect(JSON.stringify(result)).not.toContain('PRIVATE_CANARY');expect(f.hops).toEqual(['proxy_access','token','drive']);
 });
