@@ -3,7 +3,7 @@ import type { RunEffectScope } from '../channels/run-effect-scope';
 // used to live only inside one turn; this ledger keeps the last few so the context
 // composer can stage them as tool_result sources with provenance and taint.
 import type { ContextFragment } from '../context-composer/types';
-import type { SourceTaint } from '@waldo/contracts';
+import { literalJsonTextRedactor, type SourceTaint } from '@waldo/contracts';
 import { prepareWithScribe, type StrictSchema } from '../scribe/prepare';
 
 export type ToolOutputEntry = Readonly<{
@@ -101,15 +101,10 @@ export const redactToolOutputLedger = async (storage: KeyValueStorage, texts: re
   const writes: Record<string, unknown> = {};
   // Case-insensitive literal match, same rule as the conversation store: a casing variant of a
   // forgotten text surviving into next-turn context is the leak returning.
-  const patterns = [...new Set(texts.map((text) => text.trim()).filter(Boolean))]
-    .map((text) => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'));
+  const redact = literalJsonTextRedactor(texts, marker, 'tool_result');
   for (const [key, entry] of rows) {
     if (key === 'toolout-count') continue;
-    let summary = entry.summary;
-    for (const pattern of patterns) summary = summary.replace(pattern, marker);
-    // Fresh post-scan on the rewritten text: if any variant somehow survives, the whole summary
-    // becomes the marker - context loss beats leaking a forgotten text.
-    if (patterns.some((pattern) => new RegExp(pattern.source, 'i').test(summary))) summary = marker;
+    const summary = redact(entry.summary);
     if (summary !== entry.summary) {
       writes[key] = { ...entry, summary };
       touched += 1;
