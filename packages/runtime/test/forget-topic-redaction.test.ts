@@ -72,6 +72,18 @@ describe('forgetting by the exact identifier the owner named', () => {
       const texts = sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY rowid').toArray().map((r) => r.text);
       expect(texts.join(' ')).not.toContain('DLD-20261002-M3');
       expect(texts).toContain('unrelated lunch plan');
+
+describe('the forget outcome counts the episodes it redacted', () => {
+  it('reports how many retained episode rows a topic forget cleaned', async () => {
+    await run('forget-topic-count', (sql, tx) => {
+      const store = claimStore(sql, tx);
+      const episodes = episodeIndex(sql);
+      episodes.add('tg-1', 'owner', 'Posterbot standup moved', 1);
+      episodes.add('tg-1-reply', 'waldo', 'Noted: Posterbot standup moved.', 2);
+      episodes.add('tg-2', 'owner', 'unrelated lunch plan', 3);
+      let episodesRedacted: number | undefined;
+      applyClaimOps(store, ops({ forget_topic: 'Posterbot' }), AT, 'owner, tg-3', undefined, { owner: 'forget Posterbot' }, true, (outcome) => { episodesRedacted = outcome.episodesRedacted; });
+      expect(episodesRedacted).toBe(2);
     });
   });
 });
