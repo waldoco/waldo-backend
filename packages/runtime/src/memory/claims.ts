@@ -278,11 +278,14 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     // leaves the search index, backups, and frozen legacy tables (redacted, preserving
     // unrelated content), constellation nodes stop quoting it and stop referencing its id,
     // and a barrier blocks re-admission. Fresh-state verification reports what survived.
-    purge(ids: readonly number[], at: string): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } } {
+    purge(ids: readonly number[], at: string, topics: readonly string[] = []): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } } {
       const forgotten = ids.length
         ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
         : [];
-      const texts = [...new Set(forgotten.map((claim) => claim.text.trim()).filter(Boolean))];
+      // The owner's forget topic is redacted from retained text like a claim's text, so forgetting a topic whose claim is
+      // already gone still clears episodes and backups. Literal, case-insensitive; a hard floor of 3 characters keeps a
+      // stray short word from redacting everything.
+      const texts = [...new Set([...forgotten.map((claim) => claim.text.trim()), ...topics.map((topic) => topic.trim()).filter((topic) => topic.length >= 3)].filter(Boolean))];
       const failed: string[] = [];
       const attempt = (store: string, op: () => void) => {
         try { op(); } catch { failed.push(store); }
@@ -818,7 +821,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   for (const id of ops.confirm.filter((id) => known.has(id))) store.confirm(id, evidence, at);
   for (const id of ops.dismiss.filter((id) => known.has(id) && !correctionIds.has(id))) store.setStatus(id, 'dismissed');
   const forgetIds = forgetsAllowed ? ops.forget_claims.filter((id) => forgettable.has(id) && !correctionIds.has(id)) : [];
-  const purge = forgetIds.length ? store.purge(forgetIds, at) : null;
+  const purge = forgetIds.length || topic ? store.purge(forgetIds, at, topic ? [topic] : []) : null;
   if (purge && purge.texts.length > 0) {
     if (onPurged === undefined) {
       // No KV consumer: SQL verification is the whole settlement, so settle now. A caller

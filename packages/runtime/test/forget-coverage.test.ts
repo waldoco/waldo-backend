@@ -352,7 +352,7 @@ describe('forget coverage - rolling conversation window', () => {
       await conv.save([
         {
           id: 'tg-1', ownerId: 'owner', chatId: 'chat', parentId: null, threadAnchorId: null,
-          surface: 'telegram', modelPayload: `owner said: ${CLAIM_TEXT}`, appPayload: '',
+          surface: 'telegram', modelPayload: `owner said: ${CLAIM_TEXT} (these are my code words)`, appPayload: '',
           modelProjection: { mode: 'include' }, role: 'user',
         },
         {
@@ -371,7 +371,9 @@ describe('forget coverage - rolling conversation window', () => {
       let purged: readonly string[] = [];
       const summary = applyClaimOps(store, JSON.stringify({ add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: 'code words' }), AT, 'owner, tg-1', (texts) => { purged = texts; }, undefined, true);
       expect(summary).toContain('purged');
-      expect(purged.length).toBe(1);
+      // The claim text and the forget_topic are both redaction texts now (#609: a topic is redacted even with no claim id left).
+      expect(purged.length).toBe(2);
+      expect(purged).toContain('code words');
       const convResult = await redactConversationEntries(storage, purged, '[forgotten]');
       expect(convResult).toEqual({ rewritten: 1, remaining: 0 });
 
@@ -381,6 +383,7 @@ describe('forget coverage - rolling conversation window', () => {
       expect(entries).toHaveLength(2);
       expect(entries.some((entry) => entry.modelPayload.includes(MARKER) || entry.appPayload.includes(MARKER))).toBe(false);
       expect(entries[0]!.modelPayload).toContain('[forgotten]');
+      expect(entries[0]!.modelPayload).not.toMatch(/code words/i);
       expect(entries[1]!.modelPayload).toContain('gym session');
     });
   });
