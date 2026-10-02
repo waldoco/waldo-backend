@@ -207,6 +207,8 @@ export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: 
         return { ok: false, code: 'auth_failed', error: readAuthText(error.reason, error.feature), source_taint: 'external', connect: { status: 'auth_required', service: 'google', reason: error.reason, ...(error.feature === undefined ? {} : { feature: error.feature }) } };
       }
       const message = error instanceof Error ? error.message : String(error);
+      // The edge's stable code for a read it refused (unregistered server or tool, malformed id). Exact match on a code, not text parsing.
+      if ((error as { status?: number }).status === 400 && message === 'mcp_read_rejected') return { ok: false, code: 'rejected', error: 'The read was refused by the connector service. Nothing was read.', source_taint: 'external' };
       return { ok: false, code: error instanceof ToolExecutionError ? 'rejected' : 'transient', error: message, source_taint: 'external' };
     }
   },
