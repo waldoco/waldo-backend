@@ -84,6 +84,15 @@ describe('read_mcp_tool through the real dispatcher', () => {
     expect(out).toMatchObject({ ok: false, code: 'transient', error: 'upstream boom' });
   });
 
+  it('the edge mcp_read_rejected code is a typed rejected result with no reconnect', async () => {
+    const rejected: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async () => { throw Object.assign(new Error('mcp_read_rejected'), { status: 400 }); } };
+    const out = await dispatchTool({ id: 'rej', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, rejected, true)] });
+    expect(out).toMatchObject({ ok: false, code: 'rejected', source_taint: 'external' });
+    expect(out).not.toHaveProperty('connect');
+    const other: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async () => { throw Object.assign(new Error('bad request'), { status: 400 }); } };
+    expect(await dispatchTool({ id: 'o', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, other, true)] })).toMatchObject({ ok: false, code: 'transient' });
+  });
+
   it('the staging Drive entry declares exactly the four read tools in read_tools', () => {
     const drive = mcpServers(SERVERS).find((s) => s.name === 'drive');
     expect(drive?.read_tools).toEqual(['search_files', 'list_recent_files', 'get_file_metadata', 'read_file_content']);
