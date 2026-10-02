@@ -35,6 +35,7 @@ export const literalTextRedactor = (texts: readonly string[], marker: string): (
 export const literalJsonTextRedactor = (
   texts: readonly string[], marker: string, mode: 'data' | 'arguments' | 'tool_result' = 'data',
 ): ((value: string) => string) => {
+  if (texts.every(text => !text.trim())) return value => value;
   const redact = literalTextRedactor(texts, marker);
   const encode = (text: string) => JSON.stringify(text).slice(1, -1);
   const escaped = literalTextRedactor(texts.map(encode), encode(marker));
