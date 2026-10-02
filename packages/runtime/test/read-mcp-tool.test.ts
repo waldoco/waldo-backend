@@ -57,4 +57,26 @@ describe('read_mcp_tool through the real dispatcher', () => {
     const drive = mcpServers(SERVERS).find((s) => s.name === 'drive');
     expect(drive?.read_tools).toEqual(['search_files', 'list_recent_files', 'get_file_metadata', 'read_file_content']);
   });
+
+  it('the tool description names each read-only server and its exact read tools, and nothing from other servers', () => {
+    const handler = readMcpToolHandler(SERVERS, auth);
+    expect(handler.description).toContain('"drive"');
+    for (const tool of ['search_files', 'list_recent_files', 'get_file_metadata', 'read_file_content']) expect(handler.description).toContain(tool);
+    expect(handler.description).not.toContain('"mail"');
+    expect(handler.description).not.toContain('delete_file');
+    expect(readMcpToolHandler(undefined, auth).description).toContain('No read-only MCP servers');
+  });
+
+  it('a missing Drive grant yields a fixed, typed reconnect message naming the feature and reason, with no link text', async () => {
+    const expired: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async () => { throw Object.assign(new Error('forbidden'), { status: 403 }); } };
+    const out = await dispatchTool({ id: 'scope', name: 'read_mcp_tool', args: { server: 'drive', tool: 'list_recent_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, expired)] });
+    expect(out).toMatchObject({ ok: false, code: 'auth_failed', connect: { status: 'auth_required', service: 'google', reason: 'scope_missing', feature: 'drive' } });
+    const error = (out as { error: string }).error;
+    expect(error).toContain('drive');
+    expect(error).toMatch(/not authorized/);
+    expect(error).toMatch(/reconnect/i);
+    expect(error).not.toMatch(/https?:/);
+    const notConnected = await dispatchTool({ id: 'nc', name: 'read_mcp_tool', args: { server: 'drive', tool: 'list_recent_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, { resolve: async () => null, proxy: async () => [] })] });
+    expect((notConnected as { error: string }).error).toMatch(/not connected/);
+  });
 });
