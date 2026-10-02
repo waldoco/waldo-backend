@@ -33,7 +33,7 @@ Merged, SOURCE + CI only: #552 read_mcp_tool names and reconnect message (ec553a
 
 ## Still the owner's
 
-Spend (any model run), secrets and keys (vault links only), production changes, and approval of the exact Google consent screen. Today's consent screen requests Gmail send and compose and Tasks write along with Drive read; the owner's 17:26 message says yes to Dalda's asks but does not name that screen, so Core still needs his words on it, or the incremental flow from #553 to ship.
+Spend (any model run), secrets and keys (vault links only), production changes, and approval of the exact Google consent screen. Today's consent screen requests Gmail send and compose and Tasks write along with Drive read; main relayed at 17:26 that the owner said yes to Dalda's asks (relay only, not independently verified here), and nothing in it names that screen, so Core still needs his words on it, or the incremental flow from #553 to ship.
 
 ## Order of work (proposal)
 
