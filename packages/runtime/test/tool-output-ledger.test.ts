@@ -95,3 +95,24 @@ describe('tool output ledger', () => {
   });
 
 });
+
+it('verifies all retained ledger rows including escaped summaries outside the staged ring',async()=>{
+ const storage=fakeStorage(); const needle='Synthetic "quoted" pending topic';
+ for(let i=0;i<8;i++)storage.data.set(`toolout:${String(i).padStart(10,'0')}`,{tool:'fixture',ok:true,at:i,taint:'external',summary:i===0?JSON.stringify({text:needle}):'Unrelated'});
+ const ledger=toolOutputLedger(storage);
+ expect(JSON.stringify(await ledger.recent())).not.toContain('pending topic');
+ expect(await ledger.remaining([needle])).toBe(1);
+ const {redactToolOutputLedger}=await import('../src/conversation/tool-output-ledger');await redactToolOutputLedger(storage,[needle],'[forgotten]');
+ expect(await ledger.remaining([needle])).toBe(0);
+});
+
+it.each(['complete','capped','unclosed'])('verifies and redacts Unicode escaped topic in %s JSON display data',async shape=>{
+ const storage=fakeStorage();const needle='Synthetic cobalt paper workshop';
+ const encoded=JSON.stringify({text:needle,padding:'x'.repeat(900)}).replace('Synthetic','\\u0053ynthetic');
+ const summary=shape==='complete'?encoded:shape==='capped'?encoded.slice(0,500)+'...':'{"text":"\\u0053ynthetic cobalt paper workshop and extra display...';
+ storage.data.set('toolout:0000000000',{tool:'fixture',ok:true,at:1,taint:'external',summary});
+ const ledger=toolOutputLedger(storage);expect(await ledger.remaining([needle])).toBe(1);
+ expect(JSON.stringify(await ledger.recent([needle]))).not.toContain('cobalt paper workshop');
+ const {redactToolOutputLedger}=await import('../src/conversation/tool-output-ledger');await redactToolOutputLedger(storage,[needle],'[forgotten]');
+ expect(await ledger.remaining([needle])).toBe(0);expect(JSON.stringify(storage.data.get('toolout:0000000000'))).not.toContain('cobalt paper workshop');
+});
