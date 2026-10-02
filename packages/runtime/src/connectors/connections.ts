@@ -24,19 +24,22 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   if (!base || !key || !secret || !rpc) return null;
   const post = async (body: Record<string, unknown>) => {
     const raw = JSON.stringify(body);
+    // A bounded read has no ledger row and no effect to reconcile, so edge errors keep their provider status
+    // (401/403 drive the owner reconnect path) instead of collapsing into intent errors.
+    const ledgered = Boolean(body.intent_id) && body.read_only !== true;
     const at = Math.floor(now() / 1000);
     let response: Response;
     try { response = await fetcher(`${base}/functions/v1/connector-proxy`, {
       method: 'POST', body: raw,
       headers: { apikey: key, 'content-type': 'application/json', 'x-waldo-at': String(at), 'x-waldo-sig': await routerSignature(secret, at, `proxy.${await sha256(raw)}`) },
     }); } catch(error) {
-      if(body.intent_id)throw new ProxyIntentError('intent_pending');
+      if(ledgered)throw new ProxyIntentError('intent_pending');
       throw error;
     }
-    const json = await response.json().catch(() => ({ error: { status: response.status, message: body.intent_id ? 'intent_pending' : 'connector proxy failed' } })) as { data?: unknown; id?: string; email?: string; scopes?: string[]; error?: { status: number; message: string } };
-    if (body.intent_id && (!json || typeof json!=='object' || (!json.error && (!response.ok || !Object.hasOwn(json,'data'))))) throw new ProxyIntentError('intent_pending');
+    const json = await response.json().catch(() => ({ error: { status: response.status, message: ledgered ? 'intent_pending' : 'connector proxy failed' } })) as { data?: unknown; id?: string; email?: string; scopes?: string[]; error?: { status: number; message: string } };
+    if (ledgered && (!json || typeof json!=='object' || (!json.error && (!response.ok || !Object.hasOwn(json,'data'))))) throw new ProxyIntentError('intent_pending');
     if (json.error?.message === 'intent_pending' || json.error?.message === 'intent_conflict' || json.error?.message === 'intent_required' || json.error?.message === 'intent_unavailable') throw new ProxyIntentError(json.error.message);
-    if (body.intent_id && json.error) throw new ProxyIntentError('intent_unavailable');
+    if (ledgered && json.error) throw new ProxyIntentError('intent_unavailable');
     if (json.error) throw new GoogleError(json.error.status, json.error.message);
     return json;
   };

@@ -225,4 +225,18 @@ describe('R2 owner artifact bodies', () => {
     }
     expect(shared.calls).toEqual([]);
   });
+
+  it('read_artifact: an evicted body is a typed body_unavailable failure, distinct from an unknown id', async () => {
+    const sql = fakeSql();
+    await artifactBook(sql as never, inMemoryArtifactBodies(), clock, () => 'abc123').create(createArgs, 'tool:create_artifact');
+    const lost = artifactHandlers(artifactBook(sql as never, inMemoryArtifactBodies(), clock, () => 'abc123'));
+    const read = lost.find((h) => h.name === 'read_artifact')!;
+    const evicted = await read.handle({ artifact_id: 'art:abc123', offset: 0, length: 100 } as never);
+    expect(evicted).toMatchObject({ ok: false, code: 'rejected', source_taint: 'external' });
+    expect((evicted as { error: string }).error).toMatch(/^body_unavailable:/);
+    expect((evicted as { error: string }).error).toContain('exists');
+    const unknown = await read.handle({ artifact_id: 'art:nope', offset: 0, length: 100 } as never);
+    expect(unknown).toMatchObject({ ok: false, code: 'not_found' });
+    expect((unknown as { error: string }).error).not.toMatch(/^body_unavailable/);
+  });
 });

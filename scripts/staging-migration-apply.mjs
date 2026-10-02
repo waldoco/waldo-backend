@@ -64,6 +64,11 @@ export function effectiveConfigDigest(workdir){
    if(name.startsWith('.env')||['.branches','.cache'].includes(name))throw Error('local_forbidden_input');
    const path=join(dir,name),stat=lstatSync(path),label=relative+name;
    if(stat.isSymbolicLink()||(!stat.isFile()&&!stat.isDirectory()))throw Error('local_not_regular');
+   // The CLI writes this upgrade hint after commands; it cannot select a target or SQL.
+   if(label==='.temp/cli-latest'){
+    if(!stat.isFile())throw Error('local_not_regular');
+    continue;
+   }
    if(stat.isDirectory())scan(path,label+'/');else rows.push([label,createHash('sha256').update(readFileSync(path)).digest('hex')]);
   }
  };
@@ -113,7 +118,7 @@ export async function main({env=process.env,run=execFileSync,fetcher=fetch,manif
  const cliEnv=Object.fromEntries(['PATH','CI','SUPABASE_ACCESS_TOKEN','SUPABASE_DB_PASSWORD'].filter(k=>env[k]!==undefined).map(k=>[k,env[k]]));
  const home=join(workdir,'.isolated-home');
  makeDir(home,{recursive:true});
- Object.assign(cliEnv,{SUPABASE_PROFILE:'supabase',HOME:home,XDG_CONFIG_HOME:join(home,'config'),XDG_CACHE_HOME:join(home,'cache'),XDG_DATA_HOME:join(home,'data'),TMPDIR:join(home,'tmp')});
+ Object.assign(cliEnv,{SUPABASE_PROFILE:'supabase',SUPABASE_NO_KEYRING:'1',HOME:home,XDG_CONFIG_HOME:join(home,'config'),XDG_CACHE_HOME:join(home,'cache'),XDG_DATA_HOME:join(home,'data'),TMPDIR:join(home,'tmp')});
  makeDir(cliEnv.TMPDIR,{recursive:true});
  configDigest(workdir); // Reject parent/root dotenv before credentials reach link.
  const cli=args=>run('pnpm',['dlx','supabase@2.109.1',...args,'--profile','supabase'],{cwd:workdir,env:cliEnv,stdio:'pipe',timeout:180000});
