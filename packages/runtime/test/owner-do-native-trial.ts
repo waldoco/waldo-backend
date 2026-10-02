@@ -55,7 +55,7 @@ it('captures each admitted actual-model owner turn, adapter custody and usage wi
    const text=request.text?.format?.name==='claim_ops'?'{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}':'Scripted supervisor diagnostic reply, not native outcome.';
    return new Response(JSON.stringify({id:`scripted-response-${++fakeSequence}`,model:WALDO_CHAT_MODEL,output_text:text,output:[{type:'message',role:'assistant',content:[{type:'output_text',text,annotations:[]}]}],usage:{input_tokens:1,output_tokens:1,input_tokens_details:{cached_tokens:0}}}),{status:200,headers:{'content-type':'application/json'}});
   }) as typeof fetch):globalThis.fetch.bind(globalThis);
-  const transport=nativeModelBoundary(network,{max_attempts:24,timeout_ms:30000,model:WALDO_CHAT_MODEL});
+  const transport=nativeModelBoundary(network,{max_attempts:24,timeout_ms:30000,model:WALDO_CHAT_MODEL,max_output_tokens:4000,max_request_bytes:400000,max_total_tokens:1000000});
   vi.stubGlobal('fetch',transport.fetch);
   const subject=81201;const doName=`native-${seed}`;
   const directory:OwnerDirectory={byPresence:async(provider,id)=>provider==='telegram'&&id===String(subject)?{doName,subject:String(subject),timezone: 'Asia/Kolkata'}:null,redeem:async()=>null};
