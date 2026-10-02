@@ -114,4 +114,13 @@ describe('aliases through the claim admission gate', () => {
       expect(state.storage.sql.exec<{ text: string; aliases: string | null }>('SELECT text, aliases FROM claims').toArray()).toEqual([{ text: 'Goes to bed around 11:30pm', aliases: null }]);
     });
   });
+  it('an alias that equals a forgotten topic in other casing or spacing is dropped', async () => {
+    const { applyClaimOps } = await import('../src/memory/claims');
+    await runInDurableObject(owner('alias-case'), (_i, state) => {
+      const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
+      store.barrier('zebracillin', AT2);
+      applyClaimOps(store, ops([{ kind: 'routine', text: 'Goes to bed around 11:30pm', source: 'stated', evidence: `owner, tg-1: "${SAID}"`, touches_forgotten: false, aliases: ['ZEBRACILLIN', ' Zebracillin ', 'zebra  cillin', 'bedtime'] }]), AT2, 'owner agreed', undefined, { owner: SAID });
+      expect(state.storage.sql.exec<{ aliases: string }>('SELECT aliases FROM claims').one().aliases).toBe('zebra cillin / bedtime');
+    });
+  });
 });

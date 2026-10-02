@@ -27,6 +27,13 @@ type NewClaim = Readonly<{ kind: string; text: string; source: string; evidence:
 // recall, never rendered into a prompt and never treated as evidence. Letters, digits, spaces and hyphens only,
 // so an alias can never carry an FTS operator.
 export const MAX_ALIASES = 5;
+// The barrier hash is of the topic exactly as the model gave it, and the alias is stored lower-cased and
+// space-collapsed, so compare every form the alias can take: as written, trimmed, lower-cased, collapsed.
+const aliasForms = (alias: string): readonly string[] => {
+  const trimmed = alias.trim();
+  const lower = trimmed.toLowerCase();
+  return [...new Set([alias, trimmed, lower, lower.replace(/\s+/g, ' ')])];
+};
 export const cleanAliases = (raw: readonly string[] | undefined): string | null => {
   const seen = new Set<string>();
   for (const item of raw ?? []) {
@@ -778,7 +785,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
       }
     }
     // An alias that is itself a forgotten topic is dropped, not stored.
-    const aliases = claim.aliases_touch_forgotten ? [] : (claim.aliases ?? []).filter((alias) => typeof alias === 'string' && !barrierHashes.has(textFingerprint(alias.trim())));
+    const aliases = claim.aliases_touch_forgotten ? [] : (claim.aliases ?? []).filter((alias) => typeof alias === 'string' && !aliasForms(alias).some((form) => barrierHashes.has(textFingerprint(form))));
     store.add({ kind: claim.kind, text: claim.text.trim(), source, evidence: claim.evidence.trim(), aliases, origin: origin ?? undefined, source_ref: origin === 'owner' && evidence.startsWith('owner, ') && !evidence.includes('day of') ? evidence : undefined }, at);
     written += 1;
   }
