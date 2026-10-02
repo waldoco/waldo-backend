@@ -47,10 +47,11 @@ describe('workspace tools through the real dispatcher', () => {
     const { call, state } = await setup();
     expect(await call('workspace_write', { path: 'a.md', text: 'x', mime: 'text/markdown', expected_revision: 0 }, 'w1', context('user_message', false))).toMatchObject({ ok: false, code: 'rejected' });
     expect(await call('workspace_write', { path: 'a.pdf', text: 'x', mime: 'application/pdf', expected_revision: 0 }, 'w2')).toMatchObject({ ok: false });
-    expect(await call('workspace_write', { path: 'b.md', text: 'x'.repeat(70000), mime: 'text/markdown', expected_revision: 0 }, 'w3')).toMatchObject({ ok: false, code: 'invalid_args' });
-    // Multi-byte text is capped in bytes, not characters: 40000 two-byte chars is 80000 bytes.
-    expect(await call('workspace_write', { path: 'c.md', text: 'é'.repeat(40000), mime: 'text/markdown', expected_revision: 0 }, 'w4')).toMatchObject({ ok: false, code: 'invalid_args' });
-    expect(await call('workspace_write', { path: 'd.md', text: 'x'.repeat(65536), mime: 'text/markdown', expected_revision: 0 }, 'w5')).toMatchObject({ ok: true });
+    expect(await call('workspace_write', { path: 'b.md', text: 'plain prose line. '.repeat(3000), mime: 'text/markdown', expected_revision: 0 }, 'w3')).toMatchObject({ ok: false, code: 'invalid_args' });
+    // 32000 bytes of ordinary prose is accepted (the cap is inclusive).
+    // Multi-byte text is capped in bytes, not characters: 20000 two-byte chars is 40000 bytes.
+    expect(await call('workspace_write', { path: 'c.md', text: 'é'.repeat(20000), mime: 'text/markdown', expected_revision: 0 }, 'w4')).toMatchObject({ ok: false, code: 'invalid_args' });
+    expect(await call('workspace_write', { path: 'd.md', text: 'plain prose line. '.repeat(1778).slice(0, 32000), mime: 'text/markdown', expected_revision: 0 }, 'w5')).toMatchObject({ ok: true });
     expect(state().files).toHaveLength(1);
   });
 

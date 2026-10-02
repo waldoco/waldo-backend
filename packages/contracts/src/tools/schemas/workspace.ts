@@ -4,7 +4,9 @@ import { z } from 'zod';
 // owner-private workspace store. The model never supplies operation_id: the runtime derives it
 // from the dispatcher context, so a retry of the same call is idempotent and a model cannot
 // replay or collide with another operation. Schemas are strict; unknown keys are rejected.
-export const WORKSPACE_TEXT_MAX_BYTES = 64 * 1024;
+// 32,000 bytes: the argument sanitiser admits strings only up to about this size (50,000 chars is denied),
+// so a larger schema cap would advertise sizes the dispatcher refuses.
+export const WORKSPACE_TEXT_MAX_BYTES = 32_000;
 
 export const workspaceListArgsSchema = z.strictObject({
   prefix: z.string().min(1).max(200).optional(),
