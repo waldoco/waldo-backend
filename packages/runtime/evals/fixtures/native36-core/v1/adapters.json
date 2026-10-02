@@ -1,41 +1,56 @@
 {
-  "version": 1,
-  "revision": "core-w06-v1",
-  "sources": [
-    {
-      "family": "calendar",
-      "row_fields": [
-        "owner_id",
-        "id",
-        "title",
-        "start",
-        "end",
-        "all_day",
-        "etag"
-      ],
-      "read_methods": [
-        "query_calendar"
-      ],
-      "selected_id_filter_required": true
-    },
-    {
-      "family": "mail",
-      "row_fields": [
-        "owner_id",
-        "id",
-        "thread_id",
-        "from",
-        "subject",
-        "snippet",
-        "at",
-        "body"
-      ],
-      "read_methods": [
-        "get_communication",
-        "read_thread"
-      ],
-      "selected_id_filter_required": true
-    }
-  ],
-  "effects": []
+ "version": 1,
+ "revision": "core-w06-v1",
+ "sources": [
+  {
+   "family": "calendar",
+   "row_fields": [
+    "owner_id",
+    "id",
+    "title",
+    "start",
+    "end",
+    "all_day",
+    "etag"
+   ],
+   "read_methods": [
+    "query_calendar"
+   ],
+   "selected_id_filter_required": true
+  },
+  {
+   "family": "mail",
+   "row_fields": [
+    "owner_id",
+    "id",
+    "thread_id",
+    "from",
+    "subject",
+    "snippet",
+    "at",
+    "body"
+   ],
+   "read_methods": [
+    "get_communication",
+    "read_thread"
+   ],
+   "selected_id_filter_required": true
+  },
+  {
+   "family": "tasks",
+   "row_fields": [
+    "owner_id",
+    "id",
+    "title",
+    "status",
+    "due",
+    "updated"
+   ],
+   "read_methods": [
+    "get_tasks"
+   ],
+   "selected_id_filter_required": false
+  }
+ ],
+ "effects": []
 }
