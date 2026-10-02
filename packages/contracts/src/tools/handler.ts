@@ -191,6 +191,10 @@ export interface ToolHandler<Args, Result, Ctx> {
   // keys its no-progress epoch reset on autonomy_gated || mutates_state so live mutation
   // handlers (which are desk-routed, not privilege-gated) still open a new epoch.
   mutates_state?: true;
+  // requires_connector marks a handler that cannot run without a live connector (for example a Google account).
+  // The host derives the connector_backed list for ACL intersection from this declaration, never from a host-supplied
+  // list that can be omitted (see connectorBackedTools in tools/acl-intersection.ts).
+  requires_connector?: true;
   handle(args: Args, ctx: Ctx): Promise<ToolResult<Result>>;
   idempotentOnKey?: true;
   executeOrReconcile?(
