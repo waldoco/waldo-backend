@@ -459,3 +459,53 @@ it('an offload produced after steered forget is not retained for a later range r
     expect(memory.claims().map(row => row.text)).toEqual([KEEP]);
   });
 });
+
+it('the exact live synthetic typographic correction reaches the same-turn provider and survives eviction', async () => {
+  const name = 'correction-live-typographic';
+  const oldText = "For project WBX-20261002-M1, the workshop start time is 08:40 UTC; this is temporary fictional test context, not the owner's real schedule.";
+  const replacement = "For project WBX-20261002-M1, the fictional workshop start time is 09:10 UTC; this is disposable test context, not the owner's real schedule.";
+  const first = 'Waldo staging acceptance WBX-20261002-M1. Remember this temporary fictional test-project preference: for project WBX-20261002-M1, the workshop start time is 08:40 UTC. This is disposable test context, not my real schedule. Do not create any event, reminder, file or external message. Confirm only what you actually saved.';
+  await turn(name, 1, first, ops());
+  await runInDurableObject(stub(name), (_instance, state) => {
+    claimStore(state.storage.sql, work => state.storage.transactionSync(work)).add({ kind: 'preference', text: oldText, source: 'stated', evidence: first, origin: 'owner', source_ref: 'owner, tg-904957878' }, '2026-10-02T18:21:58Z', 75);
+  });
+  const owner = 'WBX-20261002-M1 correction: replace that fictional project workshop preference with 09:10 UTC. The previous time is no longer current. Keep this as disposable test memory only, with no calendar, reminder, file or external-message action. What is the current saved preference now?';
+  const evidence = 'Owner: “WBX-20261002-M1 correction: replace that fictional project workshop preference with 09:10 UTC. The previous time is no longer current. Keep this as disposable test memory only”';
+  await turn(name, 2, owner, ops({ corrections: [{ old_id: 75, kind: 'preference', text: replacement, evidence }] }));
+  const instructions = () => (seen.requests.at(-1) as { instructions: string }).instructions;
+  expect(instructions()).toContain('corrected 1 claim');
+  expect(instructions()).toContain(replacement); expect(instructions()).not.toContain(oldText);
+  await runInDurableObject(stub(name), (_instance, state) => {
+    const memory = claimStore(state.storage.sql);
+    expect(memory.claims()).toHaveLength(1);
+    expect(memory.claims()[0]).toMatchObject({ text: replacement, supersedes_id: 75, origin: 'owner' });
+    expect(memory.claims('superseded')[0]).toMatchObject({ id: 75, text: oldText });
+  });
+  await evictDurableObject(stub(name));
+  await turn(name, 3, 'What is the current saved WBX-20261002-M1 preference?', ops());
+  expect(instructions()).toContain(replacement); expect(instructions()).not.toContain(oldText);
+});
+
+it('the exact live forget settles with a capped retained read-owner-context ledger summary', async () => {
+  const name = 'forget-live-capped-ledger';
+  const needle = "For project WBX-20261002-M1, the workshop start time is 08:40 UTC; this is temporary fictional test context, not the owner's real schedule.";
+  await turn(name, 1, `${needle} ${KEEP}`, ops());
+  await runInDurableObject(stub(name), async (_instance, state) => {
+    claimStore(state.storage.sql, work => state.storage.transactionSync(work)).add({ kind: 'preference', text: needle, source: 'stated', evidence: needle, origin: 'owner', source_ref: 'owner, tg-904957878' }, '2026-10-02T18:21:58Z', 75);
+    await toolOutputLedger(state.storage).record({ tool: 'read_owner_context', ok: true, at: 1000, taint: 'external', summary: JSON.stringify({ ok: true, data: { keep: KEEP, text: needle, padding: 'x'.repeat(900) }, source_taint: 'external' }) });
+  });
+  const owner = 'Forget the disposable fictional memory for project WBX-20261002-M1, including its workshop start-time preference and any superseded version. Remove only this test project context; leave unrelated real memories unchanged. Confirm what category was removed without repeating the forgotten times. Do not create any external action.';
+  await turn(name, 2, owner, ops({ forget_claims: [75], forget_topic: 'WBX-20261002-M1 fictional test project context' }));
+  expect(request()).toContain('removed 1 claim'); expect(request()).not.toContain(needle); expect(request()).toContain(KEEP);
+  await runInDurableObject(stub(name), async (_instance, state) => {
+    const memory = claimStore(state.storage.sql);
+    expect(memory.claims()).toEqual([]); expect(memory.claims('purging')).toEqual([]);
+    const rows = await state.storage.list<{ tool: string; ok: boolean; taint: string; summary: string }>({ prefix: 'toolout:' });
+    const row = [...rows.values()][0]!;
+    expect(row).toMatchObject({ tool: 'read_owner_context', ok: true, taint: 'external' });
+    expect(row.summary).toContain(KEEP); expect(row.summary).not.toContain(needle);
+  });
+  await evictDurableObject(stub(name));
+  await turn(name, 3, 'What preference remains?', ops());
+  expect(request()).not.toContain(needle); expect(request()).toContain(KEEP);
+});

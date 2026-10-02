@@ -199,8 +199,16 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         if (!old) return false;
         // A prior independent mention may already have created the replacement. Do not
         // retire one row only to insert a second active copy of that same fact.
-        if (sql.exec<Claim>("SELECT * FROM claims WHERE status = 'active' AND id != ?", id).toArray()
-          .some((active) => normalizeForGrounding(active.text) === normalizeForGrounding(claim.text))) return false;
+        // Same fact already active. Only an owner-origin, stated row (origin 'owner' is written by the grounding gate) means the owner's change is already
+        // recorded, so retire only the old claim. An untrusted or inferred twin is not the owner's fact: refuse as before.
+        const twin = sql.exec<Claim>("SELECT * FROM claims WHERE status = 'active' AND id != ?", id).toArray()
+          .find((active) => normalizeForGrounding(active.text) === normalizeForGrounding(claim.text));
+        if (twin) {
+          if (twin.origin !== 'owner' || twin.source !== 'stated') return false;
+          const retiredOnly = sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active'", at, id);
+          if (retiredOnly.rowsWritten !== 1) throw new Error('correction conflict');
+          return true;
+        }
         sql.exec('INSERT INTO claims (kind, text, source, evidence, origin, status, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, null, id, 'owner-grounded', cleanAliases(claim.aliases));
         const retired = sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active'", at, id);
@@ -640,10 +648,10 @@ const normalizeForGrounding = (text: string): string => text.toLowerCase().repla
 // span, not the citation prefix. Unquoted evidence is a paraphrase and checks as a whole.
 const groundingTargets = (evidence: string): readonly string[] => {
   const spans: string[] = [];
-  const re = /"([^"]+)"/g;
+  const re = /"([^"]+)"|“([^”]+)”/g;
   let match = re.exec(evidence);
   while (match !== null) {
-    const normalized = normalizeForGrounding(match[1] ?? '');
+    const normalized = normalizeForGrounding(match[1] ?? match[2] ?? '');
     if (normalized.length >= 12) spans.push(normalized);
     match = re.exec(evidence);
   }
@@ -722,6 +730,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   // contradictory active claims. An unrelated or nonexistent old id must not suppress
   // a separately owner-grounded add.
   const blockedReplacementTexts = new Set<string>();
+  let heldCorrections = 0;
   for (const correction of ops.corrections ?? []) {
     const old = byClaimId.get(correction.old_id);
     if (old && correctionTopicMatches(old, correction)) {
@@ -729,13 +738,23 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     }
     if (!known.has(correction.old_id) || corrected.has(correction.old_id) ||
       (forgetsAllowed && ops.forget_claims.includes(correction.old_id)) ||
-      !CLAIM_KINDS.includes(correction.kind as never) || !correction.text.trim() ||
-      !correctionMatches(byClaimId.get(correction.old_id)!, correction, grounding?.owner ?? '') ||
+      !CLAIM_KINDS.includes(correction.kind as never) || !correction.text.trim()) continue;
+    // From here the owner asked for a change and Waldo is not making it. That is recorded as a hold with a
+    // closed reason, so the reply can say the memory was not updated instead of the skip being silent.
+    // No marker-word check: grounding in the owner's own words plus the topic and replacement-word checks guard it.
+    if (!correctionMatches(byClaimId.get(correction.old_id)!, correction, grounding?.owner ?? '') ||
       looksTransient(correction.text) ||
       barrierHashes.has(textFingerprint(correction.text.trim())) ||
       !refForCorrection(evidence) || !grounding || ground(correction.evidence, grounding) !== 'owner' ||
-      groundingTargets(correction.evidence).every((target) => target.length < 12) ||
-      !/\b(actually|instead|not|now|back|changed|rather|correction)\b/i.test(grounding.owner ?? '')) continue;
+      groundingTargets(correction.evidence).every((target) => target.length < 12)) {
+      // Only when it targets the claim it is about; a wrong or unrelated id stays a silent skip, as before.
+      if (correctionTopicMatches(byClaimId.get(correction.old_id)!, correction)) {
+        store.recordHold(correction.kind, 'correction-not-applied', correction.text, at);
+        holdReasons.add('correction-not-applied');
+        heldCorrections += 1;
+      }
+      continue;
+    }
     const ref = refForCorrection(evidence);
     if (store.correct(correction.old_id, { kind: correction.kind, text: correction.text.trim(), source: 'stated',
       evidence: correction.evidence.trim(), origin: 'owner', source_ref: ref }, at)) corrected.add(correction.old_id);
@@ -810,7 +829,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   for (const id of forgetsAllowed ? ops.forget_nodes.filter((id) => nodes.has(id)) : []) store.forgetNode(id);
   const leftover = purge ? [...Object.keys(purge.remaining), ...purge.failed.map((store) => `${store}(failed)`)] : [];
   onOutcome?.({
-    written, held: held.length, holdReasons: [...holdReasons], downgraded, corrected: corrected.size,
+    written, held: held.length + heldCorrections, holdReasons: [...holdReasons], downgraded, corrected: corrected.size,
     confirmed: new Set(ops.confirm.filter((id) => known.has(id))).size,
     dismissed: new Set(ops.dismiss.filter((id) => known.has(id) && !correctionIds.has(id))).size,
     // Unique ids, so a repeated id counts once; removed only when every store verified clean.
@@ -820,7 +839,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   });
   const reasons = holdReasons.size ? `(${[...holdReasons].join(',')})` : '';
   const blockedForgets = forgetsAllowed ? 0 : ops.forget_claims.length + ops.forget_nodes.length + (ops.forget_topic?.trim() ? 1 : 0);
-  return `+${written} held${held.length}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${corrected.size ? ` corrected${corrected.size}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
+  return `+${written} held${held.length + heldCorrections}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${corrected.size ? ` corrected${corrected.size}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
 };
 
 export const PROMOTION_INSTRUCTION = [
