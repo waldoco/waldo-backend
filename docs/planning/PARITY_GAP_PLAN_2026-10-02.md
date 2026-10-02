@@ -35,13 +35,16 @@ Merged, SOURCE + CI only: #552 read_mcp_tool names and reconnect message (ec553a
 
 Spend is split in two. Model-run spend for native36 was relayed by main (5:31) as approved in small chunks with actual spend reported after each; it is not a cap and not blanket approval for other spend. Provider keys already live as Worker secrets on staging (doc claim, not live-verified); a key for a local run goes only through a vault link. Production changes, and approval of the exact Google consent screen. Today's consent screen requests Gmail send and compose and Tasks write along with Drive read; main relayed at 17:26 that the owner said yes to Dalda's asks (relay only, not independently verified here), and nothing in it names that screen, so Core still needs his words on it, or the incremental flow from #553 to ship.
 
-## Open points from Dalda's review (2026-10-02 17:39, relayed by main, unverified)
+## Reconciled with Dalda's review (2026-10-02 17:39 and 17:54, relayed by main, unverified claims checked against source)
 
-- Dashboard: Dalda's #562 (visual revision) and a split between projection (Core, pure functions over owner state) and visual layer (Dalda). Accepted as the split above.
-- Health/capacity: the owner's sheet rates it a tested enhancer. Dalda asks for first-class permissioned health. Not changed here: moving it ahead of the foundational rows is the owner's call, since the sheet sets the order.
-- Google/Drive state: updated above to the live facts (auth_failed, drive scope absent, consent not approved). Staging is not yet at #552.
-- Interop/proactivity priority: the sheet marks proactivity first wedge and delegation a strategic pilot. Dalda wants both core. Kept as sheet order, flagged for the owner.
-- Dalda's order (owner-turn/Drive proof, then memory + skill, then durable follow-through) matches steps 1 to 3 below, with Drive proof first.
+Applied:
+- Dashboard: Dalda keeps #562 and the visual layer, plus coordination and review, proactivity and resumable state. Core supplies pure projections, contracts, helpers and tests, and reviews every dashboard PR.
+- Google/Drive: Tools/MCP row states the live facts (auth_failed, drive scope absent, consent unapproved). Staging is at de43da6 (healthz 200, checked 17:51), which includes #552 only if Codex's release carried it; confirm before the Drive proof.
+- Durable follow-through: WorkUnit exists as contract schemas and fixtures only (packages/contracts/src; no reference in packages/runtime/src on beta-mvp), so production WorkUnit execution is not enabled. That matches Dalda's claim. The final outbox (channels/telegram-final-outbox.ts) is a Telegram payload record (chat_id, text, attempts, status, digest), so reuse for durable send needs a generic payload seam, not a copy. Background & persistence row: reuse the outbox's identity, digest and retry model; any DO hookup is a narrow seam coordinated with Codex (single writer of telegram-owner-do.ts).
+
+Kept as the owner's sheet has them, pending an owner decision:
+- Health/capacity stays a tested enhancer. Dalda wants first-class permissioned health.
+- Proactivity stays first wedge and delegation a strategic pilot. Dalda wants both core.
 
 ## Order of work (proposal)
 
