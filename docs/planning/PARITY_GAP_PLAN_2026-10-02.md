@@ -42,6 +42,8 @@ Applied:
 - Google/Drive: Tools/MCP row states the live facts (auth_failed, drive scope absent, consent unapproved). Staging is at de43da6 (healthz 200, checked 17:51), which includes #552 only if Codex's release carried it; confirm before the Drive proof.
 - Durable follow-through: WorkUnit schemas are in packages/contracts and are referenced by packages/runtime/src/coordinator/outcome-module.ts. Production execution through WorkUnit is unverified here; Dalda says it is not enabled. The final outbox (channels/telegram-final-outbox.ts) is a Telegram payload record (chat_id, text, attempts, status, digest), so reuse for durable send needs a generic payload seam. Any DO hookup is a narrow seam coordinated with Codex (single writer of telegram-owner-do.ts).
 
+Owner decision needed (not applied): health priority. Repo CLAUDE.md "Stable constraints" says "Health-aware planning and supported pattern awareness are core launch capabilities. Health sharing is optional per user; missing/revoked health never becomes invented readiness or implicit action authority." That supports Dalda's objection against the sheet's "tested enhancer" rating for Health/capacity. Two source documents disagree on launch priority, so the order stays as the sheet has it until the owner picks. CLAUDE.md is a repo constraint file, not owner words. Its health-data rules (no raw health in DO memory, transcripts, R2 or traces; ADR-0081/0082) would bind any health work either way.
+
 Kept as the owner's sheet has them, pending an owner decision:
 - Health/capacity stays a tested enhancer. Dalda wants first-class permissioned health.
 - Proactivity stays first wedge and delegation a strategic pilot. Dalda wants both core.
