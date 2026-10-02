@@ -1,4 +1,4 @@
-import type { RunEffectScope } from './run-effect-scope';
+import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
 import type { createOwnerMessageContextAdapter } from './owner-message-context-adapter';
 import type { OwnerTurnEnvelope } from './owner-turn-envelope';
@@ -255,6 +255,7 @@ export const createOwnerResponder = (
   const control = turnControl();
   const tree = new ConversationTree();
   const redactLoaded = (texts: readonly string[]) => {
+    offloadStore?.clear();
     const combined = [...new Set([...forgottenTexts, ...texts.map(text => text.trim()).filter(Boolean)])];
     if (combined.length > 128 || combined.reduce((n, text) => n + new TextEncoder().encode(text).byteLength, 0) > 65_536) {
       forgetOverflow = true;
@@ -268,7 +269,12 @@ export const createOwnerResponder = (
       const redactJson = literalJsonTextRedactor(texts, FORGOTTEN, 'tool_result');
       for (const entry of pendingToolOutputs) entry.summary = redactJson(entry.summary);
       if (lastReply !== undefined) lastReply = redact(lastReply);
-    } catch { throw new Error('forget context sanitisation failed'); }
+    } catch (error) {
+      if (error instanceof ClosedRunError) throw error;
+      // Preserve only a safe category: regex/parser messages can contain forgotten payload.
+      const category = error instanceof SyntaxError ? 'syntax' : error instanceof TypeError ? 'type' : error instanceof RangeError ? 'range' : error instanceof Error ? 'error' : 'non_error';
+      throw new Error('forget context sanitisation failed', { cause: { seam: 'forget_retained_context', category } });
+    }
     for (const text of combined) forgottenTexts.add(text);
     forgetUnsafe = false;
   };
@@ -326,6 +332,7 @@ export const createOwnerResponder = (
           complete: (content, tools, turns) =>
             complete(trace, 'subagent', SUBAGENT_SYSTEM_PROMPT, [{ role: 'user', content }], undefined, undefined, tools as never, turns),
           onTool: (event) => {
+            if (forgottenTexts.size) offloadStore?.clear();
             log({ trace, hop: `subagent_tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: forgetJsonText(event.call.arguments), output: forgetJsonText(event.output, 'tool_result') } });
           },
         });
@@ -362,6 +369,7 @@ export const createOwnerResponder = (
         },
         onTool: (event) => {
           privateRunScope?.admit();
+          if (forgottenTexts.size) offloadStore?.clear();
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: forgetJsonText(event.call.arguments), output: forgetJsonText(event.output, 'tool_result') } });
           privateRunScope?.admit();
           pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: 'external', summary: forgetJsonText(event.output, 'tool_result') });

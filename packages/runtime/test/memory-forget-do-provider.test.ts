@@ -8,10 +8,17 @@ import { loopHandlers } from '../src/channels/loops';
 import { redactConversationEntries, durableConversationStore } from '../src/channels/conversation-store';
 import { episodeIndex } from '../src/channels/episodes';
 import { toolOutputLedger } from '../src/conversation/tool-output-ledger';
+import { capToolOutput } from '../src/conversation/tool-loop';
+import { readToolOutputHandler } from '../src/tools/read-tool-output';
+import { webSearchArgsSchema } from '@waldo/contracts';
 
 // Real registered two-argument owner DO and its fenced inbox/listener/responder path.
 // Only the model SDK and Telegram transport are scripted. No live provider or source service.
-const seen = vi.hoisted(() => ({ writer: '{}', requests: [] as unknown[], fetches: [] as string[], replyText: 'Recorded fixture response.', reasoning: undefined as string | undefined, onReply: undefined as undefined | (() => unknown[] | undefined) }));
+const seen = vi.hoisted(() => ({ writer: '{}', requests: [] as unknown[], fetches: [] as string[], replyText: 'Recorded fixture response.', reasoning: undefined as string | undefined, offloads: [] as import('../src/conversation/tool-output-store').ToolOutputStore[], onReply: undefined as undefined | (() => unknown[] | undefined) }));
+vi.mock('../src/conversation/tool-output-store', async load => {
+  const real = await load<typeof import('../src/conversation/tool-output-store')>();
+  return { ...real, inMemoryToolOutputStore: () => { const store = real.inMemoryToolOutputStore(); seen.offloads.push(store); return store; } };
+});
 vi.mock('../src/channels/telegram-api', async (load) => ({
   ...await load<typeof import('../src/channels/telegram-api')>(),
   createTelegramCaller: () => async (method: string) => method === 'getMe' ? { username: 'fixture_bot' }
@@ -47,7 +54,7 @@ const turn = async (name: string, id: number, text: string, writer: string) => {
   });
 };
 beforeEach(() => {
-  seen.requests.length = 0; seen.fetches.length = 0; seen.onReply = undefined; seen.replyText = 'Recorded fixture response.'; seen.reasoning = undefined;
+  seen.requests.length = 0; seen.fetches.length = 0; seen.offloads.length = 0; seen.onReply = undefined; seen.replyText = 'Recorded fixture response.'; seen.reasoning = undefined;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => { seen.fetches.push(String(input)); throw new Error('unmocked network is forbidden'); });
 });
 afterEach(() => { vi.unstubAllGlobals(); expect(seen.fetches).toEqual([]); });
@@ -393,3 +400,62 @@ for (const needle of ['role', 'type', 'call_id']) {
     });
   });
 }
+
+it('owner forget invalidates offloaded retained bytes and stale range reads on the same responder', async () => {
+  await runInDurableObject(stub('forget-offload-cache'), async (_instance, state) => {
+    const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', undefined, memory];
+    args[7] = true;
+    const responder = createOwnerResponder(...args);
+    const cache = seen.offloads.at(-1)!;
+    const direct = (id: string, text: string) => responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text }, (_hop, work) => work());
+    seen.writer = ops({ add: [add(FORGET), add(KEEP)] }); await direct('t1', `${FORGET}. ${KEEP}.`);
+    const id = memory.claims().find(row => row.text === FORGET)!.id;
+    const body = JSON.stringify({ ok: true, data: { padding: 'x'.repeat(18_000), quotation: FORGET }, source_taint: 'external' });
+    const head = capToolOutput(body, cache, 'fixture-retained-call');
+    const cacheId = /stored as (to-\d+)/.exec(head)![1]!;
+    expect(head).not.toContain(FORGET); // the forgotten copy is beyond the head slice
+    expect(cache.read(cacheId, 0, body.length)?.text).toContain(FORGET);
+    seen.writer = ops({ forget_claims: [id] }); await direct('t2', 'Forget only that origami preference.');
+    expect(cache.stat(cacheId)).toBeNull();
+    expect(cache.read(cacheId, 17_990, 1_000)).toBeNull();
+    expect(await readToolOutputHandler(cache).handle({ id: cacheId, offset: 17_990, length: 1_000 })).toMatchObject({ ok: false, code: 'not_found', source_taint: 'external' });
+    let round = 0;
+    seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'fixture-stale-read', name: 'read_tool_output', arguments: JSON.stringify({ id: cacheId, offset: 17_990, length: 1_000 }) }] : [];
+    seen.writer = ops(); await direct('t3', 'Read the old synthetic cached range.');
+    expect(request()).not.toContain(FORGET); expect(request()).toContain('not_found');
+    expect(memory.claims().map(row => row.text)).toEqual([KEEP]);
+  });
+});
+
+it('an offload produced after steered forget is not retained for a later range read', async () => {
+  await runInDurableObject(stub('forget-new-offload'), async (_instance, state) => {
+    const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', undefined, memory];
+    args[7] = true;
+    const loops = loopHandlers({ close: () => true, open: () => ({}), list: () => [], closed: () => [], proactivity: () => ({}), setProactivity: () => ({}) } as never);
+    args[5] = [...loops, { name: 'web_search', description: 'Read a sealed synthetic result.', schema: webSearchArgsSchema, trigger_allowlist: ['user_message'], autonomy_gated: false,
+      handle: async () => ({ ok: true, data: { padding: 'x'.repeat(18_000), quotation: FORGET }, source_taint: 'external' }) }] as never;
+    const responder = createOwnerResponder(...args);
+    const cache = seen.offloads.at(-1)!;
+    const direct = (id: string, text: string) => responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text }, (_hop, work) => work());
+    seen.writer = ops({ add: [add(FORGET), add(KEEP)] }); await direct('t1', `${FORGET}. ${KEEP}.`);
+    const id = memory.claims().find(row => row.text === FORGET)!.id;
+    let round = 0;
+    seen.onReply = () => {
+      round += 1;
+      if (round === 1) {
+        responder.control.steer(1, 'Forget only that origami preference.'); seen.writer = ops({ forget_claims: [id] });
+        return [{ type: 'function_call', call_id: 'fixture-before-forget', name: 'close_loop', arguments: JSON.stringify({ id: 'placeholder', outcome: 'done' }) }];
+      }
+      if (round === 2) return [{ type: 'function_call', call_id: 'fixture-after-forget', name: 'web_search', arguments: JSON.stringify({ query: 'sealed synthetic result', limit: 1 }) }];
+      return [];
+    };
+    seen.writer = ops(); await direct('t2', 'Read the sealed synthetic result.');
+    expect(round).toBe(3);
+    expect(cache.stat('to-1')).toBeNull();
+    expect(cache.read('to-1', 17_990, 1_000)).toBeNull();
+    expect(request()).not.toContain(FORGET);
+    expect(memory.claims().map(row => row.text)).toEqual([KEEP]);
+  });
+});
