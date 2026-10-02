@@ -142,7 +142,9 @@ export const callMcpToolHandler = (serversRaw: string | undefined, desk?: McpDes
   },
 });
 
-// Read-only MCP bridge (main's decision under the owner's overnight delegation, logged): reads of a server whose
+// Read-only MCP bridge. Owner evidence: his 8:11:06 AM "1. Yes" to main's question about Drive reads without an approve
+// button. Retention of read results at the edge was NOT put to him, so the intent-backed reads below are off by default
+// (readIntents) until the edge stops storing them or bounds them with a TTL. Reads of a server whose
 // grant feature is read-only (Drive/Docs/Sheets/Slides) run without the owner button. Fail closed:
 // the server must declare a read-only Google feature, an explicit allow_tools list AND a separate
 // read_tools list, and the tool must be on both. Anything else is refused here, never proposed or executed; writes stay on
@@ -167,7 +169,7 @@ const readAuthText = (reason: 'not_connected' | 'reauth_needed' | 'scope_missing
   return `${state}. A reconnect button is in the chat (or was just sent). Tell the owner to tap it - never quote or retype any link yourself.`;
 };
 
-export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: McpGoogleAuth): ToolHandler<CallMcpToolArgs, unknown, ToolDispatcherContext> => ({
+export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: McpGoogleAuth, readIntents = false): ToolHandler<CallMcpToolArgs, unknown, ToolDispatcherContext> => ({
   name: 'read_mcp_tool',
   description: readMcpToolDescription(serversRaw),
   schema: callMcpToolArgsSchema,
@@ -189,6 +191,9 @@ export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: 
     // The proxy rail requires a host-derived intent on every MCP call. A read gets one from the turn
     // and tool-call identity (same shape as draft_email), never from model args. Reads whose result
     // is file text stay off this path until the ledger's storage of that text is confirmed.
+    if (!readIntents) {
+      return { ok: false, code: 'forbidden', error: 'owner-button-free reads are not enabled on this Waldo yet.', source_taint: 'external' };
+    }
     if (!INTENT_READ_TOOLS.includes(tool)) {
       return { ok: false, code: 'forbidden', error: `tool "${tool}" is not enabled for owner-button-free reads yet.`, source_taint: 'external' };
     }
