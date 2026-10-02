@@ -223,3 +223,14 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - [ ] Test canonical `signin_allowed` as access eligibility, not invite validity: active members remain admitted independently of arbitrary/expired/revoked/used invite text; unverified new signup still cannot create a Waldo owner, consume or open a session.
 - [ ] Distinguish Supabase Auth identity creation (`create_user:true`) from Waldo owner provisioning. Describe signup progress as a readable signed 15-minute bearer cookie with no device binding, encryption or server revocation; restart only clears this browser.
 - [ ] Associate visible legacy labels and inspect desktop/mobile, keyboard order/focus, error and progress states using synthetic data; these checks are not full accessibility certification.
+
+### Owner admission custody epochs
+
+- [ ] Preserve an admission epoch across same-row presence unlink/reactivation and locator away/back; state_version alone cannot detect these ABA changes.
+- [ ] Lock affected owners in UUID order with NO KEY UPDATE for non-key epoch writes; presence transfers already hold destination FK KEY SHARE. Exercise opposing transfers and concurrent owner-state updates.
+- [ ] Reject direct caller epoch edits and unrelated unprivileged nested triggers, while existing service-role custody writes allocate privately.
+
+| Date | Bug found | Surface | Adversarial proof | Checklist change |
+| --- | --- | --- | --- | --- |
+| 2026-10-02 | State-only and presence-ID receipts miss same-row unlink/reactivation and locator ABA | Owner admission custody | waldo_owner_admission_revision.sql persisted receipt regressions | Require custody epoch for currentness |
+| 2026-10-02 | FOR UPDATE owner locking deadlocked opposing presence transfers against destination FK KEY SHARE | Owner revision preparation | prove-local.mjs concurrent transfers/lifecycle; preserved red receipt, then 100 monotonic epochs | Use compatible non-key locks in deterministic UUID order |
