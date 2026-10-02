@@ -88,7 +88,7 @@ describe('read_mcp_tool through the real dispatcher', () => {
   it('the edge mcp_read_rejected code is a typed rejected result with no reconnect', async () => {
     const rejected: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async () => { throw Object.assign(new Error('mcp_read_rejected'), { status: 400 }); } };
     const out = await dispatchTool({ id: 'rej', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, rejected, true)] });
-    expect(out).toMatchObject({ ok: false, code: 'rejected', source_taint: 'external' });
+    expect(out).toMatchObject({ ok: false, code: 'rejected', source_taint: 'external', error: 'The connector refused this read.' });
     expect(out).not.toHaveProperty('connect');
     const other: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async () => { throw Object.assign(new Error('bad request'), { status: 400 }); } };
     expect(await dispatchTool({ id: 'o', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, other, true)] })).toMatchObject({ ok: false, code: 'transient' });
@@ -97,7 +97,7 @@ describe('read_mcp_tool through the real dispatcher', () => {
   it('an intent_unavailable on a read is rejected, not transient, and offers no reconnect', async () => {
     const gone: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async () => { throw new ProxyIntentError('intent_unavailable'); } };
     const out = await dispatchTool({ id: 'iu', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, gone, true)] });
-    expect(out).toMatchObject({ ok: false, code: 'rejected', source_taint: 'external' });
+    expect(out).toMatchObject({ ok: false, code: 'rejected', source_taint: 'external', error: 'The connector could not run this read.' });
     expect(out).not.toHaveProperty('connect');
   });
 
