@@ -40,4 +40,24 @@ describe('a topic-only forget keeps its retry state until the caller settles it'
       expect(store.pendingTopics()).toEqual([]);
     });
   });
+  it('does not redact a topic whose pending row could not be written (custody before destruction)', async () => {
+    await run('forget-topic-pending-failwrite', (rawSql, tx) => {
+      const sql = new Proxy(rawSql, { get: (target, prop) => {
+        if (prop === 'exec') return (query: string, ...bindings: unknown[]) => {
+          if (/INSERT OR IGNORE INTO topic_purge_pending/.test(query)) throw new Error('injected sqlite failure');
+          return (target.exec as (q: string, ...b: unknown[]) => unknown)(query, ...bindings);
+        };
+        const value = Reflect.get(target, prop, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      } }) as SqlStorage;
+      const store = claimStore(sql, tx);
+      const episodes = episodeIndex(rawSql);
+      episodes.add('tg-1', 'owner', 'Posterbot standup moved to 09:10 UTC', 1);
+      let outcome: { purgeIncomplete: readonly string[] } | undefined;
+      applyClaimOps(store, ops({ forget_topic: 'Posterbot' }), AT, 'owner, tg-2', undefined, { owner: 'forget Posterbot' }, undefined, (o) => { outcome = o; });
+      // The source words are still there, the result is explicitly not complete, and nothing was settled.
+      expect(rawSql.exec<{ text: string }>('SELECT text FROM episodes').toArray()[0]!.text).toMatch(/posterbot/i);
+      expect(outcome?.purgeIncomplete).toContain('pending_topic(failed)');
+    });
+  });
 });

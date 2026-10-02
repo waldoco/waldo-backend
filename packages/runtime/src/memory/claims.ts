@@ -292,12 +292,20 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // owner's literal words an OWNER-origin claim was grounded on, at least 12 characters like the admission rule; an agent-origin quote could be any common phrase and would wipe unrelated owner text) is redacted too, so
       // a forget reaches the conversation and episodes that actually quote it. Bare citations and short strings are ignored.
       const quotedEvidence = forgotten.filter((claim) => claim.origin === 'owner').flatMap((claim) => quotedSpans(claim.evidence).map((span) => span.trim()).filter((span) => span.length >= 12));
-      const texts = [...new Set([...forgotten.map((claim) => claim.text.trim()), ...quotedEvidence, ...topics.map((topic) => topic.trim()).filter((topic) => topic.length >= 3)].filter(Boolean))];
       const failed: string[] = [];
       const attempt = (store: string, op: () => void) => {
         try { op(); } catch { failed.push(store); }
       };
-      for (const topic of topics.map((t) => t.trim()).filter((t) => t.length >= 3)) attempt('pending_topic', () => sql.exec('INSERT OR IGNORE INTO topic_purge_pending (fingerprint, topic, created_at) VALUES (?, ?, ?)', textFingerprint(topic), topic, at));
+      // Custody before destruction: a topic is redacted only after its pending row is durably written. If that write fails the
+      // topic is NOT redacted this pass (the purge reports not ready), so the owner's source words are never destroyed while the
+      // only retry state is lost.
+      const durableTopics: string[] = [];
+      for (const topic of topics.map((t) => t.trim()).filter((t) => t.length >= 3)) {
+        let written = true;
+        try { sql.exec('INSERT OR IGNORE INTO topic_purge_pending (fingerprint, topic, created_at) VALUES (?, ?, ?)', textFingerprint(topic), topic, at); } catch { written = false; failed.push('pending_topic'); }
+        if (written) durableTopics.push(topic);
+      }
+      const texts = [...new Set([...forgotten.map((claim) => claim.text.trim()), ...quotedEvidence, ...durableTopics].filter(Boolean))];
       const idList = forgotten.map((claim) => claim.id);
       const notPurging = idList.length ? ` AND id NOT IN (${idList.map(() => '?').join(',')})` : '';
       const existingHashes = new Set(sql.exec<{ topic_hash: string | null }>('SELECT topic_hash FROM forget_barriers').toArray().map((row) => row.topic_hash));
