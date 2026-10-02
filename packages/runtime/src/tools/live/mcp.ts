@@ -6,7 +6,7 @@ class ToolExecutionError extends Error {}
 // token, or 'google' - the owner's connected Google account supplies the OAuth bearer. Vault-backed
 // accounts keep the token edge-side: the runtime sends server/tool/args and the edge attaches it.
 import { sha256Hex } from '../../connectors/google';
-import type { ProxyIntent } from '../../connectors/proxy-intent';
+import { ProxyIntentError, type ProxyIntent } from '../../connectors/proxy-intent';
 import { isGoogleFeature, isReadOnlyGoogleFeature, type GoogleFeature } from '../../connectors/google';
 import { callMcpToolArgsSchema, triggerTypeSchema, TOOL_PERMISSIONS, type CallMcpToolArgs, type ToolHandler, type ToolName, type ToolResult } from '@waldo/contracts';
 import type { McpCallProposal } from '../../channels/approvals';
@@ -207,6 +207,8 @@ export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: 
         return { ok: false, code: 'auth_failed', error: readAuthText(error.reason, error.feature), source_taint: 'external', connect: { status: 'auth_required', service: 'google', reason: error.reason, ...(error.feature === undefined ? {} : { feature: error.feature }) } };
       }
       const message = error instanceof Error ? error.message : String(error);
+      // A read has no ledger, so an intent error here means the edge could not run it (for example a revoked or missing grant). Retrying would not change that.
+      if (error instanceof ProxyIntentError) return { ok: false, code: 'rejected', error: 'The read could not be run right now. Nothing was read.', source_taint: 'external' };
       // The edge's stable code for a read it refused (unregistered server or tool, malformed id). Exact match on a code, not text parsing.
       if ((error as { status?: number }).status === 400 && message === 'mcp_read_rejected') return { ok: false, code: 'rejected', error: 'The read was refused by the connector service. Nothing was read.', source_taint: 'external' };
       return { ok: false, code: error instanceof ToolExecutionError ? 'rejected' : 'transient', error: message, source_taint: 'external' };

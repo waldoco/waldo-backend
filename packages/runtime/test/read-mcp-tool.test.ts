@@ -1,3 +1,4 @@
+import { ProxyIntentError } from '../src/connectors/proxy-intent';
 import { buildSessionState } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { sanitise } from '../src/scribe/sanitiser';
@@ -91,6 +92,13 @@ describe('read_mcp_tool through the real dispatcher', () => {
     expect(out).not.toHaveProperty('connect');
     const other: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async () => { throw Object.assign(new Error('bad request'), { status: 400 }); } };
     expect(await dispatchTool({ id: 'o', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, other, true)] })).toMatchObject({ ok: false, code: 'transient' });
+  });
+
+  it('an intent_unavailable on a read is rejected, not transient, and offers no reconnect', async () => {
+    const gone: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async () => { throw new ProxyIntentError('intent_unavailable'); } };
+    const out = await dispatchTool({ id: 'iu', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, gone, true)] });
+    expect(out).toMatchObject({ ok: false, code: 'rejected', source_taint: 'external' });
+    expect(out).not.toHaveProperty('connect');
   });
 
   it('the staging Drive entry declares exactly the four read tools in read_tools', () => {
