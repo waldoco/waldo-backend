@@ -1,5 +1,9 @@
 # A1 local admission preparation
 
+## Bounded release evidence completion
+
+The actual DO local fixture now explicitly checks authenticated-ingress admission, canonical owner/tenant, `user_message` trigger, exact real-input SHA, persisted inbox occurrence timestamp, provider context/input/function schemas, synthetic reply payload committed to the owner outbox and the matching closed inbox run. Additional actual-DO cases prove a newly verified owner in the same physical DO cannot restore the previous owner history and a foreign-owner material source is rejected before the reply provider/publication. Twelve DO cases pass with existing stale custody/grant/run regressions. These are synthetic private host/provider fixtures through the actual DO class and inbox code, not an installed Cloudflare live host supplier or external webhook deployment proof. No publication; preview-off confirmation and existing security/release gates remain required.
+
 ## Material delivery correction (October 2, local follow-up)
 
 The earlier Core-seam blocker below was overstated. Existing `context-composer/prompt.ts` labels the trigger list **Tool ACL ceiling** and explicitly allows only the current request function list; that wording has existed since commit `1d938b63`, before Core #556/#558. Rendering a ceiling does not grant those tools. The public composer output can therefore be passed unchanged into the owned responder without changing Core renderer/contracts or performing prompt surgery.

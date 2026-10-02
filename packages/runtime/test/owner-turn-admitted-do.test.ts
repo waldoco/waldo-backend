@@ -27,8 +27,8 @@ function sources(admission: OwnerMessageAdmission): ContextComposerDependencies 
 }
 let seq = 700000;
 async function proof(work: (h: {
-  send(text: string): Promise<void>; requests: LLMRequest[]; state: DurableObjectState;
-  mutate(): void; revoke(): void; unavailable(): void; wrongOwner(): void; pause(): Promise<(() => void) & { reached: Promise<void> }>; reload(): void;
+  send(text: string): Promise<void>; requests: LLMRequest[]; admissions: OwnerMessageAdmission[]; state: DurableObjectState;
+  mutate(): void; revoke(): void; unavailable(): void; wrongOwner(): void; crossOwnerContext(): void; pause(): Promise<(() => void) & { reached: Promise<void> }>; reload(): void;
 }) => Promise<void>, omitHost = false) {
   const subject = 81101;
   const doName = `admitted-proof-${++seq}`;
@@ -36,6 +36,8 @@ async function proof(work: (h: {
   await runInDurableObject(stub, async (_instance, state) => {
     const noFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('local proof denies network'));
     const requests: LLMRequest[] = [];
+    const admissions: OwnerMessageAdmission[] = [];
+    let foreignContext = false;
     let revision = '9007199254740993';
     let grants: readonly ToolName[] = ['get_context'];
     let grantUnavailable = false;
@@ -44,7 +46,11 @@ async function proof(work: (h: {
     const host: TelegramOwnerPrivateHost = {
       environment: 'staging', namespace: 'private-local-namespace', allowedDoNames: [doName],
       lookup: async () => ({ owner_id: ownerId, presence_id: '20000000-0000-0000-0000-000000000001', state_version: 0, admission_revision: revision, do_name: doName, provider: 'telegram', subject: String(subject) }),
-      context: sources, access: async () => ({ grants: grantUnavailable ? { status: 'unavailable' } : { status: 'available', tools: grants }, connectors: { status: 'unavailable' } }),
+      context: admission => {
+        admissions.push(admission);
+        const deps = sources(admission);
+        return foreignContext ? { ...deps, materials: { load: async request => ({ ...await deps.materials.load(request), principal_ref: 'prn_ffffffffffffffffffffffffffffffff' }) } } : deps;
+      }, access: async () => ({ grants: grantUnavailable ? { status: 'unavailable' } : { status: 'available', tools: grants }, connectors: { status: 'unavailable' } }),
       connectorBacked: () => false,
       gateway: { complete: async ({ request, route }) => {
         requests.push(structuredClone(request));
@@ -62,7 +68,7 @@ async function proof(work: (h: {
       expect(response.status).toBe(200);
       await instance.alarm();
     };
-    try { await work({ send, requests, state, mutate: () => { revision = String(BigInt(revision) + 2n); }, revoke: () => { grants = []; }, unavailable: () => { grantUnavailable = true; }, wrongOwner: () => { ownerId = '10000000-0000-0000-0000-000000000002'; }, reload: () => { instance = new TelegramOwnerDO(state, privateEnv, omitHost ? undefined : host); }, pause: async () => {
+    try { await work({ send, requests, admissions, state, crossOwnerContext: () => { foreignContext = true; }, mutate: () => { revision = String(BigInt(revision) + 2n); }, revoke: () => { grants = []; }, unavailable: () => { grantUnavailable = true; }, wrongOwner: () => { ownerId = '10000000-0000-0000-0000-000000000002'; }, reload: () => { instance = new TelegramOwnerDO(state, privateEnv, omitHost ? undefined : host); }, pause: async () => {
       let resume!: () => void; let entered!: () => void;
       const wait = new Promise<void>(resolve => { resume = resolve; });
       const reached = new Promise<void>(resolve => { entered = resolve; });
@@ -85,6 +91,25 @@ it('actual authenticated DO turn uses admitted input, canonical continuation and
     expect(replies.length).toBeGreaterThan(1);
     expect(replies[0]!.cache_key).toBe('waldo:prn_10000000000000000000000000000001');
     expect(replies[0]!.messages.at(-1)?.content).toContain('Bengaluru');
+    expect(replies[0]!.system).toContain('Trusted user_message invocation.');
+    expect(replies[0]!.system).toContain('Plan the Bengaluru demo on October 15.');
+    const invocation = h.admissions[0]!.invocation;
+    expect(invocation.admission_source).toBe('authenticated_ingress');
+    expect(invocation.runtime_binding.trigger).toBe('user_message');
+    expect(invocation.verified_authority).toMatchObject({ principal_ref: 'prn_10000000000000000000000000000001', tenant_ref: 'ten_10000000000000000000000000000001' });
+    const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('Plan the Bengaluru demo on October 15.')))].map(b => b.toString(16).padStart(2, '0')).join('');
+    expect(invocation.input_refs[0]!.content_digest).toBe(`sha256:${digest}`);
+    const inbox = h.state.storage.kv.get<{ id: string; admittedAt: number; runId: string; attempt: string; reason: string; closedAt?: number }[]>('telegram_owner_inbox_v1')!.at(-1)!;
+    expect(invocation.occurrence.occurred_at).toBe(inbox.admittedAt);
+    expect(inbox.reason).toBe('final_committed');
+    expect(inbox.closedAt).toBeTypeOf('number');
+    const response = h.state.storage.kv.get<{ id: string; ownerSubject: string; payload: { chat_id: number; text: string }; inbox: { id: string; runId: string; attempt: string } }[]>('telegram_final_outbox_v1')!.find(row => row.id === `turn:${inbox.id}`)!;
+    expect(response).toBeDefined();
+    expect(response.ownerSubject).toBe('81101');
+    expect(response.payload.chat_id).toBe(81101);
+    expect(response.payload.text).toContain('Synthetic admitted reply.');
+    expect(response.inbox).toEqual({ id: inbox.id, runId: inbox.runId, attempt: inbox.attempt });
+
     expect(replies[0]!.tools?.map(t => t.name)).toEqual(['get_context']);
     expect(replies.at(-1)!.tool_turns?.some(t => t.call.name === 'get_context')).toBe(true);
     expect(JSON.stringify(replies)).not.toContain('skill_procedure');
@@ -191,5 +216,44 @@ it('admitted materials reach the actual provider system while only granted handl
       expect(reply.tools?.map(tool => tool.name)).toEqual(['get_context']);
       expect(reply.system).not.toContain('memory records it automatically');
     }
+  });
+});
+
+
+it('a new verified owner in the same DO receives fresh context without prior owner history', async () => {
+  await proof(async h => {
+    await h.send('OWNER_A_PRIVATE_PLAN October 15.');
+    const first = await h.state.storage.list({ prefix: 'canonical-owner-v1:prn_10000000000000000000000000000001:' });
+    expect(first.size).toBeGreaterThan(0);
+    expect((await h.state.storage.list({ prefix: 'canonical-owner-v1:prn_10000000000000000000000000000001:ten_10000000000000000000000000000001:conv:' })).size).toBe(2);
+    const ownerAReplies = h.requests.filter(request => !request.response_format);
+    expect(ownerAReplies.length).toBeGreaterThan(0);
+    expect(JSON.stringify(ownerAReplies)).toContain('OWNER_A_PRIVATE_PLAN');
+    const before = h.requests.length;
+    h.wrongOwner();
+    h.reload();
+    await h.send('OWNER_B_NEW_PLAN October 16.');
+    const replies = h.requests.slice(before).filter(request => !request.response_format);
+    expect(replies.length).toBeGreaterThan(0);
+    expect(h.admissions.at(-1)!.invocation.verified_authority.principal_ref).toBe('prn_10000000000000000000000000000002');
+    for (const reply of replies) {
+      expect(reply.cache_key).toBe('waldo:prn_10000000000000000000000000000002');
+      expect(JSON.stringify(reply)).toContain('OWNER_B_NEW_PLAN');
+      expect(JSON.stringify(reply)).not.toContain('OWNER_A_PRIVATE_PLAN');
+    }
+    expect(await h.state.storage.list({ prefix: 'canonical-owner-v1:prn_10000000000000000000000000000001:' })).toEqual(first);
+    expect((await h.state.storage.list({ prefix: 'canonical-owner-v1:prn_10000000000000000000000000000002:ten_10000000000000000000000000000002:conv:' })).size).toBe(2);
+  });
+});
+
+it('cross-owner material source rejects before the actual reply provider or publication', async () => {
+  await proof(async h => {
+    h.crossOwnerContext();
+    await h.send('Keep other owners material private.');
+    expect(h.admissions).toHaveLength(1);
+    expect(h.requests.filter(request => !request.response_format)).toEqual([]);
+    expect((await h.state.storage.list({ prefix: 'canonical-owner-v1:' })).size).toBe(0);
+    expect((h.state.storage.kv.get<{ id: string }[]>('telegram_final_outbox_v1') ?? []).filter(row => row.id.startsWith('turn:'))).toEqual([]);
+    expect(h.state.storage.kv.get<{ state: string }[]>('telegram_owner_inbox_v1')!.at(-1)!.state).toBe('quarantined');
   });
 });
