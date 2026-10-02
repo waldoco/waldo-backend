@@ -1,10 +1,10 @@
-import type { RunEffectScope } from './run-effect-scope';
+import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
 import type { createOwnerMessageContextAdapter } from './owner-message-context-adapter';
 import type { OwnerTurnEnvelope } from './owner-turn-envelope';
 import { ownerContextHandler } from '../tools/live/owner-context';
 import {
-  sanitiseResultSchema, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
+  literalJsonTextRedactor, literalTextRedactor, sanitiseResultSchema, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
@@ -21,7 +21,7 @@ import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { CLINICAL_REDIRECT, messagingSystemPrompt, ownerClockLine, withOwnerSkillProcedures, OWNER_SKILL_SAFEGUARDS } from '../prompt/messaging-behavior';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
-import { applyClaimOps, type ClaimOutcome, applyPromotion, CLAIM_OPS_SCHEMA, exchangeInput, MEMORY_INSTRUCTION, memoryPrompt, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
+import { FORGOTTEN, applyClaimOps, type ClaimOutcome, applyPromotion, CLAIM_OPS_SCHEMA, exchangeInput, MEMORY_INSTRUCTION, memoryPrompt, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
 import { restoreConversation, type ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
 import type { TurnLogEntry, TurnTimer } from './owner-turn-types';
@@ -173,8 +173,33 @@ export const createOwnerResponder = (
     ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
   };
   const handlers = [getContextHandler(clock), ownerContextHandler(memory), ...tools, ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
+  // Exact forgotten payload is transient, owner-local and bounded. It lasts only
+  // until captured provider messages and unsaved outputs have been scrubbed.
+  const forgottenTexts = new Set<string>();
+  let forgetOverflow = false;
+  let forgetUnsafe = false;
+  const forgetText = (value: string) => literalTextRedactor([...forgottenTexts], FORGOTTEN)(value);
+  const forgetJsonText = (value: string, mode: 'arguments' | 'tool_result' = 'arguments') => literalJsonTextRedactor([...forgottenTexts], FORGOTTEN, mode)(value);
+  const protocolKeys = new Set(['id', 'call_id', 'name', 'type', 'role', 'status']);
+  const forgetPrior = (value: unknown): unknown => typeof value === 'string' ? forgetText(value)
+    : Array.isArray(value) ? value.map(forgetPrior)
+    : value !== null && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key,
+      protocolKeys.has(key) ? item : key === 'arguments' && typeof item === 'string' ? forgetJsonText(item) : forgetPrior(item)])) : value;
+  const forgetToolTurn = (turn: LLMToolTurn): LLMToolTurn => ({
+    ...turn, call: { ...turn.call, arguments: forgetJsonText(turn.call.arguments) }, output: forgetJsonText(turn.output, 'tool_result'),
+    ...(turn.prior_items ? { prior_items: turn.prior_items.map(item => forgetPrior(item) as Record<string, unknown>) } : {}),
+  });
+  const clearForgotten = () => { forgottenTexts.clear(); forgetOverflow = false; };
+  const memoryOperation = async <T>(work: () => Promise<T>): Promise<T> => {
+    try { return await work(); } finally { clearForgotten(); }
+  };
   const complete = async (trace: string, purpose: string, system: string, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, clinicalRetried = false) => {
     await assertCurrent();
+    if (forgetUnsafe) throw new Error('forget context sanitisation failed');
+    const purging = memory?.claims('purging').map(claim => claim.text) ?? [];
+    if (purging.length) redactLoaded(purging);
+    if (forgetOverflow) throw new Error('forget context exceeded safe transient bound');
+    turns = turns?.map(forgetToolTurn);
     const started = Date.now();
     let reasoning: string | undefined;
     const effectivePolicy = modelOverride === undefined || modelOverride === model ? policy
@@ -184,7 +209,7 @@ export const createOwnerResponder = (
     // of the identical joined string. Roles come from the typed entry seam, never guessed here.
     const texts: readonly ConversationModelMessage[] = typeof content === 'string' ? [{ role: 'user', content }] : content;
     const userMessages = texts.map((message, index) => ({
-      ...message,
+      ...message, content: forgetText(message.content),
       ...(attachments && index === texts.length - 1 ? { attachments: attachments.map((file) => `${file.kind}:${file.filename}`) } : {}),
     }));
     const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
@@ -208,12 +233,13 @@ export const createOwnerResponder = (
     await assertCurrent();
     privateRunScope?.admit();
     const input = JSON.stringify([{ role: 'system', content: system }, ...userMessages, ...(turns ?? [])]);
+    const response = result.ok ? { ...result.response, text: forgetText(result.response.text), tool_calls: result.response.tool_calls?.map(call => ({ ...call, arguments: forgetJsonText(call.arguments) })) } : undefined;
     if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason].filter(Boolean).join(':'), shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength }, text: { input } });
     else log({
       trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true,
       usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens },
       shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength },
-      text: { input, output: result.response.text || JSON.stringify(result.response.tool_calls), ...(reasoning ? { reasoning } : {}) },
+      text: { input, output: response!.text || JSON.stringify(response!.tool_calls), ...(reasoning ? { reasoning: forgetText(reasoning) } : {}) },
     });
     if (!result.ok && result.halted_by === 'medical_gate' && !clinicalRetried) {
       const redirected = system.endsWith(OWNER_SKILL_SAFEGUARDS)
@@ -223,17 +249,60 @@ export const createOwnerResponder = (
     }
     if (!result.ok && result.halted_by === 'medical_gate') return { ...CLINICAL_FALLBACK, model };
     if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.destination, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);
-    return result.response;
+    return response!;
   };
   const ask = async (...args: Parameters<typeof complete>) => (await complete(...args)).text;
   const control = turnControl();
   const tree = new ConversationTree();
+  const redactLoaded = (texts: readonly string[]) => {
+    offloadStore?.clear();
+    const combined = [...new Set([...forgottenTexts, ...texts.map(text => text.trim()).filter(Boolean)])];
+    if (combined.length > 128 || combined.reduce((n, text) => n + new TextEncoder().encode(text).byteLength, 0) > 65_536) {
+      forgetOverflow = true;
+      forgetUnsafe = true;
+      throw new Error('forget context exceeded safe transient bound');
+    }
+    forgetUnsafe = true;
+    try {
+      tree.redact(texts, FORGOTTEN);
+      const redact = literalTextRedactor(texts, FORGOTTEN);
+      const redactJson = literalJsonTextRedactor(texts, FORGOTTEN, 'tool_result');
+      for (const entry of pendingToolOutputs) entry.summary = redactJson(entry.summary);
+      if (lastReply !== undefined) lastReply = redact(lastReply);
+    } catch (error) {
+      if (error instanceof ClosedRunError) throw error;
+      // Preserve only a safe category: regex/parser messages can contain forgotten payload.
+      const category = error instanceof SyntaxError ? 'syntax' : error instanceof TypeError ? 'type' : error instanceof RangeError ? 'range' : error instanceof Error ? 'error' : 'non_error';
+      throw new Error('forget context sanitisation failed', { cause: { seam: 'forget_retained_context', category } });
+    }
+    for (const text of combined) forgottenTexts.add(text);
+    forgetUnsafe = false;
+  };
   let pending: readonly LLMAttachment[] | undefined;
   // F1 receipt: the window observer fires only when history was actually dropped (content-free).
   const pathObservers = { onWindow: (stats: { kept: number; dropped: number; estimated_tokens: number; budget_tokens: number }) => { if (stats.dropped > 0) log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `kept ${stats.kept} dropped ${stats.dropped} ~${stats.estimated_tokens}/${stats.budget_tokens} tokens` }); } };
+  const promptMemory = (): ClaimStore | undefined => memory && ({
+    ...memory,
+    claims: status => memory!.claims(status).map(claim => ({ ...claim, text: forgetText(claim.text), evidence: forgetText(claim.evidence), source_ref: claim.source_ref ? forgetText(claim.source_ref) : claim.source_ref })),
+    recall: (query, limit) => memory!.recall(query, limit).map(claim => ({ ...claim, text: forgetText(claim.text), evidence: forgetText(claim.evidence), source_ref: claim.source_ref ? forgetText(claim.source_ref) : claim.source_ref })),
+  });
+  const consumeRound = async () => {
+    const added = await control.roundAsync();
+    if (added === null) return null;
+    const heard = control.heard();
+    if (turnWriting && heard.length > recordedHeard) {
+      const fresh = heard.slice(recordedHeard).join('\n');
+      recordedHeard = heard.length;
+      const status = await record(`${traceId}-steer${recordedHeard}`, fresh, '');
+      if (status !== 'saved') turnNotice = MEMORY_NOTICES[status];
+    }
+    return added;
+  };
   const path = new JoinedConversationPath(binding?.adapter.composer ?? adapters.contextComposer!, {
     complete: async (request) => {
       await assertCurrent();
+      const purging = memory?.claims('purging').map(claim => claim.text) ?? [];
+      if (purging.length) redactLoaded(purging);
       const trace = traceId;
       // Capture-mode probe turns run on the stripped handler set; delegation wraps that
       // same set so probe confinement applies to children too (children are read-only by
@@ -259,11 +328,12 @@ export const createOwnerResponder = (
           handlers: activeHandlers,
           budget: turnBudget,
           ctx: { ...safety, ...(turnReplyContext ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
-          controlRound: () => control.roundAsync(),
+          controlRound: consumeRound,
           complete: (content, tools, turns) =>
             complete(trace, 'subagent', SUBAGENT_SYSTEM_PROMPT, [{ role: 'user', content }], undefined, undefined, tools as never, turns),
           onTool: (event) => {
-            log({ trace, hop: `subagent_tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
+            if (forgottenTexts.size) offloadStore?.clear();
+            log({ trace, hop: `subagent_tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: forgetJsonText(event.call.arguments), output: forgetJsonText(event.output, 'tool_result') } });
           },
         });
           if (run) runs?.finish(run.id, result.exit === 'completed' ? 'completed' : result.exit === 'stopped' ? 'stopped' : 'failed', (result.text.split('\n')[0] ?? '').slice(0, 120));
@@ -281,23 +351,15 @@ export const createOwnerResponder = (
         maxSteps: MAX_TOOL_ROUNDS,
         ctx: { ...safety, ...(turnReplyContext ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
         step: async (tools, turns) => {
-          const added = await control.roundAsync();
+          const added = await consumeRound();
           if (added === null) return { text: STOPPED_REPLY };
-          // Steered additions are recorded before the round that answers them.
-          const heard = control.heard();
-          if (turnWriting && heard.length > recordedHeard) {
-            const fresh = heard.slice(recordedHeard).join('\n');
-            recordedHeard = heard.length;
-            const status = await record(`${trace}-steer${recordedHeard}`, fresh, '');
-            if (status !== 'saved') turnNotice = MEMORY_NOTICES[status];
-          }
           const entries = [...request.messages];
           const ownerCurrentText = (entries[entries.length - 1]?.content ?? '') + added;
           if (turnReplyContext) entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + '\n\n' + turnReplyContext };
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
           const ordersSection = standingOrders?.() ?? '';
           return complete(trace, 'reply',
-          binding ? request.system : withOwnerSkillProcedures([messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory ? [turnMemoryPrompt(memory, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'), privateSystemSkills ? request.skillPrompt : undefined),
+          binding ? request.system : withOwnerSkillProcedures([messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'), privateSystemSkills ? request.skillPrompt : undefined),
           entries,
           undefined,
           pending,
@@ -307,9 +369,10 @@ export const createOwnerResponder = (
         },
         onTool: (event) => {
           privateRunScope?.admit();
-          log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
+          if (forgottenTexts.size) offloadStore?.clear();
+          log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: forgetJsonText(event.call.arguments), output: forgetJsonText(event.output, 'tool_result') } });
           privateRunScope?.admit();
-          pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: 'external', summary: event.output });
+          pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: 'external', summary: forgetJsonText(event.output, 'tool_result') });
         },
         ...(offerConnect ? { onConnect: offerConnect } : {}),
       });
@@ -357,26 +420,30 @@ export const createOwnerResponder = (
   let restorePromise: Promise<void> | undefined;
   const restored = () => restorePromise ??= store ? restoreConversation(tree, store).then((leafId) => { parentId = leafId; }) : Promise.resolve();
   const converse = async (id: string, conversationRef: string, said: string, time: TurnTimer, fromOwner = false, surface = 'agent') => {
+    if (forgetUnsafe) throw new Error('forget context sanitisation failed');
     traceId = id;
     ownerTurnActive = fromOwner;
     control.begin(fromOwner);
-    const publication = await time('joined_path', () => path.submit({
-      ...(privateRunScope ? { runScope: privateRunScope } : {}),
-      authenticatedOwnerId: ownerId, invocation,
-      context: { ...(binding?.admission.snapshot ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null },
-      userEntry: { id, ownerId, chatId: conversationRef, parentId, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' } },
-      assistantEntryId: `${id}-reply`,
-    })).finally(() => { ownerTurnActive = false; control.end(); });
-    privateRunScope?.admit();
-    await assertCurrent();
-    await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId, privateRunScope);
-    for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record(entry, privateRunScope); }
-    privateRunScope?.admit();
-    await assertCurrent();
-    parentId = publication.leafId;
-    const out = publication.text;
-    lastReply = out;
-    return out;
+    try {
+      const publication = await time('joined_path', () => path.submit({
+        ...(privateRunScope ? { runScope: privateRunScope } : {}),
+        authenticatedOwnerId: ownerId, invocation,
+        context: { ...(binding?.admission.snapshot ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null },
+        userEntry: { id, ownerId, chatId: conversationRef, parentId, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' } },
+        assistantEntryId: `${id}-reply`,
+      })).finally(() => { ownerTurnActive = false; control.end(); });
+      privateRunScope?.admit();
+      await assertCurrent();
+      tree.redact([...forgottenTexts], FORGOTTEN);
+      await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId, privateRunScope);
+      for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: forgetJsonText(entry.summary, 'tool_result') }, privateRunScope); }
+      privateRunScope?.admit();
+      await assertCurrent();
+      parentId = publication.leafId;
+      const out = tree.get(publication.leafId)!.appPayload;
+      lastReply = out;
+      return out;
+    } finally { clearForgotten(); }
   };
   // 'failed': the writer never produced ops, nothing changed. 'uncertain': ops were being applied
   // or cleaned up when an error hit, so some of the write may have landed.
@@ -399,7 +466,7 @@ export const createOwnerResponder = (
       let purgeIds: readonly number[] = [];
       let outcome: ClaimOutcome | undefined;
       privateRunScope?.admit();
-      const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts, ids) => { purged = texts; purgeIds = ids; }, { owner, shared }, undefined, (result) => { outcome = result; });
+      const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts, ids) => { purged = texts; purgeIds = ids; redactLoaded(texts); }, { owner, shared }, undefined, (result) => { outcome = result; });
       const conv = purged.length && redactConversation ? await redactConversation(purged, privateRunScope) : null;
       // Settle only once the KV conversation/ledger stores verify clean too; a KV
       // survivor leaves the claim 'purging' so a later retry can still find it.
@@ -443,6 +510,7 @@ export const createOwnerResponder = (
       turnWriting = memory !== undefined && memoryWrites && !probeGuard?.suppressMemory;
       recordedHeard = 0;
       memoryReceipts.length = 0;
+      clearForgotten();
       // Record before reply: the owner's words are written first, so the reply sees corrections
       // and never acknowledges a save that did not happen. A failed write goes to the reply
       // through the system prompt, not the owner's text, so history stays the owner's words.
@@ -457,6 +525,7 @@ export const createOwnerResponder = (
         turnNotice = '';
         memoryReceipts.length = 0;
         turnReplyContext = '';
+        clearForgotten();
       }
     },
     async remind(id, conversationRef, note, time, surface) {
@@ -473,48 +542,58 @@ export const createOwnerResponder = (
     },
     async consolidate(trace, day, sides) {
       if (!memory) return 'no memory';
-      const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(memory, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
-      let purged: readonly string[] = [];
-      let purgeIds: readonly number[] = [];
-      // With speaker-split sides the full gate runs at night too (self-report holds, shared
-      // taint, origin classes). Without them the mixed transcript is a fabrication check only.
-      const grounding = sides ? { owner: sides.owner, waldo: sides.waldo } : { owner: day };
-      const summary = applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, (texts, ids) => { purged = texts; purgeIds = ids; }, grounding);
-      const conv = purged.length && redactConversation ? await redactConversation(purged, privateRunScope) : null;
-      if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
-      return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
+      clearForgotten();
+      try {
+        const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(memory, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
+        let purged: readonly string[] = [];
+        let purgeIds: readonly number[] = [];
+        // With speaker-split sides the full gate runs at night too (self-report holds, shared
+        // taint, origin classes). Without them the mixed transcript is a fabrication check only.
+        const grounding = sides ? { owner: sides.owner, waldo: sides.waldo } : { owner: day };
+        const summary = applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, (texts, ids) => { purged = texts; purgeIds = ids; redactLoaded(texts); }, grounding);
+        const conv = purged.length && redactConversation ? await redactConversation(purged, privateRunScope) : null;
+        if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
+        return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
+      } finally { clearForgotten(); }
     },
     async migrate(trace, input) {
       if (!memory) return 'no memory';
-      const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
-      let purged: readonly string[] = [];
-      let purgeIds: readonly number[] = [];
-      // Migration admits legacy facts only: the file payload can mention past forgets, so the
-      // forget-intent gate is pinned shut here - nothing purges during a migration.
-      const summary = applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', (texts, ids) => { purged = texts; purgeIds = ids; }, { owner: input }, false);
-      const conv = purged.length && redactConversation ? await redactConversation(purged, privateRunScope) : null;
-      if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
-      return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
+      clearForgotten();
+      try {
+        const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
+        let purged: readonly string[] = [];
+        let purgeIds: readonly number[] = [];
+        // Migration admits legacy facts only: the file payload can mention past forgets, so the
+        // forget-intent gate is pinned shut here - nothing purges during a migration.
+        const summary = applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', (texts, ids) => { purged = texts; purgeIds = ids; redactLoaded(texts); }, { owner: input }, false);
+        const conv = purged.length && redactConversation ? await redactConversation(purged, privateRunScope) : null;
+        if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
+        return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
+      } finally { clearForgotten(); }
     },
     async promote(trace) {
       if (!memory || memory.claims().length === 0) return 'no claims';
-      const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(memory), { name: 'promotion', schema: PROMOTION_SCHEMA });
-      return applyPromotion(memory, raw, new Date().toISOString(), (receipt) => log({
-        trace, hop: 'constellation_evidence', ms: 0, ok: true,
-        code: receipt.reason ?? receipt.outcome,
-        detail: `${receipt.outcome}:${receipt.reason ?? 'supported'}:${receipt.source_kind}:${receipt.count}`,
-      }));
+      return memoryOperation(async () => {
+        const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(memory), { name: 'promotion', schema: PROMOTION_SCHEMA });
+        return applyPromotion(memory, raw, new Date().toISOString(), (receipt) => log({
+          trace, hop: 'constellation_evidence', ms: 0, ok: true,
+          code: receipt.reason ?? receipt.outcome,
+          detail: `${receipt.outcome}:${receipt.reason ?? 'supported'}:${receipt.source_kind}:${receipt.count}`,
+        }));
+      });
     },
     control,
-    planDay: (trace, input) => ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, memory ? `${memoryPrompt(memory)}\n\n${input}` : input, { name: 'day_plan', schema: DAY_PLAN_SCHEMA }),
+    planDay: (trace, input) => memoryOperation(() => ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, memory ? `${memoryPrompt(memory)}\n\n${input}` : input, { name: 'day_plan', schema: DAY_PLAN_SCHEMA })),
     chooseReaction: async (turn) => {
       if (turn.runScope && privateRunScope !== turn.runScope) {
         return createOwnerResponder(openaiApiKey, undefined, undefined, log, clock, [], model, false, undefined, undefined, gateway, undefined, probeGuard, undefined, undefined, memoryModel, egressAllowlist, undefined, reactionChoices, turn.runScope).chooseReaction(turn);
       }
-      privateRunScope?.admit();
-      const quote = await quoteContext(turn.replyTo);
-      const gist = lastReply === undefined ? turn.text : `${turn.text}\n\n[Your reply just sent: ${lastReply.slice(0, 500)}]`;
-      return (JSON.parse(await ask(turn.traceId, 'reaction', reactionInstruction(reactionChoices), [gist, quote].filter(Boolean).join('\n\n'), { name: 'reaction', schema: reactionSchema(reactionChoices) })) as { reaction?: string }).reaction ?? null;
+      return memoryOperation(async () => {
+        privateRunScope?.admit();
+        const quote = await quoteContext(turn.replyTo);
+        const gist = lastReply === undefined ? turn.text : `${turn.text}\n\n[Your reply just sent: ${lastReply.slice(0, 500)}]`;
+        return (JSON.parse(await ask(turn.traceId, 'reaction', reactionInstruction(reactionChoices), [gist, quote].filter(Boolean).join('\n\n'), { name: 'reaction', schema: reactionSchema(reactionChoices) })) as { reaction?: string }).reaction ?? null;
+      });
     },
   };
 };

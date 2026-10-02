@@ -1,5 +1,5 @@
 import type { RunEffectScope } from './run-effect-scope';
-import type { ConversationEntry, ConversationTree } from '@waldo/contracts';
+import { literalTextRedactor, redactConversationEntry, type ConversationEntry, type ConversationTree } from '@waldo/contracts';
 import { redactSecretUrls } from './egress-guard';
 
 export type ConversationStore = Readonly<{
@@ -68,18 +68,12 @@ export const redactConversationEntries = async (
 ): Promise<Readonly<{ rewritten: number; remaining: number }>> => {
   const needles = [...new Set(texts.map((text) => text.trim()).filter(Boolean))];
   if (needles.length === 0) return { rewritten: 0, remaining: 0 };
-  const patterns = needles.map((needle) => new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'));
+  const redact = literalTextRedactor(needles, marker);
   const rows = await storage.list<ConversationEntry>({ prefix: 'conv:' });
   let rewritten = 0;
   for (const [key, entry] of rows) {
-    let model = entry.modelPayload;
-    let app = entry.appPayload;
-    for (const pattern of patterns) {
-      model = model.replace(pattern, marker);
-      app = app.replace(pattern, marker);
-    }
-    if (model !== entry.modelPayload || app !== entry.appPayload) {
-      const rewrittenEntry = { ...entry, modelPayload: model, appPayload: app };
+    const rewrittenEntry = redactConversationEntry(entry, redact);
+    if (JSON.stringify(rewrittenEntry) !== JSON.stringify(entry)) {
       if (scope) { if (!storage.kv) throw new Error('fenced redaction store unavailable'); scope.commit(() => storage.kv!.put(key, rewrittenEntry)); }
       else await storage.put(key, rewrittenEntry);
       rewritten += 1;
@@ -88,7 +82,7 @@ export const redactConversationEntries = async (
   const after = rewritten > 0 ? await storage.list<ConversationEntry>({ prefix: 'conv:' }) : rows;
   let remaining = 0;
   for (const [, entry] of after) {
-    const hay = `${entry.modelPayload}\n${entry.appPayload}`.toLowerCase();
+    const hay = `${entry.modelPayload}\n${entry.appPayload}\n${entry.modelProjection.mode === 'replace' ? entry.modelProjection.payload : ''}`.toLowerCase();
     if (needles.some((needle) => hay.includes(needle.toLowerCase()))) remaining += 1;
   }
   return { rewritten, remaining };

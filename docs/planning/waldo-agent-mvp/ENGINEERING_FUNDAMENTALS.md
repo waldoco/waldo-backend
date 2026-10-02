@@ -46,6 +46,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - A snapshot or attestation timestamp used as a provenance bound is the truthful as-of time of the requesting turn. A frozen fixture time silently poisons every later real-time artifact; replay two sequential turns with a persisted time-stamped artifact to catch it.
 
 ### Data and migrations
+- Owner forget suppresses known exact forgotten data before the current provider call, including already-loaded history, replacement projections, pending/captured tool text, ephemeral offload caches and cached publication replay. Partial cleanup stays pending; unsafe or over-budget transient context blocks provider and replay without changing trusted safeguards. Test normal DO, steering, eviction and dirty-store recovery.
 - Every migration takes a backup first, is idempotent, and leaves the old data in place until a later cleanup.
 - Schema changes on existing Durable Object storage are additive (new table, `ADD COLUMN`) and tolerate the column already existing.
 - Invariants are enforced in the database where possible (primary keys, CHECK, UNIQUE), not only in code.
@@ -273,6 +274,10 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - An older crashed schedule attempt stays as audit evidence, but a later successful or terminal-delivery attempt of the same occurrence must not suppress future occurrences. An unresolved older occurrence still blocks overlap. Select the latest attempt numerically across 9→10; ACK-bookkeeping replay preserves the first background completion time, and enqueue-commit crashes leave delivery pending.
 
 | 2026-10-02 | Heartbeat discarded blocked Telegram sends and started cooldown; send-before-cooldown crashes could duplicate nudges; stale crashed attempts could suppress later ticks | Heartbeat / scheduler | heartbeat-outbox.test.ts frozen intent, ACK truth, fresh eligibility, transport/receipt crashes and same-byte429; schedule-runs.test.ts recovered occurrence liveness and unresolved controls | Commit intent before I/O, settle from ACK, preserve audit without wedging future ticks |
+
+| 2026-10-02 | Owner forget redacted durable history but the already-restored conversation tree still sent forgotten text to the same-turn provider; replacement projections and escaped pending tool copies were sibling retained paths | Owner memory/privacy | memory-forget-do-provider.test.ts exercises the real normal owner DO plus same-turn, reused/fresh partial cleanup, steering, projection eviction, trusted-safeguard collision and cached replay; conversation-entry.test.ts covers literal/escaped redaction | Forget is enforced at retained data and publication boundaries before use; incomplete stores never become a completed receipt |
+
+| 2026-10-02 | Independent local review found forgotten text still retained beyond the offload head on a reused responder; cache readback could send it again after settled forget | Owner memory/privacy | memory-forget-do-provider.test.ts proves cache invalidation and post-forget oversized-tool eviction; tool-output-offload.test.ts verifies cleared payload/length/provenance/budget with monotonically increasing IDs | Re-derivable caches are retained stores too; invalidate before future reads, preserve identifier provenance, and route fictional-binding regressions through the required isolated CI/local pool |
 
 ### Migration executor configuration
 - [ ] Distinguish verified CLI outputs from execution inputs before excluding anything from configuration drift checks. Exclude only the regular `.temp/cli-latest` upgrade-hint file; retain project-ref, pooler URL, configuration, migrations and unknown-file checks, plus symlink/directory rejection.

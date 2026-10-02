@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ConversationTree, type ConversationEntry } from './conversation-entry';
+import { ConversationTree, literalJsonTextRedactor, type ConversationEntry } from './conversation-entry';
 
 const entry = (overrides: Partial<ConversationEntry> = {}): ConversationEntry => ({
   id: 'root', ownerId: 'owner-a', chatId: 'chat-a', parentId: null,
@@ -69,4 +69,39 @@ describe('ConversationTree', () => {
     expect(tree.get('root')?.modelPayload).toBe('model:root');
     expect(Object.isFrozen(tree.get('root'))).toBe(true);
   });
+  it('redacts every retained payload and replacement projection while preserving topology and frozen roles', () => {
+    const tree = new ConversationTree();
+    const needle = 'Synthetic [blue] "note" $&';
+    tree.append(entry({ modelPayload: needle, appPayload: needle.toUpperCase(), role: 'user' }));
+    tree.append(entry({ id: 'leaf', parentId: 'root', threadAnchorId: 'root', role: 'assistant', modelPayload: 'unrelated', appPayload: 'unrelated', modelProjection: { mode: 'replace', payload: `${needle}; unrelated` } }));
+    tree.redact([needle], '[forgotten]');
+    expect(tree.modelContext('leaf')).toEqual([{ role: 'user', content: '[forgotten]' }, { role: 'assistant', content: '[forgotten]; unrelated' }]);
+    expect(tree.appContext('leaf')).toEqual(['[forgotten]', 'unrelated']);
+    expect(tree.get('leaf')).toMatchObject({ id: 'leaf', parentId: 'root', threadAnchorId: 'root', role: 'assistant' });
+    expect(Object.isFrozen(tree.get('leaf'))).toBe(true);
+    expect(Object.isFrozen(tree.get('leaf')!.modelProjection)).toBe(true);
+  });
+
+  it('redacts escaped JSON string values and capped/budget-suffixed copies with literal metacharacters', () => {
+    const needle = 'Synthetic "blue" [origami]';
+    const redact = literalJsonTextRedactor([needle], '[forgotten]');
+    const body = JSON.stringify({ data: { text: needle, unrelated: 'amber' } });
+    expect(JSON.parse(redact(body))).toEqual({ data: { text: '[forgotten]', unrelated: 'amber' } });
+    expect(JSON.parse(redact(JSON.stringify({ [needle]: 'unrelated' })))).toEqual({ '[forgotten]': 'unrelated' });
+    expect(redact(body + '\n[budget: fixture]')).toBe(JSON.stringify({ data: { text: '[forgotten]', unrelated: 'amber' } }) + '\n[budget: fixture]');
+    expect(redact(body.slice(0, -1) + '...')).not.toContain(JSON.stringify(needle).slice(1, -1));
+  });
+
+  it('preserves argument keys and typed result authority, failing closed on protected-key collisions', () => {
+    const argument = literalJsonTextRedactor(['id'], '[forgotten]', 'arguments');
+    expect(() => argument(JSON.stringify({ id: 'unrelated' }))).toThrow('cannot be safely sanitised');
+    const result = literalJsonTextRedactor(['source_taint'], '[forgotten]', 'tool_result');
+    expect(() => result(JSON.stringify({ ok: true, data: 'unrelated', source_taint: 'external' }))).toThrow('cannot be safely sanitised');
+    const data = literalJsonTextRedactor(['private fixture'], '[forgotten]', 'tool_result');
+    expect(JSON.parse(data(JSON.stringify({ ok: true, data: { 'private fixture': 'unrelated' }, source_taint: 'external' })))).toEqual({ ok: true, data: { '[forgotten]': 'unrelated' }, source_taint: 'external' });
+    expect(() => literalJsonTextRedactor(['private fixture'], '[forgotten]')(JSON.stringify({ 'private fixture': 'a', '[forgotten]': 'b' }))).toThrow('cannot be safely sanitised');
+    expect(() => data('{"ok":true,"data":{"text":"private fixture"}...')).toThrow('cannot be safely sanitised');
+    expect(data('Plain private fixture summary')).toBe('Plain [forgotten] summary');
+  });
+
 });

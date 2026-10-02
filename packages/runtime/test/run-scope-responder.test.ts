@@ -37,7 +37,7 @@ it('paused forget-history read cannot rewrite the replacement history after clos
  const {redactConversationEntries}=await import('../src/channels/conversation-store');const {redactToolOutputLedger}=await import('../src/conversation/tool-output-ledger');
  for(const ledger of [false,true]){
   const f=scope();let release!:()=>void;let entered!:()=>void;const gate=new Promise<void>(r=>{release=r;});const ready=new Promise<void>(r=>{entered=r;});const put=vi.fn();
-  const old=ledger?{tool:'fixture',summary:'private token',ok:true,taint:'external',at:0}:{modelPayload:'private token',appPayload:'private token'};
+  const old=ledger?{tool:'fixture',summary:'private token',ok:true,taint:'external',at:0}:{id:'old',ownerId:'owner',chatId:'chat',parentId:null,threadAnchorId:null,surface:'telegram',role:'user',modelPayload:'private token',appPayload:'private token',modelProjection:{mode:'include'}};
   const storage={get:async()=>0,list:async()=>{entered();await gate;return new Map([['old',old]]);},put,delete:async()=>{},kv:{put,delete:vi.fn()}};
   const pending=ledger?redactToolOutputLedger(storage as never,['private token'],'[forgotten]',f.capability):redactConversationEntries(storage as never,['private token'],'[forgotten]',f.capability);
   const caught=pending.catch(e=>e);await ready;f.close();release();expect(await caught).toBeInstanceOf(ClosedRunError);expect(put).not.toHaveBeenCalled();
