@@ -331,6 +331,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const hasCards = tableExists(sql, 'update_cards');
       const hasPlan = tableExists(sql, 'day_plan');
       const receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } = { deleted: {}, redacted: {}, terminalised: {} };
+      const tally = (kind: keyof typeof receipt, store: string) => { receipt[kind][store] = (receipt[kind][store] ?? 0) + 1; };
       const hasRunCandidates = tableExists(sql, 'run_candidates');
       const hasOutbox = tableExists(sql, 'outbox');
       const hasHeld = tableExists(sql, 'held_candidates');
@@ -348,7 +349,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         if (hasEpisodes) attempt('episodes', () => {
           for (const row of sql.exec<{ rid: number; text: string }>(`SELECT rowid AS rid, text FROM episodes WHERE text LIKE ? ESCAPE '\\'`, like).toArray()) {
             const redacted = ci(row.text);
-            if (redacted !== row.text) sql.exec('UPDATE episodes SET text = ? WHERE rowid = ?', redacted, row.rid);
+            if (redacted !== row.text) { sql.exec('UPDATE episodes SET text = ? WHERE rowid = ?', redacted, row.rid); tally('redacted', 'episodes'); }
           }
         });
         attempt('memory_backups', () => {
@@ -414,7 +415,6 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           return parsed === undefined ? ci(raw) : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
         };
         const hits = (raw: string) => { const parsed = parsedJson(raw); return (parsed === undefined ? [raw] : stringsOf(parsed)).some((v) => v.toLowerCase().includes(text.toLowerCase())); };
-        const tally = (kind: keyof typeof receipt, store: string) => { receipt[kind][store] = (receipt[kind][store] ?? 0) + 1; };
         if (hasRunCandidates) attempt('run_candidates', () => {
           for (const row of sql.exec<{ run_id: string; candidate_json: string }>(`SELECT run_id, candidate_json FROM run_candidates WHERE candidate_json LIKE ? ESCAPE '\\'`, like).toArray()) {
             if (!hits(row.candidate_json)) continue;
@@ -718,7 +718,7 @@ const correctionMatches = (old: Claim, replacement: { kind: string; text: string
 type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean; aliases_touch_forgotten?: boolean })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null }>;
 
 // What this application of claim ops actually did, as counts the caller can report truthfully.
-export type ClaimOutcome = Readonly<{ written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[] }>;
+export type ClaimOutcome = Readonly<{ written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[]; episodesRedacted?: number }>;
 
 export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[], topics?: readonly string[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean, onOutcome?: (outcome: ClaimOutcome) => void): string => {
   // Destructive ops need an explicit forget request in the text under review (see
@@ -862,7 +862,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     // Unique ids, so a repeated id counts once; removed only when every store verified clean.
     forgetClaimsAttempted: new Set(forgetIds).size, forgetClaimsRemoved: purge?.ready ? new Set(forgetIds).size : 0,
     forgetNodes: forgetsAllowed ? new Set(ops.forget_nodes.filter((id) => nodes.has(id))).size : 0,
-    forgetAllowed: forgetsAllowed, purgeIncomplete: leftover,
+    forgetAllowed: forgetsAllowed, purgeIncomplete: leftover, episodesRedacted: purge?.receipt.redacted.episodes ?? 0,
   });
   const reasons = holdReasons.size ? `(${[...holdReasons].join(',')})` : '';
   const blockedForgets = forgetsAllowed ? 0 : ops.forget_claims.length + ops.forget_nodes.length + (ops.forget_topic?.trim() ? 1 : 0);
