@@ -29,7 +29,7 @@ function sources(admission: OwnerMessageAdmission): ContextComposerDependencies 
 }
 let seq = 700000;
 async function proof(work: (h: {
-  send(text: string, content?: Record<string, unknown>): Promise<void>; requests: LLMRequest[]; admissions: OwnerMessageAdmission[]; state: DurableObjectState;
+  send(text: string, content?: Record<string, unknown>): Promise<readonly { state: string; selected: number }[]>; requests: LLMRequest[]; admissions: OwnerMessageAdmission[]; state: DurableObjectState;
   mutateDescriptor(): void; mutate(): void; revoke(): void; unavailable(): void; wrongOwner(): void; crossOwnerContext(): void; pause(): Promise<(() => void) & { reached: Promise<void> }>; reload(): void;
 }) => Promise<void>, omitHost = false) {
   const subject = 81101;
@@ -69,7 +69,16 @@ async function proof(work: (h: {
       const id = ++seq;
       const response = await instance.fetch(new Request('https://local.invalid/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'fictional-inbox-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': doName }, body: JSON.stringify({ update_id: id, message: { message_id: id, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text, ...content } }) }));
       expect(response.status).toBe(200);
-      await instance.alarm();
+      const steps: { state: string; selected: number }[] = [];
+      // Inbox, outbox and scheduler each get service within three actual alarms.
+      for (let alarm = 0; alarm < 3; alarm++) {
+        await instance.alarm();
+        const row = state.storage.kv.get<{ updateId: number; state: string; closedAt?: number }[]>('telegram_owner_inbox_v1')!.find(row => row.updateId === id)!;
+        expect(row).toBeDefined();
+        steps.push({ state: row.state, selected: state.storage.kv.get<number>('owner_alarm_last_v1')! });
+        if (typeof row.closedAt === 'number' && ['awaiting_delivery', 'completed', 'quarantined'].includes(row.state)) return steps;
+      }
+      throw new Error(`Fixture inbox update ${id} did not close within three real alarms`);
     };
     try { await work({ send, requests, admissions, state, mutateDescriptor: () => { Object.assign(preparation, { mode: 'invalid', host: undefined }); }, crossOwnerContext: () => { foreignContext = true; }, mutate: () => { revision = String(BigInt(revision) + 2n); }, revoke: () => { grants = []; }, unavailable: () => { grantUnavailable = true; }, wrongOwner: () => { ownerId = '10000000-0000-0000-0000-000000000002'; }, reload: () => { instance = new TelegramOwnerDO(state, privateEnv, { mode: 'canonical', host: omitHost ? undefined : host }); }, pause: async () => {
       let resume!: () => void; let entered!: () => void;
@@ -189,11 +198,25 @@ it('mismatched per-row history lineage denies continuation before another reply 
     const witness = [...rows.entries()].find(([key]) => key.includes(':witness:'))!;
     expect(witness).toBeDefined();
     await h.state.storage.put(witness[0], { ...witness[1], principal_ref: 'prn_ffffffffffffffffffffffffffffffff' });
+    const finals = h.state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!;
+    const prior = finals.find(row => row.id.startsWith('turn:'))!;
+    expect(prior.status).toBe('pending');
+    expect(h.state.storage.kv.get('owner_alarm_last_v1')).toBe(0);
+    // Make the prior response deterministically ready, retaining actual round-robin arbitration.
+    prior.dueAt = 0; h.state.storage.kv.put('telegram_final_outbox_v1', finals);
+    const canonicalBefore = await h.state.storage.list({ prefix: 'canonical-owner-v1:' });
     h.reload(); const before = h.requests.filter(r => !r.response_format).length;
-    await h.send('Reject corrupt canonical history.');
+    const steps = await h.send('Reject corrupt canonical history.');
+    expect(steps[0]).toEqual({ state: 'admitted', selected: 1 });
+    expect(h.state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!.find(row => row.id === prior.id)?.attempts).toBe(1);
     expect(h.requests.filter(r => !r.response_format)).toHaveLength(before);
     const inbox = h.state.storage.kv.get<{ state: string }[]>('telegram_owner_inbox_v1')!;
     expect(inbox.at(-1)!.state).toBe('quarantined');
+    expect(steps.length).toBeGreaterThanOrEqual(2);
+    expect(steps.length).toBeLessThanOrEqual(3);
+    expect(steps.at(-1)).toEqual({ state: 'quarantined', selected: 0 });
+    expect(await h.state.storage.list({ prefix: 'canonical-owner-v1:' })).toEqual(canonicalBefore);
+    expect(h.state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!.filter(row => row.id.startsWith('turn:')).map(row => row.id)).toEqual([prior.id]);
   });
 });
 
