@@ -3,7 +3,11 @@
 import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, googleHas, GoogleError, type GoogleClient, type GoogleMethod } from '../../../packages/runtime/src/connectors/google.ts';
 import { googleAccessToken } from '../../../packages/runtime/src/connectors/google.ts';
 import { executeProxyIntent, ProxyIntentError, type IntentClaim } from '../../../packages/runtime/src/connectors/proxy-intent.ts';
-import { callMcpTransport, McpAuthError } from '../../../packages/runtime/src/connectors/mcp-transport.ts';
+import { callMcpTransport, McpAuthError, McpToolError } from '../../../packages/runtime/src/connectors/mcp-transport.ts';
+// Edge-owned, exact read authority. Never accept a request-supplied registry or generic Google host match.
+const isRegisteredMcpRead = (serverUrl: string | undefined, tool: string | undefined) =>
+  serverUrl === 'https://drivemcp.googleapis.com/mcp/v1' &&
+  ['list_recent_files', 'search_files', 'get_file_metadata'].includes(tool ?? '');
 
 declare const Deno: {env:{get(name:string):string|undefined};serve(handler:(request:Request)=>Promise<Response>):unknown};
 
@@ -37,13 +41,16 @@ const store = async (doName: string, email: string, scopes: readonly string[], t
   return id ? reply({ id, email: email.toLowerCase(), scopes }) : fail(404, 'unknown owner');
 };
 
-type Body = Readonly<{ intent_id?: string; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call'; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[] }>;
+type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call'; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[] }>;
+const nonStoringRead = (body: Body): boolean => body.op === 'mcp_call' && body.read_only === true && /^mcpread:[0-9a-f]{64}$/.test(body.intent_id ?? '') && isRegisteredMcpRead(body.server_url, body.tool);
+const READ_FAILURE_CODES = new Set(['intent_unavailable', 'insufficient scopes', 'google_refresh_failed', 'google_reauth_needed', 'google_scope_missing', 'mcp_read_rejected', 'mcp_read_failed']);
 
 // One structured line per call: operation, method, outcome and duration. Never the code, verifier,
 // token, account or arguments.
-const logged = async (started: number, op: string, method: string | undefined, response: Response) => {
+const logged = async (started: number, op: string, method: string | undefined, response: Response, read = false) => {
   const outcome = await response.clone().json().then(value => (value as {error?:{status:number;message:string}}).error ?? null).catch(() => ({ status: response.status, message: 'unreadable response' }));
-  console.log(JSON.stringify({ hop: 'connector_proxy', op, ...(method ? { method } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: outcome.message } : {}) }));
+  const message = outcome && read && !READ_FAILURE_CODES.has(outcome.message) ? 'mcp_read_failed' : outcome?.message;
+  console.log(JSON.stringify({ hop: 'connector_proxy', op, ...(method ? { method } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: message } : {}) }));
   return response;
 };
 
@@ -54,7 +61,7 @@ Deno.serve(async (request) => {
   const at = Number(request.headers.get('x-waldo-at'));
   if (!Number.isFinite(at) || Math.abs(Date.now() / 1000 - at) > 300 || !same(request.headers.get('x-waldo-sig') ?? '', await hmac(`${at}.proxy.${await sha256(raw)}`))) return logged(started, 'unsigned', undefined, fail(401, 'unsigned proxy call'));
   const body = JSON.parse(raw) as Body;
-  return logged(started, body.op, body.op === 'call' ? body.method : undefined, await handle(body));
+  return logged(started, body.op, body.op === 'call' ? body.method : undefined, await handle(body), body.op === 'mcp_call' && body.read_only === true);
 });
 
 const intentDispatch = async (body: Body, dispatch: () => Promise<unknown>) => executeProxyIntent(
@@ -76,19 +83,37 @@ const handle = async (body: Body): Promise<Response> => {
     if (body.op === 'adopt' && body.refresh_token) return store(body.do_name, body.email ?? 'google', body.scopes ?? [], body.refresh_token);
     // Google-auth MCP servers: the runtime names server/tool/args; the token never leaves the edge.
     if (body.op === 'mcp_call') {
+      // A non-retaining read request must never silently fall back to the retaining
+      // effect rail. Ordinary calls (no read flag) keep their existing ledger.
+      if (body.read_only === true && !nonStoringRead(body)) return fail(400, 'mcp_read_rejected');
       if (!body.connection || !body.server_url || !body.tool || !/^https:\/\/([a-z0-9-]+\.)?googleapis\.com\//.test(body.server_url)) return fail(404, 'unknown operation');
-      const mcpToken = await db('proxy_secret', { p_do_name: body.do_name, p_connection: body.connection }) as string | null;
+      // Each signed read is an independent observation on this explicit connection.
+      // No exactly-once/result replay promise and no effect-ledger claim or result storage.
+      const read = nonStoringRead(body);
+      const access = read ? await db('proxy_access', { p_do_name: body.do_name, p_connection: body.connection }) as {secret:string;scopes:unknown}[] : undefined;
+      const grant = Array.isArray(access) ? access[0] : undefined;
+      if (read && (!grant || typeof grant.secret !== 'string' || !grant.secret)) return fail(503, 'intent_unavailable');
+      if (read && !googleHas(Array.isArray(grant?.scopes) ? grant.scopes : undefined, 'drive')) return fail(403, 'insufficient scopes');
+      const mcpToken = read ? grant?.secret : await db('proxy_secret', { p_do_name: body.do_name, p_connection: body.connection }) as string | null;
       if (!mcpToken) return fail(body.intent_id?503:401, body.intent_id?'intent_unavailable':'connection unavailable');
       let mcpRefreshError = '';
       try {
-        const content = await intentDispatch(body, async()=> {
-          const access = await googleAccessToken(app, { refresh_token: mcpToken }, fetch, (error) => { mcpRefreshError = error; });
+        const dispatch = async()=> {
+          const access = await googleAccessToken(app, { refresh_token: mcpToken }, fetch, (error) => { mcpRefreshError = read && error ? 'google_refresh_failed' : error; });
           return (await callMcpTransport({ url: body.server_url! }, body.tool!, ((body.args ?? [])[0] ?? {}) as Record<string, unknown>, fetch, async () => access)).content ?? null;
-        });
+        };
+        const content = read ? await dispatch() : await intentDispatch(body, dispatch);
         await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' }).catch(()=>{console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'}));});
         return reply({ data: content ?? null });
       } catch (error) {
         if(error instanceof ProxyIntentError)return fail(error.code==='intent_conflict'?409:503,error.code);
+        // Read failures are provider-controlled content too. Never put that content in
+        // response errors or health telemetry: logged() persists the error message.
+        if (read) {
+          if (mcpRefreshError) await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: mcpRefreshError }).catch(()=>{console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'}));});
+          return fail(mcpRefreshError ? 401 : error instanceof McpAuthError ? error.status : error instanceof McpToolError ? 400 : 502,
+            mcpRefreshError ? 'google_refresh_failed' : error instanceof McpAuthError ? error.status === 401 ? 'google_reauth_needed' : 'google_scope_missing' : error instanceof McpToolError ? 'mcp_read_rejected' : 'mcp_read_failed');
+        }
         if (mcpRefreshError) await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: mcpRefreshError });
         return fail(mcpRefreshError ? 401 : error instanceof McpAuthError ? error.status : 502, error instanceof Error ? error.message : String(error));
       }
@@ -115,6 +140,7 @@ const handle = async (body: Body): Promise<Response> => {
       return fail(refreshError ? 401 : error instanceof GoogleError ? error.status : 502, error instanceof Error ? error.message : String(error));
     }
   } catch (error) {
+    if (body.op === 'mcp_call' && body.read_only === true) return fail(502, 'mcp_read_failed');
     return fail(502, error instanceof Error ? error.message : String(error));
   }
 };
