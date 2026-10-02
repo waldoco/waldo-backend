@@ -11,6 +11,7 @@ import {
   getHealthArgsSchema,
   getMasterMetricsArgsSchema,
   getTasksArgsSchema,
+  readDriveArgsSchema,
   healthMetricSelectorSchema,
   calendarPageSchema, queryCalendarArgsSchema,
   readDocumentArgsSchema,
@@ -369,4 +370,11 @@ describe('Calendar page receipts',()=>{
  it('rejects invalid observation, count, cursor, account and event times',()=>{
   for(const receipt of [null,{...page,observed_at:'yesterday'},{...page,fetched_count:-1},{...page,next_page_token:''},{...page,account:{connection_id:123,email:null}},{...page,events:[{id:'event',title:'Title',start:'2026-02-30',end:'2026-03-01',all_day:true}],fetched_count:1}])expect(calendarPageSchema.safeParse(receipt).success).toBe(false);
  });
+});
+
+describe('readDriveArgsSchema page_token', () => {
+  it('accepts an opaque Drive page token up to 2048 characters and refuses longer', () => {
+    expect(readDriveArgsSchema.safeParse({ action: 'recent', page_token: 'a'.repeat(2048) }).success).toBe(true);
+    expect(readDriveArgsSchema.safeParse({ action: 'recent', page_token: 'a'.repeat(2049) }).success).toBe(false);
+  });
 });

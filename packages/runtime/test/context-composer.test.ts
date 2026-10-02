@@ -1526,7 +1526,7 @@ describe('ContextComposer', () => {
 // health tools joined it, 2026-09-27; the A7 standing-order tools the A1 gmail tools and the A5 artifact tools joined it, 2026-09-27);
 // query_availability and read_owner_context joined it 2026-09-30. read_mcp_tool joined it 2026-10-02. export_artifact joined it 2026-10-02. workspace_list, workspace_read and workspace_write joined it 2026-10-02.
 // determinism is proven by first===second above.
-    expect(first.checkpoint.context_ref).toBe('ctx_c813df848d0cff097cef3403516c4dc5');
+    expect(first.checkpoint.context_ref).toBe('ctx_e67a7950e0551c7de324f7e78dce09e7');
     expect(first.prompt.indexOf('Workspace source key a- marker.')).toBeLessThan(
       first.prompt.indexOf('Workspace source key a: marker.'),
     );
