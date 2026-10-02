@@ -23,35 +23,112 @@ const esc = (value: string) => value.replace(/[&<>"']/g, (char) => `&#${char.cha
 const page = (body: string, status = 200) => new Response(
   `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo console</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;display:grid;place-items:center;min-height:100vh;margin:0}main{display:grid;gap:16px;width:min(320px,90vw)}form{display:grid;gap:12px;width:100%}input,button{font:inherit;font-size:17px;padding:12px;border-radius:10px;border:1px solid #ccc}input:focus-visible,button:focus-visible,a:focus-visible{outline:3px solid #5267AF;outline-offset:3px}label{font:bold 1rem system-ui,sans-serif}button:disabled{opacity:.65;cursor:wait}button{border:0;background:#1A1A1A;color:#FAFAF8;cursor:pointer}</style></head><body><main>${body}<p id="signin-progress" role="status" aria-live="polite"></p><button id="signin-cancel" type="button" hidden>Stop waiting</button></main><script>
 (() => {
-  let pending = false;
-  const progress = document.getElementById('signin-progress');
-  const cancel = document.getElementById('signin-cancel');
-  const clearCode = () => { const code = document.getElementById('signin-code'); if (code) code.value = ''; };
+  let main = document.querySelector('main');
+  let pending = null;
+  let generation = 0;
+  let uncertain = false;
+  const uncertainNote = 'Could not confirm the result. The request may have completed. Check your email before requesting another code.';
+  const screens = new Map();
+  const phase = () => main.querySelector('#signin-code') ? 'code' : 'details';
+  const clearCode = () => { const code = main.querySelector('#signin-code'); if (code) code.value = ''; };
   const reset = () => {
-    pending = false;
-    cancel.hidden = true;
-    document.querySelectorAll('button').forEach(button => { button.disabled = false; });
-    document.querySelectorAll('form').forEach(form => { form.removeAttribute('aria-busy'); });
-    progress.textContent = '';
+    main.querySelectorAll('button').forEach(button => { button.disabled = false; });
+    main.querySelectorAll('form').forEach(form => { form.removeAttribute('aria-busy'); });
+    main.querySelector('#signin-cancel').hidden = true;
+    main.querySelector('#signin-progress').textContent = uncertain ? uncertainNote : '';
     clearCode();
-
   };
-  document.addEventListener('submit', event => {
-    if (pending) { event.preventDefault(); return; }
-    pending = true;
-    event.target.setAttribute('aria-busy', 'true');
-    progress.textContent = event.target.dataset.pending;
-    document.querySelectorAll('button').forEach(button => { button.disabled = true; });
+  const stop = () => {
+    generation++;
+    if (pending) { uncertain = true; pending.abort(); }
+    pending = null;
+    reset();
+  };
+  const remember = () => {
+    const screen = main.cloneNode(true);
+    const code = screen.querySelector('#signin-code');
+    if (code) code.value = '';
+    // Each phase keeps its own recipient; unsent edits cannot retarget an outstanding code.
+    screens.set(phase(), screen);
+  };
+  const show = screen => {
+    const next = screen.cloneNode(true);
+    main.replaceWith(next);
+    main = next;
+    reset();
+    main.querySelector('input:not([type="hidden"])')?.focus();
+  };
+  const allowedAction = form => {
+    const url = new URL(form.action, location.href);
+    return url.origin === location.origin && !url.search && !url.hash &&
+      ['/console/signin', '/console/verify'].includes(url.pathname) && form.method.toLowerCase() === 'post';
+  };
+  history.replaceState({ waldoSignin: phase() }, '', location.href);
+  remember();
+  document.addEventListener('submit', async event => {
+    const form = event.target;
+    if (!allowedAction(form)) return;
+    event.preventDefault();
+    if (pending) return;
+    const action = new URL(form.action, location.href).href;
+    const body = new URLSearchParams(new FormData(form));
+    clearCode();
+    remember();
+    uncertain = false;
+    const attempt = ++generation;
+    const controller = new AbortController();
+    pending = controller;
+    form.setAttribute('aria-busy', 'true');
+    main.querySelector('#signin-progress').textContent = form.dataset.pending;
+    main.querySelectorAll('button').forEach(button => { button.disabled = true; });
+    const cancel = main.querySelector('#signin-cancel');
     cancel.disabled = false;
     cancel.hidden = false;
+    try {
+      const response = await fetch(action, { method: 'POST', body, mode: 'same-origin',
+        credentials: 'same-origin', cache: 'no-store', redirect: 'follow', signal: controller.signal });
+      if (attempt !== generation) return;
+      const destination = new URL(response.url);
+      if (response.redirected) {
+        if (action === location.origin + '/console/verify' && response.ok &&
+          destination.origin === location.origin && destination.pathname === '/console' && !destination.search && !destination.hash) {
+          location.assign('/console');
+          return;
+        }
+        throw new Error('Unexpected redirect');
+      }
+      if (!response.ok || destination.href !== action || !response.headers.get('content-type')?.includes('text/html')) throw new Error('Unexpected response');
+      const html = await response.text();
+      if (attempt !== generation) return;
+      const next = new DOMParser().parseFromString(html, 'text/html').querySelector('main');
+      if (!next || !next.querySelector('#signin-progress') || !next.querySelector('#signin-cancel') ||
+        !next.querySelectorAll('form').length || Array.from(next.querySelectorAll('form')).some(form => !allowedAction(form))) throw new Error('Unexpected form');
+      uncertain = false;
+      const previousPhase = phase();
+      show(next);
+      remember();
+      if (phase() !== previousPhase) history.pushState({ waldoSignin: phase() }, '', location.href);
+    } catch {
+      if (attempt !== generation) return;
+      uncertain = true;
+      reset();
+    } finally {
+      if (attempt === generation) pending = null;
+    }
   });
-  cancel.addEventListener('click', () => {
-    window.stop();
-    reset();
-    progress.textContent = 'Stopped waiting. The request may have completed. Check your email before requesting another code.';
+  document.addEventListener('click', event => {
+    if (!event.target.closest('#signin-cancel')) return;
+    stop();
+    main.querySelector('#signin-progress').textContent = 'Stopped waiting. The request may have completed. Check your email before requesting another code.';
   });
-  window.addEventListener('pageshow', reset);
-  window.addEventListener('pagehide', clearCode);
+  window.addEventListener('popstate', event => {
+    remember();
+    stop();
+    const screen = screens.get(event.state?.waldoSignin);
+    if (screen) show(screen);
+  });
+  window.addEventListener('pageshow', stop);
+  window.addEventListener('pagehide', stop);
 })();
 </script></body></html>`,
   { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } },
