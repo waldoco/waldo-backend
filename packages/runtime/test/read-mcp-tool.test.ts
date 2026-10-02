@@ -10,6 +10,7 @@ const SERVERS = JSON.stringify([DRIVE_ENTRY, { name: 'mail', url: 'https://x.goo
 // No approval is available: the read tool must not need the owner button.
 const context = () => ({
   authenticatedUserId: 'owner',
+  turnId: 'turn-1',
   trigger: 'user_message' as const,
   session: buildSessionState({ trigger: 'user_message', canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'], started_at: 1 }),
   hasApproval: () => false,
@@ -18,10 +19,30 @@ const context = () => ({
   sanitise,
 });
 const seen: Array<{ tool: string }> = [];
-const auth: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async (_url, tool) => { seen.push({ tool }); return [{ text: 'ok' }]; } };
+const intents: Array<string | undefined> = [];
+const readOnlyFlags: Array<boolean | undefined> = [];
+const auth: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async (_url, tool, _args, _conn, intent) => { seen.push({ tool }); intents.push(intent?.id); readOnlyFlags.push(intent?.readOnly); return [{ text: 'ok' }]; } };
 const run = (server: string, tool: string) => dispatchTool({ id: `r-${server}-${tool}`, name: 'read_mcp_tool', args: { server, tool, args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, auth)] });
 
 describe('read_mcp_tool through the real dispatcher', () => {
+  it('passes a host-derived intent for metadata reads and never one from model args', async () => {
+    seen.length = 0; intents.length = 0; readOnlyFlags.length = 0;
+    for (const tool of ['list_recent_files', 'search_files', 'get_file_metadata']) expect(await run('drive', tool)).toMatchObject({ ok: true });
+    expect(intents).toHaveLength(3);
+    expect(readOnlyFlags).toEqual([true, true, true]);
+    for (const id of intents) expect(id).toMatch(/^mcpread:[0-9a-f]{64}$/);
+    expect(new Set(intents).size).toBe(3);
+    const withArgIntent = await dispatchTool({ id: 'x', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: { intent: { id: 'model-chosen' } } } }, context(), { handlers: [readMcpToolHandler(SERVERS, auth)] });
+    expect(withArgIntent).toMatchObject({ ok: true });
+    expect(intents[3]).toMatch(/^mcpread:/);
+  });
+
+  it('read_file_content stays held and fails closed before any call', async () => {
+    seen.length = 0;
+    expect(await run('drive', 'read_file_content')).toMatchObject({ ok: false, code: 'forbidden' });
+    expect(seen).toEqual([]);
+  });
+
   it('an allowlisted Drive read runs with no approval and no desk', async () => {
     seen.length = 0;
     expect(await run('drive', 'search_files')).toMatchObject({ ok: true, source_taint: 'external' });

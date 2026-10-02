@@ -5,6 +5,8 @@ export type IntentRoute = Readonly<{ id: string; rail: 'local' | 'proxy' }>;
 export const pinProxyIntentRoute = <T extends IntentRoute>(sql: Pick<SqlStorage,'exec'>, intent: ProxyIntent | undefined, purpose: string, candidates: readonly T[], preferred: T | undefined): T | null => {
   if(!intent)return preferred??null;
   if(!/^[a-zA-Z0-9:_-]{1,240}$/.test(intent.id))throw new ProxyIntentError('intent_required');
+  // Read-only intents are per-call and unique: pinning them would fill the 5000-row cap shared with effects.
+  if(intent.readOnly)return preferred??null;
   // Calendar undo belongs to the connection used for apply, never today's healthy account.
   const key=intent.id.replace(/:undo$/,':apply');
   sql.exec('CREATE TABLE IF NOT EXISTS proxy_intent_routes (intent_id TEXT PRIMARY KEY, purpose TEXT NOT NULL, connection TEXT NOT NULL, rail TEXT NOT NULL)');

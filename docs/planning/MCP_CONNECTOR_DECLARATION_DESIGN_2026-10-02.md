@@ -39,3 +39,17 @@ The ACL `connectors` input is a list of tool names, not Google features. The hos
 ## Not in scope
 
 Host binding of `connector_backed` in `telegram-owner-do.ts` (Codex's file; it passes `connectorBackedTools(handlers)` into `intersectToolAcl`). Drive-only incremental consent (#553). Any hosted or production change.
+
+## Decision 2026-10-02: owner-button-free Drive reads carry a host intent
+
+Finding (source, beta-mvp 739e1b3): the proxy rail's `mcpCall` throws `intent_required` when no host intent is passed, and the edge also rejects a missing one. `read_mcp_tool` called `executeMcp` without an intent, so every proxy-mode Drive read failed `intent_required` before the network. Staging traces at 7:47-7:48 PM IST showed this on `drive/list_recent_files`.
+
+Decision (main's decision under the owner's overnight delegation, not owner-approved): `read_mcp_tool` derives `mcpread:<sha256 of [user, turn, toolCall]>` from the dispatcher context, the same shape `draft_email` uses, and never takes an intent from model args. It requires `turnId` and `toolCallId` and refuses without them.
+
+Held: only `list_recent_files`, `search_files` and `get_file_metadata` take this path. `read_file_content` stays refused (`forbidden`) until the intent ledger's storage of results is confirmed not to persist Drive file text. `call_mcp_tool` and its desk path are unchanged.
+
+Route custody: read intents carry `readOnly: true`, so `pinProxyIntentRoute` writes no `proxy_intent_routes` row for them. Pinning every read would fill the 5000-row cap shared with approvals, calendar and mail effects and make all intent calls return `intent_unavailable`. Effects keep full custody. A test runs 5001 reads and then an approval pin.
+
+Still open, not decided here:
+- Edge storage of read results. Whether the connector proxy's intent ledger stores `mcp_call` results (file names, owners, snippets) is unconfirmed (asked of Codex). Do not enable this path on staging until answered.
+- Owner decision on unattended Drive reads (no owner button) is listed open. The 2026-10-02 08:11 AM "Yes" covered read_tools; this note adds no new owner authority.

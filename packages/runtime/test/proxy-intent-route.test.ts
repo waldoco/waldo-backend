@@ -19,6 +19,16 @@ it('durable owner intent routing resists health ordering, concurrent selection, 
   expect(pinProxyIntentRoute(state.storage.sql,{id:'approval:mcp:apply'},'mcp:google',[a,b],b)).toEqual(a);
  });
 });
+it('5001 read-only intents do not pin rows or break a later approval',async()=>{
+ const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('intent-read-cap'));
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const a={id:'a',rail:'proxy' as const};const b={id:'b',rail:'proxy' as const};
+  for(let i=0;i<5001;i++)expect(pinProxyIntentRoute(state.storage.sql,{id:`mcpread:${i}`,readOnly:true},'mcp:google',[a,b],a)).toEqual(a);
+  expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name='proxy_intent_routes'").toArray().length===0||state.storage.sql.exec<{n:number}>('SELECT count(*) AS n FROM proxy_intent_routes').toArray()[0]!.n===0).toBe(true);
+  expect(pinProxyIntentRoute(state.storage.sql,{id:'approval:after:apply'},'mcp:google',[a,b],b)).toEqual(b);
+  expect(pinProxyIntentRoute(state.storage.sql,{id:'approval:after:apply'},'mcp:google',[a,b],a)).toEqual(b);
+ });
+});
 import {approvalDesk} from '../src/channels/approvals';
 import type {GoogleClient} from '../src/connectors/google';
 it('calendar proposal read, apply and undo all retain account A after independent health reorder',async()=>{
