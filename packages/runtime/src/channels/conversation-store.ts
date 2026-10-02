@@ -104,9 +104,28 @@ export const redactConversationEntries = async (
   if (Object.keys(writes).length > 0) {
     if (scope) { if (!storage.kv) throw new Error('fenced redaction store unavailable'); scope.commit(() => { for (const [key, value] of Object.entries(writes)) storage.kv!.put(key, value); }); }
     else {
-      // Durable Object put takes at most 128 keys; witnesses double the key count, so write in chunks.
-      const pairs = Object.entries(writes);
-      for (let i = 0; i < pairs.length; i += 100) await storage.put(Object.fromEntries(pairs.slice(i, i + 100)));
+      // Durable Object put takes at most 128 keys, and a failure between puts must never leave a redacted canonical row next to
+      // an old-text witness (load() throws on a mismatch). So a conv row and its witness are one unit and always share a put;
+      // units are packed up to 100 keys; legacy rows stand alone.
+      const units: string[][] = [];
+      const taken = new Set<string>();
+      for (const [key, value] of Object.entries(writes)) {
+        if (taken.has(key)) continue;
+        const unit = [key];
+        if (canonicalKind(key) === 'conv') {
+          const witnessKey = `${key.split(':').slice(0, 3).join(':')}:witness:${(value as ConversationEntry).id}`;
+          if (witnessKey in writes) unit.push(witnessKey);
+        }
+        for (const k of unit) taken.add(k);
+        units.push(unit);
+      }
+      let chunk: string[] = [];
+      const flush = async () => { if (chunk.length) await storage.put(Object.fromEntries(chunk.map((k) => [k, writes[k]]))); chunk = []; };
+      for (const unit of units) {
+        if (chunk.length + unit.length > 100) await flush();
+        chunk.push(...unit);
+      }
+      await flush();
     }
   }
   const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryText(entry).includes(needle.toLowerCase()));
