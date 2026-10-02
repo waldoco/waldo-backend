@@ -72,6 +72,9 @@ describe('forgetting by the exact identifier the owner named', () => {
       const texts = sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY rowid').toArray().map((r) => r.text);
       expect(texts.join(' ')).not.toContain('DLD-20261002-M3');
       expect(texts).toContain('unrelated lunch plan');
+    });
+  });
+});
 
 describe('the forget outcome counts the episodes it redacted', () => {
   it('reports how many retained episode rows a topic forget cleaned', async () => {
