@@ -29,5 +29,24 @@ describe('owner Memory read client',()=>{
   expect(fetch.mock.calls.every((call)=>!call[1]?.method||call[1].method==='GET')).toBe(true);
   fetch.mockResolvedValueOnce(new Response('{"error":"cursor_invalid"}',{status:400}));await expect(fetchMemory(new URLSearchParams())).rejects.toMatchObject({code:'cursor_invalid'});
  });
+ it('rejects selectors that cannot safely become a destination before rendering',()=>{
+  for(const value of ['x'.repeat(257),'bad\u0001id','\ud800']){
+   const page=response('view=claims');if(!('items' in page))throw new Error('Wrong fixture');
+   expect(()=>readMemory({...page,items:page.items.map(item=>({...item,id:value}))})).toThrow();
+   const detail=response('view=detail&id=synthetic-owner:claim:1');expect(()=>readMemory({...detail,linked_interpretation_ids:[value]})).toThrow();
+  }
+  for(const cursor of ['x'.repeat(513),'bad\u0001cursor','\ud800']){
+   const page=response('view=claims');if(!('page' in page))throw new Error('Wrong fixture');
+   expect(()=>readMemory({...page,page:{...page.page,next_cursor:cursor}})).toThrow();
+   const pattern=response('view=pattern');if(!('expand' in pattern))throw new Error('Wrong fixture');
+   expect(()=>readMemory({...pattern,expand:{...pattern.expand,next_cursor:cursor}})).toThrow();
+  }
+ });
+ it('rejects an unexpected view or a different detail/pattern target',async()=>{
+  const fetch=vi.fn();vi.stubGlobal('fetch',fetch);
+  for(const [query,body] of [['view=detail&id=other',response('view=detail&id=synthetic-owner:claim:1')],['view=pattern&id=other',response('view=pattern')],['view=detail&id=other',response('view=claims')]] as const){
+   fetch.mockResolvedValueOnce(new Response(JSON.stringify(body)));await expect(fetchMemory(new URLSearchParams(query))).rejects.toMatchObject({code:'unsupported'});
+  }
+ });
  it('encodes opaque scoped item references in deep links',()=>expect(memoryItemLink('spots','scope:claim:1&extra=1')).toBe('#/memory/spots?id=scope%3Aclaim%3A1%26extra%3D1'));
 });

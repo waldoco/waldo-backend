@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMemoryDestination, parseMemoryDestination, type MemoryDestination } from './destinations';
+import { buildMemoryDestination, isMemoryCursor, isMemoryItemId, parseMemoryDestination, type MemoryDestination } from './destinations';
 
 const cases: MemoryDestination[] = [
   { kind: 'list', view: 'spots' },
@@ -11,6 +11,16 @@ const cases: MemoryDestination[] = [
 ];
 
 describe('Memory destination contract', () => {
+  it('exposes the same selector validation to the protected response decoder', () => {
+    expect(isMemoryItemId('a'.repeat(256))).toBe(true);
+    expect(isMemoryItemId('a'.repeat(257))).toBe(false);
+    expect(isMemoryCursor('a'.repeat(512))).toBe(true);
+    expect(isMemoryCursor('a'.repeat(513))).toBe(false);
+    for (const selector of ['', undefined, 7, '\n', '\ud800']) {
+      expect(isMemoryItemId(selector)).toBe(false);
+      expect(isMemoryCursor(selector)).toBe(false);
+    }
+  });
   it.each(cases)('round trips exact typed destination %j', destination => {
     const link = buildMemoryDestination(destination);
     expect(link.startsWith('#/memory/')).toBe(true);

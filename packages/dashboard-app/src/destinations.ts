@@ -20,6 +20,8 @@ const selector = (value: unknown, maximum: number): value is string => {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum || /[\u0000-\u001f\u007f]/.test(value)) return false;
   try { encodeURIComponent(value); return true; } catch { return false; }
 };
+export const isMemoryItemId = (value: unknown): value is string => selector(value, ID_LENGTH);
+export const isMemoryCursor = (value: unknown): value is string => selector(value, CURSOR_LENGTH);
 
 /** Accept only a dashboard fragment/route, never a URL, credential or action. */
 export function parseMemoryDestination(raw: string): MemoryDestinationResult {
@@ -45,7 +47,7 @@ export function parseMemoryDestination(raw: string): MemoryDestinationResult {
   const explore = params.get('explore');
   const returnView = params.get('returnView');
   const returnCursor = params.get('returnCursor');
-  if (id !== null && !selector(id, ID_LENGTH) || cursor !== null && !selector(cursor, CURSOR_LENGTH) || returnCursor !== null && !selector(returnCursor, CURSOR_LENGTH)) return invalid();
+  if (id !== null && !isMemoryItemId(id) || cursor !== null && !isMemoryCursor(cursor) || returnCursor !== null && !isMemoryCursor(returnCursor)) return invalid();
   if (returnView !== null && !listView(returnView) || returnCursor !== null && returnView === null) return invalid();
   const returnTo: MemoryListDestination | undefined = returnView === null ? undefined : { view: returnView as MemoryListView, ...(returnCursor === null ? {} : { cursor: returnCursor }) };
   if (id === null) {
@@ -66,7 +68,7 @@ export function buildMemoryDestination(destination: MemoryDestination): string {
     : destination.kind === 'detail' ? ['kind', 'view', 'id', 'returnTo']
       : destination.kind === 'explore' ? ['kind', 'id', 'cursor', 'returnTo'] : ['kind'];
   if (Object.keys(destination).some(key => !allowed.includes(key))) throw new TypeError('Invalid Memory destination.');
-  if ((destination.kind === 'list' || destination.kind === 'explore') && destination.cursor !== undefined && !selector(destination.cursor, CURSOR_LENGTH)) throw new TypeError('Invalid Memory destination.');
+  if ((destination.kind === 'list' || destination.kind === 'explore') && destination.cursor !== undefined && !isMemoryCursor(destination.cursor)) throw new TypeError('Invalid Memory destination.');
   const params = new URLSearchParams();
   let view: string;
   if (destination.kind === 'profile') view = 'profile';
@@ -75,7 +77,7 @@ export function buildMemoryDestination(destination: MemoryDestination): string {
     view = destination.view;
     if (destination.cursor !== undefined) params.set('cursor', destination.cursor);
   } else if (destination.kind === 'detail' || destination.kind === 'explore') {
-    if (!selector(destination.id, ID_LENGTH) || destination.kind === 'detail' && !listView(destination.view)) throw new TypeError('Invalid Memory destination.');
+    if (!isMemoryItemId(destination.id) || destination.kind === 'detail' && !listView(destination.view)) throw new TypeError('Invalid Memory destination.');
     view = destination.kind === 'explore' ? 'constellation' : destination.view;
     params.set('id', destination.id);
     if (destination.kind === 'explore') {
@@ -84,7 +86,7 @@ export function buildMemoryDestination(destination: MemoryDestination): string {
     }
     if (destination.returnTo !== undefined) {
       if (Object.keys(destination.returnTo).some(key => key !== 'view' && key !== 'cursor')) throw new TypeError('Invalid Memory destination.');
-      if (!listView(destination.returnTo.view) || destination.returnTo.cursor !== undefined && !selector(destination.returnTo.cursor, CURSOR_LENGTH)) throw new TypeError('Invalid Memory destination.');
+      if (!listView(destination.returnTo.view) || destination.returnTo.cursor !== undefined && !isMemoryCursor(destination.returnTo.cursor)) throw new TypeError('Invalid Memory destination.');
       params.set('returnView', destination.returnTo.view);
       if (destination.returnTo.cursor !== undefined) params.set('returnCursor', destination.returnTo.cursor);
     }
