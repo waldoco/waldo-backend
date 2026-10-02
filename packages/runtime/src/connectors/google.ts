@@ -173,7 +173,15 @@ export type FreeBusyResult=Readonly<{from:string;to:string;calendars:Readonly<Re
 
 export type CalendarPage = Readonly<{ events: readonly CalendarItem[]; next_page_token: string | null; fetched_count: number; account: Readonly<{connection_id: string | null; email: string | null}>; observed_at: string }>;
 
+// Drive metadata only (REST, drive.readonly or narrower). Exactly these fields cross the boundary: no body, description,
+// snippet, owner or permission data. The runtime re-projects any reply to this shape.
+export type DriveFileMeta = Readonly<{ id: string; name: string; mimeType: string; modifiedTime: string | null; webViewLink: string | null; size: string | null }>;
+export type DriveFilePage = Readonly<{ files: readonly DriveFileMeta[]; nextPageToken: string | null }>;
+
 export type GoogleClient = Readonly<{
+  driveListFiles?(input: Readonly<{ pageSize?: number; pageToken?: string }>): Promise<DriveFilePage>;
+  driveSearchFiles?(input: Readonly<{ nameContains: string; pageSize?: number; pageToken?: string }>): Promise<DriveFilePage>;
+  driveGetFileMetadata?(input: Readonly<{ fileId: string }>): Promise<DriveFileMeta>;
   calendarPage?(calendarId: string, from: string, to: string, limit: number, includeDeclined: boolean, pageToken?: string): Promise<CalendarPage>;
   freeBusy(from:string,to:string,calendarIds:readonly string[],timezone:string):Promise<FreeBusyResult>;
   events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<readonly CalendarItem[]>;
@@ -195,7 +203,7 @@ export type GoogleClient = Readonly<{
 // Single source for the connector-proxy allowlist: the runtime's vault client and the Supabase
 // connector-proxy Edge Function both build from this list, so a method added to GoogleClient but
 // missed here fails `satisfies` / the parity test instead of breaking live calls on Vault installs.
-export const GOOGLE_METHODS = ['calendarPage','mailPage','freeBusy', 'events', 'draft', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail', 'searchMail', 'readThread', 'tasks'] as const satisfies readonly (keyof GoogleClient)[];
+export const GOOGLE_METHODS = ['calendarPage','mailPage','freeBusy', 'events', 'draft', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail', 'searchMail', 'readThread', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata'] as const satisfies readonly (keyof GoogleClient)[];
 export type GoogleMethod = (typeof GOOGLE_METHODS)[number];
 
 const b64urlDecode = (data: string): string => {

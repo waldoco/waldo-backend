@@ -108,6 +108,17 @@ export const getTasksArgsSchema = z.strictObject({
 });
 export type GetTasksArgs = z.infer<typeof getTasksArgsSchema>;
 
+// Drive metadata reads over the REST adapter (explicit, no MCP). The query is a typed field the edge turns into
+// a Drive query; the model never writes Drive query syntax. file_id is a closed id shape, not free text.
+export const readDriveArgsSchema = z.strictObject({
+  action: z.enum(['recent', 'search', 'get']),
+  name_contains: z.string().min(1).max(200).optional(),
+  file_id: z.string().regex(/^[A-Za-z0-9_-]{10,128}$/).optional(),
+  page_size: z.int().min(1).max(50).default(10),
+  page_token: z.string().min(1).max(512).optional(),
+}).refine((a) => (a.action !== 'search' || a.name_contains !== undefined) && (a.action !== 'get' || a.file_id !== undefined), { message: 'search needs name_contains and get needs file_id' });
+export type ReadDriveArgs = z.infer<typeof readDriveArgsSchema>;
+
 export const getMasterMetricsArgsSchema = z.strictObject({
   date: iso8601Schema.optional(),
 });
