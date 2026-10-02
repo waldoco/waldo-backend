@@ -164,6 +164,9 @@ export const runtimeContextSourceSchema = z.strictObject({
   scope: z.enum(['invocation', 'principal', 'tenant', 'thread', 'system']),
   source_taint: sourceTaintSchema,
   produced_at: z.int().nonnegative(),
+  // context_version 3 only. A recorded outcome of the host's ancestry check (same principal_ref and
+  // tenant_ref as the invocation), never an authority: a label cannot admit a source by itself.
+  lineage: z.enum(['canonical_v1', 'legacy_preserved']).optional(),
 });
 export type RuntimeContextSource = z.infer<typeof runtimeContextSourceSchema>;
 
@@ -172,7 +175,7 @@ const isExternalOriginContextSource = (source: RuntimeContextSource): boolean =>
 
 export const runtimeContextCheckpointSchema = z
   .strictObject({
-    context_version: z.literal(2),
+    context_version: z.union([z.literal(2), z.literal(3)]),
     context_ref: opaqueRef('ctx'),
     principal_ref: opaqueRef('prn'),
     tenant_ref: opaqueRef('ten'),
@@ -183,6 +186,15 @@ export const runtimeContextCheckpointSchema = z
     sources: z.array(runtimeContextSourceSchema).min(1).max(32),
   })
   .superRefine((checkpoint, context) => {
+    if (checkpoint.context_version === 2 && checkpoint.sources.some((source) => source.lineage !== undefined)) {
+      context.addIssue({ code: 'custom', path: ['sources'], message: 'lineage labels require context version 3' });
+    }
+    if (checkpoint.context_version === 3 && checkpoint.sources.some((source) => source.lineage === undefined)) {
+      context.addIssue({ code: 'custom', path: ['sources'], message: 'context version 3 requires a lineage label on every source' });
+    }
+    if (checkpoint.context_version === 3 && checkpoint.sources.some((source) => source.lineage === 'legacy_preserved')) {
+      context.addIssue({ code: 'custom', path: ['sources'], message: 'legacy preserved history cannot enter canonical context' });
+    }
     const refs = checkpoint.sources.map((source) => source.source_ref);
     if (new Set(refs).size !== refs.length) {
       context.addIssue({
