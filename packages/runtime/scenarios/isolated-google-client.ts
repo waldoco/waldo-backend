@@ -1,5 +1,6 @@
 // Test-only Google adapter over the isolated, per-owner source world. Provider methods are
 // intentionally narrow: unimplemented reads and all effects fail closed, never touch Google.
+import { calendarPageSchema, iso8601Schema } from '@waldo/contracts';
 import type { CalendarItem, GoogleClient, MailItem, TaskItem, TaskStatusFilter, ThreadMessage } from '../src/connectors/google';
 import { IsolatedSourceWorld } from './isolated-source-world';
 
@@ -10,6 +11,26 @@ const rejectRead = (): never => { throw new Error('fixture source not implemente
 
 export const isolatedGoogleClient = (world: IsolatedSourceWorld, owner: string): GoogleClient => ({
   freeBusy: async()=>rejectRead(),
+  calendarPage: async(calendarId,from,to,limit,includeDeclined,pageToken)=>{
+    if(calendarId!=='primary'||![from,to].every(v=>iso8601Schema.safeParse(v).success)||day(from)>=day(to)||!Number.isSafeInteger(limit)||limit<1||limit>50||typeof includeDeclined!=='boolean'||(pageToken!==undefined&&(typeof pageToken!=='string'||!pageToken||pageToken.length>4096)))throw new Error('unsupported fixture Calendar page request');
+    const rows=world.list(owner,'calendar').filter(row=>{
+      const start=day(String(row.start)),end=day(String(row.end));
+      if(!Number.isFinite(start)||!Number.isFinite(end)||start>=end)throw new Error('invalid fixture Calendar range');
+      return start<day(to)&&end>day(from)&&row.status!=='cancelled'&&(includeDeclined||row.status!=='declined');
+    }).sort((a,b)=>day(String(a.start))-day(String(b.start))||(a.id<b.id?-1:a.id>b.id?1:0));
+    const binding=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify({owner,calendarId,from,to,limit,includeDeclined,rows}))))).map(n=>n.toString(16).padStart(2,'0')).join('');
+    let offset=0;
+    if(pageToken!==undefined){
+      try{const token=JSON.parse(decodeURIComponent(pageToken));
+        if(!token||token.v!==1||Object.keys(token).length!==3||token.binding!==binding||!Number.isSafeInteger(token.offset)||token.offset<1||token.offset>=rows.length||token.offset%limit!==0)throw new Error();
+        offset=token.offset;
+      }catch{throw new Error('fixture Calendar cursor owner/query/revision mismatch');}
+    }
+    const events=rows.slice(offset,offset+limit).map(row=>({id:row.id,title:String(row.title),start:String(row.start),end:String(row.end),all_day:row.all_day===true,
+      ...(typeof row.location==='string'?{location:row.location}:{}),...(typeof row.description==='string'?{description:row.description}:{}),...(typeof row.attendees==='number'?{attendees:row.attendees}:{}),...(typeof row.etag==='string'?{etag:row.etag}:{})}));
+    const next=offset+events.length;
+    return calendarPageSchema.parse({events,next_page_token:next<rows.length?encodeURIComponent(JSON.stringify({v:1,binding,offset:next})):null,fetched_count:events.length,account:{connection_id:null,email:null},observed_at:world.now()});
+  },
   mailPage:async(query,limit,pageToken)=>{
     // Fixture supports only the concrete read handler's Primary/date query, never
     // a general Gmail search oracle. Selection/owner boundary runs before collection.
