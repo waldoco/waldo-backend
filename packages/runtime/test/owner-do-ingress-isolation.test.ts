@@ -20,7 +20,7 @@ vi.mock('../src/channels/telegram-owner-do', async load => {
       const subject = [81101, 81102].find(value => bindings.TELEGRAM_OWNER_DO!.idFromName(`hermetic-owner-${value}`).toString() === state.id.toString());
       const host = subject === undefined ? undefined : admittedOwnerHost(`hermetic-owner-${subject}`, String(subject),
         new OpenAIResponsesAdapter({ apiKey: bindings.OPENAI_API_KEY }), ['get_communication', 'propose_calendar_change']);
-      super(state, bindings, host);
+      super(state, bindings, { mode: 'canonical', host });
     }
   } };
 });

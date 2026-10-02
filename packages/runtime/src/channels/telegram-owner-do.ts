@@ -168,9 +168,18 @@ export type TelegramOwnerPrivateHost = Readonly<{
   gateway: LLMGatewayAdapter;
 }>;
 
+// Private construction selects canonical preparation independently of supplier availability.
+// Wrangler uses the unchanged two-argument deployed constructor.
+export type TelegramOwnerPreparation = Readonly<{ mode: 'canonical'; host?: TelegramOwnerPrivateHost }>;
+
 export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
-  constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, private readonly ownerHost?: TelegramOwnerPrivateHost) {
+  private readonly canonicalPreparation: boolean;
+  private readonly ownerHost: TelegramOwnerPrivateHost | undefined;
+  constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, preparation?: TelegramOwnerPreparation) {
     super(ctx, env);
+    if (preparation !== undefined && (!preparation || preparation.mode !== 'canonical')) throw new Error('invalid owner preparation mode');
+    this.canonicalPreparation = preparation !== undefined;
+    this.ownerHost = preparation?.host;
   }
   private runtimes: Partial<Record<ChannelKind, OwnerRuntime>> = {};
   private queue: Promise<unknown> = Promise.resolve();
@@ -1273,7 +1282,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       () => standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
-      undefined, channel, { prepare: async (turn, handlers, scope) => {
+      undefined, channel, this.canonicalPreparation ? { prepare: async (turn, handlers, scope) => {
         const host = this.ownerHost;
         const occurrence = this.activeInbox;
         if (!host || channel !== 'telegram' || !occurrence || !turn.text || turn.attachment || turn.mediaNote
@@ -1289,7 +1298,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           registeredHandlers: handlers.map(handler => handler.name), connectorBacked: handlers.filter(handler => host.connectorBacked(handler)).map(handler => handler.name), access: host.access.bind(host) });
         this.activeOwnerContext = adapter;
         return { admission, adapter, store: ownerCanonicalHistory(storage, admission, adapter) };
-      } },
+      } } : undefined,
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
@@ -1305,13 +1314,17 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const listener = owner > 0 ? new TelegramOwnerListener({
       ownerTelegramId: owner, surface: channel, api, ...responder, log,
-      chooseReaction: turn => turn.runScope ? Promise.resolve(null) : responder.chooseReaction(turn),
+      chooseReaction: turn => {
+        if (this.canonicalPreparation && turn.runScope) return Promise.resolve(null);
+        turn.runScope?.admit();
+        return responder.chooseReaction(turn);
+      },
       respond: (turn, time) => {
         if (turn.media) files.record(turn.media, turn.text ?? '', Date.now());
         return responder.respond(turn, time);
       },
       ...(channel === 'telegram' ? { queueFinal: async (turn: import('./telegram-polling').TelegramInboundTurn, payload: import('./telegram-final-outbox').FinalPayload, emoji: string) => {
-        if (turn.runScope) { if (!this.activeOwnerContext) throw new Error('owner context unavailable'); await this.activeOwnerContext.assertCurrent(); }
+        if (this.canonicalPreparation && turn.runScope) { if (!this.activeOwnerContext) throw new Error('owner context unavailable'); await this.activeOwnerContext.assertCurrent(); }
         // Capture probes remain inert and exercise the original immediate mock path.
         if (probeCapture.current !== null) { await api.sendMessage(payload); return; }
         const captured = this.activeInbox;

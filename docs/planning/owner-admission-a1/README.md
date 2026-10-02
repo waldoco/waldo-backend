@@ -1,5 +1,11 @@
 # A1 local admission preparation
 
+## Superseding constructor activation boundary (October 2)
+
+Canonical preparation is selected only by the explicit private constructor descriptor `{ mode: 'canonical', host }`. The selected mode and host reference are captured at construction; invalid descriptors reject. Selecting canonical preparation without a host, or with failed lookup/currentness, still rejects without legacy fallback. Earlier missing-supplier statements below apply to this explicitly selected mode.
+
+The ordinary deployed two-argument `TelegramOwnerDO` constructor retains its prior text/media, reaction and fenced-final behavior. The production entrypoint, Wrangler configuration, environment and inbound requests do not select canonical preparation. Synthetic constructor fixtures prove the bounded admission path; they do not install a live host or activate canonical skills, health, scheduler or other-presence admission.
+
 ## Exact CI correction
 
 The initial draft PR563 head `19a9c39` failed runtime shard4 on existing host-control mutation coverage and both core/schema jobs on revision test1's private backfill seed. The responder now captures `memoryWrites` before any currentness/host await and passes the captured control to its scoped continuation; the existing mutation test and added scoped sibling pass. Canonical pgTAP no longer assumes the private upgrade seed; the disposable runner separately requires exactly one positive backfilled seed, removes it, then runs the41 canonical assertions. Corrected local bounded checks:128 tests/8 files, worker/integration typechecks, node syntax and diff whitespace PASS. Corrected SQL execution remains NOT RUN locally after automatic approval review rejected it under the earlier SQL-execution restriction; normal requested PR CI supplies the isolated canonical-suite result. No guard bypass or security/authentication probe was attempted.

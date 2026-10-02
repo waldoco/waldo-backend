@@ -6,6 +6,8 @@ import type { OwnerMessageAdmission } from '../src/identity/owner-message-admiss
 import { claimStore } from '../src/memory/claims';
 import { TelegramOwnerDO, type TelegramOwnerPrivateHost } from '../src/channels/telegram-owner-do';
 
+// Background boot planning is outside this canonical turn proof; deny its SDK locally.
+vi.mock('openai', () => ({ default: class { responses = { create: async () => { throw new Error('local proof denies unrelated model work'); } }; } }));
 vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
   return { ...original, createTelegramCaller: () => async (method: string) => method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: 1 } : true };
@@ -27,8 +29,8 @@ function sources(admission: OwnerMessageAdmission): ContextComposerDependencies 
 }
 let seq = 700000;
 async function proof(work: (h: {
-  send(text: string): Promise<void>; requests: LLMRequest[]; admissions: OwnerMessageAdmission[]; state: DurableObjectState;
-  mutate(): void; revoke(): void; unavailable(): void; wrongOwner(): void; crossOwnerContext(): void; pause(): Promise<(() => void) & { reached: Promise<void> }>; reload(): void;
+  send(text: string, content?: Record<string, unknown>): Promise<void>; requests: LLMRequest[]; admissions: OwnerMessageAdmission[]; state: DurableObjectState;
+  mutateDescriptor(): void; mutate(): void; revoke(): void; unavailable(): void; wrongOwner(): void; crossOwnerContext(): void; pause(): Promise<(() => void) & { reached: Promise<void> }>; reload(): void;
 }) => Promise<void>, omitHost = false) {
   const subject = 81101;
   const doName = `admitted-proof-${++seq}`;
@@ -61,14 +63,15 @@ async function proof(work: (h: {
       } },
     };
     const privateEnv = { ...env, TELEGRAM_BOT_TOKEN: '12345:fictional', TELEGRAM_WEBHOOK_SECRET: 'fictional-inbox-secret', OPENAI_API_KEY: 'fictional-model-key' };
-    let instance = new TelegramOwnerDO(state, privateEnv, omitHost ? undefined : host);
-    const send = async (text: string) => {
+    const preparation = { mode: 'canonical' as const, host: omitHost ? undefined : host };
+    let instance = new TelegramOwnerDO(state, privateEnv, preparation);
+    const send = async (text: string, content: Record<string, unknown> = {}) => {
       const id = ++seq;
-      const response = await instance.fetch(new Request('https://local.invalid/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'fictional-inbox-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': doName }, body: JSON.stringify({ update_id: id, message: { message_id: id, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text } }) }));
+      const response = await instance.fetch(new Request('https://local.invalid/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'fictional-inbox-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': doName }, body: JSON.stringify({ update_id: id, message: { message_id: id, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text, ...content } }) }));
       expect(response.status).toBe(200);
       await instance.alarm();
     };
-    try { await work({ send, requests, admissions, state, crossOwnerContext: () => { foreignContext = true; }, mutate: () => { revision = String(BigInt(revision) + 2n); }, revoke: () => { grants = []; }, unavailable: () => { grantUnavailable = true; }, wrongOwner: () => { ownerId = '10000000-0000-0000-0000-000000000002'; }, reload: () => { instance = new TelegramOwnerDO(state, privateEnv, omitHost ? undefined : host); }, pause: async () => {
+    try { await work({ send, requests, admissions, state, mutateDescriptor: () => { Object.assign(preparation, { mode: 'invalid', host: undefined }); }, crossOwnerContext: () => { foreignContext = true; }, mutate: () => { revision = String(BigInt(revision) + 2n); }, revoke: () => { grants = []; }, unavailable: () => { grantUnavailable = true; }, wrongOwner: () => { ownerId = '10000000-0000-0000-0000-000000000002'; }, reload: () => { instance = new TelegramOwnerDO(state, privateEnv, { mode: 'canonical', host: omitHost ? undefined : host }); }, pause: async () => {
       let resume!: () => void; let entered!: () => void;
       const wait = new Promise<void>(resolve => { resume = resolve; });
       const reached = new Promise<void>(resolve => { entered = resolve; });
@@ -255,5 +258,31 @@ it('cross-owner material source rejects before the actual reply provider or publ
     expect((await h.state.storage.list({ prefix: 'canonical-owner-v1:' })).size).toBe(0);
     expect((h.state.storage.kv.get<{ id: string }[]>('telegram_final_outbox_v1') ?? []).filter(row => row.id.startsWith('turn:'))).toEqual([]);
     expect(h.state.storage.kv.get<{ state: string }[]>('telegram_owner_inbox_v1')!.at(-1)!.state).toBe('quarantined');
+  });
+});
+
+
+it.each([
+  { photo: [{ file_id: 'fictional-photo', width: 1, height: 1, file_size: 3 }] },
+  { document: { file_id: 'fictional-document', file_name: 'fixture.txt', file_size: 3 } },
+  { voice: { file_id: 'fictional-voice', duration: 1, file_size: 3 } },
+])('explicit canonical mode rejects unsupported media without legacy model fallback: %j', async content => {
+  await proof(async h => {
+    await h.send('Canonical media must not fall back.', { text: undefined, caption: 'Canonical media must not fall back.', ...content });
+    expect(h.requests).toEqual([]);
+    expect((await h.state.storage.list({ prefix: 'canonical-owner-v1:' })).size).toBe(0);
+    expect((h.state.storage.kv.get<{ id: string }[]>('telegram_final_outbox_v1') ?? []).filter(row => row.id.startsWith('turn:'))).toEqual([]);
+    expect(h.state.storage.kv.get<{ state: string }[]>('telegram_owner_inbox_v1')!.at(-1)!.state).toBe('quarantined');
+  });
+});
+
+
+it('captures private preparation selection and supplier at construction', async () => {
+  await proof(async h => {
+    h.mutateDescriptor();
+    await h.send('Keep selected canonical preparation after caller descriptor mutation.');
+    expect(h.admissions).toHaveLength(1);
+    expect(h.requests.filter(request => !request.response_format).length).toBeGreaterThan(0);
+    expect(h.state.storage.kv.get<{ reason: string }[]>('telegram_owner_inbox_v1')!.at(-1)!.reason).toBe('final_committed');
   });
 });
