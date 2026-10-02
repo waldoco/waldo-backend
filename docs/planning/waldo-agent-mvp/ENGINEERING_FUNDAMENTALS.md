@@ -35,6 +35,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - An OAuth callback settles its attempt once. The state is a single-use nonce with its PKCE verifier stored server-side; a reloaded callback replays the settled outcome and never re-exchanges the single-use code. Every outcome renders a page; none throws.
 
 ### Concurrency and ordering
+- Workspace tool invocations carry their captured owner-run scope through mapping and body awaits. Reserve and publish metadata inside that scope’s synchronous commit fence; closure before reservation leaves nothing, while closure after body admission retains pending custody/orphan bytes without a ready revision. Test direct metadata closure and rollback as well as mapping/body interruption.
 - Writes that belong to one turn settle before the next turn reads them.
 - Anything that reads and then writes shared state runs inside the DO's serial queue or one transaction.
 - External writes use a version check (etag / If-Match) so we never overwrite a change the owner made meanwhile.
@@ -273,3 +274,5 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - An older crashed schedule attempt stays as audit evidence, but a later successful or terminal-delivery attempt of the same occurrence must not suppress future occurrences. An unresolved older occurrence still blocks overlap. Select the latest attempt numerically across 9→10; ACK-bookkeeping replay preserves the first background completion time, and enqueue-commit crashes leave delivery pending.
 
 | 2026-10-02 | Heartbeat discarded blocked Telegram sends and started cooldown; send-before-cooldown crashes could duplicate nudges; stale crashed attempts could suppress later ticks | Heartbeat / scheduler | heartbeat-outbox.test.ts frozen intent, ACK truth, fresh eligibility, transport/receipt crashes and same-byte429; schedule-runs.test.ts recovered occurrence liveness and unresolved controls | Commit intent before I/O, settle from ACK, preserve audit without wedging future ticks |
+
+| 2026-10-02 | Workspace mapping stayed valid after owner-turn closure, so a delayed tool could publish a ready file before dispatcher refusal | Workspace host / owner-run fence | workspace-turn-fence.test.ts closes mapping and R2 awaits, proves pending orphan custody without ready publication, and checks scoped metadata closure/rollback | Capture invocation scope; admit actual I/O and atomically fence every metadata transaction |
