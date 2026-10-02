@@ -4,6 +4,7 @@ import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, googleHas, GoogleErro
 import { googleAccessToken } from '../../../packages/runtime/src/connectors/google.ts';
 import { executeProxyIntent, ProxyIntentError, type IntentClaim } from '../../../packages/runtime/src/connectors/proxy-intent.ts';
 import { callMcpTransport, McpAuthError, McpToolError } from '../../../packages/runtime/src/connectors/mcp-transport.ts';
+import { safeMcpErrorDiagnostic, type McpErrorDiagnostic } from '../../../packages/runtime/src/connectors/mcp-error-diagnostic.ts';
 // Edge-owned, exact read authority. Never accept a request-supplied registry or generic Google host match.
 const isRegisteredMcpRead = (serverUrl: string | undefined, tool: string | undefined) =>
   serverUrl === 'https://drivemcp.googleapis.com/mcp/v1' &&
@@ -28,7 +29,7 @@ const same = (a: string, b: string) => {
   return diff === 0;
 };
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-const fail = (status: number, message: string) => reply({ error: { status, message } }, status === 401 || status === 403 || status === 404 ? 200 : 502);
+const fail = (status: number, message: string, diagnostic?: McpErrorDiagnostic) => reply({ error: { status, message, ...(diagnostic ? { provider_diagnostic: diagnostic } : {}) } }, status === 401 || status === 403 || status === 404 ? 200 : 502);
 const db = async (fn: string, args: Record<string, unknown>) => {
   const response = await fetch(`${url}/rest/v1/rpc/${fn}`, {
     method: 'POST', headers: { apikey: service, authorization: `Bearer ${service}`, 'content-profile': 'waldo', 'content-type': 'application/json' }, body: JSON.stringify(args),
@@ -48,9 +49,10 @@ const READ_FAILURE_CODES = new Set(['intent_unavailable', 'insufficient scopes',
 // One structured line per call: operation, method, outcome and duration. Never the code, verifier,
 // token, account or arguments.
 const logged = async (started: number, op: string, method: string | undefined, response: Response, read = false) => {
-  const outcome = await response.clone().json().then(value => (value as {error?:{status:number;message:string}}).error ?? null).catch(() => ({ status: response.status, message: 'unreadable response' }));
+  const outcome = await response.clone().json().then(value => (value as {error?:{status:number;message:string;provider_diagnostic?:unknown}}).error ?? null).catch(() => ({ status: response.status, message: 'unreadable response' }));
   const message = outcome && read && !READ_FAILURE_CODES.has(outcome.message) ? 'mcp_read_failed' : outcome?.message;
-  console.log(JSON.stringify({ hop: 'connector_proxy', op, ...(method ? { method } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: message } : {}) }));
+  const diagnostic = read && outcome && 'provider_diagnostic' in outcome ? safeMcpErrorDiagnostic(outcome.provider_diagnostic) : undefined;
+  console.log(JSON.stringify({ hop: 'connector_proxy', op, ...(method ? { method } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: message } : {}), ...(diagnostic ? { provider_diagnostic: diagnostic } : {}) }));
   return response;
 };
 
@@ -112,7 +114,7 @@ const handle = async (body: Body): Promise<Response> => {
         if (read) {
           if (mcpRefreshError) await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: mcpRefreshError }).catch(()=>{console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'}));});
           return fail(mcpRefreshError ? 401 : error instanceof McpAuthError ? error.status : error instanceof McpToolError ? 400 : 502,
-            mcpRefreshError ? 'google_refresh_failed' : error instanceof McpAuthError ? error.status === 401 ? 'google_reauth_needed' : 'google_scope_missing' : error instanceof McpToolError ? 'mcp_read_rejected' : 'mcp_read_failed');
+            mcpRefreshError ? 'google_refresh_failed' : error instanceof McpAuthError ? error.status === 401 ? 'google_reauth_needed' : 'google_scope_missing' : error instanceof McpToolError ? 'mcp_read_rejected' : 'mcp_read_failed', error instanceof McpToolError ? safeMcpErrorDiagnostic(error.diagnostic) : undefined);
         }
         if (mcpRefreshError) await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: mcpRefreshError });
         return fail(mcpRefreshError ? 401 : error instanceof McpAuthError ? error.status : 502, error instanceof Error ? error.message : String(error));

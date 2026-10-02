@@ -224,3 +224,13 @@ it('all three exact metadata tools skip storage and body tampering cannot change
  }
  expect(f.hops).toEqual([]);expect(f.rows.size).toBe(0);
 });
+it('structured Google tool rejection retains only actionable reason/status/service diagnostics',async()=>{
+ const f=fixture();f.scope(['https://www.googleapis.com/auth/drive.readonly']);const provider=fetch;const canary='PRIVATE_DIAGNOSTIC_CANARY';
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  if(String(input)==='https://drivemcp.googleapis.com/mcp/v1'&&JSON.parse(String(init?.body)).method==='tools/call')return Response.json({result:{isError:true,structuredContent:{error:{code:403,status:'PERMISSION_DENIED',message:canary,details:[{'@type':'type.googleapis.com/google.rpc.ErrorInfo',domain:'googleapis.com',reason:'SERVICE_DISABLED',metadata:{service:'drivemcp.googleapis.com',consumer:canary,activationUrl:`https://evil.invalid/${canary}`}}]}},content:[{type:'text',text:canary}]}});
+  return provider(input,init);
+ }));
+ const logs=vi.spyOn(console,'log').mockImplementation(()=>{});const out=await(await serve(await request(await readBody()))).json();
+ expect(out).toMatchObject({error:{status:400,message:'mcp_read_rejected',provider_diagnostic:{stage:'tools/call',provider_status:'PERMISSION_DENIED',reason:'SERVICE_DISABLED',service:'drivemcp.googleapis.com'}}});
+ expect(JSON.stringify(out)).not.toContain(canary);expect(JSON.stringify(logs.mock.calls)).not.toContain(canary);expect(JSON.stringify(logs.mock.calls)).toContain('SERVICE_DISABLED');expect(f.rows.size).toBe(0);
+});
