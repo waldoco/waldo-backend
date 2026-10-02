@@ -106,9 +106,16 @@ describe('ConversationTree', () => {
 
 });
 
-it('preserves exact tool argument bytes when forgetting changes no content', () => {
+it('preserves exact tool argument bytes when no forget target exists', () => {
   const original = '{\n  "path": "notes/fixture.txt", "text": "\\u0939"\n}';
-  for (const texts of [[], ['unrelated forgotten text']]) {
+  for (const texts of [[], ['   ']]) {
     expect(literalJsonTextRedactor(texts, '[forgotten]', 'arguments')(original)).toBe(original);
   }
+});
+
+it('does not retain overwritten forgotten JSON members during active forgetting', () => {
+  const raw = '{"text":"synthetic forgotten","text":"safe"}';
+  expect(literalJsonTextRedactor(['synthetic forgotten'], '[forgotten]', 'arguments')(raw)).toBe('{"text":"safe"}');
+  const result = '{"ok":true,"data":' + raw + '}';
+  expect(literalJsonTextRedactor(['synthetic forgotten'], '[forgotten]', 'tool_result')(result)).not.toContain('synthetic forgotten');
 });

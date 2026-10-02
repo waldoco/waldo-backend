@@ -35,6 +35,7 @@ export const literalTextRedactor = (texts: readonly string[], marker: string): (
 export const literalJsonTextRedactor = (
   texts: readonly string[], marker: string, mode: 'data' | 'arguments' | 'tool_result' = 'data',
 ): ((value: string) => string) => {
+  if (texts.every(text => !text.trim())) return value => value;
   const redact = literalTextRedactor(texts, marker);
   const encode = (text: string) => JSON.stringify(text).slice(1, -1);
   const escaped = literalTextRedactor(texts.map(encode), encode(marker));
@@ -71,10 +72,9 @@ export const literalJsonTextRedactor = (
         if (redact(key) !== key) return failure();
         return [key, key === 'data' ? visit(item) : key === 'error' ? visit(item, true) : item];
       }));
-      return JSON.stringify(result) === JSON.stringify(parsed) ? value : JSON.stringify(result) + suffix;
+      return JSON.stringify(result) + suffix;
     }
-    const clean = JSON.stringify(visit(parsed, mode === 'arguments'));
-    return clean === JSON.stringify(parsed) ? value : clean + suffix;
+    return JSON.stringify(visit(parsed, mode === 'arguments')) + suffix;
   };
 };
 
