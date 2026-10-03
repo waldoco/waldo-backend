@@ -66,7 +66,15 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
       if (!record.mailFollowup || record.status === 'pending') return;
       const r = record.mailFollowup;
       if (record.status === 'blocked' && record.reason === 'owner_binding' && record.attempts === 0 && record.payload.text.trim() && deps.now() < record.createdAt + 86400000) sql.exec('UPDATE loop_mail_sources SET nudged_due = NULL, nudged_timezone = NULL, delivery_state = ? WHERE loop_id = ? AND nudged_due = ? AND nudged_timezone = ? AND nudged_message_id = ?', 'blocked', r.loopId, r.due, r.timezone, r.messageId);
-      else sql.exec('UPDATE loop_mail_sources SET delivery_state = ? WHERE loop_id = ? AND nudged_due = ? AND nudged_timezone = ? AND nudged_message_id = ?', record.status === 'delivered' ? 'delivered' : record.status === 'blocked' && record.attempts === 0 ? 'not_delivered' : 'unknown', r.loopId, r.due, r.timezone, r.messageId);
+      else if (record.status === 'blocked' && record.reason === 'owner_binding' && record.attempts === 0) {
+        // A previously released, definitely unsent occurrence can expire. Restore its
+        // exact receipt as terminal, without reviving older source evidence or a new due.
+        sql.exec(`UPDATE loop_mail_sources SET nudged_due = ?, nudged_timezone = ?, nudged_message_id = ?, delivery_state = 'not_delivered'
+          WHERE loop_id = ? AND (nudged_due IS NULL OR (nudged_due = ? AND nudged_timezone = ? AND nudged_message_id = ?))
+          AND EXISTS (SELECT 1 FROM loops l JOIN observed_mail m ON m.source_ref = loop_mail_sources.source_ref
+            WHERE l.id = loop_mail_sources.loop_id AND l.status = 'open' AND l.due = ? AND m.message_id = ? AND m.source_ref = ?)`,
+          r.due, r.timezone, r.messageId, r.loopId, r.due, r.timezone, r.messageId, r.due, r.messageId, r.sourceRef);
+      } else sql.exec('UPDATE loop_mail_sources SET delivery_state = ? WHERE loop_id = ? AND nudged_due = ? AND nudged_timezone = ? AND nudged_message_id = ?', record.status === 'delivered' ? 'delivered' : 'unknown', r.loopId, r.due, r.timezone, r.messageId);
     },
     closed: (limit = 5) => sql.exec<Loop>("SELECT * FROM loops WHERE status != 'open' ORDER BY closed_at DESC LIMIT ?", limit).toArray(),
     proactivity(): Proactivity {

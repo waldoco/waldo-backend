@@ -276,11 +276,20 @@ it('never re-arms a terminal intent whose payload expired', async () => {
   const { TelegramFinalOutbox } = await import('../src/channels/telegram-final-outbox');
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-expired-intent')), async (_i, state) => {
     let now = 1;
+    const updates = updateBook(state.storage.sql);
+    const loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'expired' });
+    observeMail(updates, 'mail:t1', 't1', '{"subject":"Review by 10"}', now, 'm1');
+    const loop = loops.open({ title: 'Review', due: '2026-10-03T10:00', source_ref: 'mail:t1' });
     const outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
-    await outbox.enqueue({ id: 'expired', trace: 'fixture', payload: { chat_id: 7, text: 'Have you handled this?' }, ownerSubject: '7', doName: 'owner-7', mailFollowup: { loopId: 'o1', due: '2026-10-03T10:00', sourceRef: 'mail:t1', timezone: 'UTC', messageId: 'm1' } });
-    now += 1000; await outbox.drain({ allowed: async () => false, send: async () => { throw new Error('must not send'); }, settled: async () => {} });
+    await outbox.enqueue({ id: 'expired', trace: 'fixture', payload: { chat_id: 7, text: 'Have you handled this?' }, ownerSubject: '7', doName: 'owner-7', mailFollowup: { loopId: loop.id, due: '2026-10-03T10:00', sourceRef: 'mail:t1', timezone: 'UTC', messageId: 'm1' } });
+    loops.claimReview(outbox.records()[0]!.mailFollowup!);
+    now += 1000; await outbox.drain({ allowed: async () => false, send: async () => { throw new Error('must not send'); }, settled: async r => loops.settleReview(r) });
+    expect(loops.reviewDue('2026-10-03T10:00')).toHaveLength(1);
     now += 86_400_000; await outbox.maintain();
     expect(outbox.records()[0]?.payload.text).toBe('');
     expect(await outbox.retryBlockedMailFollowup('expired')).toBe(false);
+    loops.settleReview(outbox.records()[0]!);
+    expect(loops.reviewDue('2026-10-03T10:00')).toEqual([]);
+    expect(state.storage.sql.exec('SELECT delivery_state FROM loop_mail_sources').one()).toEqual({ delivery_state: 'not_delivered' });
   });
 });
