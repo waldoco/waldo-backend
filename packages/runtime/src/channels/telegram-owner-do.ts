@@ -14,7 +14,7 @@ import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
 import { persistInboxWake, persistTransportWake } from '../scheduler/alarm-slot';
-import { TelegramFinalOutbox, type FinalRecord } from './telegram-final-outbox';
+import { TelegramFinalOutbox, redactMailFollowupEntries, type FinalRecord } from './telegram-final-outbox';
 import { ownerTurnTrace } from './owner-turn-envelope';
 import { adminRead, adminAction } from './dashboard-admin';
 import { pinProxyIntentRoute } from '../connectors/proxy-intent-route';
@@ -1329,7 +1329,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` });
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }), readDriveHandler(google, this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerHost?.gateway, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); return result; }), undefined,
+      }), readDriveHandler(google, this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerHost?.gateway, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten + mail.rewritten, remaining: result.remaining + mail.remaining }; }), undefined,
       () => standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
@@ -1738,6 +1738,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
               // settlement. The tool-output ledger collapses any surviving summary to the
               // marker, so a touched row is a redacted row there.
               kvRemaining += (await redactConversationEntries(this.ctx.storage, result.texts, FORGOTTEN)).remaining;
+              kvRemaining += redactMailFollowupEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               await redactToolOutputLedger(this.ctx.storage, result.texts, FORGOTTEN);
             }
             if (result.failed.length || Object.keys(result.remaining).length || kvRemaining > 0) {
@@ -1757,7 +1758,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           memory.barrier(node.label, new Date(now).toISOString());
           const conv = await redactConversationEntries(this.ctx.storage, [node.label], FORGOTTEN);
           await redactToolOutputLedger(this.ctx.storage, [node.label], FORGOTTEN);
-          if (conv.remaining > 0) log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: 'node.forget conversation redaction incomplete' });
+          const mail = redactMailFollowupEntries(this.ctx.storage.kv, [node.label], FORGOTTEN);
+          if (conv.remaining + mail.remaining > 0) log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: 'node.forget conversation redaction incomplete' });
         } else if (action === 'file.remove') {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {

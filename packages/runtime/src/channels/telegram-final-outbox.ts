@@ -1,3 +1,5 @@
+import { literalTextRedactor } from '@waldo/contracts';
+import type { RunEffectScope } from './run-effect-scope';
 import { TelegramRejection } from './telegram-api';
 
 export const FINAL_OUTBOX_KEY = 'telegram_final_outbox_v1';
@@ -135,3 +137,31 @@ export class TelegramFinalOutbox {
     if (row.status !== 'pending') { row.settled = true; await this.save(rows); }
   }
 }
+
+// Literal owner-forget cleanup for source-derived copies only. Never replays or
+// unblocks a send: pending intent is cancelled; uncertain transport stays uncertain.
+export const redactMailFollowupEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope): Readonly<{ rewritten: number; remaining: number }> => {
+  const needles = [...new Set(texts.map(text => text.trim()).filter(Boolean))];
+  if (!needles.length) return { rewritten: 0, remaining: 0 };
+  const redact = literalTextRedactor(needles, marker);
+  const rows = new TelegramFinalOutbox(kv).records();
+  let rewritten = 0;
+  for (const row of rows) {
+    if (!row.mailFollowup) continue;
+    const text = redact(row.payload.text);
+    if (text === row.payload.text) continue;
+    row.payload = { ...row.payload, text }; rewritten += 1;
+    if (row.status === 'pending') { row.status = 'blocked'; row.reason = 'owner_forget'; row.settled = false; }
+    else if (row.status === 'attempting') { row.status = 'quarantined'; row.reason = 'forget_during_uncertain_send'; row.settled = false; }
+  }
+  if (rewritten) {
+    const write = () => {
+      kv.put(FINAL_OUTBOX_KEY, rows);
+      // Reuse the existing outbox wake key; settlement happens on its normal lane.
+      kv.put(FINAL_OUTBOX_DUE_KEY, Math.min(...rows.flatMap(row => row.status === 'pending' || row.status === 'attempting' || !row.settled ? [row.dueAt] : row.payload.text ? [row.createdAt + 86400000] : [])) || null);
+    };
+    if (scope) scope.commit(write); else write();
+  }
+  const remaining = new TelegramFinalOutbox(kv).records().filter(row => row.mailFollowup && needles.some(needle => row.payload.text.toLowerCase().includes(needle.toLowerCase()))).length;
+  return { rewritten, remaining };
+};

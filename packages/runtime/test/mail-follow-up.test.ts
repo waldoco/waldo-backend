@@ -302,3 +302,26 @@ it('disabled source collection does not observe or expose source references', as
   expect(changes).toHaveLength(1);
   expect(changes[0]?.source_ref).toBeUndefined();
 });
+
+it('source-forget KV failure retains pending work for restart and never revives an uncertain send', async () => {
+  const { TelegramFinalOutbox, redactMailFollowupEntries, FINAL_OUTBOX_KEY } = await import('../src/channels/telegram-final-outbox');
+  const values = new Map<string, unknown>(); let fail = false;
+  const kv = { get: <T>(key: string) => structuredClone(values.get(key)) as T | undefined, put: (key: string, value: unknown) => { if (fail) throw new Error('synthetic KV write failure'); values.set(key, structuredClone(value)); } };
+  const marker = 'synthetic literal mailbox obligation';
+  const receipt = { loopId: 'synthetic-loop', due: '2026-10-03T10:00', sourceRef: 'mail:synthetic-thread', timezone: 'UTC', messageId: 'synthetic-message' };
+  const outbox = new TelegramFinalOutbox(kv, () => 1000);
+  await outbox.enqueue({ id: 'pending-source', trace: 'pending-source', payload: { chat_id: 42, text: marker }, ownerSubject: '42', doName: 'owner', mailFollowup: receipt });
+  await outbox.enqueue({ id: 'uncertain-source', trace: 'uncertain-source', payload: { chat_id: 42, text: marker }, ownerSubject: '42', doName: 'owner', mailFollowup: receipt });
+  await outbox.enqueue({ id: 'ordinary', trace: 'ordinary', payload: { chat_id: 42, text: marker }, ownerSubject: '42', doName: 'owner' });
+  const rows = outbox.records(); rows[1]!.status = 'quarantined'; rows[1]!.reason = 'send_unknown'; rows[1]!.attempts = 1; kv.put(FINAL_OUTBOX_KEY, rows);
+  fail = true;
+  expect(() => redactMailFollowupEntries(kv, [marker], '[forgotten]')).toThrow('synthetic KV write failure');
+  expect(new TelegramFinalOutbox(kv).records()[0]).toMatchObject({ status: 'pending', payload: { text: marker } });
+  fail = false;
+  expect(redactMailFollowupEntries(kv, [marker], '[forgotten]')).toEqual({ rewritten: 2, remaining: 0 });
+  const fresh = new TelegramFinalOutbox(kv).records();
+  expect(fresh[0]).toMatchObject({ status: 'blocked', reason: 'owner_forget', payload: { text: '[forgotten]' } });
+  expect(fresh[1]).toMatchObject({ status: 'quarantined', reason: 'send_unknown', attempts: 1, payload: { text: '[forgotten]' } });
+  expect(fresh[2]).toMatchObject({ status: 'pending', payload: { text: marker } });
+  expect(await new TelegramFinalOutbox(kv).retryBlockedMailFollowup('pending-source')).toBe(false);
+});

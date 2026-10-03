@@ -2,9 +2,11 @@ import { env, evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
 import { persistInboxWake } from '../src/scheduler/alarm-slot';
+import { updateBook } from '../src/channels/update-cards';
+import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
 import { createOwnerResponder } from '../src/channels/owner-turn';
-import { loopHandlers } from '../src/channels/loops';
+import { loopBook, loopHandlers } from '../src/channels/loops';
 import { redactConversationEntries, durableConversationStore } from '../src/channels/conversation-store';
 import { episodeIndex } from '../src/channels/episodes';
 import { toolOutputLedger } from '../src/conversation/tool-output-ledger';
@@ -608,4 +610,35 @@ it('explains a rejected topic-only custody write without claiming pending cleanu
   expect(request()).not.toContain('requested topic cleanup is pending');
   expect(request()).not.toContain('PRIVATE_INSERT_FAILURE');
  });
+});
+
+it('forgets an exact source-derived loop marker and an unsent frozen mail follow-up', async () => {
+  const name = 'forget-source-mail-marker';
+  await seeded(name);
+  await runInDurableObject(stub(name), async (_instance, state) => {
+    const now = Date.now();
+    const updates = updateBook(state.storage.sql);
+    updates.observeMail('mail:synthetic-forget-thread', 'synthetic-forget-thread', now, 'synthetic-forget-message');
+    updates.record('2026-10-03', now, [{ source: 'mail', kind: 'new', detail: FORGET, source_ref: 'mail:synthetic-forget-thread', source_message_id: 'synthetic-forget-message' }], null);
+    let loopId = 0;
+    const loops = loopBook(state.storage.sql, { now: () => now, newId: () => `synthetic-forget-loop-${loopId++}` });
+    const loop = loops.open({ title: FORGET, due: '2026-10-03T10:00', source_ref: 'mail:synthetic-forget-thread' });
+    loops.open({ title: KEEP, due: null });
+    const receipt = { loopId: loop.id, due: loop.due!, sourceRef: loop.source_ref!, timezone: 'UTC', messageId: 'synthetic-forget-message' };
+    await new TelegramFinalOutbox(state.storage.kv).enqueue({ id: 'synthetic-forget-final', trace: 'synthetic-forget-final', payload: { chat_id: 42, text: `Have you handled ${FORGET}?` }, ownerSubject: '42', doName: name, mailFollowup: receipt });
+    await new TelegramFinalOutbox(state.storage.kv).enqueue({ id: 'synthetic-keep-final', trace: 'synthetic-keep-final', payload: { chat_id: 42, text: KEEP }, ownerSubject: '42', doName: name });
+    loops.claimReview(receipt);
+    await state.storage.deleteAlarm();
+  });
+  await forget(name);
+  await runInDurableObject(stub(name), async (_instance, state) => {
+    const retained = { loops: state.storage.sql.exec('SELECT title, status FROM loops').toArray(), finals: new TelegramFinalOutbox(state.storage.kv).records() };
+    expect(JSON.stringify(retained)).not.toContain(FORGET);
+    expect(retained.finals.find(row => row.id === 'synthetic-forget-final')?.status).toBe('blocked');
+    expect(retained.loops.find(row => row.title === FORGOTTEN)?.status).toBe('dropped');
+    expect(retained.loops.find(row => row.title === KEEP)?.status).toBe('open');
+    expect(retained.finals.find(row => row.id === 'synthetic-keep-final')).toMatchObject({ status: 'pending', payload: { text: KEEP } });
+    expect(claimStore(state.storage.sql).claims('purging')).toEqual([]);
+    await state.storage.deleteAlarm();
+  });
 });
