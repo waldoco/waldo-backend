@@ -15,9 +15,9 @@ it('grounds a pending mail follow-up, revisits without new mail once, and respec
     const updates = updateBook(state.storage.sql);
     const loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'mail' });
     const client = { changedEvents: async () => [], newMail: async () => [{ id: 'message1', thread_id: 'thread1', from: 'Pat <pat@example.test>', subject: 'Review deck by 10', snippet: 'Please review', at: new Date(now).toISOString() }] } as unknown as GoogleClient;
-    await collectChanges(updates, client, now);
+    await collectChanges(updates, client, now, true);
     now += 600_000;
-    const changes = await collectChanges(updates, client, now);
+    const changes = await collectChanges(updates, client, now, true);
     expect(changes[0]).toMatchObject({ source_ref: 'mail:thread1' });
     updates.record('2026-10-03', now, changes, null);
     const loop = loops.open({ title: 'Check deck review', due: '2026-10-03T10:00', source_ref: 'mail:thread1' });
@@ -98,10 +98,10 @@ it('retains held mail for later extraction even when the next provider delta is 
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-held-ingestion')), async (_instance, state) => {
     const book = updateBook(state.storage.sql);
     const now = Date.parse('2026-10-03T02:00:00Z');
-    await collectChanges(book, { changedEvents: async () => [], newMail: async () => [] } as unknown as GoogleClient, now);
-    const held = await collectChanges(book, { changedEvents: async () => [], newMail: async () => [{ id: 'm-held', thread_id: 't-held', from: 'pat@example.test', subject: 'Review at 10', snippet: 'Please check', at: new Date(now).toISOString() }] } as unknown as GoogleClient, now + 1000);
+    await collectChanges(book, { changedEvents: async () => [], newMail: async () => [] } as unknown as GoogleClient, now, true);
+    const held = await collectChanges(book, { changedEvents: async () => [], newMail: async () => [{ id: 'm-held', thread_id: 't-held', from: 'pat@example.test', subject: 'Review at 10', snippet: 'Please check', at: new Date(now).toISOString() }] } as unknown as GoogleClient, now + 1000, true);
     book.record('2026-10-03', now + 1000, held, null);
-    expect(await collectChanges(book, { changedEvents: async () => [], newMail: async () => [] } as unknown as GoogleClient, now + 2000)).toEqual([]);
+    expect(await collectChanges(book, { changedEvents: async () => [], newMail: async () => [] } as unknown as GoogleClient, now + 2000, true)).toEqual([]);
     expect(book.pendingMail()[0]).toMatchObject({ source_ref: 'mail:t-held' });
     book.judgedMail(book.pendingMail());
     expect(book.pendingMail()).toEqual([]);

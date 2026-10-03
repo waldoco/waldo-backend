@@ -34,10 +34,12 @@ const TABLES: Record<string, Row> = {
   runtime_run_scribe_audit: exempt('run id and version'), probe_state: exempt('a tick counter'), workspace_upload_lease: exempt('lease token, expiry and byte count'),
   card_pins: exempt('card id and time'), heartbeat_notified: exempt('loop id and times'), artifact_exports: exempt('ids, format, size and time'),
   event_briefs: exempt('event id and times'), schedule_runs: exempt('ids, status codes and times'),
+  observed_mail: exempt('provider source/thread/message IDs, update-card row pointer, observation time and judged/attached flags; no sender/subject/snippet/body; unattached pointers expire after seven days'),
+  loop_mail_sources: exempt('loop/source/message IDs, due/timezone, fixed delivery-state code and revisit time; source-derived title lives in loops and source text in update_cards'),
   // Text the owner made or the runtime stored, not reached by a literal forget
   loop_governor_runs: gap('has a reason TEXT column; its writer was not traced'),
   artifacts: gap('name in the table, body in R2; owner-made'), owner_files: gap('file name and caption; owner-made'), reminder_notes: gap('note text; owner-made'),
-  standing_orders: gap('trigger and escalation text; owner-made'), loops: gap('title; owner-made'), background_runs: gap('summary text'),
+  standing_orders: gap('trigger and escalation text; owner-made'), loops: gap('generic owner-made titles remain outside literal purge; source-linked titles now have exact-literal redaction/closure verified in memory-forget-do-provider.test.ts, not blanket coverage'), background_runs: gap('summary text'),
   ledger: gap('summary and payload JSON'), event_admissions: gap('delivery body'), trace_log: gap('note column; trace sinks not verified'), journal: gap('run journal; only a partial reference in purge, not shown covered'),
   claim_recall: gap('FTS index kept in step with claims by triggers (content=claims); no test checks the index for a marker after a purge'),
   constellation_edges: gap('ids plus a relation label; node removal drops its edges per purge comments, no test checks edges'),
