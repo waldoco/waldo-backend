@@ -41,7 +41,7 @@ const start = async (s: ReturnType<typeof setup>) => {
   const progress = (await s.signup.read(new Request('https://w.test/console/signup', { headers: { cookie } })))!;
   return { cookie, progress };
 };
-it('continues through email, phone pending, resend, refresh and repeated submit without an owner or consumption', async () => {
+it('retains legacy contact continuation through resend, refresh and repeated submit without owner creation or invite consumption', async () => {
   const s = setup();
   const { cookie, progress } = await start(s);
   const retry = await handleSignup(post('/resend', { csrf: progress.csrf, email: 'attacker@example.com' }, cookie), env, s.a, s.signup);
@@ -57,9 +57,9 @@ it('continues through email, phone pending, resend, refresh and repeated submit 
   const pendingCookie = cookieFrom(collected);
   const refresh = await handleSignup(new Request('https://w.test/console/signup', { headers: { cookie: pendingCookie } }), env, s.a, s.signup);
   const html = await refresh.text();
-  expect(html).toContain('entered, not verified');
+  expect(html).not.toContain('Phone:');
   expect(html).toContain('No SMS is sent');
-  expect(html).toContain('value="+919876543210"');
+  expect(html).not.toContain('value="+919876543210"');
   expect(html).toContain('retrying opens that same account');
   expect(html).toContain("addEventListener('hashchange'");
   expect(html).not.toContain('never-retain');
@@ -172,7 +172,7 @@ it.each(['grant', 'session', 'response'])('retains verified proof and optional c
   const p = (await signup.read(new Request('https://w.test/console/signup', { headers: { cookie: retained } })))!;
   expect(p).toMatchObject({ emailVerified: true, authUser: 'u-1', phone: '+14155550100' });
   const html = await result.text();
-  expect(html).toContain('value="+14155550100"');
+  expect(html).not.toContain('value="+14155550100"');
   expect(html).not.toContain('private body');
   failed = false;
   expect((await handleSignup(post('/complete', { csrf: p.csrf, phone: p.phone! }, retained), e, a, signup)).status).toBe(303);
@@ -269,10 +269,27 @@ it.each(['fetch', 'body'])('bounds hanging console grant %s and retains signup r
   } finally { vi.useRealTimers(); }
 });
 
-it('retains entered optional contact when a completion throttle refuses the attempt', async () => {
+it('retains email-only completion context when a throttle refuses a legacy contact attempt', async () => {
   const s = setup(); const { cookie, progress } = await start(s);
   const proof = cookieFrom(await handleSignup(post('/verify', { csrf: progress.csrf, code: '123456' }, cookie), env, s.a, s.signup));
   const a = { ...s.a, throttle: vi.fn(async () => false) };
   const denied = await handleSignup(post('/complete', { csrf: progress.csrf, phone: '+14155550100' }, proof), env, a, s.signup);
-  expect(await denied.text()).toContain('value="+14155550100"');
+  const html=await denied.text();
+  expect(html).not.toContain('value="+14155550100"');
+  expect(html).toContain('person@example.com');
+  expect(html).toContain(`value="${progress.csrf}"`);
+  expect(html).toContain('Too many attempts');
+});
+
+it('offers email-only signup at entry, OTP and verified completion without a phone collection control',async()=>{
+ const s=setup(),{cookie,progress}=await start(s);
+ const entry=await handleSignup(new Request('https://w.test/console/signup'),env,s.a,s.signup);
+ const pending=await handleSignup(new Request('https://w.test/console/signup',{headers:{cookie}}),env,s.a,s.signup);
+ const verified=cookieFrom(await handleSignup(post('/verify',{csrf:progress.csrf,code:'123456'},cookie),env,s.a,s.signup));
+ const saved=cookieFrom(await handleSignup(post('/phone',{csrf:progress.csrf,phone:'+14155550100'},verified),env,s.a,s.signup));
+ const finish=await handleSignup(new Request('https://w.test/console/signup',{headers:{cookie:saved}}),env,s.a,s.signup);
+ for(const response of [entry,pending,finish]){
+  const html=await response.text();expect(html).not.toMatch(/name="phone"|type="tel"|Phone:|Save contact and continue later/);
+  expect(html).not.toContain('+14155550100');
+ }
 });

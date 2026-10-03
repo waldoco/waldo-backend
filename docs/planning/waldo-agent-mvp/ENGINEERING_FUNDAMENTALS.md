@@ -378,3 +378,5 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] Exact workspace edits run existing external-taint hard checks on supplied changed values; only ordinary email/phone/address substitutions may be skipped for exact anchors. Forced-card fields remain refused. Full text replacements retain existing sanitization. No original file bytes are promoted into model context, restored from tokens, or auto-reinstated after explicit deletion; unchanged private fields are byte-preserved, including legitimate owner-private health content.
 
 - [ ] Full workspace replacement guards cover every emitted Scribe placeholder, including instruction masking. Adversarial marker cases must reject without changing the immutable revision or writing a new body; literal owner-authorized masking remains a separate edit path.
+
+- [ ] Email-only signup pages expose no telephone input or contact-save action, including a resumed legacy contact cookie. Preserve verified-email completion, exact invite consumption, owner/session cookies, CSRF and same-owner recovery; UI removal never changes identity admission or grants.
