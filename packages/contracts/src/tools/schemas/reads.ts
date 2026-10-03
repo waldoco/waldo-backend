@@ -108,15 +108,17 @@ export const getTasksArgsSchema = z.strictObject({
 });
 export type GetTasksArgs = z.infer<typeof getTasksArgsSchema>;
 
-// Drive metadata reads over the REST adapter (explicit, no MCP). The query is a typed field the edge turns into
+// Drive reads over the REST adapter (explicit, no MCP). The query is a typed field the edge turns into
 // a Drive query; the model never writes Drive query syntax. file_id is a closed id shape, not free text.
 export const readDriveArgsSchema = z.strictObject({
-  action: z.enum(['recent', 'search', 'get']),
+  action: z.enum(['recent', 'search', 'get', 'content']),
   name_contains: z.string().min(1).max(200).optional(),
   file_id: z.string().regex(/^[A-Za-z0-9_-]{10,128}$/).optional(),
   page_size: z.int().min(1).max(50).default(10),
   page_token: z.string().min(1).max(2048).optional(),
-}).refine((a) => (a.action !== 'search' || a.name_contains !== undefined) && (a.action !== 'get' || a.file_id !== undefined), { message: 'search needs name_contains and get needs file_id' });
+  connection_id: z.string().min(1).max(256).optional(),
+  expected_modified_time: z.string().datetime({ offset: true }).optional(),
+}).refine((a) => (a.action !== 'search' || a.name_contains !== undefined) && (a.action !== 'get' || a.file_id !== undefined) && (a.action !== 'content' || (a.file_id !== undefined && a.connection_id !== undefined && a.expected_modified_time !== undefined)), { message: 'search needs name_contains; get needs file_id; content needs file_id, connection_id and expected_modified_time from a current metadata read' });
 export type ReadDriveArgs = z.infer<typeof readDriveArgsSchema>;
 
 export const getMasterMetricsArgsSchema = z.strictObject({
