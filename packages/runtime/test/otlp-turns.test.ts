@@ -41,6 +41,17 @@ describe('model cost', () => {
 });
 
 describe('otlpTurnExporter', () => {
+  it('keeps an exponent-shaped release stamp a string at every outbound identity field', async () => {
+    const { calls, send, spans } = capture();
+    const release = '66854e71';
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, release }, send);
+    await log({ trace: 'synthetic-release-shape', hop: 'turn', ms: 1, ok: true });
+    const body = calls[0]!.body as Body & { resourceSpans: [{ resource: { attributes: Attr[] } }] };
+    expect(body.resourceSpans[0].resource.attributes.find(a => a.key === 'service.version')?.value).toEqual({ stringValue: release });
+    expect(attrs(spans(0)[0]!)).toMatchObject({ 'langfuse.release': release, 'langfuse.version': release });
+    expect(JSON.stringify(body)).toContain('"stringValue":"66854e71"');
+    expect(JSON.stringify(body)).not.toContain('6.6854e+75');
+  });
   it('labels mixed price coverage as a partial estimate instead of a complete zero-priced total', async () => {
     const { send, spans } = capture();
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send);

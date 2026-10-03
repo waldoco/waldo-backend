@@ -426,3 +426,11 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 |---|---|---|
 | Unproved topic selection cleared independently valid explicit claim and node deletions; unavailable selector aborted them too | memory-forget-do-provider.test.ts registered two-argument DO rejected/unavailable hybrid RED/GREEN with invalid IDs, durable unrelated retention and recreation | Only the unproved topic is withheld; applyClaimOps retains existing intent/eligible-ID checks, currentness is rechecked outside selector catch, retained recall remains limited |
 | Coverage custody INSERT failure lost the specific honest retry receipt | memory-forget-do-provider.test.ts actual SQL seam RED/GREEN, originals preserved and no accepted-pending claim | Fail closed before destruction; do not promise automatic recovery without durable custody |
+
+### Pasted-task source scope across follow-ups (RED diagnosis)
+- [ ] Preserve authenticated task source restrictions and current fictional referents across correction, recreation, history windows and recall holds. Record reads independently of writes. Test a provider attempting five connected-mail searches and two thread reads while the pasted-only restriction is still present. Accept a repair only with owner-authorized task transition, ambiguous-referent clarification, stale-retrieval precedence and forbidden-source exclusion controls; never restore withheld history wholesale or infer scope with phrase regex.
+
+| Bug class | Evidence and regression | Boundary |
+|---|---|---|
+| Pasted-only task restriction is present in the reply context but does not constrain a drifting provider's connected-source reads | pasted-task-scope.test.ts actual responder/durable DO storage/Google handler mock ports, five-search/two-read RED; ordinary recreation and structural no-effect read scorer controls pass | Scripted host-admission diagnosis, not a real-model replay, semantic answer grade or full authenticated inbox proof |
+| An unrelated incomplete-forgetting hold removes earlier task restrictions from reply context | pasted-task-scope.test.ts coverage marker plus recreated responder RED at66854e71 | Independent later condition; cannot explain N03 at74f1e763. Future repair must retain privacy withholding and prove forbidden-source exclusion |
