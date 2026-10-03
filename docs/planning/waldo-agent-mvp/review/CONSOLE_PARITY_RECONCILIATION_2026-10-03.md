@@ -26,7 +26,7 @@ Issue #658. Snapshot: beta-mvp 13ac09f plus #562 e93fb789 and #657 visual/fix pa
 | /console/files; file.remove/open | FilesControls plus protected /console/file | source/UI tests retained | remove is reference removal, not Telegram byte purge |
 | /console/workspace upload/remove/file/cursors | Workspace React + admitted server workspace handlers | immutable-revision downloads/MIME/isolation tests | live upload unknown-outcome retry, retained revision cleanup; no sharing |
 | /console/usage | UsageControls estimate rows | source/UI projection tests | period/cost interpretation and responsive table |
-| /console/activity; run details/cursors/ledger | ActivityControls; /console/runs remains | source projections and UI tests | React projection intentionally omits raw ledger; preservation destination needed before renderer retirement; same-ms cursor issue remains |
+| /console/activity; run details/cursors/ledger | ActivityControls; /console/runs remains | source projections and UI tests | React renders returned steps and ledger; technical-detail disclosure polish and hosted equivalence still needed; same-ms cursor issue remains |
 | /console/invites; invite.member | OwnerControls invite view | quota/one-time receipt/action tests | actual invite create/revoke paths; member model has create/list, admin owns revoke |
 | /console/admin; invite.create/revoke | AdminPanel existing owner gate | admin model/tests retained | migration present in deployment; non-admin server refusal, one-time code safety |
 | /console/account; account.delete | OwnerControls typed DELETE confirmation | incomplete/uncertain/deleted receipts retained | real deletion probe; does not certify Telegram/provider copies purged |
@@ -36,7 +36,7 @@ Issue #658. Snapshot: beta-mvp 13ac09f plus #562 e93fb789 and #657 visual/fix pa
 ## Outstanding parity, not UI bugs to conceal
 
 1. Root notices still use old renderer. Before removal, route their server-produced receipts into React without trusting a client-supplied notice as an authoritative write receipt.
-2. Full raw ledger/checklist diagnostics are absent from narrow React activity projection. Keep an intentional authorized technical-detail destination or add a reviewed narrow contract.
+2. ActivityControls already exposes returned steps and raw ledger. Move these into an authorized technical-details disclosure without losing content; verify hosted equivalence before retirement. An older projection note described omissions and is stale.
 3. Sessions projection supplies count and current expiry, not an individual session list. Do not draw fictional rows.
 4. Node forget deletes the node before retained-copy cleanup. Incomplete result is now honest but durable retry custody is not established. Separate backend disposition needed before promising a retry UI.
 5. Member invites and admin issuance are distinct. Sharing an invite does not share owner data.
