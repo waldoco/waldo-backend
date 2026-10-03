@@ -82,6 +82,7 @@ export const toolNameSchema = z.enum([
   'workspace_list',
   'workspace_read',
   'workspace_write',
+  'workspace_render',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -240,6 +241,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'workspace_list',
     'workspace_read',
     'workspace_write',
+    'workspace_render',
   ],
   dreaming_mode: ['read_memory', 'update_memory', 'search_episodes'],
   // Always carries send_message — a Spot is never silent (ADR-0042).

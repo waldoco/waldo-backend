@@ -281,7 +281,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     // leaves the search index, backups, and frozen legacy tables (redacted, preserving
     // unrelated content), constellation nodes stop quoting it and stop referencing its id,
     // and a barrier blocks re-admission. Fresh-state verification reports what survived.
-    purge(ids: readonly number[], at: string, topics: readonly string[] = [], wholeSourceTurns = false): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; sourceTurns: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } } {
+    purge(ids: readonly number[], at: string, topics: readonly string[] = []): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } } {
       const forgotten = ids.length
         ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
         : [];
@@ -333,16 +333,6 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } = { deleted: {}, redacted: {}, terminalised: {} };
       const tally = (kind: keyof typeof receipt, store: string) => { receipt[kind][store] = (receipt[kind][store] ?? 0) + 1; };
       const hasRunCandidates = tableExists(sql, 'run_candidates');
-      // Provenance by source turn: an OWNER-origin claim carries source_ref "owner, <turn id>", set by the admission gate and never by
-      // the model. The owner's message of that turn and Waldo's reply to it are retained history of where the forgotten claim came
-      // from, so both are redacted whole, whatever words they used. Only the claims this forget names are followed. Cost, stated:
-      // a turn that carried other facts loses its retained text too (the other facts stay as their own claims).
-      const sourceTurns = !wholeSourceTurns ? [] : [...new Set(forgotten.filter((claim) => claim.origin === 'owner' && claim.source_ref?.startsWith('owner, tg-')).map((claim) => claim.source_ref!.slice('owner, '.length).trim()))];
-      if (hasEpisodes) for (const turn of sourceTurns) attempt('episodes', () => {
-        for (const row of sql.exec<{ rid: number; text: string }>('SELECT rowid AS rid, text FROM episodes WHERE entry_id IN (?, ?)', turn, `${turn}-reply`).toArray()) {
-          if (row.text !== FORGOTTEN) { sql.exec('UPDATE episodes SET text = ? WHERE rowid = ?', FORGOTTEN, row.rid); tally('redacted', 'source_turn_episodes'); }
-        }
-      });
       const hasOutbox = tableExists(sql, 'outbox');
       const hasHeld = tableExists(sql, 'held_candidates');
       const hasSchedule = tableExists(sql, 'schedule');
@@ -521,7 +511,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // source on SQL verification alone would orphan a KV failure: the UI says incomplete
       // but the retry could no longer find the claim. Until settle() runs, the 'purging' row
       // and pending marker remain, so every retry path still works.
-      return { ready: failed.length === 0 && Object.keys(remaining).length === 0, remaining, texts, sourceTurns, failed, receipt };
+      return { ready: failed.length === 0 && Object.keys(remaining).length === 0, remaining, texts, failed, receipt };
     },
 
     // Final step of a purge, run only once SQL AND the caller's KV stores verify clean.
@@ -611,7 +601,7 @@ const CLAIM_RULES = [
   'Each claim is one short plain sentence. Keep conditions exactly as stated ("usually 11am; 7:30-8pm when mornings fail"), never flatten them.',
   'source is stated when the owner said it, inferred when it is your read. Quote or point to the evidence.',
   'When the exchange repeats a claim, list its id in seen. When the owner agrees with an inferred claim, list it in confirm. For an explicit owner correction, use corrections with the old claim id and the owner-quoted new fact; do not also dismiss or add it.',
-  'Only when the owner explicitly asks to forget something in the text you are reviewing, list the matching claim and node ids in forget_claims and forget_nodes, and set forget_topic so it is never relearned: when the owner names an exact code, id or phrase to forget, forget_topic is that text exactly as the owner wrote it (retained history is cleaned by that literal); otherwise name the subject in a few neutral words the owner used. Set forget_source_turns true only when the owner explicitly asks to forget the whole message or conversation turn the claim came from; otherwise false, so unrelated details in that turn are kept. Without an explicit ask in that text, forget_claims and forget_nodes stay empty and forget_topic is null - never forget on your own read of the conversation.',
+  'Only when the owner explicitly asks to forget something in the text you are reviewing, list the matching claim and node ids in forget_claims and forget_nodes, and set forget_topic so it is never relearned: when the owner names an exact code, id or phrase to forget, forget_topic is that text exactly as the owner wrote it (retained history is cleaned by that literal); otherwise name the subject in a few neutral words the owner used. Without an explicit ask in that text, forget_claims and forget_nodes stay empty and forget_topic is null - never forget on your own read of the conversation.',
   'Never record the owner\'s questions or one-off momentary states (asking the time, the weather, what is on the calendar today, a bare yes or no). Record what stays true: preferences, routines, plans, facts about the owner.',
   'Requests aimed at Waldo and tool or QA chatter are moments, not memory, in any wording: "verify the task list tomorrow", "give me the page title and URL", "use your web search tool to find X", "the calendar tool failed". Record none of these.',
   'Sources stay sources: a claim about something that lives in a connected source (an email, an event, a file) records what it means for the owner and a pointer to where it lives, never a copy of its contents. Current state of those sources is read live at ask time, not recalled from a claim.',
@@ -638,11 +628,11 @@ export const MIGRATION_INSTRUCTION = [
   'Each evidence cites the file and revision and quotes the line, like: MEMORY_CORE r3: "Gym usually 11am".',
   'Skip anything an existing claim already covers, and anything the owner asked to forget.',
   ...CLAIM_RULES.slice(1, 2),
-  'corrections, seen, confirm, dismiss, forget_claims and forget_nodes stay empty, forget_topic is null and forget_source_turns is false.',
+  'corrections, seen, confirm, dismiss, forget_claims and forget_nodes stay empty and forget_topic is null.',
 ].join('\n');
 
 export const CLAIM_OPS_SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['add', 'corrections', 'seen', 'confirm', 'dismiss', 'forget_claims', 'forget_nodes', 'forget_topic', 'forget_source_turns'],
+  type: 'object', additionalProperties: false, required: ['add', 'corrections', 'seen', 'confirm', 'dismiss', 'forget_claims', 'forget_nodes', 'forget_topic'],
   properties: {
     add: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['kind', 'text', 'source', 'evidence', 'touches_forgotten', 'aliases', 'aliases_touch_forgotten'],
       properties: { kind: { type: 'string', enum: [...CLAIM_KINDS] }, text: { type: 'string' }, source: { type: 'string', enum: ['stated', 'inferred'] }, evidence: { type: 'string' }, touches_forgotten: { type: 'boolean' }, aliases_touch_forgotten: { type: 'boolean' }, aliases: { type: 'array', maxItems: MAX_ALIASES, items: { type: 'string' } } } } },
@@ -653,7 +643,6 @@ export const CLAIM_OPS_SCHEMA = {
     forget_claims: { type: 'array', items: { type: 'integer' } },
     forget_nodes: { type: 'array', items: { type: 'integer' } },
     forget_topic: { type: ['string', 'null'] },
-    forget_source_turns: { type: 'boolean' },
   },
 };
 
@@ -726,10 +715,10 @@ const correctionMatches = (old: Claim, replacement: { kind: string; text: string
     [...current].filter((word) => !previous.has(word)).every((word) => observed.has(word));
 };
 
-type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean; aliases_touch_forgotten?: boolean })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null; forget_source_turns?: boolean }>;
+type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean; aliases_touch_forgotten?: boolean })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null }>;
 
 // What this application of claim ops actually did, as counts the caller can report truthfully.
-export type ClaimOutcome = Readonly<{ written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[]; episodesRedacted?: number; sourceTurns?: readonly string[]; sourceTurnEpisodesRedacted?: number }>;
+export type ClaimOutcome = Readonly<{ written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[]; episodesRedacted?: number }>;
 
 export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[], topics?: readonly string[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean, onOutcome?: (outcome: ClaimOutcome) => void): string => {
   // Destructive ops need an explicit forget request in the text under review (see
@@ -854,7 +843,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   // A topic still pending from an earlier turn is retried here with no new intent needed: its owner evidence was
   // checked when it was first recorded.
   const purgeTopics = [...new Set([...(topic ? [topic] : []), ...store.pendingTopics()])];
-  const purge = forgetIds.length || purgeTopics.length ? store.purge(forgetIds, at, purgeTopics, forgetsAllowed && ops.forget_source_turns === true) : null;
+  const purge = forgetIds.length || purgeTopics.length ? store.purge(forgetIds, at, purgeTopics) : null;
   if (purge && purge.texts.length > 0) {
     if (onPurged === undefined) {
       // No KV consumer: SQL verification is the whole settlement, so settle now. A caller
@@ -873,7 +862,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     // Unique ids, so a repeated id counts once; removed only when every store verified clean.
     forgetClaimsAttempted: new Set(forgetIds).size, forgetClaimsRemoved: purge?.ready ? new Set(forgetIds).size : 0,
     forgetNodes: forgetsAllowed ? new Set(ops.forget_nodes.filter((id) => nodes.has(id))).size : 0,
-    forgetAllowed: forgetsAllowed, purgeIncomplete: leftover, episodesRedacted: purge?.receipt.redacted.episodes ?? 0, sourceTurns: purge?.sourceTurns ?? [], sourceTurnEpisodesRedacted: purge?.receipt.redacted.source_turn_episodes ?? 0,
+    forgetAllowed: forgetsAllowed, purgeIncomplete: leftover, episodesRedacted: purge?.receipt.redacted.episodes ?? 0,
   });
   const reasons = holdReasons.size ? `(${[...holdReasons].join(',')})` : '';
   const blockedForgets = forgetsAllowed ? 0 : ops.forget_claims.length + ops.forget_nodes.length + (ops.forget_topic?.trim() ? 1 : 0);

@@ -20,8 +20,15 @@ const wrap = (text: string, font: PDFFont, size: number, width: number): string[
     let piece = word;
     // A single word wider than the line is broken by characters so nothing runs off the page.
     while (font.widthOfTextAtSize(piece, size) > width) {
-      let cut = piece.length - 1;
-      while (cut > 1 && font.widthOfTextAtSize(piece.slice(0, cut), size) > width) cut -= 1;
+      // Search the longest fitting prefix instead of remeasuring every character cut.
+      // A permitted unbroken token must not trigger one measurement per character cut.
+      let cut = 1;
+      let high = piece.length - 1;
+      while (cut < high) {
+        const middle = Math.ceil((cut + high) / 2);
+        if (font.widthOfTextAtSize(piece.slice(0, middle), size) <= width) cut = middle;
+        else high = middle - 1;
+      }
       if (line) { lines.push(line); line = ''; }
       lines.push(piece.slice(0, cut));
       piece = piece.slice(cut);

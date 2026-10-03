@@ -1,6 +1,6 @@
 # Waldo Engineering Execution Playbook
 
-Version 1.1 · 2 October 2026 · Maintainers: Dalda and Core (Instinct)
+Version 1.2 · 3 October 2026 · Maintainers: Dalda and Core (Instinct)
 
 Build the smallest usable change, verify its real behavior, and improve the loop from observed failures. This playbook records the working direction for Waldo engineering. The process below is reusable; the dated checkpoint is historical evidence, not a permanent statement of readiness. Proposed CI improvements remain proposals until implemented and verified.
 
@@ -20,6 +20,20 @@ Start with the user outcome and observed problem. Inspect existing code, tests, 
 - **AI engineering:** Own context assembly, prompts, tool selection, action budgets, and behavioral evaluations
 
 These are responsibilities, not additional approval layers; the named component owners coordinate them.
+
+## Why build this
+
+Before every feature or new work item, record a short, risk-proportionate decision note. Start with existing evidence and research uncertainties that could change the decision:
+
+- **User job and evidence:** Who needs this, what are they trying to accomplish, and what requests, observations, or failures support the need? Separate evidence from assumptions
+- **Pain and timing:** What fails or creates friction today, how often, and why is this necessary now?
+- **Value:** Identify the improvement to system or agent capability, reliability, UX, or trust. Treat personality and personalization as product behavior: explain their value for relevance, continuity, communication, or user control
+- **Requirements and references:** Research the actual user requirements and verify relevant competitor or mature-harness patterns against current primary sources. Record limitations; do not copy blindly. Competitor adoption is neither proof of value nor a prerequisite for Waldo's distinctive capabilities
+- **Smallest useful slice:** Define the smallest end-to-end change and observable acceptance evidence
+- **Tradeoffs:** Consider cost, complexity, maintenance, dependencies, privacy, and latency against the expected value
+- **Decision:** Build, reuse, defer, or remove. Keep the owner, evidence, reason, expected outcome, and revisit trigger in the lightweight decision ledger
+
+This note adds no mandatory user approval or CI gate. Correctness, security, and bug fixes can proceed from demonstrated failure and risk without a market essay; capture their concrete value and acceptance test briefly.
 
 ## The execution loop
 

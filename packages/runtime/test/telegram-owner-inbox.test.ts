@@ -51,3 +51,34 @@ it('awaiting transport scrubs raw body and never rearms an expired execution dea
   const f=fixture();await f.inbox.admit(f.binding,1,'raw input');await f.inbox.claim('7:telegram:1','a','r',1100);await f.inbox.transition('7:telegram:1','a','awaiting_delivery');
   expect((await f.inbox.records())[0]?.body).toBe('');expect(f.data.get('due')).toBeNull();f.advance();await f.inbox.recover(new Set());expect(f.data.get('due')).toBeNull();expect((await f.inbox.records())[0]?.state).toBe('awaiting_delivery');
 });
+
+describe('never-consumed steering fallback', () => {
+ it('returns a claimed steer to the same FIFO admission and wake without weakening dedup', async () => {
+  const f=fixture();await f.inbox.admit(f.binding,2,'second',{kind:'steer',targetRun:'parent'});
+  await f.inbox.admit(f.binding,1,'third');const before=(await f.inbox.records())[0]!;
+  await f.inbox.claim(before.id,'child-attempt','child-run',2000);
+  expect(await f.inbox.returnUnconsumedSteer(before.id,'child-attempt')).toBe(true);
+  const after=(await f.inbox.records())[0]!;
+  const {control:_control,...ordinary}=before;expect(after).toEqual({...ordinary,state:'admitted'});expect(f.data.get('due')).toBe(1250);
+  expect((await f.inbox.records()).map(row=>row.updateId)).toEqual([2,1]);
+  expect(await f.inbox.admit(f.binding,2,'second')).toBe('duplicate');
+  expect(await f.inbox.admit(f.binding,2,'changed')).toBe('conflict');
+  const claimed=await f.inbox.claim(before.id,'ordinary','ordinary-run',3000);expect(claimed?.body).toBe('second');expect(claimed?.control).toBeUndefined();
+ });
+ it('recovers never-consumed steering after restart but never replays consumed children or stop controls', async()=>{
+  const f=fixture();for(const id of [1,2,3])await f.inbox.admit(f.binding,id,`body${id}`,{kind:id===3?'stop':'steer',targetRun:'parent'});
+  for(const id of [1,2,3])await f.inbox.claim(`7:telegram:${id}`,`attempt${id}`,`run${id}`,2000);
+  await f.inbox.transition('7:telegram:2','attempt2','consumed');await f.inbox.recover(new Set());
+  const rows=await f.inbox.records();expect(rows[0]).toMatchObject({state:'admitted',body:'body1'});expect(rows[0]!.control).toBeUndefined();
+  expect(rows.slice(1).map(row=>[row.state,row.body])).toEqual([['quarantined',''],['quarantined','']]);
+  expect(await f.inbox.returnUnconsumedSteer('7:telegram:2','attempt2')).toBe(false);
+ });
+ it('makes late admitted steering ordinary, fences stale attempts, and rolls back failed atomic wake',async()=>{
+  const f=fixture();await f.inbox.admit(f.binding,1,'late',{kind:'steer',targetRun:'dead'});const row=(await f.inbox.records())[0]!;
+  expect(await f.inbox.returnUnconsumedSteer(row.id)).toBe(true);
+  await f.inbox.admit(f.binding,2,'claimed',{kind:'steer',targetRun:'dead'});await f.inbox.claim('7:telegram:2','current','run',2000);
+  expect(await f.inbox.returnUnconsumedSteer('7:telegram:2','stale')).toBe(false);
+  f.fail();await expect(f.inbox.returnUnconsumedSteer('7:telegram:2','current')).rejects.toThrow('alarm commit');
+  expect((await f.inbox.records())[1]).toMatchObject({state:'claimed',attempt:'current',body:'claimed',control:{kind:'steer'}});
+ });
+});

@@ -206,6 +206,32 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     });
   }
 
+  private async notifyUncertainSteering(): Promise<void> {
+    for (const child of await this.inbox.records()) {
+      if (child.outcomeNoticeQueued || child.control?.kind !== 'steer' || !child.attempt) continue;
+      const parent = (await this.inbox.records()).find(row => row.runId === child.control!.targetRun);
+      if (child.state === 'consumed' ? parent?.closedAt === undefined
+        : child.state !== 'quarantined' || !['not_consumed', 'consumed_target_outcome_uncertain', 'recovered_uncertain'].includes(child.reason ?? '')) continue;
+      await this.setup().finalOutbox.enqueueFenced({ id: `steer-failure:${child.id}:${child.attempt}`, trace: ownerTurnTrace('telegram', child.updateId),
+        payload: { chat_id: Number(child.subject), text: child.reason === 'not_consumed'
+          ? 'Your added message was not processed. Please send it again if you still want me to act on it.'
+          : 'Your added message was used by a run whose outcome is uncertain. In-flight changes may still finish. Please check before retrying changes.' },
+        ownerSubject: child.subject, doName: child.doName, bot: child.bot,
+      }, work => this.ctx.storage.transactionSync(() => {
+        const rows = this.ctx.storage.kv.get<InboxRecord[]>('telegram_owner_inbox_v1') ?? [];
+        const current = rows.find(r => r.id === child.id);
+        if (!current || current.state !== child.state || current.attempt !== child.attempt || current.runId !== child.runId
+          || current.digest !== child.digest || current.subject !== child.subject || current.doName !== child.doName || current.bot !== child.bot
+          || current.control?.kind !== 'steer' || current.control.targetRun !== child.control!.targetRun || current.reason !== child.reason
+          || this.ctx.storage.kv.get<string>('telegram_subject') !== child.subject
+          || this.ctx.storage.kv.get<string>('do_name') !== child.doName || this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] !== child.bot || this.ctx.storage.kv.get<boolean>('telegram_unlinked')) return;
+        work();
+        current.state = 'quarantined'; current.body = ''; current.reason = child.reason ?? 'consumed_target_outcome_uncertain'; current.outcomeNoticeQueued = true;
+        this.ctx.storage.kv.put('telegram_owner_inbox_v1', rows);
+      }));
+    }
+  }
+
   private async enqueue(request: Request): Promise<Response> {
     const secret = this.env.TELEGRAM_WEBHOOK_SECRET;
     if (request.method !== 'POST' || !secret || !sameSecret(request.headers.get('x-waldo-inbox-secret') ?? '', secret)) return new Response('forbidden', { status: 403 });
@@ -251,8 +277,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
               if (target && target.runId === control.targetRun) { this.closeRunAtomic(target, 'owner_stopped'); this.activeAbort?.abort(); }
               await this.inbox.transition(row.id, attempt, 'consumed'); this.runtimes.telegram?.control.stopTarget(control.targetRun);
             }
-            else this.runtimes.telegram?.control.steerTarget(control.targetRun, raw.update_id!, text!);
-          }
+            else if (!this.runtimes.telegram?.control.steerTarget(control.targetRun, raw.update_id!, text!)) {
+              await this.inbox.returnUnconsumedSteer(row.id, attempt); this.liveAttempts.delete(attempt);
+            }
+          } else if (claimed && control.kind === 'steer') await this.inbox.returnUnconsumedSteer(row.id, attempt);
         }
       }
       return new Response('ok');
@@ -261,7 +289,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   private async drainInbox(): Promise<void> {
     const rows = (await this.inbox.records()).filter(r => r.state === 'admitted').sort((a,b) => a.sequence - b.sequence);
-    const row = rows[0]; if (!row) return;
+    let row = rows[0]; if (!row) return;
+    if (row.control?.kind === 'steer') {
+      if (!await this.inbox.returnUnconsumedSteer(row.id)) return;
+      row = (await this.inbox.records()).find(r => r.id === row!.id)!;
+    }
     if (row.control) {
       const attempt = crypto.randomUUID(); await this.inbox.claim(row.id, attempt, crypto.randomUUID(), Date.now() + 180_000);
       await this.inbox.transition(row.id, attempt, 'quarantined', 'target_run_not_live'); return;
@@ -289,7 +321,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     try {
       this.setup().control.bindTarget(runId);
       this.setup().control.durableConsume(async ids => {
-        for (const child of await this.inbox.records()) if (child.control?.targetRun === runId && ids.includes(child.updateId) && child.attempt) await this.inbox.transition(child.id, child.attempt, 'consumed');
+        scope.admit();
+        for (const id of ids) {
+          const child = (await this.inbox.records()).find(row => row.control?.targetRun === runId && row.updateId === id);
+          if (!child?.attempt || child.subject !== claimed.subject || child.bot !== claimed.bot || child.doName !== claimed.doName || child.control?.kind !== 'steer' || !['claimed', 'consumed'].includes(child.state) || !await this.inbox.transition(child.id, child.attempt, 'consumed')) throw new ClosedRunError();
+        }
+        scope.admit();
       });
       if (this.ctx.storage.kv.get<string>('telegram_subject') !== row.subject || this.ctx.storage.kv.get<string>('do_name') !== row.doName || this.ctx.storage.kv.get<boolean>('telegram_unlinked')) {
         await this.inbox.transition(row.id, attempt, 'quarantined', 'owner_binding'); return;
@@ -332,9 +369,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (this.activeScope === scope) { this.activeScope = undefined; this.activeOwnerContext = undefined; this.activeAbort = undefined; }
       try {
       for (const child of await this.inbox.records()) if (child.control?.targetRun === runId && child.attempt) {
-        await this.inbox.transition(child.id, child.attempt, 'quarantined', child.state === 'consumed' ? 'consumed_target_outcome_uncertain' : 'not_consumed');
+        if (child.state === 'claimed' && child.control.kind === 'steer') await this.inbox.returnUnconsumedSteer(child.id, child.attempt);
+        else if (child.state !== 'consumed' || child.control.kind !== 'steer') await this.inbox.transition(child.id, child.attempt, 'quarantined', child.state === 'consumed' ? 'consumed_target_outcome_uncertain' : 'not_consumed');
         this.liveAttempts.delete(child.attempt);
       }
+      await this.notifyUncertainSteering();
       } catch { console.error('child quarantine deferred to host recovery'); } finally {
         if (this.activeInbox?.runId === runId) this.activeInbox = null;
         // Serial owner execution is over; retained child claims are recovered as uncertain.
@@ -702,6 +741,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await this.inbox.transition(final.inbox.id, final.inbox.attempt, 'awaiting_delivery');
       }
       await this.inbox.recover(protectedAttempts);
+      try { await this.notifyUncertainSteering(); } catch { console.error('child uncertainty notice deferred to host recovery'); }
       const dueInbox = (await this.inbox.records()).some(r => r.state === 'admitted');
       const dueTransport = finals.some(r => r.status === 'attempting' || (r.status === 'pending' && r.dueAt <= Date.now()) || (r.status !== 'pending' && !r.settled));
       const readyKinds = [dueInbox, dueTransport, scheduler.hasDue()];
@@ -1276,7 +1316,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!scope) throw new ClosedRunError();
       scope.admit();
       return workspaceOwnerHost(this.env, storage, this.ctx.id.toString(), identity.get<string>('do_name'), fetch, scope);
-    });
+    }, { origin: async () => await storage.get<string>('origin') ?? null, durable: Boolean(this.env.ARTIFACTS) });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
       { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), ...standingOrderHandlers(orders), ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleHandlers(google, desk, clock, async (from, artifacts) => {

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { applyClaimOps, claimStore, FORGOTTEN, MEMORY_INSTRUCTION } from '../src/memory/claims';
 import { episodeIndex } from '../src/channels/episodes';
 
-const ops = (partial: Record<string, unknown>) => JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null, forget_source_turns: false, ...partial });
+const ops = (partial: Record<string, unknown>) => JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null, ...partial });
 const AT = '2026-10-03T00:00:00Z';
 const run = <T>(name: string, fn: (sql: SqlStorage, tx: <R>(work: () => R) => R) => T) =>
   runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), (_i, state) => fn(state.storage.sql, (work) => state.storage.transactionSync(work)));
@@ -58,8 +58,7 @@ describe('forgetting a topic whose claim is already gone', () => {
 });
 
 describe('forgetting by the exact identifier the owner named', () => {
-  it('tells the writer to keep an owner-named literal as forget_topic, and to opt into whole-turn forget only on the owner explicit ask', () => {
-    expect(MEMORY_INSTRUCTION).toContain('Set forget_source_turns true only when the owner explicitly asks to forget the whole message or conversation turn');
+  it('tells the writer to keep an owner-named literal as forget_topic', () => {
     expect(MEMORY_INSTRUCTION).toContain('when the owner names an exact code, id or phrase to forget, forget_topic is that text exactly as the owner wrote it');
   });
   it('a literal marker topic cleans the request and the assistant reply that repeated it', async () => {
@@ -88,71 +87,6 @@ describe('the forget outcome counts the episodes it redacted', () => {
       let episodesRedacted: number | undefined;
       applyClaimOps(store, ops({ forget_topic: 'Posterbot' }), AT, 'owner, tg-3', undefined, { owner: 'forget Posterbot' }, true, (outcome) => { episodesRedacted = outcome.episodesRedacted; });
       expect(episodesRedacted).toBe(2);
-    });
-  });
-});
-
-describe('forgetting a claim reaches the turn it came from', () => {
-  const claim = (extra: Record<string, unknown>) => ({ kind: 'preference', text: 'Workshop starts at nine', source: 'owner', evidence: 'owner, tg-1', ...extra });
-  it('redacts the owner message and Waldo reply of the source turn whole, and nothing else', async () => {
-    await run('forget-source-turn', (sql, tx) => {
-      const store = claimStore(sql, tx);
-      const episodes = episodeIndex(sql);
-      episodes.add('tg-1', 'owner', 'I like the workshop early, nine sharp', 1);
-      episodes.add('tg-1-reply', 'waldo', 'Saved: mornings at 09:00 for the workshop.', 2);
-      episodes.add('tg-2', 'owner', 'unrelated lunch plan', 3);
-      episodes.add('tg-4', 'owner', 'does the workshop still start at 09:00?', 4);
-      store.add({ ...claim({ origin: 'owner', source_ref: 'owner, tg-1' }) } as never, AT);
-      const id = store.claims()[0]!.id;
-      let outcome: { sourceTurns?: readonly string[]; sourceTurnEpisodesRedacted?: number } | undefined;
-      applyClaimOps(store, ops({ forget_claims: [id], forget_source_turns: true }), AT, 'owner, tg-5', undefined, { owner: 'forget the workshop time' }, true, (o) => { outcome = o; });
-      const rows = sql.exec<{ entry_id: string; text: string }>('SELECT entry_id, text FROM episodes ORDER BY rowid').toArray();
-      expect(rows.find((r) => r.entry_id === 'tg-1')!.text).toBe(FORGOTTEN);
-      expect(rows.find((r) => r.entry_id === 'tg-1-reply')!.text).toBe(FORGOTTEN);
-      expect(rows.find((r) => r.entry_id === 'tg-2')!.text).toBe('unrelated lunch plan');
-      expect(rows.find((r) => r.entry_id === 'tg-4')!.text).toContain('09:00');
-      expect(outcome?.sourceTurns).toEqual(['tg-1']);
-      expect(outcome?.sourceTurnEpisodesRedacted).toBe(2);
-    });
-  });
-  it('does not follow a claim that is not owner-origin, or a claim the forget did not name', async () => {
-    await run('forget-source-turn-gate', (sql, tx) => {
-      const store = claimStore(sql, tx);
-      const episodes = episodeIndex(sql);
-      episodes.add('tg-1', 'owner', 'agent-origin turn text', 1);
-      episodes.add('tg-2', 'owner', 'other owner turn text', 2);
-      store.add({ ...claim({ source_ref: 'owner, tg-1' }) } as never, AT);
-      store.add({ ...claim({ text: 'Second claim', origin: 'owner', source_ref: 'owner, tg-2' }) } as never, AT);
-      const first = store.claims().find((c) => c.text === 'Workshop starts at nine')!.id;
-      applyClaimOps(store, ops({ forget_claims: [first], forget_source_turns: true }), AT, 'owner, tg-5', undefined, { owner: 'forget the workshop time' }, true);
-      const texts = sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY rowid').toArray().map((r) => r.text);
-      expect(texts).toEqual(['agent-origin turn text', 'other owner turn text']);
-    });
-  });
-  it('DEFAULT: forgetting a claim keeps the unrelated detail in its source turn when the owner did not ask for the whole turn', async () => {
-    await run('forget-source-turn-default-off', (sql, tx) => {
-      const store = claimStore(sql, tx);
-      const episodes = episodeIndex(sql);
-      episodes.add('tg-1', 'owner', 'workshop at nine sharp, and my dentist is Dr Rao on Friday', 1);
-      store.add({ ...claim({ origin: 'owner', source_ref: 'owner, tg-1' }) } as never, AT);
-      const id = store.claims()[0]!.id;
-      let outcome: { sourceTurns?: readonly string[] } | undefined;
-      applyClaimOps(store, ops({ forget_claims: [id] }), AT, 'owner, tg-5', undefined, { owner: 'forget the workshop time' }, true, (o) => { outcome = o; });
-      expect(sql.exec<{ text: string }>('SELECT text FROM episodes').one().text).toContain('Dr Rao');
-      expect(outcome?.sourceTurns).toEqual([]);
-    });
-  });
-  it('MIXED SOURCE, whole-turn opt-in: a sibling claim from the same turn keeps its claim, but the turn text is redacted', async () => {
-    await run('forget-source-turn-mixed', (sql, tx) => {
-      const store = claimStore(sql, tx);
-      const episodes = episodeIndex(sql);
-      episodes.add('tg-1', 'owner', 'workshop at nine sharp, and my dentist is Dr Rao on Friday', 1);
-      store.add({ ...claim({ origin: 'owner', source_ref: 'owner, tg-1' }) } as never, AT);
-      store.add({ ...claim({ text: 'Dentist is Dr Rao', evidence: 'owner, tg-1', origin: 'owner', source_ref: 'owner, tg-1' }) } as never, AT);
-      const forgotten = store.claims().find((c) => c.text === 'Workshop starts at nine')!.id;
-      applyClaimOps(store, ops({ forget_claims: [forgotten], forget_source_turns: true }), AT, 'owner, tg-5', undefined, { owner: 'forget the workshop time' }, true);
-      expect(sql.exec<{ text: string }>('SELECT text FROM episodes').one().text).toBe(FORGOTTEN);
-      expect(store.claims().map((c) => c.text)).toEqual(['Dentist is Dr Rao']);
     });
   });
 });
