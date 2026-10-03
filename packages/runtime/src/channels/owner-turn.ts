@@ -362,7 +362,7 @@ export const createOwnerResponder = (
       // Capture-mode probe turns run on the stripped handler set; delegation wraps that
       // same set so probe confinement applies to children too (children are read-only by
       // construction, and the strip list is not widened here).
-      const admittedHandlers = binding ? handlers.filter(handler => request.tools.includes(handler.name)) : handlers;
+      const admittedHandlers = handlers.filter(handler => (!binding || request.tools.includes(handler.name)) && (backgroundToolNames === undefined || backgroundToolNames.includes(handler.name)));
       const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => binding ? { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => { await assertCurrent(); const result = await handler.handle(args, ctx); await assertCurrent(); return result; } } : handler);
       const activeHandlers = probeGuard?.stripLiveTools
         ? guardedHandlers.filter((handler) => !PROBE_STRIPPED_TOOLS.includes(handler.name))
@@ -437,6 +437,7 @@ export const createOwnerResponder = (
   // Set by converse() for the duration of one submit: delegate_task rides owner chat turns
   // only, never reminder/scheduled machine turns that flow through the same closure.
   let ownerTurnActive = false;
+  let backgroundToolNames: readonly string[] | undefined;
   // The reply this turn just sent, so chooseReaction reacts to the exchange (gist of what the
   // owner saw) instead of the owner's message alone - the 😢-on-stress class (2026-09-27 sweep).
   let lastReply: string | undefined;
@@ -487,7 +488,8 @@ export const createOwnerResponder = (
     refreshPendingRedaction();
     tree.redact([...forgottenTexts], FORGOTTEN);
   };
-  const converse = async (id: string, conversationRef: string, said: string, time: TurnTimer, fromOwner = false, surface = 'agent') => {
+  const converse = async (id: string, conversationRef: string, said: string, time: TurnTimer, fromOwner = false, surface = 'agent', toolNames?: readonly string[]) => {
+    backgroundToolNames = fromOwner ? undefined : toolNames;
     if (forgetUnsafe) throw new Error('forget context sanitisation failed');
     traceId = id;
     ownerTurnActive = fromOwner;
@@ -499,7 +501,7 @@ export const createOwnerResponder = (
         context: { ...(binding?.admission.snapshot ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null },
         userEntry: { id, ownerId, chatId: conversationRef, parentId, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' } },
         assistantEntryId: `${id}-reply`,
-      })).finally(() => { ownerTurnActive = false; control.end(); });
+      })).finally(() => { ownerTurnActive = false; backgroundToolNames = undefined; control.end(); });
       privateRunScope?.admit();
       await assertCurrent();
       tree.redact([...forgottenTexts], FORGOTTEN);
@@ -598,11 +600,11 @@ export const createOwnerResponder = (
       memoryReceipts.length = 0;
       return converse(id, conversationRef, `[Reminder due now, set earlier by the owner: "${note}"] Send the reminder briefly in your own words. Do not add a sentence explaining that they asked for it.`, time, false, surface);
     },
-    async prompt(id, conversationRef, said, time, surface) {
+    async prompt(id, conversationRef, said, time, surface, toolNames) {
       await restored();
       pending = undefined;
       memoryReceipts.length = 0;
-      return converse(id, conversationRef, said, time, false, surface);
+      return converse(id, conversationRef, said, time, false, surface, toolNames);
     },
     async consolidate(trace, day, sides) {
       if (!memory) return 'no memory';

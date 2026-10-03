@@ -52,7 +52,7 @@ import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardFor, isClock, compos
 import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview } from './dashboard-overview';
 import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
-import { changeLines, collectChanges, updateBook, type UpdateBook } from './update-cards';
+import { changeLines, collectChanges, reviewMailFollowup, updateBook, type UpdateBook } from './update-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../tools/live/browser';
 import { webSearchHandler } from '../tools/live/web-search';
@@ -757,7 +757,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             && (!r.bot || r.bot === this.env.TELEGRAM_BOT_TOKEN?.split(':')[0])
             && r.doName === (this.ctx.storage.kv.get<string>('do_name') ?? '')
             && this.ctx.storage.kv.get<boolean>('telegram_unlinked') !== true
+            && (!r.mailFollowup || loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).reviewEligible(r.mailFollowup, this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC'))
             && heartbeatEligible(r, this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', Date.now()),
+          defer: async r => r.mailFollowup && isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC') ? Date.now() + 10 * 60_000 : null,
           send: payload => call('sendMessage', payload), settled: settleFinal,
         }); } finally { await scheduler.rearm(); }
         return;
@@ -1579,19 +1581,29 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         const now = Date.now();
         const changes = await collectChanges(updates, client, now);
-        if (changes.length === 0) return;
         const day = localIso(now, clock.timezone).slice(0, 10);
         const sentToday = new Set(plans.read(day).filter((row) => row.sent).map((row) => row.card));
         const { volume } = loops.proactivity();
         const canSend = sentToday.has('card:brief') && !sentToday.has('card:close') && volume !== 'low' && !quiet();
         let text: string | null = null;
-        if (canSend) {
+        if (canSend && changes.length) {
           const said = updateCardPrompt(localIso(now, clock.timezone), { changes: changeLines(changes), ledger: await ledger(), feedback: updates.feedback(), volume: volume === 'high' ? 'high' : 'normal' });
-          const reply = (await responder.prompt(trace, owner, said, async (hop, work) => work())).trim();
+          const reply = (await responder.prompt(trace, owner, said, async (hop, work) => work(), ['get_context', 'read_owner_context', 'search_episodes', 'open_loop'])).trim();
           if (reply && reply !== SKIP_UPDATE) text = reply;
         }
-        const id = updates.record(day, now, changes, text);
+        const id = changes.length ? updates.record(day, now, changes, text) : null;
         if (text) await routedCall('sendMessage', { chat_id: owner, text, reply_markup: { inline_keyboard: [[{ text: 'Useful', callback_data: `fb:${id}:u` }, { text: 'Not useful', callback_data: `fb:${id}:n` }]] } });
+        await reviewMailFollowup({ loops, now, timezone: clock.timezone, allowed: canSend && changes.length === 0,
+          ledger, prompt: said => responder.prompt(`${trace}:mail-followup`, owner, said, async (_hop, work) => work(), ['get_context', 'read_owner_context', 'search_episodes']),
+          enqueue: async (text, mailFollowup) => {
+            await finalOutbox.enqueueFenced({ id: `mail-followup:${mailFollowup.loopId}:${mailFollowup.due}:${mailFollowup.timezone}`,
+              trace: `${trace}:mail-followup`, payload: { chat_id: owner, text: redactSecretUrls(text).text },
+              ownerSubject: String(owner), doName: storage.kv.get<string>('do_name') ?? '',
+              ...(channel === 'telegram' ? { bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] } : {}), mailFollowup,
+            }, work => storage.transactionSync(() => { work(); loops.claimReview(mailFollowup); }));
+            await scheduler.rearm();
+          },
+        });
         log({ trace, hop: 'update_card', ms: Date.now() - started, ok: true, detail: `${changes.length} changes; ${text ? 'sent' : canSend ? 'skipped' : 'held for next card'}`, text: { input: changeLines(changes), output: text ?? '' } });
       } catch (error) {
         log({ trace, hop: 'update_card', ms: Date.now() - started, ok: false, error: String(error) });
@@ -1636,6 +1648,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       log({ trace: record.trace, hop: 'outbox_delivery', ms: 0, ok: delivered,
         detail: record.status, ...(record.reason ? { code: record.reason } : {}) });
       if (record.status === 'pending') return;
+      if (record.mailFollowup) loops.settleReview(record);
       if (!record.reminder) log({ trace: record.trace, hop: 'turn', ms: 0, ok: delivered, detail: delivered ? 'delivered' : 'delivery_unconfirmed' });
       if (record.heartbeat) {
         settleHeartbeat(record, this.ctx.storage.sql, scheduler);

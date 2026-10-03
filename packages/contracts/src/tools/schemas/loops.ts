@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 // Open loops (W6): things Waldo took on for the owner, kept until closed so nothing is dropped silently.
 export const openLoopArgsSchema = z.strictObject({
+  source_ref: z.string().min(1).max(200).optional().describe('Observed mail source_ref from update context. This records a follow-up hypothesis with unknown completion, never an owner commitment or permission.'),
   title: z.string().min(1).max(200).describe('What Waldo took on, in a few plain words.'),
   due: z.string().regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/).nullable().default(null).describe("When it is due, as YYYY-MM-DD or YYYY-MM-DDTHH:MM in the owner's local time, or null."),
 });

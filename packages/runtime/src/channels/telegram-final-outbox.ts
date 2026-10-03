@@ -6,6 +6,7 @@ const MAX_RECORDS = 256;
 const MAX_ATTEMPTS = 3;
 export type FinalPayload = Readonly<{ chat_id: number; text: string; parse_mode?: 'HTML' }>;
 export type HeartbeatReceipt = { id: string; occurrence: number; schedulerRunId: string; runId?: string; loops: { id: string; due: string }[] };
+export type MailFollowupReceipt = { loopId: string; due: string; sourceRef: string; timezone: string };
 export type FinalRecord = {
   id: string; trace: string; payload: FinalPayload; digest: string;
   expiresAt?: number; bot?: string;
@@ -13,6 +14,7 @@ export type FinalRecord = {
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; deliveredAt?: number; reason?: string;
   inbox?: { id: string; runId: string; attempt: string };
   heartbeat?: HeartbeatReceipt;
+  mailFollowup?: MailFollowupReceipt;
   reaction?: { message_id: number; emoji: string };
   reminder?: { id: string; occurrence: number; runId: string; schedulerRunId: string | null; once: boolean };
 };
@@ -76,6 +78,7 @@ export class TelegramFinalOutbox {
   async drain(options: {
     allowed(record: FinalRecord): Promise<boolean>;
     send(payload: FinalPayload): Promise<unknown>;
+    defer?(record: FinalRecord): Promise<number | null>;
     settled(record: FinalRecord): Promise<void>;
   }): Promise<void> {
     await this.maintain();
@@ -91,6 +94,11 @@ export class TelegramFinalOutbox {
     }
     const row = rows.find(r => r.status === 'pending' && r.dueAt <= this.now());
     if (!row) return;
+    // A quiet-hours hold keeps the frozen intent pending; it is not a rejection.
+    const deferred = await options.defer?.(row);
+    if (deferred !== undefined && deferred !== null && deferred > this.now()) {
+      row.dueAt = deferred; await this.save(rows); return;
+    }
     let allowed = false;
     try { allowed = (row.expiresAt === undefined || this.now() < row.expiresAt) && await options.allowed(row); } catch { /* fail closed */ }
     if (!allowed) { row.status = 'blocked'; row.reason = 'owner_binding'; await this.save(rows); await options.settled(row); row.settled = true; await this.save(rows); return; }
