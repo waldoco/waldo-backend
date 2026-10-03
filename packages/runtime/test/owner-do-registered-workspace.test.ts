@@ -96,7 +96,7 @@ async function proof(work: (h: {
       }
       expect(args.p_sig).toBe(await routerSignature(fixtureEnv.WALDO_ROUTER_HMAC_SECRET, args.p_at, message));
       if (fn === 'workspace_owner_binding') {
-        if (mappingPause && (!pauseAfterReservation || manifest()?.operations.some(operation => operation.status === 'pending'))) { const slot = mappingPause; mappingPause = undefined; slot.entered(); await slot.wait; }
+        if (mappingPause && dispatches.mock.calls.some(([call]) => call.name === 'workspace_write') && (!pauseAfterReservation || manifest()?.operations.some(operation => operation.status === 'pending'))) { const slot = mappingPause; mappingPause = undefined; slot.entered(); await slot.wait; }
         return missing ? new Response('missing', { status: 404 }) : Response.json({ ...mapping });
       }
       return Response.json(fn === 'assert_channel_presence' ? true : fn === 'health_log_recent' ? [] : null);
@@ -181,10 +181,10 @@ it('default two-argument owner turn advertises, creates, retries, lists and read
 
 it('authenticated default ingress rejects a foreign subject and locator before provider or workspace I/O', async () => {
   await proof(async h => {
-    await h.send('Bind my owner presence.'); const calls = model.requests.length;
+    await h.send('Bind my owner presence.'); const calls = model.requests.length; const retained = h.manifest(); const rpc = h.rpc.length;
     expect((await h.enqueue('Other owner', undefined, '81102')).response.status).toBe(403);
     expect((await h.enqueue('Other locator', undefined, '81101', `${h.name}-foreign`)).response.status).toBe(403);
-    expect(model.requests).toHaveLength(calls); expect(h.puts).toEqual([]); expect(h.manifest()).toBeNull();
+    expect(model.requests).toHaveLength(calls); expect(h.puts).toEqual([]); expect(h.gets).toEqual([]); expect(h.rpc).toHaveLength(rpc); expect(h.manifest()).toEqual(retained);
   });
 });
 
@@ -238,7 +238,7 @@ it.each(['mapping_open', 'mapping_reserved', 'body'] as const)('actual /stop fen
     expect(h.manifest()?.files ?? []).toEqual([]); expect(h.manifest()?.bodies ?? []).toEqual([]);
     expect(h.state.storage.kv.get<any[]>('telegram_owner_inbox_v1')!.some(row => row.reason === 'owner_stopped' && row.closedAt !== undefined)).toBe(true);
     expect((h.state.storage.kv.get<any[]>('telegram_final_outbox_v1') ?? []).filter(row => row.id.startsWith('turn:'))).toEqual([]);
-    if (boundary === 'mapping_open') { expect(h.puts).toEqual([]); expect(h.manifest()).toBeNull(); }
+    if (boundary === 'mapping_open') { expect(h.puts).toEqual([]); expect(h.gets).toEqual([]); expect(h.manifest()).toMatchObject({ files: [], bodies: [], operations: [] }); }
     else if (boundary === 'mapping_reserved') { expect(h.puts).toEqual([]); expect(h.manifest()).toMatchObject({ files: [], bodies: [], operations: [{ status: 'pending' }] }); }
     else {
       expect(h.puts).toHaveLength(1); expect(h.bytes.get(h.puts[0]!)).toEqual(new TextEncoder().encode(BYTES));
@@ -305,7 +305,7 @@ it('workspace read taint survives the model boundary and an unapproved privilege
 
 it('scheduled reminder cannot write through the registered workspace closure without an authenticated live owner run', async () => {
   await proof(async h => {
-    await h.send('Bind my presence before the reminder.');
+    await h.send('Bind my presence before the reminder.'); const retained = h.manifest(); const mappings = h.rpc.filter(name => name === 'workspace_owner_binding').length;
     const schedule = new Scheduler(h.state.storage.sql, h.state.storage, productionDeps());
     const id = 'reminder:registered-workspace'; const now = Date.now();
     h.state.storage.sql.exec('INSERT INTO reminder_notes(id,note,created_at) VALUES(?,?,?)', id, 'Scheduled fixture attempts workspace write.', now);
@@ -316,7 +316,7 @@ it('scheduled reminder cannot write through the registered workspace closure wit
     // Legacy scheduled responder advertises the handler; the host requires live owner authority.
     const scheduledRequest = replies().find(request => (Array.isArray(request.input) ? JSON.stringify(request.input) : request.input).includes('Scheduled fixture attempts workspace write.'))!;
     expect(scheduledRequest.tools?.map(tool => tool.name)).toContain('workspace_write');
-    expect(h.puts).toEqual([]); expect(h.manifest()).toBeNull();
+    expect(h.puts).toEqual([]); expect(h.gets).toEqual([]); expect(h.rpc.filter(name => name === 'workspace_owner_binding')).toHaveLength(mappings); expect(h.manifest()).toEqual(retained);
     const scheduledContext = h.dispatches.mock.calls.find(([c]) => c.id === 'scheduled')![1];
     expect(scheduledContext.turnId).toBeTypeOf('string'); expect(scheduledContext.turnId!.length).toBeGreaterThan(0);
     expect(scheduledContext.runScope).toBeUndefined();
