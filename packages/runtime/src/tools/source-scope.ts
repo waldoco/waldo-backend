@@ -6,13 +6,33 @@
 // Only an untainted owner message can change the value. Retrieved content, scheduled or event
 // triggers cannot set or clear it. It never expires and /stop does not clear it; the prompt line
 // shows it every turn so the model clears it when the owner starts a different task.
+import type { ToolName } from '@waldo/contracts';
 export type SourceScope = 'none' | 'pasted_only';
 const SCOPES: readonly SourceScope[] = ['none', 'pasted_only'];
-// Read-class tools that bring in material from outside the owner's pasted text.
-export const EXTERNAL_READ_TOOLS = [
-  'search_communication', 'get_communication', 'read_thread', 'read_drive', 'query_calendar',
-  'web_search', 'browse_page', 'browse_act', 'workspace_read', 'workspace_list', 'read_mcp_tool', 'search_episodes',
-] as const;
+// Every tool name is classified, so adding a tool fails the build until someone decides.
+// deny  = brings in material from outside the text the owner pasted (mail, calendar, files, web,
+//         stored memory/context/notes/tasks/health, earlier tool output, browsing, MCP).
+// allow = does not read owner or outside content: clock/date (get_context), the owner's own
+//         reminder/standing-order lists (needed to act on what the owner asks), tool/skill catalog
+//         metadata, and writers/proposals that read nothing back.
+// delegate_task is allow here because the guard must be applied to the child's handlers too (see wiring).
+export const SOURCE_SCOPE_CLASS: Readonly<Record<ToolName, 'deny' | 'allow'>> = {
+  get_crs: 'deny', get_health: 'deny', query_calendar: 'deny', get_communication: 'deny', search_communication: 'deny',
+  read_thread: 'deny', get_tasks: 'deny', get_master_metrics: 'deny', get_context: 'allow', query_availability: 'deny',
+  read_owner_context: 'deny', read_memory: 'deny', update_memory: 'allow', search_episodes: 'deny', propose_action: 'allow',
+  execute_action: 'allow', send_message: 'allow', web_search: 'deny', read_document: 'deny', list_artifacts: 'deny',
+  read_artifact: 'deny', call_mcp_tool: 'deny', read_mcp_tool: 'deny', read_drive: 'deny', write_task: 'allow', update_task: 'allow',
+  draft_document: 'allow', create_artifact: 'allow', revise_artifact: 'allow', export_artifact: 'allow', draft_email: 'allow',
+  send_email: 'allow', search_connector: 'deny', propose_schedule: 'allow', write_sheet_cell: 'allow', execute_code: 'allow',
+  create_thread: 'allow', delete_message: 'allow', restore_message: 'allow', archive_thread: 'allow', update_thread_topics: 'allow',
+  search_tools: 'allow', set_reminder: 'allow', list_reminders: 'allow', cancel_reminder: 'allow', propose_calendar_change: 'allow',
+  open_loop: 'allow', close_loop: 'allow', set_proactivity: 'allow', read_tool_output: 'deny', connect_service: 'allow',
+  browse_page: 'deny', browse_act: 'deny', delegate_task: 'allow', log_meal: 'allow', log_workout: 'allow', list_health_logs: 'deny',
+  set_standing_order: 'allow', list_standing_orders: 'allow', cancel_standing_order: 'allow', workspace_list: 'deny',
+  workspace_read: 'deny', workspace_write: 'allow', workspace_render: 'allow', skills_list: 'allow', skills_install: 'allow',
+  skills_disable: 'allow', skills_load: 'allow',
+};
+export const EXTERNAL_READ_TOOLS = (Object.keys(SOURCE_SCOPE_CLASS) as ToolName[]).filter(name => SOURCE_SCOPE_CLASS[name] === 'deny');
 const DENIED = new Set<string>(EXTERNAL_READ_TOOLS);
 export type ScopeContext = Readonly<{ trigger: string; toolArgSourceTaint: string | null }>;
 export type ScopeResult = Readonly<{ ok: true } | { ok: false; reason: 'untrusted' | 'invalid' }>;
@@ -36,7 +56,7 @@ export class SourceScopeStore {
   }
   promptLine(): string | null {
     return this.current() === 'pasted_only'
-      ? 'Owner source limit is on: use only text the owner pasted in this chat. Do not read mail, calendar, files, the web or memory. Clear it with set_source_scope none only when the owner says so or starts a different task.'
+      ? 'Owner source limit is on: use only text the owner pasted in this chat. Do not read mail, calendar, files, the web, stored memory, notes or tasks, or earlier tool output. Clear it with set_source_scope none only when the owner says so or starts a different task.'
       : null;
   }
 }
