@@ -1,7 +1,7 @@
 # Curated skills: what the <=600-byte bodies keep from the v1.1 originals (#661)
 
-Layer: SOURCE. Originals: waldo-skill-pack-v1 (pack 1.1). Condensed by core (not by the pack author). Status: K = kept (same check), S = kept shortened, D = dropped (reason given). Nothing here is installed, seeded or enabled in any environment; the full 27-procedure pack is NOT installed. Only these five (plus document-email-preparation) exist as code and each needs the owner's `/skills install <name>@1`.
-Rendered size (skill block, byte bound, cap 600): day-brief 547, meeting-prep 591, inbox-triage-reply-draft 595, sourced-decision-brief 598, calendar-focus-proposal 587 (pinned by test).
+Layer: SOURCE. Originals: waldo-skill-pack-v1 (pack 1.1). Condensed by core (not by the pack author). Status: K = kept (same check), S = kept shortened, D = dropped (reason given). Nothing here is installed, seeded or enabled in any environment; the full 27-procedure pack is NOT installed. Only these six (plus document-email-preparation) exist as code and each needs the owner's `/skills install <name>@1`.
+Rendered size (skill block, byte bound, cap 600): day-brief 547, meeting-prep 591, inbox-triage-reply-draft 595, sourced-decision-brief 598, calendar-focus-proposal 587, artifact-revision-delivery 578 (pinned by test).
 
 ## Shared sections in every original ("Authority and evidence", "Result and recovery"), about 1.4 KB of each ~2.2 KB file
 | Original line | Status | Where it lives now |
@@ -33,5 +33,8 @@ Rendered size (skill block, byte bound, cap 600): day-brief 547, meeting-prep 59
 ## calendar-focus-proposal
 1 compute dates, weekday, timezone: K. Right calendar, account, people, event, duration: K. 2 existing events, travel: K. "Work preferences": D. Unknown coverage is not free; free/busy is not willingness: K. 3 exact start, end, place, attendees, conflicts; keep unrelated events: K. 4 recheck duplicates before approved mutation; verify stored event: K. "Invitations and cost/cancellation policy" verification: D (invitation kept as "No invites from a private draft"; cost/cancellation dropped, matters for paid bookings). 
 
+## artifact-revision-delivery
+1 read current artifact and revision fully, keep purpose/audience, expected_revision: K. 2 conflict reread, upload is not metadata commit, closed/revoked work must not publish a stale final: K except "closed/revoked stale final" (D, runtime owns it). 3 inspect saved content and receipt, owner-authenticated URL only, saved_internal means unavailable: K. 4 old revision URLs may conflict, no promise of archives or native downloads: D. Sharing outside the owner needs separate authority: K as "No public sharing without authority".
+
 ## Summary of real losses to decide on (not hidden)
-Draft/proposed/delivered state separation; "do not substitute a similarly named product"; attachment-contents grounding; cost/cancellation check; "ask only for a consequential gap". If any must be kept, the options are a shared base-prompt preamble (outside the skill byte budget; Dalda's lane) or a versioned catalog with a larger, justified budget.
+Stale final on closed/revoked work and old-revision URL caveat (artifact-revision-delivery); draft/proposed/delivered state separation; "do not substitute a similarly named product"; attachment-contents grounding; cost/cancellation check; "ask only for a consequential gap". If any must be kept, the options are a shared base-prompt preamble (outside the skill byte budget; Dalda's lane) or a versioned catalog with a larger, justified budget.
