@@ -1,3 +1,4 @@
+import {circuitTrace} from './graph-traces';
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {GRAPH_GEOMETRY as g,graphLabel,layoutGraph,type GraphNode,type GraphLink,type GraphPoint} from './constellation-layout';
 export type MapLink=GraphLink & {relation:string;kind:'association'|'support'};
@@ -39,11 +40,11 @@ export function GraphMap({nodes,links,selected,onSelect,reduced,resetKey}:{nodes
      else if(event.key.startsWith('Arrow')){event.preventDefault();setView(v=>({...v,x:v.x+(event.key==='ArrowLeft'?g.margin:event.key==='ArrowRight'?-g.margin:0),y:v.y+(event.key==='ArrowUp'?g.margin:event.key==='ArrowDown'?-g.margin:0)}));}
     }}>
     <g transform={`translate(${scene.width/2+view.x} ${scene.height/2+view.y}) scale(${view.zoom}) translate(${-scene.width/2} ${-scene.height/2})`}>
-    {links.map((link,i)=>{const a=point(link.from),b=point(link.to);if(!a||!b)return null;return <line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} className={`graph-edge ${link.kind} ${link.from===active||link.to===active?'active':'subdued'}`}><title>{link.relation} · {link.kind==='support'?'Saved support, not independent evidence':'Unverified association'}</title></line>;})}
+    {links.map((link,i)=>{const a=point(link.from),b=point(link.to);if(!a||!b)return null;return <path key={i} d={circuitTrace(a,b)} className={`graph-edge ${link.kind} ${link.from===active||link.to===active?'active':'subdued'}`}><title>{link.relation} · {link.kind==='support'?'Saved support, not independent evidence':'Unverified association'}</title></path>;})}
     {scene.nodes.map(node=>{const p=point(node.id)!;return <g key={node.id} data-node={node.id} transform={`translate(${p.x} ${p.y})`} className={`graph-node ${node.kind} ${node.id===selected?'selected':neighbors.has(node.id)?'neighbor':'subdued'}`} role="button" tabIndex={0} aria-label={`Inspect ${node.kind==='pattern'?'tentative pattern':'supporting Spot'} ${node.label}; ${node.degree} links on this returned page`} aria-pressed={node.id===selected}
      onPointerEnter={()=>setHover(node.id)} onPointerLeave={()=>setHover(null)} onFocus={()=>{setHover(node.id);if(scroll.current)scroll.current.scrollLeft=Math.max(0,p.x-scroll.current.clientWidth/2);}} onBlur={()=>setHover(null)} onClick={()=>{if(!dragged.current)onSelect(node.id);dragged.current=false;}} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();onSelect(node.id);}if(e.key==='Escape'){setHover(null);svg.current?.focus();}}}>
      <circle r="30" className="graph-hit"/>{node.kind==='pattern'?<circle r={node.radius} className="graph-glyph"/>:<circle r={node.radius} className="graph-glyph spot"/>}
-     <text y="34" textAnchor="middle">{graphLabel(node.label).map((label,i)=><tspan x="0" dy={i?16:0} key={i}>{label}</tspan>)}</text><title>{node.label}</title>
+     <rect className="graph-label-surface" x={-g.labelWidth/2} y="20" width={g.labelWidth} height={graphLabel(node.label).length*16+10} rx="5"/><text y="34" textAnchor="middle">{graphLabel(node.label).map((label,i)=><tspan x="0" dy={i?16:0} key={i}>{label}</tspan>)}</text><title>{node.label}</title>
     </g>;})}</g>
    </svg>
   </div>

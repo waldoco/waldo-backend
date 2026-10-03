@@ -282,3 +282,6 @@ button:disabled {opacity:.55;cursor:default}
 /* A 1000-unit label-safe scene plus a 280px inspector needs 1500px including shell chrome. */
 @media(max-width:1500px){.constellation-workspace{grid-template-columns:1fr}.constellation-inspector{margin:0 20px 20px!important}}
 .graph-node{touch-action:none}
+/* Circuit trace pads are the existing node glyphs. Rounded joins soften 45-degree bends without implying a new link. */
+.graph-edge{fill:none;stroke-linecap:round;stroke-linejoin:round;stroke-width:1.4}
+.graph-label-surface{fill:#f7f7f2;pointer-events:none}.graph-glyph{stroke-width:2.5}
