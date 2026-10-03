@@ -61,4 +61,6 @@ it('real owner console rejects unsigned and another owner session for both brows
   expect((await a.fetch('https://fixture'+path)).status).toBe(401);
   expect((await b.fetch('https://fixture'+path,{headers:{cookie:`${CONSOLE_COOKIE}=${token}`}})).status).toBe(401);
  }
+ // Positive control: the right owner's own session is not rejected, so an always-401 bug cannot pass this test.
+ expect((await a.fetch('https://fixture/console/workspace',{headers:{cookie:`${CONSOLE_COOKIE}=${token}`}})).status).not.toBe(401);
 });
