@@ -4,6 +4,7 @@ import { recallResultSchema, type LLMRequest, type ToolName } from '@waldo/contr
 import type { ContextComposerDependencies } from '../src/context-composer';
 import type { OwnerMessageAdmission } from '../src/identity/owner-message-admission';
 import { claimStore } from '../src/memory/claims';
+import { episodeIndex } from '../src/channels/episodes';
 import { TelegramOwnerDO, type TelegramOwnerPrivateHost } from '../src/channels/telegram-owner-do';
 
 // Background boot planning is outside this canonical turn proof; deny its SDK locally.
@@ -30,6 +31,7 @@ function sources(admission: OwnerMessageAdmission): ContextComposerDependencies 
 let seq = 700000;
 async function proof(work: (h: {
   send(text: string, content?: Record<string, unknown>): Promise<readonly { state: string; selected: number }[]>; requests: LLMRequest[]; admissions: OwnerMessageAdmission[]; state: DurableObjectState;
+  selectForget(topic: string, fact: string, complete?: boolean, duringSelection?: () => void): void; recallCalls(): number;
   mutateDescriptor(): void; mutate(): void; revoke(): void; unavailable(): void; wrongOwner(): void; crossOwnerContext(): void; pause(): Promise<(() => void) & { reached: Promise<void> }>; reload(): void;
 }) => Promise<void>, omitHost = false) {
   const subject = 81101;
@@ -45,18 +47,31 @@ async function proof(work: (h: {
     let grantUnavailable = false;
     let ownerId = '10000000-0000-0000-0000-000000000001';
     let paused: { entered(): void; wait: Promise<void> } | undefined;
+    let forgetting: { topic: string; fact: string; complete: boolean; duringSelection?: () => void } | undefined;
+    let recallCalls = 0;
     const host: TelegramOwnerPrivateHost = {
       environment: 'staging', namespace: 'private-local-namespace', allowedDoNames: [doName],
       lookup: async () => ({ owner_id: ownerId, presence_id: '20000000-0000-0000-0000-000000000001', state_version: 0, admission_revision: revision, do_name: doName, provider: 'telegram', subject: String(subject) }),
       context: admission => {
         admissions.push(admission);
-        const deps = sources(admission);
+        const base = sources(admission);
+        const recall = base.recall!;
+        const deps = { ...base, recall: { recall: async (request: Parameters<typeof recall.recall>[0]) => { recallCalls++; return recall.recall(request); } } };
         return foreignContext ? { ...deps, materials: { load: async request => ({ ...await deps.materials.load(request), principal_ref: 'prn_ffffffffffffffffffffffffffffffff' }) } } : deps;
       }, access: async () => ({ grants: grantUnavailable ? { status: 'unavailable' } : { status: 'available', tools: grants }, connectors: { status: 'unavailable' } }),
       connectorBacked: () => false,
       gateway: { complete: async ({ request, route }) => {
         requests.push(structuredClone(request));
         const writer = request.response_format?.name === 'claim_ops';
+        const selector = request.response_format?.name === 'forget_source_spans';
+        if (forgetting && (writer || selector)) {
+          const supplied = selector ? JSON.parse(request.messages[0]!.content) as { sources: { ref: string; text: string }[] } : null;
+          if (selector) forgetting.duringSelection?.();
+          const text = supplied ? JSON.stringify({ spans: supplied.sources.filter(row => row.text.includes(forgetting!.fact)).map(row => ({ ref: row.ref, text: forgetting!.fact })), reviewed_refs: supplied.sources.map(row => row.ref), complete: forgetting.complete })
+            : JSON.stringify({ add: [{ kind: 'preference', text: 'Unauthorized new legacy claim', source: 'stated', evidence: 'invented', touches_forgotten: false }], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: forgetting.topic });
+          return { ok: true, data: { text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, model: request.model, latency_ms: 1 } };
+        }
+
         if (!request.response_format && paused) { const slot = paused; paused = undefined; slot.entered(); await slot.wait; }
         const calls = !request.response_format && !request.tool_turns?.length && request.tools?.some(t => t.name === 'get_context') ? [{ call_id: 'fixture-clock', name: 'get_context', arguments: '{}' }] : undefined;
         return { ok: true, data: { text: writer ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : calls ? '' : 'Synthetic admitted reply.', ...(calls ? { tool_calls: calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, model: request.model, latency_ms: 1 } };
@@ -80,7 +95,7 @@ async function proof(work: (h: {
       }
       throw new Error(`Fixture inbox update ${id} did not close within three real alarms`);
     };
-    try { await work({ send, requests, admissions, state, mutateDescriptor: () => { Object.assign(preparation, { mode: 'invalid', host: undefined }); }, crossOwnerContext: () => { foreignContext = true; }, mutate: () => { revision = String(BigInt(revision) + 2n); }, revoke: () => { grants = []; }, unavailable: () => { grantUnavailable = true; }, wrongOwner: () => { ownerId = '10000000-0000-0000-0000-000000000002'; }, reload: () => { instance = new TelegramOwnerDO(state, privateEnv, { mode: 'canonical', host: omitHost ? undefined : host }); }, pause: async () => {
+    try { await work({ send, requests, admissions, state, selectForget: (topic, fact, complete = true, duringSelection) => { forgetting = { topic, fact, complete, duringSelection }; }, recallCalls: () => recallCalls, mutateDescriptor: () => { Object.assign(preparation, { mode: 'invalid', host: undefined }); }, crossOwnerContext: () => { foreignContext = true; }, mutate: () => { revision = String(BigInt(revision) + 2n); }, revoke: () => { grants = []; }, unavailable: () => { grantUnavailable = true; }, wrongOwner: () => { ownerId = '10000000-0000-0000-0000-000000000002'; }, reload: () => { instance = new TelegramOwnerDO(state, privateEnv, { mode: 'canonical', host: omitHost ? undefined : host }); }, pause: async () => {
       let resume!: () => void; let entered!: () => void;
       const wait = new Promise<void>(resolve => { resume = resolve; });
       const reached = new Promise<void>(resolve => { entered = resolve; });
@@ -89,6 +104,73 @@ async function proof(work: (h: {
     } }); } finally { await state.storage.deleteAlarm(); noFetch.mockRestore(); }
   });
 }
+it.each([true, false])('registered canonical DO selective forgetting, complete=%s', async complete => {
+  await proof(async h => {
+    const topic = 'DLD-20261003-FORGET-DO';
+    const fact = `${topic} workshop preference: Friday at 09:10 UTC`;
+    const mixed = `${fact}. Unrelated preference: tea after lunch.`;
+    const memory = claimStore(h.state.storage.sql);
+    const episodes = episodeIndex(h.state.storage.sql);
+    episodes.add('owned-topic-source', 'owner', mixed, 1);
+    episodes.add('unrelated-markerless', 'owner', 'Friday at 09:10 UTC', 2);
+    await h.send(mixed);
+    const source = (await h.state.storage.list<{ modelPayload: string }>({ prefix: 'canonical-owner-v1:' }));
+    expect([...source.values()].some(row => row.modelPayload === mixed)).toBe(true);
+    h.selectForget(topic, fact, complete);
+    const before = h.requests.length;
+    await h.send(`Forget only ${topic}. Keep the unrelated tea preference.`);
+    const forgetRequests = h.requests.slice(before);
+    expect(forgetRequests.some(r => r.response_format?.name === 'forget_source_spans')).toBe(true);
+    expect(forgetRequests.find(r => r.response_format?.name === 'claim_ops')!.messages[0]!.content).not.toContain(fact);
+    expect(memory.claims()).toEqual([]); // Malicious new claims from the writer are ignored.
+    expect(episodes.get('2')!.text).toBe('Friday at 09:10 UTC');
+    const oldRows = [...(await h.state.storage.list({ prefix: 'canonical-owner-v1:' })).values()];
+    if (complete) {
+      expect(episodes.get('1')!.text).not.toContain('09:10 UTC');
+      expect(episodes.get('1')!.text).toContain('tea after lunch');
+      expect(memory.incompleteTopics()).toEqual([]);
+      expect(memory.pendingTopics()).toEqual([]);
+      expect(JSON.stringify(oldRows)).not.toContain('09:10 UTC');
+      expect(JSON.stringify(oldRows)).toContain('tea after lunch');
+    } else {
+      expect(episodes.get('1')!.text).toBe(mixed);
+      expect(memory.incompleteTopics()).toEqual([topic]);
+      expect(JSON.stringify(oldRows)).toContain('09:10 UTC');
+    }
+    h.reload();
+    const recallBefore = h.recallCalls();
+    const next = h.requests.length;
+    await h.send('Check the current date now.');
+    const replies = h.requests.slice(next).filter(r => !r.response_format);
+    expect(replies.length).toBeGreaterThan(1);
+    expect(replies[0]!.messages.at(-1)!.content).toContain('Check the current date now.');
+    expect(replies.at(-1)!.tool_turns?.some(t => t.call.name === 'get_context')).toBe(true);
+    if (!complete) {
+      expect(h.recallCalls()).toBe(recallBefore);
+      expect(replies[0]!.system).toContain('Recall is temporarily limited');
+    }
+    expect(JSON.stringify(replies)).not.toContain('09:10 UTC');
+    expect(replies[0]!.system).toContain('Respect permissions');
+  });
+});
+
+it('registered canonical DO revocation during selection preserves source bytes', async () => {
+  await proof(async h => {
+    const topic = 'DLD-20261003-REVOKED';
+    const fact = `${topic} workshop preference: Friday at 09:10 UTC`;
+    const memory = claimStore(h.state.storage.sql);
+    const episodes = episodeIndex(h.state.storage.sql);
+    episodes.add('owned-topic-source', 'owner', fact, 1);
+    h.selectForget(topic, fact, true, h.revoke);
+    await h.send(`Forget only ${topic}`);
+    expect(h.requests.some(r => r.response_format?.name === 'forget_source_spans')).toBe(true);
+    expect(episodes.get('1')!.text).toBe(fact);
+    expect(memory.incompleteTopics()).toEqual([topic]);
+    expect(memory.pendingTopics()).toEqual([]);
+    expect(memory.barriers()).toEqual([]);
+  });
+});
+
 it('actual authenticated DO turn uses admitted input, canonical continuation and granted installed handler with zero skills', async () => {
   await proof(async h => {
     const legacy = { id: 'legacy', ownerId: 'legacy-owner', chatId: 'legacy-chat', parentId: null, threadAnchorId: null, surface: 'telegram', modelPayload: 'preserved legacy bytes', appPayload: 'preserved legacy bytes', modelProjection: { mode: 'include' }, role: 'user' };

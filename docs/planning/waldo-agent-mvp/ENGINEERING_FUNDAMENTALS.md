@@ -13,6 +13,9 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 ## Checklist
 
+- [ ] Topic forgetting selects bounded exact source clauses before marker destruction; mixed-topic facts survive, fresh-source changes keep coverage incomplete, and literal retry cannot settle unproved coverage
+- [ ] Canonical forget-only cleanup is owner-bound and never admits legacy claim writes; incomplete recall preserves current input, live tools, security materials and ACL limits
+
 - [ ] Scheduled meeting decisions stay transient until a current source and verified delivery justify publication; reject stale decision caches and do not treat unsent/no-op JSON as Waldo conversation or nightly evidence
 - [ ] Preserve curated owner skill revocation checks on every physical retry while transient background decisions neither load nor inherit earlier selected/revoked owner procedures
 - [ ] Forget source-derived prep metadata as well as payload text; hash dedup/cooldown keys and cancel metadata-only unsent matches
@@ -405,3 +408,11 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 
 | 2026-10-03 | Wide-glyph labels collided, parent selection reset graph view, and reversed circuit segments were routed incorrectly | Console graph | constellation-layout.test.ts full-em dense collision cases, GraphMap.test.ts inline-parent selection preservation, graph-traces.test.ts reversed segments; Chrome wide-label text boxes | Keep label geometry conservative, view identity independent of selection and trace geometry direction-safe |
 | 2026-10-03 | Map background touch could not scroll horizontally and a keyboard-focused target stayed over 1,000 pixels offscreen after pan/zoom | Console graph mobile/focus | GraphMap.regressions.test.ts two RED/GREEN cases; isolated Chrome 200px native touch and transformed focus readback | Permit both native background scroll axes; repair SVG clipping then scroll the actual focused element after rendering |
+### Selective forgetting regression, 2026-10-03
+- [ ] Apply forget-only principal/tenant custody and retained-recall gating in the real owner DO, then exercise authenticated enqueue and alarm dispatch. Test complete and incomplete mixed-source cleanup, canonical bytes and witnesses after recreation, current `get_context` availability, ignored writer claim additions and revocation during selection. A reviewed unapplied wiring patch is not a serving capability.
+
+| Bug class | Evidence and regression | Boundary |
+|---|---|---|
+| Literal topic marker removal leaves associated preference values in retained episodes | forget-selective-span.test.ts mixed-source red regression; owner-message-context-adapter.test.ts canonical request-to-selector and limited-recall provider capture | Bounded ASCII exact-topic source clauses only; markerless paraphrases, unsupported projections and provider retention are not certified erased |
+| Selective-forget source alone did not populate the canonical DO capability or gate retained recall | owner-turn-admitted-do.test.ts three authenticated enqueue/alarm RED cases without wiring, GREEN with complete/incomplete/revoked selection and recreated readback | Private admitted principal/tenant capability and owner-local cleanup store; unchanged provider grants and current live-tool permission |
+| Incomplete forgetting could replay a frozen calendar/mail output after recreation while original bytes remained unproved | calendar-prep-owner-do.test.ts and mail-follow-up-owner-do.test.ts real-alarm RED/GREEN holds with no sends, attempts or payload mutation | Recheck owner-local coverage at source-derived delivery; defer within expiry and keep current owner request lane usable |

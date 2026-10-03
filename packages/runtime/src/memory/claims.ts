@@ -1,4 +1,6 @@
 type Sql = Pick<SqlStorage, 'exec'>;
+import type { ForgetSource } from './selective-forget';
+import { asciiLiteralIncludes } from './selective-forget';
 
 export const CLAIM_KINDS = ['fact', 'preference', 'routine', 'goal', 'followup', 'health', 'event', 'pattern', 'observation'] as const;
 export const CLAIM_SOURCES = ['stated', 'confirmed', 'inferred'] as const;
@@ -128,6 +130,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
   // A topic-only forget (no claim left to carry retry state) keeps its exact owner-evidenced words here, only until the
   // caller confirms every store is clean and settles it. No permanent plaintext list: settle(ids, topics) deletes the row.
   sql.exec('CREATE TABLE IF NOT EXISTS topic_purge_pending (fingerprint TEXT PRIMARY KEY, topic TEXT NOT NULL, created_at TEXT NOT NULL)');
+  // 0: exact retry target; 1: unproved owner intent; 2: selected coverage
+  // awaiting readback. Neither coverage state is an ordinary literal needle.
+  if (!sql.exec("SELECT name FROM pragma_table_info('topic_purge_pending') WHERE name = 'coverage_incomplete'").toArray().length) {
+    sql.exec('ALTER TABLE topic_purge_pending ADD COLUMN coverage_incomplete INTEGER NOT NULL DEFAULT 0');
+  }
   if (!sql.exec("SELECT name FROM pragma_table_info('forget_barriers')").toArray().some((col) => (col as { name: string }).name === 'topic_hash')) {
     sql.exec('ALTER TABLE forget_barriers ADD COLUMN topic_hash TEXT');
   }
@@ -282,6 +289,9 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     // unrelated content), constellation nodes stop quoting it and stop referencing its id,
     // and a barrier blocks re-admission. Fresh-state verification reports what survived.
     purge(ids: readonly number[], at: string, topics: readonly string[] = []): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } } {
+      if (topics.some(topic => sql.exec('SELECT 1 FROM topic_purge_pending WHERE fingerprint = ? AND coverage_incomplete != 0', textFingerprint(topic.trim())).toArray().length)) {
+        return { ready: false, remaining: { selected_source_coverage: 1 }, texts: [], failed: [], receipt: { deleted: {}, redacted: {}, terminalised: {} } };
+      }
       const forgotten = ids.length
         ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
         : [];
@@ -291,7 +301,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // A claim's text is usually a paraphrase; retained history holds the owner's own words. The quoted evidence span (the
       // owner's literal words an OWNER-origin claim was grounded on, at least 12 characters like the admission rule; an agent-origin quote could be any common phrase and would wipe unrelated owner text) is redacted too, so
       // a forget reaches the conversation and episodes that actually quote it. Bare citations and short strings are ignored.
-      const quotedEvidence = forgotten.filter((claim) => claim.origin === 'owner').flatMap((claim) => quotedSpans(claim.evidence).map((span) => span.trim()).filter((span) => span.length >= 12));
+      const quotedEvidence = topics.length ? [] : forgotten.filter((claim) => claim.origin === 'owner').flatMap((claim) => quotedSpans(claim.evidence).map((span) => span.trim()).filter((span) => span.length >= 12));
       const failed: string[] = [];
       const attempt = (store: string, op: () => void) => {
         try { op(); } catch { failed.push(store); }
@@ -305,7 +315,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         try { sql.exec('INSERT OR IGNORE INTO topic_purge_pending (fingerprint, topic, created_at) VALUES (?, ?, ?)', textFingerprint(topic), topic, at); } catch { written = false; failed.push('pending_topic'); }
         if (written) durableTopics.push(topic);
       }
-      const texts = [...new Set([...forgotten.map((claim) => claim.text.trim()), ...quotedEvidence, ...durableTopics].filter(Boolean))];
+      const texts = [...new Set([...forgotten.map((claim) => claim.text.trim()), ...quotedEvidence, ...durableTopics].filter(Boolean))].sort((a, b) => b.length - a.length);
       const idList = forgotten.map((claim) => claim.id);
       const notPurging = idList.length ? ` AND id NOT IN (${idList.map(() => '?').join(',')})` : '';
       const existingHashes = new Set(sql.exec<{ topic_hash: string | null }>('SELECT topic_hash FROM forget_barriers').toArray().map((row) => row.topic_hash));
@@ -373,9 +383,9 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         });
         // Other claims may quote the forgotten text in their own text or evidence.
         attempt('surviving_claims', () => {
-          for (const row of sql.exec<{ rid: number; text: string; evidence: string; aliases: string | null }>(`SELECT id AS rid, text, evidence, aliases FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\' OR aliases LIKE ? ESCAPE '\\')${notPurging}`, like, like, like, ...idList).toArray()) {
-            const redactedText = ci(row.text); const redactedEvidence = ci(row.evidence); const redactedAliases = row.aliases === null ? null : ci(row.aliases);
-            if (redactedText !== row.text || redactedEvidence !== row.evidence || redactedAliases !== row.aliases) sql.exec('UPDATE claims SET text = ?, evidence = ?, aliases = ? WHERE id = ?', redactedText, redactedEvidence, redactedAliases, row.rid);
+          for (const row of sql.exec<{ rid: number; text: string; evidence: string; aliases: string | null; source_ref: string | null }>(`SELECT id AS rid, text, evidence, aliases, source_ref FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\' OR aliases LIKE ? ESCAPE '\\' OR source_ref LIKE ? ESCAPE '\\')${notPurging}`, like, like, like, like, ...idList).toArray()) {
+            const redactedText = ci(row.text); const redactedEvidence = ci(row.evidence); const redactedAliases = row.aliases === null ? null : ci(row.aliases); const redactedSource = row.source_ref === null ? null : ci(row.source_ref);
+            if (redactedText !== row.text || redactedEvidence !== row.evidence || redactedAliases !== row.aliases || redactedSource !== row.source_ref) sql.exec('UPDATE claims SET text = ?, evidence = ?, aliases = ?, source_ref = ? WHERE id = ?', redactedText, redactedEvidence, redactedAliases, redactedSource, row.rid);
           }
         });
         // Derived text the model reads back (unfolded update cards, day-plan reasons). Rows and
@@ -495,7 +505,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         // Same honesty contract as the redaction loops: a store that errors lands in failed,
         // the claim stays 'purging', and the console reports incomplete - no worker crash.
         // The purged claims themselves still hold their text until settle below - exclude them.
-        attempt('claims', () => add('claims', sql.exec<{ text: string; evidence: string; aliases: string | null }>(`SELECT text, evidence, aliases FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\' OR aliases LIKE ? ESCAPE '\\')${notPurging}`, like, like, like, ...idList).toArray().filter((row) => exact(row.text) || exact(row.evidence) || (row.aliases !== null && exact(row.aliases))).length));
+        attempt('claims', () => add('claims', sql.exec<{ text: string; evidence: string; aliases: string | null; source_ref: string | null }>(`SELECT text, evidence, aliases, source_ref FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\' OR aliases LIKE ? ESCAPE '\\' OR source_ref LIKE ? ESCAPE '\\')${notPurging}`, like, like, like, like, ...idList).toArray().filter((row) => exact(row.text) || exact(row.evidence) || (row.aliases !== null && exact(row.aliases)) || (row.source_ref !== null && exact(row.source_ref))).length));
         if (hasEpisodes) attempt('episodes', () => add('episodes', sql.exec<{ text: string }>(`SELECT text FROM episodes WHERE text LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.text)).length));
         attempt('memory_backups', () => add('memory_backups', sql.exec<{ payload: string }>(`SELECT payload FROM memory_backups WHERE payload LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.payload)).length));
         if (hasSpots) attempt('legacy_spots', () => add('legacy_spots', sql.exec<{ text: string }>(`SELECT text FROM spots WHERE text LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.text)).length));
@@ -531,14 +541,92 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     // Idempotent: already-deleted rows are no-ops. Only 'purging' rows are removed, so a
     // claim re-admitted after a failed attempt is never swept away by a late settle.
     pendingTopics(): string[] {
-      return sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending ORDER BY created_at, fingerprint').toArray().map((row) => row.topic);
+      return sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending WHERE coverage_incomplete = 0 ORDER BY created_at, fingerprint').toArray().map((row) => row.topic);
     },
-    settle(ids: readonly number[], topics: readonly string[] = []): void {
-      for (const topic of topics) sql.exec('DELETE FROM topic_purge_pending WHERE fingerprint = ?', textFingerprint(topic.trim()));
+    incompleteTopics(): string[] {
+      return sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending WHERE coverage_incomplete != 0 ORDER BY created_at, fingerprint').toArray().map(row => row.topic);
+    },
+    topicCoverage(topic: string): number | null {
+      const row = sql.exec<{ topic: string; coverage_incomplete: number }>('SELECT topic, coverage_incomplete FROM topic_purge_pending WHERE fingerprint = ?', textFingerprint(topic.trim())).toArray()[0];
+      return row?.topic === topic.trim() ? row.coverage_incomplete : null;
+    },
+    forgetSources(topic: string): { sources: ForgetSource[]; incomplete: boolean } {
+      const sources: ForgetSource[] = [];
+      let incomplete = false;
+      const like = likePrefilter(topic);
+      const collect = (table: string, id: string, columns: readonly string[]) => {
+        if (!tableExists(sql, table)) return;
+        const rows = sql.exec<Record<string, string | number | null>>(`SELECT ${id} AS source_id, ${columns.join(', ')} FROM ${table} WHERE ${columns.map(column => `${column} LIKE ? ESCAPE '\\'`).join(' OR ')} LIMIT 65`, ...columns.map(() => like)).toArray();
+        if (rows.length > 64) incomplete = true;
+        for (const row of rows.slice(0, 64)) for (const column of columns) {
+          const text = row[column];
+          if (typeof text === 'string' && asciiLiteralIncludes(text, topic)) sources.push({ ref: `${table}:${row.source_id}:${column}`, text });
+        }
+      };
+      collect('episodes', 'rowid', ['text']);
+      collect('claims', 'id', ['text', 'evidence', 'source_ref']);
+      collect('constellation_nodes', 'id', ['label', 'summary']);
+      // These existing cleanup projections are outside the bounded selector's
+      // source contract. Preserve their originals if they still carry the topic.
+      for (const [table, columns] of [
+        ['claims', ['aliases']], ['memory_backups', ['payload']], ['spots', ['text', 'evidence']],
+        ['core_file_revisions', ['content']], ['update_cards', ['changes', 'text']],
+        ['day_plan', ['reason']], ['loops', ['title']],
+        ['run_candidates', ['candidate_json']], ['outbox', ['payload']],
+        ['held_candidates', ['candidate_json']], ['schedule', ['payload_json']],
+      ] as const) {
+        if (!tableExists(sql, table)) continue;
+        const available = columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length);
+        if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${available.map(column => `(${column} LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE (type = 'text' AND value LIKE ? ESCAPE '\\') OR key LIKE ? ESCAPE '\\'))`).join(' OR ')} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) incomplete = true;
+      }
+      return { sources, incomplete };
+    },
+    beginTopicCoverage(topic: string, at: string): void {
+      topic = topic.trim();
+      if (topic.length < 3 || topic.length > 512) throw new Error('pending topic bound');
+      const fingerprint = textFingerprint(topic);
+      const prior = sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending WHERE fingerprint = ?', fingerprint).toArray()[0];
+      if (prior && prior.topic !== topic) throw new Error('pending topic fingerprint conflict');
+      const pending = sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending').toArray().map(row => row.topic);
+      const aggregate = [...new Set([...pending, topic])];
+      if (aggregate.length > 128 || new TextEncoder().encode(JSON.stringify(aggregate)).byteLength > 65536) throw new Error('pending topic budget exceeded');
+      sql.exec('INSERT INTO topic_purge_pending (fingerprint, topic, created_at, coverage_incomplete) VALUES (?, ?, ?, 1) ON CONFLICT(fingerprint) DO UPDATE SET coverage_incomplete = CASE WHEN topic_purge_pending.coverage_incomplete = 2 THEN 2 ELSE 1 END', fingerprint, topic, at);
+    },
+    authoriseTopicCoverage(topic: string, selected: readonly string[], at: string): void {
+      topic = topic.trim();
+      if (!selected.length || selected.length > 32 || /[^\x20-\x7e]/.test(topic) || selected.some(text => text.length < 12 || text.length > 4096 || /[^\x20-\x7e]/.test(text) || !asciiLiteralIncludes(text, topic) || text.trim().toLowerCase() === topic.toLowerCase())) throw new Error('selected topic scope');
+      const texts = [...new Set([...this.pendingTopics(), ...selected])];
+      const existing = sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending').toArray().map(row => row.topic);
+      const aggregate = [...new Set([...existing, ...texts])];
+      if (aggregate.length > 128 || new TextEncoder().encode(JSON.stringify(aggregate)).byteLength > 65536) throw new Error('pending topic budget exceeded');
+      const rows = texts.map(text => ({ fingerprint: textFingerprint(text), topic: text }));
+      const hashes = new Map<string, string>();
+      for (const row of rows) {
+        const prior = sql.exec<{ topic: string; coverage_incomplete: number }>('SELECT topic, coverage_incomplete FROM topic_purge_pending WHERE fingerprint = ?', row.fingerprint).toArray()[0];
+        if ((prior && prior.topic !== row.topic) || (hashes.has(row.fingerprint) && hashes.get(row.fingerprint) !== row.topic)) throw new Error('pending topic fingerprint conflict');
+        if (prior && prior.coverage_incomplete !== 0) throw new Error('pending topic coverage conflict');
+        hashes.set(row.fingerprint, row.topic);
+      }
+      // A failed barrier write leaves coverage incomplete and originals intact.
+      // Selected clauses become literal-ready only after every exact hash exists.
+      // The owner topic stays incomplete until independently verified settlement.
+      for (const text of [topic, ...selected]) this.barrier(text, at);
+      // One atomic SQL statement couples selected-clause custody to the proof
+      // state. 1 means unproved; 2 means selected coverage awaiting readback.
+      const batch = [...rows.map(row => ({ ...row, coverage: 0 })), { fingerprint: textFingerprint(topic), topic, coverage: 2 }];
+      sql.exec(`INSERT INTO topic_purge_pending (fingerprint, topic, created_at, coverage_incomplete)
+        SELECT json_extract(value, '$.fingerprint'), json_extract(value, '$.topic'), ?, json_extract(value, '$.coverage') FROM json_each(?) WHERE 1
+        ON CONFLICT(fingerprint) DO UPDATE SET coverage_incomplete = excluded.coverage_incomplete`, at, JSON.stringify(batch));
+    },
+    settle(ids: readonly number[], topics: readonly string[] = [], coveredTopic?: string): void {
+      for (const topic of topics) sql.exec('DELETE FROM topic_purge_pending WHERE fingerprint = ? AND coverage_incomplete = 0', textFingerprint(topic.trim()));
       for (const id of ids) {
         sql.exec("DELETE FROM claims WHERE id = ? AND status = 'purging'", id);
         sql.exec('DELETE FROM purge_pending WHERE claim_id = ?', id);
       }
+      // Only an explicit source-coverage proof after async readback may retire
+      // topic custody. Ordinary literal retries cannot establish that proof.
+      if (coveredTopic) sql.exec('DELETE FROM topic_purge_pending WHERE fingerprint = ? AND topic = ? AND coverage_incomplete = 2', textFingerprint(coveredTopic.trim()), coveredTopic.trim());
     },
   };
 };
@@ -732,6 +820,12 @@ type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolea
 
 // What this application of claim ops actually did, as counts the caller can report truthfully.
 export type ClaimOutcome = Readonly<{ written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[]; episodesRedacted?: number }>;
+export const ownerForgetTopic = (raw: string, owner: string): string | null => {
+  if (!hasForgetIntent(owner)) return null;
+  const ops = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as ClaimOps;
+  const topic = ops.forget_topic?.trim();
+  return topic && normalizeForGrounding(owner).includes(normalizeForGrounding(topic)) ? topic : null;
+};
 
 export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[], topics?: readonly string[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean, onOutcome?: (outcome: ClaimOutcome) => void): string => {
   // Destructive ops need an explicit forget request in the text under review (see
@@ -743,7 +837,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   const known = new Set(currentClaims.map((claim) => claim.id));
   const byClaimId = new Map(currentClaims.map((claim) => [claim.id, claim]));
   // Claims mid-scrub (a previous purge left survivors) are forgettable too: that is the retry path.
-  const forgettable = new Set([...known, ...store.claims('purging').map((claim) => claim.id)]);
+  const forgettable = new Set([...known, ...['purging', 'superseded', 'promoted'].flatMap(status => store.claims(status).map(claim => claim.id))]);
   const nodes = new Set(store.nodes().map((node) => node.id));
   // The topic drives destructive cleanup of retained text, so it must be the owner's own words of this turn, not a writer's
   // invention. A caller with no owner grounding (migration-style) keeps the explicit forgetAllowed decision.

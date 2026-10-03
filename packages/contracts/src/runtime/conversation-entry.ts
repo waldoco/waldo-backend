@@ -27,6 +27,7 @@ export type ConversationEntry = Readonly<{
 // Privacy redaction uses literal text only; it never decides what the owner meant.
 export const literalTextRedactor = (texts: readonly string[], marker: string): ((value: string) => string) => {
   const patterns = [...new Set(texts.map(text => text.trim()).filter(Boolean))]
+    .sort((a, b) => b.length - a.length)
     .map(text => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'));
   return value => patterns.reduce((text, pattern) => text.replace(pattern, () => marker), value);
 };

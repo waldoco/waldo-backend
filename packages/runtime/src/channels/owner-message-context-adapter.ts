@@ -22,6 +22,7 @@ type Options = Readonly<{
     dependencies: ContextComposerDependencies;
     registeredHandlers: readonly ToolName[];
     connectorBacked: readonly ToolName[];
+    retainedRecallAvailable?: () => boolean;
     access(): Promise<Readonly<{
         grants: Access;
         connectors: Access;
@@ -125,7 +126,11 @@ export function createOwnerMessageContextAdapter(options: Options) {
                     snapshot: { ...snapshot, revision_ref: `rev_${input.content_digest.slice(7, 39)}` },
                     source: { source_key: 'owner-message-input-snapshot', source_kind: 'runtime_metadata' as const, scope: 'invocation' as const, source_taint: null, produced_at: snapshot.snapshot_at } };
             } },
-        materials: { load: async (supplied) => { const request = copy(supplied); check(request); return bound(() => materialsLoad(request)); } },
+        materials: { load: async (supplied) => {
+                const request = copy(supplied); check(request);
+                const result = await bound(() => materialsLoad(request));
+                return options.retainedRecallAvailable?.() === false ? { ...result, tool_outputs: [] } : result;
+            } },
         owner_binding: { bind: async (supplied) => { const request = copy(supplied); check(request); return bound(() => ownerBind(request)); } },
         system_skills: { list: async (supplied) => {
                 const request = copy(supplied);
@@ -140,7 +145,17 @@ export function createOwnerMessageContextAdapter(options: Options) {
         recall: { recall: async (supplied) => {
                 const request = copy(supplied);
                 check({ ...request, principal_ref: request.owner.principal_ref, tenant_ref: request.owner.tenant_ref });
-                return bound(() => recall(request));
+                const unavailable = () => ({
+                    principal_ref: authority.principal_ref, tenant_ref: authority.tenant_ref,
+                    snapshot: { ...snapshot, revision_ref: 'rev_00000000000000000000000000000000' },
+                    status: 'failed' as const,
+                    result: { memory_hits: [], episode_hits: [], evolution_hits: [], query_used: 'Retained recall temporarily limited: forgetting coverage incomplete', duration_ms: 0 },
+                    source: null, capability: 'owner_bound_local_temporal_snapshot' as const,
+                });
+                await assertCurrent();
+                if (options.retainedRecallAvailable?.() === false) return unavailable();
+                const result = await bound(() => recall(request));
+                return options.retainedRecallAvailable?.() === false ? unavailable() : result;
             } },
     });
     const base = createContextComposer(dependencies);

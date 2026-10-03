@@ -4,6 +4,7 @@ import { expect, it, vi } from 'vitest';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { loopBook } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
+import { claimStore } from '../src/memory/claims';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
 const fixture = vi.hoisted(() => ({ mail: false, loopId: '', sent: [] as string[], prompts: [] as string[] }));
 vi.mock('../src/connectors/google', async load => {
@@ -29,11 +30,12 @@ vi.mock('../src/channels/telegram-turn', async load => {
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
 const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
-it('actual default owner ingress retains quiet mail, extracts after wake, nudges without new mail and closes on owner done', async () => {
-  await runInDurableObject(env.TRACER_DO.get(env.TRACER_DO.idFromName('mail-follow-up-owner-default')), async (_instance, state) => {
+it.each(['normal', 'forget-coverage'])('actual default owner mail followup: %s', async mode => {
+  await runInDurableObject(env.TRACER_DO.get(env.TRACER_DO.idFromName(`mail-follow-up-owner-${mode}`)), async (_instance, state) => {
     const originalNow = Date.now;
     let now = Date.parse('2026-10-03T06:59:00Z');
     Date.now = () => now;
+    fixture.mail = false; fixture.loopId = ''; fixture.sent = []; fixture.prompts = [];
     const config = { ...env, MAIL_SOURCE_FOLLOWUPS: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
     let owner = new TelegramOwnerDO(state, config);
     state.storage.kv.put('do_name', 'synthetic-mail-owner'); state.storage.kv.put('telegram_subject', '7');
@@ -71,6 +73,23 @@ it('actual default owner ingress retains quiet mail, extracts after wake, nudges
       now += 600_000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm();
       expect(fixture.sent.filter(text => text.startsWith('Have you handled'))).toHaveLength(0);
       expect(state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!.find(r => r.mailFollowup)?.status).toBe('pending');
+      if (mode === 'forget-coverage') {
+        const memory = claimStore(state.storage.sql);
+        memory.beginTopicCoverage('unproved source association', new Date(now).toISOString());
+        config.MAIL_SOURCE_FOLLOWUPS = '1';
+        owner = new TelegramOwnerDO(state, config);
+        now += 600_000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm();
+        expect(fixture.sent.filter(text => text.startsWith('Have you handled'))).toHaveLength(0);
+        const held = state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!.find(r => r.mailFollowup)!;
+        expect(held).toMatchObject({ status: 'pending', attempts: 0 });
+        expect(held.payload).toEqual(queued[0]!.payload);
+        expect(memory.incompleteTopics()).toEqual(['unproved source association']);
+        now = held.createdAt + 86400000;
+        state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm();
+        expect(state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!.find(r => r.mailFollowup)).toMatchObject({ status: 'blocked', attempts: 0 });
+        expect(fixture.sent.filter(text => text.startsWith('Have you handled'))).toHaveLength(0);
+        return;
+      }
       config.MAIL_SOURCE_FOLLOWUPS = '1';
       owner = new TelegramOwnerDO(state, config);
       now += 600_000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm();

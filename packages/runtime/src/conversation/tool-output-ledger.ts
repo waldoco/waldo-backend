@@ -1,4 +1,5 @@
 import type { RunEffectScope } from '../channels/run-effect-scope';
+import { asciiLiteralIncludes } from '../memory/selective-forget';
 // Recent tool outputs as composable context (BUILD_ORDER 12). The tool loop's outputs
 // used to live only inside one turn; this ledger keeps the last few so the context
 // composer can stage them as tool_result sources with provenance and taint.
@@ -18,7 +19,7 @@ const MAX_KEPT = 6;
 const MAX_SUMMARY_CHARS = 500;
 
 type KeyValueStorage = {
-  kv?: Pick<DurableObjectStorage['kv'], 'put' | 'delete'>;
+  kv?: Pick<DurableObjectStorage['kv'], 'put' | 'delete'> & Partial<Pick<DurableObjectStorage['kv'], 'list'>>;
   get<T>(key: string): Promise<T | undefined>;
   list<T>(options: { prefix: string }): Promise<Map<string, T>>;
   put(entries: Record<string, unknown>): Promise<void>;
@@ -63,7 +64,29 @@ const summaryRedactor = (texts: readonly string[], marker: string) => {
   };
 };
 
+const ledgerSourcesFromRows = (topic: string, rows: Iterable<[string, ToolOutputEntry]>): { sources: { ref: string; text: string }[]; incomplete: boolean } => {
+  const sources: { ref: string; text: string }[] = [];
+  let incomplete = false;
+  for (const [key, row] of rows) {
+    let index = 0;
+    const add = (text: string) => { if (asciiLiteralIncludes(text, topic)) sources.push({ ref: `ledger:${key}:${index++}`, text }); };
+    add(row.summary);
+    const decoded = (value: unknown): void => {
+      if (typeof value === 'string') add(value);
+      else if (Array.isArray(value)) value.forEach(decoded);
+      else if (value && typeof value === 'object') for (const [name, child] of Object.entries(value)) {
+        if (asciiLiteralIncludes(name, topic)) incomplete = true;
+        add(name); decoded(child);
+      }
+    };
+    try { decoded(JSON.parse(row.summary)); } catch { if (/\\u/i.test(row.summary)) incomplete = true; }
+  }
+  return { sources, incomplete };
+};
+
 export const toolOutputLedger = (storage: KeyValueStorage) => ({
+  forgetSourcesCurrent(topic: string) { return storage.kv?.list ? ledgerSourcesFromRows(topic, storage.kv.list<ToolOutputEntry>({ prefix: 'toolout:' })) : null; },
+  async forgetSources(topic: string) { return ledgerSourcesFromRows(topic, await storage.list<ToolOutputEntry>({ prefix: 'toolout:' })); },
   async record(entry: Omit<ToolOutputEntry, 'at'> & { at: number }, scope?: RunEffectScope): Promise<void> {
     const summary = entry.summary.length > MAX_SUMMARY_CHARS ? `${entry.summary.slice(0, MAX_SUMMARY_CHARS)}...` : entry.summary;
     // Admission guard at write time: a poisoned summary is dropped, never persisted.
