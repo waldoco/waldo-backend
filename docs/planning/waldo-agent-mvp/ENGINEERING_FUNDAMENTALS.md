@@ -474,3 +474,31 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] Decoder acceptance must match the provider schema: canonicalize repeated known source families without accepting unknowns or malformed evidence.
 - [ ] Malformed or uncertain source classification cannot keep protected reads active for the current instruction; negative owner-narrowing control must observe zero incremental connector calls, alongside usable valid continuation.
 - [ ] Metadata-only decoder categories must identify syntax/shape/decision/source/evidence failures without logging private raw classifier text.
+### Bounded public browser continuity
+- [ ] Reconnect must preserve the exact guarded provider session; test the pinned SDK's actual request serializer, including missing/expired IDs, without fresh allocation fallback
+- [ ] Final native action and read-only receipt reconciliation bind the canonical owner/task/session/generation, exact observed URL, form state and fresh approval. Drift requires observation and approval again; unknown submission never repeats the physical action
+- [ ] Provider termination must work without a valid page/context and prove session absence. Lost allocation IDs remain honest cleanup uncertainty bounded by provider TTL
+- [ ] Bounded streamed receipt rejection cancels asynchronously: awaiting cancel on a tee branch can hang behind the other branch. Reject oversized/malformed bodies without waiting for peer consumption
+
+| 2026-10-03 | Pinned Cloudflare connectOverCDP endpoint session path selected fresh launch; error diagnostics leaked provider details; URL could drift before act; invalid page blocked cleanup; empty fill caused a side effect before evidence rejected it | Public browser adapter | public-fixture-browser.test.ts actual installed SDK transport, phase errors, final URL drift, popup-independent termination and empty-fill denial | Use public connect with persistent default context, closed errors and exact final synchronous native snapshot |
+| 2026-10-03 | Awaiting cancellation of an oversized tee-stream response stalled receipt rejection | Authoritative receipt reader | public-fixture-browser.test.ts malformed/oversized response test | Initiate cancellation without awaiting peer branch consumption |
+| 2026-10-03 | Unknown-submit readback could verify after private session generation changed | Browser task receipt reconciliation | browser-task-continuity.test.ts generation drift zero receipt I/O | Recheck the stored exact scope digest before receipt replay or authoritative readback |
+- [ ] Stop output distinguishes logical action fencing from provider cleanup confirmation. Report cleanup_pending when termination fails or allocation identity is lost; never imply paid resource termination succeeded
+- [ ] Recheck enabled and absolute expiry after awaited grant admission, including the final action callback; time can expire while authority lookup is pending
+| 2026-10-03 | Stop projected unconditional cancellation despite provider cleanup failure | Typed browse_act stop | browser-task-handler.test.ts cleanup_pending projection; browser-task-continuity.test.ts throwing provider end fences further action | Return honest bounded cleanup outcome |
+| 2026-10-03 | Final admission could resolve after absolute expiry and still authorize physical submit | Browser task grant boundary | browser-task-continuity.test.ts final admission advances beyond expiresAt, zero physical submit | Revalidate lifetime/flag after asynchronous authority lookup |
+- [ ] Approval publication failure/Modify must preserve recoverability: editing or repreparing atomically invalidates old exact proposal IDs while retaining the current form, never reopening submitted/unknown actions
+| 2026-10-03 | A failed approval-card publication or Modify stranded the task in approval_pending | Browser proposal preparation | browser-task-continuity.test.ts reprepare/edit invalidates old approvals with zero submit | Permit bounded pending preparation and supersede old references atomically |
+- [ ] Owner stop first revokes independent admission before task-mutex cleanup. A pending provider await must encounter current revocation at the final action callback; typed stop without this host hook fails closed
+| 2026-10-03 | Cleanup mutex alone could queue owner stop behind an in-flight physical action | Browser stop integration | browser-task-continuity.test.ts deferred callback sees independent stop; browser-task-handler.test.ts requires ordered stop hook | Revoke canonical admission immediately before queued provider cleanup |
+- [ ] Malformed authoritative driver receipt metadata remains unknown without throwing away no-retry intent or promoting completion; parse before durable verified transition
+| 2026-10-03 | Malformed site receipt metadata could throw during durable checkpoint promotion | Browser authoritative result reconciliation | browser-task-continuity.test.ts bad ID/time receipt remains unknown, exactly one physical action | Safe-parse receipt and retain unknown state |
+
+
+### Browser owner host admission and lifecycle checks
+
+- [ ] Typed browser commands fail closed without trusted configuration; legacy free-text handler remains singly registered. A BROWSER binding alone does not activate canonical owner identity.
+- [ ] Physical DO, current canonical directory owner/presence/revision, exact immutable task/manifest/site, fresh operation evidence and atomically claimed exact desk proposal agree before physical actions.
+- [ ] One private task/checkpoint per owner, five write attempts, 32 fresh authorizations and bounded lifetime survive reconstruction. Owner stop fences admission before waiting for the task mutex.
+- [ ] Concurrent same-owner initial reads resume one allocation under the mutex. Ended cleanup is idempotent, and browser cleanup never awaits in front of inbox/outbox/scheduler arbitration.
+- [ ] Shared alarm retains browser expiry/retry wakes; failed cleanup remains private pending evidence. Two distinct canonical UUIDs in separate physical DOs cannot project each other's session identities.

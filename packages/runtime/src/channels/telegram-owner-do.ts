@@ -62,6 +62,8 @@ import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview 
 import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
 import { changeLines, collectChanges, reviewMailFollowup, updateBook, type UpdateBook } from './update-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
+import { browserOwnerHost, BROWSER_TASK_KEY, type BrowserOwnerConfiguration } from './browser-owner-host';
+import { browserTaskHandler, browserTaskApprovalBridge } from '../tools/live/browser-task';
 import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../tools/live/browser';
 import { webSearchHandler } from '../tools/live/web-search';
 import { healthLogBook, healthLogHandlers, healthSection } from './health-log';
@@ -189,11 +191,25 @@ export type TelegramOwnerPreparation = Readonly<{ mode: 'canonical'; host?: Tele
 export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly canonicalPreparation: boolean;
   private readonly ownerHost: TelegramOwnerPrivateHost | undefined;
-  constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, preparation?: TelegramOwnerPreparation) {
+  private readonly browserTasks: ReturnType<typeof browserOwnerHost>;
+  constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, preparation?: TelegramOwnerPreparation, browserConfiguration?: BrowserOwnerConfiguration) {
     super(ctx, env);
     if (preparation !== undefined && (!preparation || preparation.mode !== 'canonical')) throw new Error('invalid owner preparation mode');
     this.canonicalPreparation = preparation !== undefined;
     this.ownerHost = preparation?.host;
+    this.browserTasks = browserOwnerHost({ storage: ctx.storage, config: browserConfiguration, now: Date.now, newId: () => crypto.randomUUID(),
+      physical: () => { const doName = ctx.storage.kv.get<string>('do_name'); return { doName, subject: ctx.storage.kv.get<string>('telegram_subject'), matches: Boolean(doName && env.TELEGRAM_OWNER_DO && env.TELEGRAM_OWNER_DO.idFromName(doName).toString() === ctx.id.toString() && ctx.storage.kv.get<boolean>('telegram_unlinked') !== true) }; },
+      approved: (approval, proposal) => {
+        try {
+          const row = ctx.storage.sql.exec<{ payload_json: string; decided_at: number }>("SELECT payload_json, decided_at FROM ledger WHERE id = ? AND kind = 'browser_submit' AND status = 'uncertain'", approval).toArray()[0];
+          const payload = row ? JSON.parse(row.payload_json) : null;
+          const checkpoint = ctx.storage.kv.get<{ taskId: string; proposal: { id: string; url: string; actionRef: string; scopeDigest: string; binding: Record<string, string> } | null }>(BROWSER_TASK_KEY);
+          const prepared = checkpoint?.proposal;
+          const facts = (value: Record<string, string>) => JSON.stringify(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+          return Boolean(row && row.decided_at <= Date.now() && Date.now() - row.decided_at < 600000 && payload?.continuation?.proposalId === proposal && payload?.continuation?.taskRef === checkpoint?.taskId && prepared?.id === proposal && payload.url === prepared.url && payload.action?.selector === prepared.actionRef && payload.action?.method === 'click' && (payload.action?.arguments?.length ?? 0) === 0 && payload.continuation?.scopeDigest === prepared.scopeDigest && facts(payload.binding) === facts(prepared.binding));
+        } catch { return false; }
+      },
+    });
   }
   private runtimes: Partial<Record<ChannelKind, OwnerRuntime>> = {};
   private queue: Promise<unknown> = Promise.resolve();
@@ -309,6 +325,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (admitted === 'conflict' || admitted === 'capacity') return new Response(admitted, { status: admitted === 'conflict' ? 409 : 503 });
       // Binding follows authenticated admission, and never replaces a different binding.
       this.ctx.storage.kv.put('do_name', doName); this.ctx.storage.kv.put('telegram_subject', subject);
+      if (text === '/stop') { await this.browserTasks.revoke(); this.ctx.waitUntil(this.browserTasks.stop()); }
       const origin = request.headers.get('x-waldo-origin'); if (origin) this.ctx.storage.kv.put('origin', origin);
       const timezone = request.headers.get('x-waldo-timezone'); if (timezone) this.ctx.storage.kv.put('timezone', timezone);
       if (admitted === 'admitted' && control && this.activeInbox?.runId === control.targetRun) {
@@ -844,6 +861,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!doName || !subject || !/^\d+$/.test(subject) || !Number.isSafeInteger(Number(subject)) || Number(subject) <= 0
           || this.ctx.storage.kv.get<boolean>('telegram_unlinked') === true
           || !this.env.TELEGRAM_OWNER_DO || this.env.TELEGRAM_OWNER_DO.idFromName(doName).toString() !== this.ctx.id.toString()) {
+          if ((this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity) <= Date.now()) this.ctx.waitUntil(this.browserTasks.maintain());
           await rearmSharedAlarm(this.ctx.storage, null, Date.now(), 30_000);
           return;
         }
@@ -862,12 +880,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       try { await this.notifyUncertainRecovery(); } catch { console.error('uncertainty notice deferred to host recovery'); }
       const dueInbox = (await this.inbox.records()).some(r => r.state === 'admitted');
       const dueTransport = finals.some(r => r.status === 'attempting' || (r.status === 'pending' && r.dueAt <= Date.now()) || (r.status !== 'pending' && !r.settled));
-      const readyKinds = [dueInbox, dueTransport, scheduler.hasDue()];
+      const browserDue = this.ctx.storage.kv.get<number>('browser_owner_task_due_v1');
+      const readyKinds = [dueInbox, dueTransport, scheduler.hasDue(), browserDue !== undefined && browserDue !== null && browserDue <= Date.now()];
       const last = this.ctx.storage.kv.get<number>('owner_alarm_last_v1') ?? 2;
       let selected = -1;
-      for (let n = 1; n <= 3; n++) { const candidate = (last + n) % 3; if (readyKinds[candidate]) { selected = candidate; break; } }
+      for (let n = 1; n <= 4; n++) { const candidate = (last + n) % 4; if (readyKinds[candidate]) { selected = candidate; break; } }
       if (selected < 0) { await scheduler.rearm(); return; }
       this.ctx.storage.kv.put('owner_alarm_last_v1', selected);
+      if (selected === 3) { this.ctx.waitUntil(this.browserTasks.maintain()); await scheduler.rearm(); return; }
       if (selected === 0) { try { await this.drainInbox(); } finally { await scheduler.rearm(); } return; }
       if (selected === 1) {
         try { await finalOutbox.drain({
@@ -919,6 +939,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (update.message?.from?.id !== owner || update.message.chat?.id !== owner || !text) return false;
     const trace = `tg-${update.update_id}`;
     if (text === '/stop') {
+      this.ctx.waitUntil(this.browserTasks.stop());
       const stopping = control.stop();
       log({ trace, hop: 'stop', ms: 0, ok: true, detail: stopping ? 'stopping the running turn' : 'nothing running' });
       void call('sendMessage', { chat_id: owner, text: stopping ? 'Stopping.' : 'Nothing is running right now.' }).catch(() => undefined);
@@ -1376,6 +1397,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       return `telegram:${this.ctx.id.toString()}:${boundOwner}`;
     };
+    const browserApproval = browserTaskApprovalBridge({ ownerId: this.browserTasks.principal, host: async () => this.browserTasks.resolve(this.browserTasks.principal) });
     const desk = approvalDesk(storage.sql, {
       call: routedCall, owner, google: (intent,feature) => google.client(feature??'calendar',intent), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
       timezone: clock.timezone, log,
@@ -1393,7 +1415,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const origin = await storage.get<string>('origin');
         return origin && /^https:\/\/[^/?#]+$/.test(origin) ? `${origin}${CONSOLE_PATH}/waiting` : null;
       },
-      browserSubmit: (proposal) => executeBrowserSubmit(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, proposal),
+      browserSubmit: (proposal, approval) => proposal.continuation ? browserApproval.submit(proposal, approval) : executeBrowserSubmit(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, proposal),
+      browserReceiptVerified: browserApproval.receiptVerified,
       // Approved sends go out this Waldo's own channel chat, verbatim, through the same routed
       // call the cards use. A proposal naming another channel fails honestly instead of
       // rerouting silently.
@@ -1488,7 +1511,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` });
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerHost?.gateway, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
+      }), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browserTaskHandler({ legacy: browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId), propose: desk.proposeBrowserSubmit, stopAdmission: async () => { await this.browserTasks.revoke(); } }), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerHost?.gateway, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
       () => standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),

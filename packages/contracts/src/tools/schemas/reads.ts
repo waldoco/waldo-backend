@@ -192,10 +192,18 @@ export type BrowsePageArgs = z.infer<typeof browsePageArgsSchema>;
 // B-tool-2: bounded in-page actions. observe-before-act seam, capped steps, deterministic
 // stop before anything irreversible-looking (submit/pay/send/book...) - those need the
 // approval gate, which is B-tool-3, not model judgment.
+export const browserTaskCommandSchema = z.discriminatedUnion('operation', [
+  z.strictObject({ operation: z.literal('inspect') }),
+  z.strictObject({ operation: z.literal('fill'), field_ref: z.string().min(1).max(80), value: z.string().min(1).max(1000) }),
+  z.strictObject({ operation: z.literal('prepare_submit') }),
+  z.strictObject({ operation: z.literal('verify') }),
+  z.strictObject({ operation: z.literal('cancel') }),
+]);
 export const browseActArgsSchema = z.strictObject({
   url: z.url().max(2000),
   task: z.string().min(1).max(1000),
   max_actions: z.int().min(1).max(5).default(3),
+  command: browserTaskCommandSchema.optional(),
 });
 export type BrowseActArgs = z.infer<typeof browseActArgsSchema>;
 

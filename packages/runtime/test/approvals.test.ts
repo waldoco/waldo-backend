@@ -7,6 +7,24 @@ import { GoogleError, type GoogleClient } from '../src/connectors/google';
 const iso = (s: string) => s as never;
 
 describe('approval desk', () => {
+  it('promotes only host-checked receipts and passes the fresh desk approval reference', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-browser-checked-receipt'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let next = 0;
+      for (const checked of [true, false, 'throws'] as const) {
+        let seen = '';
+        const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => ({}), google: async () => null, newId: () => `checked-${++next}`, now: () => 1000, timezone: 'UTC', log: () => {},
+          browserSubmit: async (_payload, approval) => { seen = approval!; return { status: 'verified_with_receipt', message: 'Verified fixture', receipt: {} } as never; },
+          browserReceiptVerified: async () => { if (checked === 'throws') throw Error('unavailable'); return checked; },
+        });
+        const id = await desk.proposeBrowserSubmit({ url: 'https://fixture.invalid', action: { selector: '#submit', description: 'Submit' }, binding: { value: 'synthetic' }, steps: [] });
+        expect((await desk.decide(id, 'a', 'test')).toast).toBe(checked === true ? 'Verified' : 'Receipt not checked');
+        expect(seen).toBe(id);
+        expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe(checked === true ? 'done' : 'unverified');
+        expect((await desk.decide(id, 'a', 'test')).toast).toBe('Already handled.');
+      }
+    });
+  });
   it('browser outcomes never claim Done without checked durable receipt, and consume replay/concurrent callbacks', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-browser-outcomes'));
     await runInDurableObject(stub, async (_instance, state) => {

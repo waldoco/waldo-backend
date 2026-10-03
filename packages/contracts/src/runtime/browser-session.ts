@@ -8,7 +8,7 @@ const publicUrlSchema = z.url().refine((url) => /^https:\/\/(?![^/]*@)/.test(url
 export const browserSessionSchema = z.strictObject({
   id: z.string().min(1),
   ownerId: z.string().min(1),
-  provider: z.literal('browserbase_stagehand_http_v3'),
+  provider: z.enum(['browserbase_stagehand_http_v3', 'cloudflare_playwright']),
   providerSessionId: z.string().min(1),
   contextHandle: z.string().min(1).nullable(),
   mode: z.enum(['public', 'authenticated_takeover']),
@@ -83,3 +83,14 @@ export class BrowserSessionBoundary {
     return this.options.executor.issue(session, command);
   }
 }
+
+const taskFactsSchema = z.record(z.string().min(1).max(80), z.string().min(1).max(1000)).refine(value => Object.keys(value).length > 0 && Object.keys(value).length <= 24 && Object.keys(value).every(key => !['__proto__', 'constructor', 'prototype'].includes(key)));
+export const browserTaskProposalSchema = z.strictObject({ id: z.string().min(1).max(200), url: publicUrlSchema, actionRef: z.string().min(1).max(300), actionDigest: digestSchema, scopeDigest: digestSchema, stateDigest: digestSchema, bindingDigest: digestSchema, binding: taskFactsSchema });
+export type BrowserTaskProposal = z.infer<typeof browserTaskProposalSchema>;
+export const browserTaskReceiptSchema = z.strictObject({ id: z.string().min(1).max(100), observed_at: iso8601Schema, source: z.enum(['controlled_fixture', 'provider']), action_digest: digestSchema, binding_digest: digestSchema });
+export type BrowserTaskReceipt = z.infer<typeof browserTaskReceiptSchema>;
+export const browserTaskCheckpointSchema = z.strictObject({ taskId: z.string().min(1).max(200), origin: publicUrlSchema, manifestDigest: digestSchema, session: browserSessionSchema, phase: z.enum(['active', 'approval_pending', 'submitting', 'unknown', 'verified', 'closed', 'cleanup_pending']), steps: z.int().min(0).max(5), proposal: browserTaskProposalSchema.nullable(), receipt: browserTaskReceiptSchema.nullable() });
+export type BrowserTaskCheckpoint = z.infer<typeof browserTaskCheckpointSchema>;
+
+export const browserTaskContinuationSchema = z.strictObject({ version: z.literal(1), taskRef: z.string().min(1).max(200), proposalId: z.string().min(1).max(200), scopeDigest: digestSchema });
+export type BrowserTaskContinuation = z.infer<typeof browserTaskContinuationSchema>;

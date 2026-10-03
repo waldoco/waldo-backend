@@ -106,7 +106,8 @@ export const browseActHandler = (
   trigger_allowlist: allowlist('browse_act'),
   autonomy_gated: false,
   mutates_state: true,
-  async handle({ url, task, max_actions }: BrowseActArgs, ctx) {
+  async handle({ url, task, max_actions, command }: BrowseActArgs, ctx) {
+    if (command) return { ok: false, code: 'rejected', error: 'Typed browser commands require a configured current task host.', source_taint: 'external' };
     if (!apiKey || !projectId) return { ok: false, code: 'auth_failed', error: 'Browsing is not set up on this Waldo yet.', source_taint: 'external' };
     const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json' };
     const call = async (path: string, body: object) => {
@@ -198,6 +199,7 @@ export const executeBrowserSubmit = async (
   const rejected = (message: string): BrowserSubmitOutcome => ({ status: 'rejected', message });
   const uncertain = (message: string): BrowserSubmitOutcome => ({ status: 'uncertain', message });
   let actAttempted = false;
+  if (proposal.continuation) return rejected('This prepared browser task requires its configured continuation host. Nothing was submitted.');
   if (!apiKey || !projectId) return rejected('Browsing is not set up on this Waldo yet, so nothing happened.');
   const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json' };
   const call = (path: string, body: object) => fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
