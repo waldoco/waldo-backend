@@ -214,9 +214,73 @@ it.each(['done', 'dropped', 'deadline', 'timezone'])('suppresses frozen work inv
     await outbox.enqueue({ id: 'source-check', trace: 'fixture', ownerSubject: '7', doName: 'owner-7', payload: { chat_id: 7, text: 'Have you handled this?' }, mailFollowup: receipt });
     loops.claimReview(receipt);
     if (mode === 'deadline') loops.open({ title: 'Review', due: '2026-10-03T12:00', source_ref: 'mail:t1' });
-    else if (mode !== 'timezone') loops.close(loop.id, mode);
+    else if (mode === 'done' || mode === 'dropped') loops.close(loop.id, mode);
     let sent = false; now += 1000;
     await outbox.drain({ allowed: async r => loops.reviewEligible(r.mailFollowup!, mode === 'timezone' ? 'Asia/Kolkata' : 'UTC'), send: async () => { sent = true; return { message_id: 1, chat: { id: 7 } }; }, settled: async r => loops.settleReview(r) });
     expect(sent).toBe(false); expect(outbox.records()[0]?.status).toBe('blocked');
+  });
+});
+
+it('retains a missing-result ACK as unknown and cannot safely re-arm it', async () => {
+  const { TelegramFinalOutbox } = await import('../src/channels/telegram-final-outbox');
+  const { createTelegramCaller } = await import('../src/channels/telegram-api');
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-missing-ack')), async (_i, state) => {
+    let now = 1;
+    const updates = updateBook(state.storage.sql);
+    const loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'ack' });
+    observeMail(updates, 'mail:t1', 't1', '{"subject":"Review by 10"}', now, 'm1');
+    const loop = loops.open({ title: 'Review', due: '2026-10-03T10:00', source_ref: 'mail:t1' });
+    const receipt = { loopId: loop.id, due: loop.due!, sourceRef: 'mail:t1', timezone: 'UTC', messageId: 'm1' };
+    const outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
+    await outbox.enqueue({ id: 'missing-ack', trace: 'fixture', payload: { chat_id: 7, text: 'Have you handled this?' }, ownerSubject: '7', doName: 'owner-7', mailFollowup: receipt });
+    loops.claimReview(receipt);
+    let sends = 0;
+    const caller = createTelegramCaller('synthetic-offline', (async () => { sends++; return Response.json({ ok: true }); }) as typeof fetch);
+    now += 1000;
+    await outbox.drain({ allowed: async () => true, send: p => caller('sendMessage', p), settled: async r => loops.settleReview(r) });
+    expect(outbox.records()[0]?.reason).toBe('egress_blocked');
+    expect(await outbox.retryBlockedMailFollowup('missing-ack')).toBe(false);
+    expect(loops.reviewDue('2026-10-03T10:00')).toEqual([]);
+    expect(state.storage.sql.exec('SELECT delivery_state FROM loop_mail_sources').one()).toEqual({ delivery_state: 'unknown' });
+    await outbox.drain({ allowed: async () => true, send: p => caller('sendMessage', p), settled: async r => loops.settleReview(r) });
+    expect(sends).toBe(1);
+  });
+});
+
+it('atomically re-arms a known pre-send denial and its source claim across reconstruction', async () => {
+  const { TelegramFinalOutbox } = await import('../src/channels/telegram-final-outbox');
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-atomic-rearm')), async (_i, state) => {
+    let now = 1;
+    const updates = updateBook(state.storage.sql);
+    let loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'atomic' });
+    observeMail(updates, 'mail:t1', 't1', '{"subject":"Review by 10"}', now, 'm1');
+    const loop = loops.open({ title: 'Review', due: '2026-10-03T10:00', source_ref: 'mail:t1' });
+    const receipt = { loopId: loop.id, due: loop.due!, sourceRef: 'mail:t1', timezone: 'UTC', messageId: 'm1' };
+    let outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
+    await outbox.enqueue({ id: 'atomic', trace: 'fixture', payload: { chat_id: 7, text: 'Have you handled this?' }, ownerSubject: '7', doName: 'owner-7', mailFollowup: receipt }); loops.claimReview(receipt);
+    now += 1000;
+    await outbox.drain({ allowed: async () => false, send: async () => { throw new Error('must not send'); }, settled: async r => loops.settleReview(r) });
+    expect(loops.reviewDue('2026-10-03T10:00')).toHaveLength(1);
+    await outbox.retryBlockedMailFollowup('atomic', work => state.storage.transactionSync(() => { work(); loops.claimReview(receipt); }));
+    // Reconstruct immediately after the atomic cutpoint, before alarm rearm or send.
+    loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'unused' });
+    outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
+    expect(loops.reviewDue('2026-10-03T10:00')).toEqual([]);
+    now += 1000;
+    await outbox.drain({ allowed: async () => true, send: async () => ({ message_id: 1, chat: { id: 7 } }), settled: async r => loops.settleReview(r) });
+    expect(state.storage.sql.exec('SELECT delivery_state FROM loop_mail_sources').one()).toEqual({ delivery_state: 'delivered' });
+  });
+});
+
+it('never re-arms a terminal intent whose payload expired', async () => {
+  const { TelegramFinalOutbox } = await import('../src/channels/telegram-final-outbox');
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-expired-intent')), async (_i, state) => {
+    let now = 1;
+    const outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
+    await outbox.enqueue({ id: 'expired', trace: 'fixture', payload: { chat_id: 7, text: 'Have you handled this?' }, ownerSubject: '7', doName: 'owner-7', mailFollowup: { loopId: 'o1', due: '2026-10-03T10:00', sourceRef: 'mail:t1', timezone: 'UTC', messageId: 'm1' } });
+    now += 1000; await outbox.drain({ allowed: async () => false, send: async () => { throw new Error('must not send'); }, settled: async () => {} });
+    now += 86_400_000; await outbox.maintain();
+    expect(outbox.records()[0]?.payload.text).toBe('');
+    expect(await outbox.retryBlockedMailFollowup('expired')).toBe(false);
   });
 });

@@ -65,8 +65,8 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
     settleReview(record: FinalRecord): void {
       if (!record.mailFollowup || record.status === 'pending') return;
       const r = record.mailFollowup;
-      if (record.status === 'blocked') sql.exec('UPDATE loop_mail_sources SET nudged_due = NULL, nudged_timezone = NULL, delivery_state = ? WHERE loop_id = ? AND nudged_due = ? AND nudged_timezone = ? AND nudged_message_id = ?', 'blocked', r.loopId, r.due, r.timezone, r.messageId);
-      else sql.exec('UPDATE loop_mail_sources SET delivery_state = ? WHERE loop_id = ? AND nudged_due = ? AND nudged_timezone = ? AND nudged_message_id = ?', record.status === 'delivered' ? 'delivered' : 'unknown', r.loopId, r.due, r.timezone, r.messageId);
+      if (record.status === 'blocked' && record.reason === 'owner_binding' && record.attempts === 0 && record.payload.text.trim() && deps.now() < record.createdAt + 86400000) sql.exec('UPDATE loop_mail_sources SET nudged_due = NULL, nudged_timezone = NULL, delivery_state = ? WHERE loop_id = ? AND nudged_due = ? AND nudged_timezone = ? AND nudged_message_id = ?', 'blocked', r.loopId, r.due, r.timezone, r.messageId);
+      else sql.exec('UPDATE loop_mail_sources SET delivery_state = ? WHERE loop_id = ? AND nudged_due = ? AND nudged_timezone = ? AND nudged_message_id = ?', record.status === 'delivered' ? 'delivered' : record.status === 'blocked' && record.attempts === 0 ? 'not_delivered' : 'unknown', r.loopId, r.due, r.timezone, r.messageId);
     },
     closed: (limit = 5) => sql.exec<Loop>("SELECT * FROM loops WHERE status != 'open' ORDER BY closed_at DESC LIMIT ?", limit).toArray(),
     proactivity(): Proactivity {

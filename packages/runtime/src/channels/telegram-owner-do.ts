@@ -1604,8 +1604,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             const id = `mail-followup:${mailFollowup.loopId}:${mailFollowup.due}:${mailFollowup.timezone}:${mailFollowup.messageId}`;
             const known = finalOutbox.records().find(record => record.id === id);
             if (known) {
-              if (await finalOutbox.retryBlockedMailFollowup(id)) loops.claimReview(mailFollowup);
-              else if (known.status !== 'pending') loops.settleReview(known);
+              const retried = await finalOutbox.retryBlockedMailFollowup(id, work => storage.transactionSync(() => { work(); loops.claimReview(mailFollowup); }));
+              if (!retried && known.status !== 'pending') loops.settleReview(known);
               await scheduler.rearm(); return;
             }
             await finalOutbox.enqueueFenced({ id: `mail-followup:${mailFollowup.loopId}:${mailFollowup.due}:${mailFollowup.timezone}:${mailFollowup.messageId}`,
