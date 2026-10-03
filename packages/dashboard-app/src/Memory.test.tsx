@@ -45,3 +45,8 @@ describe('modern Memory presentation',()=>{
   expect(html).toContain('<svg');expect(html).toContain('role="button"');expect(html).toContain('tabindex="0"');expect(html).toContain('Saved branches');expect(html).toContain('Unverified association');expect(html).toContain('cannot be recovered');expect(html).toContain('tentative');expect(html).not.toContain('Your days');
  });
 });
+it('puts evidence before collapsed technical metadata without implying a source link',()=>{
+ const html=renderToStaticMarkup(<MemoryDetailView data={readMemory(response('view=detail&id=synthetic-owner:claim:1')) as MemoryDetail}/>);
+ expect(html.indexOf('A writer note')).toBeLessThan(html.indexOf('Technical details'));
+ expect(html).toContain('<details');expect(html).toContain('not an original-message link');expect(html).toContain('Writer seen count');
+});
