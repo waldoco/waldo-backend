@@ -68,13 +68,12 @@ export class CuratedOwnerSkills {
   this.sql.exec(`INSERT INTO skills(name,version,provenance,identity_locked,provisional,trigger_types_json,trigger_condition,required_tools_json,required_connectors_json,effectiveness,invocations,last_used,body_markdown,created_by,created_at,status,pinned,last_curated_at,archived_at)
    VALUES(?,?,'system',1,0,?,?, '[]','[]',1,0,NULL,?,?,?,'active',1,NULL,NULL) ${conflict}`,s.name,s.version,JSON.stringify(s.trigger_types),s.trigger_condition,s.body_markdown,this.createdBy(s),s.created_at);
  }
- // Defaults for an owner with no curated row at all (so an existing owner who never installed any also
- // gets them). Rows that exist are never inserted over, so an owner's disable stays disabled.
+ // Defaults: every reviewed catalog name the owner has no row for (new owners, partial owners, later catalog additions).
  // Upgrade rewrites only an older reviewed row of this owner to the catalog text; status is kept.
  private ensureDefaults(): void {
-  const names = this.catalog.map(s => s.name);
-  const present = this.sql.exec<{ n: number }>(`SELECT count(*) AS n FROM skills WHERE name IN (${names.map(() => '?').join(',')})`, ...names).toArray()[0]!.n;
-  if (present === 0) { for (const s of this.catalog) this.insert(s, 'ON CONFLICT(name) DO NOTHING'); return; }
+  // Per-name admission: a reviewed name with no row at all is inserted active. Any existing row
+  // (active, archived, hostile) is untouched here, so a disabled skill is never brought back.
+  for (const s of this.catalog) if (!this.stored(s.name)) this.insert(s, 'ON CONFLICT(name) DO NOTHING');
   for (const s of this.catalog) {
    const row = this.stored(s.name);
    if (!row || row.admitted !== 1 || row.version === null || row.version >= s.version || row.provenance !== 'system' || row.identity_locked !== 1
