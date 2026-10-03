@@ -83,3 +83,10 @@ describe('profile, setup, usage and Telegram references', () => {
     expect(html).not.toContain('<script>'); expect(html).not.toContain('/console/files');
   });
 });
+it('uses honest labels with raw types inspectable, without inventing missing outcomes',()=>{
+ const record:ActivityRecord={...activity,data:{...activity.data,trace:['update_card','joined_path','llm_reply','unknown_hop'].map(hop=>({time:'10:00',hop,ok:true,ms:0,summary:null}))}};
+ const html=renderToStaticMarkup(<ActivityControls record={record} busy={false} onPage={noop}/>);
+ for(const label of ['Update card','Conversation processing','Chat reply','Recorded activity'])expect(html).toContain(`<h3>${label}</h3>`);
+ expect(html).toContain('No outcome summary recorded.');expect(html).toContain('<details');expect(html).toContain('unknown_hop');
+ expect(html).not.toMatch(/<h3>(update_card|joined_path|llm_reply|unknown_hop)<\/h3>/);
+});

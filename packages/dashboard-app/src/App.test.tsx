@@ -54,7 +54,7 @@ describe('dashboard routing and overview boundaries', () => {
     for(const value of ['memory/spots?owner=other','memory/profile?id=1','memory/unknown'])expect(resolveRoute(value)).toBe('memory');
     expect(resolveRoute('')).toBe('today');
     expect(resolveRoute('overview?owner=other')).toBe('today');
-    expect(resolveRoute('unknown?view=waiting')).toBe('today');
+    expect(resolveRoute('unknown?view=waiting')).toBe('not-found');
   });
   it('keeps supported destinations and Today links inside the shell', () => {
     const nav = renderToStaticMarkup(<DashboardNavigation route="today"/>);
@@ -125,8 +125,8 @@ describe('dashboard routing and overview boundaries', () => {
   it('preserves an activity with an absent summary and places waiting before the Brief', () => {
     const record: OverviewV1 = { ...empty, waiting: { count: 1, first: { id: 'w1', summary: 'Review recipient and effect' } }, latest_activity: { kind: 'update_card', status: 'completed', at: empty.as_of, summary: null } };
     const html = renderToStaticMarkup(<Dashboard data={record} route="today"/>);
-    expect(html).toContain('update_card');
-    expect(html).toContain('No summary is recorded for this activity.');
+    expect(html).toContain('Update card');
+    expect(html).toContain('No outcome summary recorded. This record does not confirm delivery or an external change.');
     expect(html).not.toContain('No owner-facing work appears');
     expect(html).toContain('overview-grid has-waiting');
     expect(html.indexOf('Review recipient and effect')).toBeLessThan(html.indexOf('The Brief has not been sent.'));
