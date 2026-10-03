@@ -380,3 +380,5 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] Full workspace replacement guards cover every emitted Scribe placeholder, including instruction masking. Adversarial marker cases must reject without changing the immutable revision or writing a new body; literal owner-authorized masking remains a separate edit path.
 
 - [ ] Email-only signup pages expose no telephone input or contact-save action, including a resumed legacy contact cookie. Preserve verified-email completion, exact invite consumption, owner/session cookies, CSRF and same-owner recovery; UI removal never changes identity admission or grants.
+
+- [ ] Google REST read 403s request consent only for exact structured insufficient-scope evidence; API-disabled, quota and ordinary denials do not imply missing consent. Test direct and proxy reason propagation, foreign/unknown/malformed reasons, 401 and 5xx; deploy matching Edge reason transport before its Worker consumer. MCP and ledgered-write parity are separate, unproven surfaces.
