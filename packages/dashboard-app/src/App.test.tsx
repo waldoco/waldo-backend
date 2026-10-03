@@ -4,17 +4,17 @@ import { Dashboard, DashboardNavigation, DashboardFeedback, resolveRoute } from 
 import type { OverviewV1 } from './model';
 const empty: OverviewV1 = { version: 1, as_of: '2026-09-29T07:40:00Z', timezone: 'Asia/Kolkata', brief: { status: 'not_sent', at: null }, waiting: { count: 0, first: null }, next_card: null, latest_activity: null, services: [] };
 describe('dashboard routing and overview boundaries', () => {
-  it('labels Account accurately and locates sessions in the modern Connections destination', () => {
+  it('groups account and sessions in Settings while keeping connections separate', () => {
     const html = renderToStaticMarkup(<DashboardNavigation route="connections" />);
     expect(html).not.toContain('Account &amp; sign out');
     expect(html).toContain('href="/console/legacy"');
     expect(html).not.toContain('Original console');
-    expect(html).toMatch(/href="#\/connections"[^>]*>Sessions &amp; sign out/);
-    expect(html).toMatch(/href="#\/account"[^>]*>Account</);
+    expect(html).toContain('href="#/settings"');
+    expect(html).not.toContain('href="#/account"');
   });
   it('loads controls independently rather than turning overview summaries into complete records', () => {
     const record: OverviewV1 = { ...empty, waiting: { count: 1, first: { id: 'p1', summary: 'Overview-only proposal' } }, services: [{ account_id: 'g1', email: 'owner@example.test', grants: ['calendar'], health: 'needs_reconnect' }] };
-    for (const [route, title] of [['waiting', 'Waiting.'], ['patrol', 'Patrol.'], ['connections', 'Connections.'], ['day', 'Your day.'], ['files', 'Files.'], ['usage', 'Usage.'], ['setup', 'Setup.']] as const) {
+    for (const [route, title] of [['waiting', 'Waiting.'], ['patrol', 'Patrol.'], ['connections', 'Connections.'], ['day', 'Settings.'], ['files', 'Files.'], ['usage', 'Settings.'], ['setup', 'Settings.']] as const) {
       const html = renderToStaticMarkup(<Dashboard data={record} route={route} />);
       expect(html).toContain(title);
       expect(html).toContain('role="status"');
@@ -40,7 +40,7 @@ describe('dashboard routing and overview boundaries', () => {
   it('keeps one Memory destination and backed waiting counts in navigation', () => {
     const nav = renderToStaticMarkup(<DashboardNavigation route="memory/constellation" waitingCount={2}/>);
     expect(nav).toMatch(/aria-current="page"[^>]*href="#\/memory"/);
-    expect(nav).toContain('href="#/day"');
+    expect(nav).toContain('href="#/settings"');
     expect(nav).toContain('2 waiting decisions');
     expect(renderToStaticMarkup(<DashboardNavigation route="today"/>)).not.toContain('0 waiting decisions');
   });
@@ -58,10 +58,10 @@ describe('dashboard routing and overview boundaries', () => {
   });
   it('keeps supported destinations and Today links inside the shell', () => {
     const nav = renderToStaticMarkup(<DashboardNavigation route="today"/>);
-    for (const path of ['today', 'waiting', 'patrol', 'memory', 'connections', 'day', 'setup', 'files', 'usage']) expect(nav).toContain(`href="#/${path}"`);
+    for (const path of ['today', 'waiting', 'patrol', 'memory', 'connections', 'files', 'settings']) expect(nav).toContain(`href="#/${path}"`);
     for (const path of ['legacy']) expect(nav).toContain(`href="/console/${path}"`);
     const today = renderToStaticMarkup(<Dashboard data={empty} route="today"/>);
-    for (const path of ['waiting', 'day', 'patrol']) expect(today).toContain(`href="#/${path}"`);
+    for (const path of ['waiting', 'settings/day', 'patrol']) expect(today).toContain(`href="#/${path}"`);
     expect(today).not.toContain('href="/console/day"');
   });
   it('escapes hostile overview text without exposing it in independently loaded panels', () => {
@@ -77,7 +77,7 @@ describe('dashboard routing and overview boundaries', () => {
     }
   });
   it('does not expose summary approval or mutations before a protected read', () => {
-    for (const route of ['today', 'waiting', 'memory/spots', 'memory/constellation', 'memory/profile', 'connections', 'day', 'files', 'usage', 'setup', 'invites', 'account'] as const) {
+    for (const route of ['today', 'waiting', 'memory/spots', 'memory/constellation', 'memory/profile', 'connections', 'files', 'settings', 'invites'] as const) {
       const html = renderToStaticMarkup(<Dashboard data={empty} route={route}/>);
       expect(html).not.toContain('<form');
       expect(html).not.toContain('<input');

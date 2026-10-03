@@ -1,3 +1,4 @@
+import {SettingsPanel,type SettingsSection} from './Settings';
 import {parseMemoryDestination} from './destinations';
 import {WorkspacePanel} from './Workspace';
 import {OwnerControlsPanel} from './OwnerControls';
@@ -10,17 +11,18 @@ import type { OverviewV1 } from './model';
 import { fetchOverview, SignInRequired } from './model';
 import './style.css';
 
-export type Route = 'today' | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace';
+export type Route = 'today' | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
 const routes = [
   { key: 'today', label: 'Today' }, { key: 'waiting', label: 'Waiting' },
-  { key: 'patrol', label: 'Patrol' }, { key: 'memory', label: 'Memory' },
-  { key: 'connections', label: 'Connections' }, { key: 'day', label: 'Your day' },
+  { key: 'memory', label: 'Memory' }, { key: 'patrol', label: 'Patrol' },
 ] as const;
 export const resolveRoute = (raw: string): Route => {
   const memory = parseMemoryDestination(raw);
   if(memory.kind==='invalid-memory')return 'memory';
   if(memory.kind==='valid-memory'){const d=memory.destination;return d.kind==='profile'?'memory/profile':d.kind==='explore'?'memory/constellation':`memory/${d.view}`;}
-  const value = raw.split('?')[0];
+  const value = raw.split('?')[0] ?? '';
+  if(value.startsWith('settings/')&&!['day','sessions','usage','account','setup'].includes(value.slice(9)))return 'settings/not-found';
+  if(['settings','settings/day','settings/sessions','settings/usage','settings/account','settings/setup','day','connections'].includes(value))return value as Route;
   if (value === 'admin' || value==='files'||value==='usage'||value==='setup'||value==='invites'||value==='account'||value==='files/workspace') return value;
   if (value === 'memory/spots' || value === 'memory/constellation' || value === 'memory/profile') return value;
   return routes.find((r) => r.key === value)?.key ?? 'today';
@@ -51,7 +53,7 @@ const navigationIcons = {
 };
 
 export function DashboardNavigation({ route, waitingCount, onNavigate, isAdmin = false }: { isAdmin?: boolean; route: Route; waitingCount?: number; onNavigate?: () => void }) {
-  const selected = route.startsWith('memory/') ? 'memory' : route === 'overview' ? 'today' : route;
+  const selected = route.startsWith('memory/') ? 'memory' : route === 'overview' ? 'today' : ['day','usage','account','setup'].includes(route)||route.startsWith('settings')?'settings':route;
   return <div className="navigation">
     <nav aria-label="Dashboard pages">{routes.map((item) => (
       <a aria-current={selected === item.key ? 'page' : undefined} onClick={onNavigate}
@@ -60,28 +62,27 @@ export function DashboardNavigation({ route, waitingCount, onNavigate, isAdmin =
       </a>
     ))}</nav>
     <nav className="secondary-nav" aria-label="More console controls">
-      <a href="#/files" onClick={onNavigate}>Files <small>Telegram references</small></a>
-      <a href="#/usage" onClick={onNavigate}>Usage &amp; estimated cost</a>
-      <a href="#/setup" onClick={onNavigate}>Setup checklist</a>
-      <a href="#/invites" onClick={onNavigate}>Invite someone</a>
+      <a href="#/files" aria-current={route.startsWith('files')?'page':undefined} onClick={onNavigate}>Files</a>
+      <a href="#/connections" aria-current={route==='connections'?'page':undefined} onClick={onNavigate}>Connections</a>
     </nav>
     {isAdmin && <nav className="secondary-nav" aria-label="Restricted administration"><a href="#/admin" aria-current={route === 'admin' ? 'page' : undefined} onClick={onNavigate}><span className="nav-label"><svg className="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5M8 17h3"/></svg>Invite management</span><small>Restricted administration</small></a></nav>}
-    <nav className="account-nav" aria-label="Account and sessions">
-      <a href="#/account" onClick={onNavigate}>Account</a>
-      <a href="#/connections" onClick={onNavigate}>Sessions &amp; sign out</a>
+    <nav className="account-nav" aria-label="Settings and invitations">
+      <a href="#/settings" aria-current={selected==='settings'?'page':undefined} onClick={onNavigate}>Settings</a>
+      <a href="#/invites" aria-current={route==='invites'?'page':undefined} onClick={onNavigate}>Invite someone</a>
       <a href="/console/legacy" onClick={onNavigate}>Existing controls <span aria-hidden="true">↗</span></a>
     </nav>
-    <p className="sidebar-note">Invites let someone join Waldo. They do not share your data.</p>
   </div>;
 }
 
 export function Dashboard({ data, route }: { data: OverviewV1; route: Route }) {
   const activity = ownerActivity(data);
+  if(route==='settings/not-found')return <section className="panel" role="status"><h1>Settings page not found</h1><p>This settings destination is not available.</p><a href="#/settings">Open Settings</a></section>;
   if(route==='files'||route==='files/workspace')return <><div className="page-heading"><span className="eyebrow">Files with Waldo</span><h1>Files.</h1><p>Inspect Telegram references or your separate private workspace.</p></div><nav className="memory-tabs" aria-label="File storage views"><a href="#/files" aria-current={route==='files'?'page':undefined}>Telegram references</a><a href="#/files/workspace" aria-current={route==='files/workspace'?'page':undefined}>Private workspace</a></nav>{route==='files/workspace'?<WorkspacePanel/>:<ControlsPanel key="files" view="files" embedded/>}</>;
   if(route==='waiting'||route==='patrol')return <ControlsPanel key={route} view={route==='patrol'?'activity':'waiting'}/>;
-  if(route==='invites'||route==='account')return <OwnerControlsPanel view={route}/>;
+  if(route==='invites')return <OwnerControlsPanel view={route}/>;
+  if(route==='settings'||route.startsWith('settings/')||['day','usage','account','setup'].includes(route)){const section=(route==='settings'?'day':route.startsWith('settings/')?route.slice(9):route) as SettingsSection;return <SettingsPanel section={section}/>;}
   if (route === 'memory' || route.startsWith('memory/')) return <MemoryPanel subview={route === 'memory/constellation' ? 'constellation' : route === 'memory/profile' ? 'profile' : 'spots'}/>;
-  if(route==='day'||route==='connections'||route==='usage'||route==='setup')return <ControlsPanel key={route} view={route}/>;
+  if(route==='connections')return <ControlsPanel key={route} view={route} section="connections"/>;
 
   const brief = data.brief.status === 'sent_recorded' ? 'The Brief is marked sent.'
     : data.brief.status === 'not_scheduled' ? 'No Brief is scheduled.' : 'The Brief has not been sent.';
@@ -96,7 +97,7 @@ export function Dashboard({ data, route }: { data: OverviewV1; route: Route }) {
       </section>
       <section className="next-panel"><span className="eyebrow">Next on your day</span><h2>{data.next_card?.label ?? 'No card scheduled ahead.'}</h2>
         <p>{data.next_card ? date(data.next_card.scheduled_at, data.timezone) : 'No future card is recorded in this plan.'}</p>
-        <a href="#/day">Adjust timing &amp; pins <span aria-hidden="true">↗</span></a>
+        <a href="#/settings/day">Adjust timing &amp; pins <span aria-hidden="true">↗</span></a>
       </section>
     </div>
     <div className="record-list">
@@ -109,7 +110,7 @@ export function Dashboard({ data, route }: { data: OverviewV1; route: Route }) {
         <a href="#/patrol">Inspect the latest record <span aria-hidden="true">→</span></a></div>
       </section>
     </div>
-    <p className="day-note">The Brief, Check-in and evening Close run in chat. <a href="#/day">Your day</a> keeps their timing and pins together. Their full content and Close results are not shown here yet.</p>
+    <p className="day-note">The Brief, Check-in and evening Close run in chat. <a href="#/settings/day">Your day</a> keeps their timing and pins together. Their full content and Close results are not shown here yet.</p>
   </>;
 }
 
@@ -173,6 +174,7 @@ export function App() {
       <button ref={menuButton} type="button" aria-expanded={drawerOpen} aria-controls="navigation-drawer" aria-haspopup="dialog" onClick={openDrawer} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openDrawer(); } }}>Menu</button>
     </header>
     <dialog ref={drawer} id="navigation-drawer" className="navigation-drawer" aria-labelledby="drawer-title" onClose={() => { setDrawerOpen(false); if (window.matchMedia('(max-width: 860px)').matches) menuButton.current?.focus(); }} onKeyDown={(event) => {
+      if(event.key==='Escape'){event.preventDefault();closeDrawer();return;}
       if (event.key !== 'Tab') return;
       const controls = event.currentTarget.querySelectorAll<HTMLElement>('a[href],button:not([disabled])');
       const first = controls[0];
