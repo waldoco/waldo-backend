@@ -139,3 +139,12 @@ it('export caller byte ceiling rejects an immutable revision before any body rea
  f.state().operations[index]={...current,body:{...current.body,binding:{...current.body.binding,ownerId:id(999)}}};
  await expect(s.recentWrites()).rejects.toThrow('workspace_rejected');
  });
+
+ it('literal revisions retain current-owner admission and refuse revoked or foreign custody before new bytes',async()=>{
+ const f=fixture(),s=await workspaceStore(f.host);await s.write(args());
+ const edit={path:'file.txt',mime:'text/plain',expected_revision:1,operation_id:id(80),edits:[{before:'hello',after:'updated'}]};
+ f.state().binding={...binding,ownerId:id(999)};
+ await expect(s.reviseText(edit)).rejects.toThrow('workspace_rejected');expect(f.state().files[0]!.revision).toBe(1);
+ f.state().binding={...binding};f.suspend();await expect(s.reviseText(edit)).rejects.toThrow('workspace_rejected');
+ expect(f.host.bodies.put).toHaveBeenCalledTimes(1);
+ });

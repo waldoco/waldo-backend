@@ -37,10 +37,13 @@ function utf8Bytes(v: string): number {
 export const workspaceWriteArgsSchema = z.strictObject({
   path: z.string().min(1).max(300),
   // The cap is in UTF-8 bytes (the store's unit), not characters.
-  text: z.string().min(1).refine((v) => utf8Bytes(v) <= WORKSPACE_TEXT_MAX_BYTES, { message: 'text exceeds the byte cap' }),
+  text: z.string().min(1).refine((v) => utf8Bytes(v) <= WORKSPACE_TEXT_MAX_BYTES, { message: 'text exceeds the byte cap' }).optional(),
+  edits: z.array(z.strictObject({ before:z.string().min(1), after:z.string() })).min(1).max(20)
+    .refine(edits => edits.reduce((bytes,edit) => bytes + utf8Bytes(edit.before) + utf8Bytes(edit.after),0) <= WORKSPACE_TEXT_MAX_BYTES, { message:'edits exceed the byte cap' }).optional(),
   mime: z.enum(['text/plain', 'text/markdown']),
   expected_revision: z.int().nonnegative(),
-});
+}).refine(value => (value.text === undefined) !== (value.edits === undefined), {message:'provide exactly one of text or edits'})
+ .refine(value => value.edits === undefined || value.expected_revision > 0, {message:'edits require an existing revision'});
 export type WorkspaceWriteArgs = z.infer<typeof workspaceWriteArgsSchema>;
 
 // Render bounded saved text to genuine document bytes; binary data never enters model arguments.

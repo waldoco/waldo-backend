@@ -18,7 +18,7 @@ const CODE: Record<string, 'rejected' | 'not_found' | 'transient' | 'oversize' |
 // The store's typed codes map onto the tool contract's; a conflict keeps its own message so the model re-reads the revision.
 const toResult = (r: WsResult, taint?: null): ToolResult<unknown> => r.ok
   ? { ok: true, data: r.data, source_taint: r.source_taint }
-  : { ok: false, code: CODE[r.code] ?? 'transient', error: r.code === 'conflict' ? 'revision conflict: re-read the file and retry with its current revision' : r.error, ...((taint === undefined ? r.source_taint : taint) === null ? {} : { source_taint: 'external' as const }) };
+  : { ok: false, code: CODE[r.code] ?? 'transient', error: r.code === 'conflict' ? 'revision or exact-edit conflict: re-read current revision; use unique literal edits on changed spans rather than copying redaction placeholders, or ask for the missing field' : r.error, ...((taint === undefined ? r.source_taint : taint) === null ? {} : { source_taint: 'external' as const }) };
 
 export const workspaceToolHandlers = (open: (ctx?: ToolDispatcherContext) => Promise<WorkspaceStore>, delivery?: WorkspaceDeliveryOptions) => [
   {
@@ -39,7 +39,7 @@ export const workspaceToolHandlers = (open: (ctx?: ToolDispatcherContext) => Pro
   } satisfies ToolHandler<WorkspaceReadArgs, unknown, ToolDispatcherContext>,
   {
     name: 'workspace_write',
-    description: 'Write a text file (text/plain or text/markdown) to the private workspace. expected_revision is 0 to create a new path, or the revision you last saw to replace it; a mismatch writes nothing and returns a conflict.',
+    description: 'Write a text file (text/plain or text/markdown) to the private workspace. expected_revision is 0 to create a new path, or the revision you last saw to revise it. For files read through a redacted view, use edits: literal unique before/after replacements for only changed spans (after may be empty to delete). Untouched bytes are preserved privately. Exactly one of text or edits is required; edits require revision > 0. Absent, duplicate or overlapping matches and changed full overwrites containing redaction placeholders fail without writing. A stale revision writes nothing; reread on conflict.',
     schema: workspaceWriteArgsSchema,
     trigger_allowlist: allowlist('workspace_write'),
     autonomy_gated: false,
