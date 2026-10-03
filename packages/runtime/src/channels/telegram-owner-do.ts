@@ -1,3 +1,4 @@
+import { createCuratedSkillCapability, createScopedCuratedSkillCapability } from '../skills/curated-host';
 import { ownerMessageAdmission, type OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { createOwnerMessageContextAdapter } from './owner-message-context-adapter';
 import { ownerCanonicalHistory } from './owner-canonical-history';
@@ -1345,10 +1346,31 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           allowedDoNames: host.allowedDoNames, provider: 'telegram', subject: occurrence.subject, text: turn.text,
           occurrenceKey: occurrence.id, occurredAt: occurrence.admittedAt, now: Date.now,
         });
+        const skills = createCuratedSkillCapability(storage.sql, admission, turn.text, turn.traceId, scope);
         const adapter = createOwnerMessageContextAdapter({ admission, scope, dependencies: host.context(admission),
-          registeredHandlers: handlers.map(handler => handler.name), connectorBacked: handlers.filter(handler => host.connectorBacked(handler)).map(handler => handler.name), access: host.access.bind(host) });
+          registeredHandlers: [...handlers, ...skills.handlers].map(handler => handler.name), connectorBacked: handlers.filter(handler => host.connectorBacked(handler)).map(handler => handler.name), access: host.access.bind(host) });
         this.activeOwnerContext = adapter;
-        return { admission, adapter, store: ownerCanonicalHistory(storage, admission, adapter) };
+        return { admission, adapter, store: ownerCanonicalHistory(storage, admission, adapter), skills };
+      } } : undefined, !this.canonicalPreparation && channel === 'telegram' ? { prepare: async (turn, contextOwnerId, scope) => {
+        if (turn.attachment || turn.mediaNote || probeCapture.current !== null) return undefined;
+        const occurrence = this.activeInbox;
+        const doName = identity.get<string>('do_name');
+        const subject = identity.get<string>('telegram_subject');
+        const assertSkillOwnerCurrent = async () => {
+          scope.admit();
+          const currentOwner = resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
+          if (!occurrence || occurrence !== this.activeInbox || scope !== this.activeScope
+            || occurrence.runId !== scope.runId || occurrence.attempt !== scope.attempt
+            || occurrence.subject !== String(owner) || currentOwner !== owner || owner <= 0
+            || identity.get<string>('do_name') !== doName || identity.get<string>('telegram_subject') !== subject
+            || turn.surface !== 'telegram' || turn.conversationRef !== `telegram-${owner}`
+            || turn.traceId !== `tg-${occurrence.updateId}` || turn.attachment || turn.mediaNote)
+            throw new ClosedRunError();
+          scope.admit();
+        };
+        await assertSkillOwnerCurrent();
+        return createScopedCuratedSkillCapability(storage.sql, { owner: contextOwnerId, custodyKey: `telegram:${owner}`, turnId: turn.traceId,
+          trigger: 'user_message', ownerText: turn.text, assertCurrent: assertSkillOwnerCurrent }, scope);
       } } : undefined,
     );
     const migrateCoreFiles = async (trace: string) => {

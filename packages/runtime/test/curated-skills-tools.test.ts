@@ -1,0 +1,30 @@
+import { env, runInDurableObject } from 'cloudflare:test';
+import { expect,it } from 'vitest';
+import { buildSessionState, TOOL_PERMISSIONS, skillsVersionArgsSchema, skillsListArgsSchema, handlerAllowlistMatchesAcl } from '@waldo/contracts';
+import { createScopedCuratedSkillCapability } from '../src/skills/curated-host';
+import { dispatchTool } from '../src/tools/dispatcher';
+import { sanitise } from '../src/scribe/sanitiser';
+const canaries=['0123456789abcdef','fedcba9876543210','0011223344556677'];
+it('strict schemas, registry ACL and taint gate cover every lifecycle entry',async()=>{
+ expect(skillsVersionArgsSchema.safeParse({name:'document-email-preparation',version:1,body:'forged'}).success).toBe(false);
+ expect(skillsListArgsSchema.safeParse({path:'SKILL.md'}).success).toBe(false);
+ const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-tools'));
+ await runInDurableObject(stub,async(_,state)=>{
+  let closed=false;const scope={runId:'run',attempt:'attempt',deadline:Date.now()+60000,signal:new AbortController().signal,admit(){if(closed)throw new Error('closed');},commit<T>(work:()=>T){this.admit();return work();}};
+  const turn={owner:'owner',turnId:'turn',trigger:'user_message' as const,ownerText:'/skills install document-email-preparation@1',assertCurrent:async()=>scope.admit()};
+  const cap=createScopedCuratedSkillCapability(state.storage.sql,turn,scope);
+  for(const handler of cap.handlers)expect(handlerAllowlistMatchesAcl(handler.name,handler.trigger_allowlist)).toBe(true);
+  expect(TOOL_PERMISSIONS.brief).not.toContain('skills_install');expect(TOOL_PERMISSIONS.brief).not.toContain('skills_disable');
+  const ctx={authenticatedUserId:'owner',turnId:'turn',runScope:scope,trigger:'user_message' as const,canaryTokens:canaries,session:buildSessionState({trigger:'user_message',canary_tokens:canaries,started_at:1}),hasApproval:()=>true,sourceTaint:null,toolArgSourceTaint:null,sanitise};
+  const call=(name:'skills_install'|'skills_load',overrides={})=>dispatchTool({id:'call',name,args:{name:'document-email-preparation',version:1}},{...ctx,...overrides},{handlers:cap.handlers});
+  expect(await call('skills_install',{toolArgSourceTaint:'external'})).toMatchObject({ok:false});
+  expect(await call('skills_install',{authenticatedUserId:'other'})).toMatchObject({ok:false});
+  expect(await call('skills_install',{turnId:'wrong'})).toMatchObject({ok:false});
+  expect(await call('skills_install',{runScope:{...scope,runId:'other'}})).toMatchObject({ok:false});
+  expect(await call('skills_install',{runScope:{...scope,admit:()=>{}}})).toMatchObject({ok:false});
+  const installed=await call('skills_install');expect(installed).toMatchObject({ok:true});
+  expect(await call('skills_load')).toMatchObject({ok:true});
+  expect(await cap.prompt(canaries)).toContain('Prepare a reviewable draft.');
+  closed=true;await expect(cap.prompt(canaries)).rejects.toThrow('closed');
+ });
+});

@@ -83,6 +83,10 @@ export const toolNameSchema = z.enum([
   'workspace_read',
   'workspace_write',
   'workspace_render',
+  'skills_list',
+  'skills_install',
+  'skills_disable',
+  'skills_load',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -242,6 +246,10 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'workspace_read',
     'workspace_write',
     'workspace_render',
+    'skills_list',
+    'skills_install',
+    'skills_disable',
+    'skills_load',
   ],
   dreaming_mode: ['read_memory', 'update_memory', 'search_episodes'],
   // Always carries send_message — a Spot is never silent (ADR-0042).
@@ -275,6 +283,7 @@ export const ALWAYS_ON_TOOLS: readonly ToolName[] = [
   'propose_action',
   'search_tools',
   'connect_service',
+  'skills_list',
 ];
 
 // search_tools returns top-K by query relevance only — "show me everything" is

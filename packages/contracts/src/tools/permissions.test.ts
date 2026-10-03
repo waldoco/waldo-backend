@@ -34,7 +34,7 @@ const triggersGranting = (tool: string): readonly string[] =>
   );
 
 describe('toolName', () => {
-  it('is exactly the 64 canonical tools, in order', () => {
+  it('matches the canonical closed tool registry in order', () => {
     expect(toolNameSchema.options).toEqual([
       'get_crs',
       'get_health',
@@ -100,6 +100,10 @@ describe('toolName', () => {
       'workspace_read',
       'workspace_write',
       'workspace_render',
+      'skills_list',
+      'skills_install',
+      'skills_disable',
+      'skills_load',
     ]);
   });
 
@@ -280,6 +284,10 @@ describe('TOOL_PERMISSIONS', () => {
         'workspace_read',
         'workspace_write',
         'workspace_render',
+      'skills_list',
+      'skills_install',
+      'skills_disable',
+      'skills_load',
       ],
       dreaming_mode: ['read_memory', 'update_memory', 'search_episodes'],
       pre_activity_spot: [
@@ -295,11 +303,11 @@ describe('TOOL_PERMISSIONS', () => {
     });
   });
 
-  it('grants no trigger the full surface — user_message tops out at 63 of 64', () => {
+  it('grants no trigger the full surface', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(TOOL_PERMISSIONS[trigger].length).toBeLessThan(toolNameSchema.options.length);
     }
-    expect(TOOL_PERMISSIONS.user_message).toHaveLength(63);
+    expect(TOOL_PERMISSIONS.user_message).toHaveLength(toolNameSchema.options.length - 1);
   });
 
   it("keeps 'execute_code' typed but dispatchable nowhere (ADR-0050)", () => {
@@ -368,8 +376,8 @@ describe('search_tools — ADR-0034 Option A, first-class', () => {
     expect(LAZY_DISCOVERY_TRIGGERS).toEqual(['user_message', 'handoff_explore']);
   });
 
-  it('pins the always-on set: the ADR-0034 four plus connect_service (connect intent without discovery)', () => {
-    expect(ALWAYS_ON_TOOLS).toEqual(['read_memory', 'send_message', 'propose_action', 'search_tools', 'connect_service']);
+  it('pins the always-on discovery and skill metadata set', () => {
+    expect(ALWAYS_ON_TOOLS).toEqual(['read_memory', 'send_message', 'propose_action', 'search_tools', 'connect_service', 'skills_list']);
   });
 
   it('grants connect_service exactly where query_calendar is granted', () => {

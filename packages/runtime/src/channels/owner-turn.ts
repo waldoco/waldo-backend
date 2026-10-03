@@ -1,3 +1,4 @@
+import type { OwnerSkillCapability } from '../skills/curated-host';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
 import type { createOwnerMessageContextAdapter } from './owner-message-context-adapter';
@@ -86,11 +87,13 @@ export type OwnerResponderBinding = Readonly<{
   admission: OwnerMessageAdmission;
   adapter: ReturnType<typeof createOwnerMessageContextAdapter>;
   store: ConversationStore;
+  skills?: OwnerSkillCapability;
 }>;
 export type OwnerResponderHost = Readonly<{
   prepare(turn: OwnerTurnEnvelope, handlers: DispatchToolOptions<ToolDispatcherContext>['handlers'], scope: RunEffectScope): Promise<OwnerResponderBinding>;
 }>;
-type PrivateOwner = Readonly<{ host?: OwnerResponderHost; binding?: OwnerResponderBinding }>;
+export type OwnerSkillHost = Readonly<{ prepare(turn: OwnerTurnEnvelope, contextOwnerId: string, scope: RunEffectScope): Promise<OwnerSkillCapability | undefined> }>;
+type PrivateOwner = Readonly<{ host?: OwnerResponderHost; binding?: OwnerResponderBinding; skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability }>;
 
 export const createOwnerResponder = (
   openaiApiKey: string,
@@ -141,6 +144,7 @@ export const createOwnerResponder = (
   privateOwner?: PrivateOwner,
 ): OwnerResponder => {
   const binding = privateOwner?.binding;
+  const skills = binding?.skills ?? privateOwner?.skills;
   const invocation = binding?.admission.invocation ?? (() => {
     const accepted = acceptTrustedInvocation(localTrustedBriefScheduleInput().admission);
     if (!accepted.ok) throw new Error('fixture admission failed');
@@ -180,7 +184,7 @@ export const createOwnerResponder = (
     // Typed store provenance for the provider's retrieval receipts (owner review on #212).
     ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
   };
-  const handlers = [getContextHandler(clock), ownerContextHandler(memory), ...tools, ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
+  const handlers = [getContextHandler(clock), ownerContextHandler(memory), ...tools, ...(skills?.handlers ?? []), ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
   // Exact forgotten payload is transient, owner-local and bounded. It lasts only
   // until captured provider messages and unsaved outputs have been scrubbed.
   const forgottenTexts = new Set<string>();
@@ -201,6 +205,7 @@ export const createOwnerResponder = (
   const memoryOperation = async <T>(work: () => Promise<T>): Promise<T> => {
     try { return await work(); } finally { clearForgotten(); }
   };
+  let expectedProcedure: string | undefined;
   const complete = async (trace: string, purpose: string, system: string, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, clinicalRetried = false) => {
     await assertCurrent();
     if (forgetUnsafe) throw new Error('forget context sanitisation failed');
@@ -220,10 +225,12 @@ export const createOwnerResponder = (
       ...(attachments && index === texts.length - 1 ? { attachments: attachments.map((file) => `${file.kind}:${file.filename}`) } : {}),
     }));
     const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
-    const admittedGateway: LLMGatewayAdapter = binding ? { complete: async request => {
+    const admittedGateway: LLMGatewayAdapter = binding || skills ? { complete: async request => {
       await assertCurrent();
+      if (skills && expectedProcedure !== undefined) await skills.assertProcedureCurrent(expectedProcedure, CANARIES);
       const result = await adapter.complete(request);
       await assertCurrent();
+      if (skills && expectedProcedure !== undefined) await skills.assertProcedureCurrent(expectedProcedure, CANARIES);
       return result;
     } } : adapter;
     const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker }).complete({
@@ -422,8 +429,14 @@ export const createOwnerResponder = (
           if (turnReplyContext) entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + '\n\n' + turnReplyContext };
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
           const ordersSection = standingOrders?.() ?? '';
+          await assertCurrent();
+          const skillPrompt = skills && (!binding || request.tools.includes('skills_load')) ? await skills.prompt(CANARIES) : undefined;
+          await assertCurrent();
+          expectedProcedure = skillPrompt ?? '';
+          const skillMetadata = skills && (!binding || request.tools.includes('skills_list')) ? skills.metadata() : '';
+          const canonicalSystem = skillMetadata ? `${request.system}\n\n${skillMetadata}` : request.system;
           return complete(trace, 'reply',
-          binding ? request.system : withOwnerSkillProcedures([messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'), privateSystemSkills ? request.skillPrompt : undefined),
+          binding ? withOwnerSkillProcedures(canonicalSystem, skillPrompt) : withOwnerSkillProcedures([messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : [])].join('\n\n'), skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined)),
           entries,
           undefined,
           pending,
@@ -569,8 +582,9 @@ export const createOwnerResponder = (
       if (turn.runScope && privateRunScope !== turn.runScope) {
         const capturedTurn = { ...turn, memoryWrites };
         const prepared = privateOwner?.host ? await privateOwner.host.prepare(capturedTurn, handlers, turn.runScope) : undefined;
-        if (privateOwner && !prepared) throw new Error('owner host unavailable');
-        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, prepared ? { binding: prepared } : undefined);
+        if (privateOwner?.host && !prepared) throw new Error('owner host unavailable');
+        const preparedSkills = !prepared && privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, ownerId, turn.runScope) : undefined;
+        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, prepared ? { binding: prepared } : preparedSkills ? { skills: preparedSkills } : undefined);
         control.route(scoped.control);
         try { return await scoped.respond(capturedTurn, time); }
         finally { control.unroute(scoped.control); }

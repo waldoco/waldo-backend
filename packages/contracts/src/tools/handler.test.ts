@@ -169,6 +169,8 @@ describe('privileged-action set — ADR-0049', () => {
       'restore_message',
       'archive_thread',
       'update_thread_topics',
+      'skills_install',
+      'skills_disable',
     ]);
   });
 

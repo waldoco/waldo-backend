@@ -104,6 +104,31 @@ export class DoSchemaDriftError extends Error {
   }
 }
 
+// Shared DDL for the legacy owner host and the product migration; one schema representation.
+export const SKILLS_TABLE_SCHEMA = `
+      CREATE TABLE IF NOT EXISTS skills (
+        name                 TEXT PRIMARY KEY,
+        version              INTEGER NOT NULL CHECK (version > 0),
+        provenance           TEXT NOT NULL CHECK (provenance IN ('system', 'connector', 'user', 'agent_authored')),
+        identity_locked      INTEGER NOT NULL CHECK (identity_locked IN (0, 1)),
+        provisional          INTEGER NOT NULL CHECK (provisional IN (0, 1)),
+        trigger_types_json   TEXT NOT NULL DEFAULT '[]',
+        trigger_condition    TEXT NOT NULL,
+        required_tools_json  TEXT NOT NULL DEFAULT '[]',
+        required_connectors_json TEXT NOT NULL DEFAULT '[]',
+        effectiveness        REAL NOT NULL CHECK (effectiveness >= 0 AND effectiveness <= 1),
+        invocations          INTEGER NOT NULL DEFAULT 0 CHECK (invocations >= 0),
+        last_used            TEXT,
+        body_markdown        TEXT NOT NULL,
+        created_at           TEXT NOT NULL,
+        created_by           TEXT NOT NULL,
+        status               TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'stale', 'archived')),
+        pinned               INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
+        last_curated_at      TEXT,
+        archived_at          TEXT
+      );
+    `;
+
 export const HEY10_BASE_SCHEMA_MIGRATION: DoMigration = {
   version: 1,
   name: 'hey10-base-context-schema',
@@ -240,29 +265,7 @@ export const HEY10_BASE_SCHEMA_MIGRATION: DoMigration = {
         ON adjustments(user_id, idempotency_key)
        WHERE idempotency_key IS NOT NULL;
     `,
-    `
-      CREATE TABLE IF NOT EXISTS skills (
-        name                 TEXT PRIMARY KEY,
-        version              INTEGER NOT NULL CHECK (version > 0),
-        provenance           TEXT NOT NULL CHECK (provenance IN ('system', 'connector', 'user', 'agent_authored')),
-        identity_locked      INTEGER NOT NULL CHECK (identity_locked IN (0, 1)),
-        provisional          INTEGER NOT NULL CHECK (provisional IN (0, 1)),
-        trigger_types_json   TEXT NOT NULL DEFAULT '[]',
-        trigger_condition    TEXT NOT NULL,
-        required_tools_json  TEXT NOT NULL DEFAULT '[]',
-        required_connectors_json TEXT NOT NULL DEFAULT '[]',
-        effectiveness        REAL NOT NULL CHECK (effectiveness >= 0 AND effectiveness <= 1),
-        invocations          INTEGER NOT NULL DEFAULT 0 CHECK (invocations >= 0),
-        last_used            TEXT,
-        body_markdown        TEXT NOT NULL,
-        created_at           TEXT NOT NULL,
-        created_by           TEXT NOT NULL,
-        status               TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'stale', 'archived')),
-        pinned               INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
-        last_curated_at      TEXT,
-        archived_at          TEXT
-      );
-    `,
+    SKILLS_TABLE_SCHEMA,
     `
       CREATE INDEX IF NOT EXISTS skills_loader_idx
         ON skills(status, provenance, effectiveness);
