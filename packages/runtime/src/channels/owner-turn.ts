@@ -311,8 +311,9 @@ export const createOwnerResponder = (
       sourceSnapshot = await sourceScope.unresolved(); binding?.adapter.setTaskSources(sourceSnapshot); return;
     }
     await assertCurrent();
-    const admitted = await sourceScope.classify(raw, traceId);
+    const admitted = await sourceScope.classify(raw, traceId, ownerText);
     sourceSnapshot = admitted.snapshot;
+    log({ trace: traceId, hop: 'task_source_custody', ms: 0, ok: sourceSnapshot.ready, detail: JSON.stringify({ sources_before: previous.sources, sources_after: sourceSnapshot.sources, new_task: previous.taskId !== sourceSnapshot.taskId, proposed: !!admitted.proposal }) });
     sourceSteeringRevision = classifiedSteering;
     binding?.adapter.setTaskSources(sourceSnapshot);
     if (admitted.proposal && sourceScope.propose) {

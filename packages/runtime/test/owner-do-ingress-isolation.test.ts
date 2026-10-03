@@ -31,7 +31,7 @@ let onFixtureReply: (() => Promise<void>) | undefined;
 const unexpectedFetches: string[] = [];
 let sourceWorld: IsolatedSourceWorld | null = null;
 let interceptCalendarEffects = false;
-let taskDecision = { decision: 'retain', sources: [] as string[] };
+let taskDecision: { decision: string; sources: string[]; evidence?: string | null } = { decision: 'retain', sources: [] };
 vi.mock('../src/seams/deps', async (load) => {
   const original = await load<typeof import('../src/seams/deps')>();
   return { ...original, productionDeps: () => {
@@ -191,6 +191,30 @@ describe('real owner-DO ingress in a sealed test world', () => {
     await runInDurableObject(doStub(81102), async (_instance, state) => {
       expect(state.storage.kv.get('telegram_subject')).toBe('81102');
     });
+  });
+  it('canonical owner input transitions planning without granting an absent connector', async () => {
+    sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T11:00:00Z', owners: [{ id: 'a@example.invalid' }], sources: { mail: [
+      { owner_id: 'a@example.invalid', id: 'mail', thread_id: 'thread', from: 'sender@example.invalid', subject: 'Fictional report', snippet: 'new-task-owned-mail', at: '2026-09-29T10:30:00Z' },
+    ] } });
+    const update = 700000 + ++sequence * 10;
+    await runInDurableObject(doStub(81101), async (_instance, state) => { await state.storage.delete('google:accounts'); });
+    taskDecision = { decision: 'restrict', sources: [] };
+    await send(81101, 'Only use pasted fictional material.', update);
+    const instruction = 'Start a new fictional mail task. Read the fixture inbox using mail only; exclude workspace, calendar and browser.';
+    taskDecision = { decision: 'new', sources: ['mail'], evidence: instruction };
+    await send(81101, instruction, update + 1);
+    expect(sourceWorld.accessLog('a@example.invalid')).toEqual([]);
+    await runInDurableObject(doStub(81101), async (_instance, state) => {
+      const row = state.storage.sql.exec<{ sources_json: string; start_ref: string; ready: number }>('SELECT sources_json, start_ref, ready FROM owner_task_source_scope').one();
+      expect(row.sources_json).toBe('["mail"]'); expect(row.ready).toBe(1); expect(row.start_ref).toBe(`tg-${update + 1}`);
+      expect(state.storage.kv.get('google:accounts')).toBeUndefined();
+      await state.storage.put('google:accounts', [{ id: 'local:a@example.invalid', email: 'a@example.invalid', scopes: null, refresh_token: 'fictional-not-a-token' }]);
+    });
+    taskDecision = { decision: 'retain', sources: [], evidence: null };
+    await send(81101, 'Read the fixture inbox for the same fictional mail task.', update + 2);
+    expect(sourceWorld.accessLog('a@example.invalid')).toEqual([expect.objectContaining({ source: 'mail', kind: 'list', owner_id: 'a@example.invalid' })]);
+    expect(sourceWorld.outbox('a@example.invalid')).toEqual([]);
+    expect(outbox.filter(item => item.method === 'sendMessage' && String(item.body.text).includes('Change task sources'))).toEqual([]);
   });
   it('routes fictional Google reads through owner-scoped source rows inside the real DO tool loop', async () => {
     sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T11:00:00Z', owners: [{ id: 'a@example.invalid' }, { id: 'b@example.invalid' }], sources: { mail: [

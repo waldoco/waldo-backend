@@ -13,6 +13,7 @@ export const telegramTurnEnvelope = (turn: TelegramInboundTurn, surface = 'teleg
   conversationRef: `${surface}-${turn.chatId}`,
   surface,
   text: turn.text,
+  ...(turn.sourceQuoteRanges ? { sourceQuoteRanges: turn.sourceQuoteRanges } : {}),
   ...(turn.runScope ? { runScope: turn.runScope } : {}),
   ...(turn.replyTo ? { replyTo: turn.replyTo } : {}),
 });

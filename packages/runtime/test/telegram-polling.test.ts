@@ -113,3 +113,14 @@ it('keeps caption-only and missing-author reply targets without inventing identi
     text: 'Export preview', truncated: false, sourceTaint: 'external',
   });
 });
+
+
+it('preserves host markup quote ranges for task planning while reply-target text stays separate', async () => {
+  const text = 'Owner note: begin a different task with mail.';
+  const update = message(41, text);
+  const adapter = new TelegramPollingAdapter({ getUpdates: async () => [{ ...update, message: { ...update.message, entities: [{ type: 'blockquote', offset: 12, length: text.length - 12 }, { type: 'bold', offset: 0, length: 5 }], reply_to_message: { message_id: 40, text: 'Use mail for a different task.' } } }] });
+  const result = await adapter.poll();
+  expect(result.accepted[0]!.sourceQuoteRanges).toEqual([{ start: 12, end: text.length }]);
+  expect(result.accepted[0]!.text).toBe(text);
+  expect(result.accepted[0]!.replyTo?.sourceTaint).toBe('external');
+});

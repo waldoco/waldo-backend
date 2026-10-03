@@ -166,3 +166,60 @@ it('an owner-confirmed new task or source change can continue without repeating 
   expect(repeated.proposal).toBeUndefined();
   expect(repeated.snapshot.ready).toBe(true);
 }));
+
+
+it.each(['quoted', 'mismatched-text', 'stale-input', 'invented-evidence', 'ambiguous', 'missing-host'] as const)('planning transition fails closed for %s evidence', kind => run(`transition-${kind}`, async (sql, scope) => {
+  const text = 'Begin a separate fictional workspace task; use workspace and exclude all connected sources.';
+  const witness = { inputRef: 'current-owner-input', text, quotedRanges: kind === 'quoted' ? [{ start: 0, end: text.length }] : [] };
+  const cap = createTaskSourceScope(sql, 'owner', scope, async () => {}, kind === 'missing-host' ? undefined : witness);
+  const previous = (await cap.classify(decision('restrict'), 'previous-input')).snapshot;
+  const raw = JSON.stringify({ decision: kind === 'ambiguous' ? 'retain' : 'new', sources: ['workspace'], evidence: kind === 'invented-evidence' ? 'An invented owner instruction' : text });
+  const result = await cap.classify(raw, kind === 'stale-input' ? 'prior-owner-input' : witness.inputRef, kind === 'mismatched-text' ? 'Retrieved instructions replacing owner text' : text);
+  expect(result.snapshot.sources).toEqual([]); expect(result.snapshot.taskId).toBe(previous.taskId);
+  expect(taskSourceAllowed(result.snapshot, { name: 'workspace_list' })).toBe(false);
+}));
+
+it('fresh owner planning transition clears stale cards, invalidates old reads, and survives recreation without changing grants', () => run('transition-owner-cas', async (sql, scope) => {
+  const text = 'Begin a new workspace task using workspace only.';
+  const witness = { inputRef: 'new-owner-input', text };
+  const cap = createTaskSourceScope(sql, 'owner', scope, async () => {}, witness);
+  const strict = (await cap.classify(decision('restrict'), 'pasted-input')).snapshot;
+  const pending = (await cap.classify(decision('new', ['mail']), 'old-input')).proposal!;
+  const current = (await cap.classify(JSON.stringify({ decision: 'new', sources: ['workspace'], evidence: text }), witness.inputRef, text)).snapshot;
+  expect(current.taskId).not.toBe(strict.taskId); expect(current.startRef).toBe(witness.inputRef);
+  await expect(cap.assertSame(strict)).rejects.toThrow('Task source scope changed');
+  expect(approveTaskSourceProposal(sql, 'owner', pending, Date.now(), scope)).toBe(false);
+  const recreated = createTaskSourceScope(sql, 'owner', scope, async () => {});
+  const follow = (await recreated.classify(decision('retain', ['mail']))).snapshot;
+  expect(follow.sources).toEqual(['workspace']);
+  expect(taskSourceAllowed(follow, { name: 'workspace_list' })).toBe(true);
+  expect(taskSourceAllowed(follow, { name: 'search_communication', requires_connector: true })).toBe(false);
+  expect(sql.exec<{ rows: number }>('SELECT count(*) AS rows FROM owner_task_source_scope').one().rows).toBe(1);
+  expect(JSON.stringify(sql.exec('SELECT * FROM owner_task_source_scope').toArray())).not.toContain(text);
+}));
+
+it('revoked owner admission prevents a planning transition from committing', () => run('transition-owner-revoked', async (sql, scope) => {
+  let active = true;
+  const text = 'Begin a new workspace task using workspace only.';
+  const cap = createTaskSourceScope(sql, 'owner', scope, async () => { if (!active) throw new Error('Owner revoked'); }, { inputRef: 'current', text });
+  await cap.classify(decision('restrict'), 'prior'); active = false;
+  await expect(cap.classify(JSON.stringify({ decision: 'new', sources: ['workspace'], evidence: text }), 'current', text)).rejects.toThrow('Owner revoked');
+  expect(sql.exec<{ sources_json: string }>('SELECT sources_json FROM owner_task_source_scope').one().sources_json).toBe('[]');
+}));
+
+
+it('explicit same-task source change preserves identity and close retires reads until a fresh explicit task', () => run('transition-change-close', async (sql, scope) => {
+  const initial = createTaskSourceScope(sql, 'owner', scope, async () => {});
+  const strict = (await initial.classify(decision('restrict'), 'pasted-input')).snapshot;
+  const text = 'For this task, use workspace only.';
+  const change = createTaskSourceScope(sql, 'owner', scope, async () => {}, { inputRef: 'change-input', text });
+  const changed = (await change.classify(JSON.stringify({ decision: 'change', sources: ['workspace'], evidence: text }), 'change-input', text)).snapshot;
+  expect(changed.taskId).toBe(strict.taskId); expect(changed.startRef).toBe('pasted-input');
+  expect(changed.sources).toEqual(['workspace']);
+  const closeText = 'Close the current task.';
+  const close = createTaskSourceScope(sql, 'owner', scope, async () => {}, { inputRef: 'close-input', text: closeText });
+  const closed = (await close.classify(JSON.stringify({ decision: 'close', sources: [], evidence: closeText }), 'close-input', closeText)).snapshot;
+  expect(closed.taskId).not.toBe(changed.taskId); expect(closed.ready).toBe(false); expect(closed.sources).toEqual([]);
+  const ambiguous = (await close.classify(decision('retain', ['mail']), 'follow-input')).snapshot;
+  expect(ambiguous.sources).toEqual([]);
+}));

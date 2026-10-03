@@ -21,6 +21,7 @@ export type TelegramInboundTurn = Readonly<{
   chatId: number;
   sentAt: number | null;
   text: string;
+  sourceQuoteRanges?: readonly Readonly<{ start: number; end: number }>[];
   media?: TelegramMedia;
   replyTo?: ReplyContext;
   runScope?: RunEffectScope;
@@ -116,6 +117,7 @@ export class TelegramPollingAdapter {
           : message.audio
             ? { kind: 'audio', fileId: message.audio.file_id, fileName: message.audio.file_name ?? 'audio', mimeType: message.audio.mime_type ?? null, fileSize: message.audio.file_size ?? null }
             : undefined;
+    const sourceQuoteRanges = (message.entities ?? message.caption_entities ?? []).filter(entity => ['blockquote', 'expandable_blockquote', 'pre', 'code'].includes(entity.type)).map(entity => ({ start: entity.offset, end: entity.offset + entity.length }));
     return Object.freeze({
       updateId: update.update_id,
       messageId: message.message_id ?? null,
@@ -123,6 +125,7 @@ export class TelegramPollingAdapter {
       chatId: message.chat.id,
       sentAt: message.date === undefined ? null : message.date * 1000,
       text: message.text ?? message.caption ?? '',
+      ...(sourceQuoteRanges.length ? { sourceQuoteRanges } : {}),
       ...(message.reply_to_message ? { replyTo: Object.freeze({
         surface: 'telegram',
         messageId: String(message.reply_to_message.message_id),

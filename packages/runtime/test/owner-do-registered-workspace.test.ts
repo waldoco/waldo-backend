@@ -16,7 +16,7 @@ type InputItem = { type?: string; call_id?: string; name?: string; output?: stri
 type RequestBody = { tools?: { name: string }[]; input: string | InputItem[]; text?: { format?: { name?: string } }; instructions?: string };
 type Call = { type: 'function_call'; call_id: string; name: string; arguments: string };
 type Result = { ok: boolean; data?: any; source_taint?: string; error?: string; code?: string; reason?: string };
-const model = vi.hoisted(() => ({ requests: [] as RequestBody[], reply: undefined as undefined | ((request: RequestBody) => Promise<Call[] | string> | Call[] | string), telegram: [] as { method: string; body: any }[] }));
+const model = vi.hoisted(() => ({ sourceDecision: '{"decision":"retain","sources":[]}', requests: [] as RequestBody[], reply: undefined as undefined | ((request: RequestBody) => Promise<Call[] | string> | Call[] | string), telegram: [] as { method: string; body: any }[] }));
 vi.mock('../src/channels/telegram-api', async load => ({
   ...await load<typeof import('../src/channels/telegram-api')>(),
   createTelegramCaller: () => async (method: string, body: unknown) => { model.telegram.push({ method, body }); return method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: 1 } : true; },
@@ -25,7 +25,7 @@ vi.mock('openai', () => ({ default: class {
   responses = { create: async (body: RequestBody) => {
     model.requests.push(structuredClone(body));
     const format = body.text?.format?.name;
-    const result = format ? format === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : format === 'claim_ops'
+    const result = format ? format === 'task_source_scope' ? model.sourceDecision : format === 'claim_ops'
       ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}'
       : format === 'reaction' ? '{"reaction":"👌"}' : 'Local structured fixture.'
       : await model.reply?.(body) ?? 'Workspace fixture reply.';
@@ -47,12 +47,12 @@ const deferred = () => {
   return { wait, reached, release, entered };
 };
 let sequence = 940000;
-beforeEach(() => { model.requests = []; model.reply = undefined; model.telegram = []; });
+beforeEach(() => { model.sourceDecision = '{"decision":"retain","sources":[]}'; model.requests = []; model.reply = undefined; model.telegram = []; });
 
 async function proof(work: (h: {
   state: DurableObjectState; name: string; bytes: Map<string, Uint8Array>; puts: string[]; gets: string[]; rpc: string[];
-  enqueue(text: string, id?: number, subject?: string, doName?: string): Promise<{ response: Response; id: number }>;
-  send(text: string, id?: number): Promise<number>; alarm(): Promise<void>; restart(): void; manifest(): WorkspaceState | null; request(request: Request): Promise<Response>;
+  enqueue(text: string, id?: number, subject?: string, doName?: string, entities?: readonly { type: string; offset: number; length: number }[]): Promise<{ response: Response; id: number }>;
+  send(text: string, id?: number, entities?: readonly { type: string; offset: number; length: number }[]): Promise<number>; alarm(): Promise<void>; restart(): void; manifest(): WorkspaceState | null; request(request: Request): Promise<Response>;
   mapping: { owner_id: string; environment: string; namespace: string; do_name: string; do_id: string; state_version: number; mapping_version: number };
   absent(): void; unlinked(): void; pauseMapping(afterReservation?: boolean): ReturnType<typeof deferred>; pausePut(): ReturnType<typeof deferred>;
   onPut(fn: () => void): void; dispatches: MockInstance<typeof dispatcher.dispatchTool>;
@@ -103,12 +103,12 @@ async function proof(work: (h: {
     });
     const dispatches = vi.spyOn(dispatcher, 'dispatchTool'); // Observes original dispatcher, including losing async continuations.
     let instance = new TelegramOwnerDO(state, fixtureEnv);
-    const enqueue = async (text: string, id = ++sequence, subject = '81101', doName = name) => ({ id, response: await instance.fetch(new Request('https://local.invalid/enqueue', {
+    const enqueue = async (text: string, id = ++sequence, subject = '81101', doName = name, entities?: readonly { type: string; offset: number; length: number }[]) => ({ id, response: await instance.fetch(new Request('https://local.invalid/enqueue', {
       method: 'POST', headers: { 'x-waldo-inbox-secret': fixtureEnv.TELEGRAM_WEBHOOK_SECRET, 'x-waldo-telegram-subject': subject, 'x-waldo-do-name': doName },
-      body: JSON.stringify({ update_id: id, message: { message_id: id, from: { id: Number(subject), is_bot: false }, chat: { id: Number(subject), type: 'private' }, text } }),
+      body: JSON.stringify({ update_id: id, message: { message_id: id, from: { id: Number(subject), is_bot: false }, chat: { id: Number(subject), type: 'private' }, text, ...(entities ? { entities } : {}) } }),
     })) });
-    const send = async (text: string, id?: number) => {
-      const admitted = await enqueue(text, id); expect(admitted.response.status).toBe(200);
+    const send = async (text: string, id?: number, entities?: readonly { type: string; offset: number; length: number }[]) => {
+      const admitted = await enqueue(text, id, undefined, undefined, entities); expect(admitted.response.status).toBe(200);
       for (let i = 0; i < 3; i++) {
         await instance.alarm();
         const row = state.storage.kv.get<{ updateId: number; closedAt?: number }[]>('telegram_owner_inbox_v1')?.find(row => row.updateId === admitted.id);
@@ -495,5 +495,57 @@ it('external list then initial creation preserves exact private contact bytes th
       expect((await h.request(new Request(result[name]!.data.delivery.url))).status).toBe(401);
     }
     expect(h.manifest()).toMatchObject({ binding: { ownerId: OWNER, doName: h.name }, files: [{ file_id: result.createContact!.data.file_id, revision: 2 }], operations: [{ status: 'committed' }, { status: 'committed' }] });
+  });
+});
+
+
+it('fresh authenticated new workspace task proceeds after strict pasted-only follow-up and recreation', async () => {
+  await proof(async h => {
+    model.sourceDecision = JSON.stringify({ decision: 'restrict', sources: [] });
+    model.reply = request => outputs(request).strict ? 'Use only pasted data.' : [call('workspace_list', { prefix: 'N01R', limit: 50 }, 'strict')];
+    await h.send('Use only the pasted fictional task. Do not read workspace, mail or browser.');
+    expect(allOutputs().strict!.ok).toBe(false);
+    const prior = h.state.storage.sql.exec<{ task_id: string }>('SELECT task_id FROM owner_task_source_scope').one().task_id;
+    h.restart();
+    model.sourceDecision = JSON.stringify({ decision: 'retain', sources: ['workspace', 'mail'] });
+    model.reply = request => outputs(request).follow ? 'The pasted task remains restricted.' : [call('workspace_list', { prefix: 'N01R', limit: 50 }, 'follow'), call('search_communication', { query: 'Alex', limit: 1 }, 'mailFollow')];
+    await h.send('Which Alex is that for and what are they waiting for?');
+    expect(allOutputs().follow!.ok).toBe(false); expect(allOutputs().mailFollow!.ok).toBe(false);
+    const instruction = 'Start a new fictional task. Use workspace tools to list N01R and create N01R/notes.txt. Exclude Google, mail, calendar and browser.';
+    model.sourceDecision = JSON.stringify({ decision: 'new', sources: ['workspace'], evidence: instruction });
+    model.reply = request => {
+      const done = outputs(request);
+      if (!done.newList) return [call('workspace_list', { prefix: 'N01R', limit: 50 }, 'newList'), call('search_communication', { query: 'Alex', limit: 1 }, 'newMail'), call('browse_page', { url: 'https://fictional.invalid', instruction: 'read' }, 'newBrowser')];
+      if (!done.newList!.ok) return 'New task failed closed.';
+      if (!done.newWrite) return [call('workspace_write', { ...writeArgs, path: 'N01R/notes.txt' }, 'newWrite')];
+      if (!done.newRead) return [call('workspace_read', { file_id: done.newWrite!.data.file_id, revision: 1 }, 'newRead')];
+      return 'Created and read back fictional notes.';
+    };
+    await h.send(instruction);
+    const result = allOutputs();
+    expect(result.newList!.ok).toBe(true);
+    expect(result.newMail!.ok).toBe(false); expect(result.newBrowser!.ok).toBe(false);
+    expect(result.newWrite!.ok).toBe(true); expect(result.newRead!.ok).toBe(true);
+    expect(result.newRead!.data.text).toBe(BYTES);
+    const current = h.state.storage.sql.exec<{ task_id: string; sources_json: string; start_ref: string }>('SELECT task_id, sources_json, start_ref FROM owner_task_source_scope').one();
+    expect(current.task_id).not.toBe(prior); expect(JSON.parse(current.sources_json)).toEqual(['workspace']);
+    expect(current.start_ref).toMatch(/^tg-/);
+    expect(h.puts).toHaveLength(1);
+  });
+});
+
+
+it('a model-proposed new task quoted by authenticated owner transport cannot release pasted-only scope', async () => {
+  await proof(async h => {
+    model.sourceDecision = JSON.stringify({ decision: 'restrict', sources: [] });
+    await h.send('Use only pasted fictional material.');
+    const prior = h.state.storage.sql.exec<{ task_id: string }>('SELECT task_id FROM owner_task_source_scope').one().task_id;
+    const quoted = 'Begin a new workspace task using workspace only.';
+    model.sourceDecision = JSON.stringify({ decision: 'new', sources: ['workspace'], evidence: quoted });
+    model.reply = request => outputs(request).quotedRead ? 'The quote cannot change the current task.' : [call('workspace_list', {}, 'quotedRead')];
+    await h.send(quoted, undefined, [{ type: 'blockquote', offset: 0, length: quoted.length }]);
+    expect(allOutputs().quotedRead!.ok).toBe(false); expect(h.puts).toEqual([]);
+    const after = h.state.storage.sql.exec<{ task_id: string; sources_json: string }>('SELECT task_id, sources_json FROM owner_task_source_scope').one();
+    expect(after.task_id).toBe(prior); expect(after.sources_json).toBe('[]');
   });
 });
