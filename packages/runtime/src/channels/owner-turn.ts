@@ -363,7 +363,16 @@ export const createOwnerResponder = (
       // same set so probe confinement applies to children too (children are read-only by
       // construction, and the strip list is not widened here).
       const admittedHandlers = handlers.filter(handler => (!binding || request.tools.includes(handler.name)) && (backgroundToolNames === undefined || backgroundToolNames.includes(handler.name)));
-      const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => binding ? { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => { await assertCurrent(); const result = await handler.handle(args, ctx); await assertCurrent(); return result; } } : handler);
+      const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => {
+        if (!binding && backgroundToolNames === undefined) return handler;
+        return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
+          await assertCurrent();
+          if (backgroundToolNames !== undefined && handler.name === 'open_loop' && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
+            return { ok: false, code: 'invalid_args', error: 'Background mail follow-up requires an observed source_ref.', source_taint: null };
+          }
+          const result = await handler.handle(args, ctx); await assertCurrent(); return result;
+        } };
+      });
       const activeHandlers = probeGuard?.stripLiveTools
         ? guardedHandlers.filter((handler) => !PROBE_STRIPPED_TOOLS.includes(handler.name))
         : guardedHandlers;

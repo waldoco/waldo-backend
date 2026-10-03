@@ -6,7 +6,7 @@ const MAX_RECORDS = 256;
 const MAX_ATTEMPTS = 3;
 export type FinalPayload = Readonly<{ chat_id: number; text: string; parse_mode?: 'HTML' }>;
 export type HeartbeatReceipt = { id: string; occurrence: number; schedulerRunId: string; runId?: string; loops: { id: string; due: string }[] };
-export type MailFollowupReceipt = { loopId: string; due: string; sourceRef: string; timezone: string };
+export type MailFollowupReceipt = { loopId: string; due: string; sourceRef: string; timezone: string; messageId: string };
 export type FinalRecord = {
   id: string; trace: string; payload: FinalPayload; digest: string;
   expiresAt?: number; bot?: string;
@@ -74,6 +74,15 @@ export class TelegramFinalOutbox {
       this.kv.put(FINAL_OUTBOX_KEY, rows);
       this.kv.put(FINAL_OUTBOX_DUE_KEY, this.due(rows));
     });
+  }
+  // Only a known pre-send denial can re-arm the same frozen mail intent. Ambiguous
+  // attempts remain quarantined and are never retried through this path.
+  async retryBlockedMailFollowup(id: string): Promise<boolean> {
+    const rows = this.records();
+    const row = rows.find(record => record.id === id);
+    if (!row?.mailFollowup || row.status !== 'blocked' || !['owner_binding', 'egress_blocked'].includes(row.reason ?? '')) return false;
+    row.status = 'pending'; row.dueAt = this.now() + 250; row.settled = false;
+    await this.save(rows); return true;
   }
   async drain(options: {
     allowed(record: FinalRecord): Promise<boolean>;

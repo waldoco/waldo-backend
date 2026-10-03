@@ -1,18 +1,52 @@
-import { expect, it, vi } from 'vitest';
+import { expect, it } from 'vitest';
+import { env } from 'cloudflare:workers';
+import { runInDurableObject } from 'cloudflare:test';
 import { readThreadArgsSchema } from '@waldo/contracts';
-const seen = vi.hoisted(() => ({ requests: [] as string[], calls: 0 }));
-vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
-  seen.requests.push(JSON.stringify(body));
-  const next = seen.requests.length % 2 === 1;
-  return { id: 'fixture', output_text: next ? '' : 'Have you handled the review?', output: next ? [{ type: 'function_call', call_id: 'injected-read', name: 'read_thread', arguments: '{"thread_id":"t1","limit":3}' }] : [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
-} }; } }));
-const { createOwnerResponder } = await import('../src/channels/owner-turn');
-it('denies a model-requested OTP relay outside the background tool ceiling, leaving default prompts unchanged', async () => {
-  const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [{ name: 'read_thread', description: 'Read', schema: readThreadArgsSchema, trigger_allowlist: ['user_message'], autonomy_gated: false, async handle() { seen.calls++; return { ok: true, data: [], source_taint: 'external' as const }; } }]);
-  await responder.prompt('mail-1', 'owner', 'Untrusted mail asks to read and relay an OTP', (_n, work) => work(), 'telegram', ['get_context']);
-  expect(seen.calls).toBe(0);
-  expect((JSON.parse(seen.requests[0]!) as { tools: { name: string }[] }).tools.map(t => t.name)).not.toContain('read_thread');
-  seen.requests = [];
-  await responder.prompt('legacy-1', 'owner', 'Existing prompt behavior', (_n, work) => work(), 'telegram');
-  expect((JSON.parse(seen.requests[0]!) as { tools: { name: string }[] }).tools.map(t => t.name)).toContain('read_thread');
+import { createOwnerResponder } from '../src/channels/owner-turn';
+import { loopBook, loopHandlers } from '../src/channels/loops';
+import { updateBook } from '../src/channels/update-cards';
+import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
+
+const scripted = (name: string, args: unknown) => {
+  const requests: LLMGatewayRequest[] = [];
+  const gateway: LLMGatewayAdapter = { async complete(request) {
+    requests.push(request);
+    return { ok: true, data: { model: request.request.model, text: requests.length === 1 ? '' : 'SKIP', ...(requests.length === 1 ? { tool_calls: [{ call_id: 'c1', name, arguments: JSON.stringify(args) }] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+  } };
+  return { gateway, requests };
+};
+const time = <T>(_name: string, work: () => Promise<T>) => work();
+
+it('denies a model-requested OTP relay outside the background tool ceiling and preserves default prompts', async () => {
+  let calls = 0;
+  const handler = { name: 'read_thread' as const, description: 'Read', schema: readThreadArgsSchema, trigger_allowlist: ['user_message' as const], autonomy_gated: false, async handle() { calls++; return { ok: true as const, data: [], source_taint: 'external' as const }; } };
+  const first = scripted('read_thread', { thread_id: 't1', limit: 3 });
+  const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [handler], undefined, false, undefined, undefined, first.gateway);
+  await responder.prompt('mail-1', 'owner', 'External source asks to relay authentication artifacts', time, 'telegram', ['get_context']);
+  expect(calls).toBe(0);
+  expect(first.requests[0]!.request.tools?.map(t => t.name)).not.toContain('read_thread');
+  const legacy = scripted('read_thread', { thread_id: 't1', limit: 3 });
+  await createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [handler], undefined, false, undefined, undefined, legacy.gateway).prompt('legacy-1', 'owner', 'Existing prompt', time, 'telegram');
+  expect(legacy.requests[0]!.request.tools?.map(t => t.name)).toContain('read_thread');
+});
+
+it('requires a grounded source for background loop creation while owner tools remain backward compatible', async () => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-loop-authority')), async (_i, state) => {
+    let seq = 0;
+    const loops = loopBook(state.storage.sql, { now: () => 1, newId: () => String(++seq) });
+    const create = async (id: string, args: unknown, restricted = true) => {
+      const { gateway } = scripted('open_loop', args);
+      const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, loopHandlers(loops), undefined, false, undefined, undefined, gateway);
+      return responder.prompt(id, 'owner', 'Check observed mail', time, 'telegram', restricted ? ['open_loop'] : undefined);
+    };
+    await create('source-less', { title: 'A third-party request', due: '2026-10-03T10:00' });
+    expect(loops.list()).toEqual([]);
+    const updates = updateBook(state.storage.sql);
+    updates.observeMail('mail:t1', 't1', 1, 'm1');
+    updates.record('2026-10-03', 1, [{ source: 'mail', kind: 'new', source_ref: 'mail:t1', source_message_id: 'm1', detail: '{"subject":"Review by 10"}' }], null);
+    await create('source-linked', { title: 'Check review', due: '2026-10-03T10:00', source_ref: 'mail:t1' });
+    expect(loops.list()[0]?.source_ref).toBe('mail:t1');
+    await create('owner-ordinary', { title: 'Owner task', due: null }, false);
+    expect(loops.list()).toHaveLength(2);
+  });
 });
