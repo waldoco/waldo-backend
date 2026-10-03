@@ -1,19 +1,21 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import type { CalendarItem } from '../src/connectors/google';
+import type { CalendarItem, CalendarChange } from '../src/connectors/google';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
 import { loopBook } from '../src/channels/loops';
+import { updateBook } from '../src/channels/update-cards';
+import { DeliveryGateStore } from '../src/delivery-gate/store';
 import { ensureSchema } from '../src/tracer/schema';
 
-const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, sent: [] as string[], requests: [] as LLMGatewayRequest[], decision: 'notify', mutate: null as (() => void) | null, ack: true }));
+const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, sent: [] as string[], requests: [] as LLMGatewayRequest[], decision: 'notify', changes: [] as CalendarChange[], mutate: null as (() => void) | null, ack: true }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, _health: unknown, account: unknown) => ({
     account, events: async () => fixture.event && fixture.event.status !== 'cancelled' ? [fixture.event] : [],
     calendarPage: async () => ({ events: fixture.event && fixture.event.status !== 'cancelled' ? [fixture.event] : [], next_page_token: null, fetched_count: 1, account, observed_at: new Date().toISOString() }),
-    event: async () => fixture.event, changedEvents: async () => [], newMail: async () => [],
+    event: async () => fixture.event, changedEvents: async () => fixture.changes, newMail: async () => [],
   }) };
 });
 vi.mock('../src/channels/telegram-api', async load => {
@@ -63,7 +65,7 @@ it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-r
     try {
       if (mode === 'legacy-counters') {
         ensureSchema(state.storage);
-        state.storage.sql.exec('INSERT INTO class_state (user_id, local_date, push_class, count, last_sent_at) VALUES (?, ?, ?, ?, ?)', '7', '2026-10-02', 'pre_activity_spot', 1, now - 86400_000);
+        state.storage.sql.exec('INSERT INTO class_state (user_id, local_date, push_class, count, last_sent_at) VALUES (?, ?, ?, ?, ?)', '7', '2026-10-03', 'pre_activity_spot', 1, now - 86400_000);
       }
       if (mode === 'changed-during-model') fixture.mutate = () => { fixture.event = { ...fixture.event!, etag: 'r2', description: 'Changed agenda' }; };
       if (mode === 'revoked-during-model') fixture.mutate = () => state.storage.kv.put('google:accounts', []);
@@ -161,6 +163,119 @@ it('actual default owner DO freezes grounded local-time prep and rechecks quiet/
       owner = new TelegramOwnerDO(state, config);
       await incoming(); await drain();
       expect(fixture.sent.filter(t => t.startsWith('Design review'))).toHaveLength(1);
+    } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
+  });
+});
+
+type CounterCase = { name: string; zone?: string; now?: string; day?: string; last?: number | string | null; marker?: unknown; tables?: string[]; ready: boolean; flag?: string; advanceTo?: string; updates?: boolean; inspection?: boolean };
+const counterCases: CounterCase[] = [
+  { name: 'historical legacy UTC counters', ready: true },
+  { name: 'historical budget-only counters', tables: ['daily_push_budget'], ready: true },
+  { name: 'historical subkind-only counters', tables: ['subkind_state'], ready: true },
+  { name: 'held adoption still processes update changes', day: '2026-10-03', ready: false, updates: true },
+  { name: 'today UTC rows across IST boundary', now: '2026-10-02T20:00:00Z', day: '2026-10-02', ready: false, advanceTo: '2026-10-03T00:00:00Z' },
+  { name: 'UTC and IST both advanced', now: '2026-10-03T00:00:00Z', day: '2026-10-02', last: Date.parse('2026-10-02T18:29:59Z'), ready: true },
+  { name: 'IST day start send', last: Date.parse('2026-10-02T18:30:00Z'), ready: false },
+  { name: 'UTC day start send', last: Date.parse('2026-10-03T00:00:00Z'), ready: false },
+  { name: 'negative offset current local row', zone: 'America/Los_Angeles', now: '2026-10-03T06:30:00Z', day: '2026-10-02', ready: false },
+  { name: 'negative offset both days advanced', zone: 'America/Los_Angeles', now: '2026-10-03T07:00:00Z', day: '2026-10-02', last: Date.parse('2026-10-02T23:59:59Z'), ready: true },
+  { name: 'negative offset UTC current send', zone: 'America/Los_Angeles', now: '2026-10-03T07:00:00Z', last: Date.parse('2026-10-03T06:59:59Z'), ready: false },
+  { name: 'DST fallback advanced days', zone: 'America/New_York', now: '2026-11-01T06:30:00Z', day: '2026-10-31', last: Date.parse('2026-10-31T23:59:59Z'), ready: true },
+  { name: 'DST fallback current send', zone: 'America/New_York', now: '2026-11-01T06:30:00Z', day: '2026-10-31', last: Date.parse('2026-11-01T04:00:00Z'), ready: false },
+  { name: 'midnight gap advanced days', zone: 'America/Sao_Paulo', now: '2018-11-04T03:30:00Z', day: '2018-11-03', last: Date.parse('2018-11-03T23:59:59Z'), ready: true },
+  { name: 'midnight gap current send', zone: 'America/Sao_Paulo', now: '2018-11-04T03:30:00Z', day: '2018-11-03', last: Date.parse('2018-11-04T03:00:00Z'), ready: false },
+  { name: 'skipped date both days advanced', zone: 'Pacific/Apia', now: '2011-12-30T12:00:00Z', day: '2011-12-29', last: Date.parse('2011-12-29T23:59:59Z'), ready: true },
+  { name: 'skipped date current UTC send', zone: 'Pacific/Apia', now: '2011-12-30T12:00:00Z', day: '2011-12-29', last: Date.parse('2011-12-30T09:59:59Z'), ready: false },
+  { name: 'DST spring advanced days', zone: 'America/New_York', now: '2026-03-08T07:30:00Z', day: '2026-03-07', last: Date.parse('2026-03-07T23:59:59Z'), ready: true },
+  { name: 'current budget-only later zone change', marker: 'UTC', tables: ['daily_push_budget'], day: '2026-10-03', ready: false, advanceTo: '2026-10-04T04:30:00Z' },
+  { name: 'current subkind-only later zone change', marker: 'UTC', tables: ['subkind_state'], day: '2026-10-03', ready: false },
+  { name: 'subkind-only current send later zone change', marker: 'UTC', tables: ['subkind_state'], last: Date.parse('2026-10-02T18:30:00Z'), ready: false },
+  { name: 'historical later zone change', marker: 'America/New_York', ready: true },
+  { name: 'null historical sends', last: null, ready: true },
+  { name: 'future date', day: '2099-01-01', ready: false, inspection: true },
+  { name: 'future send', last: Date.parse('2099-01-01T00:00:00Z'), ready: false, inspection: true },
+  { name: 'same-day future send', last: Date.parse('2026-10-03T05:00:00Z'), ready: false, inspection: true },
+  { name: 'subkind-only same-day future send', tables: ['subkind_state'], last: Date.parse('2026-10-03T05:00:00Z'), ready: false, inspection: true },
+  { name: 'malformed date', day: 'yesterday', ready: false, inspection: true },
+  { name: 'nonexistent civil date', day: '2026-02-30', ready: false, inspection: true },
+  { name: 'budget-only malformed date', tables: ['daily_push_budget'], day: '2026-02-30', ready: false, inspection: true },
+  { name: 'subkind-only malformed timestamp', tables: ['subkind_state'], last: 'yesterday', ready: false, inspection: true },
+  { name: 'old nonUTC zone current send', marker: 'Asia/Kolkata', zone: 'UTC', last: Date.parse('2026-10-02T19:00:00Z'), ready: false },
+  { name: 'malformed timestamp', last: 'yesterday', ready: false, inspection: true },
+  { name: 'out-of-range timestamp', last: -8640000000000001, ready: false, inspection: true },
+  { name: 'invalid old zone', marker: 'Invalid/Zone', ready: false, inspection: true },
+  { name: 'empty old zone', marker: '', ready: false, inspection: true },
+  { name: 'nonstring old zone', marker: 1, ready: false, inspection: true },
+  { name: 'same-zone current rows immediately usable', marker: 'Asia/Kolkata', day: '2026-10-03', last: Date.parse('2026-10-03T04:00:00Z'), ready: true },
+  { name: 'flag absent preserves legacy counters', flag: 'absent', ready: false },
+  { name: 'flag zero preserves legacy counters', flag: '0', ready: false },
+];
+
+it.each(counterCases)('counter timezone adoption: $name', async scenario => {
+  const name = `calendar-counter-${counterCases.indexOf(scenario)}`;
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    const originalNow = Date.now;
+    let now = Date.parse(scenario.now ?? '2026-10-03T04:30:00Z');
+    const zone = scenario.zone ?? 'Asia/Kolkata';
+    Date.now = () => now;
+    fixture.sent = []; fixture.requests = []; fixture.mutate = null; fixture.decision = 'no_op'; fixture.ack = true;
+    fixture.event = { id: 'event-historical', title: 'Design review', status: 'confirmed', start: new Date(now + 30 * 60_000).toISOString(), end: new Date(now + 60 * 60_000).toISOString(), all_day: false, etag: 'r1' };
+    const config = { ...env, CALENDAR_GROUNDED_PREP: scenario.flag === 'absent' ? undefined : scenario.flag ?? '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: zone, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
+    const owner = new TelegramOwnerDO(state, config);
+    state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
+    if (scenario.marker !== undefined) state.storage.kv.put('calendar_prep_counter_timezone_v1', scenario.marker);
+    await state.storage.put('origin', 'https://fixture.invalid');
+    await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+    ensureSchema(state.storage);
+    fixture.changes = scenario.updates ? [{ ...fixture.event!, status: 'confirmed', title: 'Changed independent event', created: new Date(now - 86400_000).toISOString(), updated: new Date(now).toISOString() }] : [];
+    if (scenario.updates) updateBook(state.storage.sql).mark('calendar_since', now - 60_000);
+    const day = scenario.day ?? '2026-10-01';
+    const last = scenario.last === undefined ? now - 3 * 86400_000 : scenario.last;
+    const tables = scenario.tables ?? ['class_state', 'subkind_state', 'daily_push_budget'];
+    if (tables.includes('class_state')) {
+      state.storage.sql.exec('INSERT INTO class_state VALUES (?, ?, ?, ?, ?)', '7', day, 'pre_activity_spot', 2, last);
+      state.storage.sql.exec('INSERT INTO class_state VALUES (?, ?, ?, ?, ?)', '7', '2000-01-01', 'constellation_first', 1, null);
+    }
+    if (tables.includes('subkind_state')) state.storage.sql.exec('INSERT INTO subkind_state VALUES (?, ?, ?, ?, ?, ?)', '7', day, 'adjustment', 'proposed', 3, last);
+    if (tables.includes('daily_push_budget')) state.storage.sql.exec('INSERT INTO daily_push_budget VALUES (?, ?, ?, ?)', '7', day, 4, 5);
+    state.storage.sql.exec('INSERT INTO event_cooldowns VALUES (?, ?, ?, ?)', '7', 'sync_error', 'retained-event', now - 1000);
+    state.storage.sql.exec('INSERT INTO exempt_telemetry VALUES (?, ?, ?)', '7', 'pre_activity_spot', 6);
+    const retained = [...tables, 'event_cooldowns', 'exempt_telemetry'];
+    const before = retained.map(table => state.storage.sql.exec(`SELECT * FROM ${table}`).toArray());
+    try {
+      const fire = (update: number) => owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: update, message: { message_id: update + 1, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: '/fire briefs' } }) }));
+      expect((await fire(100)).status).toBe(200);
+      expect(state.storage.kv.get('calendar_prep_counter_timezone_v1')).toEqual(scenario.ready ? zone : scenario.marker);
+      const decisions = () => fixture.requests.filter(r => r.request.messages.at(-1)?.content.includes('[Meeting prep decision'));
+      expect(decisions()).toHaveLength(scenario.ready ? 1 : 0);
+      if (!scenario.ready && !scenario.flag) {
+        const hold = state.storage.sql.exec<{ note: string }>("SELECT note FROM trace_log WHERE hop = 'brief_sweep' AND ok = 0 ORDER BY id DESC LIMIT 1").one();
+        expect(hold.note).toContain(scenario.inspection ? 'inspection required' : 'await both civil-day rollovers');
+      }
+      if (scenario.updates) {
+        const cards = state.storage.sql.exec<{ changes: string }>('SELECT changes FROM update_cards').toArray();
+        expect(cards).toHaveLength(1);
+        expect(cards[0]!.changes).toContain('Changed independent event');
+      }
+      expect(retained.map(table => state.storage.sql.exec(`SELECT * FROM ${table}`).toArray())).toEqual(before);
+      if (tables.includes('class_state')) {
+        const candidate = { event_id: 'retained-event', push_class: 'constellation_first' as const, trigger: 'user_message' as const };
+        expect(new DeliveryGateStore(state.storage.sql).readClassState('7', candidate, now, zone).constellation_first).toEqual({ count: 1, last_sent_at: null });
+      }
+      expect(new DeliveryGateStore(state.storage.sql).readClassState('7', { event_id: 'retained-event', push_class: 'sync_error', trigger: 'patrol' }, now, zone).sync_error?.last_sent_at).toBe(Date.parse(scenario.now ?? '2026-10-03T04:30:00Z') - 1000);
+      if (scenario.advanceTo) {
+        now = Date.parse(scenario.advanceTo);
+        fixture.event = { ...fixture.event!, start: new Date(now + 30 * 60_000).toISOString(), end: new Date(now + 60 * 60_000).toISOString() };
+        await fire(104);
+        expect(state.storage.kv.get('calendar_prep_counter_timezone_v1')).toBe(zone);
+        expect(decisions()).toHaveLength(1);
+        expect(retained.map(table => state.storage.sql.exec(`SELECT * FROM ${table}`).toArray())).toEqual(before);
+      }
+      if (scenario.ready) {
+        await fire(102);
+        expect(decisions()).toHaveLength(1);
+        expect(retained.map(table => state.storage.sql.exec(`SELECT * FROM ${table}`).toArray())).toEqual(before);
+      }
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
 });

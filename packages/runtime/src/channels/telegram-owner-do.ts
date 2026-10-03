@@ -1582,20 +1582,47 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const briefBook = eventBriefs(storage.sql, clock.timezone);
     const calendarGate = new DeliveryGateStore(storage.sql);
-    // These existing aggregates have no historical timezone provenance. Only a clean
-    // owner DO can adopt local counters; preserve populated legacy rows for review.
-    const calendarCounterReady = (): boolean => {
-      const previous = identity.get<string>('calendar_prep_counter_timezone_v1');
-      if (!previous) {
-        if (['class_state', 'subkind_state', 'daily_push_budget'].some(table => storage.sql.exec(`SELECT 1 FROM ${table} LIMIT 1`).toArray().length)) return false;
-        identity.put('calendar_prep_counter_timezone_v1', clock.timezone);
-      } else if (previous !== clock.timezone) {
-        const last = storage.sql.exec<{ at: number | null }>('SELECT MAX(last_sent_at) AS at FROM class_state').one().at;
-        if (last !== null && [previous, clock.timezone].some(zone => localIso(last, zone).slice(0, 10) === localIso(Date.now(), zone).slice(0, 10))) return false;
-        identity.put('calendar_prep_counter_timezone_v1', clock.timezone);
-      }
-      return true;
-    };
+    // Legacy owner counters used UTC. Adopt a new zone only once both civil days
+    // have advanced past every retained daily row and send; never reset aggregates.
+    const calendarCounterHold = (): string | null => storage.transactionSync(() => {
+      const previous = identity.get<unknown>('calendar_prep_counter_timezone_v1');
+      const timezone = clock.timezone;
+      if (previous === timezone) return null;
+      if (previous !== undefined && (typeof previous !== 'string' || !previous)) return 'invalid timezone marker; inspection required';
+      try {
+        const now = Date.now();
+        const zones = [previous ?? 'UTC', timezone] as string[];
+        const days = zones.map(zone => localIso(now, zone).slice(0, 10));
+        const earliestDay = days.reduce((a, b) => a < b ? a : b);
+        const latestDay = days.reduce((a, b) => a > b ? a : b);
+        const rowDays: string[] = [];
+        for (const table of ['class_state', 'subkind_state', 'daily_push_budget']) {
+          // Validate and filter in SQL rather than materializing all historical rows.
+          if (storage.sql.exec(`SELECT 1 FROM ${table}
+            WHERE length(local_date) != 10 OR local_date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+              OR date(local_date, '+0 days') IS NOT local_date LIMIT 1`).toArray().length) return 'malformed counter date; inspection required';
+          const date = storage.sql.exec<{ day: string | null }>(`SELECT MAX(local_date) AS day FROM ${table}`).one().day;
+          if (date !== null) rowDays.push(date);
+        }
+        for (const table of ['class_state', 'subkind_state']) {
+          if (storage.sql.exec(`SELECT 1 FROM ${table} WHERE last_sent_at IS NOT NULL
+            AND (typeof(last_sent_at) NOT IN ('integer', 'real') OR last_sent_at < -8640000000000000
+              OR last_sent_at > 8640000000000000) LIMIT 1`).toArray().length) return 'malformed send timestamp; inspection required';
+        }
+        const last = storage.sql.exec<{ at: number | null }>(`SELECT MAX(last_sent_at) AS at FROM (
+          SELECT last_sent_at FROM class_state UNION ALL SELECT last_sent_at FROM subkind_state
+        )`).one().at;
+        if (last !== null && last > now) return 'future send timestamp; inspection required';
+        // Comparing civil dates also covers DST days without assuming a 24-hour day.
+        const sentDays = last === null ? [] : zones.map(zone => localIso(last, zone).slice(0, 10));
+        if (rowDays.some(day => day > latestDay)) return 'future counter date; inspection required';
+        if (sentDays.some((day, i) => day > days[i]!)) return 'future send timestamp; inspection required';
+        if (rowDays.some(day => day >= earliestDay)) return 'current-day counters; await both civil-day rollovers';
+        if (sentDays.some((day, i) => day === days[i]!)) return 'current-day sends; await both civil-day rollovers';
+        identity.put('calendar_prep_counter_timezone_v1', timezone);
+        return null;
+      } catch { return 'invalid timezone or unreadable counter state; inspection required'; }
+    });
     const calendarOwnerCurrent = async (connectionId: string, timezone: string): Promise<void> => {
       const check = () => {
         const doName = identity.get<string>('do_name');
@@ -1631,9 +1658,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         if (this.env.CALENDAR_GROUNDED_PREP === '1') {
           if (channel !== 'telegram' || loops.proactivity().volume === 'low') return;
-          if (!calendarCounterReady()) {
-            log({ trace, hop: 'brief_sweep', ms: 0, ok: false, code: 'calendar_counter_cutover_required', detail: 'Existing counters need reviewed timezone cutover before meeting prep can activate.' });
-            return;
+          const counterHold = calendarCounterHold();
+          if (counterHold) {
+            log({ trace, hop: 'brief_sweep', ms: 0, ok: false, code: 'calendar_counter_cutover_required', detail: `Counter timezone transition held: ${counterHold}.` });
+            return void (await updateCheck(`update:${entry.occurrence_at}`));
           }
           const client = await google.client('calendar');
           const connectionId = client?.account?.connection_id;
@@ -1655,7 +1683,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
                 ownerSubject: String(owner), doName, bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: Date.parse(calendarPrep.start), calendarPrep,
               }, work => storage.transactionSync(() => {
                 if (clock.timezone !== timezone || identity.get<string>('do_name') !== doName || identity.get<string>('telegram_subject') !== String(owner)
-                  || identity.get<boolean>('telegram_unlinked') || !calendarCounterReady() || this.env.CALENDAR_GROUNDED_PREP !== '1'
+                  || identity.get<boolean>('telegram_unlinked') || calendarCounterHold() !== null || this.env.CALENDAR_GROUNDED_PREP !== '1'
                   || loops.proactivity().volume === 'low' || Date.now() >= Date.parse(calendarPrep.start)) throw new Error('calendar prep admission changed');
                 const now = Date.now();
                 const candidate = { event_id: cooldownKey, push_class: 'pre_activity_spot' as const, trigger: 'pre_activity_spot' as const, expires_at: Date.parse(calendarPrep.start) };
