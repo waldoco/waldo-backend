@@ -38,24 +38,26 @@ export function constellationScene(data: MemoryPattern, focusId: string, claims:
   const adjacent = new Set(associations.filter(link => link.from === focus.id || link.to === focus.id).flatMap(link => [link.from, link.to]));
   const peers = patterns.filter(pattern => pattern.id !== focus.id).sort((a, b) => Number(adjacent.has(b.id)) - Number(adjacent.has(a.id)));
   const nodes: SceneNode[] = [{ id: focus.id, kind: 'pattern', label: focus.label, point: { x: 310, y: 250 } }];
+  const rows = Math.max(4, Math.ceil(peers.length / 3));
+  const pitch = Math.max(80, 330 / (rows - 1));
+  const height = Math.max(500, 60 + (rows - 1) * pitch + 15 + 60);
   // Unequal branch lengths and staggered columns keep the scene out of a wheel.
   peers.forEach((pattern, index) => {
-    const rows = Math.max(4, Math.ceil(peers.length / 3));
     const column = Math.min(2, Math.floor(index / rows)), row = index % rows;
-    nodes.push({ id: pattern.id, kind: 'pattern', label: pattern.label, point: { x: Math.min(695, 425 + column * 125 + (row % 2 ? 8 : -8)), y: 60 + row * (330 / (rows - 1)) + (column % 2 ? 15 : 0) } });
+    nodes.push({ id: pattern.id, kind: 'pattern', label: pattern.label, point: { x: Math.min(695, 425 + column * 125 + (row % 2 ? 4 : -4)), y: 60 + row * pitch + (column % 2 ? 15 : 0) } });
   });
   const supportIds = new Set(focus.support.claim_ids);
   const shown = [...new Map(claims.filter(claim => supportIds.has(claim.id)).map(claim => [claim.id, claim])).values()].slice(0, SUPPORT_PREVIEW_LIMIT);
   shown.forEach((claim, index) => nodes.push({ id: claim.id, kind: 'spot', label: claim.text, point: { x: index % 2 ? 190 : 75, y: 85 + Math.floor(index / 2) * 160 } }));
   const links: SceneLink[] = associations.map(link => ({ from: link.from, to: link.to, relation: link.relation, kind: 'association' }));
   shown.forEach(claim => links.push({ from: focus.id, to: claim.id, relation: 'Stored supporting Spot', kind: 'support' }));
-  return { focus, nodes, links, claims: shown };
+  return { focus, nodes, links, claims: shown, height };
 }
 
-export function springStep(point: Point & { vx: number; vy: number }, target: Point) {
+export function springStep(point: Point & { vx: number; vy: number }, target: Point, height = 500) {
   const vx = (point.vx + (target.x - point.x) * .12) * .65;
   const vy = (point.vy + (target.y - point.y) * .12) * .65;
-  return { x: Math.max(38, Math.min(722, point.x + vx)), y: Math.max(35, Math.min(465, point.y + vy)), vx, vy };
+  return { x: Math.max(38, Math.min(722, point.x + vx)), y: Math.max(35, Math.min(height - 35, point.y + vy)), vx, vy };
 }
 function useReducedMotion() {
   const [reduced, setReduced] = useState(() => typeof window === 'undefined' || !window.matchMedia || window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -68,7 +70,7 @@ function useReducedMotion() {
   }, []);
   return reduced;
 }
-function useSettledScene(nodes: SceneNode[], reduced: boolean) {
+function useSettledScene(nodes: SceneNode[], reduced: boolean, height: number) {
   const target = useMemo(() => new Map(nodes.map(node => [node.id, node.point])), [nodes]);
   const [positions, setPositions] = useState(target);
   const current = useRef(positions);
@@ -78,7 +80,7 @@ function useSettledScene(nodes: SceneNode[], reduced: boolean) {
     let moving = new Map([...target].map(([id, point]) => [id, { ...(current.current.get(id) ?? { x: 310, y: 250 }), vx: 0, vy: 0 }]));
     const step = () => {
       frame++;
-      moving = new Map([...moving].map(([id, point]) => [id, springStep(point, target.get(id)!)]));
+      moving = new Map([...moving].map(([id, point]) => [id, springStep(point, target.get(id)!, height)]));
       const next = new Map([...moving].map(([id, point]) => [id, { x: point.x, y: point.y }]));
       current.current = next; setPositions(next);
       if (frame < 46) raf = requestAnimationFrame(step);
@@ -86,7 +88,7 @@ function useSettledScene(nodes: SceneNode[], reduced: boolean) {
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [target, reduced]);
+  }, [target, reduced, height]);
   return positions;
 }
 const origin = (value: string) => value === 'shared' || value === 'untrusted' ? `${value} · untrusted provenance` : value;
@@ -136,7 +138,7 @@ export function PatternExplorer({ data, onNext, onRestart, returnTo }: { returnT
     observer?.observe(map);
     return () => observer?.disconnect();
   }, [data.center.id]);
-  const positions = useSettledScene(scene.nodes, reduced);
+  const positions = useSettledScene(scene.nodes, reduced, scene.height);
   const selectedSpot = scene.claims.find(claim => claim.id === selectedId);
   const selected = selectedSpot?.id ?? focused.id;
   const incident = new Set(scene.links.filter(link => link.from === selected || link.to === selected).flatMap(link => [link.from, link.to]));
@@ -149,7 +151,7 @@ export function PatternExplorer({ data, onNext, onRestart, returnTo }: { returnT
     <p className="constellation-guide">Hexagons are tentative patterns. Circles are returned Spots from the selected pattern’s saved support. Lines describe stored links—not truth, causation or verified independent observations.</p>
     {data.omitted_links > 0 && <p className="memory-read-notice">{data.omitted_links} associations omitted from this page.{data.expand.links_capped && ` ${data.expand.capped_links} capped associations cannot be recovered with this cursor.`}</p>}
     <div className="constellation-workspace" data-reduced-motion={reduced}>
-      <div className="constellation-canvas"><div ref={mapRef} className="constellation-map-scroll" role="region" aria-label="Saved branch map; scroll horizontally on small screens" tabIndex={0}><svg viewBox="0 0 760 500" role="group" aria-label="Saved pattern and supporting Spot branches">
+      <div className="constellation-canvas"><div ref={mapRef} className="constellation-map-scroll" role="region" aria-label="Saved branch map; scroll horizontally on small screens" tabIndex={0}><svg viewBox={`0 0 760 ${scene.height}`} role="group" aria-label="Saved pattern and supporting Spot branches">
         {scene.links.map((link, index) => {
           const from = positions.get(link.from), to = positions.get(link.to);
           if (!from || !to) return null;

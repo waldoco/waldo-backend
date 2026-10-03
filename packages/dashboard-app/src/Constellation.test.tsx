@@ -68,9 +68,20 @@ describe('saved Constellation branches', () => {
       data.nodes = Array.from({ length: count }, (_, i) => ({ ...data.nodes[0]!, id: `pattern:${i}` }));
       const nodes = constellationScene(data, data.center.id, []).nodes;
       expect(nodes).toHaveLength(count + 1);
-      for (const node of nodes) { expect(node.point.x).toBeLessThanOrEqual(695); expect(node.point.y).toBeLessThanOrEqual(405); }
+      for (const node of nodes) { expect(node.point.x).toBeLessThanOrEqual(695); expect(node.point.y+48).toBeLessThanOrEqual(constellationScene(data,data.center.id,[]).height); }
       expect(new Set(nodes.map(node => `${node.point.x}:${node.point.y}`)).size).toBe(count + 1);
     }
+  });
+
+  it('keeps 25 peers clear of two-line labels and 48px hit targets', () => {
+    const data=pattern();data.nodes=Array.from({length:25},(_,i)=>({...data.nodes[0]!,id:`pattern:${i}`,label:`Dense saved pattern ${i}`}));
+    const scene=constellationScene(data,data.center.id,[]);
+    const peers=scene.nodes.filter(node=>node.id!==data.center.id);
+    for(const a of peers)for(const b of peers){if(a.id===b.id)continue;
+      // Glyph/hit box begins 24px above origin; two-line text ends 48px below it.
+      expect(Math.abs(a.point.x-b.point.x)>=110 || Math.abs(a.point.y-b.point.y)>=80).toBe(true);
+    }
+    for(const node of scene.nodes)expect(node.point.y+48).toBeLessThanOrEqual(scene.height);
   });
 
   it('escapes saved content and provides explicit counts, glyphs and a keyboard/list fallback', () => {
