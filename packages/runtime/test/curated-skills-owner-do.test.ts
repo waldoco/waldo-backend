@@ -25,7 +25,11 @@ vi.mock('openai',()=>({default:class {responses={create:async(body:{instructions
    expect(target.backend).toBe('workspace');seen.fileId=target.file_id;seen.revision=target.revision;
    return call('workspace_read',{file_id:target.file_id,revision:target.revision});
   }
-  if((step===1 && seen.mode==='draft') || (step===2 && seen.mode==='revise')){return call('workspace_write',{path:'drafts/demo-email.md',text:seen.mode==='draft'?'To: demo@example.test\nSubject: Demo plan\nThe demo is October 15 at 09:10 UTC.':'To: demo@example.test\nSubject: Revised demo plan\nThe demo is October 15 at 10:00 UTC.',mime:'text/markdown',expected_revision:seen.mode==='draft'?0:seen.revision});}
+  if((step===1 && seen.mode==='draft') || (step===2 && seen.mode==='revise')){
+   const readOutput=seen.mode==='revise'?(body.input as Array<{type:string;output?:string}>).filter(item=>item.type==='function_call_output').map(item=>JSON.parse(item.output!)).find(item=>item.data?.text!==undefined):undefined;
+   const text=seen.mode==='draft'?'To: demo@example.test\nSubject: Demo plan\nThe demo is October 15 at 09:10 UTC.':readOutput.data.text.replace('09:10','10:00').replace('Subject: Demo plan','Subject: Revised demo plan');
+   return call('workspace_write',{path:'drafts/demo-email.md',text,mime:'text/markdown',expected_revision:seen.mode==='draft'?0:seen.revision});
+  }
  }
  return {id:'fixture-final',output_text:seen.mode==='ambiguous'?'Which saved file do you mean?':'Draft prepared for review; it has not been sent.',output:[],usage:{input_tokens:1,output_tokens:1}};
 }};}}));
@@ -62,7 +66,7 @@ it('actual default owner DO installs once, selects normal tasks, saves and revis
    expect(seen.calls).toEqual(['skills_load','workspace_read','workspace_write']);
    expect(ws.files).toHaveLength(2);expect(ws.files.find(file=>file.file_id===seen.fileId)?.revision).toBe(2);expect(ws.files.find(file=>file.file_id===older.file_id)).toEqual(older);
    expect((await seen.store!.read(older.file_id,1,0,8000)).text).toBe('Fictional field notes, unrelated to demo');
-   const read=await seen.store!.read(seen.fileId,2,0,8000);expect(read.text).toContain('10:00 UTC');
+   const read=await seen.store!.read(seen.fileId,2,0,8000);expect(read.text).toContain('10:00 UTC');expect(read.text).toContain('To: demo@example.test');expect(read.text).not.toContain('[REDACTED_EMAIL]');
    expect(seen.requests.some(r=>r.instructions.includes(CURATED_PREPARATION_SKILL.body_markdown))).toBe(true);
    const offered=seen.requests[0]!.tools!.map(t=>t.name).sort();
    expect(offered).not.toContain('execute_code');
