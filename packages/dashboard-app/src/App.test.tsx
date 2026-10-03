@@ -132,3 +132,8 @@ describe('dashboard routing and overview boundaries', () => {
     expect(html.indexOf('Review recipient and effect')).toBeLessThan(html.indexOf('The Brief has not been sent.'));
   });
 });
+it('home uses a timezone-aware greeting and short recorded-plan brief without guessing a name',()=>{
+ const html=renderToStaticMarkup(<Dashboard data={{...empty,timezone:'Asia/Kolkata',waiting:{count:1,first:null}}} route="today" now={new Date('2026-10-03T17:00:00Z')}/>);
+ expect(html).toContain('<h1>Good evening.</h1>');expect(html).toContain('1 decision is waiting for you. No next card is recorded.');expect(html).not.toContain('<h1>Today.</h1>');
+ expect(renderToStaticMarkup(<DashboardNavigation route="today"/>)).toContain('Today');
+});
