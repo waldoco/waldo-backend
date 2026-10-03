@@ -450,3 +450,50 @@ it('default MD and TXT writes return authenticated downloads with exact text MIM
   expect(h.puts).toHaveLength(2);
  });
 });
+
+it('external list then initial creation preserves exact private contact bytes through revision, guarded read and authenticated download', async () => {
+  await proof(async h => {
+    await h.state.storage.put('origin', 'https://local.invalid');
+    const initial = 'To: demo@example.test\nPhone: +1 415 555 0100\nAddress: 123 Main Street\nDemo at 13:00\nThanks.';
+    const revised = initial.replace('13:00', '14:00').replace('Thanks.', 'Thanks so much. Looking forward to seeing you!');
+    const digest = async (text: string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    model.reply = request => {
+      const done = outputs(request);
+      if (!done.beforeCreate) return [call('workspace_list', {}, 'beforeCreate')];
+      if (!done.createContact) return [call('workspace_write', { path: 'docs/contact.md', text: initial, mime: 'text/markdown', expected_revision: 0 }, 'createContact')];
+      if (!done.initialRead) return [call('workspace_read', { file_id: done.createContact.data.file_id, revision: 1 }, 'initialRead')];
+      if (!done.reviseContact) return [call('workspace_write', { path: 'docs/contact.md', edits: [{ before: '13:00', after: '14:00' }, { before: 'Thanks.', after: 'Thanks so much. Looking forward to seeing you!' }], mime: 'text/markdown', expected_revision: 1 }, 'reviseContact')];
+      if (!done.revisedRead) return [call('workspace_read', { file_id: done.createContact.data.file_id, revision: 2 }, 'revisedRead')];
+      return 'Private contact fixture revised.';
+    };
+    await h.send(`Save these exact private document fields, then change the time and tone: ${initial}`);
+    const result = allOutputs();
+    expect(result.beforeCreate).toMatchObject({ ok: true, source_taint: 'external', data: { count: 0 } });
+    expect(h.dispatches.mock.calls.find(([c]) => c.id === 'createContact')?.[1].toolArgSourceTaint).toBe('external');
+    expect(result.createContact).toMatchObject({ ok: true, data: { revision: 1, byte_size: new TextEncoder().encode(initial).length, sha256: await digest(initial) } });
+    expect(h.bytes.get(h.puts[0]!)).toEqual(new TextEncoder().encode(initial));
+    expect(result.reviseContact).toMatchObject({ ok: true, data: { file_id: result.createContact!.data.file_id, revision: 2, byte_size: new TextEncoder().encode(revised).length, sha256: await digest(revised) } });
+    expect(h.bytes.get(h.puts[1]!)).toEqual(new TextEncoder().encode(revised));
+    expect(h.puts).toHaveLength(2);
+    for (const name of ['initialRead', 'revisedRead']) {
+      expect(result[name]).toMatchObject({ ok: true, source_taint: 'external' });
+      expect(result[name]!.data.text).toContain('[REDACTED_EMAIL]');
+      expect(result[name]!.data.text).not.toContain('demo@example.test');
+    }
+    expect(result.revisedRead!.data.text).toContain('Demo at 14:00');
+    expect(h.dispatches.mock.calls.find(([c]) => c.id === 'reviseContact')?.[1].toolArgSourceTaint).toBe('external');
+    const access = consoleAccess(h.state.storage);
+    const session = await access.grant();
+    const headers = { cookie: `${CONSOLE_COOKIE}=${session}` };
+    h.restart();
+    for (const [name, text] of [['createContact', initial], ['reviseContact', revised]] as const) {
+      const download = await h.request(new Request(result[name]!.data.delivery.url, { headers }));
+      expect(download.status).toBe(200);
+      const bytes = new Uint8Array(await download.arrayBuffer());
+      expect(bytes).toEqual(new TextEncoder().encode(text));
+      expect([...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('')).toBe(result[name]!.data.sha256);
+      expect((await h.request(new Request(result[name]!.data.delivery.url))).status).toBe(401);
+    }
+    expect(h.manifest()).toMatchObject({ binding: { ownerId: OWNER, doName: h.name }, files: [{ file_id: result.createContact!.data.file_id, revision: 2 }], operations: [{ status: 'committed' }, { status: 'committed' }] });
+  });
+});

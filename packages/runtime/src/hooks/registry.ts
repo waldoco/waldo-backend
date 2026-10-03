@@ -374,10 +374,9 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
     // Redaction would corrupt them (the 2026-09-25 halt - [REDACTED_EMAIL] fails zod), so they
     // are checked (hard denies still halt fail-closed) but never rewritten.
     if (destination === 'draft_email') return checkExecutableArgs(payload.args, ctx, destination, sourceTaint.data);
-    if (tool.data === 'workspace_write' && payload.args !== null && typeof payload.args === 'object'
-      && Array.isArray((payload.args as { edits?:unknown }).edits)) {
-      // Only literal revision edits keep ordinary contact anchors exact. Forced sensitive
-      // substitutions still refuse; full replacement bodies retain their existing policy.
+    if (tool.data === 'workspace_write') {
+      // Private writes are executable data, including initial text and full replacements.
+      // Preserve ordinary contact fields exactly; mandatory substitutions still refuse.
       return checkExecutableArgs(payload.args, ctx, destination, sourceTaint.data, new Set(['email','phone','address']));
     }
     const sanitized = await sanitiseCandidate(
