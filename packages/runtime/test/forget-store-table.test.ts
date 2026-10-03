@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 // Every table the owner Durable Object can create, and what a forget does about it. Test only, no behaviour change.
-//  PURGED    purge() clears the owner's text from it, and `proof` names the test file that seeds a marker and checks it (the test
-//            file must mention the table, so a rename or a deleted test fails here).
+//  PURGED    purge() clears the owner's text from it, and `proof` names the test file that seeds a marker and checks it (the guard only checks that file mentions the table name: a substring tripwire against renames and deleted tests, not proof that it seeds one).
 //  EXEMPT    holds no owner-authored text (ids, hashes, counters, flags, timestamps, codes); `why` says what it holds.
 //  KNOWN_GAP may hold owner text and a literal forget does not reach it, or it has not been inspected. No claim is made about it.
 //            Unclear goes here. Whether a forget should reach things the owner made on purpose (reminder notes, standing
@@ -21,13 +20,13 @@ const TABLES: Record<string, Row> = {
   constellation_nodes: purged('forget-coverage.test.ts'), 
   run_candidates: purged('forget-tracer-stores.test.ts'), outbox: purged('forget-tracer-stores.test.ts'), held_candidates: purged('forget-tracer-stores.test.ts'),
   schedule: purged('forget-tracer-stores.test.ts'), update_cards: purged('forget-derived-stores.test.ts'), day_plan: purged('forget-derived-stores.test.ts'),
-  claim_holds: exempt('kind, reason code and a fingerprint hash'), forget_barriers: exempt('a marker and a hash, never the words'),
+  claim_holds: exempt('kind, reason code and a fingerprint hash'), forget_barriers: exempt('never holds topic words for new writes (marker and hash only); legacy rows are redacted on load'),
   purge_pending: exempt('claim id and fingerprint hash'), topic_purge_pending: exempt('fingerprint hash, a marker and a time'), settle_pending: exempt('trace id and time'),
   claim_recall_ready: exempt('claim ids'),
   // Operational: counters, flags, hashes, leases, ids, times
   class_state: exempt('counts and times per push class'), daily_push_budget: exempt('counts per day'), event_cooldowns: exempt('event id and time'),
   exempt_telemetry: exempt('counts'), subkind_state: exempt('counts and times'), loop_kill_flags: exempt('flag keys'), loop_progress: exempt('counts'),
-  loop_progress_params: exempt('parameter hashes'), loop_observations: exempt('tool name and hashes'), loop_governor_runs: exempt('ids, counts and reason codes'),
+  loop_progress_params: exempt('parameter hashes'), loop_observations: exempt('tool name and hashes'),
   local_ingress_rate: exempt('rate buckets'), responsibility_ingress_rate: exempt('rate buckets'), owner_roots: exempt('root key and owner id'),
   owner_event_state: exempt('cursor'), presence_registrations: exempt('ids and state'), presence_sessions: exempt('session ids and times'),
   planning_execution_leases: exempt('lease ids, fences and times'), execution_writer_rollback_guard: exempt('a flag'),
@@ -36,6 +35,7 @@ const TABLES: Record<string, Row> = {
   card_pins: exempt('card id and time'), heartbeat_notified: exempt('loop id and times'), artifact_exports: exempt('ids, format, size and time'),
   event_briefs: exempt('event id and times'), schedule_runs: exempt('ids, status codes and times'),
   // Text the owner made or the runtime stored, not reached by a literal forget
+  loop_governor_runs: gap('has a reason TEXT column; its writer was not traced'),
   artifacts: gap('name in the table, body in R2; owner-made'), owner_files: gap('file name and caption; owner-made'), reminder_notes: gap('note text; owner-made'),
   standing_orders: gap('trigger and escalation text; owner-made'), loops: gap('title; owner-made'), background_runs: gap('summary text'),
   ledger: gap('summary and payload JSON'), event_admissions: gap('delivery body'), trace_log: gap('note column; trace sinks not verified'), journal: gap('run journal; only a partial reference in purge, not shown covered'),
