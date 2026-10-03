@@ -618,7 +618,12 @@ export const createOwnerResponder = (
       const topic = ownerForgetTopic(raw, owner);
       if (topic) {
         const at = new Date().toISOString();
-        writerStore.beginTopicCoverage(topic, at);
+        try { writerStore.beginTopicCoverage(topic, at); }
+        catch (error) {
+          if (error instanceof ClosedRunError) throw error;
+          memoryReceipts.push('Requested topic cleanup could not be accepted because its retry state could not be stored; its source was preserved; ask the owner to retry the request.');
+          throw error;
+        }
         const gather = async () => {
           const local = writerStore!.forgetSources(topic);
           const rows: ForgetSource[] = [...local.sources];
@@ -635,7 +640,12 @@ export const createOwnerResponder = (
         };
         const supplied = await gather();
         await assertCurrent();
-        const selection = supplied.incomplete ? null : supplied.sources.length === 0 && writerStore.topicCoverage(topic) === 2 ? '' : await ask(id, 'forget_source', SELECTIVE_FORGET_INSTRUCTION, JSON.stringify({ topic, sources: supplied.sources }), { name: 'forget_source_spans', schema: SELECTIVE_FORGET_SCHEMA }, undefined, undefined, undefined, memoryModel);
+        let selection: string | null = null;
+        if (!supplied.incomplete) {
+          try {
+            selection = supplied.sources.length === 0 && writerStore.topicCoverage(topic) === 2 ? '' : await ask(id, 'forget_source', SELECTIVE_FORGET_INSTRUCTION, JSON.stringify({ topic, sources: supplied.sources }), { name: 'forget_source_spans', schema: SELECTIVE_FORGET_SCHEMA }, undefined, undefined, undefined, memoryModel);
+          } catch (error) { if (error instanceof ClosedRunError) throw error; }
+        }
         await assertCurrent();
         if (selection !== null) await gather();
         await assertCurrent();
@@ -649,7 +659,7 @@ export const createOwnerResponder = (
         }
         else {
           const ops = JSON.parse(raw);
-          raw = JSON.stringify({ ...ops, forget_topic: null, forget_claims: [], forget_nodes: [] });
+          raw = JSON.stringify({ ...ops, forget_topic: null });
           memoryReceipts.push('Requested forgetting is incomplete. Retained recall is temporarily limited; current requests and ordinary tools remain available. Do not claim that every associated fact was erased.');
         }
       }

@@ -154,14 +154,14 @@ it.each([true, false])('registered canonical DO selective forgetting, complete=%
   });
 });
 
-it('registered canonical DO revocation during selection preserves source bytes', async () => {
+it.each(['returned', 'failed'])('registered canonical DO revocation during %s selection preserves source bytes', async outcome => {
   await proof(async h => {
-    const topic = 'DLD-20261003-REVOKED';
+    const topic = 'DLD-20261003-REVOKED-' + outcome;
     const fact = `${topic} workshop preference: Friday at 09:10 UTC`;
     const memory = claimStore(h.state.storage.sql);
     const episodes = episodeIndex(h.state.storage.sql);
     episodes.add('owned-topic-source', 'owner', fact, 1);
-    h.selectForget(topic, fact, true, h.revoke);
+    h.selectForget(topic, fact, true, () => { h.revoke(); if (outcome === 'failed') throw new Error('Synthetic selector unavailable after revocation'); });
     await h.send(`Forget only ${topic}`);
     expect(h.requests.some(r => r.response_format?.name === 'forget_source_spans')).toBe(true);
     expect(episodes.get('1')!.text).toBe(fact);
