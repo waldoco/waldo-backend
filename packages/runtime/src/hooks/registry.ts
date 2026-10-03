@@ -373,8 +373,12 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
     // draft_email/send_email args are executable: the recipient addresses ARE the call.
     // Redaction would corrupt them (the 2026-09-25 halt - [REDACTED_EMAIL] fails zod), so they
     // are checked (hard denies still halt fail-closed) but never rewritten.
-    if (destination === 'draft_email') {
-      return checkExecutableArgs(payload.args, ctx, destination, sourceTaint.data);
+    if (destination === 'draft_email') return checkExecutableArgs(payload.args, ctx, destination, sourceTaint.data);
+    if (tool.data === 'workspace_write' && payload.args !== null && typeof payload.args === 'object'
+      && Array.isArray((payload.args as { edits?:unknown }).edits)) {
+      // Only literal revision edits keep ordinary contact anchors exact. Forced sensitive
+      // substitutions still refuse; full replacement bodies retain their existing policy.
+      return checkExecutableArgs(payload.args, ctx, destination, sourceTaint.data, new Set(['email','phone','address']));
     }
     const sanitized = await sanitiseCandidate(
       payload.args,
@@ -815,9 +819,12 @@ async function checkExecutableArgs(
   ctx: HookRuntimeContext,
   destination: SanitiseDestination,
   sourceTaint: SourceTaint,
+  allowedRedactions?: ReadonlySet<string>,
 ): Promise<HookResult> {
   const checked = await sanitiseCandidate(value, ctx, destination, sourceTaint);
-  return checked.ok ? ok() : checked.result;
+  if (!checked.ok) return checked.result;
+  if (allowedRedactions && checked.redactions.some(redaction => !allowedRedactions.has(redaction.kind))) return halt('exact edit requires a privacy-safe field', 'forbidden');
+  return ok();
 }
 
 async function sanitiseCandidate(
@@ -826,7 +833,7 @@ async function sanitiseCandidate(
   destination: SanitiseDestination,
   sourceTaint: SourceTaint,
 ): Promise<
-  | { ok: true; payload: Extract<SanitiseResult, { ok: true }>['payload'] }
+  | { ok: true; payload: Extract<SanitiseResult, { ok: true }>['payload']; redactions: Extract<SanitiseResult, {ok:true}>['redactions'] }
   | { ok: false; result: HookResult }
 > {
   if (ctx.sanitise === undefined) {
@@ -852,7 +859,7 @@ async function sanitiseCandidate(
     if (result.source_taint !== sourceTaint) {
       return { ok: false, result: halt('scribe sanitiser changed taint', 'transient') };
     }
-    return { ok: true, payload: result.payload };
+    return { ok: true, payload: result.payload, redactions: result.redactions };
   } catch {
     return { ok: false, result: halt('scribe sanitiser failed', 'transient') };
   }

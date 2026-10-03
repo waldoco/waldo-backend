@@ -28,6 +28,9 @@ const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 const decode = (bytes: Uint8Array): string => { try { return utf8.decode(bytes); } catch { return fail('invalid'); } };
 const byteTotal = (state: WorkspaceState): number => state.bodies.reduce((s, b) => s + b.byte_size, 0) + state.operations.filter(o => o.status === 'pending').reduce((s, o) => s + o.body.byte_size, 0);
 const copyMeta = (meta: FileMeta): FileMeta => ({ ...meta });
+export type LiteralEdit = Readonly<{ before: string; after: string }>;
+export type TextRevision = Readonly<{ path: string; expected_revision: number; operation_id: string; mime: string; text?: string; edits?: readonly LiteralEdit[] }>;
+const REDACTION_MARKERS = ['[REDACTED_EMAIL]', '[REDACTED_PHONE]', '[REDACTED_ADDRESS]', '[REDACTED_CREDIT_CARD]', '[REDACTED_ATTENDEE_NAME]', '[REDACTED_INSTRUCTION]'] as const;
 export type Write = Readonly<{ path: string; bytes: Uint8Array; mime: string; expected_revision: number; provenance: Provenance; operation_id: string }>;
 export const workspaceStore = async (host: WorkspaceHost) => {
   validateBinding(host.binding);
@@ -80,7 +83,7 @@ export const workspaceStore = async (host: WorkspaceHost) => {
     return copyMeta(saved.meta);
     });
   };
-  return {
+  const store = {
     // Recover recent successful writes from durable operation receipts, not conversation text.
     // Only the current ready revision is projected. Mapping/admission still gate every read.
     async recentWrites() {
@@ -151,6 +154,43 @@ export const workspaceStore = async (host: WorkspaceHost) => {
       await bounded(() => host.bodies.put(reserved.operation.body, bytes));
       return commit(reserved.operation);
     },
+    // Literal spans address only changed bytes. Redacted model views never supply a whole
+    // replacement for hidden fields; original owner-private bytes stay behind this store.
+    async reviseText(args: TextRevision): Promise<FileMeta> {
+      if (!Number.isSafeInteger(args.expected_revision) || args.expected_revision < 1
+        || (args.text === undefined) === (args.edits === undefined)) fail('invalid');
+      validatePath(args.path);
+      if (args.edits !== undefined && (!Array.isArray(args.edits) || args.edits.length < 1 || args.edits.length > 20
+        || args.edits.reduce((bytes,edit) => !edit || typeof edit.before !== 'string' || typeof edit.after !== 'string'
+          ? Infinity : bytes + new TextEncoder().encode(edit.before).length + new TextEncoder().encode(edit.after).length,0) > LIMITS.textWriteBytes)) fail('invalid');
+      await admit('read');
+      const meta = transact(state => state.files.find(file => file.path === args.path && file.state === 'ready'));
+      if (!meta) fail('not_found');
+      const original = decode((await store.export(meta!.file_id, args.expected_revision, LIMITS.textWriteBytes)).bytes);
+      let revised: string;
+      if (args.edits !== undefined) {
+        if (!Array.isArray(args.edits) || args.edits.length < 1 || args.edits.length > 20) fail('invalid');
+        const spans = args.edits.map(edit => {
+          if (!edit || typeof edit.before !== 'string' || !edit.before || typeof edit.after !== 'string'
+            || decode(new TextEncoder().encode(edit.before)) !== edit.before
+            || decode(new TextEncoder().encode(edit.after)) !== edit.after) fail('invalid');
+          const start = original.indexOf(edit.before);
+          if (start < 0 || original.indexOf(edit.before, start + 1) !== -1) fail('conflict');
+          return { start, end: start + edit.before.length, after: edit.after };
+        }).sort((a,b) => a.start - b.start);
+        if (spans.some((span,index) => index > 0 && span.start < spans[index - 1]!.end)) fail('conflict');
+        revised = original;
+        for (const span of spans.slice().reverse()) revised = revised.slice(0,span.start) + span.after + revised.slice(span.end);
+      } else {
+        if (typeof args.text !== 'string') fail('invalid');
+        revised = args.text!;
+        if (revised !== original && REDACTION_MARKERS.some(marker => revised.includes(marker))) fail('conflict');
+      }
+      const bytes = new TextEncoder().encode(revised);
+      if (bytes.length > LIMITS.textWriteBytes) fail('invalid');
+      return store.write({ path: args.path, bytes, mime: args.mime,
+        expected_revision: args.expected_revision, operation_id: args.operation_id, provenance: 'agent_generated' });
+    },
     async reconcile(operationId: string): Promise<FileMeta> {
       await admit('finalize');
       if (!validId(operationId)) fail('invalid');
@@ -213,5 +253,6 @@ export const workspaceStore = async (host: WorkspaceHost) => {
       return { bytes, meta: { ...record!.meta, revision, mime: record!.body.mime, provenance: record!.body.provenance, updated_at: record!.body.created_at, byte_size: record!.body.byte_size, sha256: record!.body.sha256 } };
     },
   };
+  return store;
 };
 export type WorkspaceStore = Awaited<ReturnType<typeof workspaceStore>>;

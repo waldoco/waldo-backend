@@ -234,3 +234,20 @@ it('structured Google tool rejection retains only actionable reason/status/servi
  expect(out).toMatchObject({error:{status:400,message:'mcp_read_rejected',provider_diagnostic:{stage:'tools/call',provider_status:'PERMISSION_DENIED',reason:'SERVICE_DISABLED',service:'drivemcp.googleapis.com'}}});
  expect(JSON.stringify(out)).not.toContain(canary);expect(JSON.stringify(logs.mock.calls)).not.toContain(canary);expect(JSON.stringify(logs.mock.calls)).toContain('SERVICE_DISABLED');expect(f.rows.size).toBe(0);
 });
+
+it.each([
+ ['ACCESS_TOKEN_SCOPE_INSUFFICIENT','googleapis.com','ACCESS_TOKEN_SCOPE_INSUFFICIENT'],
+ ['SERVICE_DISABLED','googleapis.com','SERVICE_DISABLED'],
+ ['RATE_LIMIT_EXCEEDED','googleapis.com',undefined],
+ ['SERVICE_DISABLED','foreign.example',undefined],
+ ['ACCESS_TOKEN_SCOPE_INSUFFICIENT',undefined,undefined],
+] as const)('signed REST read carries only allowlisted structured reason %s (%s)',async(reason,domain,expected)=>{
+ const f=fixture(),provider=fetch;
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  if(String(input).startsWith('https://tasks.googleapis.com/'))return Response.json({error:{code:403,message:reason,details:domain?[{'@type':'type.googleapis.com/google.rpc.ErrorInfo',domain,reason}]:[]}},{status:403});
+  return provider(input,init);
+ }));
+ const out=await(await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'tasks',args:['todo',5]}))).json() as {error:{status:number;reason?:string}};
+ expect(out.error.status).toBe(403);expect(out.error.reason).toBe(expected);
+ expect(f.rows.size).toBe(0);expect(f.hops).not.toContain('proxy_idem_claim');expect(f.hops).not.toContain('proxy_idem_store');
+});

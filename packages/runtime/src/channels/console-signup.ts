@@ -22,11 +22,11 @@ const page = (body: string, status = 200, script = '') => {
 };
 const note = (text: string) => text ? `<p class="note" role="alert">${esc(text)}</p>` : '';
 // The email is what the person typed, shown back so a refused field does not wipe it. The invite code is never reflected.
-const entry = (text = '', email = '') => page(`<h1>Your Waldo starts here.</h1><p>Verify your email to join with your invite. A phone number is optional contact information.</p><p class="help">Requesting an email code can create a Supabase Auth identity. It does not create your Waldo owner account.</p>${note(text)}<form method="post" action="${CONSOLE_SIGNUP_PATH}/send"><label for="email">Recipient email</label><input id="email" name="email" type="email" autocomplete="email" maxlength="254" value="${esc(email.slice(0, 254))}" required><label for="invite">Invite code</label><input id="invite" name="invite" autocomplete="off" spellcheck="false" maxlength="20" required aria-describedby="invite-help"><p id="invite-help" class="help">Your link fills this in. Opening it does not use the invite. Codes expire after 14 days.</p><button>Send email code</button></form><p class="help">You can finish signup with verified email alone. A phone number never signs you in or links another account.</p><p><a href="/console/signin">Already a member? Sign in</a></p><noscript><p>Enter the email and code from your invite link manually. Nothing is sent until you submit.</p></noscript>`, 200, entryScript);
+const entry = (text = '', email = '') => page(`<h1>Your Waldo starts here.</h1><p>Verify your email to join with your invite.</p><p class="help">Requesting an email code can create a Supabase Auth identity. It does not create your Waldo owner account.</p>${note(text)}<form method="post" action="${CONSOLE_SIGNUP_PATH}/send"><label for="email">Recipient email</label><input id="email" name="email" type="email" autocomplete="email" maxlength="254" value="${esc(email.slice(0, 254))}" required><label for="invite">Invite code</label><input id="invite" name="invite" autocomplete="off" spellcheck="false" maxlength="20" required aria-describedby="invite-help"><p id="invite-help" class="help">Your link fills this in. Opening it does not use the invite. Codes expire after 14 days.</p><button>Send email code</button></form><p class="help">You can finish signup with verified email alone.</p><p><a href="/console/signin">Already a member? Sign in</a></p><noscript><p>Enter the email and code from your invite link manually. Nothing is sent until you submit.</p></noscript>`, 200, entryScript);
 const csrf = (p: SignupProgress) => `<input type="hidden" name="csrf" value="${esc(p.csrf)}">`;
-const otp = (p: SignupProgress, text = '') => page(`<h1>Check your email.</h1><ol aria-label="Verification progress"><li>Email: waiting for a code</li><li>Phone: optional contact</li></ol><p>Enter the most recent email code for ${esc(p.email)}. Codes are requested only when this email has existing member access or a valid matching invite. This does not prove that an invite is valid. Delivery can take a few minutes.</p>${note(text)}<form method="post" action="${CONSOLE_SIGNUP_PATH}/verify">${csrf(p)}<label for="code">Email verification code</label><input id="code" name="code" autocomplete="one-time-code" inputmode="numeric" maxlength="16" required><button>Verify email</button></form><form method="post" action="${CONSOLE_SIGNUP_PATH}/resend">${csrf(p)}<button>Send another code</button></form><p><a href="${CONSOLE_SIGNUP_PATH}?restart=1">Use another invite or email</a></p>`, 200, restartScript);
-const phone = (p: SignupProgress, text = '', entered = p.phone ?? '') => page(`<h1>Email verified. Finish signup.</h1><ol aria-label="Verification progress"><li>Email: verified (${esc(p.email)})</li><li>Phone: ${p.phone ? 'entered, not verified' : 'optional contact'}</li></ol>${note(text)}<p>Your verified email and invite are enough to join. A phone number is optional and remains unverified. No SMS is sent. It cannot sign you in, link accounts or enable WhatsApp.</p><form method="post" action="${CONSOLE_SIGNUP_PATH}/complete">${csrf(p)}<label for="phone">Phone with country code (optional)</label><input id="phone" name="phone" type="tel" autocomplete="tel" maxlength="32" value="${esc(entered.slice(0, 32))}" aria-describedby="phone-help"><p id="phone-help" class="help">Leave blank to continue with email only, or enter a number such as +91 98765 43210. Temporary progress is a readable signed cookie. Anyone holding a copy can finish this signup until it expires.</p><button>Finish signup</button><button formaction="${CONSOLE_SIGNUP_PATH}/phone">Save contact and continue later</button></form><p class="help">Finishing checks your invite and opens your member account. If a previous attempt was interrupted, it may already have created the account; retrying opens that same account. Progress expires 15 minutes after starting. If finishing is interrupted, retry here without another email code.</p><p><a href="${CONSOLE_SIGNUP_PATH}?restart=1">Start again</a></p><p class="help">Starting again clears this browser’s progress only; it does not revoke copies elsewhere.</p>`, 200, restartScript);
-const resume = (p: SignupProgress, text = '') => p.emailVerified ? phone(p, text) : otp(p, text);
+const otp = (p: SignupProgress, text = '') => page(`<h1>Check your email.</h1><ol aria-label="Verification progress"><li>Email: waiting for a code</li></ol><p>Enter the most recent email code for ${esc(p.email)}. Codes are requested only when this email has existing member access or a valid matching invite. This does not prove that an invite is valid. Delivery can take a few minutes.</p>${note(text)}<form method="post" action="${CONSOLE_SIGNUP_PATH}/verify">${csrf(p)}<label for="code">Email verification code</label><input id="code" name="code" autocomplete="one-time-code" inputmode="numeric" maxlength="16" required><button>Verify email</button></form><form method="post" action="${CONSOLE_SIGNUP_PATH}/resend">${csrf(p)}<button>Send another code</button></form><p><a href="${CONSOLE_SIGNUP_PATH}?restart=1">Use another invite or email</a></p>`, 200, restartScript);
+const finish = (p: SignupProgress, text = '') => page(`<h1>Email verified. Finish signup.</h1><ol aria-label="Verification progress"><li>Email: verified (${esc(p.email)})</li></ol>${note(text)}<p>Your verified email and invite are enough to join. No SMS is sent.</p><form method="post" action="${CONSOLE_SIGNUP_PATH}/complete">${csrf(p)}<button>Finish signup</button></form><p class="help">Finishing checks your invite and opens your member account. If a previous attempt was interrupted, it may already have created the account; retrying opens that same account. Progress expires 15 minutes after starting. If finishing is interrupted, retry here without another email code.</p><p class="help">Temporary progress is a readable signed cookie. Anyone holding a copy can finish this signup until it expires.</p><p><a href="${CONSOLE_SIGNUP_PATH}?restart=1">Start again</a></p><p class="help">Starting again clears this browser’s progress only; it does not revoke copies elsewhere.</p>`, 200, restartScript);
+const resume = (p: SignupProgress, text = '') => p.emailVerified ? finish(p, text) : otp(p, text);
 const withCookie = (response: Response, value: string) => {
   response.headers.append('set-cookie', `${SIGNUP_COOKIE}=${value}; Path=${CONSOLE_SIGNUP_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=${SIGNUP_TTL_SECONDS}`);
   return response;
@@ -60,7 +60,7 @@ export const handleSignup = async (request: Request, env: SignupEnv, auth: Conso
   // hash after the browser has cleared its fragment. This is not proof of eligibility.
   const draftValue = action === '/send' ? await signup.begin(email, invite) : null;
   const retry = (message: string) => action === '/phone' || action === '/complete'
-    ? phone(progress!, message, String(form.get('phone') ?? '')) : resume(progress!, message);
+    ? finish(progress!, message) : resume(progress!, message);
   // Coarse per-location and durable per-email/IP limits cover every attempt, including phone
   // collection rechecks. Errors fail closed and expose only a retryable, content-free message.
   try {
@@ -95,28 +95,28 @@ export const handleSignup = async (request: Request, env: SignupEnv, auth: Conso
     }
     const rawPhone = String(form.get('phone') ?? '');
     const compact = rawPhone.replace(/[\s().-]/g, '');
-    if (compact !== '' && !/^\+[1-9]\d{6,14}$/.test(compact)) return phone(progress!, 'Enter a phone with country code, or leave it blank.', rawPhone.slice(0, 32));
-    if (action === '/complete' && !env.TELEGRAM_OWNER_DO) return phone(progress!, unavailable, rawPhone);
+    if (compact !== '' && !/^\+[1-9]\d{6,14}$/.test(compact)) return finish(progress!, 'Enter a phone with country code, or leave it blank.');
+    if (action === '/complete' && !env.TELEGRAM_OWNER_DO) return finish(progress!, unavailable);
     let value: string | null;
     try { value = await signup.collectPhone(progress!, compact); }
-    catch { return phone(progress!, unavailable, rawPhone); }
-    if (!value) return phone(progress!, unavailableCompletion, rawPhone);
+    catch { return finish(progress!, unavailable); }
+    if (!value) return finish(progress!, unavailableCompletion);
     if (action === '/phone') return redirect(value);
     const saved = await signup.read(new Request(request.url, { headers: { cookie: `${SIGNUP_COOKIE}=${value}` } }));
-    if (!saved) return withCookie(phone(progress!, unavailable), value);
+    if (!saved) return withCookie(finish(progress!, unavailable), value);
     // Keep verified progress and entered contact on any uncertain completion/session result.
     // A retry resolves the already-bound owner and never replays the consumed OTP.
     try {
       const doName = await signup.complete(saved, compact);
-      if (!doName) return withCookie(phone(saved, unavailableCompletion), value);
+      if (!doName) return withCookie(finish(saved, unavailableCompletion), value);
       const grant = await withRequestTimeout(async signal => {
         const response = await env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(doName))
           .fetch('https://telegram-owner/grant-console', { method: 'POST', headers: { 'x-waldo-do-name': doName }, signal });
         return response.ok ? await response.text() : null;
       });
-      if (!grant) return withCookie(phone(saved, unavailable), value);
+      if (!grant) return withCookie(finish(saved, unavailable), value);
       const ownerCookie = await auth.ownerCookie(doName);
-      if (!ownerCookie) return withCookie(phone(saved, unavailable), value);
+      if (!ownerCookie) return withCookie(finish(saved, unavailable), value);
       const headers = new Headers({ location: CONSOLE_PATH, 'cache-control': 'no-store', 'referrer-policy': 'same-origin' });
       const cookie = `Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200`;
       headers.append('set-cookie', `${CONSOLE_COOKIE}=${grant}; ${cookie}`);
@@ -126,7 +126,7 @@ export const handleSignup = async (request: Request, env: SignupEnv, auth: Conso
       return new Response(null, { status: 303, headers });
     } catch {
       consoleLog(trace, 'console_signup', false, 'completion_unconfirmed');
-      return withCookie(phone(saved, 'We could not confirm completion. Retry Finish signup; your verified email is retained.'), value);
+      return withCookie(finish(saved, 'We could not confirm completion. Retry Finish signup; your verified email is retained.'), value);
     }
   } catch {
     consoleLog(trace, 'console_signup', false, 'verification_unavailable');
