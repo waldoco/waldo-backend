@@ -313,15 +313,38 @@ it('source-forget KV failure retains pending work for restart and never revives 
   await outbox.enqueue({ id: 'pending-source', trace: 'pending-source', payload: { chat_id: 42, text: marker }, ownerSubject: '42', doName: 'owner', mailFollowup: receipt });
   await outbox.enqueue({ id: 'uncertain-source', trace: 'uncertain-source', payload: { chat_id: 42, text: marker }, ownerSubject: '42', doName: 'owner', mailFollowup: receipt });
   await outbox.enqueue({ id: 'ordinary', trace: 'ordinary', payload: { chat_id: 42, text: marker }, ownerSubject: '42', doName: 'owner' });
-  const rows = outbox.records(); rows[1]!.status = 'quarantined'; rows[1]!.reason = 'send_unknown'; rows[1]!.attempts = 1; kv.put(FINAL_OUTBOX_KEY, rows);
+  await outbox.enqueue({ id: 'blocked-source', trace: 'blocked-source', payload: { chat_id: 42, text: marker }, ownerSubject: '42', doName: 'owner', mailFollowup: receipt });
+  const rows = outbox.records(); rows[3]!.status = 'blocked'; rows[3]!.reason = 'owner_binding'; rows[3]!.attempts = 0; rows[3]!.settled = true; rows[1]!.status = 'quarantined'; rows[1]!.reason = 'send_unknown'; rows[1]!.attempts = 1; kv.put(FINAL_OUTBOX_KEY, rows);
   fail = true;
   expect(() => redactMailFollowupEntries(kv, [marker], '[forgotten]')).toThrow('synthetic KV write failure');
   expect(new TelegramFinalOutbox(kv).records()[0]).toMatchObject({ status: 'pending', payload: { text: marker } });
   fail = false;
-  expect(redactMailFollowupEntries(kv, [marker], '[forgotten]')).toEqual({ rewritten: 2, remaining: 0 });
+  expect(redactMailFollowupEntries(kv, [marker], '[forgotten]')).toEqual({ rewritten: 3, remaining: 0 });
   const fresh = new TelegramFinalOutbox(kv).records();
   expect(fresh[0]).toMatchObject({ status: 'blocked', reason: 'owner_forget', payload: { text: '[forgotten]' } });
   expect(fresh[1]).toMatchObject({ status: 'quarantined', reason: 'send_unknown', attempts: 1, payload: { text: '[forgotten]' } });
   expect(fresh[2]).toMatchObject({ status: 'pending', payload: { text: marker } });
   expect(await new TelegramFinalOutbox(kv).retryBlockedMailFollowup('pending-source')).toBe(false);
+  expect(fresh[3]).toMatchObject({ status: 'blocked', reason: 'owner_forget', attempts: 0, payload: { text: '[forgotten]' } });
+  expect(await new TelegramFinalOutbox(kv, () => 1000).retryBlockedMailFollowup('blocked-source')).toBe(false);
+});
+
+it('forgotten text cancels a previously released unsent occurrence even when its loop title differs', async () => {
+  const { TelegramFinalOutbox, redactMailFollowupEntries } = await import('../src/channels/telegram-final-outbox');
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-forget-released')), async (_i, state) => {
+    let now = 1;
+    const loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'forgot-released' });
+    observeMail(updateBook(state.storage.sql), 'mail:released', 'released', '{"subject":"Review"}', now, 'released-message');
+    const loop = loops.open({ title: 'Neutral review check', due: '2026-10-03T10:00', source_ref: 'mail:released' });
+    const outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
+    await outbox.enqueue({ id: 'forgot-released', trace: 'fixture', payload: { chat_id: 7, text: 'synthetic forgotten source fact' }, ownerSubject: '7', doName: 'owner-7', mailFollowup: { loopId: loop.id, due: loop.due!, sourceRef: 'mail:released', timezone: 'UTC', messageId: 'released-message' } });
+    loops.claimReview(outbox.records()[0]!.mailFollowup!);
+    now += 1000; await outbox.drain({ allowed: async () => false, send: async () => { throw new Error('must not send'); }, settled: async r => loops.settleReview(r) });
+    expect(loops.reviewDue('2026-10-03T10:00')).toHaveLength(1);
+    expect(redactMailFollowupEntries(state.storage.kv, ['synthetic forgotten source fact'], '[forgotten]')).toEqual({ rewritten: 1, remaining: 0 });
+    expect(await outbox.retryBlockedMailFollowup('forgot-released')).toBe(false);
+    loops.settleReview(outbox.records()[0]!);
+    expect(loops.reviewDue('2026-10-03T10:00')).toEqual([]);
+    expect(state.storage.sql.exec('SELECT delivery_state FROM loop_mail_sources').one()).toEqual({ delivery_state: 'not_delivered' });
+  });
 });

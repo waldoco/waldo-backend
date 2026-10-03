@@ -151,7 +151,7 @@ export const redactMailFollowupEntries = (kv: Kv, texts: readonly string[], mark
     const text = redact(row.payload.text);
     if (text === row.payload.text) continue;
     row.payload = { ...row.payload, text }; rewritten += 1;
-    if (row.status === 'pending') { row.status = 'blocked'; row.reason = 'owner_forget'; row.settled = false; }
+    if (row.status === 'pending' || (row.status === 'blocked' && row.reason === 'owner_binding' && row.attempts === 0)) { row.status = 'blocked'; row.reason = 'owner_forget'; row.settled = false; }
     else if (row.status === 'attempting') { row.status = 'quarantined'; row.reason = 'forget_during_uncertain_send'; row.settled = false; }
   }
   if (rewritten) {

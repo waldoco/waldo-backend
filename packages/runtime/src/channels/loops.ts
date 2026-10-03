@@ -66,8 +66,8 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
       if (!record.mailFollowup || record.status === 'pending') return;
       const r = record.mailFollowup;
       if (record.status === 'blocked' && record.reason === 'owner_binding' && record.attempts === 0 && record.payload.text.trim() && deps.now() < record.createdAt + 86400000) sql.exec('UPDATE loop_mail_sources SET nudged_due = NULL, nudged_timezone = NULL, delivery_state = ? WHERE loop_id = ? AND nudged_due = ? AND nudged_timezone = ? AND nudged_message_id = ?', 'blocked', r.loopId, r.due, r.timezone, r.messageId);
-      else if (record.status === 'blocked' && record.reason === 'owner_binding' && record.attempts === 0) {
-        // A previously released, definitely unsent occurrence can expire. Restore its
+      else if (record.status === 'blocked' && (record.reason === 'owner_binding' || record.reason === 'owner_forget') && record.attempts === 0) {
+        // A previously released, definitely unsent occurrence can expire or be forgotten. Restore its
         // exact receipt as terminal, without reviving older source evidence or a new due.
         sql.exec(`UPDATE loop_mail_sources SET nudged_due = ?, nudged_timezone = ?, nudged_message_id = ?, delivery_state = 'not_delivered'
           WHERE loop_id = ? AND (nudged_due IS NULL OR (nudged_due = ? AND nudged_timezone = ? AND nudged_message_id = ?))
