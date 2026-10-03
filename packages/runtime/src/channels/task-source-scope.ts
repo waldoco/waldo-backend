@@ -61,7 +61,11 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
   };
   return {
     current, assertSame,
-    async unresolved() { const previous = await current(); return commit(previous, previous.sources, false); },
+    async unresolved() {
+      const previous = await current();
+      const pending = sql.exec<Row>('SELECT * FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).one().pending_json;
+      return pending ? previous : commit(previous, previous.sources, false);
+    },
     async classify(raw: string, inputRef?: string, classifiedOwnerText?: string, ordinaryOwnerTurn = false): Promise<{ snapshot: TaskSourceSnapshot; proposal?: TaskSourceProposal; outcome: TaskSourceOutcome }> {
       const previous = await current();
       const pending = sql.exec<Row>('SELECT * FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).one().pending_json;
@@ -75,7 +79,7 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
       let decision: Decision;
       try { decision = parseDecision(raw); } catch { return pending ? { snapshot: previous, outcome: 'owner_confirmation' } : retainOnFailure('invalid_decision'); }
       // A model continuation cannot consume or approve the visible owner decision.
-      if (pending && ['retain', 'uncertain'].includes(decision.decision)) return { snapshot: previous, outcome: 'owner_confirmation' };
+      if (pending && (['retain', 'uncertain'].includes(decision.decision) || decision.decision === 'restrict' && decision.sources.length > 0)) return { snapshot: previous, outcome: 'owner_confirmation' };
       const evidence = decision.evidence;
       const start = evidence && instruction ? instruction.text.indexOf(evidence) : -1;
       const ownerTransition = !!instruction && instruction.inputRef === inputRef && instruction.text === classifiedOwnerText

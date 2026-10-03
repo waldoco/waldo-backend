@@ -40,7 +40,7 @@ it.each(['local', 'mail', 'drive', 'calendar', 'contacts', 'tasks', 'web', 'brow
   const next = await cap.classify(JSON.stringify({ decision: 'new', sources: [family], evidence: text }), 'current', text);
   expect(next.proposal?.sources).toEqual([family]);
   expect(next.snapshot.sources).toEqual([]); expect(next.snapshot.ready).toBe(false);
-  for (const raw of ['not json', JSON.stringify({ decision: 'uncertain', sources: [], evidence: null }), JSON.stringify({ decision: 'retain', sources: TASK_SOURCE_FAMILIES, evidence: null })]) {
+  for (const raw of ['not json', JSON.stringify({ decision: 'uncertain', sources: [], evidence: null }), JSON.stringify({ decision: 'retain', sources: TASK_SOURCE_FAMILIES, evidence: null }), JSON.stringify({ decision: 'restrict', sources: [family], evidence: null })]) {
     const waiting = await cap.classify(raw, 'current', text, true);
     expect(waiting.snapshot).toEqual(next.snapshot);
   }
@@ -66,6 +66,9 @@ it('an initial external-source proposal stays inactive across model continuation
   const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, { inputRef: 'current', text });
   const next = await cap.classify(JSON.stringify({ decision: 'new', sources: ['mail'], evidence: text }), 'current', text);
   expect(next.proposal).toBeDefined(); expect(next.snapshot.ready).toBe(false);
+  const restricted = await cap.classify(JSON.stringify({ decision: 'restrict', sources: ['mail'], evidence: null }));
+  expect(restricted.snapshot).toEqual(next.snapshot);
+  await cap.unresolved();
   const retained = await cap.classify(JSON.stringify({ decision: 'retain', sources: TASK_SOURCE_FAMILIES, evidence: null }));
   expect(retained.snapshot).toEqual(next.snapshot);
   expect(taskSourceAllowed(retained.snapshot, { name: 'get_communication' })).toBe(false);

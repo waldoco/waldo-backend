@@ -238,6 +238,36 @@ describe('real owner-DO ingress in a sealed test world', () => {
     expect(sourceWorld.outbox('a@example.invalid')).toEqual([]);
     expect(outbox.filter(item => item.method === 'sendMessage' && String(item.body.text).includes('Start a new task with read access only to: mail'))).toHaveLength(1);
   });
+  it('pending initial external confirmation cannot be bypassed by restrict before a real owner callback', async () => {
+    sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T11:00:00Z', owners: [{ id: 'b@example.invalid' }], sources: { mail: [
+      { owner_id: 'b@example.invalid', id: 'mail', thread_id: 'thread', from: 'sender@example.invalid', subject: 'Fixture report', snippet: 'confirmed mail', at: '2026-09-29T10:30:00Z' },
+    ] } });
+    outbox.length = 0; modelInputs.length = 0;
+    await runInDurableObject(doStub(81102), async (_instance, state) => {
+      if (state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'owner_task_source_scope'").toArray().length) state.storage.sql.exec('DELETE FROM owner_task_source_scope');
+      await state.storage.delete('google:accounts');
+    });
+    const update = 800000 + ++sequence * 10;
+    const text = 'Read the fixture inbox for a new mail task.';
+    taskDecision = { decision: 'new', sources: ['mail'], evidence: text };
+    await send(81102, text, update);
+    const card = outbox.find(item => item.method === 'sendMessage' && String(item.body.text).includes('Start a new task with read access only to: mail'))!;
+    expect(card).toBeDefined(); expect(sourceWorld.accessLog('b@example.invalid')).toEqual([]);
+    const snapshot = () => runInDurableObject(doStub(81102), async (_instance, state) => state.storage.sql.exec('SELECT * FROM owner_task_source_scope').one());
+    const before = await snapshot();
+    await runInDurableObject(doStub(81102), async (_instance, state) => {
+      await state.storage.put('google:accounts', [{ id: 'local:b@example.invalid', email: 'b@example.invalid', scopes: null, refresh_token: 'fictional-not-a-token' }]);
+    });
+    taskDecision = { decision: 'restrict', sources: ['mail'], evidence: null };
+    await send(81102, 'Read the fixture inbox while the decision is pending.', update + 1);
+    expect(await snapshot()).toEqual(before); expect(sourceWorld.accessLog('b@example.invalid')).toEqual([]);
+    const buttons = (card.body.reply_markup as { inline_keyboard: { callback_data: string }[][] }).inline_keyboard.flat();
+    await callback(81102, 81102, buttons.find(button => button.callback_data.startsWith('a:'))!.callback_data, update + 2);
+    expect(sourceWorld.accessLog('b@example.invalid')).toEqual([]);
+    taskDecision = { decision: 'retain', sources: [], evidence: null };
+    await send(81102, 'Read the fixture inbox after the confirmed decision.', update + 3);
+    expect(sourceWorld.accessLog('b@example.invalid')).toEqual([expect.objectContaining({ source: 'mail', kind: 'list', owner_id: 'b@example.invalid' })]);
+  });
   it('routes fictional Google reads through owner-scoped source rows inside the real DO tool loop', async () => {
     sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T11:00:00Z', owners: [{ id: 'a@example.invalid' }, { id: 'b@example.invalid' }], sources: { mail: [
       { owner_id: 'a@example.invalid', id: 'mail', thread_id: 'thread', from: 'sender@example.invalid', subject: 'Cedar report', snippet: 'cedar only', at: '2026-09-29T10:30:00Z' },
