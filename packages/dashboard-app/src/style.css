@@ -278,3 +278,27 @@ button:disabled { cursor:not-allowed;opacity:.55; }
 @media (max-width: 360px) {
   .page-heading h1 { font-size: 2.6rem; }
 }
+
+/* Motion reference: https://emilkowal.ski/ui/agents-with-taste
+   120ms ease = hover microinteraction in the published 100-150ms band.
+   Direct drag/pan/zoom and settled layout are immediate: no input latency or idle wobble. */
+.force-map .graph-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0 20px 12px}.graph-tools button{min-width:44px;min-height:44px}.graph-tools output{font-size:12px;min-width:42px;text-align:center}
+.force-map-scroll{overflow-x:auto;overscroll-behavior-x:contain}.constellation-canvas .force-map svg{width:100%;min-width:1000px;max-width:none;height:auto;touch-action:pan-y}
+.graph-edge{stroke:#c6c1b8;stroke-width:1;transition:opacity 120ms ease,stroke 120ms ease}.graph-edge.subdued{opacity:.35}.graph-edge.active{stroke:#ba8b61;opacity:1}.graph-edge.support{stroke-dasharray:4 5}
+.graph-hit{fill:transparent;stroke:transparent}.graph-glyph{fill:#aaa294;stroke:#faf9f5;stroke-width:2}.graph-glyph.spot{fill:#faf9f5;stroke:#8b8276}.graph-node.selected .graph-glyph{fill:#ef8739;stroke:#fff5e9}.graph-node.neighbor .graph-glyph{fill:#a78f77}.graph-node text{font:13px Arial,sans-serif;fill:#625d55;stroke:#f7f7f2;stroke-width:5;paint-order:stroke;stroke-linejoin:round;pointer-events:none}.graph-node.selected text,.graph-node.neighbor text{fill:#3d372f}.graph-node{cursor:grab}.graph-node:active{cursor:grabbing}.graph-node:focus{outline:none}.graph-node:focus .graph-hit{stroke:#d66d24;stroke-width:2}.graph-legend{font-size:12px;padding:12px 20px;color:#746d61}.force-map>p{padding:0 20px;line-height:1.6;font-size:12px}
+/* 220ms ease-out drawer entry: published 200-300ms drawer band, under 300ms.
+   Exit stays immediate to restore focus promptly; repeated navigation is not animated. */
+.navigation-drawer[open]{animation:console-drawer-enter 220ms cubic-bezier(.16,1,.3,1)}
+@keyframes console-drawer-enter{from{transform:translateX(-20px);opacity:0}to{transform:translateX(0);opacity:1}}
+@media(prefers-reduced-motion:reduce){.graph-edge{transition:none}.navigation-drawer[open]{animation:none}}
+.force-map[data-reduced-motion=true] .graph-edge{transition:none}
+.graph-tools button{background:#fffefb;border:1px solid var(--line);border-radius:9px;color:var(--text);font:inherit;padding:10px 14px;cursor:pointer}.graph-tools button:disabled{opacity:.4;cursor:default}
+/* A 1000-unit label-safe scene plus a 280px inspector needs 1500px including shell chrome. */
+@media(max-width:1500px){.constellation-workspace{grid-template-columns:1fr}.constellation-inspector{margin:0 20px 20px!important}}
+.graph-node{touch-action:none}
+/* Circuit trace pads are the existing node glyphs. Rounded joins soften 45-degree bends without implying a new link. */
+.graph-edge{fill:none;stroke-linecap:round;stroke-linejoin:round;stroke-width:1.4}
+.graph-label-surface{fill:#f7f7f2;pointer-events:none}.graph-glyph{stroke-width:2.5}
+.memory-record-list{display:grid;gap:14px;border:0}.memory-record{border:1px solid var(--line);border-radius:15px;background:#fffefb;padding:24px}.memory-record:hover{background:#f5f3ed}.memory-record h2{font-size:24px}.memory-local-filters{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:18px 0}.memory-local-filters button{min-height:44px;background:#fffefb;border:1px solid var(--line);border-radius:20px;padding:10px 16px;font:inherit;cursor:pointer}.memory-local-filters button[aria-pressed=true]{background:#eee8df;border-color:#b8a994}.memory-local-filters p{flex-basis:100%;font-size:12px;color:#736b60;margin:0}.memory-evidence{margin:24px 0;padding:20px;background:#f6f4ee;border-radius:12px}.memory-evidence h3{font-size:16px}.memory-technical summary{min-height:44px;cursor:pointer;display:list-item;padding:12px 0}.memory-technical{border-top:1px solid var(--line);margin-top:24px}.memory-technical dl{margin-top:14px}
+@media(max-width:860px){.memory-record{padding:20px;gap:12px}.memory-record h2{font-size:23px}}
+.memory-actions button{min-height:44px;background:#fffefb;border:1px solid var(--line);border-radius:9px;padding:10px 16px;font:inherit;cursor:pointer}.memory-actions button:disabled{opacity:.45;cursor:default}

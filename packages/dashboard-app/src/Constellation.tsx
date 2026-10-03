@@ -1,5 +1,6 @@
+import {GraphMap} from './GraphMap';
 import {buildMemoryDestination,type MemoryListDestination} from './destinations';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { fetchMemory, memoryItemLink, type Claim, type Interpretation, type MemoryPattern } from './memory-model';
 import { SignInRequired } from './model';
 
@@ -68,27 +69,6 @@ function useReducedMotion() {
   }, []);
   return reduced;
 }
-function useSettledScene(nodes: SceneNode[], reduced: boolean) {
-  const target = useMemo(() => new Map(nodes.map(node => [node.id, node.point])), [nodes]);
-  const [positions, setPositions] = useState(target);
-  const current = useRef(positions);
-  useEffect(() => {
-    if (reduced) { current.current = target; setPositions(target); return; }
-    let raf = 0, frame = 0;
-    let moving = new Map([...target].map(([id, point]) => [id, { ...(current.current.get(id) ?? { x: 310, y: 250 }), vx: 0, vy: 0 }]));
-    const step = () => {
-      frame++;
-      moving = new Map([...moving].map(([id, point]) => [id, springStep(point, target.get(id)!)]));
-      const next = new Map([...moving].map(([id, point]) => [id, { x: point.x, y: point.y }]));
-      current.current = next; setPositions(next);
-      if (frame < 46) raf = requestAnimationFrame(step);
-      else { current.current = target; setPositions(target); }
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  }, [target, reduced]);
-  return positions;
-}
 const origin = (value: string) => value === 'shared' || value === 'untrusted' ? `${value} · untrusted provenance` : value;
 // Keep labels in their own columns; the full value remains in the accessible name
 // and inspector. This is typography, not a semantic grouping or ranking.
@@ -125,18 +105,7 @@ export function PatternExplorer({ data, onNext, onRestart, returnTo }: { returnT
   const activeSupport = support.key === supportKey ? support : null;
   const claims = activeSupport?.read.claims ?? EMPTY_CLAIMS;
   const scene = useMemo(() => constellationScene(data, focused.id, claims), [data, focused.id, claims]);
-  const mapRef = useRef<HTMLDivElement>(null);
-  const reduced = useReducedMotion();
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    const position = () => { if (map.clientWidth < 500) map.scrollLeft = 150; };
-    position();
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(position);
-    observer?.observe(map);
-    return () => observer?.disconnect();
-  }, [data.center.id]);
-  const positions = useSettledScene(scene.nodes, reduced);
+  const reduced=useReducedMotion();
   const selectedSpot = scene.claims.find(claim => claim.id === selectedId);
   const selected = selectedSpot?.id ?? focused.id;
   const incident = new Set(scene.links.filter(link => link.from === selected || link.to === selected).flatMap(link => [link.from, link.to]));
@@ -146,24 +115,10 @@ export function PatternExplorer({ data, onNext, onRestart, returnTo }: { returnT
     <a href={memoryItemLink('constellation', data.center.id, returnTo)}>← Back to pattern details</a>
     <div className="constellation-toolbar"><div><span className="eyebrow">Saved support · opt-in exploration</span><h2>{data.center.label}</h2><p>{data.showing.nodes} of {data.showing.of_nodes} returned neighboring patterns · {data.showing.links} of {data.showing.of_links} saved associations on this page</p></div><button onClick={onRestart}>Restart exploration</button></div>
     {(data.state !== 'available' || !data.complete) && <div className="memory-read-notice" role="status"><p>This Memory read is {data.state}. Missing or withheld records are not an empty Memory or completed removal.</p>{data.unavailable_claim_count > 0 && <p>{data.unavailable_claim_count} claims withheld during removal.</p>}</div>}
-    <p className="constellation-guide">Hexagons are tentative patterns. Circles are returned Spots from the selected pattern’s saved support. Lines describe stored links—not truth, causation or verified independent observations.</p>
+    <p className="constellation-guide">Filled circles are tentative patterns. Outlined circles are returned Spots from the selected pattern’s saved support. Lines describe stored links—not truth, causation or verified independent observations.</p>
     {data.omitted_links > 0 && <p className="memory-read-notice">{data.omitted_links} associations omitted from this page.{data.expand.links_capped && ` ${data.expand.capped_links} capped associations cannot be recovered with this cursor.`}</p>}
     <div className="constellation-workspace" data-reduced-motion={reduced}>
-      <div className="constellation-canvas"><div ref={mapRef} className="constellation-map-scroll" role="region" aria-label="Saved branch map; scroll horizontally on small screens" tabIndex={0}><svg viewBox="0 0 760 500" role="group" aria-label="Saved pattern and supporting Spot branches">
-        {scene.links.map((link, index) => {
-          const from = positions.get(link.from), to = positions.get(link.to);
-          if (!from || !to) return null;
-          const active = link.from === selected || link.to === selected;
-          return <path key={`${link.kind}:${index}`} d={branchPath(from, to)} className={`constellation-link ${link.kind}${active ? ' active' : ' subdued'}`}><title>{`${link.relation} · ${link.kind === 'association' ? 'Unverified association' : 'Saved support, not independent evidence'}`}</title></path>;
-        })}
-        {scene.nodes.map(node => {
-          const point = positions.get(node.id) ?? node.point;
-          const active = node.id === selected, connected = incident.has(node.id);
-          return <g key={node.id} transform={`translate(${point.x} ${point.y})`} role="button" tabIndex={0} aria-label={`Inspect ${node.kind === 'pattern' ? 'tentative pattern' : 'supporting Spot'} ${node.label}`} aria-pressed={active} className={`constellation-node ${node.kind}${active ? ' selected' : connected ? ' connected' : ' subdued'}`} onClick={() => choose(node)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(node); } }}>
-            <circle r="24" className="constellation-hit"/>{node.kind === 'pattern' ? <polygon points="0,-13 12,-7 12,7 0,13 -12,7 -12,-7"/> : <circle r="8" className="constellation-spot"/>}<text y="31" textAnchor="middle">{branchLabel(node.label).map((line, index) => <tspan key={index} x="0" dy={index ? 15 : 0}>{line}</tspan>)}</text><title>{node.label}</title>
-          </g>;
-        })}
-      </svg></div><p className="constellation-scroll-hint">Scroll the map sideways to see more branches. The full returned list is below.</p><p className="muted">Select a saved branch to inspect it. Keyboard: Tab, then Enter or Space. The returned branches also appear in the list below.</p></div>
+      <div className="constellation-canvas"><GraphMap resetKey={data.center.id} nodes={scene.nodes.map(({id,label,kind})=>({id,label,kind}))} links={scene.links} selected={selected} onSelect={id=>{const node=scene.nodes.find(n=>n.id===id);if(node)choose(node);}} reduced={reduced}/></div>
       <aside className="panel constellation-inspector" aria-label="Selected saved item">
         {selectedSpot ? <><span className="eyebrow">Saved supporting Spot</span><h3>{selectedSpot.text}</h3><p>Kind: {selectedSpot.kind} · Source: {selectedSpot.source} · Origin: {origin(selectedSpot.origin)} · Status: {selectedSpot.status}</p><p>{selectedSpot.evidence.text}</p><p className="muted">Writer evidence note, not an original-message link or proof. Writer seen count: {selectedSpot.writer_seen_count ?? 'unavailable'}.</p><a href={memoryItemLink('spots', selectedSpot.id, returnTo)}>Inspect this Spot</a></>
           : <><span className="eyebrow">Tentative pattern · {focused.domain}</span><h3>{focused.label}</h3><p>{focused.summary}</p><p>Stored status: {focused.stored_status}</p><p className="muted">Uncalibrated model estimate: {focused.estimate ?? 'unavailable'}. Independent observations remain unverified.</p><a href={memoryItemLink('constellation', focused.id, returnTo)}>Inspect pattern details</a><p><a href={buildMemoryDestination({kind:'explore',id:focused.id,...(returnTo?{returnTo}:{})})}>Explore from this pattern</a></p></>}
