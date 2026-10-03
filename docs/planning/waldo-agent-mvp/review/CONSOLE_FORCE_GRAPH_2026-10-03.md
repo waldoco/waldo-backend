@@ -1,0 +1,15 @@
+# Organic Memory graph
+
+Base: #660 at 63a9be983e863155b4f6741bf9a08d8f2070492e. Separate UI-only slice. No production/staging deploy or auth/backend changes.
+
+Returned nodes and stored links retain their semantics. Deterministic ID seed, finite spring/repulsion settling, hit/label rectangle separation, and growing world extent replace the fixed branch columns. A deterministic spaced recovery is disclosed if settling cannot clear every label. Radius uses unique neighbors on the returned page only, not confidence/importance; foreign/self links do not inflate it. Full returned-pattern list remains below, as do provenance, missing/capped reads and supporting-Spot inspector.
+
+Graph interactions: hover/focus neighbor highlight, click/Enter/Space inspect, local mouse/touch node drag, mouse background pan, native touch background scroll, visible pan/zoom/reset controls, focused SVG arrow pan and +/- zoom. Drag suppresses click. Initial horizontal scroll centers the selected item; keyboard node focus brings it into view. Label text has opaque halos. The map scrolls horizontally rather than shrinking 44px targets and 13px text below usable sizes. At ordinary desktop widths the inspector stacks below to avoid clipping the map behind it.
+
+Motion references opened: https://emilkowal.ski/skill ; https://github.com/emilkowalski/skills ; https://emilkowal.ski/ui/agents-with-taste . The last source publishes 100-150ms microinteractions, 200-300ms drawers, under-300ms UI motion, ease for hover and ease-out for entry. Applied 120ms ease neighbor-edge transition and 220ms ease-out drawer entry; repeated navigation and graph layout/drag/pan/zoom are immediate. This makes frequent/direct gestures interruptible without travel or idle animation. Reduced motion disables transitions and drawer animation; the graph is settled from first paint. Geometry constants carry reasons in constellation-layout.ts. 4px drag threshold distinguishes pointer jitter from a drag; pan step uses existing 80-unit scene margin. A non-spring graph state change needs no invented motion timing.
+
+Design references: https://help.obsidian.md/plugins/graph and owner's effect reference https://andrewtrousdale.com/ . This is Waldo's own layout, not a copy of either implementation.
+
+Verification: pure tests 0/1/2/26/32/60 nodes, deterministic order, isolates, degree and label/hit collisions; mounted keyboard selection/focus, pan/zoom/reset, zoom floor, reduced-motion flag, node drag and click suppression. Existing missing/partial/capped and support-read tests remain. Screens use synthetic 25 peers and a supporting Spot at desktop/390/320px; no page-wide overflow. The star-shaped fixture naturally forms a radial hub because every peer links to the same center; that is data shape, not an imposed wheel. Browser inspection needed for each future dataset shape; hosted/provider behavior not claimed.
+
+Limit: moving nodes by hand can create overlap, intentionally, until Reset view. No automatic rearrangement fights the pointer. Returned-page degree does not describe unseen links. Missing records remain missing.
