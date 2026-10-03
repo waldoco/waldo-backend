@@ -97,5 +97,14 @@ describe('forget by source turn', () => {
       expect(all).toContain('unrelated lunch plan');
     });
   });
+  it('counts a source-turn entry that is not in its whole-redacted form as remaining', async () => {
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-source-turn-remaining')), async (_i, state) => {
+      const e = entry('tg-1', 'I like the workshop early, nine sharp');
+      await state.storage.put({ [`${P}conv:0000000000`]: e, [`${P}witness:tg-1`]: { lineage: 'canonical_v1', principal_ref: 'prn_x', tenant_ref: 'ten_x', entry: e } });
+      // A fenced commit that writes nothing leaves the entry as it was: that must show as remaining, not as clean.
+      const receipt = await redactConversationEntries(state.storage, [], '[forgotten]', { commit: () => undefined } as never, ['tg-1']);
+      expect(receipt.remaining).toBeGreaterThan(0);
+    });
+  });
 });
 

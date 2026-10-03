@@ -138,7 +138,8 @@ export const redactConversationEntries = async (
       await flush();
     }
   }
-  const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryText(entry).includes(needle.toLowerCase()));
+  const unredactedTurn = (entry: ConversationEntry): boolean => JSON.stringify(entry) !== JSON.stringify(wholeEntry(entry));
+  const hit = (entry: ConversationEntry): boolean => (turnEntryIds.has(entry.id) && unredactedTurn(entry)) || needles.some((needle) => entryText(entry).includes(needle.toLowerCase()));
   const afterLegacy = rewritten > 0 ? await storage.list<ConversationEntry>({ prefix: 'conv:' }) : legacy;
   const afterCanonical = Object.keys(writes).length > 0 ? await storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX }) : canonical;
   let remaining = 0;
