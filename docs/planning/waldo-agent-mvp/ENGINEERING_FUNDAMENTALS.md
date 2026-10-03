@@ -364,3 +364,8 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] Recent artifact metadata retains external provenance: Scribe must admit unchanged bytes before names join the owner prompt. Health/instruction filenames, rewritten email paths and active-forget matches are withheld, never offered as exact replacement targets. Host-verified receipts do not authorize tools, overwrite a current owner target, or establish model relevance quality.
 
 - [ ] Workspace continuity reads precede tool selection. Cancellation fixtures pause the actual write dispatch, while foreign ingress and scheduled-write rejection retain the pre-existing read-only manifest and perform no additional workspace I/O.
+
+### Bounded provider document previews
+- [ ] Apply the existing external Scribe policy before bounding a content preview, then measure the complete escaped metadata/body/account envelope. Redaction expansion must not silently spill a supposedly inline preview to offload. Test dense emails, escaped metadata and Unicode through the actual dispatcher with an offload spy; recompute visible byte count and preserve truncation after each cut.
+
+| 2026-10-03 | External PII redaction expanded a pre-bounded Google document body beyond the dispatcher inline cap | Drive content preview | read-drive.test.ts dense-email real-Scribe dispatcher/offload-spy RED/GREEN and escaped-metadata Unicode envelope case | Prepare with the existing external Scribe policy before the final whole-envelope bound, retaining normal dispatcher verification and honest visible bytes |
