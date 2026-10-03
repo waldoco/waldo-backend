@@ -23,6 +23,7 @@ const TABLES: Record<string, Row> = {
   claim_holds: exempt('kind, reason code and a fingerprint hash'), forget_barriers: exempt('never holds topic words for new writes (marker and hash only); legacy rows are redacted on load'),
   purge_pending: exempt('claim id and fingerprint hash'), topic_purge_pending: exempt('fingerprint hash, a marker and a time'), settle_pending: exempt('trace id and time'),
   claim_recall_ready: exempt('claim ids'),
+  owner_source_scope: exempt('an enum value (none or pasted_only) and a time; no owner text'),
   // Operational: counters, flags, hashes, leases, ids, times
   class_state: exempt('counts and times per push class'), daily_push_budget: exempt('counts per day'), event_cooldowns: exempt('event id and time'),
   exempt_telemetry: exempt('counts'), subkind_state: exempt('counts and times'), loop_kill_flags: exempt('flag keys'), loop_progress: exempt('counts'),
