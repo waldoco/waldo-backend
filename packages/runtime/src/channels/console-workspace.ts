@@ -4,10 +4,11 @@ import type { FileMeta } from '../../../workspace/src/store';
 const escape = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const headers = { 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; frame-ancestors 'none'; sandbox" };
 export const workspaceDownload = (bytes: Uint8Array, meta: FileMeta): Response => {
-  // MIME is metadata, not permission to run active content. Download as opaque bytes.
+  // Preserve only these download types. All other metadata stays opaque; never inline.
+  const mime = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/markdown', 'text/plain'].includes(meta.mime) ? meta.mime : 'application/octet-stream';
   const name = meta.path.split('/').at(-1) ?? 'file';
   const encoded = encodeURIComponent(name).replace(/['()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
-  return new Response(bytes.slice().buffer, { headers: { ...headers, 'content-type': 'application/octet-stream', 'content-length': String(bytes.byteLength), 'content-disposition': `attachment; filename="file"; filename*=UTF-8''${encoded}` } });
+  return new Response(bytes.slice().buffer, { headers: { ...headers, 'content-type': mime, 'content-length': String(bytes.byteLength), 'content-disposition': `attachment; filename="file"; filename*=UTF-8''${encoded}` } });
 };
 export const workspacePage = (files: readonly FileMeta[], csrf: string, nextCursor: string | null): Response => {
   const hidden = (name: string, value: string) => `<input type="hidden" name="${name}" value="${escape(value)}">`;
