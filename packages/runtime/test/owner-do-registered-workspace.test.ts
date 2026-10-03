@@ -8,6 +8,8 @@ import { routerSignature } from '../src/identity/owner-directory';
 import * as dispatcher from '../src/tools/dispatcher';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
+import { handleConsole } from '../src/channels/console-signin';
+import type { ConsoleAuth } from '../src/identity/console-auth';
 import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 
 type InputItem = { type?: string; call_id?: string; name?: string; output?: string };
@@ -365,9 +367,56 @@ it.each(['pdf', 'docx'] as const)('default owner ingress renders an actual %s fi
     });
     expect((await h.request(new Request(rendered.data.delivery.url,{headers:{cookie:`${CONSOLE_COOKIE}=${otherSession}`}}))).status).toBe(401);
     expect((await otherStub.fetch(rendered.data.delivery.url,{headers})).status).toBe(401);
+    // Exercise the continuation through the real DO session/file admission boundary.
+    const authEnv = { TELEGRAM_OWNER_DO: {
+      idFromName: (name: string) => name,
+      get: (name: string) => ({ fetch: (input: RequestInfo, init?: RequestInit) => {
+        const request = input instanceof Request ? input : new Request(String(input), init);
+        return name === h.name ? h.request(request) : otherStub.fetch(request);
+      } }),
+    } as unknown as DurableObjectNamespace, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as unknown as RateLimit };
+    const identity = (name: string, verify = true) => ({
+      readOwnerCookie: async (request: Request) => request.headers.get('cookie')?.includes('waldo_owner=') ? name : null,
+      throttle: async () => true, verify: async () => verify ? name : null,
+      ownerCookie: async () => 'fictional-owner-session',
+    }) as unknown as ConsoleAuth;
+    const storedSessions = (await h.state.storage.get<Record<string, { token: string; csrf: string; expires: number }>>('console:sessions'))!;
+    storedSessions[session!]!.expires = Date.now() - 1;
+    await h.state.storage.put('console:sessions', storedSessions);
+    const expired = (await handleConsole(new Request(rendered.data.delivery.url, { headers: { cookie: `waldo_owner=fictional;${CONSOLE_COOKIE}=${session}` } }), authEnv, identity(h.name)))!;
+    expect(expired.status).toBe(303);
+    expect(new URL(expired.headers.get('location')!, rendered.data.delivery.url).searchParams.get('return_to')).toBe(new URL(rendered.data.delivery.url).pathname + new URL(rendered.data.delivery.url).search);
+    await access.signOut(session!);
+    const resume = (await handleConsole(new Request(rendered.data.delivery.url, { headers: { cookie: `waldo_owner=fictional;${CONSOLE_COOKIE}=${session}` } }), authEnv, identity(h.name)))!;
+    expect(resume.status).toBe(303);
+    const signInUrl = new URL(resume.headers.get('location')!, rendered.data.delivery.url);
+    const returnTo = signInUrl.searchParams.get('return_to')!;
+    expect(returnTo).toBe(new URL(rendered.data.delivery.url).pathname + new URL(rendered.data.delivery.url).search);
+    const beforeAuthReads = h.gets.length;
+    const invalid = (await handleConsole(new Request('https://local.invalid/console/verify', { method: 'POST', body: new URLSearchParams({ email: 'owner@example.test', code: 'wrong', return_to: returnTo }) }), authEnv, identity(h.name, false)))!;
+    expect(await invalid.text()).not.toContain('id="signin-download"');
+    expect(h.gets).toHaveLength(beforeAuthReads);
+    const authenticate = async (name: string) => {
+      const done = (await handleConsole(new Request('https://local.invalid/console/verify', { method: 'POST', body: new URLSearchParams({ email: 'owner@example.test', code: 'synthetic-valid', return_to: returnTo }) }), authEnv, identity(name)))!;
+      expect(done.status).toBe(200);
+      expect(await done.text()).toContain('Download your file');
+      const cookie = done.headers.getAll('Set-Cookie').map(value => value.split(';')[0]).join('; ');
+      return (await handleConsole(new Request(new URL(returnTo, 'https://local.invalid'), { headers: { cookie } }), authEnv, identity(name)))!;
+    };
+    const switched = await authenticate(otherName);
+    expect(switched.status).not.toBe(200);
+    expect(h.gets).toHaveLength(beforeAuthReads);
+    const resumed = await authenticate(h.name);
+    expect(resumed.status).toBe(200);
+    expect(resumed.headers.get('content-type')).toBe(format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    expect(new Uint8Array(await resumed.arrayBuffer())).toEqual(bytes);
+    // Refresh the original session for the existing restart assertions below.
+    const refreshed = await access.grant();
+    headers.cookie = `${CONSOLE_COOKIE}=${refreshed}`;
+    const readsAfterResume = h.gets.length;
     const absent = new URL(rendered.data.delivery.url);absent.searchParams.set('id',crypto.randomUUID());
     expect((await h.request(new Request(absent,{headers}))).status).toBe(404);
-    expect(h.gets).toHaveLength(reads);
+    expect(h.gets).toHaveLength(readsAfterResume);
     h.restart();
     const afterRestart = await h.request(new Request(rendered.data.delivery.url,{headers}));
     expect(afterRestart.status).toBe(200);

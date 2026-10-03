@@ -18,7 +18,8 @@ import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-lin
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH } from './channels/console';
 import { ownerDirectory } from './identity/owner-directory';
-import { handleConsole } from './channels/console-signin';
+import { downloadReturnTarget, handleConsole, CONSOLE_SIGNIN_PATH } from './channels/console-signin';
+import { consoleAuth } from './identity/console-auth';
 import { serveDashboard } from './channels/dashboard-static';
 import { consoleLog, consoleTrace, withConsoleTrace } from './observability/console-correlation';
 import type { GatewaySecretBinding } from './llm/gateway';
@@ -159,6 +160,12 @@ export default {
       const ownerRoute = await ownerDirectory(env).byPresence('telegram', env.WALDO_OWNER_TELEGRAM_ID);
       const consoleDoName = ownerRoute?.doName ?? env.WALDO_OWNER_TELEGRAM_ID;
       const response = await env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(consoleDoName)).fetch(request);
+      // A ticket-only session uses this existing owner route. Preserve file intent
+      // on expiry only when the email sign-in route is available.
+      const resume = request.method === 'GET' ? downloadReturnTarget([new URL(request.url).pathname + new URL(request.url).search]) : null;
+      if (response.status === 401 && resume && consoleAuth(env)) {
+        return withConsoleTrace(new Response(null, { status: 303, headers: { location: `${CONSOLE_SIGNIN_PATH}?return_to=${encodeURIComponent(resume)}` } }), consoleRequestTrace ?? consoleTrace());
+      }
       if (consoleRequestTrace) {
         consoleLog(consoleRequestTrace, 'console_route', response.ok, response.ok ? 'forwarded' : 'forward_failed');
         return withConsoleTrace(response, consoleRequestTrace);
