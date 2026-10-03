@@ -11,7 +11,7 @@ import type { OverviewV1 } from './model';
 import { fetchOverview, SignInRequired } from './model';
 import './style.css';
 
-export type Route = 'today' | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | `settings/${SettingsSection}`;
+export type Route = 'today' | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
 const routes = [
   { key: 'today', label: 'Today' }, { key: 'waiting', label: 'Waiting' },
   { key: 'memory', label: 'Memory' }, { key: 'patrol', label: 'Patrol' },
@@ -21,6 +21,7 @@ export const resolveRoute = (raw: string): Route => {
   if(memory.kind==='invalid-memory')return 'memory';
   if(memory.kind==='valid-memory'){const d=memory.destination;return d.kind==='profile'?'memory/profile':d.kind==='explore'?'memory/constellation':`memory/${d.view}`;}
   const value = raw.split('?')[0] ?? '';
+  if(value.startsWith('settings/')&&!['day','sessions','usage','account','setup'].includes(value.slice(9)))return 'settings/not-found';
   if(['settings','settings/day','settings/sessions','settings/usage','settings/account','settings/setup','day','connections'].includes(value))return value as Route;
   if (value === 'admin' || value==='files'||value==='usage'||value==='setup'||value==='invites'||value==='account'||value==='files/workspace') return value;
   if (value === 'memory/spots' || value === 'memory/constellation' || value === 'memory/profile') return value;
@@ -75,6 +76,7 @@ export function DashboardNavigation({ route, waitingCount, onNavigate, isAdmin =
 
 export function Dashboard({ data, route }: { data: OverviewV1; route: Route }) {
   const activity = ownerActivity(data);
+  if(route==='settings/not-found')return <section className="panel" role="status"><h1>Settings page not found</h1><p>This settings destination is not available.</p><a href="#/settings">Open Settings</a></section>;
   if(route==='files'||route==='files/workspace')return <><div className="page-heading"><span className="eyebrow">Files with Waldo</span><h1>Files.</h1><p>Inspect Telegram references or your separate private workspace.</p></div><nav className="memory-tabs" aria-label="File storage views"><a href="#/files" aria-current={route==='files'?'page':undefined}>Telegram references</a><a href="#/files/workspace" aria-current={route==='files/workspace'?'page':undefined}>Private workspace</a></nav>{route==='files/workspace'?<WorkspacePanel/>:<ControlsPanel key="files" view="files" embedded/>}</>;
   if(route==='waiting'||route==='patrol')return <ControlsPanel key={route} view={route==='patrol'?'activity':'waiting'}/>;
   if(route==='invites')return <OwnerControlsPanel view={route}/>;
@@ -172,6 +174,7 @@ export function App() {
       <button ref={menuButton} type="button" aria-expanded={drawerOpen} aria-controls="navigation-drawer" aria-haspopup="dialog" onClick={openDrawer} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openDrawer(); } }}>Menu</button>
     </header>
     <dialog ref={drawer} id="navigation-drawer" className="navigation-drawer" aria-labelledby="drawer-title" onClose={() => { setDrawerOpen(false); if (window.matchMedia('(max-width: 860px)').matches) menuButton.current?.focus(); }} onKeyDown={(event) => {
+      if(event.key==='Escape'){event.preventDefault();closeDrawer();return;}
       if (event.key !== 'Tab') return;
       const controls = event.currentTarget.querySelectorAll<HTMLElement>('a[href],button:not([disabled])');
       const first = controls[0];
