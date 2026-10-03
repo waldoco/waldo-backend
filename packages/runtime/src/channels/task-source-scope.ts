@@ -60,6 +60,12 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
       const previous = await current();
       let decision: Decision;
       try { decision = parseDecision(raw); } catch { return { snapshot: await commit(previous, previous.sources, false) }; }
+      // Repeating a confirmed machine-family request cannot grant anything new.
+      // New-task acknowledgement is consumed once, when its host input boundary is pinned.
+      if (previous.ready && decision.sources.every(source => previous.sources.includes(source))
+        && (decision.decision === 'change' || decision.decision === 'new' && previous.startRef === null && !!inputRef)) {
+        return { snapshot: await commit(previous, previous.sources.filter(source => decision.sources.includes(source)), true, previous.startRef ?? inputRef ?? null) };
+      }
       if (decision.decision === 'retain') return { snapshot: await commit(previous, previous.sources, true, previous.startRef ?? inputRef ?? null) };
       if (decision.decision === 'restrict') return { snapshot: await commit(previous, previous.sources.filter(x => decision.sources.includes(x)), true, previous.sources.length === TASK_SOURCE_FAMILIES.length ? inputRef ?? null : previous.startRef) };
       const snapshot = await commit(previous, previous.sources, false);
@@ -87,12 +93,16 @@ export const approveTaskSourceProposal = (sql: SqlStorage, ownerKey: string, sup
 
 const TOOL_SOURCE: Partial<Record<ToolName, TaskSourceFamily>> = {
   get_context: 'local', read_owner_context: 'local', read_memory: 'local', search_episodes: 'local', read_tool_output: 'local',
-  workspace_list: 'workspace', workspace_read: 'workspace', workspace_render: 'workspace', get_communication: 'mail', search_communication: 'mail', read_thread: 'mail',
+  workspace_list: 'workspace', workspace_read: 'workspace', workspace_render: 'workspace', export_artifact: 'workspace', read_artifact: 'workspace', list_artifacts: 'workspace', get_communication: 'mail', search_communication: 'mail', read_thread: 'mail',
   query_calendar: 'calendar', query_availability: 'calendar', get_tasks: 'tasks', read_drive: 'drive', web_search: 'web', browse_page: 'browser', browse_act: 'browser', read_mcp_tool: 'mcp', call_mcp_tool: 'mcp',
 };
-export const taskSourceRequired = (handler: Readonly<{ name: ToolName; requires_connector?: true; mutates_state?: true; autonomy_gated?: boolean }>): boolean => !!TOOL_SOURCE[handler.name] || !!handler.requires_connector || !(handler.mutates_state || handler.autonomy_gated || ['delegate_task', 'skills_list', 'skills_load', 'skills_install', 'skills_disable'].includes(handler.name));
-export const taskSourceAllowed = (snapshot: TaskSourceSnapshot, handler: Readonly<{ name: ToolName; requires_connector?: true; mutates_state?: true; autonomy_gated?: boolean }>): boolean => {
-  const family = TOOL_SOURCE[handler.name];
+const taskSourceFamily = (handler: Readonly<{ name: ToolName }>, args?: unknown): TaskSourceFamily | undefined => {
+  if (handler.name === 'workspace_write' && args && typeof args === 'object' && ('edits' in args || 'expected_revision' in args && typeof args.expected_revision === 'number' && args.expected_revision > 0)) return 'workspace';
+  return TOOL_SOURCE[handler.name];
+};
+export const taskSourceRequired = (handler: Readonly<{ name: ToolName; requires_connector?: true; mutates_state?: true; autonomy_gated?: boolean }>, args?: unknown): boolean => !!taskSourceFamily(handler, args) || !!handler.requires_connector || !(handler.mutates_state || handler.autonomy_gated || ['delegate_task', 'skills_list', 'skills_load', 'skills_install', 'skills_disable'].includes(handler.name));
+export const taskSourceAllowed = (snapshot: TaskSourceSnapshot, handler: Readonly<{ name: ToolName; requires_connector?: true; mutates_state?: true; autonomy_gated?: boolean }>, args?: unknown): boolean => {
+  const family = taskSourceFamily(handler, args);
   // Unknown connector routes cannot escape through an omitted family declaration.
   if (family) return snapshot.ready && snapshot.sources.includes(family);
   if (handler.requires_connector) return snapshot.ready && snapshot.sources.length === TASK_SOURCE_FAMILIES.length;

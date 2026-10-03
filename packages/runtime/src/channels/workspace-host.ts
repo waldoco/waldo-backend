@@ -34,11 +34,13 @@ export const workspaceOwnerHost = async (
   doName: string | undefined,
   fetcher: typeof fetch = fetch,
   scope?: RunEffectScope,
+  assertSourceCurrent?: () => Promise<void>,
 ) => {
   const call = signedRpc(env, async (input,init) => {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
+      await assertSourceCurrent?.();
       scope?.admit();
       return await Promise.race([
         fetcher(input,{...init,signal:controller.signal}).then(async response => {
@@ -62,11 +64,13 @@ export const workspaceOwnerHost = async (
   const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(locator)))].map(b => b.toString(16).padStart(2, '0')).join('');
   const resolve = async (): Promise<OwnerBinding | null> => rowBinding(await call('workspace_owner_binding', `workspace.bind.${hash}`, args));
   const binding = await resolve();
+  await assertSourceCurrent?.();
   scope?.admit();
   if (!binding || binding.environment !== environment || binding.namespace !== namespace || binding.doName !== doName || binding.doId !== actualDoId) throw new WorkspaceError('rejected');
   const admit: Admission = async supplied => {
     try {
       const current = await resolve();
+      await assertSourceCurrent?.();
       scope?.admit();
       if (!current) return { status: 'rejected' };
       if (Object.keys(binding).some(key => supplied[key as keyof OwnerBinding] !== current[key as keyof OwnerBinding])) return { status: 'rejected' };
@@ -77,8 +81,8 @@ export const workspaceOwnerHost = async (
   // the raw bucket boundary prevents an async mapping check from granting later I/O.
   const bucket = env.ARTIFACTS;
   const bodies = await r2Bodies({
-    put: (key, bytes) => { scope?.admit(); return bucket.put(key, bytes); },
-    get: key => { scope?.admit(); return bucket.get(key); },
+    put: async (key, bytes) => { await assertSourceCurrent?.(); scope?.admit(); return bucket.put(key, bytes); },
+    get: async key => { await assertSourceCurrent?.(); scope?.admit(); return bucket.get(key); },
     delete: key => { scope?.admit(); return bucket.delete(key); },
   }, binding, admit);
   return workspaceStore({ binding, admit, metadata: workspaceMetadata(storage, scope), bodies, now: Date.now, newId: () => crypto.randomUUID() });

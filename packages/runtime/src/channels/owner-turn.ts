@@ -8,7 +8,7 @@ import type { createOwnerMessageContextAdapter } from './owner-message-context-a
 import type { OwnerTurnEnvelope } from './owner-turn-envelope';
 import { ownerContextHandler } from '../tools/live/owner-context';
 import {
-  literalJsonTextRedactor, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
+  EXTERNAL_ORIGIN_TOOLS, literalJsonTextRedactor, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
@@ -453,10 +453,10 @@ export const createOwnerResponder = (
           await assertCurrent();
           const admittedSource = sourceSnapshot;
           const admittedSteering = sourceSteeringRevision;
-          const sourceRead = taskSourceRequired(handler);
+          const sourceRead = taskSourceRequired(handler, args);
           if (interactiveSource && requireTaskScope && sourceRead) {
-            if (!sourceScope || !admittedSource || !taskSourceAllowed(admittedSource, handler)) return { ok: false, code: 'rejected', error: 'This source is outside the current owner task. Use supplied task data or the owner confirmation.', source_taint: 'external' };
-            if (control.revision() !== admittedSteering) return { ok: false, code: 'rejected', error: 'New owner direction must be admitted before reading this source.', source_taint: 'external' };
+            if (!sourceScope || !admittedSource || !taskSourceAllowed(admittedSource, handler, args)) return { ok: false, code: 'rejected', error: 'This source is outside the current owner task. Use supplied task data or the owner confirmation.', source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
+            if (control.revision() !== admittedSteering) return { ok: false, code: 'rejected', error: 'New owner direction must be admitted before reading this source.', source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
             await sourceScope.assertSame(admittedSource);
           }
           const retainedRead = ['read_owner_context', 'read_memory', 'search_episodes', 'read_tool_output'].includes(handler.name);
@@ -560,7 +560,13 @@ export const createOwnerResponder = (
           const skillPrompt = skills && (!binding || request.tools.includes('skills_load')) ? await skills.prompt(CANARIES) : undefined;
           await assertCurrent();
           expectedProcedure = skillPrompt ?? '';
-          const rawTaskContext = sourceFamilyAvailable('workspace') && skills?.taskContext ? await skills.taskContext() : '';
+          const taskContextSource = sourceSnapshot;
+          const assertTaskContextSource = async () => {
+            await assertCurrent();
+            if (!sourceFamilyAvailable('workspace')) throw new Error('Workspace task context changed');
+            if (taskContextSource && sourceScope) await sourceScope.assertSame(taskContextSource);
+          };
+          const rawTaskContext = sourceFamilyAvailable('workspace') && skills?.taskContext ? await skills.taskContext(assertTaskContextSource) : '';
           // A committed receipt authenticates identity, not user/provider-authored path text.
           // Keep the external fragment gate before joining metadata to trusted instructions.
           let guardedTaskContext = rawTaskContext ? 'Recent workspace metadata was withheld by the context safety gate. Do not infer a saved-file target or substitute a Drive target.' : '';

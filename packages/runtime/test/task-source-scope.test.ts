@@ -59,6 +59,7 @@ it('new, change and close need exact single-use owner decisions; expiry does not
 it('stale cards and captured read snapshots cannot outlive a task revision', () => run('task-custody-revision', async (sql, scope) => {
   const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {});
   const previous = (await cap.classify(decision('retain'))).snapshot;
+  await cap.classify(decision('restrict'), 'pasted-start');
   const proposal = (await cap.classify(decision('change', ['mail']))).proposal!;
   await cap.classify(decision('restrict'));
   expect(approveTaskSourceProposal(sql, 'owner-one', proposal, Date.now(), scope)).toBe(false);
@@ -115,3 +116,53 @@ it('browser scope change during session start prevents navigation while still cl
   expect(result.ok).toBe(false);
   expect(calls.map(url => url.split('/').at(-1))).toEqual(['start', 'end']);
 });
+
+it('render/export and an edit read require workspace scope, while creating supplied bytes remains possible', () => {
+  const snapshot = { taskId: 'task', revision: 1, sources: [] as const, ready: true, startRef: 'input' };
+  expect(taskSourceAllowed(snapshot, { name: 'workspace_render', mutates_state: true })).toBe(false);
+  expect(taskSourceAllowed(snapshot, { name: 'export_artifact', mutates_state: true })).toBe(false);
+  expect(taskSourceAllowed(snapshot, { name: 'workspace_write', mutates_state: true }, { expected_revision: 1, edits: [] })).toBe(false);
+  expect(taskSourceAllowed(snapshot, { name: 'workspace_write', mutates_state: true }, { expected_revision: 0, text: 'supplied bytes' })).toBe(true);
+});
+
+it('workspace render rechecks after awaited store admission before exporting source bytes', async () => {
+  const { workspaceRenderHandler } = await import('../src/tools/live/workspace-render');
+  let current = true;
+  const physical = vi.fn(async () => { throw new Error('Must not read'); });
+  const handler = workspaceRenderHandler(async () => { await Promise.resolve(); current = false; return { export: physical } as never; });
+  const result = await handler.handle({ source_file_id: 'file', source_revision: 1, path: 'result.pdf', expected_revision: 0, format: 'pdf' }, { authenticatedUserId: 'owner', turnId: 'turn', toolCallId: 'call', assertTaskSourceCurrent: async () => { if (!current) throw new Error('Task changed'); } } as ToolDispatcherContext);
+  expect(result.ok).toBe(false);
+  expect(physical).not.toHaveBeenCalled();
+});
+
+it('Vault-backed MCP reads recheck after awaited grant resolution before proxy dispatch', async () => {
+  const { readMcpToolHandler } = await import('../src/tools/live/mcp');
+  let current = true;
+  const physical = vi.fn(async () => 'private source');
+  const resolve = vi.fn(async () => { await Promise.resolve(); current = false; return { mode: 'proxy' as const, connection: 'fixture' }; });
+  const handler = readMcpToolHandler(JSON.stringify([{ name: 'drive', url: 'https://drive.googleapis.com/mcp', auth: 'google', requires: 'drive', allow_tools: ['list_recent_files'], read_tools: ['list_recent_files'] }]), {
+    resolve, proxy: physical,
+  }, true);
+  const result = await handler.handle({ server: 'drive', tool: 'list_recent_files', args: {} }, { authenticatedUserId: 'owner', turnId: 'turn', toolCallId: 'call', assertTaskSourceCurrent: async () => { if (!current) throw new Error('Task changed'); } } as ToolDispatcherContext);
+  expect(resolve).toHaveBeenCalledTimes(1);
+  expect(result.ok).toBe(false);
+  expect(physical).not.toHaveBeenCalled();
+});
+
+it('an owner-confirmed new task or source change can continue without repeating the same confirmation', () => run('scope-confirmed-retry', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner', scope, async () => {});
+  await cap.classify(decision('restrict'), 'pasted-task-start');
+  const next = await cap.classify(decision('new', ['mail']), 'new-request');
+  expect(approveTaskSourceProposal(sql, 'owner', next.proposal!, Date.now(), scope)).toBe(true);
+  const retried = await cap.classify(decision('new', ['mail']), 'new-request-retry');
+  expect(retried.proposal).toBeUndefined();
+  expect(retried.snapshot.ready).toBe(true);
+  expect(retried.snapshot.sources).toEqual(['mail']);
+  expect(retried.snapshot.startRef).toBe('new-request-retry');
+  const changed = await cap.classify(decision('change', ['mail', 'calendar']), 'change-request');
+  expect(changed.proposal).toBeDefined();
+  expect(approveTaskSourceProposal(sql, 'owner', changed.proposal!, Date.now(), scope)).toBe(true);
+  const repeated = await cap.classify(decision('change', ['mail', 'calendar']), 'change-retry');
+  expect(repeated.proposal).toBeUndefined();
+  expect(repeated.snapshot.ready).toBe(true);
+}));

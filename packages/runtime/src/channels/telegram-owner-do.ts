@@ -1437,10 +1437,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if(!vault||!doName){if(intent)throw new ProxyIntentError('intent_unavailable');return null;}
         return { mode: 'proxy' as const, connection: account.id };
       },
-      proxy: async (serverUrl, tool, args, connection, intent) => {
+      proxy: async (serverUrl, tool, args, connection, intent, assertSourceCurrent) => {
         const doName = vaultOwner();
         if (!vault || !doName) throw new Error('connector proxy is not configured');
-        return vault.mcpCall(doName, connection, serverUrl, tool, args, intent);
+        await assertSourceCurrent?.();
+        return (googleProxy(this.env, taskSourceFetch(assertSourceCurrent)) ?? vault).mcpCall(doName, connection, serverUrl, tool, args, intent);
       },
     };
     const updates = updateBook(storage.sql);
@@ -1455,7 +1456,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const scope = ctx?.runScope;
       if (!scope) throw new ClosedRunError();
       scope.admit();
-      return workspaceOwnerHost(this.env, storage, this.ctx.id.toString(), identity.get<string>('do_name'), fetch, scope);
+      return workspaceOwnerHost(this.env, storage, this.ctx.id.toString(), identity.get<string>('do_name'), fetch, scope, ctx?.assertTaskSourceCurrent);
     }, { origin: async () => await storage.get<string>('origin') ?? null, durable: Boolean(this.env.ARTIFACTS) });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
@@ -1523,11 +1524,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         });
         return Object.freeze({ ...capability, sourceScope: { ...sourceScope, propose: async proposal => {
           await assertSkillOwnerCurrent(); await desk.proposeTaskSources(proposal); await assertSkillOwnerCurrent();
-        } }, taskContext: async () => {
+        } }, taskContext: async (assertSourceCurrent?: () => Promise<void>) => {
           await assertSkillOwnerCurrent();
           let receipts: Awaited<ReturnType<Awaited<ReturnType<typeof workspaceOwnerHost>>['recentWrites']>>;
           try {
-            const workspace = await workspaceOwnerHost(this.env, storage, this.ctx.id.toString(), doName, fetch, scope);
+            const workspace = await workspaceOwnerHost(this.env, storage, this.ctx.id.toString(), doName, fetch, scope, assertSourceCurrent);
             receipts = await workspace.recentWrites();
           } catch {
             await assertSkillOwnerCurrent();

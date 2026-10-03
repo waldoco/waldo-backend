@@ -9,7 +9,7 @@ export type OwnerSkillCapability = Readonly<{
  sourceScope?: OwnerTaskSourceScope;
  handlers: DispatchToolOptions<ToolDispatcherContext>['handlers'];
  // Optional host-owned metadata only; never skill/file instruction bytes.
- taskContext?(): Promise<string>;
+ taskContext?(assertSourceCurrent?: () => Promise<void>): Promise<string>;
  metadata(): string;
  prompt(canaries:readonly string[]):Promise<string>;
  assertProcedureCurrent(expected:string,canaries:readonly string[]):Promise<void>;

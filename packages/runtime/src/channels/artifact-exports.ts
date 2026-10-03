@@ -48,7 +48,8 @@ export const artifactExports = (sql: Sql, book: ArtifactBook, bodies: ArtifactBo
     // Exact-id lookup for the download helper. Returns the stored row or null; callers validate it.
     byId: (id: string): ExportRow | null => sql.exec<ExportRow>('SELECT * FROM artifact_exports WHERE id = ?', id).toArray()[0] ?? null,
     rows: (artifactId: string) => sql.exec<ExportRow>('SELECT * FROM artifact_exports WHERE source_artifact_id = ?', artifactId).toArray(),
-    async exportPdf(args: ExportArtifactArgs) {
+    async exportPdf(args: ExportArtifactArgs, assertSourceCurrent?: () => Promise<void>) {
+      await assertSourceCurrent?.();
       if (args.format !== 'pdf') return { ok: false as const, code: 'unsupported_format' };
       const meta = book.byId(args.artifact_id);
       if (meta === null) return { ok: false as const, code: 'not_found' };
@@ -58,13 +59,17 @@ export const artifactExports = (sql: Sql, book: ArtifactBook, bodies: ArtifactBo
       // cannot be the dedupe key; the revision is immutable, so id + revision identifies the content.)
       const prior = sql.exec<ExportRow>('SELECT * FROM artifact_exports WHERE source_artifact_id = ? AND source_revision = ? AND format = ?', meta.id, meta.revision, 'pdf').toArray()[0];
       if (prior !== undefined) return { ok: true as const, id: prior.id, bytes: prior.byte_size, mime_type: prior.mime_type, sha256: prior.sha256, key: prior.r2_key, deduped: true };
+      await assertSourceCurrent?.();
       const body = await bodies.get(meta.r2_key);
+      await assertSourceCurrent?.();
       if (body === null) return { ok: false as const, code: 'not_found' };
       const rendered = await renderMarkdownPdf(body);
       if (rendered.status !== 'exported') return { ok: false as const, code: rendered.status };
       const id = `exp:${newId()}`;
       const key = `${meta.id}/r${meta.revision}/${id}`;
+      await assertSourceCurrent?.();
       await binaries.putBytes(key, rendered.bytes);
+      await assertSourceCurrent?.();
       // Re-check the source did not move while we wrote bytes; orphan bytes are harmless, a stale row is not.
       const after = book.byId(args.artifact_id);
       if (after === null || after.revision !== args.expected_revision) return { ok: false as const, code: 'conflict', current_revision: after?.revision ?? 0 };
@@ -84,8 +89,8 @@ export const exportArtifactHandler = (exporter: ReturnType<typeof artifactExport
   trigger_allowlist: allowlist('export_artifact'),
   autonomy_gated: false,
   mutates_state: true,
-  handle: async (args: ExportArtifactArgs) => {
-    const r = await exporter.exportPdf(args);
+  handle: async (args: ExportArtifactArgs, ctx?: ToolDispatcherContext) => {
+    const r = await exporter.exportPdf(args, ctx?.assertTaskSourceCurrent);
     // Discriminated: only status 'exported' is ok:true. Every failure is ok:false with its real reason.
     if (r.ok) return { ok: true, data: { status: 'exported', artifact_id: args.artifact_id, bytes: r.bytes, mime_type: r.mime_type, sha256: r.sha256, deduped: r.deduped, delivery: { status: 'saved_internal', url: null, audience: 'unverified' } }, source_taint: null };
     if (r.code === 'not_found') return { ok: false, code: 'not_found', error: 'No artifact with that id.' };

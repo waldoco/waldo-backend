@@ -444,3 +444,6 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 |---|---|---|
 | Owner steering arrives during connector authentication or a Gmail list response | pasted-task-scope.test.ts steering-auth control; task-source-scope.test.ts Gmail transport and browser session-start controls | Scripted provider; an admitted remote operation cannot be rolled back |
 | Tool-only scope policy leaves automatic retained suppliers unconstrained | pasted-task-scope.test.ts forbidden memory/order/workspace sentinels; owner-message-context-adapter.test.ts absent task-safe supplier and zero ordinary material/recall reads | Mandatory base is host-trusted; real-model restriction recognition still needs live acceptance |
+
+- [ ] Classify render/export/edit operations by their source reads even when they mutate state. Creation from current supplied bytes remains possible; reading existing source revisions requires workspace custody. Vault-backed MCP must fence after grant resolution and at proxy dispatch, not only bearer fetch.
+- [ ] An owner-confirmed new/change request must be usable on retry without an endless same-family confirmation loop. Consume a fresh confirmed task's input-boundary acknowledgement once; all repeated transitions may only retain/intersect already confirmed source families.

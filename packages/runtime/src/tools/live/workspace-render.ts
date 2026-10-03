@@ -19,12 +19,14 @@ export const workspaceRenderHandler = (open: (ctx?: ToolDispatcherContext) => Pr
     // intent for this one, and nondeterministic library ZIP/PDF timestamps never break a retry.
     const operation_id = await workspaceOperationId([ctx.authenticatedUserId, ctx.turnId, ctx.toolCallId, args.source_file_id, args.source_revision, args.path, args.expected_revision, args.format], 'workspace_render');
     try {
-      const store = await open(ctx); ctx.runScope?.admit();
+      const store = await open(ctx); await ctx.assertTaskSourceCurrent?.(); ctx.runScope?.admit();
       let meta: FileMeta;
       try { meta = await store.reconcile(operation_id); }
       catch (error) {
         if (!(error instanceof WorkspaceError) || error.code !== 'not_found') throw error;
+        await ctx.assertTaskSourceCurrent?.();
         const source = await store.export(args.source_file_id, args.source_revision, WORKSPACE_TEXT_MAX_BYTES);
+        await ctx.assertTaskSourceCurrent?.();
         if (!['text/plain', 'text/markdown'].includes(source.meta.mime)) return { ok: false as const, code: 'invalid_args' as const, error: 'Document source must be text/plain or text/markdown.' };
         let text: string;
         try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(source.bytes); }
@@ -32,6 +34,7 @@ export const workspaceRenderHandler = (open: (ctx?: ToolDispatcherContext) => Pr
         const rendered = await renderWorkspaceDocument(text, args.format);
         ctx.runScope?.admit();
         if (rendered.status !== 'exported') return { ok: false as const, code: 'rejected' as const, error: `Document render ${rendered.status}. Nothing was written.` };
+        await ctx.assertTaskSourceCurrent?.();
         meta = await store.write({ path: args.path, bytes: rendered.bytes, mime: rendered.mime, expected_revision: args.expected_revision, operation_id, provenance: 'agent_generated' });
       }
       ctx.runScope?.admit();

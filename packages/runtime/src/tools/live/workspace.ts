@@ -27,7 +27,7 @@ export const workspaceToolHandlers = (open: (ctx?: ToolDispatcherContext) => Pro
     schema: workspaceListArgsSchema,
     trigger_allowlist: allowlist('workspace_list'),
     autonomy_gated: false,
-    handle: async (args: WorkspaceListArgs, ctx?: ToolDispatcherContext) => { const store = await open(ctx); ctx?.runScope?.admit(); return toResult(await workspaceHandlers(store).list(args)); },
+    handle: async (args: WorkspaceListArgs, ctx?: ToolDispatcherContext) => { const store = await open(ctx); await ctx?.assertTaskSourceCurrent?.(); ctx?.runScope?.admit(); return toResult(await workspaceHandlers(store).list(args)); },
   } satisfies ToolHandler<WorkspaceListArgs, unknown, ToolDispatcherContext>,
   {
     name: 'workspace_read',
@@ -35,7 +35,7 @@ export const workspaceToolHandlers = (open: (ctx?: ToolDispatcherContext) => Pro
     schema: workspaceReadArgsSchema,
     trigger_allowlist: allowlist('workspace_read'),
     autonomy_gated: false,
-    handle: async (args: WorkspaceReadArgs, ctx?: ToolDispatcherContext) => { const store = await open(ctx); ctx?.runScope?.admit(); return toResult(await workspaceHandlers(store).read(args)); },
+    handle: async (args: WorkspaceReadArgs, ctx?: ToolDispatcherContext) => { const store = await open(ctx); await ctx?.assertTaskSourceCurrent?.(); ctx?.runScope?.admit(); return toResult(await workspaceHandlers(store).read(args)); },
   } satisfies ToolHandler<WorkspaceReadArgs, unknown, ToolDispatcherContext>,
   {
     name: 'workspace_write',
@@ -50,6 +50,7 @@ export const workspaceToolHandlers = (open: (ctx?: ToolDispatcherContext) => Pro
       // A write is not an external-origin tool: its failure arm carries a null stamp too.
       // The run may have closed while the store opened: admit again right before the write so a closed run reaches no store.
       const store = await open(ctx);
+      await ctx.assertTaskSourceCurrent?.();
       ctx.runScope?.admit();
       const written = await workspaceHandlers(store).write({ ...args, operation_id });
       if (!written.ok) return toResult(written, null);

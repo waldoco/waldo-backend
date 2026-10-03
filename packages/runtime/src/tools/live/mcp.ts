@@ -37,7 +37,7 @@ export const mcpServers = (raw: string | undefined): readonly McpServerConfig[] 
 export type McpGoogleResolution = Readonly<{ mode: 'bearer'; token: string } | { mode: 'proxy'; connection: string }>;
 export type McpGoogleAuth = Readonly<{
   resolve(intent?: ProxyIntent, feature?: GoogleFeature): Promise<McpGoogleResolution | null>;
-  proxy(serverUrl: string, tool: string, args: Record<string, unknown>, connection: string, intent?: ProxyIntent): Promise<unknown>;
+  proxy(serverUrl: string, tool: string, args: Record<string, unknown>, connection: string, intent?: ProxyIntent, assertSourceCurrent?: () => Promise<void>): Promise<unknown>;
 }>;
 
 // Typed auth states shared by the turn handler (mapped to a connect card) and the approval
@@ -203,7 +203,13 @@ export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: 
     // so the host sets it after the model's args, and the model cannot turn snippets back on.
     const intent: ProxyIntent = { id: `mcpread:${await sha256Hex(JSON.stringify([ctx.authenticatedUserId, ctx.turnId, ctx.toolCallId]))}`, readOnly: true };
     try {
-      const { content, protocolVersion } = await executeMcp(found, tool, { ...args, excludeContentSnippets: true }, googleAuth, async (input, init) => {
+      const scopedAuth: McpGoogleAuth | undefined = googleAuth && { ...googleAuth, proxy: async (url, name, values, connection, readIntent) => {
+        await ctx.assertTaskSourceCurrent?.();
+        const result = await googleAuth.proxy(url, name, values, connection, readIntent, ctx.assertTaskSourceCurrent);
+        await ctx.assertTaskSourceCurrent?.();
+        return result;
+      } };
+      const { content, protocolVersion } = await executeMcp(found, tool, { ...args, excludeContentSnippets: true }, scopedAuth, async (input, init) => {
         await ctx.assertTaskSourceCurrent?.();
         const response = await fetch(input, init);
         await ctx.assertTaskSourceCurrent?.();
