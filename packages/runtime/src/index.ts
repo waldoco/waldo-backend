@@ -157,8 +157,8 @@ export default {
       // turns to. With Supabase configured that name comes from the owner directory (e.g.
       // 'owner-<uuid>' from console signup), not the env telegram id. Routing by the env id
       // served an empty shell DO: one-time links minted in the turn DO never redeemed (403),
-      // and account.delete would have wiped the wrong DO. Directory errors propagate loudly;
-      // no fallback to a possibly-wrong DO beyond the designed no-directory single-owner path.
+      // and account.delete would have wiped the wrong DO. Directory failures stay fail-closed; the shell adapter logs a content-free failure class.
+      // No fallback to a possibly-wrong DO beyond the designed no-directory single-owner path.
       const response = await forwardTicketConsole(request, env);
       // A ticket-only session uses this existing owner route. Preserve file intent
       // on expiry only when the email sign-in route is available.

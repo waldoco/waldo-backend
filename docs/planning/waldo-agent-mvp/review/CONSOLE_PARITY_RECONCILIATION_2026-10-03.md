@@ -45,3 +45,9 @@ Issue #658. Snapshot: beta-mvp 13ac09f plus #562 e93fb789 and #657 visual/fix pa
 ## Verification layers
 
 Local merge tests preserve beta workspace MIME/download two-owner behavior, signin return targets, canonical route bindings, JSON failure headers, dashboard controls/CSRF/replay, and node-final-copy cleanup with injected KV failure. UI suite remains 14 files/156 tests. Typecheck requires higher local Node heap (default exhausted). Frozen lockfile install restores happy-dom; lockfile regenerated from beta with that existing dashboard dependency. No hosted auth, SMS, external mutation, provider outcome or deployment is proven here.
+
+## Exact-head review clarifications
+
+Default authenticated /console GET/HEAD intentionally serves the React shell; /console/legacy remains during migration. Unsigned shell requests intentionally redirect 303 to /console/signin. This is a source/staging migration posture, not production release. API, ticket redemption, root notices and guarded POST paths remain distinct. A thrown owner lookup is logged with a fixed content-free owner_verification_failed class and returns private 503 without assets or fallback routing.
+
+Node forget limit: output-ledger redactor returns a touched count, not a remaining count; completing that helper is not an independent survivor verification. Durable node cleanup retry custody also remains unresolved. Do not claim full retained-copy purge certification from this receipt.

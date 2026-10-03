@@ -58,3 +58,11 @@ describe('dashboard static adapter', () => {
     expect((await serveDashboard(url('/console/dashboard'), undefined, auth()))?.status).toBe(503);
   });
 });
+it('logs content-free owner verification failure while keeping the shell fail-closed',async()=>{
+ const sink=vi.spyOn(console,'error').mockImplementation(()=>{});const asset=assets();
+ try{
+  const response=await serveDashboard(url('/console'),asset,async()=>{throw new Error('private-cookie-and-email-canary');});
+  expect(response?.status).toBe(503);expect(response?.headers.get('cache-control')).toBe('private, no-store');expect(asset.fetch).not.toHaveBeenCalled();
+  expect(sink).toHaveBeenCalledOnce();expect(JSON.stringify(sink.mock.calls)).toContain('owner_verification_failed');expect(JSON.stringify(sink.mock.calls)).not.toContain('private-cookie');
+ }finally{sink.mockRestore();}
+});

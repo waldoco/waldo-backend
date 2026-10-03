@@ -31,7 +31,10 @@ export const serveDashboard = async (
     // the signed owner routing and DO session, without making a second auth authority.
     let auth: Response;
     try { auth = await verifyOwner(new Request(new URL(DASHBOARD_OVERVIEW_PATH, url), { method: 'GET', headers: request.headers })); }
-    catch { return new Response('dashboard unavailable', { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS }); }
+    catch {
+      console.error(JSON.stringify({ hop: 'dashboard_static', ok: false, code: 'owner_verification_failed' }));
+      return new Response('dashboard unavailable', { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS });
+    }
     if (auth.status === 401) return new Response(null, { status: 303, headers: { ...DASHBOARD_OVERVIEW_HEADERS, location: `${CONSOLE_PATH}/signin` } });
     if (!auth.ok) return new Response('dashboard unavailable', {
       status: 503,
