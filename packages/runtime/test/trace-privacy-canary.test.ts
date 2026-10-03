@@ -244,7 +244,7 @@ describe('staging release gate: production can never export text', () => {
 });
 
 
-it.each(['invalid_decision', 'uncertain', 'retained_invalid', 'retained_uncertain'] as const)('task custody %s diagnostic survives capture-off without private classifier data', async code => {
+it.each(['invalid_decision', 'uncertain', 'retained_invalid', 'retained_uncertain', 'invalid_decision:json_syntax', 'invalid_decision:invalid_shape', 'invalid_decision:unknown_decision', 'invalid_decision:invalid_sources', 'invalid_decision:invalid_evidence'] as const)('task custody %s diagnostic survives capture-off without private classifier data', async code => {
   const entry: TurnLogEntry = { trace: 'scope-recovery', hop: 'task_source_custody', ms: 0, ok: code.startsWith('retained_'), code, detail: MARKER, error: MARKER, text: { input: MARKER, output: MARKER } };
   const gated = gateTraceEntry(entry, false);
   const bodies = await exportBodies([gated, { trace: entry.trace, hop: 'turn', ms: 0, ok: true }], false);

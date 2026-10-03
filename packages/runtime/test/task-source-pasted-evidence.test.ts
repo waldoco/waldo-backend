@@ -41,7 +41,7 @@ it.each(['local', 'mail', 'drive', 'calendar', 'contacts', 'tasks', 'web', 'brow
   expect(next.proposal?.sources).toEqual([family]);
   expect(next.snapshot.sources).toEqual([]); expect(next.snapshot.ready).toBe(false);
   for (const raw of ['not json', JSON.stringify({ decision: 'uncertain', sources: [], evidence: null }), JSON.stringify({ decision: 'retain', sources: TASK_SOURCE_FAMILIES, evidence: null }), JSON.stringify({ decision: 'restrict', sources: [family], evidence: null })]) {
-    const waiting = await cap.classify(raw, 'current', text, true);
+    const waiting = await cap.classify(raw, 'current', text);
     expect(waiting.snapshot).toEqual(next.snapshot);
   }
   expect(approveTaskSourceProposal(sql, 'owner-one', next.proposal!, Date.now(), scope)).toBe(true);
