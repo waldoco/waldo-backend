@@ -8,11 +8,11 @@ import { CURATED_PACK_SKILLS } from '../src/skills/curated-catalog';
 
 const canaries = ['0123456789abcdef','fedcba9876543210','0011223344556677'];
 const owner = 'owner-a';
-const NAMES = ['document-email-preparation','day-brief','meeting-prep','inbox-triage-reply-draft','sourced-decision-brief','calendar-focus-proposal'];
+const NAMES = ['document-email-preparation','day-brief','meeting-prep','inbox-triage-reply-draft','sourced-decision-brief','calendar-focus-proposal','artifact-revision-delivery'];
 const turn = (ownerText:string,turnId='turn-1') => ({ owner, turnId, trigger:'user_message' as const, ownerText, assertCurrent:async()=>{} });
 const bytes = (t:string) => new TextEncoder().encode(t).length;
 
-it('catalog lists exactly the six reviewed skills, all disabled, instruction-only', async () => {
+it('catalog lists exactly the seven reviewed skills, all disabled, instruction-only', async () => {
  const stub = env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('catalog-list'));
  await runInDurableObject(stub, async (_,state) => {
   provisionDoSchema(state.storage);
