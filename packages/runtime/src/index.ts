@@ -35,18 +35,10 @@ import {
   type TrustedResponsibilityContext,
 } from './responsibility/worker-adapter';
 
-export * from './hooks/registry';
-export * from './context-composer';
-export * from './llm/provider';
-export * from './do-schema';
-export * from './run-loop/do';
-export * from './responsibility/raw-json';
-export * from './responsibility/constants';
-export * from './responsibility/errors';
-export * from './responsibility/ingress-signature';
-export * from './responsibility/supabase-authority';
-export * from './responsibility/worker-adapter';
-export * from './tools/dispatcher';
+// The entry exports only Durable Object classes and the default handler. `wrangler dev --local`
+// rejects constants or arrays exported from the Worker entry, so helpers are imported from their
+// own modules, never re-exported here (pinned by test/worker-entry-exports.test.ts).
+export { RunLoopDO } from './run-loop/do';
 export { TelegramOwnerDO } from './channels/telegram-owner-do';
 export { TracerDO } from './tracer/tracer-do';
 import type { RunLoopDO } from './run-loop/do';
