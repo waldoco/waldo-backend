@@ -1,5 +1,5 @@
 import type { OwnerSkillCapability } from '../skills/curated-host';
-import { TASK_SOURCE_INSTRUCTION, TASK_SOURCE_SCHEMA, taskSourceAllowed, taskSourceRequired, taskSourcePrompt, type OwnerTaskSourceScope, type TaskSourceSnapshot } from './task-source-scope';
+import { TASK_SOURCE_INSTRUCTION, TASK_SOURCE_SCHEMA, taskSourceAllowed, taskSourceRequired, taskSourcePrompt, type OwnerTaskSourceScope, type TaskSourceSnapshot, type TaskSourceFamily } from './task-source-scope';
 import { forgetSnapshot, selectedForgetTexts, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, type ForgetSource } from '../memory/selective-forget';
 import { ownerForgetTopic, hasForgetIntent } from '../memory/claims';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
@@ -154,6 +154,7 @@ export const createOwnerResponder = (
   const requireTaskScope = privateOwner?.requireTaskScope || !!sourceScope;
   let sourceSnapshot: TaskSourceSnapshot | undefined;
   let sourceAdmissionCalls = 0;
+  let sourceSteeringRevision = 0;
   let sourceTurnBudget: { remaining: number } | undefined;
   let interactiveSource = false;
   const invocation = binding?.admission.invocation ?? (() => {
@@ -184,11 +185,16 @@ export const createOwnerResponder = (
   let traceId = '';
   const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' }, { ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: async () => {
     refreshPendingRedaction();
-    if (forgettingState?.incompleteTopics().length) return [];
+    if (!sourceFamilyAvailable('local') || forgettingState?.incompleteTopics().length) return [];
     const fragments = await toolLedger?.recent([...forgottenTexts]) ?? [];
     refreshPendingRedaction();
+    if (!sourceFamilyAvailable('local') || forgettingState?.incompleteTopics().length) return [];
     return fragments.map(fragment => ({ ...fragment, text: forgetJsonText(fragment.text, 'data') }));
-  }, ...(health === undefined ? {} : { health: () => health(traceId) }) });
+  }, ...(health === undefined ? {} : { health: async () => {
+    if (!sourceFamilyAvailable('local')) return null;
+    const material = await health(traceId);
+    return sourceFamilyAvailable('local') ? material : null;
+  } }) });
   // Tool outputs from the current turn; flushed to the ledger when the turn's entries persist.
   const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external'; summary: string }> = [];
   const circuitBreaker = new InMemoryCircuitBreaker();
@@ -293,6 +299,7 @@ export const createOwnerResponder = (
     if (!reserve || new TextEncoder().encode(ownerText).byteLength > 16_384) { sourceSnapshot = await sourceScope.unresolved(); binding?.adapter.setTaskSources(sourceSnapshot); return; }
     if (sourceTurnBudget) sourceTurnBudget.remaining--;
     sourceAdmissionCalls++;
+    const classifiedSteering = control.revision();
     const previous = await sourceScope.current();
     let raw: string;
     try {
@@ -306,12 +313,13 @@ export const createOwnerResponder = (
     await assertCurrent();
     const admitted = await sourceScope.classify(raw, traceId);
     sourceSnapshot = admitted.snapshot;
+    sourceSteeringRevision = classifiedSteering;
     binding?.adapter.setTaskSources(sourceSnapshot);
     if (admitted.proposal && sourceScope.propose) {
       await assertCurrent(); await sourceScope.propose(admitted.proposal); await assertCurrent();
     }
   };
-  const sourceFamilyAvailable = (family: string) => !interactiveSource || !requireTaskScope || !!sourceSnapshot?.ready && sourceSnapshot.sources.includes(family as never);
+  const sourceFamilyAvailable = (family: TaskSourceFamily) => !interactiveSource || !requireTaskScope || !!sourceSnapshot?.ready && sourceSnapshot.sources.includes(family) && control.revision() === sourceSteeringRevision;
   const control = turnControl();
   let classifiedHeard = 0;
   const tree = new ConversationTree();
@@ -444,10 +452,11 @@ export const createOwnerResponder = (
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertCurrent();
           const admittedSource = sourceSnapshot;
-          const admittedSteering = control.revision();
+          const admittedSteering = sourceSteeringRevision;
           const sourceRead = taskSourceRequired(handler);
           if (interactiveSource && requireTaskScope && sourceRead) {
             if (!sourceScope || !admittedSource || !taskSourceAllowed(admittedSource, handler)) return { ok: false, code: 'rejected', error: 'This source is outside the current owner task. Use supplied task data or the owner confirmation.', source_taint: 'external' };
+            if (control.revision() !== admittedSteering) return { ok: false, code: 'rejected', error: 'New owner direction must be admitted before reading this source.', source_taint: 'external' };
             await sourceScope.assertSame(admittedSource);
           }
           const retainedRead = ['read_owner_context', 'read_memory', 'search_episodes', 'read_tool_output'].includes(handler.name);
@@ -480,8 +489,16 @@ export const createOwnerResponder = (
       sourceTurnBudget = turnBudget;
       const delegate = delegateTaskHandler(async (task) => {
         const childSource = sourceSnapshot;
+        const childSteering = sourceSteeringRevision;
+        const assertChildSource = async () => {
+          await assertCurrent();
+          if (interactiveSource && requireTaskScope) {
+            if (!sourceScope || !childSource || control.revision() !== childSteering) throw new Error('Child task source scope changed');
+            await sourceScope.assertSame(childSource);
+          }
+        };
         const childHandlers = activeHandlers.map(handler => ({ ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
-          if (interactiveSource && requireTaskScope && childSource) await sourceScope!.assertSame(childSource);
+          await assertChildSource();
           return handler.handle(args, ctx);
         } }));
         // A5b: one run row per spawned child; the exit classification lands on the row, and
@@ -493,13 +510,18 @@ export const createOwnerResponder = (
           budget: turnBudget,
           ctx: { ...safety, ...(turnReplyContext ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
           controlRound: consumeRound,
-          complete: (content, tools, turns) =>
-            complete(trace, 'subagent', [SUBAGENT_SYSTEM_PROMPT, childSource ? taskSourcePrompt(childSource) : ''].filter(Boolean).join('\n\n'), [{ role: 'user', content }], undefined, undefined, tools as never, turns),
+          complete: async (content, tools, turns) => {
+            await assertChildSource();
+            const response = await complete(trace, 'subagent', [SUBAGENT_SYSTEM_PROMPT, childSource ? taskSourcePrompt(childSource) : ''].filter(Boolean).join('\n\n'), [{ role: 'user', content }], undefined, undefined, tools as never, turns);
+            await assertChildSource();
+            return response;
+          },
           onTool: (event) => {
             if (forgottenTexts.size) offloadStore?.clear();
             log({ trace, hop: `subagent_tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: forgetJsonText(event.call.arguments), output: forgetJsonText(event.output, 'tool_result') } });
           },
         });
+          await assertChildSource();
           if (run) runs?.finish(run.id, result.exit === 'completed' ? 'completed' : result.exit === 'stopped' ? 'stopped' : 'failed', (result.text.split('\n')[0] ?? '').slice(0, 120));
           return result;
         } catch (error) {

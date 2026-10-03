@@ -1,3 +1,5 @@
+import { webSearchArgsSchema } from '@waldo/contracts';
+import { toolOutputLedger } from '../src/conversation/tool-output-ledger';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { PASTED_TASK_SCOPE_CASE as fixture } from '../evals/pasted-task-scope-case';
@@ -21,6 +23,8 @@ const run = (name: string, drift: boolean, incomplete: boolean) => runInDurableO
     memory.add({ kind: 'preference', text: 'FORBIDDEN_RETAINED_SENTINEL', source: 'stated', evidence: 'fixture', origin: 'owner' }, new Date().toISOString());
     const taskContext = vi.fn(async () => 'FORBIDDEN_WORKSPACE_SENTINEL');
     const standingOrders = vi.fn(() => 'FORBIDDEN_ORDER_SENTINEL');
+    const recent = vi.fn(async () => []);
+    const health = vi.fn(async () => null);
     let turn = 0;
     let step = 0;
     const inputs: string[] = [];
@@ -36,6 +40,8 @@ const run = (name: string, drift: boolean, incomplete: boolean) => runInDurableO
     const make = () => {
       const args: Parameters<typeof createOwnerResponder> = ['fixture', durableConversationStore(state.storage), memory];
       args[5] = handlers; args[10] = gateway; args[13] = standingOrders;
+      args[8] = { ...toolOutputLedger(state.storage), recent };
+      args[17] = health;
       const scope = { runId: name, attempt: 'fixture-attempt', deadline: Date.now() + 30_000, signal: new AbortController().signal, admit: () => {}, commit: <T>(work: () => T) => work() };
       args[19] = scope;
       args[21] = { sourceScope: createTaskSourceScope(state.storage.sql, name, scope, async () => {}), requireTaskScope: true, skills: { handlers: [], prompt: async () => '', metadata: () => '', taskContext, assertProcedureCurrent: async () => {} } };
@@ -50,6 +56,8 @@ const run = (name: string, drift: boolean, incomplete: boolean) => runInDurableO
       }
       await responder.respond({ traceId: `${name}-${turn}`, conversationRef: 'fictional-owner', surface: 'telegram', text: fixture.visible.conversation[index]!.content, memoryWrites: false }, (_label, work) => work());
     }
+    expect(recent).not.toHaveBeenCalled();
+    expect(health).not.toHaveBeenCalled();
     expect(taskContext).not.toHaveBeenCalled();
     expect(standingOrders).not.toHaveBeenCalled();
     expect(inputs.join('\n')).not.toContain('FORBIDDEN_');
@@ -87,8 +95,8 @@ it('grades source reads even when no send or write occurred; semantic answer cor
   }
 });
 
-it('steering during awaited authentication fences the next physical read before classification', () => runInDurableObject(
-  env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('scope-steering-auth')), async (_instance, state) => {
+it.each(['authentication', 'reply'] as const)('steering during %s fences the next physical read before classification', where => runInDurableObject(
+  env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`scope-steering-${where}`)), async (_instance, state) => {
     const physical = vi.fn(async () => []);
     let responder: ReturnType<typeof createOwnerResponder>;
     let calls = 0;
@@ -97,11 +105,12 @@ it('steering during awaited authentication fences the next physical read before 
       const classifier = request.response_format?.name === 'task_source_scope';
       const text = classifier ? JSON.stringify({ decision: classifications++ === 0 ? 'retain' : 'restrict', sources: [] }) : 'Use supplied data.';
       const tool_calls = !classifier && calls++ === 0 ? [{ call_id: 'read', name: 'search_communication', arguments: '{"query":"fictional","limit":1}' }] : undefined;
+      if (tool_calls && where === 'reply') expect(responder.control.steer(998, 'Use only supplied data now.')).toBe(true);
       return { ok: true, data: { text: tool_calls ? '' : text, ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, model: request.model, latency_ms: 1 } };
     } };
     const google = { client: async () => {
       await Promise.resolve();
-      expect(responder.control.steer(999, 'Use only the supplied data now.')).toBe(true);
+      if (where === 'authentication') expect(responder.control.steer(999, 'Use only the supplied data now.')).toBe(true);
       return { searchMail: physical };
     } } as unknown as GoogleAccess;
     const handlers = googleHandlers(google, { propose: async () => 'unused', proposeSendEmail: async () => 'unused', record() {} }, { timezone: 'UTC', now: () => new Date() }).filter(h => h.name === 'search_communication');
@@ -113,4 +122,32 @@ it('steering during awaited authentication fences the next physical read before 
     await responder.respond({ traceId: 'auth-turn', conversationRef: 'fixture', surface: 'telegram', text: 'Read the fictional inbox', memoryWrites: false }, (_label, fn) => fn());
     expect(physical).not.toHaveBeenCalled();
     expect(classifications).toBe(2);
+  }));
+
+
+it('narrowing steering aborts child continuation and prevents stale source summary publication', () => runInDurableObject(
+  env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('scope-child-steering')), async (_instance, state) => {
+    let responder: ReturnType<typeof createOwnerResponder>;
+    let classifications = 0; let parentCalls = 0; let childCalls = 0;
+    const inputs: string[] = [];
+    const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
+      if (request.response_format?.name === 'task_source_scope') return { ok: true, data: { text: JSON.stringify({ decision: classifications++ === 0 ? 'retain' : 'restrict', sources: [] }), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, model: request.model, latency_ms: 1 } };
+      inputs.push(JSON.stringify(request));
+      const child = request.system?.startsWith('You are a subagent') ?? false;
+      const tool_calls = child ? childCalls++ === 0 ? [{ call_id: 'child-read', name: 'web_search', arguments: '{"query":"fictional","limit":1}' }] : undefined
+        : parentCalls++ === 0 ? [{ call_id: 'delegate', name: 'delegate_task', arguments: '{"task":"Read fictional source"}' }] : undefined;
+      return { ok: true, data: { text: tool_calls ? '' : child ? 'FORBIDDEN_CHILD_SENTINEL' : 'Use supplied task data.', ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, model: request.model, latency_ms: 1 } };
+    } };
+    const scope = { runId: 'scope-child', attempt: 'fixture', deadline: Date.now() + 30_000, signal: new AbortController().signal, admit() {}, commit: <T>(fn: () => T) => fn() };
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', durableConversationStore(state.storage)];
+    args[3] = entry => { if (entry.hop === 'subagent_tool_web_search') expect(responder.control.steer(777, 'Use supplied data only from now on.')).toBe(true); };
+    args[5] = [{ name: 'web_search', description: 'Read fictional source', schema: webSearchArgsSchema, trigger_allowlist: ['user_message'], autonomy_gated: false, handle: async () => ({ ok: true, data: { text: 'FORBIDDEN_CHILD_SENTINEL' }, source_taint: 'external' }) }];
+    args[10] = gateway; args[19] = scope;
+    args[21] = { sourceScope: createTaskSourceScope(state.storage.sql, 'owner', scope, async () => {}), requireTaskScope: true };
+    responder = createOwnerResponder(...args);
+    const result = await responder.respond({ traceId: 'child-turn', conversationRef: 'fixture', surface: 'telegram', text: 'Research the fictional source', memoryWrites: false }, (_label, fn) => fn());
+    expect(childCalls).toBe(1);
+    expect(classifications).toBe(2);
+    expect(inputs.join('\n')).not.toContain('FORBIDDEN_CHILD_SENTINEL');
+    expect(result).not.toContain('FORBIDDEN_CHILD_SENTINEL');
   }));
