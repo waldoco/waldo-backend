@@ -1493,7 +1493,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const sourceScope = createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
           await admission.assertCurrent();
           if (await currentTaskOwnerKey() !== taskOwnerKey) throw new ClosedRunError();
-        });
+        }, { inputRef: turn.traceId, text: turn.text, quotedRanges: turn.sourceQuoteRanges });
         return { admission, adapter, store: ownerCanonicalHistory(storage, admission, adapter), skills,
           sourceScope: { ...sourceScope, propose: async proposal => { await admission.assertCurrent(); await desk.proposeTaskSources(proposal); await admission.assertCurrent(); } },
           forgetting: { principal_ref: admission.invocation.verified_authority.principal_ref, tenant_ref: admission.invocation.verified_authority.tenant_ref, store: memory } };
@@ -1521,7 +1521,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const sourceScope = createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
           await assertSkillOwnerCurrent();
           if (await currentTaskOwnerKey() !== taskOwnerKey) throw new ClosedRunError();
-        });
+        }, { inputRef: turn.traceId, text: turn.text, quotedRanges: turn.sourceQuoteRanges });
         return Object.freeze({ ...capability, sourceScope: { ...sourceScope, propose: async proposal => {
           await assertSkillOwnerCurrent(); await desk.proposeTaskSources(proposal); await assertSkillOwnerCurrent();
         } }, taskContext: async (assertSourceCurrent?: () => Promise<void>) => {

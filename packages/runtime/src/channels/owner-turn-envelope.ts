@@ -24,6 +24,8 @@ export type OwnerTurnEnvelope = Readonly<{
   conversationRef: string;
   surface: string;
   text: string;
+  // Host-parsed source markup; these ranges never supply task-transition evidence.
+  sourceQuoteRanges?: readonly Readonly<{ start: number; end: number }>[];
   mediaNote?: string;
   replyTo?: ReplyContext;
   attachment?: LLMAttachment;
