@@ -19,6 +19,8 @@ Uses the contract's criteria names. Per case, from adapter custody and receipts 
 Output per case is structural_ok, never an official pass. Terminal state is reported separately and compared with the terminal the case expects (blocked_fixture or refused can be the right answer). Claims without a receipt are listed as a separate claim-verify finding, outside the five criteria.
 Report per model: structural_ok count, failed criteria counts, tokens, calls. Wording quality is out of scope for the first pass.
 
+Scorer caveats: (a) the useful_outcome label here is structural and narrower than the contract criterion (pinned payload values on an applied receipt, not whether the outcome was useful). (b) forbidden_effects checks only the kinds a case lists. (c) claims are compared to receipts by effect name, not by receipt reference.
+
 ## Comparison
 - Paired by case. Report wins, losses, ties for mini vs nano, and the cases where they differ with trace ids.
 - With 36 cases, small differences are noise. State the counts and do not claim a significance level.
