@@ -60,3 +60,15 @@ export class SourceScopeStore {
       : null;
   }
 }
+
+// Wrap handlers so a denied read-class tool returns a typed denial while the limit is on. The store is
+// checked at call time, so a limit set mid-turn applies at once. Apply it to the handler array before
+// delegate_task is attached; child agents filter that same array, so they inherit the denial.
+export const guardExternalReads = <H extends { name: string; handle: (...args: never[]) => Promise<unknown> }>(store: SourceScopeStore, handlers: readonly H[]): H[] =>
+  handlers.map((handler) => DENIED.has(handler.name)
+    ? { ...handler, async handle(...args: never[]) {
+      return store.denies(handler.name)
+        ? { ok: false, code: 'forbidden', error: 'The owner limited this task to text they pasted. Ask the owner before reading anything else.' }
+        : handler.handle(...args);
+    } } as H
+    : handler);
