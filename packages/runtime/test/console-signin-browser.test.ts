@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { handleConsole } from '../src/channels/console-signin';
 import type { ConsoleAuth } from '../src/identity/console-auth';
 
-const browser = async () => {
+const browser = async (target = '') => {
   const response = await handleConsole(new Request('https://fixture.test/console/signin'),
     { TELEGRAM_OWNER_DO: {} as DurableObjectNamespace }, {} as ConsoleAuth);
   const script = (await response!.text()).match(/<script>([\s\S]*?)<\/script>/)![1]!;
@@ -14,7 +14,7 @@ const browser = async () => {
   const navigations: string[] = [];
   const requests: { url: string; options: RequestInit; resolve: (value: any) => void; reject: (error: Error) => void }[] = [];
   const makeMain = (phase = 'details') => {
-    const fields = { email: 'fixture@example.test', phone: '+15555550123', invite: 'FIXTURE', ...(phase === 'code' ? { code: 'synthetic-otp' } : {}) };
+    const fields = { ...(target ? { return_to: target } : {}), email: 'fixture@example.test', phone: '+15555550123', invite: 'FIXTURE', ...(phase === 'code' ? { code: 'synthetic-otp' } : {}) };
     const inputs = Object.entries(fields).map(([name, value]) => ({ name, value, focus: () => {} }));
     const attributes = new Map<string, string>();
     const form = { action: `https://fixture.test/console/${phase === 'code' ? 'verify' : 'signin'}`, method: 'post', dataset: { pending: 'Working…' },
@@ -22,9 +22,10 @@ const browser = async () => {
     const button = { disabled: false };
     const cancel = { hidden: true, disabled: false, addEventListener: (name: string, handler: () => void) => { events[`cancel-${name}`] = handler; } };
     const status = { textContent: '' };
+    const download = { getAttribute: (name: string) => name === 'href' ? inputs.find(input => input.name === 'return_to')?.value : null };
     const main: any = { phase, form, button, cancel, status, inputs, attributes,
-      querySelector: (selector: string) => selector === 'input:not([type="hidden"])' ? inputs[0] : selector === '#signin-code' ? inputs.find(input => input.name === 'code') ?? null : selector === '#signin-progress' ? status : selector === '#signin-cancel' ? cancel : null,
-      querySelectorAll: (selector: string) => selector === 'form' ? [form] : selector === 'button' ? [button, cancel] : selector === 'input' ? inputs : [],
+      querySelector: (selector: string) => selector === '#signin-download' ? phase === 'download' ? download : null : selector === 'input:not([type="hidden"])' ? inputs[0] : selector === '#signin-code' ? inputs.find(input => input.name === 'code') ?? null : selector === '#signin-progress' ? status : selector === '#signin-cancel' ? cancel : null,
+      querySelectorAll: (selector: string) => selector === 'form' ? phase === 'download' ? [] : [form] : selector === 'button' ? [button, cancel] : selector === 'input' ? inputs : [],
       cloneNode: () => { const clone = makeMain(phase); inputs.forEach(input => { clone.inputs.find((other: any) => other.name === input.name).value = input.value; }); return clone; },
       replaceWith: (next: any) => { current = next; },
     };
@@ -206,4 +207,38 @@ it('ignores stale HTML decoding after cancellation', async () => {
   finish('code'); await send.settled;
   expect(b.ui().phase).toBe('details'); expect(b.ui().button.disabled).toBe(false);
   expect(b.history).toHaveLength(1);
+});
+
+it('shows the OTP terminal link without fetching or navigating to binary bytes', async () => {
+  const target = '/console/workspace/file?id=def993c9-db4d-49c4-8998-8465bed3606e&revision=1';
+  const b = await browser(target);
+  const send = b.submit(); b.reply(0, 'code'); await send.settled;
+  const verify = b.submit(); b.reply(1, 'download'); await verify.settled;
+  expect(b.ui().phase).toBe('download');
+  expect(b.ui().querySelector('#signin-download').getAttribute('href')).toBe(target);
+  expect(b.requests.map(request => request.url)).toEqual(['https://fixture.test/console/signin', 'https://fixture.test/console/verify']);
+  expect(b.navigations).toEqual([]);
+  expect(b.ui().status.textContent).toBe('');
+});
+it('rejects a terminal link different from the submitted download intent', async () => {
+  const target = '/console/workspace/file?id=def993c9-db4d-49c4-8998-8465bed3606e&revision=1';
+  const b = await browser(target);
+  const send = b.submit(); b.reply(0, 'code'); await send.settled;
+  const verify = b.submit(); b.reply(1, JSON.stringify({ phase: 'download', values: { return_to: 'https://evil.test/' } })); await verify.settled;
+  expect(b.ui().phase).toBe('code');
+  expect(b.ui().status.textContent).toContain('Could not confirm');
+  expect(b.navigations).toEqual([]);
+});
+it('restores terminal and details screens on Back and Forward without repeating OTP or binary reads', async () => {
+  const target = '/console/workspace/file?id=def993c9-db4d-49c4-8998-8465bed3606e&revision=1';
+  const b = await browser(target);
+  const send = b.submit(); b.reply(0, 'code'); await send.settled;
+  const verify = b.submit(); b.reply(1, 'download'); await verify.settled;
+  await b.events.popstate!({ state: { waldoSignin: 'details' } });
+  expect(b.ui().phase).toBe('details');
+  await b.events.popstate!({ state: { waldoSignin: 'download' } });
+  expect(b.ui().phase).toBe('download');
+  expect(b.ui().querySelector('#signin-download').getAttribute('href')).toBe(target);
+  expect(b.requests).toHaveLength(2);
+  expect(b.navigations).toEqual([]);
 });

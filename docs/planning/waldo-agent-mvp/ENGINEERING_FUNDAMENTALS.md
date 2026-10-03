@@ -18,6 +18,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Every URL we send in chat has previews turned off unless the preview is the point.
 - Tokens have an expiry, a single use, and are compared in full. Minting a new one invalidates the old one on purpose, and the tests say so.
 - Cookies: HttpOnly, Secure, a narrow Path, and a SameSite value that works for the actual navigation (Strict cookies are dropped on cross-site redirects).
+- Private download sign-in preserves only a canonical read-only file/revision target across expiry, OTP retry and edit. Resume through an explicit same-origin link with unchanged owner/session checks; test malicious targets, account switches, terminal history and absence of binary fetches.
 - Every state-changing request checks CSRF and the owner identity. Callback data from buttons is checked against the owner before it acts.
 - Secrets never reach the repo, chat, logs or traces.
 
@@ -336,3 +337,4 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 | 2026-10-03 | Hook-cloned scope identity rejected valid owner skill lifecycle tools | Curated skill authority | curated-skills-owner-do.test.ts actual dispatcher install/disable and curated-skills-tools.test.ts forged-scope rejection | Captured authority closures and pinned run identity govern mutations, not scope object equality |
 | 2026-10-03 | Captured procedure instructions survived disable during reduced-context retry and medical recursion | Curated skill revocation | curated-skills-retry.test.ts physical provider-boundary disable regressions | Check revocation for each physical provider request, including recursive paths |
 | 2026-10-03 | Oversized and NUL-tail stored skill fields were materialized before rejection | Curated skill storage | curated-skills.test.ts actual-SQL byte-bound and rejected-row-presence regressions | Project bounded fields before JavaScript and retain rejected presence; never reactivate hostile rows as absent |
+| 2026-10-03 | A Telegram document link redirected to sign-in and lost its file target although direct navigation downloaded the retained PDF | Console private downloads | console-signin.test.ts target validation/retry/expiry, console-owner-routing.test.ts ticket expiry, console-signin-browser.test.ts terminal/history/no binary fetch, owner-do-registered-workspace.test.ts expired/revoked/foreign account and exact PDF/DOCX bytes | Preserve Strict cookies and download intent; resume with an explicit same-origin link after existing authentication admission |
