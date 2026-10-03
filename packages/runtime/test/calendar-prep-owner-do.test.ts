@@ -194,6 +194,8 @@ const counterCases: CounterCase[] = [
   { name: 'null historical sends', last: null, ready: true },
   { name: 'future date', day: '2099-01-01', ready: false, inspection: true },
   { name: 'future send', last: Date.parse('2099-01-01T00:00:00Z'), ready: false, inspection: true },
+  { name: 'same-day future send', last: Date.parse('2026-10-03T05:00:00Z'), ready: false, inspection: true },
+  { name: 'subkind-only same-day future send', tables: ['subkind_state'], last: Date.parse('2026-10-03T05:00:00Z'), ready: false, inspection: true },
   { name: 'malformed date', day: 'yesterday', ready: false, inspection: true },
   { name: 'nonexistent civil date', day: '2026-02-30', ready: false, inspection: true },
   { name: 'budget-only malformed date', tables: ['daily_push_budget'], day: '2026-02-30', ready: false, inspection: true },

@@ -1612,6 +1612,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const last = storage.sql.exec<{ at: number | null }>(`SELECT MAX(last_sent_at) AS at FROM (
           SELECT last_sent_at FROM class_state UNION ALL SELECT last_sent_at FROM subkind_state
         )`).one().at;
+        if (last !== null && last > now) return 'future send timestamp; inspection required';
         // Comparing civil dates also covers DST days without assuming a 24-hour day.
         const sentDays = last === null ? [] : zones.map(zone => localIso(last, zone).slice(0, 10));
         if (rowDays.some(day => day > latestDay)) return 'future counter date; inspection required';

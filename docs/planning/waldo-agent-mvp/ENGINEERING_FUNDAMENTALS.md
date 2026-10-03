@@ -351,3 +351,4 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 | Date | Bug found | Surface | Adversarial proof | Checklist change |
 | --- | --- | --- | --- | --- |
 | 2026-10-03 | Historical daily rows permanently blocked initial Calendar activation; later timezone changes ignored budget/subkind rows | Owner DO Calendar counter marker | calendar-prep-owner-do.test.ts historical adoption RED, boundary/sibling/malformed/finite-transition matrix and exact retained-row/lifetime/cooldown assertions | Adopt only after both civil days have advanced; preserve SQL state and default-off behavior |
+| 2026-10-03 | Future send timestamps later in the current civil day were reported as ordinary rollover holds | Owner DO Calendar counter marker | calendar-prep-owner-do.test.ts same-day future class/subkind send regressions | Compare send instants with now before civil-day checks; future instants require inspection |
