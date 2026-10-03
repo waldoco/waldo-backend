@@ -40,8 +40,9 @@ export function constellationScene(data: MemoryPattern, focusId: string, claims:
   const nodes: SceneNode[] = [{ id: focus.id, kind: 'pattern', label: focus.label, point: { x: 310, y: 250 } }];
   // Unequal branch lengths and staggered columns keep the scene out of a wheel.
   peers.forEach((pattern, index) => {
-    const column = Math.floor(index / 4), row = index % 4;
-    nodes.push({ id: pattern.id, kind: 'pattern', label: pattern.label, point: { x: 425 + column * 125 + (row % 2 ? 8 : -8), y: 60 + row * 110 + (column % 2 ? 15 : 0) } });
+    const rows = Math.max(4, Math.ceil(peers.length / 3));
+    const column = Math.min(2, Math.floor(index / rows)), row = index % rows;
+    nodes.push({ id: pattern.id, kind: 'pattern', label: pattern.label, point: { x: Math.min(695, 425 + column * 125 + (row % 2 ? 8 : -8)), y: 60 + row * (330 / (rows - 1)) + (column % 2 ? 15 : 0) } });
   });
   const supportIds = new Set(focus.support.claim_ids);
   const shown = [...new Map(claims.filter(claim => supportIds.has(claim.id)).map(claim => [claim.id, claim])).values()].slice(0, SUPPORT_PREVIEW_LIMIT);

@@ -62,6 +62,17 @@ describe('saved Constellation branches', () => {
     expect(new Set(scene.nodes.filter(node => node.kind === 'pattern').map(node => node.point.x)).size).toBeGreaterThan(3);
   });
 
+  it('keeps a thirteenth and later peer inside the label-safe canvas', () => {
+    const data = pattern();
+    for (const count of [13, 18, 25]) {
+      data.nodes = Array.from({ length: count }, (_, i) => ({ ...data.nodes[0]!, id: `pattern:${i}` }));
+      const nodes = constellationScene(data, data.center.id, []).nodes;
+      expect(nodes).toHaveLength(count + 1);
+      for (const node of nodes) { expect(node.point.x).toBeLessThanOrEqual(695); expect(node.point.y).toBeLessThanOrEqual(405); }
+      expect(new Set(nodes.map(node => `${node.point.x}:${node.point.y}`)).size).toBe(count + 1);
+    }
+  });
+
   it('escapes saved content and provides explicit counts, glyphs and a keyboard/list fallback', () => {
     const data = pattern();
     data.center = { ...data.center, label: '<script>pattern</script>', summary: '<img src=x onerror=evil()>', estimate: null };
