@@ -47,7 +47,7 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   return {
     exchange: async (doName, code, redirectUri, codeVerifier) => link(await post({ do_name: doName, op: 'exchange', code, redirect_uri: redirectUri, ...(codeVerifier ? { code_verifier: codeVerifier } : {}) })),
     adopt: async (doName, tokens) => link(await post({ do_name: doName, op: 'adopt', refresh_token: tokens.refresh_token, email: tokens.email ?? 'google', scopes: tokens.scopes ?? [] })),
-    client: (doName, connection, health, intent) => Object.fromEntries(METHODS.map((method) => [method, async (...args: unknown[]) => {
+    client: (doName, connection, health, intent) => ({ account: { connection_id: connection, email: null }, ...Object.fromEntries(METHODS.map((method) => [method, async (...args: unknown[]) => {
       try {
         // JSON arrays cannot hold undefined: an omitted trailing optional arg (sendRaw's threadId,
         // moveEvent/cancelEvent's etag) would cross the wire as null and fail typed validation.
@@ -62,7 +62,7 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
         if (error instanceof GoogleError && error.status === 401) health?.(error.message);
         throw error;
       }
-    }])) as unknown as GoogleClient,
+    }])) }) as unknown as GoogleClient,
     mcpCall: async (doName, connection, serverUrl, tool, args, intent) => {
       if(!intent)throw new ProxyIntentError('intent_required');
       // A host-derived read intent says so on the wire. The edge must still match server and tool against its own
