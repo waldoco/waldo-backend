@@ -322,3 +322,8 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] An admitted steering message needs its own durable outcome. If never consumed, return only that exact child to its original FIFO admission; if consumed, never replay effects and publish a deduplicated fixed uncertainty notice. Model exposure follows successful durable consumption, and notice publication failure retains a durable wake.
 
 | 2026-10-02 | Final-round steering was ACKed but ignored/quarantined with its body erased and no child outcome | Owner inbox/delivery | normal-DO concurrent final-round and refused steering RED/GREEN, late-target FIFO/dedup, consumed/missing transition fences, restart and outbox-capacity notice recovery | Reuse the existing durable inbox and fenced final outbox; preserve never-consumed message identity, prohibit consumed replay, and retain publication intent until enqueue |
+
+### Bounded document rendering
+- [ ] PDF line wrapping bounds font-measurement work for long unbroken tokens as well as ordinary words. Cover geometry and the maximum admitted source length in workerd; rendering must not turn a bounded owner input into quadratic CPU work.
+
+| 2026-10-03 | PDF wrapping measured 42,529 font widths for a 2,000-character unbroken token | Workspace document export | artifact-export.test.ts long-token measurement/geometry regression and document-render-compat.test.ts maximum 32,000-character token in workerd | Binary-search wrapping keeps bounded inputs within bounded rendering work; retain real-byte and authenticated-download acceptance |
