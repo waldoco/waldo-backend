@@ -8,6 +8,7 @@ import { routerSignature } from '../src/identity/owner-directory';
 import * as dispatcher from '../src/tools/dispatcher';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
+import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 
 type InputItem = { type?: string; call_id?: string; name?: string; output?: string };
 type RequestBody = { tools?: { name: string }[]; input: string | InputItem[]; text?: { format?: { name?: string } }; instructions?: string };
@@ -49,7 +50,7 @@ beforeEach(() => { model.requests = []; model.reply = undefined; model.telegram 
 async function proof(work: (h: {
   state: DurableObjectState; name: string; bytes: Map<string, Uint8Array>; puts: string[]; gets: string[]; rpc: string[];
   enqueue(text: string, id?: number, subject?: string, doName?: string): Promise<{ response: Response; id: number }>;
-  send(text: string, id?: number): Promise<number>; alarm(): Promise<void>; restart(): void; manifest(): WorkspaceState | null;
+  send(text: string, id?: number): Promise<number>; alarm(): Promise<void>; restart(): void; manifest(): WorkspaceState | null; request(request: Request): Promise<Response>;
   mapping: { owner_id: string; environment: string; namespace: string; do_name: string; do_id: string; state_version: number; mapping_version: number };
   absent(): void; unlinked(): void; pauseMapping(afterReservation?: boolean): ReturnType<typeof deferred>; pausePut(): ReturnType<typeof deferred>;
   onPut(fn: () => void): void; dispatches: MockInstance<typeof dispatcher.dispatchTool>;
@@ -119,7 +120,7 @@ async function proof(work: (h: {
       const row = state.storage.sql.exec<{ state_json: string }>('SELECT state_json FROM workspace_manifest WHERE singleton=1').toArray()[0];
       return row ? JSON.parse(row.state_json) as WorkspaceState : null;
     };
-    try { await work({ state, name, bytes, puts, gets, rpc, enqueue, send, alarm: () => instance.alarm(), restart: () => { instance = new TelegramOwnerDO(state, fixtureEnv); }, manifest, mapping,
+    try { await work({ state, name, bytes, puts, gets, rpc, enqueue, send, alarm: () => instance.alarm(), request: request => instance.fetch(request), restart: () => { instance = new TelegramOwnerDO(state, fixtureEnv); }, manifest, mapping,
       absent: () => { missing = true; }, unlinked: () => { state.storage.kv.put('telegram_unlinked', true); },
       pauseMapping: (afterReservation = false) => { pauseAfterReservation = afterReservation; mappingPause = deferred(); pauses.push(mappingPause); return mappingPause; }, pausePut: () => { putPause = deferred(); pauses.push(putPause); return putPause; }, onPut: fn => { afterPut = fn; }, dispatches });
     } finally { for (const pause of pauses) pause.release(); await state.storage.deleteAlarm(); localFetch.mockRestore(); dispatches.mockRestore(); }
@@ -320,7 +321,7 @@ it('scheduled reminder cannot write through the registered workspace closure wit
   });
 });
 
-it.each(['pdf', 'docx'] as const)('default owner ingress renders an actual %s file, returns its immutable link and lists its retained digest after restart', async format => {
+it.each(['pdf', 'docx'] as const)('default owner ingress renders an actual %s file, downloads exact authenticated bytes and retains its digest after restart', async format => {
   await proof(async h => {
     await h.state.storage.put('origin', 'https://local.invalid');
     model.reply = request => {
@@ -340,10 +341,63 @@ it.each(['pdf', 'docx'] as const)('default owner ingress renders an actual %s fi
     const bytes = h.bytes.get(key)!;
     expect(bytes.length).toBe(rendered.data.byte_size);
     expect([...bytes.slice(0,4)]).toEqual(format==='pdf'?[37,80,68,70]:[80,75,3,4]);
+    const access = consoleAccess(h.state.storage);
+    const sessionLink = await access.mintLink('https://local.invalid');
+    const session = await access.redeem(new URL(sessionLink).searchParams.get('t')!);
+    expect(session).toBeTruthy();
+    const headers = {cookie: `${CONSOLE_COOKIE}=${session}`};
+    const download = await h.request(new Request(rendered.data.delivery.url, {headers}));
+    expect(download.status).toBe(200);
+    expect(download.headers.get('content-type')).toBe(format==='pdf'?'application/pdf':'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    expect(download.headers.get('content-disposition')).toBe(`attachment; filename="file"; filename*=UTF-8''export.${format}`);
+    expect(download.headers.get('content-length')).toBe(String(bytes.length));
+    expect(download.headers.get('cache-control')).toBe('private, no-store');
+    expect(download.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(new Uint8Array(await download.arrayBuffer())).toEqual(bytes);
+    const reads = h.gets.length;
+    expect((await h.request(new Request(rendered.data.delivery.url))).status).toBe(401);
+    const otherName = `${h.name}-foreign-download`;
+    const otherStub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(otherName));
+    const otherSession = await runInDurableObject(otherStub, async (_instance,state) => {
+      const otherAccess = consoleAccess(state.storage);
+      const link = await otherAccess.mintLink('https://local.invalid');
+      return otherAccess.redeem(new URL(link).searchParams.get('t')!);
+    });
+    expect((await h.request(new Request(rendered.data.delivery.url,{headers:{cookie:`${CONSOLE_COOKIE}=${otherSession}`}}))).status).toBe(401);
+    expect((await otherStub.fetch(rendered.data.delivery.url,{headers})).status).toBe(401);
+    const absent = new URL(rendered.data.delivery.url);absent.searchParams.set('id',crypto.randomUUID());
+    expect((await h.request(new Request(absent,{headers}))).status).toBe(404);
+    expect(h.gets).toHaveLength(reads);
     h.restart();
+    const afterRestart = await h.request(new Request(rendered.data.delivery.url,{headers}));
+    expect(afterRestart.status).toBe(200);
+    expect(new Uint8Array(await afterRestart.arrayBuffer())).toEqual(bytes);
     model.reply = request => outputs(request).savedDoc ? 'Stored document remains.' : [call('workspace_list',{prefix:'docs/export.'},'savedDoc')];
     await h.send('Check my exported document after restart.');
     expect(allOutputs().savedDoc).toMatchObject({ok:true,data:{files:[{file_id:rendered.data.file_id,revision:1,sha256:rendered.data.sha256}]}});
     expect(h.manifest()).toEqual(manifest); expect(h.puts).toHaveLength(2);
   });
+});
+
+it('default MD and TXT writes return authenticated downloads with exact text MIME, filename and bytes',async()=>{
+ await proof(async h=>{
+  await h.state.storage.put('origin','https://local.invalid');
+  model.reply=request=>{
+   const done=outputs(request);
+   if(!done.markdownFile)return [call('workspace_write',{path:'docs/notes.md',text:'# Notes\nSaved markdown.',mime:'text/markdown',expected_revision:0},'markdownFile')];
+   if(!done.textFile)return [call('workspace_write',{path:'docs/notes.txt',text:'Saved plain text.',mime:'text/plain',expected_revision:0},'textFile')];
+   return 'Text documents saved.';
+  };
+  await h.send('Save my notes in Markdown and TXT.');
+  const access=consoleAccess(h.state.storage),link=await access.mintLink('https://local.invalid');
+  const session=await access.redeem(new URL(link).searchParams.get('t')!);
+  for(const [name,mime,filename,text] of [['markdownFile','text/markdown','notes.md','# Notes\nSaved markdown.'],['textFile','text/plain','notes.txt','Saved plain text.']] as const){
+   const r=allOutputs()[name]!;expect(r.ok).toBe(true);expect(r.data.delivery.status).toBe('owner_link');
+   const download=await h.request(new Request(r.data.delivery.url,{headers:{cookie:`${CONSOLE_COOKIE}=${session}`}}));
+   expect(download.status).toBe(200);expect(download.headers.get('content-type')).toBe(mime);
+   expect(download.headers.get('content-disposition')).toBe(`attachment; filename="file"; filename*=UTF-8''${filename}`);
+   expect(await download.text()).toBe(text);
+  }
+  expect(h.puts).toHaveLength(2);
+ });
 });
