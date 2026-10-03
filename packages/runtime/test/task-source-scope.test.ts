@@ -223,3 +223,57 @@ it('explicit same-task source change preserves identity and close retires reads 
   const ambiguous = (await close.classify(decision('retain', ['mail']), 'follow-input')).snapshot;
   expect(ambiguous.sources).toEqual([]);
 }));
+
+
+it.each(['invalid', 'uncertain'] as const)('fresh owner %s recovery retains strict pasted-only sources without adding classifier families', kind => run(`recovery-strict-${kind}`, async (sql, scope) => {
+  const text = 'Which Alex is that going to?';
+  const cap = createTaskSourceScope(sql, 'owner', scope, async () => {}, { inputRef: 'followup', text });
+  const strict = (await cap.classify(decision('restrict'), 'pasted-start')).snapshot;
+  const raw = kind === 'invalid' ? 'not json' : JSON.stringify({ decision: 'uncertain', sources: ['mail', 'workspace'], evidence: null });
+  const result = await cap.classify(raw, 'followup', text, true);
+  expect(result.snapshot.taskId).toBe(strict.taskId); expect(result.snapshot.startRef).toBe(strict.startRef);
+  expect(result.snapshot.sources).toEqual([]); expect(result.outcome).toBe(kind === 'invalid' ? 'retained_invalid' : 'retained_uncertain');
+  for (const name of ['search_communication', 'workspace_list', 'web_search'] as const) expect(taskSourceAllowed(result.snapshot, { name })).toBe(false);
+}));
+
+it.each(['baseline', 'unready', 'closed', 'pending', 'quoted', 'steering', 'stale-input'] as const)('invalid classification never recovers %s custody', kind => run(`recovery-deny-${kind}`, async (sql, scope) => {
+  const text = 'Use the current workspace notes.';
+  const witness = { inputRef: 'current', text, quotedRanges: kind === 'quoted' ? [{ start: 0, end: text.length }] : [] };
+  const cap = createTaskSourceScope(sql, 'owner', scope, async () => {}, witness);
+  if (kind !== 'baseline') await cap.classify(decision('restrict', ['workspace']), 'workspace-start');
+  if (kind === 'unready') await cap.unresolved();
+  if (kind === 'pending') await cap.classify(decision('change', ['workspace', 'mail']), 'old-input');
+  if (kind === 'closed') {
+    const closeText = 'Close the current task.';
+    const close = createTaskSourceScope(sql, 'owner', scope, async () => {}, { inputRef: 'close', text: closeText });
+    await close.classify(JSON.stringify({ decision: 'close', sources: [], evidence: closeText }), 'close', closeText);
+  }
+  const before = await cap.current();
+  const result = await cap.classify('not json', kind === 'stale-input' ? 'old-input' : 'current', text, kind !== 'steering');
+  expect(result.outcome).toBe('invalid_decision'); expect(result.snapshot.ready).toBe(false);
+  expect(result.snapshot.taskId).toBe(before.taskId); expect(result.snapshot.sources).toEqual(before.sources);
+  expect(taskSourceAllowed(result.snapshot, { name: 'workspace_list' })).toBe(false);
+}));
+
+it('valid restrictive instructions take precedence over same-scope recovery', () => run('recovery-narrow', async (sql, scope) => {
+  const text = 'Use only supplied fictional material now.';
+  const cap = createTaskSourceScope(sql, 'owner', scope, async () => {}, { inputRef: 'current', text });
+  await cap.classify(decision('restrict', ['workspace']), 'workspace-start');
+  const result = await cap.classify(JSON.stringify({ decision: 'restrict', sources: [], evidence: null }), 'current', text, true);
+  expect(result.snapshot.sources).toEqual([]); expect(result.outcome).toBe('restricted');
+  expect(taskSourceAllowed(result.snapshot, { name: 'workspace_list' })).toBe(false);
+}));
+
+it('a concurrent restriction wins CAS while an invalid-decision recovery is suspended', () => run('recovery-cas', async (sql, scope) => {
+  let gated = false; let calls = 0; let entered!: () => void; let release!: () => void;
+  const reached = new Promise<void>(resolve => { entered = resolve; }); const paused = new Promise<void>(resolve => { release = resolve; });
+  const text = 'Derive a plan from the current workspace notes.';
+  const cap = createTaskSourceScope(sql, 'owner', scope, async () => { if (gated && ++calls === 2) { entered(); await paused; } }, { inputRef: 'current', text });
+  await cap.classify(decision('restrict', ['workspace']), 'workspace-start'); gated = true;
+  const recovery = cap.classify('not json', 'current', text, true);
+  await reached;
+  const concurrent = createTaskSourceScope(sql, 'owner', scope, async () => {});
+  await concurrent.classify(decision('restrict'), 'new-restriction'); release();
+  await expect(recovery).rejects.toThrow('Task source scope changed');
+  expect((await concurrent.current()).sources).toEqual([]);
+}));

@@ -450,3 +450,11 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 
 
 | 2026-10-03 | N01R new workspace task denied after pasted-only scope because restrict intersected old[] and new required an extra card | Owner task planning / admission | Actual default owner DO RED→GREEN: strict follow-up denied; fresh authenticated new workspace list/create/readback allowed with mail/browser denied after recreation. task-source-scope tests reject quoted/stale/invented evidence and revoked owner; owner/task/revision CAS invalidates old cards/reads. | Model interprets explicit intent within independent host grants/ACLs; unmarked pasted text intent remains model-dependent. Live N01/N02 file referent correctness remains unproved. |
+
+
+| Date | Failure | Domain | Regression/evidence | Limitation |
+| --- | --- | --- | --- | --- |
+| 2026-10-03 | N01R workspace continuation kept workspace families but made custody unreadable after invalid/uncertain classification | Owner task planning recovery | Actual default DO RED→GREEN after recreation: list/read/derive plan succeeds, original unchanged, mail denied. Strict[] and valid narrowing remain denied; baseline/unready/closed/pending/quote/stale/steering controls and concurrent restriction CAS fail closed. Enum-only outcome diagnostics distinguish recovery/denial without raw model output. | Only exact ordinary fresh owner input with prior ready narrowed pinned scope may recover. New restrictions missed by model can remain unrecognized; existing unresolved rows are not blindly revived. Wrong-file referents remain unproved. |
+
+- [ ] An invalid/uncertain ordinary source classification must not disable a previously ready narrow workspace task. Recovery preserves exact task/families/boundary and independent permissions; initial, unready, closed, pending, quoted/stale or steering states cannot recover. A valid new supplied-only restriction always overrides recovery.
+- [ ] Metadata-only custody outcomes must distinguish invalid_decision/uncertain from retained_invalid/retained_uncertain; never export raw classifier output/evidence or classify private content with diagnostic regexes.
