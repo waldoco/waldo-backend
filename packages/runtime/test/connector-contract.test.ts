@@ -35,7 +35,7 @@ describe('tier-2 connector contract', () => {
   it('a 403 scope rejection maps to auth_failed with a scope_missing intent, not a generic error', async () => {
     const google: GoogleAccess = {
       client: async () => ({
-        events: async () => { throw new GoogleError(403, 'insufficient authentication scopes'); },
+        events: async () => { throw new GoogleError(403, 'insufficient authentication scopes', 'ACCESS_TOKEN_SCOPE_INSUFFICIENT'); },
       }) as never,
     };
     const query = googleHandlers(google, desk, clock).find((h) => h.name === 'query_calendar')!;
