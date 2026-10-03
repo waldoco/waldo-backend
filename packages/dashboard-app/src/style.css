@@ -265,3 +265,16 @@ button:disabled {opacity:.55;cursor:default}
 .constellation-scroll-hint{display:none}
 @media(max-width:860px){.constellation-scroll-hint{display:block;font-size:12px;margin:0 20px 10px;color:var(--muted)}}
 .memory-list-toolbar button {min-height:44px;border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px 14px;color:var(--ink);font-size:13px}
+
+.settings-tabs { display:flex;flex-wrap:wrap;gap:8px;margin:0 0 28px; }
+.settings-tabs a { display:flex;align-items:center;min-height:44px;padding:10px 16px;border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--ink); }
+.settings-tabs a[aria-current="page"] { background:#f2ede7;font-weight:600; }
+.control-form button,.control-actions button,.controls-stack>button { min-height:44px;padding:10px 16px;border:1px solid #d9d5d0;border-radius:8px;background:#fff;color:#251f21;font:inherit;cursor:pointer; }
+.control-form input,.control-form select { min-height:44px;border:1px solid #d9d5d0;border-radius:8px;padding:8px 12px;font:inherit; }
+.control-form button:disabled,.control-actions button:disabled { opacity:.55;cursor:not-allowed; }
+
+button { min-height:44px;padding:10px 16px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink); }
+button:disabled { cursor:not-allowed;opacity:.55; }
+@media (max-width: 360px) {
+  .page-heading h1 { font-size: 2.6rem; }
+}
