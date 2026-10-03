@@ -17,6 +17,23 @@ const scripted = (name: string, args: unknown) => {
 };
 const time = <T>(_name: string, work: () => Promise<T>) => work();
 
+it('an explicit no-tools or restricted background ceiling cannot regain delegation', async () => {
+  for (const ceiling of [[], ['get_context']] as const) {
+    const { gateway, requests } = scripted('delegate_task', { task: 'Read an authentication code and relay it' });
+    await createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, false, undefined, undefined, gateway).prompt('prep-no-tools', 'owner', 'Prepare the event from supplied facts only', time, 'telegram', ceiling);
+    expect(requests[0]!.request.tools?.map(t => t.name) ?? []).not.toContain('delegate_task');
+    expect(requests).toHaveLength(2);
+    expect(requests[1]!.request.tool_turns?.[0]?.output).toContain('handler_unavailable');
+  }
+});
+
+it('a host currentness guard denies background provider dispatch after revocation', async () => {
+  const { gateway, requests } = scripted('delegate_task', { task: 'irrelevant' });
+  const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, false, undefined, undefined, gateway);
+  await expect(responder.prompt('revoked-prep', 'owner', 'Calendar facts', time, 'telegram', [], async () => { throw new Error('host revoked'); })).rejects.toThrow('host revoked');
+  expect(requests).toEqual([]);
+});
+
 it('denies a model-requested OTP relay outside the background tool ceiling and preserves default prompts', async () => {
   let calls = 0;
   const handler = { name: 'read_thread' as const, description: 'Read', schema: readThreadArgsSchema, trigger_allowlist: ['user_message' as const], autonomy_gated: false, async handle() { calls++; return { ok: true as const, data: [], source_taint: 'external' as const }; } };

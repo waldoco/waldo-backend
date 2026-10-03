@@ -160,7 +160,9 @@ export const createOwnerResponder = (
     offload = false;
     health = undefined;
   }
-  const assertCurrent = async () => { privateRunScope?.admit(); await binding?.adapter.assertCurrent(); privateRunScope?.admit(); };
+  let backgroundCurrent: (() => Promise<void>) | undefined;
+  let transientDecision = false;
+  const assertCurrent = async () => { privateRunScope?.admit(); await binding?.adapter.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
   const ownerId = invocation.verified_authority.principal_ref;
   const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;
@@ -225,12 +227,13 @@ export const createOwnerResponder = (
       ...(attachments && index === texts.length - 1 ? { attachments: attachments.map((file) => `${file.kind}:${file.filename}`) } : {}),
     }));
     const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
-    const admittedGateway: LLMGatewayAdapter = binding || skills ? { complete: async request => {
+    const admittedGateway: LLMGatewayAdapter = binding || skills || backgroundCurrent ? { complete: async request => {
       await assertCurrent();
-      if (skills && expectedProcedure !== undefined) await skills.assertProcedureCurrent(expectedProcedure, CANARIES);
+      if (transientDecision && (request.context !== 'full_context' || new TextEncoder().encode(JSON.stringify(request.request)).byteLength > 32_768)) throw new Error('background decision context bound');
+      if (!transientDecision && skills && expectedProcedure !== undefined) await skills.assertProcedureCurrent(expectedProcedure, CANARIES);
       const result = await adapter.complete(request);
       await assertCurrent();
-      if (skills && expectedProcedure !== undefined) await skills.assertProcedureCurrent(expectedProcedure, CANARIES);
+      if (!transientDecision && skills && expectedProcedure !== undefined) await skills.assertProcedureCurrent(expectedProcedure, CANARIES);
       return result;
     } } : adapter;
     const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker }).complete({
@@ -248,12 +251,12 @@ export const createOwnerResponder = (
     privateRunScope?.admit();
     const input = JSON.stringify([{ role: 'system', content: system }, ...userMessages, ...(turns ?? [])]);
     const response = result.ok ? { ...result.response, text: forgetText(result.response.text), tool_calls: result.response.tool_calls?.map(call => ({ ...call, arguments: forgetJsonText(call.arguments) })) } : undefined;
-    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason].filter(Boolean).join(':'), shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength }, text: { input } });
+    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason].filter(Boolean).join(':'), shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength }, ...(transientDecision ? {} : { text: { input } }) });
     else log({
       trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true,
       usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens },
       shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength },
-      text: { input, output: response!.text || JSON.stringify(response!.tool_calls), ...(reasoning ? { reasoning: forgetText(reasoning) } : {}) },
+      ...(transientDecision ? {} : { text: { input, output: response!.text || JSON.stringify(response!.tool_calls), ...(reasoning ? { reasoning: forgetText(reasoning) } : {}) } }),
     });
     if (!result.ok && result.halted_by === 'medical_gate' && !clinicalRetried) {
       const redirected = system.endsWith(OWNER_SKILL_SAFEGUARDS)
@@ -623,11 +626,24 @@ export const createOwnerResponder = (
       memoryReceipts.length = 0;
       return converse(id, conversationRef, `[Reminder due now, set earlier by the owner: "${note}"] Send the reminder briefly in your own words. Do not add a sentence explaining that they asked for it.`, time, false, surface);
     },
-    async prompt(id, conversationRef, said, time, surface, toolNames) {
-      await restored();
-      pending = undefined;
-      memoryReceipts.length = 0;
-      return converse(id, conversationRef, said, time, false, surface, toolNames);
+    async prompt(id, conversationRef, said, time, surface, toolNames, current, decision) {
+      backgroundCurrent = current;
+      transientDecision = decision !== undefined;
+      try {
+        await assertCurrent();
+        await restored();
+        pending = undefined;
+        memoryReceipts.length = 0;
+        if (decision) {
+          if (!current || !toolNames || toolNames.length) throw new Error('transient decision requires currentness and no tools');
+          const source = promptMemory();
+          const eligible = (claim: import('../memory/claims').Claim) => claim.origin === 'owner' && claim.kind !== 'health';
+          const context = source ? turnMemoryPrompt({ ...source, claims: status => source.claims(status).filter(eligible), recall: (query, limit) => source.recall(query, limit).filter(eligible) }, said) : '';
+          const bounded = new TextEncoder().encode(context).byteLength <= 12_000 ? context : 'Owner context omitted because it exceeded the bounded decision budget.';
+          return await time('background_decision', () => ask(id, 'background_decision', [messagingSystemPrompt([]), ownerClockLine(clock), bounded].filter(Boolean).join('\n\n'), said, decision));
+        }
+        return await converse(id, conversationRef, said, time, false, surface, toolNames);
+      } finally { backgroundCurrent = undefined; transientDecision = false; clearForgotten(); }
     },
     async consolidate(trace, day, sides) {
       if (!memory) return 'no memory';
