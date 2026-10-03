@@ -19,7 +19,7 @@ describe('googleErrorReason', () => {
   it('the REST client carries the reason on the GoogleError it throws', async () => {
     const fetcher = (async (input: RequestInfo | URL) => String(input).startsWith('https://oauth2.googleapis.com/token') ? Response.json({ access_token: 'at' }) : Response.json(info('SERVICE_DISABLED'), { status: 403 })) as typeof fetch;
     const client = googleClient({ clientId: 'c', clientSecret: 's', redirectUri: 'https://w.example/cb' }, { refresh_token: 'rt' }, fetcher);
-    const error = await client.tasks('open', 5).catch((e: unknown) => e);
+    const error = await client.tasks('todo', 5).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(GoogleError);
     expect(error).toMatchObject({ status: 403, reason: 'SERVICE_DISABLED' });
   });
