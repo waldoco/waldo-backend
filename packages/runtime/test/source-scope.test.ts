@@ -3,7 +3,8 @@ import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { provisionDoSchema } from '../src/do-schema';
 import { toolNameSchema } from '@waldo/contracts';
-import { EXTERNAL_READ_TOOLS, SOURCE_SCOPE_CLASS, SourceScopeStore } from '../src/tools/source-scope';
+import { CHILD_TOOL_NAMES } from '../src/conversation/subagent';
+import { guardExternalReads, EXTERNAL_READ_TOOLS, SOURCE_SCOPE_CLASS, SourceScopeStore } from '../src/tools/source-scope';
 
 const withDo = (name: string, run: (sql: SqlStorage) => Promise<void>) =>
   runInDurableObject(env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName(name)), async (_, state) => { provisionDoSchema(state.storage); await run(state.storage.sql); });
@@ -89,5 +90,34 @@ it('every tool name is classified deny or allow, and denies() agrees with the cl
     expect(Object.keys(SOURCE_SCOPE_CLASS).sort()).toEqual([...toolNameSchema.options].sort());
     for (const name of ['search_communication', 'get_communication', 'read_thread', 'read_drive', 'query_calendar', 'query_availability', 'web_search', 'browse_page', 'browse_act', 'read_memory', 'read_owner_context', 'search_episodes', 'read_document', 'search_connector', 'read_tool_output', 'workspace_read', 'workspace_list', 'read_mcp_tool', 'call_mcp_tool'] as const) expect(s.denies(name)).toBe(true);
     for (const name of ['get_context', 'set_reminder', 'list_reminders', 'cancel_reminder', 'draft_email', 'set_proactivity'] as const) expect(s.denies(name)).toBe(false);
+  });
+});
+
+it('guard denies a read handler only while the limit is on', async () => {
+  await withDo('scope-guard', async (sql) => {
+    const s = new SourceScopeStore(sql);
+    const read = { name: 'search_communication', handle: async () => ({ ok: true, data: 'mail' }) };
+    const write = { name: 'set_reminder', handle: async () => ({ ok: true, data: 'r' }) };
+    const [guardedRead, guardedWrite] = guardExternalReads(s, [read, write]) as [typeof read, typeof write];
+    expect(await guardedRead.handle()).toEqual({ ok: true, data: 'mail' });
+    s.set('pasted_only', owner, NOW);
+    expect(await guardedRead.handle()).toMatchObject({ ok: false, code: 'forbidden' });
+    expect(await guardedWrite.handle()).toEqual({ ok: true, data: 'r' });
+  });
+});
+
+it('delegate children: every child tool is either denied under the limit or content-free, and the guard survives the child filter', async () => {
+  await withDo('scope-child', async (sql) => {
+    const s = new SourceScopeStore(sql);
+    s.set('pasted_only', owner, NOW);
+    const turnHandlers = toolNameSchema.options.map((name) => ({ name, handle: async () => ({ ok: true, data: 'content' }) }));
+    const childHandlers = guardExternalReads(s, turnHandlers).filter((h) => (CHILD_TOOL_NAMES as readonly string[]).includes(h.name));
+    expect(childHandlers.length).toBe(CHILD_TOOL_NAMES.length);
+    const open: string[] = [];
+    for (const h of childHandlers) {
+      const r = await h.handle() as { ok: boolean; code?: string };
+      if (r.ok) open.push(h.name); else expect(r.code).toBe('forbidden');
+    }
+    expect(open).toEqual(['get_context']);
   });
 });
