@@ -326,4 +326,4 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 ### Bounded document rendering
 - [ ] PDF line wrapping bounds font-measurement work for long unbroken tokens as well as ordinary words. Cover geometry and the maximum admitted source length in workerd; rendering must not turn a bounded owner input into quadratic CPU work.
 
-| 2026-10-03 | PDF wrapping measured 42,529 font widths for a 2,000-character unbroken token | Workspace document export | artifact-export.test.ts long-token measurement/geometry regression and document-render-compat.test.ts maximum 32,000-character token in workerd | Binary-search wrapping keeps bounded inputs within bounded rendering work; retain real-byte and authenticated-download acceptance |
+| 2026-10-03 | PDF wrapping measured 42,529 font widths for a 2,000-character unbroken token | Workspace document export | artifact-export.test.ts long-token measurement/geometry regression and workspace-render.test.ts maximum 32,000-character token in workerd | Binary-search wrapping keeps bounded inputs within bounded rendering work; retain real-byte and authenticated-download acceptance |
