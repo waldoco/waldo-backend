@@ -132,7 +132,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     return describe(JSON.parse(entry.payload_json) as Stored);
   };
   const describeTaskSources = (p: TaskSourceProposal) => p.action === 'close'
-    ? 'Close the current task and return future tasks to separately permitted owner sources'
+    ? 'Close the current task and stop its source reads until a new task is established'
     : `${p.action === 'new' ? 'Start a new task' : 'Change the current task'} with read access only to: ${p.sources.length ? p.sources.join(', ') : 'supplied task data'}`;
   // ADR-0054 exactly-once: a second approval of the same idempotency key collapses onto the
   // first send instead of double-delivering.
