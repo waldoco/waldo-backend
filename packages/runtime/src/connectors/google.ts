@@ -126,9 +126,21 @@ export const mailPromptProjection = (item: MailItem): Omit<MailItem, 'id' | 'thr
   return projection;
 };
 
+// Structured provider evidence only (never message text): google.rpc.ErrorInfo.reason, or the legacy
+// errors[].reason, exactly the pair drive-rest.ts already trusts. Anything else stays undefined.
+export type GoogleErrorReason = 'ACCESS_TOKEN_SCOPE_INSUFFICIENT' | 'SERVICE_DISABLED';
 export class GoogleError extends Error {
-  constructor(readonly status: number, message: string) { super(message); }
+  constructor(readonly status: number, message: string, readonly reason?: GoogleErrorReason) { super(message); }
 }
+const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+export const googleErrorReason = (body: unknown): GoogleErrorReason | undefined => {
+  const error = isObject(body) && isObject(body.error) ? body.error : undefined;
+  const info = Array.isArray(error?.details) ? error.details.find((d) => isObject(d) && d['@type'] === 'type.googleapis.com/google.rpc.ErrorInfo' && d.domain === 'googleapis.com') : undefined;
+  const legacy = Array.isArray(error?.errors) ? error.errors.filter(isObject).map((item) => item.reason) : [];
+  if ((isObject(info) && info.reason === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT') || legacy.includes('insufficientPermissions')) return 'ACCESS_TOKEN_SCOPE_INSUFFICIENT';
+  if ((isObject(info) && info.reason === 'SERVICE_DISABLED') || legacy.includes('accessNotConfigured')) return 'SERVICE_DISABLED';
+  return undefined;
+};
 export type CalendarChange = Omit<CalendarItem, 'status'> & Readonly<{ status: string; created: string }>;
 export type MailItem = Readonly<{ id: string; thread_id: string; from: string; subject: string; snippet: string; at: string }>;
 // A1: a thread-read message carries the decoded body; the list projection (MailItem) stays
@@ -256,7 +268,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
   const call = async (url: string, init: RequestInit = {}) => {
     const response = await fetcher(url, { ...init, headers: { ...(init.headers ?? {}), authorization: `Bearer ${await bearer()}` } });
     const json = response.status === 204 ? {} : await response.json() as Record<string, unknown>;
-    if (!response.ok) throw new GoogleError(response.status, `google ${response.status}: ${(json.error as { message?: string } | undefined)?.message ?? 'request failed'}`);
+    if (!response.ok) throw new GoogleError(response.status, `google ${response.status}: ${(json.error as { message?: string } | undefined)?.message ?? 'request failed'}`, googleErrorReason(json));
     return json;
   };
   const EVENTS = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';

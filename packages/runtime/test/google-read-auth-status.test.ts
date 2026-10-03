@@ -5,13 +5,12 @@ import { googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 // Issue #665. Pins how each Google READ tool turns a provider status into an owner-facing result.
 // Layer: SOURCE unit. Drive (read-drive.test.ts) and MCP (mcp-google-auth.test.ts) are pinned elsewhere.
 // 401 = stored grant dead -> reconnect intent. 5xx/other = transient, no connect prompt.
-// 403 is CHARACTERIZATION of current behavior: these five reads (calendar, mail, tasks) answer a blanket scope_missing
-// consent prompt, while Drive refuses with the provider's words and no prompt. That divergence is
-// recorded here, not endorsed; changing it is a behavior decision for the owner/Dalda, not this slice.
+// 403 (issue #668): consent is offered only on structured scope evidence (ACCESS_TOKEN_SCOPE_INSUFFICIENT); a disabled API
+// or an unexplained denial returns the provider's words with no prompt, matching Drive.
 const clock = { timezone: 'Asia/Kolkata', now: () => new Date('2026-10-03T08:00:00Z') };
 const desk = { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => undefined };
-const failing = (status: number): GoogleAccess => ({
-  client: async () => new Proxy({}, { get: (_t, k) => k === 'then' ? undefined : async () => { throw new GoogleError(status, `provider ${status}`); } }) as never,
+const failing = (status: number, reason?: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT' | 'SERVICE_DISABLED'): GoogleAccess => ({
+  client: async () => new Proxy({}, { get: (_t, k) => k === 'then' ? undefined : async () => { throw new GoogleError(status, `provider ${status}`, reason); } }) as never,
 });
 const READS = [
   ['query_calendar', { include_declined: false, limit: 20 }, 'calendar'],
@@ -35,9 +34,19 @@ describe('google read tools: provider status to owner-facing result', () => {
       expect(r).toMatchObject({ ok: false, code: 'transient', source_taint: 'external' });
       expect((r as { connect?: unknown }).connect).toBeUndefined();
     });
-    it(`${name}: 403 currently -> scope_missing consent prompt (characterization, see header)`, async () => {
+    it(`${name}: 403 with no structured reason -> plain refusal, no consent prompt`, async () => {
       const r = await run(failing(403), name, args);
+      expect(r).toMatchObject({ ok: false, code: 'rejected', source_taint: 'external' });
+      expect((r as { connect?: unknown }).connect).toBeUndefined();
+    });
+    it(`${name}: 403 ACCESS_TOKEN_SCOPE_INSUFFICIENT -> scope_missing consent prompt`, async () => {
+      const r = await run(failing(403, 'ACCESS_TOKEN_SCOPE_INSUFFICIENT'), name, args);
       expect(r).toMatchObject({ ok: false, code: 'auth_failed', connect: { reason: 'scope_missing', feature } });
+    });
+    it(`${name}: 403 SERVICE_DISABLED -> refusal naming the disabled API, no consent prompt`, async () => {
+      const r = await run(failing(403, 'SERVICE_DISABLED'), name, args);
+      expect(r).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('API is disabled') });
+      expect((r as { connect?: unknown }).connect).toBeUndefined();
     });
   }
 });
