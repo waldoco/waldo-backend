@@ -91,3 +91,42 @@ describe('the forget outcome counts the episodes it redacted', () => {
   });
 });
 
+describe('forgetting a claim reaches the turn it came from', () => {
+  const claim = (extra: Record<string, unknown>) => ({ kind: 'preference', text: 'Workshop starts at nine', source: 'owner', evidence: 'owner, tg-1', ...extra });
+  it('redacts the owner message and Waldo reply of the source turn whole, and nothing else', async () => {
+    await run('forget-source-turn', (sql, tx) => {
+      const store = claimStore(sql, tx);
+      const episodes = episodeIndex(sql);
+      episodes.add('tg-1', 'owner', 'I like the workshop early, nine sharp', 1);
+      episodes.add('tg-1-reply', 'waldo', 'Saved: mornings at 09:00 for the workshop.', 2);
+      episodes.add('tg-2', 'owner', 'unrelated lunch plan', 3);
+      episodes.add('tg-4', 'owner', 'does the workshop still start at 09:00?', 4);
+      store.add({ ...claim({ origin: 'owner', source_ref: 'owner, tg-1' }) } as never, AT);
+      const id = store.claims()[0]!.id;
+      let outcome: { sourceTurns?: readonly string[]; sourceTurnEpisodesRedacted?: number } | undefined;
+      applyClaimOps(store, ops({ forget_claims: [id] }), AT, 'owner, tg-5', undefined, { owner: 'forget the workshop time' }, true, (o) => { outcome = o; });
+      const rows = sql.exec<{ entry_id: string; text: string }>('SELECT entry_id, text FROM episodes ORDER BY rowid').toArray();
+      expect(rows.find((r) => r.entry_id === 'tg-1')!.text).toBe(FORGOTTEN);
+      expect(rows.find((r) => r.entry_id === 'tg-1-reply')!.text).toBe(FORGOTTEN);
+      expect(rows.find((r) => r.entry_id === 'tg-2')!.text).toBe('unrelated lunch plan');
+      expect(rows.find((r) => r.entry_id === 'tg-4')!.text).toContain('09:00');
+      expect(outcome?.sourceTurns).toEqual(['tg-1']);
+      expect(outcome?.sourceTurnEpisodesRedacted).toBe(2);
+    });
+  });
+  it('does not follow a claim that is not owner-origin, or a claim the forget did not name', async () => {
+    await run('forget-source-turn-gate', (sql, tx) => {
+      const store = claimStore(sql, tx);
+      const episodes = episodeIndex(sql);
+      episodes.add('tg-1', 'owner', 'agent-origin turn text', 1);
+      episodes.add('tg-2', 'owner', 'other owner turn text', 2);
+      store.add({ ...claim({ source_ref: 'owner, tg-1' }) } as never, AT);
+      store.add({ ...claim({ text: 'Second claim', origin: 'owner', source_ref: 'owner, tg-2' }) } as never, AT);
+      const first = store.claims().find((c) => c.text === 'Workshop starts at nine')!.id;
+      applyClaimOps(store, ops({ forget_claims: [first] }), AT, 'owner, tg-5', undefined, { owner: 'forget the workshop time' }, true);
+      const texts = sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY rowid').toArray().map((r) => r.text);
+      expect(texts).toEqual(['agent-origin turn text', 'other owner turn text']);
+    });
+  });
+});
+

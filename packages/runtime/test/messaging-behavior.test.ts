@@ -24,6 +24,7 @@ describe('messagingSystemPrompt', () => {
     expect(MESSAGING_BEHAVIOR).toContain('When the memory line for this turn lists a removal or cleanup, that work is already done: say so in plain words');
     expect(MESSAGING_BEHAVIOR).toContain('Never say you cannot delete or forget something that memory line lists as done');
     expect(MESSAGING_BEHAVIOR).toContain('If the memory line says a cleanup is pending or incomplete, say that');
+    expect(MESSAGING_BEHAVIOR).toContain('Never say that nothing remains, that no other copy exists, or that nothing else was kept');
   });
 
   it('keeps the vocabulary block and the health lines', () => {

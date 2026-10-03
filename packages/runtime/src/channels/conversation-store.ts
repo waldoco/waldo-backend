@@ -77,27 +77,37 @@ export const redactConversationEntries = async (
   texts: readonly string[],
   marker: string,
   scope?: RunEffectScope,
+  sourceTurns: readonly string[] = [],
 ): Promise<Readonly<{ rewritten: number; remaining: number }>> => {
   const needles = [...new Set(texts.map((text) => text.trim()).filter(Boolean))];
-  if (needles.length === 0) return { rewritten: 0, remaining: 0 };
-  const redact = literalTextRedactor(needles, marker);
+  // A source turn is a turn id a forgotten owner-origin claim came from (its stored provenance). The owner entry with that id and
+  // Waldo's reply (`<id>-reply`) are redacted whole. Over-redaction of other facts in that turn is the stated tradeoff.
+  const turnEntryIds = new Set(sourceTurns.flatMap((turn) => [turn, `${turn}-reply`]));
+  if (needles.length === 0 && turnEntryIds.size === 0) return { rewritten: 0, remaining: 0 };
+  const literal = literalTextRedactor(needles, marker);
+  const wholeEntry = (entry: ConversationEntry): ConversationEntry => ({
+    ...entry, modelPayload: marker, appPayload: marker,
+    modelProjection: entry.modelProjection.mode === 'replace' ? { mode: 'replace', payload: marker } : entry.modelProjection,
+  });
+  const redactEntry = (entry: ConversationEntry): ConversationEntry => turnEntryIds.has(entry.id) ? wholeEntry(entry) : redactConversationEntry(entry, literal);
+  const redact = literal;
   const legacy = await storage.list<ConversationEntry>({ prefix: 'conv:' });
   const canonical = await storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX });
   const writes: Record<string, unknown> = {};
   let rewritten = 0;
   for (const [key, entry] of legacy) {
-    const next = redactConversationEntry(entry, redact);
+    const next = redactEntry(entry);
     if (JSON.stringify(next) !== JSON.stringify(entry)) { writes[key] = next; rewritten += 1; }
   }
   for (const [key, value] of canonical) {
     if (canonicalKind(key) === 'conv') {
       const entry = value as ConversationEntry;
-      const next = redactConversationEntry(entry, redact);
+      const next = redactEntry(entry);
       if (JSON.stringify(next) !== JSON.stringify(entry)) { writes[key] = next; rewritten += 1; }
     } else if (canonicalKind(key) === 'witness') {
       const witness = value as Witness;
       if (!witness?.entry) continue;
-      const next = redactConversationEntry(witness.entry, redact);
+      const next = redactEntry(witness.entry);
       if (JSON.stringify(next) !== JSON.stringify(witness.entry)) writes[key] = { ...witness, entry: next };
     }
   }
