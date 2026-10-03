@@ -369,3 +369,5 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] Apply the existing external Scribe policy before bounding a content preview, then measure the complete escaped metadata/body/account envelope. Redaction expansion must not silently spill a supposedly inline preview to offload. Test dense emails, escaped metadata and Unicode through the actual dispatcher with an offload spy; recompute visible byte count and preserve truncation after each cut.
 
 | 2026-10-03 | External PII redaction expanded a pre-bounded Google document body beyond the dispatcher inline cap | Drive content preview | read-drive.test.ts dense-email real-Scribe dispatcher/offload-spy RED/GREEN and escaped-metadata Unicode envelope case | Prepare with the existing external Scribe policy before the final whole-envelope bound, retaining normal dispatcher verification and honest visible bytes |
+
+- [ ] Google client inventory parity distinguishes host-bound account metadata from callable proxy operations. Account identity is data, never a new remote operation; retain exact Calendar wire-argument coverage.
