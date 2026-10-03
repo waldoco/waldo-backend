@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { workspaceHandlers } from '../src/handlers';
-import { workspaceStore, type WorkspaceState } from '../src/store';
+import { workspaceStore, LIMITS, type WorkspaceState } from '../src/store';
 it('real store adapters bound text/taint, reject extra scope and never echo write body',async()=>{
  let state:WorkspaceState={binding:null,files:[],bodies:[],operations:[]};const map=new Map<string,Uint8Array>();let n=100;
  const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
@@ -34,4 +34,6 @@ it('literal revision edits preserve unrelated recipient bytes and reject ambiguo
  expect(await h.write({...write,operation_id:id(207),expected_revision:3,text:'Subject: Demo\nRecipient removed at owner request.'})).toMatchObject({ok:true,data:{revision:4}});
  expect((await store.read(file.file_id,4,0,8000)).text).not.toContain('demo@example.test');
  expect((await store.read(file.file_id,4,0,8000)).text).not.toContain('[REDACTED_EMAIL]');
+ expect(await h.write({...edit,expected_revision:4,operation_id:id(208),edits:[{before:'Demo',after:'x'.repeat(LIMITS.textWriteBytes-4)}]})).toMatchObject({ok:false,code:'invalid'});
+ expect(state.files[0]!.revision).toBe(4);
 });

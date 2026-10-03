@@ -186,7 +186,9 @@ export const workspaceStore = async (host: WorkspaceHost) => {
         revised = args.text!;
         if (revised !== original && REDACTION_MARKERS.some(marker => revised.includes(marker))) fail('conflict');
       }
-      return store.write({ path: args.path, bytes: new TextEncoder().encode(revised), mime: args.mime,
+      const bytes = new TextEncoder().encode(revised);
+      if (bytes.length > LIMITS.textWriteBytes) fail('invalid');
+      return store.write({ path: args.path, bytes, mime: args.mime,
         expected_revision: args.expected_revision, operation_id: args.operation_id, provenance: 'agent_generated' });
     },
     async reconcile(operationId: string): Promise<FileMeta> {
