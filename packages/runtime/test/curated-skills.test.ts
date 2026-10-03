@@ -12,6 +12,7 @@ it('keeps metadata available but instructions disabled until explicit owner inst
  const stub = env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-lifecycle'));
  await runInDurableObject(stub, async (_,state) => {
   provisionDoSchema(state.storage);
+  new CuratedOwnerSkills(state.storage.sql, owner); state.storage.sql.exec("UPDATE skills SET status='archived'");
   const book = new CuratedOwnerSkills(state.storage.sql, owner);
   expect(book.list()[0]).toEqual(expect.objectContaining({name:CURATED_PREPARATION_SKILL.name,enabled:false,version:1}));
   expect(await book.prompt({...turn,ownerText:'prepare a draft'},canaries)).toBe('');
@@ -29,6 +30,7 @@ it('rejects foreign owner, background installs, unknown versions and storage bod
  const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-boundaries'));
  await runInDurableObject(stub,async(_,state)=>{
   provisionDoSchema(state.storage);
+  new CuratedOwnerSkills(state.storage.sql, owner); state.storage.sql.exec("UPDATE skills SET status='archived'");
   const book=new CuratedOwnerSkills(state.storage.sql,owner);
   expect(book.install(CURATED_PREPARATION_SKILL.name,2,turn).ok).toBe(false);
   expect(book.install(CURATED_PREPARATION_SKILL.name,1,{...turn,owner:'owner-b'}).ok).toBe(false);
@@ -52,7 +54,8 @@ it('counts the whole rendered fragment; unavailable and oversize budgets never i
  expect(new TextEncoder().encode(renderSkill(CURATED_PREPARATION_SKILL)).length).toBeLessThanOrEqual(600);
  const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-budgets'));
  await runInDurableObject(stub,async(_,state)=>{
-  provisionDoSchema(state.storage);const sql=state.storage.sql;
+  provisionDoSchema(state.storage);
+  new CuratedOwnerSkills(state.storage.sql, owner); state.storage.sql.exec("UPDATE skills SET status='archived'");const sql=state.storage.sql;
   const base=new CuratedOwnerSkills(sql,owner);expect(base.install(CURATED_PREPARATION_SKILL.name,1,turn).ok).toBe(true);
   for(const budget of [
    {countRenderedSkill:async()=>({ok:false as const,code:'unavailable' as const}),countRenderedBlock:async()=>({ok:false as const,code:'unavailable' as const})},
@@ -65,7 +68,8 @@ it('counts the whole rendered fragment; unavailable and oversize budgets never i
 it('disable or source mutation during an awaited budget prevents publication',async()=>{
  const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-revoke-await'));
  await runInDurableObject(stub,async(_,state)=>{
-  provisionDoSchema(state.storage);const sql=state.storage.sql;
+  provisionDoSchema(state.storage);
+  new CuratedOwnerSkills(state.storage.sql, owner); state.storage.sql.exec("UPDATE skills SET status='archived'");const sql=state.storage.sql;
   const writer=new CuratedOwnerSkills(sql,owner);expect(writer.install(CURATED_PREPARATION_SKILL.name,1,turn).ok).toBe(true);
   const budget={countRenderedSkill:async()=>{writer.disable(CURATED_PREPARATION_SKILL.name,1,{...turn,ownerText:'/skills disable document-email-preparation@1'});return {ok:true as const,tokens:400};},countRenderedBlock:async()=>({ok:true as const,tokens:450})};
   const reader=new CuratedOwnerSkills(sql,owner,budget);expect(reader.load(CURATED_PREPARATION_SKILL.name,1,turn).ok).toBe(true);expect(await reader.prompt(turn,canaries)).toBe('');
@@ -74,7 +78,8 @@ it('disable or source mutation during an awaited budget prevents publication',as
 it('untrusted owner-workspace skill files and forged source identity are never catalog instructions',async()=>{
  const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-source'));
  await runInDurableObject(stub,async(_,state)=>{
-  provisionDoSchema(state.storage);const sql=state.storage.sql;const book=new CuratedOwnerSkills(sql,owner);
+  provisionDoSchema(state.storage);
+  new CuratedOwnerSkills(state.storage.sql, owner); state.storage.sql.exec("UPDATE skills SET status='archived'");const sql=state.storage.sql;const book=new CuratedOwnerSkills(sql,owner);
   expect(book.install('uploaded-skill',1,{...turn,ownerText:'/skills install uploaded-skill@1'}).ok).toBe(false);
   expect(book.install(CURATED_PREPARATION_SKILL.name,1,turn).ok).toBe(true);
   sql.exec('UPDATE skills SET created_by=? WHERE name=?','workspace:SKILL.md',CURATED_PREPARATION_SKILL.name);
