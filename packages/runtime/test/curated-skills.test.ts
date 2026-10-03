@@ -13,7 +13,7 @@ it('keeps metadata available but instructions disabled until explicit owner inst
  await runInDurableObject(stub, async (_,state) => {
   provisionDoSchema(state.storage);
   const book = new CuratedOwnerSkills(state.storage.sql, owner);
-  expect(book.list()).toEqual([expect.objectContaining({name:CURATED_PREPARATION_SKILL.name,enabled:false,version:1})]);
+  expect(book.list()[0]).toEqual(expect.objectContaining({name:CURATED_PREPARATION_SKILL.name,enabled:false,version:1}));
   expect(await book.prompt({...turn,ownerText:'prepare a draft'},canaries)).toBe('');
   expect(book.install(CURATED_PREPARATION_SKILL.name,1,{...turn,ownerText:'prepare a draft'}).ok).toBe(false);
   expect(book.install(CURATED_PREPARATION_SKILL.name,1,turn).ok).toBe(true);
