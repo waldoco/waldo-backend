@@ -26,10 +26,10 @@ export function createScopedCuratedSkillCapability(sql:SqlStorage, turn:CuratedS
  const turnId=turn.turnId;
  const book=new CuratedOwnerSkills(sql,owner,undefined,turn.custodyKey ?? owner);
  const allow=(name:ToolName)=>triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes(name));
- const checked=async(ctx:ToolDispatcherContext,work:()=>ToolResult<unknown>)=>{
+ const checked=async(ctx:ToolDispatcherContext,work:()=>ToolResult<unknown>,readOnlySelection=false)=>{
   await turn.assertCurrent();
   // Hook snapshots clone the scope object; its host-created closure identities are opaque proof.
-  if(ctx.authenticatedUserId!==owner || ctx.turnId!==turnId || (ctx.runScope?.runId!==scope.runId || ctx.runScope.attempt!==scope.attempt || ctx.runScope.deadline!==scope.deadline || ctx.runScope.admit!==scope.admit || ctx.runScope.commit!==scope.commit) || ctx.trigger!==turn.trigger || ctx.toolArgSourceTaint!==null)
+  if(ctx.authenticatedUserId!==owner || ctx.turnId!==turnId || (ctx.runScope?.runId!==scope.runId || ctx.runScope.attempt!==scope.attempt || ctx.runScope.deadline!==scope.deadline || ctx.runScope.admit!==scope.admit || ctx.runScope.commit!==scope.commit) || ctx.trigger!==turn.trigger || (ctx.toolArgSourceTaint!==null && !(readOnlySelection && ctx.toolArgSourceTaint==='external')))
    return {ok:false as const,code:'rejected' as const,error:'Skill invocation authority is unavailable.'};
   const result=scope.commit(work);await turn.assertCurrent();return result;
  };
@@ -39,7 +39,9 @@ export function createScopedCuratedSkillCapability(sql:SqlStorage, turn:CuratedS
   ...(['install','disable','load'] as const).map(action=>({name:`skills_${action}` as ToolName,
    description:action==='load'?'Select one already enabled reviewed skill version for this invocation. Instructions enter trusted bounded context on the next step and never appear in this result.':`Explicit owner command only: /skills ${action} document-email-preparation@1. Does not accept uploaded skills or grant capabilities.`,
    schema:skillsVersionArgsSchema,trigger_allowlist:allow(`skills_${action}` as ToolName),autonomy_gated:action!=='load',mutates_state:true as const,
-   handle:async(args:SkillsVersionArgs,ctx:ToolDispatcherContext)=>checked(ctx,()=>book[action](args.name,args.version,turn))})),
+   // Selecting an already enabled reviewed procedure grants no tools or lifecycle authority.
+   // External data may inform that choice; original owner/run and exact catalog checks remain.
+   handle:async(args:SkillsVersionArgs,ctx:ToolDispatcherContext)=>checked(ctx,()=>book[action](args.name,args.version,turn),action==='load')})),
  ];
  return Object.freeze({handlers,metadata:()=>`Reviewed skill catalog (metadata only): ${JSON.stringify(book.list())}. Use skills_load only if an enabled skill fits the current task. Disabled skills cannot load; install requires the explicit owner lifecycle command.`,prompt:async(canaries:readonly string[])=>book.prompt(turn,canaries),assertProcedureCurrent:async(expected:string,canaries:readonly string[])=>{if(await book.prompt(turn,canaries)!==expected)throw new Error('Selected skill is no longer current.');}});
 }
