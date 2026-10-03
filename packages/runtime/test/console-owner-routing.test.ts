@@ -23,7 +23,7 @@ const baseEnv = {
 afterEach(() => vi.unstubAllGlobals());
 
 it('retains a read-only download intent when the legacy ticket session expires', async () => {
-  vi.stubGlobal('fetch', vi.fn(async () => new Response('[]')));
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([{ do_name: 'owner-download', subject: '5458446350', timezone: null }]))));
   const ns = { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response('unauthorized', { status: 401 }) }) };
   const target = '/console/workspace/file?id=def993c9-db4d-49c4-8998-8465bed3606e&revision=1';
   const request = () => new Request(`https://waldo.invalid${target}`, { headers: { cookie: 'waldo_console=expired-ticket' } });
@@ -44,13 +44,13 @@ describe('console owner-DO routing', () => {
     expect(await res.text()).toBe('do:owner-test-uuid');
   });
 
-  it('falls back to the env telegram id when the directory has no presence row', async () => {
+  it('does not route to the legacy DO when the directory has no presence row', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('[]')));
     const res = await worker.fetch(
       new Request('https://waldo.invalid/console', { headers: { cookie: 'waldo_console=a.b.c' } }),
       { ...baseEnv, ...supabaseEnv } as unknown as Cloudflare.Env,
     );
-    expect(await res.text()).toBe('do:5458446350');
+    expect(res.status).toBe(503);
   });
 
   it('uses the deploy-owner path when Supabase is not configured', async () => {
@@ -66,4 +66,12 @@ it('routes a private artifact path through the same owner gate, never a public b
  expect(await result.text()).toBe('do:owner-artifact');
  const signedOut=await worker.fetch(new Request(request.url),{...baseEnv,...supabaseEnv} as unknown as Cloudflare.Env);
  expect(signedOut.status).toBe(303);expect(signedOut.headers.get('location')).toBe('/console/signin');
+});
+
+it('never selects a legacy console DO when directory lookup fails', async () => {
+  const get = vi.fn();
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('unavailable', { status: 503 })));
+  await expect(worker.fetch(new Request('https://waldo.invalid/console', { headers: { cookie: 'waldo_console=a.b.c' } }),
+    { ...baseEnv, ...supabaseEnv, TELEGRAM_OWNER_DO: { idFromName: (name: string) => name, get } } as unknown as Cloudflare.Env)).rejects.toThrow('owner directory 503');
+  expect(get).not.toHaveBeenCalled();
 });

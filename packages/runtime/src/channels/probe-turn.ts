@@ -98,7 +98,8 @@ export const handleProbeTurn = async (
   const subject = env.WALDO_OWNER_TELEGRAM_ID;
   if (!subject) return new Response('owner unavailable', { status: 503 });
   const route = await directory.byPresence('telegram', subject).catch(() => null);
-  const doName = route?.doName ?? subject;
+  if (!route) return new Response('owner unavailable', { status: 503 });
+  const doName = route.doName;
   const headers: Record<string, string> = {
     'content-type': 'application/json',
     'x-waldo-origin': new URL(request.url).origin,

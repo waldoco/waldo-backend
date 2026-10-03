@@ -14,7 +14,7 @@ import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
-import { persistInboxWake, persistTransportWake } from '../scheduler/alarm-slot';
+import { persistInboxWake, persistTransportWake, rearmSharedAlarm } from '../scheduler/alarm-slot';
 import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
@@ -734,6 +734,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const mode=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);
     if(mode){await this.serial(()=>this.drainLink(mode));return;}
     await this.serial(async () => {
+      // Directory-backed owner alarms require the same physical binding as owner ingress.
+      // Keep retained work and transport recovery wakes; do not boot provider work on an orphan.
+      if (consoleAuth(this.env)) {
+        const doName = this.ctx.storage.kv.get<string>('do_name');
+        const subject = this.ctx.storage.kv.get<string>('telegram_subject');
+        if (!doName || !subject || !/^\d+$/.test(subject) || !Number.isSafeInteger(Number(subject)) || Number(subject) <= 0
+          || this.ctx.storage.kv.get<boolean>('telegram_unlinked') === true
+          || !this.env.TELEGRAM_OWNER_DO || this.env.TELEGRAM_OWNER_DO.idFromName(doName).toString() !== this.ctx.id.toString()) {
+          await rearmSharedAlarm(this.ctx.storage, null, Date.now(), 30_000);
+          return;
+        }
+      }
       const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal, call, owner, calendarPrepCurrent } = this.setup();
       await ready;
       await finalOutbox.maintain();

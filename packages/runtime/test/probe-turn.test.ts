@@ -59,12 +59,12 @@ describe('handleProbeTurn', () => {
     expect((await handleProbeTurn(post('probe-secret', { text: 'x', live: 'yes' }), staging(ns), directory)).status).toBe(400);
   });
 
-  it('falls back to the configured owner subject when the directory has no presence', async () => {
+  it('does not select the legacy subject DO when the directory has no presence', async () => {
     const { fetch, idFromName, ns } = namespace();
     const empty: OwnerDirectory = { byPresence: async () => null, redeem: async () => null };
-    expect((await handleProbeTurn(post('probe-secret'), staging(ns), empty)).status).toBe(200);
-    expect(idFromName).toHaveBeenCalledWith('42');
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect((await handleProbeTurn(post('probe-secret'), staging(ns), empty)).status).toBe(503);
+    expect(idFromName).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 
@@ -110,4 +110,16 @@ describe('probe capture confinement (Codex #230/#231 holds)', () => {
       expect(PROBE_STRIPPED_TOOLS).not.toContain(keep);
     }
   });
+});
+
+it('does not select a legacy DO when probe directory lookup fails', async () => {
+ const { fetch, idFromName, ns } = namespace();
+ const failed: OwnerDirectory = { ...directory, byPresence: async () => { throw new Error('directory unavailable'); } };
+ expect((await handleProbeTurn(post('probe-secret'), staging(ns), failed)).status).toBe(503);
+ expect(idFromName).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+});
+it('keeps the no-directory deploy-owner probe route', async () => {
+ const { idFromName, ns } = namespace();
+ expect((await handleProbeTurn(post('probe-secret'), staging(ns))).status).toBe(200);
+ expect(idFromName).toHaveBeenCalledWith('42');
 });
