@@ -327,3 +327,12 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] PDF line wrapping bounds font-measurement work for long unbroken tokens as well as ordinary words. Cover geometry and the maximum admitted source length in workerd; rendering must not turn a bounded owner input into quadratic CPU work.
 
 | 2026-10-03 | PDF wrapping measured 42,529 font widths for a 2,000-character unbroken token | Workspace document export | artifact-export.test.ts long-token measurement/geometry regression and workspace-render.test.ts maximum 32,000-character token in workerd | Binary-search wrapping keeps bounded inputs within bounded rendering work; retain real-byte and authenticated-download acceptance |
+
+### Curated skill authority and revocation
+- [ ] Hook snapshots may clone scope objects. Verify captured admit/commit authority and exact owner/update/run/attempt identity rather than object equality; valid cloned snapshots must work while forged scopes fail.
+- [ ] Recheck enabled reviewed-procedure identity and current owner/run authority at every physical provider call, including reduced-context retry and medical recursion. Disable suppresses captured instructions before any subsequent call; bodies never enter tool results or retained conversation history.
+- [ ] Bound every stored skill text/scalar field in SQL before JavaScript materialization, using UTF-8 BLOB byte lengths. Preserve invalid-row presence so rejected oversized or NUL-tail rows cannot be treated as missing and reactivated by ON CONFLICT.
+
+| 2026-10-03 | Hook-cloned scope identity rejected valid owner skill lifecycle tools | Curated skill authority | curated-skills-owner-do.test.ts actual dispatcher install/disable and curated-skills-tools.test.ts forged-scope rejection | Captured authority closures and pinned run identity govern mutations, not scope object equality |
+| 2026-10-03 | Captured procedure instructions survived disable during reduced-context retry and medical recursion | Curated skill revocation | curated-skills-retry.test.ts physical provider-boundary disable regressions | Check revocation for each physical provider request, including recursive paths |
+| 2026-10-03 | Oversized and NUL-tail stored skill fields were materialized before rejection | Curated skill storage | curated-skills.test.ts actual-SQL byte-bound and rejected-row-presence regressions | Project bounded fields before JavaScript and retain rejected presence; never reactivate hostile rows as absent |
