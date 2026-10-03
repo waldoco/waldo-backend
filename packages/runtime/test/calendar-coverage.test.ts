@@ -98,7 +98,9 @@ it('exposes Calendar pagination through the shared proxy operation inventory and
  let body:any;
  const proxy=googleProxy({SUPABASE_PROJECT_URL:'https://example.test',SUPABASE_PUBLISHABLE_KEY:'fixture',WALDO_ROUTER_HMAC_SECRET:'fixture'} as never,(async(_input:RequestInfo|URL,init?:RequestInit)=>{body=JSON.parse(String(init?.body));return Response.json({data:{events:[],next_page_token:null,fetched_count:0,account:{connection_id:'conn',email:null},observed_at:clock.now().toISOString()}});}) as typeof fetch)!;
  expect(GOOGLE_METHODS).toContain('calendarPage');
- expect(Object.keys(proxy.client('owner','conn')).sort()).toEqual([...GOOGLE_METHODS].sort());
+ expect(Object.keys(proxy.client('owner','conn')).sort()).toEqual(['account', ...GOOGLE_METHODS].sort());
+ expect(proxy.client('owner','conn').account).toEqual({connection_id:'conn',email:null});
+ expect(GOOGLE_METHODS).not.toContain('account');
  await proxy.client('owner','conn').calendarPage!('primary',from,to,20,false);
  expect(body).toMatchObject({connection:'conn',method:'calendarPage',args:['primary',from,to,20,false]});
 });
