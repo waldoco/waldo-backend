@@ -436,10 +436,29 @@ export const createOwnerResponder = (
           const skillPrompt = skills && (!binding || request.tools.includes('skills_load')) ? await skills.prompt(CANARIES) : undefined;
           await assertCurrent();
           expectedProcedure = skillPrompt ?? '';
+          const rawTaskContext = skills?.taskContext ? await skills.taskContext() : '';
+          // A committed receipt authenticates identity, not user/provider-authored path text.
+          // Keep the external fragment gate before joining metadata to trusted instructions.
+          let guardedTaskContext = rawTaskContext ? 'Recent workspace metadata was withheld by the context safety gate. Do not infer a saved-file target or substitute a Drive target.' : '';
+          const sanitiseTaskContext = adapters.safety.sanitise;
+          if (sanitiseTaskContext && rawTaskContext && new TextEncoder().encode(rawTaskContext).byteLength <= 4096) {
+            try {
+              const fragment = sanitiseResultSchema.parse(await sanitiseTaskContext({
+                payload: rawTaskContext, destination: 'system_prompt', source_taint: 'external',
+                canary_tokens: CANARIES,
+              }));
+              if (fragment.ok && fragment.source_taint === 'external' && fragment.payload === rawTaskContext) guardedTaskContext = fragment.payload;
+            } catch { /* Denied/unavailable metadata is never promoted to trusted context. */ }
+          }
+          refreshPendingRedaction();
+          const scrubbedTaskContext = forgetText(guardedTaskContext);
+          const taskContext = scrubbedTaskContext === guardedTaskContext ? scrubbedTaskContext
+            : 'Recent workspace metadata was withheld by the active forget barrier. A masked path is not an exact target; ask the owner to identify the file.';
+          await assertCurrent();
           const skillMetadata = skills && (!binding || request.tools.includes('skills_list')) ? skills.metadata() : '';
-          const canonicalSystem = skillMetadata ? `${request.system}\n\n${skillMetadata}` : request.system;
+          const canonicalSystem = [request.system, skillMetadata, taskContext].filter(Boolean).join('\n\n');
           return complete(trace, 'reply',
-          binding ? withOwnerSkillProcedures(canonicalSystem, skillPrompt) : withOwnerSkillProcedures([messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : [])].join('\n\n'), skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined)),
+          binding ? withOwnerSkillProcedures(canonicalSystem, skillPrompt) : withOwnerSkillProcedures([messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])].join('\n\n'), skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined)),
           entries,
           undefined,
           pending,

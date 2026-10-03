@@ -168,3 +168,27 @@ it('hung directory response body is cancelled by the5second deadline',async()=>{
   await vi.advanceTimersByTimeAsync(5_001);await result;expect(cancel).toHaveBeenCalledOnce();expect(vi.getTimerCount()).toBe(0);
  }finally{vi.useRealTimers();}
 });
+
+it('recent receipt projection survives real owner SQLite eviction and rejects revoked or foreign mapping',async()=>{
+ const name=`workspace-receipt-${crypto.randomUUID()}`;const id=ownerNamespace.idFromName(name);const stub=ownerNamespace.get(id);
+ const objects=new Map<string,Uint8Array>();
+ const bucket={put:vi.fn(async(key:string,bytes:Uint8Array)=>{objects.set(key,bytes.slice());}),get:vi.fn(async(key:string)=>{const bytes=objects.get(key);return bytes?{arrayBuffer:async()=>bytes.slice().buffer}:null;}),delete:vi.fn(async(key:string)=>{objects.delete(key);})};
+ const mapped={...binding,do_name:name,do_id:id.toString()};let current:unknown=mapped;
+ const fetcher=vi.fn(async()=>Response.json(current));
+ const configured={...config,TELEGRAM_OWNER_DO:ownerNamespace,ARTIFACTS:bucket as unknown as R2Bucket};
+ let receipt:{file_id:string;revision:number}|undefined;
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const store=await workspaceOwnerHost(configured,state.storage,id.toString(),name,fetcher);
+  receipt=await store.write({path:'drafts/current.md',bytes:new TextEncoder().encode('Retained draft body'),mime:'text/markdown',expected_revision:0,provenance:'agent_generated',operation_id:crypto.randomUUID()});
+ });
+ await evictDurableObject(stub);
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const store=await workspaceOwnerHost(configured,state.storage,id.toString(),name,fetcher);
+  expect(await store.recentWrites()).toEqual([expect.objectContaining({backend:'workspace',path:'drafts/current.md',file_id:receipt!.file_id,revision:1})]);
+  expect(bucket.get).not.toHaveBeenCalled();
+  current=null;await expect(store.recentWrites()).rejects.toThrow('workspace_rejected');
+  current={...mapped,owner_id:'10000000-0000-0000-0000-000000000099'};
+  await expect(store.recentWrites()).rejects.toThrow('workspace_rejected');
+  current={...mapped,state_version:1};await expect(store.recentWrites()).rejects.toThrow('workspace_rejected');
+ });
+});

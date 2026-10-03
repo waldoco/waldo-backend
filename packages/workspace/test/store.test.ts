@@ -108,3 +108,34 @@ it('export caller byte ceiling rejects an immutable revision before any body rea
  expect((await s.export(m.file_id,1,5)).bytes.byteLength).toBe(5);
  await expect(s.export(m.file_id,1,-1)).rejects.toThrow('workspace_invalid');
 });
+
+ it('projects only current committed workspace receipts after restart, with no file bodies',async()=>{
+ const f=fixture(),s=await workspaceStore(f.host);
+ const old=await s.write(args(20,'older.md',new TextEncoder().encode('unrelated private body')));
+ const saved=await s.write(args(21,'demo.md',new TextEncoder().encode('demo draft body')));
+ const restarted=await workspaceStore(f.host);
+ const receipts=await restarted.recentWrites();
+ expect(receipts).toEqual([{backend:'workspace',operation_id:id(21),file_id:saved.file_id,path:'demo.md',revision:1},{backend:'workspace',operation_id:id(20),file_id:old.file_id,path:'older.md',revision:1}]);
+ expect(JSON.stringify(receipts)).not.toContain('body');
+ expect(f.host.bodies.get).not.toHaveBeenCalled();
+ await s.tombstone(saved.file_id,1);
+ expect((await restarted.recentWrites()).map(r=>r.file_id)).toEqual([old.file_id]);
+ f.suspend();await expect(restarted.recentWrites()).rejects.toThrow('workspace_rejected');
+ });
+
+ it('bounds receipt rows and omits pending, stale, malformed and foreign metadata',async()=>{
+ const f=fixture(),s=await workspaceStore(f.host);
+ for(let n=0;n<5;n++)await s.write(args(30+n,`draft${n}.md`));
+ expect(await s.recentWrites()).toHaveLength(3);
+ const latest=f.state().operations.at(-1)!;const index=f.state().operations.length-1;
+ f.state().operations[index]={...latest,status:'pending'};
+ expect((await s.recentWrites()).some(r=>r.operation_id===latest.operation_id)).toBe(false);
+ f.state().operations[index]={...f.state().operations[index]!,status:'committed'};
+ f.state().files[index]={...f.state().files[index]!,path:'bad\\path'};
+ expect((await s.recentWrites()).some(r=>r.operation_id===latest.operation_id)).toBe(false);
+ f.state().files[index]={...f.state().files[index]!,path:'draft4.md',revision:8};
+ expect((await s.recentWrites()).some(r=>r.operation_id===latest.operation_id)).toBe(false);
+ const current=f.state().operations.at(-1)!;
+ f.state().operations[index]={...current,body:{...current.body,binding:{...current.body.binding,ownerId:id(999)}}};
+ await expect(s.recentWrites()).rejects.toThrow('workspace_rejected');
+ });
