@@ -54,7 +54,7 @@ export const scriptedGateway = (options: ScriptedGatewayOptions): LLMGatewayAdap
       // route's (invalid_response), so the stub answers as whichever model the caller routed to.
       const as = request.model;
       if (request.response_format?.name === 'claim_ops') {
-        return response(as, options.claimOps ?? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
+        return response(as, options.claimOps ?? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null,"forget_source_turns":false}');
       }
       const said = request.messages[request.messages.length - 1]?.content ?? '';
       // The responder packs conversation history into the same user message, so an earlier
