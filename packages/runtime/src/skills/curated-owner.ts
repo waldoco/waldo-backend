@@ -34,7 +34,25 @@ const denied = (): Result => ({ok:false,code:'rejected',error:'Skill version, so
 const metadata = (enabled: boolean) => ({name:NAME,version:1,enabled,source:SOURCE});
 type Stored = { version:number; provenance:string; identity_locked:number; provisional:number; trigger_types_json:string;
  trigger_condition:string; required_tools_json:string; required_connectors_json:string; body_markdown:string; created_by:string;
- created_at:string; status:string; effectiveness:number; pinned:number; invocations:number; last_used:string|null; last_curated_at:string|null; archived_at:string|null };
+ admitted:number; created_at:string; status:string; effectiveness:number; pinned:number; invocations:number; last_used:string|null; last_curated_at:string|null; archived_at:string|null };
+
+// SQL projects only bounded text into JS, retaining a rejected row's presence so install
+// cannot mistake hostile storage for absence and reactivate it through ON CONFLICT.
+const TEXT_FIELDS = [
+ ['provenance',32,false],
+ ['trigger_types_json',1024,false], ['trigger_condition',800,false],
+ ['required_tools_json',1024,false], ['required_connectors_json',1024,false],
+ ['body_markdown',2400,false], ['created_by',256,false], ['created_at',64,false],
+ ['status',16,false], ['last_used',64,true], ['last_curated_at',64,true], ['archived_at',64,true],
+] as const;
+const NUMERIC_FIELDS = ['version','identity_locked','provisional','pinned','invocations','effectiveness'] as const;
+const boundedText = (field:string,limit:number,nullable:boolean) =>
+ `(${nullable ? `${field} IS NULL OR ` : ''}(typeof(${field}) = 'text' AND length(CAST(${field} AS BLOB)) <= ${limit}))`;
+const boundedNumber = (field:string) => `typeof(${field}) IN ('integer','real')`;
+const STORAGE_GUARDS = [...TEXT_FIELDS.map(([field,limit,nullable])=>boundedText(field,limit,nullable)),...NUMERIC_FIELDS.map(boundedNumber)];
+const STORED_ROW_QUERY = `SELECT CASE WHEN ${STORAGE_GUARDS.join(' AND ')} THEN 1 ELSE 0 END AS admitted,
+ ${[...TEXT_FIELDS.map(([field,limit,nullable])=>`CASE WHEN ${boundedText(field,limit,nullable)} THEN ${field} ELSE NULL END AS ${field}`),
+ ...NUMERIC_FIELDS.map(field=>`CASE WHEN ${boundedNumber(field)} THEN ${field} ELSE NULL END AS ${field}`)].join(', ')} FROM skills WHERE name=?`;
 
 export class CuratedOwnerSkills {
  readonly #selected = new Map<string,string>();
@@ -79,11 +97,11 @@ export class CuratedOwnerSkills {
    && turn.ownerText.trim()===`/skills ${action} ${NAME}@1`;
  }
  private stored():Stored|undefined {
-  return this.sql.exec<Stored>('SELECT version,provenance,identity_locked,provisional,trigger_types_json,trigger_condition,required_tools_json,required_connectors_json,body_markdown,created_by,created_at,status,effectiveness,pinned,invocations,last_used,last_curated_at,archived_at FROM skills WHERE name=?',NAME).toArray()[0];
+  return this.sql.exec<Stored>(STORED_ROW_QUERY,NAME).toArray()[0];
  }
  private authentic(row:Stored):boolean {
   const s=CURATED_PREPARATION_SKILL;
-  return row.version===1 && row.provenance==='system' && row.identity_locked===1 && row.provisional===0
+  return row.admitted===1 && row.version===1 && row.provenance==='system' && row.identity_locked===1 && row.provisional===0
    && row.trigger_types_json===JSON.stringify(s.trigger_types) && row.trigger_condition===s.trigger_condition
    && row.required_tools_json==='[]' && row.required_connectors_json==='[]' && row.body_markdown===s.body_markdown
    && row.created_by===`${SOURCE}:owner:${this.custodyKey}` && row.created_at===s.created_at && row.effectiveness===1 && row.pinned===1 && row.invocations===0

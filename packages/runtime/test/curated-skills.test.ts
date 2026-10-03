@@ -93,3 +93,26 @@ it('the reviewed catalog is immutable and contradictory active storage cannot by
   expect(await book.prompt(turn,canaries)).toBe('');
  });
 });
+it('oversize and NUL-tail storage is rejected without materializing raw instruction bytes or reactivating the row',async()=>{
+ const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-bounded-storage'));
+ await runInDurableObject(stub,async(_,state)=>{
+  const sql=state.storage.sql;const writer=new CuratedOwnerSkills(sql,owner);
+  expect(writer.install(CURATED_PREPARATION_SKILL.name,1,turn).ok).toBe(true);
+  for(const hostile of ['x'.repeat(10000),'prefix\0'+'tail'.repeat(3000)]){
+   sql.exec("UPDATE skills SET body_markdown=?,status='archived' WHERE name=?",hostile,CURATED_PREPARATION_SKILL.name);
+   let rawBodies=0;
+   const observed=new Proxy(sql,{get(target,key){if(key!=='exec')return Reflect.get(target,key);return (...args:Parameters<SqlStorage['exec']>)=>{
+    const cursor=target.exec(...args);return new Proxy(cursor,{get(result,property){if(property!=='toArray')return Reflect.get(result,property);return ()=>{
+     const rows=result.toArray();for(const row of rows){const body=(row as Record<string,unknown>).body_markdown;if(typeof body==='string'&&new TextEncoder().encode(body).length>2400)rawBodies++;}return rows;
+    };}});
+   };}});
+   const book=new CuratedOwnerSkills(observed,owner);
+   expect(book.list()[0]?.enabled).toBe(false);
+   expect(book.load(CURATED_PREPARATION_SKILL.name,1,turn).ok).toBe(false);
+   expect(book.install(CURATED_PREPARATION_SKILL.name,1,turn).ok).toBe(false);
+   expect(await book.prompt(turn,canaries)).toBe('');
+   expect(sql.exec<{status:string}>('SELECT status FROM skills WHERE name=?',CURATED_PREPARATION_SKILL.name).toArray()[0]?.status).toBe('archived');
+   expect(rawBodies).toBe(0);
+  }
+ });
+});

@@ -58,3 +58,21 @@ Local verification (final code, matching dependency cache and unchanged lock SHA
 First full runtime execution had two intentional final-prompt digest/snapshot changes and one missing-build asset failure. The final prompt pins were re-derived for the four new ACL names; the missing local dashboard assets were built from unchanged source. A fresh entire runtime suite then passed. This is not a skipped or relabeled older result.
 
 Full top-level CI/live Supabase checks are not claimed here. Static guards require a committed strict-ancestor migration base; their final result is recorded in the handoff. Dependency installation initially lacked an offline tarball; the existing independently copied cache was checked against the unchanged exact lock, including Wrangler 4.135.0 and Vitest 4.1.9. Actual-model and live-provider/deployed acceptance are NOT RUN. No source was published or deployed, no external account was created, and no credentials or persistent grants were added.
+
+## Current-serving integration
+
+Integrated onto `4485c64492854b42db2a4e552dc5fe1f598c3758`. The original source packet remains pinned to `8e5c45f64c5af2f979d692f64e5f16b36bdf49ca` over c1f; its full-runtime evidence belongs to that candidate, not a relabeled current-base full suite.
+
+Mail envelope, background tool intersections, source_ref requirement and default-off collection were preserved. Latest strict reply-effect mapping now includes list=null, install=skill_enabled, disable=skill_disabled and load=skill_selected; selection does not promise instruction admission or new capabilities. Existing skills retention classification remains KNOWN_GAP with no new exemption or table.
+
+Storage materialization is bounded before JavaScript through SQL type/UTF-8 BLOB-length CASE projection. Rejected existing rows retain their presence, so installation cannot mistake them for absent rows and reactivate them via ON CONFLICT. Actual-SQL oversized and NUL-tail tests first observed raw body materialization, then passed with bounded projection. The projection includes every required text field, including provenance; happy-path regressions caught and resolved the initial omitted column.
+
+Current-base receipts:
+- Initial integrated skill/canonical/composer/effect/store checks: 11 files, 103 tests PASS
+- Mail/background integration: 3 files, 23 tests PASS
+- Final bounded-guard + skill + effect + store + mail tests: 9 files, 44 tests PASS
+- Full contracts: 92 files, 1,748 tests PASS
+- Worker/integration/contracts TypeScript: PASS
+- Independent integration review: no blocker; final bounded guard separately reviewed
+
+No complete current-base runtime/required CI/live acceptance is claimed. Root owns those release checks. There was no new activation, external grant, publication or deployment during integration.
