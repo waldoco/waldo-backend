@@ -148,3 +148,11 @@ it('export caller byte ceiling rejects an immutable revision before any body rea
  f.state().binding={...binding};f.suspend();await expect(s.reviseText(edit)).rejects.toThrow('workspace_rejected');
  expect(f.host.bodies.put).toHaveBeenCalledTimes(1);
  });
+
+it.each(['EMAIL','PHONE','ADDRESS','CREDIT_CARD','ATTENDEE_NAME','INSTRUCTION'])('refuses a changed full replacement containing the Scribe %s placeholder without advancing the revision',async kind=>{
+ const f=fixture(),s=await workspaceStore(f.host),saved=await s.write(args());
+ await expect(s.reviseText({path:'file.txt',mime:'text/plain',expected_revision:1,operation_id:id(81),text:`Changed [REDACTED_${kind}]`})).rejects.toThrow('workspace_conflict');
+ expect((await s.read(saved.file_id,1,0,10)).text).toBe('hello');
+ expect(f.state().files[0]!.revision).toBe(1);
+ expect(f.host.bodies.put).toHaveBeenCalledTimes(1);
+});

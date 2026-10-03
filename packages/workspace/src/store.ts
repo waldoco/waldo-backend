@@ -30,7 +30,7 @@ const byteTotal = (state: WorkspaceState): number => state.bodies.reduce((s, b) 
 const copyMeta = (meta: FileMeta): FileMeta => ({ ...meta });
 export type LiteralEdit = Readonly<{ before: string; after: string }>;
 export type TextRevision = Readonly<{ path: string; expected_revision: number; operation_id: string; mime: string; text?: string; edits?: readonly LiteralEdit[] }>;
-const REDACTION_MARKERS = ['[REDACTED_EMAIL]', '[REDACTED_PHONE]', '[REDACTED_ADDRESS]', '[REDACTED_CREDIT_CARD]', '[REDACTED_ATTENDEE_NAME]'] as const;
+const REDACTION_MARKERS = ['[REDACTED_EMAIL]', '[REDACTED_PHONE]', '[REDACTED_ADDRESS]', '[REDACTED_CREDIT_CARD]', '[REDACTED_ATTENDEE_NAME]', '[REDACTED_INSTRUCTION]'] as const;
 export type Write = Readonly<{ path: string; bytes: Uint8Array; mime: string; expected_revision: number; provenance: Provenance; operation_id: string }>;
 export const workspaceStore = async (host: WorkspaceHost) => {
   validateBinding(host.binding);
