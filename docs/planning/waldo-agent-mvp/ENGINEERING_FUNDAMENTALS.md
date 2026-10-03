@@ -458,3 +458,10 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 
 - [ ] An invalid/uncertain ordinary source classification must not disable a previously ready narrow workspace task. Recovery preserves exact task/families/boundary and independent permissions; initial, unready, closed, pending, quoted/stale or steering states cannot recover. A valid new supplied-only restriction always overrides recovery.
 - [ ] Metadata-only custody outcomes must distinguish invalid_decision/uncertain from retained_invalid/retained_uncertain; never export raw classifier output/evidence or classify private content with diagnostic regexes.
+
+
+| 2026-10-03 | Plain unquoted pasted excerpt widened a strict task to external families without confirmation; legacy close card restored all sources | Task source permission custody | PR692 source RED plus actual owner inbox/card RED→GREEN. Each added retained/external family requires a visible card; private workspace still needs none. Pending retain/uncertain/invalid preserves nonce, foreign/replayed decisions fail, callback performs no reads/connects, legacy close stays empty inactive. | Exact owner message bytes do not prove pasted-line permission. Existing baseline policy is unchanged; live classifier/UX behavior remains separate. |
+
+- [ ] Evidence matching cannot independently authorize newly added retained/external source families; compare against prior established scope for both new and change and require the visible owner decision.
+- [ ] Pending model continuations preserve inactive custody and the exact approval nonce/revision; only an authenticated matching card decision may activate the displayed families.
+- [ ] Task closure must enforce empty inactive scope even for legacy all-family card payloads; ordinary retain cannot restore baseline families.

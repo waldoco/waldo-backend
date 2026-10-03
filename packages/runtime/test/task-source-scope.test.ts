@@ -50,7 +50,7 @@ it('new, change and close need exact single-use owner decisions; expiry does not
     expect(approveTaskSourceProposal(sql, 'owner-one', proposal!, Date.now(), scope)).toBe(true);
     expect(approveTaskSourceProposal(sql, 'owner-one', proposal!, Date.now(), scope)).toBe(false);
     const approved = await cap.current();
-    expect(approved.sources).toEqual(action === 'close' ? [...TASK_SOURCE_FAMILIES] : ['mail']);
+    expect(approved.sources).toEqual(action === 'close' ? [] : ['mail']);
     expect(approved.taskId === snapshot.taskId).toBe(action === 'change');
     await cap.classify(decision('restrict'));
   }
@@ -250,7 +250,7 @@ it.each(['baseline', 'unready', 'closed', 'pending', 'quoted', 'steering', 'stal
   }
   const before = await cap.current();
   const result = await cap.classify('not json', kind === 'stale-input' ? 'old-input' : 'current', text, kind !== 'steering');
-  expect(result.outcome).toBe('invalid_decision'); expect(result.snapshot.ready).toBe(false);
+  expect(result.outcome).toBe(kind === 'pending' ? 'owner_confirmation' : 'invalid_decision'); expect(result.snapshot.ready).toBe(false);
   expect(result.snapshot.taskId).toBe(before.taskId); expect(result.snapshot.sources).toEqual(before.sources);
   expect(taskSourceAllowed(result.snapshot, { name: 'workspace_list' })).toBe(false);
 }));
