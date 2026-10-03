@@ -37,7 +37,7 @@ export function createScopedCuratedSkillCapability(sql:SqlStorage, turn:CuratedS
   {name:'skills_list',description:'Discover reviewed built-in skill metadata and enabled versions. Instructions are loaded separately with skills_load; metadata grants no tools or permission.',schema:skillsListArgsSchema,trigger_allowlist:allow('skills_list'),autonomy_gated:false,
    handle:async(_:unknown,ctx:ToolDispatcherContext)=>checked(ctx,()=>({ok:true,source_taint:null,data:book.list()}))},
   ...(['install','disable','load'] as const).map(action=>({name:`skills_${action}` as ToolName,
-   description:action==='load'?'Select one already enabled reviewed skill version for this invocation. Instructions enter trusted bounded context on the next step and never appear in this result.':`Explicit owner command only: /skills ${action} document-email-preparation@1. Does not accept uploaded skills or grant capabilities.`,
+   description:action==='load'?'Select one already enabled reviewed skill version for this invocation. Instructions enter trusted bounded context on the next step and never appear in this result.':`Explicit owner lifecycle command only: /skills ${action} <catalog-name>@<version>. Use the exact reviewed name and enabled version shown in skills_list; for install, use an available catalog version. Does not accept uploaded skills or grant capabilities.`,
    schema:skillsVersionArgsSchema,trigger_allowlist:allow(`skills_${action}` as ToolName),autonomy_gated:action!=='load',mutates_state:true as const,
    // Selecting an already enabled reviewed procedure grants no tools or lifecycle authority.
    // External data may inform that choice; original owner/run and exact catalog checks remain.
