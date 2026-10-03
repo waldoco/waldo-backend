@@ -45,3 +45,16 @@ describe('modern Memory presentation',()=>{
   expect(html).toContain('<svg');expect(html).toContain('role="button"');expect(html).toContain('tabindex="0"');expect(html).toContain('Saved branches');expect(html).toContain('Unverified association');expect(html).toContain('cannot be recovered');expect(html).toContain('tentative');expect(html).not.toContain('Your days');
  });
 });
+it('puts evidence before collapsed technical metadata without implying a source link',()=>{
+ const html=renderToStaticMarkup(<MemoryDetailView data={readMemory(response('view=detail&id=synthetic-owner:claim:1')) as MemoryDetail}/>);
+ expect(html.indexOf('A writer note')).toBeLessThan(html.indexOf('Technical details'));
+ expect(html).toContain('<details');expect(html).toContain('not an original-message link');expect(html).toContain('Writer seen count');
+});
+it('never labels an untrusted-origin Spot as Shared on cards or detail',()=>{
+ const page=readMemory(response('view=claims&limit=25')) as MemoryPage;
+ const cards=renderToStaticMarkup(<MemoryList data={{...page,items:page.items.map(item=>({...item,origin:'untrusted'}))}} onNext={()=>{}} onRestart={()=>{}}/>);
+ const detail=readMemory(response('view=detail&id=synthetic-owner:claim:1')) as MemoryDetail;
+ if(detail.kind!=='claim')throw new Error('Expected claim fixture');
+ const html=renderToStaticMarkup(<MemoryDetailView data={{...detail,item:{...detail.item,origin:'untrusted'}}}/>);
+ for(const result of [cards,html]){expect(result).toContain('Untrusted origin');expect(result).not.toContain('Shared');}
+});

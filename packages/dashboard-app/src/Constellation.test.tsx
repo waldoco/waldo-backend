@@ -85,8 +85,8 @@ describe('saved Constellation branches', () => {
     expect(html).toContain('&lt;script&gt;relation&lt;/script&gt;');
     expect(html).not.toContain('<script>');
     expect(html).not.toContain('<img');
-    expect(html).toContain('viewBox="0 0 760 500"');
-    expect(html).toContain('<polygon');
+    expect(html).toContain('viewBox="0 0 1000 700"');
+    expect(html).toContain('class="graph-glyph"');
     expect(html).toContain('role="button"');
     expect(html).toContain('tabindex="0"');
     expect(html).toContain('list fallback');
