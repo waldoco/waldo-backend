@@ -41,11 +41,11 @@ export function constellationScene(data: MemoryPattern, focusId: string, claims:
   // Unequal branch lengths and staggered columns keep the scene out of a wheel.
   peers.forEach((pattern, index) => {
     const column = Math.floor(index / 4), row = index % 4;
-    nodes.push({ id: pattern.id, kind: 'pattern', label: pattern.label, point: { x: Math.min(690, 440 + column * 105 + (row % 2 ? 15 : -8)), y: 70 + row * 112 + (column % 2 ? 18 : 0) } });
+    nodes.push({ id: pattern.id, kind: 'pattern', label: pattern.label, point: { x: 425 + column * 125 + (row % 2 ? 8 : -8), y: 60 + row * 110 + (column % 2 ? 15 : 0) } });
   });
   const supportIds = new Set(focus.support.claim_ids);
   const shown = [...new Map(claims.filter(claim => supportIds.has(claim.id)).map(claim => [claim.id, claim])).values()].slice(0, SUPPORT_PREVIEW_LIMIT);
-  shown.forEach((claim, index) => nodes.push({ id: claim.id, kind: 'spot', label: claim.text, point: { x: index % 2 ? 170 : 75, y: 65 + index * 72 } }));
+  shown.forEach((claim, index) => nodes.push({ id: claim.id, kind: 'spot', label: claim.text, point: { x: index % 2 ? 190 : 75, y: 85 + Math.floor(index / 2) * 160 } }));
   const links: SceneLink[] = associations.map(link => ({ from: link.from, to: link.to, relation: link.relation, kind: 'association' }));
   shown.forEach(claim => links.push({ from: focus.id, to: claim.id, relation: 'Stored supporting Spot', kind: 'support' }));
   return { focus, nodes, links, claims: shown };
@@ -89,7 +89,19 @@ function useSettledScene(nodes: SceneNode[], reduced: boolean) {
   return positions;
 }
 const origin = (value: string) => value === 'shared' || value === 'untrusted' ? `${value} · untrusted provenance` : value;
-const shortLabel = (value: string) => value.length > 29 ? `${value.slice(0, 28)}…` : value;
+// Keep labels in their own columns; the full value remains in the accessible name
+// and inspector. This is typography, not a semantic grouping or ranking.
+export function branchLabel(value: string): string[] {
+  if (value.length <= 18) return [value];
+  const split = value.lastIndexOf(' ', 18);
+  const boundary = split > 7 ? split : 18;
+  const rest = value.slice(boundary).trimStart();
+  return [value.slice(0, boundary), rest.length > 18 ? `${rest.slice(0, 17)}…` : rest];
+}
+export function branchPath(from: Point, to: Point) {
+  const bend = from.x + (to.x - from.x) * .43;
+  return `M ${from.x} ${from.y} L ${bend} ${from.y} L ${bend + (to.x - bend) * .28} ${to.y} L ${to.x} ${to.y}`;
+}
 
 export function PatternExplorer({ data, onNext, onRestart, returnTo }: { returnTo?:MemoryListDestination; data: MemoryPattern; onNext: () => void; onRestart: () => void }) {
   const [focusId, setFocusId] = useState(data.center.id);
@@ -112,7 +124,17 @@ export function PatternExplorer({ data, onNext, onRestart, returnTo }: { returnT
   const activeSupport = support.key === supportKey ? support : null;
   const claims = activeSupport?.read.claims ?? EMPTY_CLAIMS;
   const scene = useMemo(() => constellationScene(data, focused.id, claims), [data, focused.id, claims]);
+  const mapRef = useRef<HTMLDivElement>(null);
   const reduced = useReducedMotion();
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const position = () => { if (map.clientWidth < 500) map.scrollLeft = 150; };
+    position();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(position);
+    observer?.observe(map);
+    return () => observer?.disconnect();
+  }, [data.center.id]);
   const positions = useSettledScene(scene.nodes, reduced);
   const selectedSpot = scene.claims.find(claim => claim.id === selectedId);
   const selected = selectedSpot?.id ?? focused.id;
@@ -126,21 +148,21 @@ export function PatternExplorer({ data, onNext, onRestart, returnTo }: { returnT
     <p className="constellation-guide">Hexagons are tentative patterns. Circles are returned Spots from the selected pattern’s saved support. Lines describe stored links—not truth, causation or verified independent observations.</p>
     {data.omitted_links > 0 && <p className="memory-read-notice">{data.omitted_links} associations omitted from this page.{data.expand.links_capped && ` ${data.expand.capped_links} capped associations cannot be recovered with this cursor.`}</p>}
     <div className="constellation-workspace" data-reduced-motion={reduced}>
-      <div className="constellation-canvas"><svg viewBox="0 0 760 500" role="group" aria-label="Saved pattern and supporting Spot branches">
+      <div className="constellation-canvas"><div ref={mapRef} className="constellation-map-scroll" role="region" aria-label="Saved branch map; scroll horizontally on small screens" tabIndex={0}><svg viewBox="0 0 760 500" role="group" aria-label="Saved pattern and supporting Spot branches">
         {scene.links.map((link, index) => {
           const from = positions.get(link.from), to = positions.get(link.to);
           if (!from || !to) return null;
           const active = link.from === selected || link.to === selected;
-          return <path key={`${link.kind}:${index}`} d={`M ${from.x} ${from.y} Q ${(from.x + to.x) / 2} ${(from.y + to.y) / 2 - 24} ${to.x} ${to.y}`} className={`constellation-link ${link.kind}${active ? ' active' : ' subdued'}`}><title>{`${link.relation} · ${link.kind === 'association' ? 'Unverified association' : 'Saved support, not independent evidence'}`}</title></path>;
+          return <path key={`${link.kind}:${index}`} d={branchPath(from, to)} className={`constellation-link ${link.kind}${active ? ' active' : ' subdued'}`}><title>{`${link.relation} · ${link.kind === 'association' ? 'Unverified association' : 'Saved support, not independent evidence'}`}</title></path>;
         })}
         {scene.nodes.map(node => {
           const point = positions.get(node.id) ?? node.point;
           const active = node.id === selected, connected = incident.has(node.id);
           return <g key={node.id} transform={`translate(${point.x} ${point.y})`} role="button" tabIndex={0} aria-label={`Inspect ${node.kind === 'pattern' ? 'tentative pattern' : 'supporting Spot'} ${node.label}`} aria-pressed={active} className={`constellation-node ${node.kind}${active ? ' selected' : connected ? ' connected' : ' subdued'}`} onClick={() => choose(node)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(node); } }}>
-            <circle r="24" className="constellation-hit"/>{node.kind === 'pattern' ? <polygon points="0,-13 12,-7 12,7 0,13 -12,7 -12,-7"/> : <circle r="8" className="constellation-spot"/>}<text y="35" textAnchor="middle">{shortLabel(node.label)}</text><title>{node.label}</title>
+            <circle r="24" className="constellation-hit"/>{node.kind === 'pattern' ? <polygon points="0,-13 12,-7 12,7 0,13 -12,7 -12,-7"/> : <circle r="8" className="constellation-spot"/>}<text y="31" textAnchor="middle">{branchLabel(node.label).map((line, index) => <tspan key={index} x="0" dy={index ? 15 : 0}>{line}</tspan>)}</text><title>{node.label}</title>
           </g>;
         })}
-      </svg><p className="muted">Select a saved branch to inspect it. Keyboard: Tab, then Enter or Space. The returned branches also appear in the list below.</p></div>
+      </svg></div><p className="constellation-scroll-hint">Scroll the map sideways to see more branches. The full returned list is below.</p><p className="muted">Select a saved branch to inspect it. Keyboard: Tab, then Enter or Space. The returned branches also appear in the list below.</p></div>
       <aside className="panel constellation-inspector" aria-label="Selected saved item">
         {selectedSpot ? <><span className="eyebrow">Saved supporting Spot</span><h3>{selectedSpot.text}</h3><p>Kind: {selectedSpot.kind} · Source: {selectedSpot.source} · Origin: {origin(selectedSpot.origin)} · Status: {selectedSpot.status}</p><p>{selectedSpot.evidence.text}</p><p className="muted">Writer evidence note, not an original-message link or proof. Writer seen count: {selectedSpot.writer_seen_count ?? 'unavailable'}.</p><a href={memoryItemLink('spots', selectedSpot.id, returnTo)}>Inspect this Spot</a></>
           : <><span className="eyebrow">Tentative pattern · {focused.domain}</span><h3>{focused.label}</h3><p>{focused.summary}</p><p>Stored status: {focused.stored_status}</p><p className="muted">Uncalibrated model estimate: {focused.estimate ?? 'unavailable'}. Independent observations remain unverified.</p><a href={memoryItemLink('constellation', focused.id, returnTo)}>Inspect pattern details</a><p><a href={buildMemoryDestination({kind:'explore',id:focused.id,...(returnTo?{returnTo}:{})})}>Explore from this pattern</a></p></>}

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { constellationScene, loadSavedSupport, PatternExplorer, springStep } from './Constellation';
+import { branchLabel, branchPath, constellationScene, loadSavedSupport, PatternExplorer, springStep } from './Constellation';
 import { readMemory, type Claim, type MemoryDetail, type MemoryPattern } from './memory-model';
 import { response } from './memory-test-fixtures';
 
@@ -13,6 +13,13 @@ const detailResponse = (id: string) => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('saved Constellation branches', () => {
+  it('wraps branch typography without changing the full accessible value', () => {
+    expect(branchLabel('Keep mornings gentle')).toEqual(['Keep mornings', 'gentle']);
+    expect(branchLabel('Gentler mornings')).toEqual(['Gentler mornings']);
+    expect(branchLabel('A very long stored interpretation label with more words').every(line => line.length <= 18)).toBe(true);
+    expect(branchPath({x:100,y:200},{x:300,y:400})).toBe('M 100 200 L 186 200 L 217.92000000000002 400 L 300 400');
+  });
+
   it('draws only returned associations and exact selected-pattern support IDs', () => {
     const data = pattern();
     data.associations.push({ ...data.associations[0]!, to: 'foreign-pattern' }, { ...data.associations[0]!, to: data.center.id });
