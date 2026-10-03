@@ -37,6 +37,8 @@ export type TelegramWebhookEnv = Readonly<{
   DRIVE_READS?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
   MAIL_SOURCE_FOLLOWUPS?: string;
+  // Calendar-only prep remains off until controlled owner-path acceptance.
+  CALENDAR_GROUNDED_PREP?: string;
   WALDO_EGRESS_ALLOWLIST?: string;
 }> & OwnerDirectoryEnv;
 

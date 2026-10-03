@@ -13,6 +13,11 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 ## Checklist
 
+- [ ] Scheduled meeting decisions stay transient until a current source and verified delivery justify publication; reject stale decision caches and do not treat unsent/no-op JSON as Waldo conversation or nightly evidence
+- [ ] Preserve curated owner skill revocation checks on every physical retry while transient background decisions neither load nor inherit earlier selected/revoked owner procedures
+- [ ] Forget source-derived prep metadata as well as payload text; hash dedup/cooldown keys and cancel metadata-only unsent matches
+- [ ] Evaluate finite expiry before quiet deferral and clamp held wakes to expiry; pass one trusted owner timezone through every daily counter read/write without silently rebucketing legacy aggregates
+
 ### Tokens, auth and sessions
 - A one-time token is spent only by a deliberate user action (a POST from our own page), never by a GET. Link previews, scanners and prefetchers issue GETs.
 - Every URL we send in chat has previews turned off unless the preview is the point.
@@ -118,6 +123,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 | Date | Bug | Class | Test added | Checklist line |
 |---|---|---|---|---|
+| 2026-10-03 | Existing conversational publication cached stale meeting decisions and indexed undelivered JSON; payload-only forgetting left source codes in metadata; quiet deferral preceded expiry | Calendar preparation / final delivery | Default-DO cancelled-history, changed-source retry, metadata-only forget, quiet-expiry and owner-local delivery regressions | Transient structured decisions, hashed derived keys, literal metadata cleanup and expiry-before-deferral |
 | 2026-09-30 | Owner-local artifact metadata used shared R2 body keys based on short IDs; two owners with the same ID overwrote and read each other | Trust boundaries | artifacts.test.ts: same-ID shared bucket create/revise/restart, missing namespace, percent/slash namespace collision, no legacy fallback | Shared object-storage keys include immutable owner scope |
 | 2026-09-30 | Browser binding extraction failures became empty approvals; old-key-only lowercase comparison missed additional facts and case-sensitive recipient drift | Trust boundaries | browse-act.test.ts: failed/empty/malformed extraction and old approvals, added/removed facts, exact recipient case, key-order success; original source fails 6/32 tests | Browser approvals need valid nonempty evidence and exact complete-set comparison |
 | 2026-09-26 | Forget deleted the claim row but left the forgotten text live in five stores: the episodes FTS index (search_episodes could resurface it), memory_backups payloads, the frozen legacy spots and core_file_revisions tables, and constellation nodes kept quoting it and referencing its id in supporting_spots; the console forget path added a re-admission barrier while the model-facing path did not. Found by the forget-coverage audit: red-first survivor scan showed {episodes:1, backups:1, spots:1, revisions:1, nodes:1} after a forget | Memory / trust boundaries | forget-coverage.test.ts: marker planted in all six stores, forgotten through the real applyClaimOps path, fresh-state scan asserts zero everywhere, node stops quoting the claim and drops its id, barrier blocks re-admission, absent legacy tables skip cleanly, result reports purged vs purge-incomplete:<stores> | Deletes that the owner asked for are real across every store, proven by a fresh-state re-scan |
