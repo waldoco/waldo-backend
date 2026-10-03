@@ -127,6 +127,7 @@ type OwnerRuntime = Readonly<{
   cards(entry: ScheduleEntry): Promise<void>;
   updateCheck(trace: string): Promise<void>;
   calendarPrepCurrent(receipt: CalendarPrepReceipt): Promise<boolean>;
+  retainedRecallAvailable(): boolean;
   view(session: ConsoleSession, notice: string | null, page?: { traceBefore?: number; runsBefore?: number }): Promise<ConsoleView & { page: { trace_before: number | null; runs_before: number | null; trace_applied: number | null; runs_applied: number | null } }>;
   overview(): Promise<ReturnType<typeof dashboardOverview>>;
   act(action: ConsoleAction): Promise<boolean | string>;
@@ -824,7 +825,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           return;
         }
       }
-      const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal, call, owner, calendarPrepCurrent } = this.setup();
+      const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal, call, owner, calendarPrepCurrent, retainedRecallAvailable } = this.setup();
       await ready;
       await finalOutbox.maintain();
       // Reconcile finals before quarantining recovered claims with committed payloads.
@@ -847,14 +848,19 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (selected === 0) { try { await this.drainInbox(); } finally { await scheduler.rearm(); } return; }
       if (selected === 1) {
         try { await finalOutbox.drain({
-          allowed: async r => r.payload.chat_id === owner && r.ownerSubject === String(owner)
+          allowed: async r => (!(r.mailFollowup || r.calendarPrep) || retainedRecallAvailable()) && r.payload.chat_id === owner && r.ownerSubject === String(owner)
             && (!r.bot || r.bot === this.env.TELEGRAM_BOT_TOKEN?.split(':')[0])
             && r.doName === (this.ctx.storage.kv.get<string>('do_name') ?? '')
             && this.ctx.storage.kv.get<boolean>('telegram_unlinked') !== true
             && (!r.mailFollowup || (loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume !== 'low' && loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).reviewEligible(r.mailFollowup, this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')))
             && (!r.calendarPrep || await calendarPrepCurrent(r.calendarPrep))
             && heartbeatEligible(r, this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', Date.now()),
-          defer: async r => (r.mailFollowup || r.calendarPrep) && ((r.mailFollowup && this.env.MAIL_SOURCE_FOLLOWUPS !== '1') || (r.calendarPrep && this.env.CALENDAR_GROUNDED_PREP !== '1') || loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume === 'low' || isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) ? Date.now() + 10 * 60_000 : null,
+          defer: async r => {
+            // Frozen source-derived outputs cannot replay retained facts while coverage is unproved.
+            // Keep bytes and transport state intact; current owner replies use a separate lane.
+            if ((r.mailFollowup || r.calendarPrep) && !retainedRecallAvailable()) return Math.min(Date.now() + 10 * 60_000, r.expiresAt ?? r.createdAt + 86400000);
+            return (r.mailFollowup || r.calendarPrep) && ((r.mailFollowup && this.env.MAIL_SOURCE_FOLLOWUPS !== '1') || (r.calendarPrep && this.env.CALENDAR_GROUNDED_PREP !== '1') || loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume === 'low' || isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) ? Date.now() + 10 * 60_000 : null;
+          },
           send: payload => call('sendMessage', payload), settled: settleFinal,
         }); } finally { await scheduler.rearm(); }
         return;
@@ -1443,9 +1449,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         });
         const skills = createCuratedSkillCapability(storage.sql, admission, turn.text, turn.traceId, scope);
         const adapter = createOwnerMessageContextAdapter({ admission, scope, dependencies: host.context(admission),
+          retainedRecallAvailable: () => memory.incompleteTopics().length === 0,
           registeredHandlers: [...handlers, ...skills.handlers].map(handler => handler.name), connectorBacked: handlers.filter(handler => host.connectorBacked(handler)).map(handler => handler.name), access: host.access.bind(host) });
         this.activeOwnerContext = adapter;
-        return { admission, adapter, store: ownerCanonicalHistory(storage, admission, adapter), skills };
+        return { admission, adapter, store: ownerCanonicalHistory(storage, admission, adapter), skills, forgetting: { principal_ref: admission.invocation.verified_authority.principal_ref, tenant_ref: admission.invocation.verified_authority.tenant_ref, store: memory } };
       } } : undefined, !this.canonicalPreparation && channel === 'telegram' ? { prepare: async (turn, contextOwnerId, scope) => {
         if (turn.attachment || turn.mediaNote || probeCapture.current !== null) return undefined;
         const occurrence = this.activeInbox;
@@ -1926,7 +1933,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
         message_id: record.reaction.message_id, reaction: [{ type: 'emoji', emoji: record.reaction.emoji }] }).catch(() => undefined);
     };
-    const runtime: OwnerRuntime = { finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, nightly, briefs, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, nightly, briefs, cards, updateCheck, calendarPrepCurrent, retainedRecallAvailable: () => memory.incompleteTopics().length === 0, traces, log, google,
       view: async (session, notice, page) => {
         const linked = await google.state();
         const tracePage = traces.rowsPage(clock.timezone, 60, page?.traceBefore);

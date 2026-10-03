@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ConversationTree, literalJsonTextRedactor, type ConversationEntry } from './conversation-entry';
+import { ConversationTree, literalJsonTextRedactor, literalTextRedactor, type ConversationEntry } from './conversation-entry';
 
 const entry = (overrides: Partial<ConversationEntry> = {}): ConversationEntry => ({
   id: 'root', ownerId: 'owner-a', chatId: 'chat-a', parentId: null,
@@ -8,6 +8,13 @@ const entry = (overrides: Partial<ConversationEntry> = {}): ConversationEntry =>
 });
 
 describe('ConversationTree', () => {
+  it('redacts longest exact clauses before their shorter markers independent of custody order', () => {
+    const topic = 'DLD-20261002-M3';
+    const fact = `${topic} workshop preference: Friday at 09:10 UTC`;
+    for (const targets of [[topic, fact], [fact, topic]]) {
+      expect(literalTextRedactor(targets, '[forgotten]')(`${fact}. Unrelated: tea after lunch.`)).toBe('[forgotten]. Unrelated: tea after lunch.');
+    }
+  });
   it('builds context from the active leaf ancestry instead of siblings', () => {
     const tree = new ConversationTree();
     tree.append(entry());

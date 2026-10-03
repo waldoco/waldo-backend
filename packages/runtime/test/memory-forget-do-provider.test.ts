@@ -16,7 +16,7 @@ import { webSearchArgsSchema } from '@waldo/contracts';
 
 // Real registered two-argument owner DO and its fenced inbox/listener/responder path.
 // Only the model SDK and Telegram transport are scripted. No live provider or source service.
-const seen = vi.hoisted(() => ({ writer: '{}', requests: [] as unknown[], fetches: [] as string[], replyText: 'Recorded fixture response.', reasoning: undefined as string | undefined, toolSuppliers: [] as (() => Promise<readonly import('../src/context-composer/types').ContextFragment[]>)[], offloads: [] as import('../src/conversation/tool-output-store').ToolOutputStore[], onReply: undefined as undefined | (() => unknown[] | undefined) }));
+const seen = vi.hoisted(() => ({ writer: '{}', requests: [] as unknown[], fetches: [] as string[], replyText: 'Recorded fixture response.', reasoning: undefined as string | undefined, toolSuppliers: [] as (() => Promise<readonly import('../src/context-composer/types').ContextFragment[]>)[], offloads: [] as import('../src/conversation/tool-output-store').ToolOutputStore[], selectorThrows: false, selectedText: undefined as string | undefined, onReply: undefined as undefined | (() => unknown[] | undefined) }));
 vi.mock('../src/run-loop/adapters', async load => {
  const actual = await load<typeof import('../src/run-loop/adapters')>();
  return { ...actual, resolveRunLoopAdapters: (...args: Parameters<typeof actual.resolveRunLoopAdapters>) => {
@@ -37,9 +37,16 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
   const name = (body as { text?: { format?: { name?: string } } }).text?.format?.name;
   if (!name) seen.requests.push(body);
   const output = !name ? seen.onReply?.() ?? [] : [];
+  let selection = '{}';
+  if (name === 'forget_source_spans') {
+    if (seen.selectorThrows) throw new Error('Synthetic selector unavailable');
+    const input = (body as { input: string }).input;
+    const supplied = JSON.parse(input.slice(input.indexOf('{'))) as { sources: Array<{ ref: string; text: string }> };
+    selection = JSON.stringify({ complete: !!seen.selectedText, reviewed_refs: supplied.sources.map(row => row.ref), spans: supplied.sources.filter(row => seen.selectedText && row.text.includes(seen.selectedText)).map(row => ({ ref: row.ref, text: seen.selectedText })) });
+  }
   if (!name && seen.reasoning) output.push({ type: 'reasoning', summary: [{ type: 'summary_text', text: seen.reasoning }] });
   return { id: 'local-fixture', output_text: name === 'claim_ops' ? seen.writer
-    : name === 'reaction' ? '{"reaction":null}' : seen.replyText, output,
+    : name === 'forget_source_spans' ? selection : name === 'reaction' ? '{"reaction":null}' : seen.replyText, output,
     usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
 } }; } }));
 const FORGET = 'Prefers synthetic cerulean origami before a focus block';
@@ -63,7 +70,7 @@ const turn = async (name: string, id: number, text: string, writer: string) => {
   });
 };
 beforeEach(() => {
-  seen.requests.length = 0; seen.fetches.length = 0; seen.toolSuppliers.length = 0; seen.offloads.length = 0; seen.onReply = undefined; seen.replyText = 'Recorded fixture response.'; seen.reasoning = undefined;
+  seen.requests.length = 0; seen.fetches.length = 0; seen.toolSuppliers.length = 0; seen.offloads.length = 0; seen.onReply = undefined; seen.selectedText = undefined; seen.selectorThrows = false; seen.replyText = 'Recorded fixture response.'; seen.reasoning = undefined;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => { seen.fetches.push(String(input)); throw new Error('unmocked network is forbidden'); });
 });
 afterEach(() => { vi.unstubAllGlobals(); expect(seen.fetches).toEqual([]); });
@@ -84,7 +91,7 @@ const forget = async (name: string) => {
   await runInDurableObject(stub(name), async (_instance, state) => {
     id = claimStore(state.storage.sql).claims().find(row => row.text === FORGET)!.id;
   });
-  await turn(name, 2, 'Forget only the origami preference. Keep my other preference.', ops({ forget_claims: [id], forget_topic: 'origami preference' }));
+  await turn(name, 2, 'Forget only the origami preference. Keep my other preference.', ops({ forget_claims: [id] }));
 };
 const storesClean = async (name: string) => runInDurableObject(stub(name), async (_instance, state) => {
   const memory = claimStore(state.storage.sql);
@@ -106,6 +113,35 @@ it('excludes forgotten bytes from the exact same-turn provider request after ver
   expect(request()).toContain('removed 1 claim');
   expect(request()).toContain(KEEP);
   expect(request().includes(FORGET), 'forgotten bytes reached provider').toBe(false);
+});
+it.each(['rejected', 'unavailable'])('preserves valid explicit-ID deletion when accompanying topic selection is %s', async selection => {
+  const name = 'forget-do-hybrid-' + selection;
+  seen.selectorThrows = selection === 'unavailable';
+  await seeded(name);
+  let id = 0; let nodeId = 0;
+  await runInDurableObject(stub(name), (_instance, state) => {
+    const memory = claimStore(state.storage.sql);
+    id = memory.claims().find(row => row.text === FORGET)!.id;
+    nodeId = memory.saveNode({ id: null, domain: 'fixture', label: FORGET, summary: FORGET, strength: 1, status: 'active', supporting_spots: [] }, '2026-10-03T00:00:00Z');
+    memory.saveNode({ id: null, domain: 'fixture', label: KEEP, summary: KEEP, strength: 1, status: 'active', supporting_spots: [] }, '2026-10-03T00:00:00Z');
+  });
+  await turn(name, 2, 'Forget only the origami preference. Keep my other preference.', ops({ forget_claims: [id, 999999], forget_nodes: [nodeId, 999999], forget_topic: 'origami preference' }));
+  await storesClean(name);
+  await runInDurableObject(stub(name), (_instance, state) => {
+    const memory = claimStore(state.storage.sql);
+    expect(memory.incompleteTopics()).toEqual(['origami preference']);
+    expect(memory.nodes().map(row => row.label)).toEqual([KEEP]);
+  });
+  expect(request()).toContain('removed 1 claim');
+  expect(request()).toContain('incomplete');
+  expect(request()).not.toContain(FORGET);
+  expect(request()).not.toContain(KEEP);
+  await evictDurableObject(stub(name));
+  await turn(name, 3, 'Read the current synthetic request only.', ops());
+  expect(request()).toContain('Read the current synthetic request only.');
+  expect(request()).toContain('Recall is temporarily limited');
+  expect(request()).not.toContain(FORGET);
+  await storesClean(name);
 });
 it('keeps forget authoritative in later turns and after DO eviction without losing unrelated history', async () => {
   const name = 'forget-do-later-provider';
@@ -380,7 +416,8 @@ it('does not re-persist known forgotten text through model reasoning summaries',
     seen.writer = ops({ forget_claims: [memory.claims()[0]!.id] }); seen.reasoning = `Synthetic reasoning quotation: ${FORGET}`;
     await direct('t2', 'Forget that origami preference.');
     const log = logs.find(row => row.trace === 't2' && row.hop === 'llm_reply')!;
-    expect(log.text?.reasoning).toBe('Synthetic reasoning quotation: [forgotten]');
+    expect(log.text).toBeUndefined();
+    expect(JSON.stringify(logs.filter(row => row.trace === 't2'))).not.toContain(FORGET);
     expect(request().includes(FORGET)).toBe(false);
   });
 });
@@ -508,7 +545,7 @@ it('the exact live forget settles with a capped retained read-owner-context ledg
     await toolOutputLedger(state.storage).record({ tool: 'read_owner_context', ok: true, at: 1000, taint: 'external', summary: JSON.stringify({ ok: true, data: { keep: KEEP, text: needle, padding: 'x'.repeat(900) }, source_taint: 'external' }) });
   });
   const owner = 'Forget the disposable fictional memory for project WBX-20261002-M1, including its workshop start-time preference and any superseded version. Remove only this test project context; leave unrelated real memories unchanged. Confirm what category was removed without repeating the forgotten times. Do not create any external action.';
-  await turn(name, 2, owner, ops({ forget_claims: [75], forget_topic: 'WBX-20261002-M1 fictional test project context' }));
+  await turn(name, 2, owner, ops({ forget_claims: [75] }));
   expect(request()).toContain('removed 1 claim'); expect(request()).not.toContain(needle); expect(request()).toContain(KEEP);
   await runInDurableObject(stub(name), async (_instance, state) => {
     const memory = claimStore(state.storage.sql);
@@ -523,9 +560,9 @@ it('the exact live forget settles with a capped retained read-owner-context ledg
   expect(request()).not.toContain(needle); expect(request()).toContain(KEEP);
 });
 
-it.each(['literal','unicode','capped unicode'])('topic-only %s forget survives KV failure and recreation then verifies retry', async encoding => {
+it.each(['literal','unicode','capped unicode'])('topic-only %s forgetting verifies supported clause retry or preserves unsupported truncated originals', async encoding => {
  await runInDurableObject(stub('forget-topic-only-recovery-'+encoding), async (_instance, state) => {
-  const TOPIC = 'Synthetic cobalt paper workshop';
+  const TOPIC = 'Synthetic cobalt paper workshop'; const FACT = `${TOPIC} meets at 09:10 UTC`; seen.selectedText = FACT;
   let memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
   const kv = durableConversationStore(state.storage); const ledger = toolOutputLedger(state.storage);
   let failKv = true;
@@ -538,65 +575,100 @@ it.each(['literal','unicode','capped unicode'])('topic-only %s forget survives K
   };
   let responder = createOwnerResponder(...args);
   const direct = (id:string,text:string,writes=true) => responder.respond({traceId:id,conversationRef:'owner',surface:'telegram',text,memoryWrites:writes},(_hop,work)=>work());
-  seen.writer = ops({add:[add(KEEP)]}); await direct('t1', `${TOPIC}; ${KEEP}`);
-  const summary = encoding === 'literal' ? `${TOPIC}; ${KEEP}` : JSON.stringify({keep:KEEP,text:TOPIC,...(encoding==='capped unicode'?{padding:'x'.repeat(900)}:{})}).replace('Synthetic','\\u0053ynthetic');
+  seen.writer = ops({add:[add(KEEP)]}); await direct('t1', `${FACT}; ${KEEP}`);
+  const summary = encoding === 'literal' ? `${FACT}; ${KEEP}` : JSON.stringify({keep:KEEP,text:FACT,...(encoding==='capped unicode'?{padding:'x'.repeat(900)}:{})}).replace('Synthetic','\\u0053ynthetic');
   await ledger.record({tool:'fixture_read',ok:true,at:1,taint:'external',summary});
   await ledger.record({tool:'fixture_keep',ok:true,at:2,taint:'external',summary:KEEP});
-  seen.writer = ops({forget_topic:TOPIC}); await direct('t2', `Forget ${TOPIC}.`);
-  expect(memory.claims('purging')).toEqual([]); expect(memory.pendingTopics()).toEqual([TOPIC]);
+  seen.writer = ops({forget_topic:TOPIC}); await direct('t2', `Forget ${FACT}.`);
+  expect(memory.claims('purging')).toEqual([]); expect(memory.incompleteTopics()).toEqual([TOPIC]);
   expect(JSON.stringify(await kv.load())).toContain(TOPIC); expect(JSON.stringify(await ledger.recent())).toContain('cobalt paper workshop');
   memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work)); args[2] = memory;
   responder = createOwnerResponder(...args); seen.writer = ops(); await direct('t3','What remains relevant?',false);
-  expect(request()).not.toContain(TOPIC); expect(request()).toContain(KEEP);
+  expect(request()).not.toContain(TOPIC); expect(request()).not.toContain(KEEP);
   expect(JSON.stringify(await seen.toolSuppliers.at(-1)!())).not.toContain('cobalt paper workshop');
-  expect(JSON.stringify(await seen.toolSuppliers.at(-1)!())).toContain(KEEP);
-  expect(memory.pendingTopics()).toEqual([TOPIC]);
+  expect(JSON.stringify(await seen.toolSuppliers.at(-1)!())).not.toContain(KEEP);
+  expect(memory.incompleteTopics()).toEqual([TOPIC]);
   expect(JSON.stringify(await kv.load())).toContain(TOPIC); expect(JSON.stringify(await ledger.recent())).toContain('cobalt paper workshop');
-  failKv = false; await direct('t4','Check the retained preference.',false);
-  expect(memory.pendingTopics()).toEqual([]);
-  expect(JSON.stringify(await kv.load())).not.toContain(TOPIC); expect(JSON.stringify(await ledger.recent())).not.toContain('cobalt paper workshop');
-  expect(request()).not.toContain(TOPIC); expect(request()).toContain(KEEP);
+  failKv = false; seen.writer = ops({forget_topic:TOPIC}); await direct('t4',`Please forget ${TOPIC}; retry the verified cleanup.`);
+  if (encoding === 'capped unicode') {
+    expect(memory.incompleteTopics()).toEqual([TOPIC]);
+    expect(JSON.stringify(await kv.load())).toContain(FACT);
+    expect(JSON.stringify(await ledger.recent())).toContain('cobalt paper workshop');
+    expect(request()).toContain('incomplete');
+    expect(request()).not.toContain(FACT);
+    expect(request()).not.toContain(KEEP);
+  } else {
+    expect(memory.incompleteTopics()).toEqual([]);
+    expect(JSON.stringify(await kv.load())).not.toContain(FACT);
+    expect(JSON.stringify(await ledger.recent())).not.toContain('cobalt paper workshop');
+    expect(request()).not.toContain(FACT); expect(request()).toContain(KEEP);
+  }
  });
 });
 it('topic-only settlement rejects a false-clean conversation receipt while the ledger survives',async()=>{
  await runInDurableObject(stub('forget-topic-ledger-survivor'),async(_instance,state)=>{
-  const TOPIC='Synthetic indigo receipt workshop'; const memory=claimStore(state.storage.sql);
+  const TOPIC='Synthetic indigo receipt workshop'; const FACT = `${TOPIC} meets at 09:10 UTC`; seen.selectedText = FACT; const memory=claimStore(state.storage.sql);
   const kv=durableConversationStore(state.storage); const ledger=toolOutputLedger(state.storage);
   const args:Parameters<typeof createOwnerResponder>=['fixture',kv,memory]; args[8]=ledger;
   args[11]=texts=>redactConversationEntries(state.storage,texts,FORGOTTEN);
   const responder=createOwnerResponder(...args);
   const direct=(id:string,text:string,writes=true)=>responder.respond({traceId:id,conversationRef:'owner',surface:'telegram',text,memoryWrites:writes},(_hop,work)=>work());
-  seen.writer=ops();await direct('t1',`${TOPIC}; ${KEEP}`);
-  await ledger.record({tool:'fixture_read',ok:true,at:1,taint:'external',summary:`${TOPIC}; ${KEEP}`});
-  seen.writer=ops({forget_topic:TOPIC});await direct('t2',`Forget ${TOPIC}.`);
+  seen.writer=ops();await direct('t1',`${FACT}; ${KEEP}`);
+  await ledger.record({tool:'fixture_read',ok:true,at:1,taint:'external',summary:`${FACT}; ${KEEP}`});
+  seen.writer=ops({forget_topic:TOPIC});await direct('t2',`Forget ${FACT}.`);
   expect(JSON.stringify(await kv.load())).not.toContain(TOPIC);expect(JSON.stringify(await ledger.recent())).toContain(TOPIC);
-  expect(memory.pendingTopics()).toEqual([TOPIC]);expect(request()).toContain('pending');
+  expect(memory.incompleteTopics()).toEqual([TOPIC]);expect(request()).toContain('pending');
   await direct('t3','What remains relevant?',false);
-  expect(memory.pendingTopics()).toEqual([TOPIC]);expect(JSON.stringify(await seen.toolSuppliers.at(-1)!())).not.toContain(TOPIC);
+  expect(memory.incompleteTopics()).toEqual([TOPIC]);expect(JSON.stringify(await seen.toolSuppliers.at(-1)!())).not.toContain(TOPIC);
  });
 });
 it.each(['conversation','ledger'])('keeps topic pending when independent %s verification fails despite clean writes',async failing=>{
  await runInDurableObject(stub('forget-topic-readback-'+failing),async(_instance,state)=>{
-  const TOPIC='Synthetic violet readback workshop';const memory=claimStore(state.storage.sql);const kv=durableConversationStore(state.storage);const ledger=toolOutputLedger(state.storage);
+  const TOPIC='Synthetic violet readback workshop'; const FACT = `${TOPIC} meets at 09:10 UTC`; seen.selectedText = FACT;const memory=claimStore(state.storage.sql);const kv=durableConversationStore(state.storage);const ledger=toolOutputLedger(state.storage);
   let failVerify=false;const reads:string[]=[];const logs:import('../src/channels/owner-turn-types').TurnLogEntry[]=[];
   const args:Parameters<typeof createOwnerResponder>=['fixture',{...kv,load:async()=>{reads.push('conversation');if(failVerify&&failing==='conversation')throw new Error('PRIVATE_KV_VERIFY_FAILURE');return kv.load();}},memory,entry=>logs.push(entry)];
   args[8]={...ledger,remaining:async texts=>{reads.push('ledger');if(failVerify&&failing==='ledger')throw new Error('PRIVATE_KV_VERIFY_FAILURE');return ledger.remaining(texts);}};
   args[11]=async texts=>{const receipt=await redactConversationEntries(state.storage,texts,FORGOTTEN);const {redactToolOutputLedger}=await import('../src/conversation/tool-output-ledger');await redactToolOutputLedger(state.storage,texts,FORGOTTEN);return receipt;};
   const responder=createOwnerResponder(...args);const direct=(id:string,text:string,writes=true)=>responder.respond({traceId:id,conversationRef:'owner',surface:'telegram',text,memoryWrites:writes},(_hop,work)=>work());
-  seen.writer=ops();await direct('t1',`${TOPIC}; ${KEEP}`);await ledger.record({tool:'fixture_read',ok:true,at:1,taint:'external',summary:`${TOPIC}; ${KEEP}`});
-  failVerify=true;reads.length=0;seen.writer=ops({forget_topic:TOPIC});await direct('t2',`Forget ${TOPIC}.`);
-  expect(reads).toEqual(expect.arrayContaining(['conversation','ledger']));expect(memory.pendingTopics()).toEqual([TOPIC]);
+  seen.writer=ops();await direct('t1',`${FACT}; ${KEEP}`);await ledger.record({tool:'fixture_read',ok:true,at:1,taint:'external',summary:`${FACT}; ${KEEP}`});
+  failVerify=true;reads.length=0;seen.writer=ops({forget_topic:TOPIC});await direct('t2',`Forget ${FACT}.`);
+  expect(reads).toEqual(expect.arrayContaining(['conversation','ledger']));expect(memory.incompleteTopics()).toEqual([TOPIC]);
   expect(JSON.stringify(await kv.load())).not.toContain(TOPIC);expect(JSON.stringify(await ledger.recent())).not.toContain(TOPIC);
   expect(JSON.stringify(logs)).not.toContain('PRIVATE_KV_VERIFY_FAILURE');expect(request()).toContain('only partly stored');expect(request()).not.toContain('Memory this turn');
-  failVerify=false;await direct('t3','Check the unrelated preference.',false);expect(memory.pendingTopics()).toEqual([]);
+  failVerify=false;seen.writer=ops({forget_topic:TOPIC});await direct('t3',`Forget ${FACT}.`);expect(memory.incompleteTopics()).toEqual([]);
  });
+});
+
+it.each(['bare marker', 'Unicode topic'])('preserves %s originals and incomplete recall across recreation', async variant => {
+  await runInDurableObject(stub('forget-unsupported-' + variant), async (_instance, state) => {
+    const TOPIC = variant === 'bare marker' ? 'Synthetic bare workshop' : 'Synthetic café workshop';
+    seen.selectedText = TOPIC;
+    let memory = claimStore(state.storage.sql);
+    const kv = durableConversationStore(state.storage);
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', kv, memory];
+    args[11] = texts => redactConversationEntries(state.storage, texts, FORGOTTEN);
+    let responder = createOwnerResponder(...args);
+    const direct = (id: string, text: string, writes = true) => responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text, memoryWrites: writes }, (_hop, work) => work());
+    seen.writer = ops({ add: [add(KEEP)] }); await direct('t1', `${TOPIC}; ${KEEP}`);
+    seen.writer = ops({ forget_topic: TOPIC }); await direct('t2', `Forget ${TOPIC}.`);
+    expect(memory.incompleteTopics()).toEqual([TOPIC]);
+    expect(JSON.stringify(await kv.load())).toContain(TOPIC);
+    expect(memory.claims().map(row => row.text)).toEqual([KEEP]);
+    expect(request()).toContain('incomplete');
+    memory = claimStore(state.storage.sql); args[2] = memory; responder = createOwnerResponder(...args);
+    seen.writer = ops(); await direct('t3', 'Use this current request only.', false);
+    expect(memory.incompleteTopics()).toEqual([TOPIC]);
+    expect(JSON.stringify(await kv.load())).toContain(TOPIC);
+    expect(request()).not.toContain(TOPIC); expect(request()).not.toContain(KEEP);
+    expect(request()).toContain('Use this current request only.');
+  });
 });
 
 it('explains a rejected topic-only custody write without claiming pending cleanup or automatic retry',async()=>{
  await runInDurableObject(stub('forget-topic-custody-receipt'),async(_instance,state)=>{
   const TOPIC='Synthetic cobalt custody workshop';let failInsert=false;
   const sql={exec:((query:string,...values:unknown[])=>{
-   if(failInsert&&query.startsWith('INSERT OR IGNORE INTO topic_purge_pending'))throw new Error('PRIVATE_INSERT_FAILURE');
+   if(failInsert&&query.startsWith('INSERT INTO topic_purge_pending'))throw new Error('PRIVATE_INSERT_FAILURE');
    return state.storage.sql.exec(query,...values as SqlStorageValue[]);
   }) as SqlStorage['exec']};
   const memory=claimStore(sql,work=>state.storage.transactionSync(work));const kv=durableConversationStore(state.storage);

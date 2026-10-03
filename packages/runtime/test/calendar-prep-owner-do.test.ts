@@ -8,6 +8,7 @@ import { loopBook } from '../src/channels/loops';
 import { updateBook } from '../src/channels/update-cards';
 import { DeliveryGateStore } from '../src/delivery-gate/store';
 import { ensureSchema } from '../src/tracer/schema';
+import { claimStore } from '../src/memory/claims';
 
 const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, sent: [] as string[], requests: [] as LLMGatewayRequest[], decision: 'notify', changes: [] as CalendarChange[], mutate: null as (() => void) | null, ack: true }));
 vi.mock('../src/connectors/google', async load => {
@@ -51,7 +52,7 @@ it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-r
     fixture.sent = []; fixture.requests = []; fixture.mutate = null; fixture.decision = mode === 'no-op' ? 'no_op' : 'notify'; fixture.ack = mode !== 'wrong-ack';
     fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: '2026-10-03T10:30:00+05:30', end: '2026-10-03T11:00:00+05:30', all_day: false, description: 'Bring the onboarding mocks', etag: 'r1' };
     const config = { ...env, CALENDAR_GROUNDED_PREP: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
-    const owner = new TelegramOwnerDO(state, config);
+    let owner = new TelegramOwnerDO(state, config);
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
@@ -99,8 +100,9 @@ it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-r
         }
         if (mode === 'forget') {
           await incoming('Forget "Bring the onboarding mocks"');
-          expect(rows()[0]?.payload.text).not.toContain('Bring the onboarding mocks');
-          expect(rows()[0]?.reason).toBe('owner_forget');
+          expect(rows()[0]?.payload.text).toContain('Bring the onboarding mocks'); // Unproved coverage preserves source bytes.
+          expect(claimStore(state.storage.sql).incompleteTopics()).toEqual(['Bring the onboarding mocks']);
+          owner = new TelegramOwnerDO(state, config); // The hold survives recreation.
         }
         if (mode === 'daily-cap') {
           fixture.event = { ...fixture.event!, id: 'event-2' }; await incoming();
@@ -109,7 +111,7 @@ it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-r
           expect(state.storage.sql.exec('SELECT local_date, count FROM class_state').one()).toEqual({ local_date: '2026-10-03', count: 2 });
         }
         await drain();
-        if (['disabled', 'low-volume'].includes(mode)) {
+        if (['disabled', 'low-volume', 'forget'].includes(mode)) {
           expect(rows()[0]?.status).toBe('pending');
           expect(rows()[0]!.dueAt).toBeLessThanOrEqual(Date.parse(fixture.event.start));
           now = Date.parse(fixture.event.start); await drain();

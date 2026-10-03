@@ -1,17 +1,22 @@
 import type { RunEffectScope } from './run-effect-scope';
 import { literalTextRedactor, redactConversationEntry, type ConversationEntry, type ConversationTree } from '@waldo/contracts';
 import { redactSecretUrls } from './egress-guard';
+import { asciiLiteralIncludes, type ForgetSource } from '../memory/selective-forget';
 
 export type ConversationStore = Readonly<{
   load(): Promise<Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null }>>;
   save(entries: readonly ConversationEntry[], leafId: string, scope?: RunEffectScope): Promise<void>;
+  forgetSources?(topic: string): Promise<{ sources: ForgetSource[]; incomplete: boolean }>;
+  forgetSourcesCurrent?(topic: string): { sources: ForgetSource[]; incomplete: boolean } | null;
 }>;
 
-type KeyValueStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & Partial<Pick<DurableObjectStorage, 'kv'>>;
+type KeyValueStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & { kv?: Pick<DurableObjectStorage['kv'], 'put'> & Partial<Pick<DurableObjectStorage['kv'], 'list'>> };
 
 const entryKey = (seq: number) => `conv:${String(seq).padStart(10, '0')}`;
 
 export const durableConversationStore = (storage: KeyValueStorage): ConversationStore => ({
+  forgetSources: topic => conversationForgetSources(storage, topic),
+  forgetSourcesCurrent: topic => storage.kv?.list ? conversationForgetSourcesCurrent(storage.kv as Pick<DurableObjectStorage['kv'], 'list'>, topic) : null,
   async load() {
     const rows = await storage.list<ConversationEntry>({ prefix: 'conv:' });
     return { entries: [...rows.values()], leafId: (await storage.get<string>('conv-leaf')) ?? null };
@@ -69,6 +74,41 @@ const canonicalKind = (key: string): 'conv' | 'witness' | null => {
   if (!key.startsWith(CANONICAL_PREFIX)) return null;
   const kind = key.slice(CANONICAL_PREFIX.length).split(':')[2];
   return kind === 'conv' || kind === 'witness' ? kind : null;
+};
+type ExpectedForgetOwner = Readonly<{ principal_ref: string; tenant_ref: string }>;
+export const conversationForgetSources = async (storage: KeyValueStorage, topic: string, expected?: ExpectedForgetOwner) =>
+  conversationSourcesFromRows(await storage.list<ConversationEntry>({ prefix: 'conv:' }), await storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX }), topic, expected);
+export const conversationForgetSourcesCurrent = (storage: Pick<DurableObjectStorage['kv'], 'list'>, topic: string, expected?: ExpectedForgetOwner) =>
+  conversationSourcesFromRows(new Map(storage.list<ConversationEntry>({ prefix: 'conv:' })), new Map(storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX })), topic, expected);
+const conversationSourcesFromRows = (legacy: Map<string, ConversationEntry>, canonical: Map<string, ConversationEntry | Witness>, topic: string, expected?: ExpectedForgetOwner): { sources: ForgetSource[]; incomplete: boolean } => {
+  const sources: ForgetSource[] = [];
+  let incomplete = false;
+  const expectedPrefix = expected ? `${CANONICAL_PREFIX}${expected.principal_ref}:${expected.tenant_ref}:` : null;
+  const ownEntries = new Map<string, ConversationEntry | null>();
+  if (expectedPrefix) for (const [key, value] of canonical) if (key.startsWith(expectedPrefix) && canonicalKind(key) === 'conv') {
+    const entry = value as ConversationEntry;
+    ownEntries.set(entry.id, ownEntries.has(entry.id) ? null : entry);
+  }
+  const verified = (key: string, entry: ConversationEntry) => {
+    if (!expected || !expectedPrefix) return true;
+    if (!key.startsWith(expectedPrefix) || entry.ownerId !== expected.principal_ref) return false;
+    const witness = canonical.get(`${expectedPrefix}witness:${entry.id}`) as Witness | undefined;
+    if (!witness || witness.lineage !== 'canonical_v1' || witness.principal_ref !== expected.principal_ref || witness.tenant_ref !== expected.tenant_ref || JSON.stringify(witness.entry) !== JSON.stringify(entry)) return false;
+    return JSON.stringify(ownEntries.get(entry.id)) === JSON.stringify(entry);
+  };
+  const add = (key: string, entry: ConversationEntry) => {
+    const fields = [['model', entry.modelPayload], ['app', entry.appPayload], ...(entry.modelProjection.mode === 'replace' ? [['replace', entry.modelProjection.payload]] : [])] as const;
+    for (const [field, text] of fields) if (asciiLiteralIncludes(text, topic)) {
+      if (!verified(key, entry)) { incomplete = true; continue; }
+      sources.push({ ref: `conversation:${key}:${field}`, text });
+    }
+  };
+  for (const [key, entry] of legacy) add(key, entry);
+  for (const [key, value] of canonical) {
+    if (canonicalKind(key) === 'conv') add(key, value as ConversationEntry);
+    else if (canonicalKind(key) === 'witness') add(key, (value as Witness).entry);
+  }
+  return { sources, incomplete };
 };
 const entryText = (entry: ConversationEntry): string => `${entry.modelPayload}\n${entry.appPayload}\n${entry.modelProjection.mode === 'replace' ? entry.modelProjection.payload : ''}`.toLowerCase();
 

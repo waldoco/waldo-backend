@@ -1,5 +1,5 @@
 import type { ConversationEntry } from '@waldo/contracts';
-import { durableConversationStore, type ConversationStore } from './conversation-store';
+import { conversationForgetSources, conversationForgetSourcesCurrent, durableConversationStore, type ConversationStore } from './conversation-store';
 import type { OwnerResponderBinding } from './owner-turn';
 
 // A fresh labelled namespace. Legacy conv:* bytes are never read or rewritten here.
@@ -26,6 +26,13 @@ export function ownerCanonicalHistory(storage: DurableObjectStorage, admission: 
   };
   const base = durableConversationStore(mapped as Parameters<typeof durableConversationStore>[0]);
   return {
+    forgetSourcesCurrent: topic => conversationForgetSourcesCurrent(storage.kv, topic, { principal_ref, tenant_ref }),
+    async forgetSources(topic) {
+      await adapter.assertCurrent();
+      const sources = await conversationForgetSources(storage, topic, { principal_ref, tenant_ref });
+      await adapter.assertCurrent();
+      return sources;
+    },
     async load() {
       await adapter.assertCurrent();
       const loaded = await base.load();

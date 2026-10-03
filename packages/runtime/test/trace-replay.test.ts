@@ -35,6 +35,18 @@ describe('trace replay scorer', () => {
     const wrongFirst = { ...draft, seq: 1, payload: { to: 'x@example.com', body: 'hi' } };
     expect(score({ effects: [wrongFirst, { ...draft, seq: 2 }] }).structural_ok).toBe(true);
   });
+  it('rejects an unwanted artifact write even when the requested artifact also succeeds', () => {
+    const workspaceWant: CaseExpectation = { ...want,
+      required_effects: [{ kind: 'workspace.write', payload: { file_id: 'current', revision: 2 } }],
+      forbidden_effect_payloads: [{ kind: 'workspace.write', payload: { file_id: 'older' } }],
+    };
+    const current = { seq: 2, kind: 'workspace.write', state: 'applied' as const, payload: { file_id: 'current', revision: 2 } };
+    const older = { ...current, seq: 1, payload: { file_id: 'older', revision: 3 } };
+    expect(score({ effects: [older, current] }, workspaceWant).failed).toEqual(['forbidden_effects']);
+    expect(score({ effects: [{ ...older, state: 'unknown' }, current] }, workspaceWant).failed).toEqual(['forbidden_effects']);
+    expect(score({ effects: [{ ...older, state: 'rejected' }, current] }, workspaceWant).failed).toEqual([]);
+    expect(score({ effects: [current] }, workspaceWant).failed).toEqual([]);
+  });
   it('forbidden_effects: an applied or unknown forbidden effect fails; a rejected one does not', () => {
     const send = { seq: 3, kind: 'mail.send', state: 'applied' as const, payload: {} };
     expect(score({ effects: [draft, send] }).failed).toEqual(['forbidden_effects']);
