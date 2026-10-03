@@ -29,13 +29,13 @@ function sources(admission: OwnerMessageAdmission): ContextComposerDependencies 
 let sequence = 880000;
 async function browserProof(work: (h: {
   send(text: string): Promise<void>; reload(): void; foreign(): void; stale(): void;
-  alarm(): Promise<void>; replyOnly(): void; pauseCleanup(): (() => void) & { reached: Promise<void> }; state: DurableObjectState; requests: LLMRequest[]; starts(): number; ends(): number; inspections(): number;
+  reloadAbsent(): void; failCleanup(): void; alarm(): Promise<void>; replyOnly(): void; pauseCleanup(): (() => void) & { reached: Promise<void> }; state: DurableObjectState; requests: LLMRequest[]; starts(): number; ends(): number; inspections(): number;
 }) => Promise<void>, mode: 'enabled' | 'absent' | 'disabled' = 'enabled', ownerId = '10000000-0000-0000-0000-000000000001') {
   const subject = 81101, doName = `browser-do-proof-${++sequence}`;
   const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(doName));
   await runInDurableObject(stub, async (_instance, state) => {
     const noFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('browser proof denies network'));
-    let starts = 0, ends = 0, inspections = 0, replyOnly = false;
+    let starts = 0, ends = 0, inspections = 0, replyOnly = false, cleanupFails = false;
     let endPause: { enter(): void; wait: Promise<void> } | undefined;
     const requests: LLMRequest[] = [];
     const binding = { owner_id: ownerId, presence_id: '20000000-0000-0000-0000-000000000001', do_name: doName, provider: 'telegram' as const, subject: String(subject), admission_revision: '9007199254740993', state_version: 0 };
@@ -46,7 +46,7 @@ async function browserProof(work: (h: {
       inspect: async () => { inspections++; return { url: 'https://fixture.example/form', stateDigest: await fixtureDigest('synthetic'), binding: { value: 'synthetic' } }; },
       fill: async (_id: string, _field: string, _value: string, _state: string, before: () => Promise<void>) => { await before(); },
       submit: async (_id: string, _state: string, before: () => Promise<void>) => { await before(); }, verify: async () => null,
-      end: async () => { ends++; if (endPause) { const slot = endPause; endPause = undefined; slot.enter(); await slot.wait; } },
+      end: async () => { ends++; if (cleanupFails) throw Error('synthetic cleanup unavailable'); if (endPause) { const slot = endPause; endPause = undefined; slot.enter(); await slot.wait; } },
     };
     const config: BrowserOwnerConfiguration = { enabled: mode !== 'disabled', binding, manifestDigest: `sha256:${'a'.repeat(64)}`, driver, lookup: async () => ({ ...directory }), grant: async request => ({ ...request, ref: 'synthetic-current-grant', expiresAt: Date.now() + 60000 }) };
     const host: TelegramOwnerPrivateHost = {
@@ -74,7 +74,7 @@ async function browserProof(work: (h: {
       if (text === '/stop') return;
       throw Error('Synthetic browser turn did not close in five actual alarms');
     };
-    try { await work({ send, state, requests, alarm: () => instance.alarm(), replyOnly: () => { replyOnly = true; }, pauseCleanup: () => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const wait = new Promise<void>(resolve => { resume = resolve; }); endPause = { enter, wait }; return Object.assign(resume, { reached }); }, starts: () => starts, ends: () => ends, inspections: () => inspections, reload: () => { instance = construct(); }, foreign: () => { directory = { ...directory, owner_id: '10000000-0000-0000-0000-000000000002' }; }, stale: () => { directory = { ...directory, admission_revision: '9007199254740995' }; } }); }
+    try { await work({ send, state, requests, reloadAbsent: () => { instance = new TelegramOwnerDO(state, privateEnv, { mode: 'canonical', host }); }, failCleanup: () => { cleanupFails = true; }, alarm: () => instance.alarm(), replyOnly: () => { replyOnly = true; }, pauseCleanup: () => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const wait = new Promise<void>(resolve => { resume = resolve; }); endPause = { enter, wait }; return Object.assign(resume, { reached }); }, starts: () => starts, ends: () => ends, inspections: () => inspections, reload: () => { instance = construct(); }, foreign: () => { directory = { ...directory, owner_id: '10000000-0000-0000-0000-000000000002' }; }, stale: () => { directory = { ...directory, admission_revision: '9007199254740995' }; } }); }
     finally { await state.storage.deleteAlarm(); noFetch.mockRestore(); }
   });
 }
@@ -162,5 +162,55 @@ it('expired browser cleanup waiting on a provider cannot starve actual inbox or 
       expect(h.state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!.find(row => row.id === prior.id)!.attempts).toBeGreaterThan(attempts);
       expect(await h.state.storage.get(BROWSER_TASK_KEY)).toMatchObject({ phase: 'cleanup_pending' });
     } finally { resume(); }
+  });
+});
+for (const state of ['missing', 'malformed', 'closed'] as const) it(`actual owner alarm retires an overdue browser wake with ${state} checkpoint without deleting evidence`, async () => {
+  await browserProof(async h => {
+    await h.send('Open synthetic browser task.'); h.replyOnly();
+    const original = await h.state.storage.get<Record<string, unknown>>(BROWSER_TASK_KEY);
+    const retained = state === 'malformed' ? { private_provider_id: 'unresolved-private-id', damaged: true } : state === 'closed' ? { ...original, phase: 'closed', session: { ...(original!.session as object), state: 'ended' } } : undefined;
+    if (state === 'missing') await h.state.storage.delete(BROWSER_TASK_KEY); else await h.state.storage.put(BROWSER_TASK_KEY, retained);
+    await h.state.storage.put('browser_owner_task_due_v1', Date.now() - 1);
+    h.state.storage.kv.put('owner_alarm_last_v1', 2);
+    await h.alarm();
+    // waitUntil maintenance may finish after the bounded alarm service slot.
+    for (let n = 0; n < 20 && await h.state.storage.get('browser_owner_task_due_v1') !== null; n++) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(await h.state.storage.get('browser_owner_task_due_v1')).toBeNull();
+    expect(await h.state.storage.get(BROWSER_TASK_KEY)).toEqual(retained);
+    expect(h.ends()).toBe(0);
+    if (state === 'malformed') expect(await h.state.storage.get('browser_owner_task_quarantine_v1')).toMatchObject({ reason: 'malformed_checkpoint' });
+    h.state.storage.kv.put('owner_alarm_last_v1', 2); await h.alarm();
+    expect(h.state.storage.kv.get('owner_alarm_last_v1')).not.toBe(3);
+  });
+});
+
+for (const recovery of ['missing_configuration', 'exhausted_cleanup'] as const) it(`actual DO ${recovery} retires its cleanup wake while preserving unresolved identity and servicing owner inbox`, async () => {
+  await browserProof(async h => {
+    await h.send('Open the synthetic browser session.'); h.replyOnly();
+    const original = await h.state.storage.get<{ session: Record<string, unknown> }>(BROWSER_TASK_KEY);
+    expect(original!.session.providerSessionId).toBe('PRIVATE_SYNTHETIC_PROVIDER_SESSION');
+    await h.state.storage.put(BROWSER_TASK_KEY, { ...original, session: { ...original!.session, expiresAt: Date.now() - 1 } });
+    if (recovery === 'missing_configuration') h.reloadAbsent(); else h.failCleanup();
+    const count = recovery === 'missing_configuration' ? 1 : 4;
+    for (let attempt = 0; attempt < count; attempt++) {
+      await h.state.storage.put('browser_owner_task_due_v1', Date.now() - 1);
+      h.state.storage.kv.put('owner_alarm_last_v1', 2);
+      await h.alarm();
+      // Cleanup runs in waitUntil; wait only for this persisted recovery result.
+      for (let n = 0; n < 30 && (await h.state.storage.get<number>('browser_owner_task_due_v1') ?? 0) <= Date.now() && await h.state.storage.get('browser_owner_task_due_v1') !== null; n++) await new Promise(resolve => setTimeout(resolve, 5));
+      if (recovery === 'exhausted_cleanup' && attempt < 2) {
+        for (let n = 0; n < 30 && h.ends() <= attempt; n++) await new Promise(resolve => setTimeout(resolve, 5));
+        h.reload();
+      }
+    }
+    for (let n = 0; n < 30 && await h.state.storage.get('browser_owner_task_due_v1') !== null; n++) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(h.ends()).toBe(recovery === 'missing_configuration' ? 0 : 3);
+    expect(await h.state.storage.get('browser_owner_task_due_v1')).toBeNull();
+    expect(await h.state.storage.get('browser_owner_task_cleanup_v1')).toMatchObject({ status: recovery === 'missing_configuration' ? 'driver_unavailable' : 'exhausted', ...(recovery === 'exhausted_cleanup' ? { attempts: 3 } : {}) });
+    expect(await h.state.storage.get(BROWSER_TASK_KEY)).toMatchObject({ session: { providerSessionId: 'PRIVATE_SYNTHETIC_PROVIDER_SESSION' } });
+    expect((await h.state.storage.get<{ phase: string }>(BROWSER_TASK_KEY))!.phase).not.toBe('closed');
+    const before = h.requests.length; await h.send('Continue the owner conversation despite unavailable browser cleanup.');
+    expect(h.requests.length).toBeGreaterThan(before);
+    expect(JSON.stringify(h.requests)).not.toContain('PRIVATE_SYNTHETIC_PROVIDER_SESSION');
   });
 });

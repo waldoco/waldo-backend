@@ -502,3 +502,6 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] One private task/checkpoint per owner, five write attempts, 32 fresh authorizations and bounded lifetime survive reconstruction. Owner stop fences admission before waiting for the task mutex.
 - [ ] Concurrent same-owner initial reads resume one allocation under the mutex. Ended cleanup is idempotent, and browser cleanup never awaits in front of inbox/outbox/scheduler arbitration.
 - [ ] Shared alarm retains browser expiry/retry wakes; failed cleanup remains private pending evidence. Two distinct canonical UUIDs in separate physical DOs cannot project each other's session identities.
+
+- [ ] Missing, malformed or already-closed browser checkpoints retire stale runnable wakes; malformed private metadata is preserved and quarantined, never treated as a fresh task.
+- [ ] Cleanup physical attempts persist before provider I/O and stop after three, including across reconstruction. Lost allocation IDs, unavailable or incompatible configured drivers and exhausted cleanup retain unresolved private evidence with no runnable browser retry wake; none claims provider closure.

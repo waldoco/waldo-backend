@@ -75,3 +75,33 @@ it('durably caps fresh authorizations per owner task and cannot replenish by rec
   await expect((await browserOwnerHost(f.options).resolve(f.principal))!.inspect(f.principal)).rejects.toThrow('expired or revoked');
   expect(f.starts()).toBe(1); expect(f.rows.get('browser_owner_task_v1')).toMatchObject({ phase: 'closed' });
 });
+it('caps failed physical cleanup attempts durably across reconstruction and retains the unresolved provider identity', async () => {
+  const f = fixture(); let attempts = 0;
+  f.driver.end = async () => { attempts++; throw Error('synthetic cleanup remains unavailable'); };
+  await (await browserOwnerHost(f.options).resolve(f.principal))!.read(f.principal);
+  for (let n = 0; n < 6; n++) { f.time(60100 + n * 30000); await browserOwnerHost(f.options).maintain(); }
+  expect(attempts).toBe(3);
+  expect(f.rows.get('browser_owner_task_due_v1')).toBeNull();
+  expect(f.rows.get('browser_owner_task_cleanup_v1')).toMatchObject({ attempts: 3, status: 'exhausted' });
+  expect(f.rows.get('browser_owner_task_v1')).toMatchObject({ phase: 'cleanup_pending', session: { providerSessionId: 'private-provider-id' } });
+});
+it('retires missing-driver and lost-allocation retry wakes without claiming provider closure', async () => {
+  const f = fixture(); await (await browserOwnerHost(f.options).resolve(f.principal))!.read(f.principal);
+  await browserOwnerHost({ ...f.options, config: undefined }).maintain();
+  expect(f.rows.get('browser_owner_task_due_v1')).toBeNull();
+  expect(f.rows.get('browser_owner_task_cleanup_v1')).toMatchObject({ status: 'driver_unavailable' });
+  const lost = fixture(); lost.driver.start = async () => { throw Error('allocation response missing'); };
+  await expect((await browserOwnerHost(lost.options).resolve(lost.principal))!.read(lost.principal)).rejects.toThrow('could not open');
+  expect(lost.rows.get('browser_owner_task_due_v1')).toBeNull();
+  expect(lost.rows.get('browser_owner_task_v1')).toMatchObject({ phase: 'cleanup_pending', session: { providerSessionId: 'pending', state: 'lost' } });
+  expect(lost.rows.get('browser_owner_task_cleanup_v1')).toMatchObject({ status: 'identity_unavailable' });
+});
+it('retires cleanup when trusted configuration no longer identifies the stored session without selecting a new provider identity', async () => {
+  const f = fixture(); await (await browserOwnerHost(f.options).resolve(f.principal))!.read(f.principal);
+  const original = f.rows.get('browser_owner_task_v1');
+  f.options.config.manifestDigest = `sha256:${'b'.repeat(64)}`; f.time(60100);
+  await expect(browserOwnerHost(f.options).maintain()).resolves.toBeUndefined();
+  expect(f.rows.get('browser_owner_task_due_v1')).toBeNull();
+  expect(f.rows.get('browser_owner_task_v1')).toEqual(original);
+  expect(f.rows.get('browser_owner_task_cleanup_v1')).toMatchObject({ status: 'configuration_mismatch' });
+});

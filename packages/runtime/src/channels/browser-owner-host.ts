@@ -13,6 +13,9 @@ export type BrowserOwnerConfiguration = Readonly<{
 }>;
 export const BROWSER_TASK_KEY = 'browser_owner_task_v1';
 export const BROWSER_TASK_DUE_KEY = 'browser_owner_task_due_v1';
+export const BROWSER_TASK_CLEANUP_KEY = 'browser_owner_task_cleanup_v1';
+const MAX_CLEANUP_ATTEMPTS = 3;
+type CleanupState = Readonly<{ taskId: string; attempts: number; status: 'retry_pending' | 'exhausted' | 'identity_unavailable' | 'driver_unavailable' | 'configuration_mismatch' | 'closed'; at: number }>;
 const REVOKED_KEY = 'browser_owner_task_revoked_v1';
 const locks = new WeakMap<DurableObjectStorage, Promise<unknown>>();
 export function browserOwnerHost(options: Readonly<{
@@ -40,7 +43,11 @@ export function browserOwnerHost(options: Readonly<{
   };
   const save = async (value: BrowserTaskCheckpoint) => {
     const record = browserTaskCheckpointSchema.parse(value);
-    const due = record.phase === 'closed' ? null : record.phase === 'cleanup_pending' ? options.now() + 30000 : record.session.expiresAt;
+    const cleanup = await options.storage.get<CleanupState>(BROWSER_TASK_CLEANUP_KEY);
+    const lost = record.phase === 'cleanup_pending' && record.session.providerSessionId === 'pending';
+    if (lost) await options.storage.put(BROWSER_TASK_CLEANUP_KEY, { taskId: record.taskId, attempts: 0, status: 'identity_unavailable', at: options.now() });
+    const exhausted = cleanup?.status === 'exhausted' || (cleanup?.attempts ?? 0) >= MAX_CLEANUP_ATTEMPTS;
+    const due = record.phase === 'closed' || lost || exhausted ? null : record.phase === 'cleanup_pending' ? options.now() + 30000 : record.session.expiresAt;
     await options.storage.put({ [BROWSER_TASK_KEY]: record, [BROWSER_TASK_DUE_KEY]: due });
     if (due !== null) {
       const existing = await options.storage.getAlarm();
@@ -63,7 +70,25 @@ export function browserOwnerHost(options: Readonly<{
     };
   const make = () => config && binding ? browserTaskContinuity({
     enabled: config.enabled, ownerId: principal, taskId: config.driver.runId, manifestDigest: config.manifestDigest,
-    driver: config.driver, now: options.now, newId: options.newId,
+    driver: { ...config.driver, end: async id => {
+      const previous = await options.storage.get<CleanupState>(BROWSER_TASK_CLEANUP_KEY);
+      const valid = previous === undefined || previous.taskId === config.driver.runId && Number.isSafeInteger(previous.attempts) && previous.attempts >= 0;
+      const attempts = valid ? previous?.attempts ?? 0 : MAX_CLEANUP_ATTEMPTS;
+      if (attempts >= MAX_CLEANUP_ATTEMPTS) {
+        await options.storage.put({ [BROWSER_TASK_CLEANUP_KEY]: { taskId: config.driver.runId, attempts, status: 'exhausted', at: options.now() }, [BROWSER_TASK_DUE_KEY]: null });
+        throw Error('browser cleanup attempts exhausted');
+      }
+      // Persist the attempt before external I/O so reconstruction cannot replenish it.
+      const next = attempts + 1;
+      await options.storage.put(BROWSER_TASK_CLEANUP_KEY, { taskId: config.driver.runId, attempts: next, status: 'retry_pending', at: options.now() });
+      try {
+        await config.driver.end(id);
+        await options.storage.put(BROWSER_TASK_CLEANUP_KEY, { taskId: config.driver.runId, attempts: next, status: 'closed', at: options.now() });
+      } catch {
+        await options.storage.put({ [BROWSER_TASK_CLEANUP_KEY]: { taskId: config.driver.runId, attempts: next, status: next >= MAX_CLEANUP_ATTEMPTS ? 'exhausted' : 'retry_pending', at: options.now() }, [BROWSER_TASK_DUE_KEY]: next >= MAX_CLEANUP_ATTEMPTS ? null : options.now() + 30000 });
+        throw Error('browser cleanup remains unresolved');
+      }
+    } }, now: options.now, newId: options.newId,
     store: { exclusive, load: async () => (await options.storage.get(BROWSER_TASK_KEY)) ?? null, save },
     admit,
   }) : null;
@@ -87,13 +112,24 @@ export function browserOwnerHost(options: Readonly<{
     maintain(): Promise<void> {
       if (maintenance) return maintenance;
       maintenance = (async () => {
-        const parsed = browserTaskCheckpointSchema.safeParse(await options.storage.get(BROWSER_TASK_KEY));
-        if (!parsed.success || parsed.data.phase === 'closed') return;
+        const raw = await options.storage.get(BROWSER_TASK_KEY);
+        const parsed = browserTaskCheckpointSchema.safeParse(raw);
+        if (!parsed.success) {
+          await options.storage.put({ [BROWSER_TASK_DUE_KEY]: null, browser_owner_task_quarantine_v1: { reason: raw == null ? 'missing_checkpoint' : 'malformed_checkpoint', at: options.now() }, ...(config ? { [REVOKED_KEY]: config.driver.runId } : {}) });
+          return;
+        }
+        if (parsed.data.phase === 'closed') { await options.storage.put(BROWSER_TASK_DUE_KEY, null); return; }
         // A missing driver cannot certify closure; retain private uncertainty without
         // spinning the shared alarm. Provider TTL remains the physical bound.
-        await options.storage.put(BROWSER_TASK_DUE_KEY, options.now() + 30000);
-        if (!config) return;
         const record = parsed.data;
+        const cleanup = await options.storage.get<CleanupState>(BROWSER_TASK_CLEANUP_KEY);
+        const matches = config && record.taskId === config.driver.runId && record.manifestDigest === config.manifestDigest && record.origin === config.driver.origin && record.session.ownerId === principal && record.session.provider === config.driver.provider && record.session.mode === 'public' && record.session.contextHandle === null;
+        if (!config || !matches || record.session.providerSessionId === 'pending' || cleanup?.status === 'exhausted') {
+          await options.storage.put({ [BROWSER_TASK_DUE_KEY]: null, [REVOKED_KEY]: record.taskId,
+            [BROWSER_TASK_CLEANUP_KEY]: cleanup?.status === 'exhausted' ? cleanup : { taskId: record.taskId, attempts: cleanup?.attempts ?? 0, status: !config ? 'driver_unavailable' : !matches ? 'configuration_mismatch' : 'identity_unavailable', at: options.now() } });
+          return;
+        }
+        await options.storage.put(BROWSER_TASK_DUE_KEY, options.now() + 30000);
         if (record.session.expiresAt <= options.now() || !config.enabled || !await current()
           || await options.storage.get(REVOKED_KEY) === record.taskId || record.phase === 'cleanup_pending' || !await admit('extract', {}, false)) await this.stop();
       })().finally(() => { maintenance = undefined; });
