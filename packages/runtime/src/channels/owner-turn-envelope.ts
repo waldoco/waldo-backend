@@ -1,5 +1,5 @@
 import type { RunEffectScope } from './run-effect-scope';
-import { llmRequestSchema, type LLMAttachment } from '@waldo/contracts';
+import { llmRequestSchema, type ToolName, type LLMAttachment } from '@waldo/contracts';
 import type { TurnTimer } from './owner-turn-types';
 import type { turnControl } from './turn-control';
 
@@ -39,7 +39,7 @@ export type OwnerResponder = Readonly<{
   respond(turn: OwnerTurnEnvelope, time: TurnTimer): Promise<string>;
   chooseReaction(turn: OwnerTurnEnvelope): Promise<string | null>;
   remind(id: string, conversationRef: string, note: string, time: TurnTimer, surface?: string): Promise<string>;
-  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string): Promise<string>;
+  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[]): Promise<string>;
   consolidate(trace: string, day: string, sides?: { owner: string; waldo: string }): Promise<string>;
   migrate(trace: string, input: string): Promise<string>;
   promote(trace: string): Promise<string>;

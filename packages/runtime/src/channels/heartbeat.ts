@@ -91,6 +91,7 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
       .exec<Loop>(
         `SELECT l.* FROM loops l
          WHERE l.status = 'open' AND l.due IS NOT NULL AND l.due <= ?
+           AND NOT EXISTS (SELECT 1 FROM loop_mail_sources s WHERE s.loop_id = l.id)
            AND NOT EXISTS (
              SELECT 1 FROM heartbeat_notified n
              WHERE n.loop_id = l.id AND n.due = l.due AND n.notified_at >= ?)
