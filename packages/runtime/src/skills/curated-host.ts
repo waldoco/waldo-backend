@@ -6,6 +6,8 @@ import { CuratedOwnerSkills, type CuratedSkillTurn } from './curated-owner';
 
 export type OwnerSkillCapability = Readonly<{
  handlers: DispatchToolOptions<ToolDispatcherContext>['handlers'];
+ // Optional host-owned metadata only; never skill/file instruction bytes.
+ taskContext?(): Promise<string>;
  metadata(): string;
  prompt(canaries:readonly string[]):Promise<string>;
  assertProcedureCurrent(expected:string,canaries:readonly string[]):Promise<void>;

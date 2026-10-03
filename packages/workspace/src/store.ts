@@ -81,6 +81,26 @@ export const workspaceStore = async (host: WorkspaceHost) => {
     });
   };
   return {
+    // Recover recent successful writes from durable operation receipts, not conversation text.
+    // Only the current ready revision is projected. Mapping/admission still gate every read.
+    async recentWrites() {
+      await admit('read');
+      return transact(state => {
+        const seen = new Set<string>();
+        return state.operations.slice().reverse().filter(operation => {
+          const file = state.files.find(file => file.file_id === operation.meta.file_id);
+          if (operation.status !== 'committed' || !file || file.state !== 'ready'
+            || file.revision !== operation.meta.revision || file.path !== operation.meta.path
+            || seen.has(file.file_id) || !validId(file.file_id) || !validId(operation.operation_id)
+            || !Number.isSafeInteger(file.revision) || file.revision < 1) return false;
+          try { validatePath(file.path); } catch { return false; }
+          seen.add(file.file_id);
+          return true;
+        }).slice(0, 3).map(operation => ({ backend: 'workspace' as const,
+          operation_id: operation.operation_id, file_id: operation.meta.file_id,
+          path: operation.meta.path, revision: operation.meta.revision }));
+      });
+    },
     async list(cursor?: string, limit = 20, prefix = '') {
       await admit('read');
       if (!Number.isInteger(limit) || limit < 1 || limit > LIMITS.pageRows || typeof prefix !== 'string' || new TextEncoder().encode(prefix).length > 240 || (cursor !== undefined && !validId(cursor))) fail('invalid');
