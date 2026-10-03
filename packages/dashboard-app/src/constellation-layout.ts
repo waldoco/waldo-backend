@@ -1,16 +1,16 @@
 // World units equal CSS pixels at zoom 1. Values describe geometry, not importance.
 export const GRAPH_GEOMETRY = {
-  labelWidth: 156, // Two lines of at most 18 chars at 13px, including a text halo.
+  labelWidth: 252, // 18 full-em 13px glyphs (234px), both 5px halo sides and 8px font margin. Covers W/M/CJK, not average character width.
   above: 30, // 60px hit circle keeps a 45px target even at minimum 0.75 zoom.
   below: 58, // Node radius + two 16px label baselines + halo.
   gap: 18, // Breathing room between combined label/hit rectangles.
   margin: 80, // Keep edge labels and drag targets away from the initial world border.
   minWidth: 1000, minHeight: 700, // Desktop review surface, not a fixed viewport.
-  cellArea: 34000, // Room per label/hit rectangle plus connecting whitespace.
+  cellArea: 52000, // Full-em label/hit rectangle plus connecting whitespace.
   radiusBase: 5, radiusPerRootDegree: 2, radiusMax: 16, // Sublinear page degree; cap leaves labels readable.
-  linkLength: 170, // One label-width plus gutter keeps linked items distinct.
+  linkLength: 270, // Full-em label-width plus gutter keeps linked items distinct.
   linkPull: .018, // Small spring step avoids overshooting collision corrections.
-  repel: 16000, // Inverse-square repulsion provides space at the 170px link distance.
+  repel: 16000, // Inverse-square repulsion provides space at the 270px link distance.
   centerPull: .002, // Weak containment, not a semantic grouping force.
   steps: 220, // Finite deterministic settling budget; never a continuous idle animation.
   collisionPasses: 260, // Bounded rectangle relaxation before deterministic grid recovery.

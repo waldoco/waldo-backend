@@ -20,3 +20,14 @@ it('uses unique returned neighbors for radius, never foreign/self links or confi
  const nodes=fixture(3),scene=layoutGraph(nodes,[{from:'node:0',to:'node:1'},{from:'node:0',to:'node:1'},{from:'node:0',to:'foreign'},{from:'node:2',to:'node:2'}]);
  expect(scene.nodes.map(n=>n.degree)).toEqual([1,1,0]);expect(scene.nodes[0]!.radius).toBeGreaterThan(scene.nodes[2]!.radius);
 });
+it('bounds 18 full-em glyphs plus halo, including wide Latin and CJK labels',()=>{
+ // 13px rendered text: conservative full-em advance for each glyph, plus both halo sides.
+ const measuredWorstWidth=18*13+10;
+ expect(g.labelWidth).toBeGreaterThanOrEqual(measuredWorstWidth);
+ for(const text of ['W'.repeat(18),'M'.repeat(18),'界'.repeat(18)]){
+  const scene=layoutGraph(fixture(26).map(n=>({...n,label:text})),fixture(26).slice(1).map(n=>({from:'node:0',to:n.id})));
+  for(const [i,a] of scene.nodes.entries())for(const b of scene.nodes.slice(0,i)){
+   expect(Math.abs(a.x-b.x)>=measuredWorstWidth || Math.abs(a.y-b.y)>=g.above+g.below).toBe(true);
+  }
+ }
+});
