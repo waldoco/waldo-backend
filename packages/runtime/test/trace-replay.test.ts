@@ -83,4 +83,12 @@ describe('trace replay scorer', () => {
     expect(r).not.toHaveProperty('usd');
     expect(() => comparePaired(a, [])).toThrow();
   });
+
+  it('rejects duplicate case ids on either side, even when the lengths match and ids overlap', () => {
+    const c1 = scoreTrace(good, want);
+    const c2 = scoreTrace({ ...good, case_id: 'c2' }, { ...want, case_id: 'c2' });
+    expect(() => comparePaired([c1, c1], [c1, c2])).toThrow(/duplicate/);
+    expect(() => comparePaired([c1, c2], [c1, c1])).toThrow(/duplicate/);
+    expect(() => comparePaired([c1, c2], [c2, c1])).not.toThrow();
+  });
 });

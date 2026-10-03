@@ -83,6 +83,9 @@ export type PairedReport = Readonly<{
 
 // Paired by case. Counts only: no significance claim, and no dollar figure (needs a verified tariff).
 export const comparePaired = (a: readonly CaseScore[], b: readonly CaseScore[]): PairedReport => {
+  // A duplicate case id would pair ambiguously and let an unmatched case slip through when lengths match.
+  if (new Set(a.map((s) => s.case_id)).size !== a.length || new Set(b.map((s) => s.case_id)).size !== b.length)
+    throw new Error('duplicate case id in a paired run');
   const bById = new Map(b.map((s) => [s.case_id, s]));
   if (a.length !== b.length || a.some((s) => !bById.has(s.case_id))) throw new Error('paired runs must cover the same cases');
   const sum = (xs: readonly CaseScore[]) => ({ structural_ok: xs.filter((x) => x.structural_ok).length,
