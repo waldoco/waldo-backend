@@ -150,7 +150,8 @@ export default {
       // and account.delete would have wiped the wrong DO. Directory errors propagate loudly;
       // no fallback to a possibly-wrong DO beyond the designed no-directory single-owner path.
       const ownerRoute = await ownerDirectory(env).byPresence('telegram', env.WALDO_OWNER_TELEGRAM_ID);
-      const consoleDoName = ownerRoute?.doName ?? env.WALDO_OWNER_TELEGRAM_ID;
+      if (!ownerRoute) return new Response('owner unavailable', { status: 503 });
+      const consoleDoName = ownerRoute.doName;
       const response = await env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(consoleDoName)).fetch(request);
       // A ticket-only session uses this existing owner route. Preserve file intent
       // on expiry only when the email sign-in route is available.

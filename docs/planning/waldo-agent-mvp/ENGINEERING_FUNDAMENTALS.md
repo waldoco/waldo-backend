@@ -352,3 +352,8 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 | --- | --- | --- | --- | --- |
 | 2026-10-03 | Historical daily rows permanently blocked initial Calendar activation; later timezone changes ignored budget/subkind rows | Owner DO Calendar counter marker | calendar-prep-owner-do.test.ts historical adoption RED, boundary/sibling/malformed/finite-transition matrix and exact retained-row/lifetime/cooldown assertions | Adopt only after both civil days have advanced; preserve SQL state and default-off behavior |
 | 2026-10-03 | Future send timestamps later in the current civil day were reported as ordinary rollover holds | Owner DO Calendar counter marker | calendar-prep-owner-do.test.ts same-day future class/subkind send regressions | Compare send instants with now before civil-day checks; future instants require inspection |
+
+### Unbound owner alarm admission
+- [ ] Directory-backed scheduled work requires the persisted canonical owner name to match the physical DO and a linked Telegram subject before runtime setup. Retain schedule/data and inbox/outbox/link recovery wakes with bounded backoff; canonical restoration resumes dispatch. Missing/failed directory routes never select a legacy subject DO, while no-directory deploy-owner routing remains supported.
+
+| 2026-10-03 | An unresolved alarm reached legacy Google refresh after Calendar prep alone rejected missing owner identity | Owner DO alarm and probe/console routing | unbound-owner-alarm.test.ts actual DO no-setup/physical mismatch/unlinked/retained wakes/restoration; probe-turn.test.ts and console-owner-routing.test.ts null/error no-fallback proofs | Reuse canonical physical binding and shared alarm arbitration before scheduled runtime setup |
