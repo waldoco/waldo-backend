@@ -293,3 +293,12 @@ it('never re-arms a terminal intent whose payload expired', async () => {
     expect(state.storage.sql.exec('SELECT delivery_state FROM loop_mail_sources').one()).toEqual({ delivery_state: 'not_delivered' });
   });
 });
+
+// Release gate: legacy mail projection remains available without source state.
+it('disabled source collection does not observe or expose source references', async () => {
+  const book = { since: () => 1, mark: () => {}, observeMail: () => { throw new Error("source collection disabled"); } } as unknown as import('../src/channels/update-cards').UpdateBook;
+  const google = { changedEvents: async () => [], newMail: async () => [{ id: 'gate-message', thread_id: 'gate-thread', from: 'Pat', subject: 'Review', snippet: 'By 10', at: '2026-10-03T09:00:00Z' }] } as unknown as import('../src/connectors/google').GoogleClient;
+  const changes = await collectChanges(book, google, Date.parse('2026-10-03T09:00:00Z'), false);
+  expect(changes).toHaveLength(1);
+  expect(changes[0]?.source_ref).toBeUndefined();
+});

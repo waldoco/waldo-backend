@@ -76,12 +76,13 @@ const toChange = (item: CalendarChange, since: number): Change => {
   return { source: 'calendar', kind, detail: JSON.stringify(calendarPromptProjection(event)) };
 };
 
-export const collectChanges = async (book: UpdateBook, google: GoogleClient, now: number): Promise<readonly Change[]> => {
+export const collectChanges = async (book: UpdateBook, google: GoogleClient, now: number, sourceFollowups = true): Promise<readonly Change[]> => {
   const calendarSince = book.since('calendar_since');
   const mailSince = book.since('mail_since');
   const calendar = calendarSince === null ? [] : (await google.changedEvents(calendarSince, now, now + 2 * DAY_MS)).map((item) => toChange(item, calendarSince));
   const mail = mailSince === null ? [] : (await google.newMail(mailSince, 10)).map((item): Change => {
     const detail = JSON.stringify(mailPromptProjection(item));
+    if (!sourceFollowups) return { source: 'mail', kind: 'new', detail };
     const source_ref = `mail:${item.thread_id || item.id}`;
     book.observeMail(source_ref, item.thread_id, Date.parse(item.at), item.id);
     return { source: 'mail', kind: 'new', detail, source_ref, source_message_id: item.id };

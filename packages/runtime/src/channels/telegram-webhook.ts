@@ -35,6 +35,8 @@ export type TelegramWebhookEnv = Readonly<{
   WALDO_MCP_SERVERS?: string;
   MCP_READ_INTENTS?: string;
   DRIVE_READS?: string;
+  // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
+  MAIL_SOURCE_FOLLOWUPS?: string;
   WALDO_EGRESS_ALLOWLIST?: string;
 }> & OwnerDirectoryEnv;
 
