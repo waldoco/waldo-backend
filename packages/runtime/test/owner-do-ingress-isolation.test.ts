@@ -31,6 +31,7 @@ let onFixtureReply: (() => Promise<void>) | undefined;
 const unexpectedFetches: string[] = [];
 let sourceWorld: IsolatedSourceWorld | null = null;
 let interceptCalendarEffects = false;
+let taskDecision = { decision: 'retain', sources: [] as string[] };
 vi.mock('../src/seams/deps', async (load) => {
   const original = await load<typeof import('../src/seams/deps')>();
   return { ...original, productionDeps: () => {
@@ -61,14 +62,14 @@ vi.mock('openai', () => ({
       modelInputs.push(body);
       const name = (body as { text?: { format?: { name?: string } } }).text?.format?.name;
       if (!name && onFixtureReply) { const hook = onFixtureReply; onFixtureReply = undefined; await hook(); }
-      const text = name === 'claim_ops'
+      const text = name === 'task_source_scope' ? JSON.stringify(taskDecision) : name === 'claim_ops'
         ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}'
         : 'Synthetic answer from the model adapter.';
       const input = JSON.stringify(body);
       const wantsMail = input.includes('Read the fixture inbox');
       const wantsProposal = input.includes('Propose a fixture calendar event') && !input.includes('REPLY_FIXTURE_TARGET');
       const hasToolOutput = input.includes('function_call_output');
-      const output = name === 'claim_ops' || hasToolOutput ? []
+      const output = name === 'task_source_scope' || name === 'claim_ops' || hasToolOutput ? []
         : wantsProposal ? [{ type: 'function_call', call_id: 'fixture-calendar-proposal', name: 'propose_calendar_change', arguments: JSON.stringify({ action: 'create', title: 'Fixture meeting', start: '2026-10-01T10:00:00+05:30', end: '2026-10-01T10:30:00+05:30', reason: 'test-only owner request' }) }]
         : wantsMail ? [{ type: 'function_call', call_id: 'fixture-mail-read', name: 'get_communication', arguments: '{}' }]
         : [];
@@ -112,6 +113,7 @@ const doStub = (subject: number) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNE
 describe('real owner-DO ingress in a sealed test world', () => {
   beforeEach(() => {
     unexpectedFetches.length = 0;
+    taskDecision = { decision: 'retain', sources: [] };
     // Hard deny all ordinary global network calls in this integration harness. The
     // only legal effects are the explicit mocked model/channel and fixture adapter.
     vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => {
@@ -130,6 +132,33 @@ describe('real owner-DO ingress in a sealed test world', () => {
     // This negative test intentionally made one denied call; the teardown checks zero
     // unexpected calls on every actual owner-DO trial below.
     unexpectedFetches.length = 0;
+  });
+  it('requires an authenticated exact owner card before widening a supplied-only task', async () => {
+    outbox.length = 0; modelInputs.length = 0;
+    const update = 700000 + ++sequence * 10;
+    taskDecision = { decision: 'restrict', sources: [] };
+    await send(81101, 'Use only this fictional pasted task.', update);
+    taskDecision = { decision: 'change', sources: ['mail'] };
+    await send(81101, 'Read the fixture inbox for a new task.', update + 1);
+    const card = outbox.find(item => item.method === 'sendMessage' && String(item.body.text).includes('Change the current task'))!;
+    expect(card).toBeDefined();
+    const buttons = (card.body.reply_markup as { inline_keyboard: { callback_data: string }[][] }).inline_keyboard.flat();
+    const approve = buttons.find(button => button.callback_data.startsWith('a:'))!.callback_data;
+    const snapshot = () => runInDurableObject(doStub(81101), async (_instance, state) => state.storage.sql.exec<{ sources_json: string; revision: number }>('SELECT sources_json, revision FROM owner_task_source_scope').one());
+    const before = await snapshot(); expect(before.sources_json).toBe('[]');
+    await callback(81101, 81102, approve, update + 2);
+    expect(await snapshot()).toEqual(before);
+    await callback(81101, 81101, approve, update + 3);
+    const after = await snapshot(); expect(after.sources_json).toBe('["mail"]');
+    expect(after.revision).toBe(before.revision + 1);
+    await callback(81101, 81101, approve, update + 4);
+    expect(await snapshot()).toEqual(after);
+    taskDecision = { decision: 'close', sources: [] };
+    await send(81101, 'Close this task.', update + 5);
+    const close = outbox.filter(item => item.method === 'sendMessage' && String(item.body.text).includes('Close the current task')).at(-1)!;
+    const closeButtons = (close.body.reply_markup as { inline_keyboard: { callback_data: string }[][] }).inline_keyboard.flat();
+    await callback(81101, 81101, closeButtons.find(button => button.callback_data.startsWith('a:'))!.callback_data, update + 6);
+    taskDecision = { decision: 'retain', sources: [] };
   });
   it('routes two fictional owners through separate durable state and intercepts model and channel effects', async () => {
     outbox.length = 0;

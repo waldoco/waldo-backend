@@ -1,4 +1,5 @@
 import type { OwnerSkillCapability } from '../skills/curated-host';
+import { TASK_SOURCE_INSTRUCTION, TASK_SOURCE_SCHEMA, taskSourceAllowed, taskSourceRequired, taskSourcePrompt, type OwnerTaskSourceScope, type TaskSourceSnapshot, type TaskSourceFamily } from './task-source-scope';
 import { forgetSnapshot, selectedForgetTexts, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, type ForgetSource } from '../memory/selective-forget';
 import { ownerForgetTopic, hasForgetIntent } from '../memory/claims';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
@@ -7,7 +8,7 @@ import type { createOwnerMessageContextAdapter } from './owner-message-context-a
 import type { OwnerTurnEnvelope } from './owner-turn-envelope';
 import { ownerContextHandler } from '../tools/live/owner-context';
 import {
-  literalJsonTextRedactor, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
+  EXTERNAL_ORIGIN_TOOLS, literalJsonTextRedactor, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
@@ -19,10 +20,10 @@ import { readToolOutputHandler } from '../tools/read-tool-output';
 import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveRunLoopAdapters, type LocalSystemSkillBinding } from '../run-loop/adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
-import { JoinedConversationPath } from '../conversation/joined-path';
+import { JoinedConversationPath, taskHistoryMessages } from '../conversation/joined-path';
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
-import { CLINICAL_REDIRECT, messagingSystemPrompt, ownerClockLine, withOwnerSkillProcedures, OWNER_SKILL_SAFEGUARDS } from '../prompt/messaging-behavior';
+import { CLINICAL_REDIRECT, OWNER_TASK_SOURCE_PRECEDENCE, messagingSystemPrompt, ownerClockLine, withOwnerSkillProcedures, OWNER_SKILL_SAFEGUARDS } from '../prompt/messaging-behavior';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { FORGOTTEN, applyClaimOps, type ClaimOutcome, applyPromotion, CLAIM_OPS_SCHEMA, exchangeInput, MEMORY_INSTRUCTION, memoryPrompt, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
 import { restoreConversation, type ConversationStore } from './conversation-store';
@@ -86,6 +87,7 @@ const CLINICAL_FALLBACK = {
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
 export type OwnerResponderBinding = Readonly<{
+  sourceScope?: OwnerTaskSourceScope;
   admission: OwnerMessageAdmission;
   adapter: ReturnType<typeof createOwnerMessageContextAdapter>;
   store: ConversationStore;
@@ -96,7 +98,7 @@ export type OwnerResponderHost = Readonly<{
   prepare(turn: OwnerTurnEnvelope, handlers: DispatchToolOptions<ToolDispatcherContext>['handlers'], scope: RunEffectScope): Promise<OwnerResponderBinding>;
 }>;
 export type OwnerSkillHost = Readonly<{ prepare(turn: OwnerTurnEnvelope, contextOwnerId: string, scope: RunEffectScope): Promise<OwnerSkillCapability | undefined> }>;
-type PrivateOwner = Readonly<{ host?: OwnerResponderHost; binding?: OwnerResponderBinding; skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability }>;
+type PrivateOwner = Readonly<{ host?: OwnerResponderHost; binding?: OwnerResponderBinding; skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; sourceScope?: OwnerTaskSourceScope; requireTaskScope?: boolean }>;
 
 export const createOwnerResponder = (
   openaiApiKey: string,
@@ -148,6 +150,13 @@ export const createOwnerResponder = (
 ): OwnerResponder => {
   const binding = privateOwner?.binding;
   const skills = binding?.skills ?? privateOwner?.skills;
+  const sourceScope = binding?.sourceScope ?? privateOwner?.sourceScope ?? skills?.sourceScope;
+  const requireTaskScope = privateOwner?.requireTaskScope || !!sourceScope;
+  let sourceSnapshot: TaskSourceSnapshot | undefined;
+  let sourceAdmissionCalls = 0;
+  let sourceSteeringRevision = 0;
+  let sourceTurnBudget: { remaining: number } | undefined;
+  let interactiveSource = false;
   const invocation = binding?.admission.invocation ?? (() => {
     const accepted = acceptTrustedInvocation(localTrustedBriefScheduleInput().admission);
     if (!accepted.ok) throw new Error('fixture admission failed');
@@ -176,11 +185,16 @@ export const createOwnerResponder = (
   let traceId = '';
   const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' }, { ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: async () => {
     refreshPendingRedaction();
-    if (forgettingState?.incompleteTopics().length) return [];
+    if (!sourceFamilyAvailable('local') || forgettingState?.incompleteTopics().length) return [];
     const fragments = await toolLedger?.recent([...forgottenTexts]) ?? [];
     refreshPendingRedaction();
+    if (!sourceFamilyAvailable('local') || forgettingState?.incompleteTopics().length) return [];
     return fragments.map(fragment => ({ ...fragment, text: forgetJsonText(fragment.text, 'data') }));
-  }, ...(health === undefined ? {} : { health: () => health(traceId) }) });
+  }, ...(health === undefined ? {} : { health: async () => {
+    if (!sourceFamilyAvailable('local')) return null;
+    const material = await health(traceId);
+    return sourceFamilyAvailable('local') ? material : null;
+  } }) });
   // Tool outputs from the current turn; flushed to the ledger when the turn's entries persist.
   const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external'; summary: string }> = [];
   const circuitBreaker = new InMemoryCircuitBreaker();
@@ -260,7 +274,7 @@ export const createOwnerResponder = (
     privateRunScope?.admit();
     const input = JSON.stringify([{ role: 'system', content: system }, ...userMessages, ...(turns ?? [])]);
     const response = result.ok ? { ...result.response, text: forgetText(result.response.text), tool_calls: result.response.tool_calls?.map(call => ({ ...call, arguments: forgetJsonText(call.arguments) })) } : undefined;
-    const metadataOnly = transientDecision || forgettingTurn || purpose.startsWith('memory') || purpose.startsWith('forget_source');
+    const metadataOnly = transientDecision || forgettingTurn || purpose.startsWith('memory') || purpose.startsWith('forget_source') || purpose.startsWith('task_source');
     if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason].filter(Boolean).join(':'), shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength }, ...(metadataOnly ? {} : { text: { input } }) });
     else log({
       trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true,
@@ -279,7 +293,35 @@ export const createOwnerResponder = (
     return response!;
   };
   const ask = async (...args: Parameters<typeof complete>) => (await complete(...args)).text;
+  const admitTaskSource = async (ownerText: string) => {
+    if (!sourceScope) return;
+    const reserve = sourceTurnBudget ? sourceTurnBudget.remaining > 0 : sourceAdmissionCalls < MAX_TOOL_ROUNDS;
+    if (!reserve || new TextEncoder().encode(ownerText).byteLength > 16_384) { sourceSnapshot = await sourceScope.unresolved(); binding?.adapter.setTaskSources(sourceSnapshot); return; }
+    if (sourceTurnBudget) sourceTurnBudget.remaining--;
+    sourceAdmissionCalls++;
+    const classifiedSteering = control.revision();
+    const previous = await sourceScope.current();
+    let raw: string;
+    try {
+      raw = await ask(traceId, 'task_source', TASK_SOURCE_INSTRUCTION,
+        JSON.stringify({ current_policy: { sources: previous.sources, ready: previous.ready }, owner_current_instruction: ownerText }),
+        { name: 'task_source_scope', schema: TASK_SOURCE_SCHEMA });
+    } catch (error) {
+      if (error instanceof ClosedRunError) throw error;
+      sourceSnapshot = await sourceScope.unresolved(); binding?.adapter.setTaskSources(sourceSnapshot); return;
+    }
+    await assertCurrent();
+    const admitted = await sourceScope.classify(raw, traceId);
+    sourceSnapshot = admitted.snapshot;
+    sourceSteeringRevision = classifiedSteering;
+    binding?.adapter.setTaskSources(sourceSnapshot);
+    if (admitted.proposal && sourceScope.propose) {
+      await assertCurrent(); await sourceScope.propose(admitted.proposal); await assertCurrent();
+    }
+  };
+  const sourceFamilyAvailable = (family: TaskSourceFamily) => !interactiveSource || !requireTaskScope || !!sourceSnapshot?.ready && sourceSnapshot.sources.includes(family) && control.revision() === sourceSteeringRevision;
   const control = turnControl();
+  let classifiedHeard = 0;
   const tree = new ConversationTree();
   const redactLoaded = (texts: readonly string[]) => {
     offloadStore?.clear();
@@ -381,6 +423,11 @@ export const createOwnerResponder = (
     const added = await control.roundAsync();
     if (added === null) return null;
     const heard = control.heard();
+    if (interactiveSource && heard.length > classifiedHeard) {
+      const fresh = heard.slice(classifiedHeard).join('\n');
+      classifiedHeard = heard.length;
+      await admitTaskSource(fresh);
+    }
     if (turnWriting && heard.length > recordedHeard) {
       const fresh = heard.slice(recordedHeard).join('\n');
       recordedHeard = heard.length;
@@ -394,6 +441,9 @@ export const createOwnerResponder = (
       await assertCurrent();
       refreshPendingRedaction();
       const trace = traceId;
+      let composedSourceRevision = sourceSnapshot?.revision;
+      let canonicalPrompt = request.system;
+      let admittedToolTurnsFrom = 0;
       // Capture-mode probe turns run on the stripped handler set; delegation wraps that
       // same set so probe confinement applies to children too (children are read-only by
       // construction, and the strip list is not widened here).
@@ -401,12 +451,27 @@ export const createOwnerResponder = (
       const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => {
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertCurrent();
+          const admittedSource = sourceSnapshot;
+          const admittedSteering = sourceSteeringRevision;
+          const sourceRead = taskSourceRequired(handler, args);
+          if (interactiveSource && requireTaskScope && sourceRead) {
+            if (!sourceScope || !admittedSource || !taskSourceAllowed(admittedSource, handler, args)) return { ok: false, code: 'rejected', error: 'This source is outside the current owner task. Use supplied task data or the owner confirmation.', source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
+            if (control.revision() !== admittedSteering) return { ok: false, code: 'rejected', error: 'New owner direction must be admitted before reading this source.', source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
+            await sourceScope.assertSame(admittedSource);
+          }
           const retainedRead = ['read_owner_context', 'read_memory', 'search_episodes', 'read_tool_output'].includes(handler.name);
           if (retainedRead && forgettingState?.incompleteTopics().length) return { ok: false, code: 'transient', error: 'Recall is temporarily limited while requested forgetting coverage is incomplete.', source_taint: null };
           if (backgroundToolNames !== undefined && handler.name === 'open_loop' && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
             return { ok: false, code: 'invalid_args', error: 'Background mail follow-up requires an observed source_ref.', source_taint: null };
           }
-          const result = await handler.handle(args, ctx); await assertCurrent();
+          const sourceContext = interactiveSource && requireTaskScope && sourceRead && admittedSource ? { ...ctx, assertTaskSourceCurrent: async () => {
+            await assertCurrent();
+            if (control.revision() !== admittedSteering) throw new Error('Owner steering changed the task');
+            await sourceScope!.assertSame(admittedSource);
+          } } : ctx;
+          const result = await handler.handle(args, sourceContext); await assertCurrent();
+          await sourceContext.assertTaskSourceCurrent?.();
+          if (interactiveSource && requireTaskScope && sourceRead && admittedSource) await sourceScope!.assertSame(admittedSource);
           if (retainedRead && forgettingState?.incompleteTopics().length) return { ok: false, code: 'transient', error: 'Recall is temporarily limited while requested forgetting coverage is incomplete.', source_taint: null };
           return result;
         } };
@@ -420,24 +485,43 @@ export const createOwnerResponder = (
       // slice; flat by construction - children never get delegate_task.
       // One shared round budget per submitted turn: the parent loop and every child it spawns
       // draw from it, so the turn's stated cap is absolute (Codex #224 hold).
-      const turnBudget = { remaining: MAX_TOOL_ROUNDS };
+      const turnBudget = { remaining: Math.max(0, MAX_TOOL_ROUNDS - sourceAdmissionCalls) };
+      sourceTurnBudget = turnBudget;
       const delegate = delegateTaskHandler(async (task) => {
+        const childSource = sourceSnapshot;
+        const childSteering = sourceSteeringRevision;
+        const assertChildSource = async () => {
+          await assertCurrent();
+          if (interactiveSource && requireTaskScope) {
+            if (!sourceScope || !childSource || control.revision() !== childSteering) throw new Error('Child task source scope changed');
+            await sourceScope.assertSame(childSource);
+          }
+        };
+        const childHandlers = activeHandlers.map(handler => ({ ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
+          await assertChildSource();
+          return handler.handle(args, ctx);
+        } }));
         // A5b: one run row per spawned child; the exit classification lands on the row, and
         // the summary is the report's first line (capped by the book), never an error dump.
         const run = runs?.start('delegate_task', trace) ?? null;
         try {
           const result = await runChildLoop(task, {
-          handlers: activeHandlers,
+          handlers: childHandlers,
           budget: turnBudget,
           ctx: { ...safety, ...(turnReplyContext ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
           controlRound: consumeRound,
-          complete: (content, tools, turns) =>
-            complete(trace, 'subagent', SUBAGENT_SYSTEM_PROMPT, [{ role: 'user', content }], undefined, undefined, tools as never, turns),
+          complete: async (content, tools, turns) => {
+            await assertChildSource();
+            const response = await complete(trace, 'subagent', [SUBAGENT_SYSTEM_PROMPT, childSource ? taskSourcePrompt(childSource) : ''].filter(Boolean).join('\n\n'), [{ role: 'user', content }], undefined, undefined, tools as never, turns);
+            await assertChildSource();
+            return response;
+          },
           onTool: (event) => {
             if (forgottenTexts.size) offloadStore?.clear();
             log({ trace, hop: `subagent_tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: forgetJsonText(event.call.arguments), output: forgetJsonText(event.output, 'tool_result') } });
           },
         });
+          await assertChildSource();
           if (run) runs?.finish(run.id, result.exit === 'completed' ? 'completed' : result.exit === 'stopped' ? 'stopped' : 'failed', (result.text.split('\n')[0] ?? '').slice(0, 120));
           return result;
         } catch (error) {
@@ -453,20 +537,36 @@ export const createOwnerResponder = (
         maxSteps: MAX_TOOL_ROUNDS,
         ctx: { ...safety, ...(turnReplyContext ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
         step: async (tools, turns) => {
+          const previousSourceRevision = sourceSnapshot?.revision;
           const added = await consumeRound();
+          if (previousSourceRevision !== sourceSnapshot?.revision) admittedToolTurnsFrom = turns.length;
           if (added === null) return { text: STOPPED_REPLY };
-          const entries = forgettingState?.incompleteTopics().length ? [...request.messages.slice(-1)] : [...request.messages];
+          const contextSteering = control.revision();
+          if (binding && composedSourceRevision !== sourceSnapshot?.revision) {
+            const composition = await binding.adapter.composer.compose(invocation, { ...binding.admission.snapshot, canary_tokens: CANARIES, replay_context_ref: null });
+            if (!composition.ok) throw new Error('Task context unavailable');
+            canonicalPrompt = composition.prompt;
+            composedSourceRevision = sourceSnapshot?.revision;
+          }
+          const entries = forgettingState?.incompleteTopics().length ? [...request.messages.slice(-1)] : interactiveSource && requireTaskScope && !sourceFamilyAvailable('local') ? [...taskHistoryMessages(tree, trace, sourceSnapshot?.startRef ?? trace)] : [...request.messages];
           const ownerCurrentText = (entries[entries.length - 1]?.content ?? '') + added;
           if (turnReplyContext) entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + '\n\n' + turnReplyContext };
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
-          const ordersRaw = standingOrders?.() ?? '';
+          const ordersRaw = sourceFamilyAvailable('local') ? standingOrders?.() ?? '' : '';
+          const sourceNotice = interactiveSource && requireTaskScope ? sourceSnapshot ? taskSourcePrompt(sourceSnapshot) : 'Current owner task source scope is unavailable. Do not read connected or retained sources; ask for clarification.' : '';
           const ordersSection = forgettingState?.incompleteTopics().some(topic => ordersRaw.toLowerCase().includes(topic.toLowerCase())) ? '' : ordersRaw;
           const recallNotice = forgettingState?.incompleteTopics().length ? 'Recall is temporarily limited while requested forgetting coverage is incomplete. Use the current request and permitted live tools. Do not claim complete erasure or absence of associated facts.' : '';
           await assertCurrent();
           const skillPrompt = skills && (!binding || request.tools.includes('skills_load')) ? await skills.prompt(CANARIES) : undefined;
           await assertCurrent();
           expectedProcedure = skillPrompt ?? '';
-          const rawTaskContext = skills?.taskContext ? await skills.taskContext() : '';
+          const taskContextSource = sourceSnapshot;
+          const assertTaskContextSource = async () => {
+            await assertCurrent();
+            if (!sourceFamilyAvailable('workspace')) throw new Error('Workspace task context changed');
+            if (taskContextSource && sourceScope) await sourceScope.assertSame(taskContextSource);
+          };
+          const rawTaskContext = sourceFamilyAvailable('workspace') && skills?.taskContext ? await skills.taskContext(assertTaskContextSource) : '';
           // A committed receipt authenticates identity, not user/provider-authored path text.
           // Keep the external fragment gate before joining metadata to trusted instructions.
           let guardedTaskContext = rawTaskContext ? 'Recent workspace metadata was withheld by the context safety gate. Do not infer a saved-file target or substitute a Drive target.' : '';
@@ -485,15 +585,16 @@ export const createOwnerResponder = (
           const taskContext = forgettingState?.incompleteTopics().some(topic => guardedTaskContext.toLowerCase().includes(topic.toLowerCase())) ? 'Related workspace metadata is temporarily withheld while forgetting coverage is incomplete.' : scrubbedTaskContext === guardedTaskContext ? scrubbedTaskContext
             : 'Recent workspace metadata was withheld by the active forget barrier. A masked path is not an exact target; ask the owner to identify the file.';
           await assertCurrent();
+          if (control.revision() !== contextSteering) throw new ClosedRunError();
           const skillMetadata = skills && (!binding || request.tools.includes('skills_list')) ? skills.metadata() : '';
-          const canonicalSystem = [request.system, recallNotice, turnNotice, ...(memoryReceipts.length ? [`Memory this turn: ${memoryReceipts.join(' ')}`] : []), skillMetadata, taskContext].filter(Boolean).join('\n\n');
+          const canonicalSystem = [canonicalPrompt, OWNER_TASK_SOURCE_PRECEDENCE, sourceNotice, recallNotice, turnNotice, ...(memoryReceipts.length ? [`Memory this turn: ${memoryReceipts.join(' ')}`] : []), skillMetadata, taskContext].filter(Boolean).join('\n\n');
           return complete(trace, 'reply',
-          binding ? withOwnerSkillProcedures(canonicalSystem, skillPrompt) : withOwnerSkillProcedures([messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(recallNotice ? [recallNotice] : []), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])].join('\n\n'), skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined)),
+          binding ? withOwnerSkillProcedures(canonicalSystem, skillPrompt) : withOwnerSkillProcedures([messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), sourceNotice, ...(recallNotice ? [recallNotice] : []), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory && sourceFamilyAvailable('local') ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])].join('\n\n'), skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined)),
           entries,
           undefined,
           pending,
           tools,
-          turns,
+          turns.slice(admittedToolTurnsFrom),
           );
         },
         onTool: (event) => {
@@ -575,6 +676,7 @@ export const createOwnerResponder = (
         context: { ...(binding?.admission.snapshot ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null },
         userEntry: { id, ownerId, chatId: conversationRef, parentId, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' } },
         assistantEntryId: `${id}-reply`,
+        ...(interactiveSource && requireTaskScope && !sourceFamilyAvailable('local') ? { historyStartRef: sourceSnapshot?.startRef ?? id } : {}),
       })).finally(() => { ownerTurnActive = false; backgroundToolNames = undefined; control.end(); });
       privateRunScope?.admit();
       await assertCurrent();
@@ -610,7 +712,7 @@ export const createOwnerResponder = (
     writerStore.beginSettle(id, new Date().toISOString());
     let stage: 'failed' | 'uncertain' = 'failed';
     try {
-      let raw = await ask(id, 'memory', MEMORY_INSTRUCTION, memory ? exchangeInput(promptMemory()!, owner, shared, '') : JSON.stringify({ owner_current_request: owner, instruction: 'Extract only an explicit forget_topic copied from the owner request. All add, correction, claim, node, seen, confirm and dismiss arrays must be empty. No legacy profile is supplied or admitted.' }), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
+      let raw = await ask(id, 'memory', MEMORY_INSTRUCTION, memory && sourceFamilyAvailable('local') ? exchangeInput(promptMemory()!, owner, shared, '') : JSON.stringify({ owner_current_request: owner, instruction: 'Extract only an explicit forget_topic copied from the owner request. All add, correction, claim, node, seen, confirm and dismiss arrays must be empty. No legacy profile is supplied or admitted.' }), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
       await assertCurrent();
       if (binding) { const candidate = JSON.parse(raw); raw = JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: candidate.forget_topic ?? null }); }
       stage = 'uncertain';
@@ -694,7 +796,7 @@ export const createOwnerResponder = (
         const prepared = privateOwner?.host ? await privateOwner.host.prepare(capturedTurn, handlers, turn.runScope) : undefined;
         if (privateOwner?.host && !prepared) throw new Error('owner host unavailable');
         const preparedSkills = !prepared && privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, prepared ? { binding: prepared } : preparedSkills ? { skills: preparedSkills } : undefined);
+        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(prepared ? { binding: prepared } : preparedSkills ? { skills: preparedSkills } : {}), requireTaskScope: privateOwner?.requireTaskScope, ...(privateOwner?.sourceScope ? { sourceScope: privateOwner.sourceScope } : {}) });
         control.route(scoped.control);
         try { return await scoped.respond(capturedTurn, time); }
         finally { control.unroute(scoped.control); }
@@ -704,23 +806,32 @@ export const createOwnerResponder = (
       if (binding && (await binding.admission.readInput()).text !== turn.text) throw new Error('owner input mismatch');
       await restored();
       const id = turn.traceId;
-      const media = turn.attachment || turn.mediaNote ? { attachment: turn.attachment, note: turn.mediaNote } : undefined;
-      pending = ownerTurnAttachments(turn);
-      turnWriting = (memory !== undefined || !!binding?.forgetting && hasForgetIntent(turn.text ?? '')) && memoryWrites && !probeGuard?.suppressMemory;
-      recordedHeard = 0;
-      memoryReceipts.length = 0;
-      clearForgotten();
-      // Record before reply: the owner's words are written first, so the reply sees corrections
-      // and never acknowledges a save that did not happen. A failed write goes to the reply
-      // through the system prompt, not the owner's text, so history stays the owner's words.
-      const status = turnWriting ? await record(id, turn.text ?? '', media?.note ?? '') : 'saved';
-      turnNotice = status === 'saved' ? '' : (binding?.forgetting ? FORGET_NOTICES : MEMORY_NOTICES)[status];
-      turnReplyContext = await quoteContext(turn.replyTo);
-      const said = [turn.text, media?.note].filter(Boolean).join('\n');
+      traceId = id;
+      interactiveSource = true;
+      sourceAdmissionCalls = 0;
+      classifiedHeard = 0;
+      sourceTurnBudget = undefined;
       try {
+        await admitTaskSource(turn.text);
+        const media = turn.attachment || turn.mediaNote ? { attachment: turn.attachment, note: turn.mediaNote } : undefined;
+        pending = ownerTurnAttachments(turn);
+        turnWriting = (memory !== undefined || !!binding?.forgetting && hasForgetIntent(turn.text ?? '')) && memoryWrites && !probeGuard?.suppressMemory;
+        recordedHeard = 0;
+        memoryReceipts.length = 0;
+        clearForgotten();
+        // Record before reply: the owner's words are written first, so the reply sees corrections
+        // and never acknowledges a save that did not happen. A failed write goes to the reply
+        // through the system prompt, not the owner's text, so history stays the owner's words.
+        const status = turnWriting ? await record(id, turn.text ?? '', media?.note ?? '') : 'saved';
+        turnNotice = status === 'saved' ? '' : (binding?.forgetting ? FORGET_NOTICES : MEMORY_NOTICES)[status];
+        turnReplyContext = await quoteContext(turn.replyTo);
+        const said = [turn.text, media?.note].filter(Boolean).join('\n');
         return await converse(id, turn.conversationRef, said, time, true, turn.surface);
       } finally {
         turnWriting = false;
+        interactiveSource = false;
+        sourceSnapshot = undefined;
+        sourceTurnBudget = undefined;
         forgettingTurn = false;
         turnNotice = '';
         memoryReceipts.length = 0;

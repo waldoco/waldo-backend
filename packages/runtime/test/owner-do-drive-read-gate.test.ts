@@ -14,7 +14,7 @@ vi.mock('../src/tools/live/drive',async load=>{
 vi.mock('../src/channels/telegram-api',async load=>({...await load<typeof import('../src/channels/telegram-api')>(),createTelegramCaller:()=>async(method:string)=>method==='getMe'?{username:'fixture_bot'}:method==='sendMessage'?{message_id:1}:true}));
 vi.mock('openai',()=>({default:class{responses={create:async(body:unknown)=>{
  const name=(body as {text?:{format?:{name?:string}}}).text?.format?.name;
- return {id:'fixture',output_text:name==='claim_ops'?'{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}':name==='reaction'?'{"reaction":"👌"}':'Local read-gate fixture reply.',output:[],usage:{input_tokens:1,output_tokens:1}};
+ return {id:'fixture',output_text:name==='task_source_scope'?'{"decision":"retain","sources":[]}':name==='claim_ops'?'{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}':name==='reaction'?'{"reaction":"👌"}':'Local read-gate fixture reply.',output:[],usage:{input_tokens:1,output_tokens:1}};
 }}}}));
 
 let sequence=930000;

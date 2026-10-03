@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { exportArtifactArgsSchema } from '@waldo/contracts';
 import { artifactBook, inMemoryArtifactBodies, type ArtifactMeta } from '../src/channels/artifacts';
 import { artifactExports, exportArtifactHandler, inMemoryArtifactBinaries, r2ArtifactBinaries } from '../src/channels/artifact-exports';
@@ -47,7 +47,7 @@ const setup = async (body: string) => {
   const book = artifactBook(sql as never, bodies, clock, () => 'abc');
   const meta = await book.create({ name: 'Brief', kind: 'note', body_markdown: body } as never, 'test');
   const ex = artifactExports(sql as never, book, bodies, bins, clock, () => 'e1');
-  return { meta, ex, bins, handler: exportArtifactHandler(ex) };
+  return { meta, ex, bins, bodies, handler: exportArtifactHandler(ex) };
 };
 const args = (id: string, rev = 1, format = 'pdf') => exportArtifactArgsSchema.parse({ artifact_id: id, expected_revision: rev, format });
 
@@ -104,4 +104,20 @@ describe('export_artifact', () => {
     expect([...(await a.getBytes('k'))!]).toEqual([1, 2]);
     expect(() => r2ArtifactBinaries(bucket, ' ')).toThrow();
   });
+});
+
+
+it('export source fencing prevents body reads and withholds publication after a source change', async () => {
+  const { meta, ex, bodies, bins } = await setup('Private fictional source');
+  let current = false;
+  const read = vi.spyOn(bodies, 'get');
+  const put = vi.spyOn(bins, 'putBytes');
+  const assertCurrent = async () => { if (!current) throw new Error('Task changed'); };
+  await expect(ex.exportPdf(args(meta.id), assertCurrent)).rejects.toThrow('Task changed');
+  expect(read).not.toHaveBeenCalled();
+  current = true;
+  read.mockImplementationOnce(async () => { current = false; return 'Private fictional source'; });
+  await expect(ex.exportPdf(args(meta.id), assertCurrent)).rejects.toThrow('Task changed');
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(put).not.toHaveBeenCalled();
 });

@@ -392,3 +392,24 @@ it('validates same-tenant row ancestry with the existing conversation tree and f
         expect(JSON.stringify(entries)).toBe(before);
     }
 });
+
+it('limited canonical tasks never invoke the ordinary material bundle or retained recall supplier', async () => {
+    const s = await setup('Only use the current supplied data');
+    const safe = await s.load();
+    s.load.mockClear();
+    const recall = vi.fn(s.dependencies.recall.recall);
+    const taskMaterials = vi.fn(async () => safe);
+    const adapter = createOwnerMessageContextAdapter({ ...s, dependencies: { ...s.dependencies, recall: { recall } }, taskMaterials, registeredHandlers: [], access: async () => ({ grants: { status: 'available', tools: [] }, connectors: { status: 'available', tools: [] } }) });
+    adapter.setTaskSources({ taskId: 'task', revision: 1, ready: true, sources: [], startRef: 'owner-input' });
+    const request = { ...s.admission.invocation.verified_authority, ...s.admission.snapshot };
+    await adapter.dependencies.materials.load(request);
+    expect(taskMaterials).toHaveBeenCalledWith(request, []);
+    expect(s.load).not.toHaveBeenCalled();
+    const result = await adapter.dependencies.recall.recall({ ...request, owner: s.admission.invocation.verified_authority, query: 'retained sentinel' } as never);
+    expect(result.result.memory_hits).toEqual([]);
+    expect(recall).not.toHaveBeenCalled();
+    const absent = createOwnerMessageContextAdapter({ ...s, registeredHandlers: [], access: async () => ({ grants: { status: 'available', tools: [] }, connectors: { status: 'available', tools: [] } }) });
+    absent.setTaskSources({ taskId: 'task', revision: 1, ready: true, sources: [], startRef: 'owner-input' });
+    await expect(absent.dependencies.materials.load(request)).rejects.toThrow('owner context rejected');
+    expect(s.load).not.toHaveBeenCalled();
+});

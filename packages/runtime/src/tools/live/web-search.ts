@@ -17,11 +17,12 @@ export const webSearchHandler = (
   schema: webSearchArgsSchema,
   trigger_allowlist: allowlist('web_search'),
   autonomy_gated: false,
-  async handle({ query, limit }: WebSearchArgs) {
+  async handle({ query, limit }: WebSearchArgs, ctx) {
     if (!apiKey) return { ok: false, code: 'auth_failed', error: 'Web search is not set up on this Waldo yet.' };
     const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${limit}`;
     let response: Response;
     try {
+      await ctx?.assertTaskSourceCurrent?.();
       response = await fetcher(url, { headers: { 'X-Subscription-Token': apiKey, Accept: 'application/json' } });
     } catch (error) {
       return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error) };
@@ -31,6 +32,7 @@ export const webSearchHandler = (
     }
     if (!response.ok) return { ok: false, code: 'transient', error: `Brave search returned HTTP ${response.status}` };
     const body = (await response.json()) as { web?: { results?: { title?: string; url?: string; description?: string }[] } };
+    await ctx?.assertTaskSourceCurrent?.();
     const hits = (body.web?.results ?? [])
       .map((r) => ({ title: r.title ?? '', url: r.url ?? '', snippet: r.description ?? '' }))
       .filter((hit) => hit.url !== '')
