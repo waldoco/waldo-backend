@@ -551,7 +551,7 @@ it('a model-proposed new task quoted by authenticated owner transport cannot rel
 });
 
 
-it.each(['invalid', 'uncertain'] as const)('ordinary owner workspace continuation retains established scope after %s classification', async failure => {
+it.each(['valid', 'duplicate-known-family'] as const)('ordinary owner workspace continuation remains usable after %s retain classification', async kind => {
   await proof(async h => {
     const setup = 'Start a new fictional task using workspace only. Create N01R/notes.txt and keep it for later work.';
     model.sourceDecision = JSON.stringify({ decision: 'new', sources: ['workspace'], evidence: setup });
@@ -561,7 +561,7 @@ it.each(['invalid', 'uncertain'] as const)('ordinary owner workspace continuatio
     const original = h.manifest()!.files[0]!; const originalBytes = h.bytes.get(h.puts[0]!)!.slice();
     const prior = h.state.storage.sql.exec<{ task_id: string; sources_json: string; start_ref: string }>('SELECT task_id, sources_json, start_ref FROM owner_task_source_scope').one();
     h.restart();
-    model.sourceDecision = failure === 'invalid' ? 'not json' : JSON.stringify({ decision: 'uncertain', sources: [], evidence: null });
+    model.sourceDecision = JSON.stringify({ decision: 'retain', sources: kind === 'valid' ? ['workspace'] : ['workspace', 'workspace'], evidence: null });
     model.reply = request => {
       const done = outputs(request);
       if (!done.continueList) return [call('workspace_list', { prefix: 'N01R', limit: 50 }, 'continueList'), call('search_communication', { query: 'Alex', limit: 1 }, 'continueMail')];
@@ -572,7 +572,7 @@ it.each(['invalid', 'uncertain'] as const)('ordinary owner workspace continuatio
     };
     const followup = await h.send('Use N01R/notes.txt to make a short checklist called N01R/plan v2.md. Keep the original unchanged.');
     const diagnostic = h.state.storage.sql.exec<{ ok: number; note: string }>('SELECT ok, note FROM trace_log WHERE trace = ? AND hop = ?', `tg-${followup}`, 'task_source_custody').one();
-    expect(diagnostic).toEqual({ ok: 1, note: failure === 'invalid' ? 'retained_invalid' : 'retained_uncertain' });
+    expect(diagnostic).toEqual({ ok: 1, note: 'retained' });
     const result = allOutputs();
     expect(result.continueList!.ok).toBe(true); expect(result.continueRead!.data.text).toBe(BYTES); expect(result.derived!.ok).toBe(true);
     expect(result.continueMail!.ok).toBe(false);

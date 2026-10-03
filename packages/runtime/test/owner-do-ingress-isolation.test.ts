@@ -31,7 +31,7 @@ let onFixtureReply: (() => Promise<void>) | undefined;
 const unexpectedFetches: string[] = [];
 let sourceWorld: IsolatedSourceWorld | null = null;
 let interceptCalendarEffects = false;
-let taskDecision: { decision: string; sources: string[]; evidence?: string | null } = { decision: 'retain', sources: [] };
+let taskDecision: { decision: string; sources: string[]; evidence?: string | null } | string = { decision: 'retain', sources: [] };
 vi.mock('../src/seams/deps', async (load) => {
   const original = await load<typeof import('../src/seams/deps')>();
   return { ...original, productionDeps: () => {
@@ -62,7 +62,7 @@ vi.mock('openai', () => ({
       modelInputs.push(body);
       const name = (body as { text?: { format?: { name?: string } } }).text?.format?.name;
       if (!name && onFixtureReply) { const hook = onFixtureReply; onFixtureReply = undefined; await hook(); }
-      const text = name === 'task_source_scope' ? JSON.stringify(taskDecision) : name === 'claim_ops'
+      const text = name === 'task_source_scope' ? typeof taskDecision === 'string' ? taskDecision : JSON.stringify(taskDecision) : name === 'claim_ops'
         ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}'
         : 'Synthetic answer from the model adapter.';
       const input = JSON.stringify(body);
@@ -267,6 +267,33 @@ describe('real owner-DO ingress in a sealed test world', () => {
     taskDecision = { decision: 'retain', sources: [], evidence: null };
     await send(81102, 'Read the fixture inbox after the confirmed decision.', update + 3);
     expect(sourceWorld.accessLog('b@example.invalid')).toEqual([expect.objectContaining({ source: 'mail', kind: 'list', owner_id: 'b@example.invalid' })]);
+  });
+  it('malformed classification during owner narrowing performs no external source call', async () => {
+    sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T11:00:00Z', owners: [{ id: 'a@example.invalid' }], sources: { mail: [
+      { owner_id: 'a@example.invalid', id: 'mail', thread_id: 'thread', from: 'sender@example.invalid', subject: 'Fixture report', snippet: 'private fixture mail', at: '2026-09-29T10:30:00Z' },
+    ] } });
+    outbox.length = 0; modelInputs.length = 0;
+    await runInDurableObject(doStub(81101), async (_instance, state) => { await state.storage.delete('google:accounts'); });
+    const update = 900000 + ++sequence * 10;
+    taskDecision = { decision: 'restrict', sources: [], evidence: null };
+    await send(81101, 'Start from supplied fictional material only.', update - 1);
+    const text = 'Start another task. Read the fixture inbox using mail only.';
+    taskDecision = { decision: 'new', sources: ['mail'], evidence: text };
+    await send(81101, text, update);
+    const card = outbox.find(item => item.method === 'sendMessage' && String(item.body.text).includes('Start a new task with read access only to: mail'))!;
+    const buttons = (card.body.reply_markup as { inline_keyboard: { callback_data: string }[][] }).inline_keyboard.flat();
+    await callback(81101, 81101, buttons.find(button => button.callback_data.startsWith('a:'))!.callback_data, update + 1);
+    await runInDurableObject(doStub(81101), async (_instance, state) => {
+      await state.storage.put('google:accounts', [{ id: 'local:a@example.invalid', email: 'a@example.invalid', scopes: null, refresh_token: 'fictional-not-a-token' }]);
+    });
+    taskDecision = { decision: 'retain', sources: [], evidence: null };
+    await send(81101, 'Read the fixture inbox for this current task.', update + 2);
+    const before = sourceWorld.accessLog('a@example.invalid'); expect(before).toHaveLength(1);
+    taskDecision = 'not json';
+    await send(81101, 'Do not Read the fixture inbox. Use only pasted material for this instruction.', update + 3);
+    expect(sourceWorld.accessLog('a@example.invalid')).toEqual(before);
+    expect(JSON.stringify(modelInputs)).toContain('outside the current owner task');
+    taskDecision = { decision: 'retain', sources: [], evidence: null };
   });
   it('routes fictional Google reads through owner-scoped source rows inside the real DO tool loop', async () => {
     sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T11:00:00Z', owners: [{ id: 'a@example.invalid' }, { id: 'b@example.invalid' }], sources: { mail: [

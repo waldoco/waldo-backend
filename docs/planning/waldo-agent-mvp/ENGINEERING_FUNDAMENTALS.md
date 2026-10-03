@@ -465,3 +465,10 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] Evidence matching cannot independently authorize newly added retained/external source families; compare against prior established scope for both new and change and require the visible owner decision.
 - [ ] Pending model continuations preserve inactive custody and the exact approval nonce/revision; only an authenticated matching card decision may activate the displayed families.
 - [ ] Task closure must enforce empty inactive scope even for legacy all-family card payloads; ordinary retain cannot restore baseline families.
+
+
+| 2026-10-03 | Provider schema permitted duplicate known task families rejected by decoder; broad #693 failure recovery retained external reads on malformed owner narrowing | Structured source classification | Schema-valid duplicate RED→GREEN canonical-set decode; malformed/uncertain owner-narrowing source controls and actual connected owner-DO zero-incremental-read regression; valid workspace continuation/readback/original preservation. Finite decode category privacy canaries. | Supersedes #693 failure recovery, not proof of historical trace5691 cause or guaranteed natural-language intent recognition. |
+
+- [ ] Decoder acceptance must match the provider schema: canonicalize repeated known source families without accepting unknowns or malformed evidence.
+- [ ] Malformed or uncertain source classification cannot keep protected reads active for the current instruction; negative owner-narrowing control must observe zero incremental connector calls, alongside usable valid continuation.
+- [ ] Metadata-only decoder categories must identify syntax/shape/decision/source/evidence failures without logging private raw classifier text.
