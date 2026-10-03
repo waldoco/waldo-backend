@@ -1,6 +1,6 @@
 // Typed connector proxy. The only place a Google token is read, refreshed or used: the runtime
 // sends a connection id and a typed operation, signed with the router secret, and gets data back.
-import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, googleHas, GoogleError, type GoogleClient, type GoogleMethod } from '../../../packages/runtime/src/connectors/google.ts';
+import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, googleHas, GoogleError, type GoogleErrorReason, type GoogleClient, type GoogleMethod } from '../../../packages/runtime/src/connectors/google.ts';
 import { driveRestClient, DRIVE_REST_METHODS, DriveRestError, type DriveRestMethod } from '../../../packages/runtime/src/connectors/drive-rest.ts';
 import { googleAccessToken } from '../../../packages/runtime/src/connectors/google.ts';
 import { executeProxyIntent, ProxyIntentError, type IntentClaim } from '../../../packages/runtime/src/connectors/proxy-intent.ts';
@@ -31,7 +31,7 @@ const same = (a: string, b: string) => {
   return diff === 0;
 };
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-const fail = (status: number, message: string, diagnostic?: McpErrorDiagnostic) => reply({ error: { status, message, ...(diagnostic ? { provider_diagnostic: diagnostic } : {}) } }, status === 401 || status === 403 || status === 404 ? 200 : 502);
+const fail = (status: number, message: string, diagnostic?: McpErrorDiagnostic, reason?: GoogleErrorReason) => reply({ error: { status, message, ...(reason ? { reason } : {}), ...(diagnostic ? { provider_diagnostic: diagnostic } : {}) } }, status === 401 || status === 403 || status === 404 ? 200 : 502);
 const db = async (fn: string, args: Record<string, unknown>) => {
   const response = await fetch(`${url}/rest/v1/rpc/${fn}`, {
     method: 'POST', headers: { apikey: service, authorization: `Bearer ${service}`, 'content-profile': 'waldo', 'content-type': 'application/json' }, body: JSON.stringify(args),
@@ -157,7 +157,7 @@ const handle = async (body: Body): Promise<Response> => {
     } catch (error) {
       if(error instanceof ProxyIntentError)return fail(error.code==='intent_conflict'?409:503,error.code);
       if (refreshError) await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: refreshError });
-      return fail(refreshError ? 401 : error instanceof GoogleError ? error.status : 502, error instanceof Error ? error.message : String(error));
+      return fail(refreshError ? 401 : error instanceof GoogleError ? error.status : 502, error instanceof Error ? error.message : String(error), undefined, error instanceof GoogleError ? error.reason : undefined);
     }
   } catch (error) {
     if (driveRead(body)) return fail(502, 'drive_read_failed');

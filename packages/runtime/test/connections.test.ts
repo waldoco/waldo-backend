@@ -26,6 +26,14 @@ describe('google proxy', () => {
   const proxyOf = (fetcher: ReturnType<typeof vi.fn>) => googleProxy(env, fetcher as unknown as typeof fetch, () => at * 1000)!;
   const sent = (fetcher: ReturnType<typeof vi.fn>, call = 0) => fetcher.mock.calls[call] as [string, RequestInit];
 
+  it('carries a structured provider reason from the proxy error body, and drops any other value (#668)', async () => {
+    for (const [sent, expected] of [['SERVICE_DISABLED', 'SERVICE_DISABLED'], ['ACCESS_TOKEN_SCOPE_INSUFFICIENT', 'ACCESS_TOKEN_SCOPE_INSUFFICIENT'], ['anything else', undefined]] as const) {
+      const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ error: { status: 403, message: 'denied', reason: sent } })));
+      const error = await proxyOf(fetcher).client('do-a', 'c-1').tasks('todo', 5).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(GoogleError);
+      expect(error).toMatchObject({ status: 403, reason: expected });
+    }
+  });
   it('drops an omitted trailing optional arg instead of sending null across the wire', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ data: { message_id: 'm1' } })));
     await proxyOf(fetcher).client('do-a', 'c-1', undefined, {id:'approval:fixture'}).sendRaw('raw-mime');
@@ -87,7 +95,7 @@ describe('google health', () => {
 
 describe('incremental Google access', () => {
   it('a mail tool on a calendar-only grant reports a scope_missing intent for mail, not a retry and not a URL', async () => {
-    const client = { draft: async () => { throw new GoogleError(403, 'google 403: insufficient scopes'); } } as unknown as GoogleClient;
+    const client = { draft: async () => { throw new GoogleError(403, 'google 403: insufficient scopes', 'ACCESS_TOKEN_SCOPE_INSUFFICIENT'); } } as unknown as GoogleClient;
     const google = { client: async () => client };
     const draft = googleHandlers(google, { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => undefined }, { timezone: 'UTC', now: () => new Date() }).find((tool) => tool.name === 'draft_email')!;
     const result = await draft.handle({ to: ['a@example.com'], subject: 'Hi', body: 'Body' } as never, {authenticatedUserId:'fixture',turnId:'turn',toolCallId:'call'} as never);
