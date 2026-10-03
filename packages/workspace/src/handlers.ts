@@ -6,7 +6,7 @@ const object = (value: unknown, allowed: string[]): Record<string, unknown> => {
 };
 const text = (value: unknown): string => { if (typeof value !== 'string') throw new WorkspaceError('invalid'); return value; };
 const integer = (value: unknown): number => { if (typeof value !== 'number' || !Number.isSafeInteger(value)) throw new WorkspaceError('invalid'); return value; };
-const result = async (work: () => unknown, taint: 'external' | null) => {
+const result = async <T>(work: () => T | Promise<T>, taint: 'external' | null) => {
   try { return { ok: true as const, data: await work(), source_taint: taint }; }
   catch (error) { return { ok: false as const, code: error instanceof WorkspaceError ? error.code : 'unavailable', error: error instanceof WorkspaceError ? error.message : 'workspace_unavailable', source_taint: 'external' as const }; }
 };

@@ -180,11 +180,13 @@ export const workspaceStore = async (host: WorkspaceHost) => {
       }
       return { status: 'purged' as const };
     },
-    async export(fileId: string, revision: number) {
+    async export(fileId: string, revision: number, maxBytes: number = LIMITS.fileBytes) {
       await admit('export');
       if (!validId(fileId) || !Number.isSafeInteger(revision) || revision < 1) fail('invalid');
       const record = transact(state => { const meta = state.files.find(f => f.file_id === fileId && f.state === 'ready'); const body = state.bodies.find(b => b.file_id === fileId && b.revision === revision); return meta && body ? { meta, body } : null; });
       if (!record) fail('not_found');
+      if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > LIMITS.fileBytes) fail('invalid');
+      if (record!.body.byte_size > maxBytes) fail('quota');
       const bytes = await verifyBody(record!.body);
       await admit('export');
       transact(state => { if (!state.files.some(f => f.file_id === fileId && f.state === 'ready') || !state.bodies.some(b => b.blob_id === record!.body.blob_id)) fail('not_found'); });

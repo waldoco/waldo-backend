@@ -99,3 +99,12 @@ describe('retained byte store',()=>{
  const f=fixture(),s=await workspaceStore(f.host);await s.write(args());await s.write(args(11,'second'));const first=await s.list(undefined,1);expect(first.count).toBe(1);expect(first.next_cursor).not.toBeNull();const next=await s.list(first.next_cursor!,1);expect(next.count).toBe(1);expect(next.next_cursor).toBeNull();expect(JSON.stringify(first)).not.toMatch(/blob_id|binding|hello/);await expect(s.list(id(999),1)).rejects.toThrow('workspace_invalid');await expect(s.list(undefined,51)).rejects.toThrow('workspace_invalid');
  });
 });
+
+it('export caller byte ceiling rejects an immutable revision before any body read', async()=>{
+ const f=fixture(),s=await workspaceStore(f.host),m=await s.write(args());
+ f.host.bodies.get=vi.fn(f.host.bodies.get);
+ await expect(s.export(m.file_id,1,4)).rejects.toThrow('workspace_quota');
+ expect(f.host.bodies.get).not.toHaveBeenCalled();
+ expect((await s.export(m.file_id,1,5)).bytes.byteLength).toBe(5);
+ await expect(s.export(m.file_id,1,-1)).rejects.toThrow('workspace_invalid');
+});

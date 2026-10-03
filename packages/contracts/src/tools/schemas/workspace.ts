@@ -42,3 +42,13 @@ export const workspaceWriteArgsSchema = z.strictObject({
   expected_revision: z.int().nonnegative(),
 });
 export type WorkspaceWriteArgs = z.infer<typeof workspaceWriteArgsSchema>;
+
+// Render bounded saved text to genuine document bytes; binary data never enters model arguments.
+export const workspaceRenderArgsSchema = z.strictObject({
+  source_file_id: z.string().min(1).max(100),
+  source_revision: z.int().positive(),
+  path: z.string().min(1).max(300),
+  expected_revision: z.int().nonnegative(),
+  format: z.enum(['pdf', 'docx']),
+});
+export type WorkspaceRenderArgs = z.infer<typeof workspaceRenderArgsSchema>;

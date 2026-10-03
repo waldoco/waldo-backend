@@ -38,3 +38,19 @@ describe('markdown to PDF render (inert, Latin text only)', () => {
     expect(await renderMarkdownPdf('   \n')).toEqual({ status: 'empty' });
   });
 });
+
+it('long unbroken text wraps with bounded font measurements, rather than scanning every suffix', async () => {
+ const {PDFFont,PDFPage}=await import('pdf-lib');
+ const measure=vi.spyOn(PDFFont.prototype,'widthOfTextAtSize');
+ const draw=vi.spyOn(PDFPage.prototype,'drawText');
+ try {
+  const rendered=await renderMarkdownPdf('W'.repeat(2000));expect(rendered.status).toBe('exported');
+  if(rendered.status==='exported')expect((await PDFDocument.load(rendered.bytes)).getPageCount()).toBeGreaterThanOrEqual(1);
+  // Logarithmic search per line keeps adversarial but permitted tokens bounded.
+  expect(measure.mock.calls.length).toBeLessThan(1000);
+  for(const [text,options] of draw.mock.calls){
+   expect(options!.x! + options!.font!.widthOfTextAtSize(text,options!.size!)).toBeLessThanOrEqual(595.28-56);
+   expect(options!.y).toBeGreaterThanOrEqual(56);
+  }
+ } finally {measure.mockRestore();draw.mockRestore()}
+});

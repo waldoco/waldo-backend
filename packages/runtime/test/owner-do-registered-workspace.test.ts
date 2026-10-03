@@ -319,3 +319,31 @@ it('scheduled reminder cannot write through the registered workspace closure wit
     expect(scheduledContext.runScope).toBeUndefined();
   });
 });
+
+it.each(['pdf', 'docx'] as const)('default owner ingress renders an actual %s file, returns its immutable link and lists its retained digest after restart', async format => {
+  await proof(async h => {
+    await h.state.storage.put('origin', 'https://local.invalid');
+    model.reply = request => {
+      const done = outputs(request);
+      if (!done.docSource) return [call('workspace_write', {path:'docs/source.md',text:'# Owner document\nA real saved file',mime:'text/markdown',expected_revision:0}, 'docSource')];
+      if (!done.document) return [call('workspace_render', {source_file_id:done.docSource.data.file_id,source_revision:1,path:`docs/export.${format}`,expected_revision:0,format}, 'document')];
+      return 'Document fixture reply.';
+    };
+    await h.send(`Save my document as ${format}.`);
+    expect(replies()[0]!.tools?.map(t=>t.name)).toContain('workspace_render');
+    const rendered = allOutputs().document!;
+    expect(rendered).toMatchObject({ok:true,data:{status:'exported',revision:1,delivery:{status:'owner_link',audience:'owner_authenticated'}}});
+    expect(rendered.data.delivery.url).toBe(`https://local.invalid/console/workspace/file?id=${rendered.data.file_id}&revision=1`);
+    const manifest = h.manifest()!; expect(manifest.files).toHaveLength(2);
+    const body = manifest.bodies.find(b=>b.file_id===rendered.data.file_id)!;
+    const key = h.puts.find(k=>h.bytes.get(k)?.length===body.byte_size)!;
+    const bytes = h.bytes.get(key)!;
+    expect(bytes.length).toBe(rendered.data.byte_size);
+    expect([...bytes.slice(0,4)]).toEqual(format==='pdf'?[37,80,68,70]:[80,75,3,4]);
+    h.restart();
+    model.reply = request => outputs(request).savedDoc ? 'Stored document remains.' : [call('workspace_list',{prefix:'docs/export.'},'savedDoc')];
+    await h.send('Check my exported document after restart.');
+    expect(allOutputs().savedDoc).toMatchObject({ok:true,data:{files:[{file_id:rendered.data.file_id,revision:1,sha256:rendered.data.sha256}]}});
+    expect(h.manifest()).toEqual(manifest); expect(h.puts).toHaveLength(2);
+  });
+});
