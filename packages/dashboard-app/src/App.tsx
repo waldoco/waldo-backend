@@ -1,3 +1,4 @@
+import {greeting,homeBrief} from './greeting';
 import {SettingsPanel,type SettingsSection} from './Settings';
 import {parseMemoryDestination} from './destinations';
 import {WorkspacePanel} from './Workspace';
@@ -74,7 +75,7 @@ export function DashboardNavigation({ route, waitingCount, onNavigate, isAdmin =
   </div>;
 }
 
-export function Dashboard({ data, route }: { data: OverviewV1; route: Route }) {
+export function Dashboard({ data, route, now = new Date() }: { data: OverviewV1; route: Route; now?:Date }) {
   const activity = ownerActivity(data);
   if(route==='settings/not-found')return <section className="panel" role="status"><h1>Settings page not found</h1><p>This settings destination is not available.</p><a href="#/settings">Open Settings</a></section>;
   if(route==='files'||route==='files/workspace')return <><div className="page-heading"><span className="eyebrow">Files with Waldo</span><h1>Files.</h1><p>Inspect Telegram references or your separate private workspace.</p></div><nav className="memory-tabs" aria-label="File storage views"><a href="#/files" aria-current={route==='files'?'page':undefined}>Telegram references</a><a href="#/files/workspace" aria-current={route==='files/workspace'?'page':undefined}>Private workspace</a></nav>{route==='files/workspace'?<WorkspacePanel/>:<ControlsPanel key="files" view="files" embedded/>}</>;
@@ -87,7 +88,7 @@ export function Dashboard({ data, route }: { data: OverviewV1; route: Route }) {
   const brief = data.brief.status === 'sent_recorded' ? 'The Brief is marked sent.'
     : data.brief.status === 'not_scheduled' ? 'No Brief is scheduled.' : 'The Brief has not been sent.';
   return <>
-    <Heading eyebrow="Your Waldo" title="Today."><p>What needs you. What’s next. What has been recorded.</p></Heading>
+    <Heading eyebrow="Your Waldo" title={greeting(data.timezone,now)}><p>{homeBrief(data)}</p></Heading>
     <div className={`overview-grid${data.waiting.count ? ' has-waiting' : ''}`}>
       <section className={`waiting-panel${data.waiting.count ? ' needs-you' : ''}`}>
         <div className="section-label"><span className="eyebrow">Waiting on you</span><span className="count" aria-label={`${data.waiting.count} waiting ${data.waiting.count === 1 ? 'decision' : 'decisions'}`}>{data.waiting.count}</span></div>
@@ -123,6 +124,8 @@ export function DashboardFeedback({ state, onRetry }: { state: FeedbackState; on
 
 export function App() {
   const [route, setRoute] = useState<Route>(currentRoute);
+  const [now,setNow]=useState(()=>new Date());
+  useEffect(()=>{const tick=()=>setNow(new Date());const timer=window.setInterval(tick,60000);window.addEventListener('focus',tick);document.addEventListener('visibilitychange',tick);return()=>{window.clearInterval(timer);window.removeEventListener('focus',tick);document.removeEventListener('visibilitychange',tick);};},[]);
   const [state, setState] = useState<FeedbackState | { kind: 'ready'; data: OverviewV1 }>({ kind: 'loading' });
   const [retry, setRetry] = useState(0);
   const [adminState, setAdminState] = useState<AdminState>({kind:'loading'});
@@ -186,7 +189,7 @@ export function App() {
       <DashboardNavigation route={route} isAdmin={adminState.kind === 'ready'} waitingCount={state.kind === 'ready' ? state.data.waiting.count : undefined} onNavigate={closeDrawer}/>
     </dialog>
     <main id="main" tabIndex={-1}>{route === 'admin' ? <AdminPanel state={adminState} onRefresh={refreshAdmin}/> : state.kind !== 'ready' ? <DashboardFeedback state={state} onRetry={() => setRetry((n) => n + 1)}/>
-      : <><div className="record-status"><span>Records as of {date(state.data.as_of, state.data.timezone)} · {state.data.timezone}</span><button onClick={() => setRetry((n) => n + 1)}>Refresh records</button></div><Dashboard data={state.data} route={route}/></>}</main>
+      : <><div className="record-status"><span>Records as of {date(state.data.as_of, state.data.timezone)} · {state.data.timezone}</span><button onClick={() => setRetry((n) => n + 1)}>Refresh records</button></div><Dashboard data={state.data} route={route} now={now}/></>}</main>
     <footer>Recorded activity can include attempts and failures. Check the result before treating work as done.</footer>
   </div></div></div>;
 }
