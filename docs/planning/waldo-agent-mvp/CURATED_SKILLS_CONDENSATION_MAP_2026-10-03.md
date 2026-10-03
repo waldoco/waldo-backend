@@ -1,7 +1,7 @@
 # Curated skills: what the <=600-byte bodies keep from the v1.1 originals (#661)
 
-Layer: SOURCE. Originals: waldo-skill-pack-v1 (pack 1.1). Condensed by core (not by the pack author). Status: K = kept (same check), S = kept shortened, D = dropped (reason given). Nothing here is installed, seeded or enabled in any environment; the full 27-procedure pack is NOT installed. Only these five (plus document-email-preparation) exist as code and each needs the owner's `/skills install <name>@1`.
-Rendered size (skill block, byte bound, cap 600): day-brief 547, meeting-prep 591, inbox-triage-reply-draft 595, sourced-decision-brief 598, calendar-focus-proposal 587 (pinned by test).
+Layer: SOURCE. Originals: waldo-skill-pack-v1 (pack 1.1). Condensed by core (not by the pack author). Status: K = kept (same check), S = kept shortened, D = dropped (reason given). Nothing here is installed, seeded or enabled in any environment; the full 27-procedure pack is NOT installed. Only these six (plus document-email-preparation) exist as code and each needs the owner's `/skills install <name>@1`.
+Rendered size (skill block, byte bound, cap 600): day-brief 547, meeting-prep 591, inbox-triage-reply-draft 595, sourced-decision-brief 598, calendar-focus-proposal 587, artifact-revision-delivery 578 (pinned by test).
 
 ## Shared sections in every original ("Authority and evidence", "Result and recovery"), about 1.4 KB of each ~2.2 KB file
 | Original line | Status | Where it lives now |
