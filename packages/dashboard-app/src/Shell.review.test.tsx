@@ -32,3 +32,18 @@ it('drawer Enter opens, Escape closes, and Menu regains focus',async()=>{
   expect(dialog.open).toBe(false);expect(menu.getAttribute('aria-expanded')).toBe('false');expect(document.activeElement).toBe(menu);
  }finally{await act(async()=>root.unmount());host.remove();show.mockRestore();close.mockRestore();vi.unstubAllGlobals();}
 });
+it('unknown hashes show a not-found destination and recover to Today through navigation',async()=>{
+ vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
+ vi.stubGlobal('matchMedia',vi.fn(()=>({matches:false,addEventListener(){},removeEventListener(){}})));
+ vi.stubGlobal('fetch',vi.fn(async(input)=>new Response(JSON.stringify(String(input).includes('overview')?data:{}),{status:String(input).includes('overview')?200:404})));
+ window.location.hash='#/qa-dld-20261003-missing';
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host);
+ try{
+  await act(async()=>root.render(<App/>));
+  expect(host.querySelector('main')?.textContent).toContain('Page not found');
+  expect(host.querySelector('main')?.textContent).not.toContain('Nothing waiting.');
+  expect(host.querySelector('main a[href="#/today"]')).not.toBeNull();
+  await act(async()=>{window.location.hash='#/today';window.dispatchEvent(new Event('hashchange'));});
+  expect(host.querySelector('main')?.textContent).toContain('Nothing waiting.');
+ }finally{await act(async()=>root.unmount());host.remove();window.location.hash='';vi.unstubAllGlobals();}
+});

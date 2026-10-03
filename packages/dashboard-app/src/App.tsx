@@ -1,3 +1,4 @@
+import {activityLabel,missingOutcome} from './activity-labels';
 import {SettingsPanel,type SettingsSection} from './Settings';
 import {parseMemoryDestination} from './destinations';
 import {WorkspacePanel} from './Workspace';
@@ -11,7 +12,7 @@ import type { OverviewV1 } from './model';
 import { fetchOverview, SignInRequired } from './model';
 import './style.css';
 
-export type Route = 'today' | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
+export type Route = 'not-found' | 'today' | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
 const routes = [
   { key: 'today', label: 'Today' }, { key: 'waiting', label: 'Waiting' },
   { key: 'memory', label: 'Memory' }, { key: 'patrol', label: 'Patrol' },
@@ -25,7 +26,8 @@ export const resolveRoute = (raw: string): Route => {
   if(['settings','settings/day','settings/sessions','settings/usage','settings/account','settings/setup','day','connections'].includes(value))return value as Route;
   if (value === 'admin' || value==='files'||value==='usage'||value==='setup'||value==='invites'||value==='account'||value==='files/workspace') return value;
   if (value === 'memory/spots' || value === 'memory/constellation' || value === 'memory/profile') return value;
-  return routes.find((r) => r.key === value)?.key ?? 'today';
+  if(value===''||value==='overview')return 'today';
+  return routes.find((r) => r.key === value)?.key ?? 'not-found';
 };
 const currentRoute = () => resolveRoute(window.location.hash.replace(/^#\/?/, ''));
 const date = (iso: string, zone: string) => {
@@ -76,6 +78,7 @@ export function DashboardNavigation({ route, waitingCount, onNavigate, isAdmin =
 
 export function Dashboard({ data, route }: { data: OverviewV1; route: Route }) {
   const activity = ownerActivity(data);
+  if(route==='not-found')return <section className="panel" role="status"><h1>Page not found</h1><p>This console destination is not available.</p><a className="button-link" href="#/today">Open Today</a></section>;
   if(route==='settings/not-found')return <section className="panel" role="status"><h1>Settings page not found</h1><p>This settings destination is not available.</p><a href="#/settings">Open Settings</a></section>;
   if(route==='files'||route==='files/workspace')return <><div className="page-heading"><span className="eyebrow">Files with Waldo</span><h1>Files.</h1><p>Inspect Telegram references or your separate private workspace.</p></div><nav className="memory-tabs" aria-label="File storage views"><a href="#/files" aria-current={route==='files'?'page':undefined}>Telegram references</a><a href="#/files/workspace" aria-current={route==='files/workspace'?'page':undefined}>Private workspace</a></nav>{route==='files/workspace'?<WorkspacePanel/>:<ControlsPanel key="files" view="files" embedded/>}</>;
   if(route==='waiting'||route==='patrol')return <ControlsPanel key={route} view={route==='patrol'?'activity':'waiting'}/>;
@@ -105,8 +108,8 @@ export function Dashboard({ data, route }: { data: OverviewV1; route: Route }) {
         <p>{data.brief.status === 'sent_recorded' ? 'Waldo recorded a send. This does not confirm delivery or show message text; open your chat to check.' : 'No Brief content is available here.'}</p>
         {data.brief.at && <p className="muted">Recorded {date(data.brief.at, data.timezone)}</p>}</div>
       </section>
-      <section className="record-row"><span className="eyebrow">Latest activity</span><div><h2>{activity?.kind ?? 'No owner-facing activity in the latest record.'}</h2>
-        {activity && <><p>{activity.summary ?? 'No summary is recorded for this activity.'}</p><p className="muted">Recorded status: {activity.status} · {date(activity.at, data.timezone)}</p></>}
+      <section className="record-row"><span className="eyebrow">Latest activity</span><div><h2>{activity ? activityLabel(activity.kind) : 'No owner-facing activity in the latest record.'}</h2>
+        {activity && <><p>{activity.summary?.trim() ? activity.summary : missingOutcome}</p><p className="muted">Recorded status: {activity.status} · {date(activity.at, data.timezone)}</p><details><summary>Technical details</summary><p>Recorded type: {activity.kind}</p></details></>}
         <a href="#/patrol">Inspect the latest record <span aria-hidden="true">→</span></a></div>
       </section>
     </div>
