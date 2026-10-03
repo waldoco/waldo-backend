@@ -42,8 +42,10 @@ async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, work:
   try {
     return { ok: true, data: await work(client), source_taint: 'external' };
   } catch (error) {
-    // A 403 means this feature's scope was never granted; a 401 means the stored grant is dead.
-    if (error instanceof GoogleError && error.status === 403) return authFailed('scope_missing', feature);
+    // 401 = the stored grant is dead. A 403 prompts for consent only on structured evidence that the scope is
+    // missing; a disabled API, a quota or a plain denial is not fixed by consent, so it returns the provider's words.
+    if (error instanceof GoogleError && error.status === 403 && error.reason === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT') return authFailed('scope_missing', feature);
+    if (error instanceof GoogleError && error.status === 403) return { ok: false, code: 'rejected', error: `Google refused the request (403${error.reason === 'SERVICE_DISABLED' ? ', the API is disabled for this project' : ''}): ${error.message}`, source_taint: 'external' };
     if (error instanceof GoogleError && error.status === 401) return authFailed('reauth_needed', feature);
     return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error), source_taint: 'external' };
   }
