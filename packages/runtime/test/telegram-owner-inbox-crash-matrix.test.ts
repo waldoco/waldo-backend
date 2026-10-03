@@ -12,9 +12,11 @@ const fixture = () => {
 };
 
 // Crash matrix: what the durable inbox does with each record state when the DO restarts with no live attempt.
-// Policy under test (current code, not a proposal): nothing that was claimed is ever replayed. A claimed or consumed
+// Policy under test (current code, not a proposal): an ordinary claimed turn is never replayed. A claimed or consumed
 // turn becomes quarantined/recovered_uncertain with its body scrubbed, which is the non_replayable_uncertain class
-// applied to the whole turn. An unclaimed record is still safe to run once.
+// applied to the whole turn. One exception: a claimed steer that was never closed returns to the ordinary admission
+// queue (recover() in telegram-owner-inbox.ts), because it was never consumed. A claimed attempt that is still
+// live is left alone. An unclaimed record is still safe to run once.
 describe('owner inbox crash matrix (restart with no live attempt)', () => {
   const seed = async (f: ReturnType<typeof fixture>, upTo: 'admitted' | 'claimed' | 'awaiting_delivery' | 'consumed' | 'completed') => {
     await f.inbox.admit(f.binding, 1, 'turn body'); const id = '7:telegram:1';
@@ -50,5 +52,14 @@ describe('owner inbox crash matrix (restart with no live attempt)', () => {
   it('a restart replays the duplicate admission as a duplicate, not a second turn', async () => {
     const f = fixture(); await seed(f, 'claimed'); await f.inbox.recover(new Set());
     expect(await f.inbox.admit(f.binding, 1, 'turn body')).toBe('duplicate'); expect(await f.inbox.records()).toHaveLength(1);
+  });
+  it('an unclosed claimed steer is re-admitted, not quarantined', async () => {
+    const f = fixture(); await f.inbox.admit(f.binding, 1, 'steer body', { kind: 'steer', targetRun: 'parent' });
+    expect(await f.inbox.claim('7:telegram:1', 'a1', 'run1', 5000)).not.toBeNull(); await f.inbox.recover(new Set());
+    const row = (await f.inbox.records())[0]!; expect(row.state).toBe('admitted'); expect(row.body).toBe('steer body');
+  });
+  it('a claimed attempt that is still live is left alone', async () => {
+    const f = fixture(); const id = await seed(f, 'claimed'); await f.inbox.recover(new Set(['a1']));
+    const row = (await f.inbox.records()).find(r => r.id === id)!; expect(row.state).toBe('claimed'); expect(row.body).toBe('turn body');
   });
 });
