@@ -128,7 +128,8 @@ const handle = async (body: Body): Promise<Response> => {
     if(!grant||typeof grant.secret!=='string'||!grant.secret)return fail(body.intent_id?503:401,body.intent_id?'intent_unavailable':'connection unavailable');
     if (driveRead(body)) {
       const scopes = Array.isArray(grant.scopes) ? grant.scopes : [];
-      if (!['drive.readonly','drive.metadata.readonly'].some(scope => scopes.includes(`https://www.googleapis.com/auth/${scope}`))) return fail(403, 'drive_scope_missing');
+      const allowedScopes = body.method === 'driveReadFileContent' ? ['drive.readonly'] : ['drive.readonly','drive.metadata.readonly'];
+      if (!allowedScopes.some(scope => scopes.includes(`https://www.googleapis.com/auth/${scope}`))) return fail(403, 'drive_scope_missing');
       if (!Array.isArray(body.args) || body.args.length !== 1) return fail(400, 'drive_invalid_request');
       let refreshFailed = false;
       const client = driveRestClient(fetch, () => googleAccessToken(app, { refresh_token: grant.secret }, fetch, error => { refreshFailed = Boolean(error); }));

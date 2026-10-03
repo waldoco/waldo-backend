@@ -1,17 +1,20 @@
-// Metadata-only Drive v3 reads. Callers supply their existing authenticated grant refresh path.
+// Drive v3 reads. Callers supply their existing authenticated grant refresh path.
 export type DriveFileMetadata = Readonly<{id:string;name:string;mimeType:string;modifiedTime:string|null;webViewLink:string|null;size:string|null}>;
 export type DriveMetadataPage = Readonly<{files:readonly DriveFileMetadata[];nextPageToken:string|null;incompleteSearch:boolean}>;
 export type DrivePageArgs = Readonly<{pageSize?:number;pageToken?:string}>;
 export type DriveSearchArgs = DrivePageArgs & Readonly<{nameContains:string}>;
 export type DriveGetArgs = Readonly<{fileId:string}>;
+export type DriveContentArgs = Readonly<{fileId:string;expectedModifiedTime:string}>;
+export type DriveFileContent = Readonly<{file:DriveFileMetadata;text:string;contentMimeType:'text/plain';version:string;truncated:boolean;returnedBytes:number;observedAt:string}>;
 export type DriveRestClient = Readonly<{
  driveListFiles(args:DrivePageArgs):Promise<DriveMetadataPage>;
  driveSearchFiles(args:DriveSearchArgs):Promise<DriveMetadataPage>;
  driveGetFileMetadata(args:DriveGetArgs):Promise<DriveFileMetadata>;
+ driveReadFileContent(args:DriveContentArgs):Promise<DriveFileContent>;
 }>;
-export const DRIVE_REST_METHODS = ['driveListFiles','driveSearchFiles','driveGetFileMetadata'] as const;
+export const DRIVE_REST_METHODS = ['driveListFiles','driveSearchFiles','driveGetFileMetadata','driveReadFileContent'] as const;
 export type DriveRestMethod = typeof DRIVE_REST_METHODS[number];
-type DriveErrorCode = 'drive_invalid_request'|'drive_invalid_response'|'drive_auth_failed'|'drive_access_denied'|'drive_scope_missing'|'drive_service_disabled'|'drive_not_found'|'drive_rate_limited'|'drive_read_failed';
+type DriveErrorCode = 'drive_invalid_request'|'drive_invalid_response'|'drive_auth_failed'|'drive_access_denied'|'drive_scope_missing'|'drive_service_disabled'|'drive_not_found'|'drive_rate_limited'|'drive_read_failed'|'drive_source_changed'|'drive_content_unsupported';
 export class DriveRestError extends Error {
  constructor(readonly status:number,readonly code:DriveErrorCode,readonly reason?:'ACCESS_TOKEN_SCOPE_INSUFFICIENT'|'SERVICE_DISABLED',readonly service?:'drive.googleapis.com'){super(code);}
 }
@@ -46,11 +49,12 @@ const file = (value:unknown):DriveFileMetadata => {
  return {id:value.id,name:value.name,mimeType:value.mimeType,modifiedTime:(value.modifiedTime as string|undefined)??null,webViewLink:(value.webViewLink as string|undefined)??null,size:(value.size as string|undefined)??null};
 };
 export const driveRestClient = (fetcher:typeof fetch,bearer:()=>Promise<string>):DriveRestClient => {
- const read = async(url:URL):Promise<unknown> => {
+ const read = async(url:URL,signal?:AbortSignal):Promise<unknown> => {
   let providerFailure:number|undefined;
   try{
    const token=await bearer();
-   const response=await fetcher(url.toString(),{method:'GET',redirect:'error',headers:{authorization:`Bearer ${token}`}});
+   signal?.throwIfAborted();
+   const response=await fetcher(url.toString(),{method:'GET',redirect:'error',headers:{authorization:`Bearer ${token}`},...(signal?{signal}:{})});
    if(!response.ok)providerFailure=response.status;
 
    // Bound the body as well as its projected fields; no raw provider body survives a failed parse.
@@ -86,6 +90,44 @@ export const driveRestClient = (fetcher:typeof fetch,bearer:()=>Promise<string>)
   return {files:files.map(file),nextPageToken:(data.nextPageToken as string|undefined)??null,incompleteSearch:data.incompleteSearch===true};
  };
  return {
+  driveReadFileContent:async value=>{
+   const args=argsObject(value,['fileId','expectedModifiedTime']);
+   if(!text(args.fileId,256)||!/^[-_a-zA-Z0-9]+$/.test(args.fileId)||!text(args.expectedModifiedTime,64)||!Number.isFinite(Date.parse(args.expectedModifiedTime)))return invalid();
+   const controller=new AbortController();const signal=controller.signal;
+   const work=async():Promise<DriveFileContent>=>{
+    const url=new URL(`${ROOT}/${encodeURIComponent(args.fileId as string)}`);
+    url.search=new URLSearchParams({fields:`${FIELDS},version,capabilities(canDownload)`}).toString();
+    const before=await read(url,signal);
+    if(!object(before))return malformed();
+    const selected=file(before);
+    if(selected.id!==args.fileId||selected.modifiedTime!==args.expectedModifiedTime)throw new DriveRestError(409,'drive_source_changed');
+    if(!text(before.version,30)||!/^\d+$/.test(before.version))return malformed();
+    if(!object(before.capabilities)||before.capabilities.canDownload!==true)throw new DriveRestError(403,'drive_access_denied');
+    if(!['application/vnd.google-apps.document','text/plain'].includes(selected.mimeType))throw new DriveRestError(400,'drive_content_unsupported');
+    const contentUrl=new URL(`${ROOT}/${encodeURIComponent(selected.id)}${selected.mimeType==='text/plain'?'':'/export'}`);
+    contentUrl.search=new URLSearchParams(selected.mimeType==='text/plain'?{alt:'media'}:{mimeType:'text/plain'}).toString();
+    const token=await bearer();signal.throwIfAborted();
+    const response=await fetcher(contentUrl.toString(),{method:'GET',redirect:'error',signal,headers:{authorization:`Bearer ${token}`}});
+    if(!response.ok)return httpFailure(response.status);
+    if(response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()!=='text/plain'||!response.body)return malformed();
+    const reader=response.body.getReader();const chunks:Uint8Array[]=[];let size=0;let truncated=false;
+    try{for(;;){const {done,value:chunk}=await reader.read();if(done)break;const remaining=8192-size;chunks.push(chunk.slice(0,remaining));size+=Math.min(chunk.byteLength,remaining);if(chunk.byteLength>remaining){truncated=true;await reader.cancel();break;}}}finally{reader.releaseLock();}
+    const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+    // Stream mode leaves an incomplete final UTF-8 code point buffered on a cut.
+    let content:string;try{content=new TextDecoder('utf-8',{fatal:true,ignoreBOM:false}).decode(bytes,{stream:truncated});}catch{return malformed();}
+    // Escapes count toward the actual inline JSON budget too; never spill document text to offload.
+    while(JSON.stringify(content).length>8192){content=content.slice(0,Math.max(0,content.length-256));truncated=true;}
+    if(content.length&&/[\uD800-\uDBFF]/.test(content.at(-1)!)){content=content.slice(0,-1);truncated=true;}
+    const after=await read(url,signal);
+    if(!object(after)||after.id!==selected.id||after.version!==before.version||after.modifiedTime!==selected.modifiedTime||after.mimeType!==selected.mimeType)throw new DriveRestError(409,'drive_source_changed');
+    return {file:selected,text:content,contentMimeType:'text/plain',version:before.version,truncated,returnedBytes:new TextEncoder().encode(content).byteLength,observedAt:new Date().toISOString()};
+   };
+   // Bound token refresh and custom transport implementations as well as native fetch/stream.
+   let timeout:ReturnType<typeof setTimeout>|undefined;
+   try{return await Promise.race([work(),new Promise<never>((_,reject)=>{timeout=setTimeout(()=>{controller.abort();reject(new DriveRestError(504,'drive_read_failed'));},10_000);})]);}
+   catch(error){if(error instanceof DriveRestError)throw error;throw new DriveRestError(502,'drive_read_failed');}
+   finally{clearTimeout(timeout);}
+  },
   driveListFiles:args=>list(args,false),
   driveSearchFiles:args=>list(args,true),
   driveGetFileMetadata:async value=>{
