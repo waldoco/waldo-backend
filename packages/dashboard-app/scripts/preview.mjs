@@ -1,8 +1,9 @@
 // Synthetic preview only, never imported by the app or bundled into production.
+import { memoryPreview } from './memory-preview.mjs';
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 const dist = new URL('../dist/console/dashboard/', import.meta.url);
-const cases = ['recorded', 'empty', 'missing-summary', 'signed-out', 'unavailable', 'malformed', 'loading', 'admin', 'admin-refresh-failure'];
+const cases = ['recorded', 'empty', 'missing-summary', 'signed-out', 'unavailable', 'malformed', 'loading', 'admin', 'admin-refresh-failure','memory','memory-partial','memory-error'];
 const selected = process.argv.find((arg) => arg.startsWith('--case='))?.slice(7) ?? 'recorded';
 const port = Number(process.argv.find((arg) => arg.startsWith('--port='))?.slice(7) ?? 4178);
 if (!cases.includes(selected) || !Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Use --case=' + cases.join('|') + ' and --port=1024..65535');
@@ -10,6 +11,10 @@ const payload = { version: 1, as_of: '2026-09-29T07:40:00Z', timezone: 'Asia/Kol
 const admin = {csrf:'synthetic-csrf',as_of:'2026-09-30T08:00:00Z',current_issuer:{id:'issuer',email:'admin@example.test',issued_count:2},owners:[{id:'issuer',email:'admin@example.test',state:'active',presences:['telegram'],created_at:'2026-09-01T00:00:00Z',issued_count:2},...Array.from({length:12},(_,i)=>({id:`owner-${i}`,email:`person${i}@example.test`,state:'active',presences:[],created_at:'2026-09-01T00:00:00Z',issued_count:0}))],invites:[{id:'one',email:'one@example.test',issued_by:'issuer',issuer_email:'admin@example.test',created_at:'2026-09-29T00:00:00Z',expires_at:'2026-10-13T00:00:00Z',used_at:null,revoked_at:null},{id:'two',email:'two@example.test',issued_by:'issuer',issuer_email:'admin@example.test',created_at:'2026-09-01T00:00:00Z',expires_at:'2026-09-15T00:00:00Z',used_at:null,revoked_at:null}]};
 let adminReadFailed=false;
 const server = createServer((req, res) => {
+  if(req.url?.startsWith('/console/dashboard/api/v1/memory?')) {
+    const data=memoryPreview(new URL(req.url,'http://localhost').searchParams,selected==='memory-partial');
+    res.writeHead(selected==='memory-error'?503:data.error?404:200,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(selected==='memory-error'?{error:'memory_unavailable'}:data));return;
+  }
   if(req.url === '/console/admin') {
     res.writeHead(selected.startsWith('admin') ? (adminReadFailed?503:200):404,{'Content-Type':'application/json','Cache-Control':'no-store'});
     res.end(JSON.stringify(selected.startsWith('admin')&&!adminReadFailed ? admin : {error:'not_found'})); return;

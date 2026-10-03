@@ -202,3 +202,66 @@ footer { padding:35px 0 45px; color:var(--muted); font-size:12px; line-height:1.
 .table-pager {display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:20px;flex-wrap:wrap;font-size:13px}
 button:disabled {opacity:.55;cursor:default}
 @media(max-width:860px){.admin-issue form{align-items:stretch}.admin-issue label{width:100%}.panel .connection-heading{flex-wrap:wrap}}
+
+.memory-tabs{display:flex;gap:8px;border-bottom:1px solid var(--line);margin-bottom:26px;flex-wrap:wrap}
+.memory-tabs a{padding:12px 18px;min-height:44px;border-bottom:2px solid transparent;text-decoration:none}
+.memory-tabs a[aria-current=page]{border-color:var(--accent);color:var(--ink)}
+.memory-read-notice{background:#fff3e7;border:1px solid #e6d4bf;border-radius:12px;padding:16px 20px;margin:18px 0;font-size:14px;line-height:1.6}
+.memory-read-notice p{margin:5px 0}
+.memory-list-toolbar,.memory-pagination,.pattern-toolbar{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap;margin:20px 0}
+.memory-record-list{border-top:1px solid var(--line)}
+.memory-record{display:grid;grid-template-columns:36px minmax(0,1fr) 24px;align-items:start;gap:18px;padding:24px 8px;border-bottom:1px solid var(--line);text-decoration:none;color:inherit;transition:background .18s}
+.memory-record:hover{background:#f0eee7}.memory-record h2{font-size:24px;margin:0 0 10px;line-height:1.3;overflow-wrap:anywhere}.memory-record p{margin:6px 0}
+.memory-record-symbol{font-size:30px;color:var(--accent)}.memory-meta{font-size:13px;color:#746a5f;line-height:1.6}
+.memory-item-detail{margin:22px 0}.memory-item-detail h2{overflow-wrap:anywhere}.memory-item-detail dl{display:grid;grid-template-columns:170px minmax(0,1fr);gap:16px;margin:26px 0;line-height:1.6}
+.memory-item-detail dt{color:#746a5f;font-size:13px}.memory-item-detail dd{margin:0;overflow-wrap:anywhere}.memory-action-recovery{margin-top:30px;padding-top:20px;border-top:1px solid var(--line)}
+/* Bounded saved-relationship exploration; layout is never memory evidence. */
+.constellation-toolbar,.control-actions {display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:22px 0}
+.constellation-toolbar h2{font-size:32px;margin:10px 0}
+.constellation-guide{font-size:14px;line-height:1.7;max-width:850px;color:#625d56}
+.constellation-workspace{display:grid;grid-template-columns:minmax(0,1fr) 280px;border:1px solid var(--line);border-radius:18px;background:#f7f7f2;margin:26px 0;overflow:hidden}
+.constellation-canvas{min-width:0;padding:18px 0}.constellation-canvas svg{display:block;width:100%;height:auto;min-height:320px}.constellation-canvas>p{font-size:12px;padding:0 22px;line-height:1.7}
+.constellation-link{fill:none;stroke:#9c9d91;stroke-width:1.1;transition:opacity .25s,stroke .25s}.constellation-link.support{stroke-dasharray:5 5}.constellation-link.active{stroke:#b35d27;stroke-width:1.8}.constellation-link.subdued{opacity:.38}
+.constellation-node{cursor:pointer;outline:none;transition:opacity .25s}.constellation-node.subdued{opacity:.48}.constellation-node polygon,.constellation-spot{fill:#fbfaf6;stroke:#65675b;stroke-width:1.5}.constellation-hit{fill:transparent;stroke:transparent}.constellation-node.selected .constellation-hit{fill:#f5e1c8}.constellation-node.selected polygon,.constellation-node.selected .constellation-spot{stroke:#b35d27;stroke-width:2}.constellation-node:focus-visible .constellation-hit{stroke:#373b32;stroke-width:2;fill:#efece2}.constellation-node text{font-family:inherit;font-size:12px;fill:#34382f;pointer-events:none}
+.constellation-inspector{margin:20px 16px!important;padding:24px!important;border-radius:10px!important;background:#fff!important;align-self:start}.constellation-inspector h3{font-size:24px;line-height:1.35;overflow-wrap:anywhere}.constellation-inspector p,.constellation-inspector li{font-size:13px;line-height:1.7}.constellation-inspector .eyebrow{font-size:10px}.constellation-support{border-top:1px dashed var(--line);margin-top:22px;padding-top:16px}.constellation-support ul{padding:0;list-style:none}.constellation-support li{margin:14px 0}.constellation-support small{display:block;margin:6px 0}.constellation-support button,.constellation-pattern-list button{white-space:normal;text-align:left;min-height:44px;max-width:100%;overflow-wrap:anywhere}.constellation-pattern-list{display:flex;gap:10px;flex-wrap:wrap}.constellation-pattern-list button[aria-pressed=true]{border-color:#b35d27;background:#f5e1c8}.constellation-list li{margin:18px 0;line-height:1.6}
+.controls-card-list,.file-reference-list{display:grid;gap:18px}.controls-card-list .panel,.file-reference-list .panel{margin:0}.control-actions{justify-content:flex-start}.control-actions button,.memory-pagination button,.constellation-toolbar button{min-height:44px}.control-row form{min-width:0}.activity-record{padding:18px 0;border-bottom:1px solid var(--line)}.activity-record h3{margin:0 0 8px;font-size:20px}.owner-record-text{white-space:pre-wrap;overflow-wrap:anywhere;font-family:inherit;line-height:1.7}.memory-actions{margin:24px 0}.panel form{display:grid;gap:16px}.panel label{min-width:0}.panel h2{overflow-wrap:anywhere}
+@media(max-width:860px){.constellation-workspace{grid-template-columns:1fr}.constellation-inspector{margin:0 16px 16px!important}.constellation-canvas svg{min-height:240px}.memory-item-detail dl{grid-template-columns:1fr;gap:6px}.memory-item-detail dd{margin-bottom:16px}.memory-record{grid-template-columns:20px minmax(0,1fr) 18px;gap:10px}.memory-tabs a{padding:12px 10px}.constellation-toolbar h2{font-size:28px}.control-actions{align-items:stretch;flex-direction:column}}
+
+/* Reference revision: paper, fine saved branches and a quiet indexed inspector.
+   A readable map scrolls on narrow screens; the full list stays available below. */
+.memory-tabs {gap:24px;margin-bottom:30px}
+.memory-tabs a {padding:12px 2px;color:var(--muted)}
+.memory-tabs a[aria-current=page] {color:var(--ink)}
+.memory-record {padding:26px 6px;gap:22px}
+.memory-record h2 {font-size:25px;margin-bottom:8px}
+.memory-record-symbol {color:#73695b;font-size:25px;line-height:1.4}
+.memory-record:hover .memory-record-symbol {color:#b35d27}
+.constellation-toolbar {border-bottom:1px solid var(--line);padding-bottom:20px}
+.constellation-toolbar h2 {font-size:38px;line-height:1.12;max-width:640px}
+.constellation-toolbar p {font-size:13px;line-height:1.65;color:var(--muted)}
+.constellation-toolbar button,.memory-pagination button,.constellation-support button,.constellation-pattern-list button {border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px 14px;color:var(--ink);font-size:13px}
+.constellation-workspace {grid-template-columns:minmax(0,1fr) 300px;background:#f5f6f1;border-radius:12px}
+.constellation-canvas {padding:28px 0 16px}
+.constellation-map-scroll {overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;padding:0 4px}
+.constellation-canvas svg {min-width:660px;min-height:0}
+.constellation-link {stroke:#61645b;stroke-width:1;stroke-linejoin:round}
+.constellation-link.active {stroke:#6e7265;stroke-width:1.2}
+.constellation-link.support {stroke-dasharray:4 5}
+.constellation-link.subdued {opacity:.3}
+.constellation-node.subdued {opacity:.65}
+.constellation-node.selected .constellation-hit {fill:#f8e6d3}
+.constellation-node.selected polygon,.constellation-node.selected .constellation-spot {fill:#f79442;stroke:#a9531e;stroke-width:1.3}
+.constellation-node text {font-size:12px;fill:#272b24}
+.constellation-inspector {border:0!important;margin:22px 18px 22px 0!important;padding:24px!important}
+.constellation-inspector h3 {font-family:Mottle,Georgia,serif;font-size:28px;font-weight:460;margin:16px 0}
+.constellation-inspector .eyebrow {letter-spacing:.06em}
+.constellation-support h4 {font-size:13px;font-weight:600;margin:0 0 12px}
+.constellation-list {border-radius:12px;padding:24px}
+.constellation-list h3 {font-size:16px;font-weight:500;margin:0 0 20px}
+@media(max-width:1100px) {.constellation-workspace{grid-template-columns:1fr}.constellation-inspector{margin:0 20px 20px!important}.constellation-canvas svg{min-width:700px}.constellation-canvas{padding-top:20px}}
+@media(max-width:860px) {.memory-tabs{gap:20px}.memory-tabs a{padding:12px 2px}.memory-record{gap:12px}.memory-record h2{font-size:23px}.constellation-toolbar h2{font-size:30px}.constellation-inspector{margin:0 12px 12px!important;padding:22px!important}.constellation-canvas svg{width:760px;max-width:none}.constellation-map-scroll{padding-bottom:12px}.constellation-list{padding:20px}.constellation-toolbar{align-items:flex-start}.constellation-toolbar button{width:100%}}
+@media(prefers-reduced-motion:reduce) {.constellation-node,.constellation-link,.memory-record{transition:none}}
+
+.constellation-scroll-hint{display:none}
+@media(max-width:860px){.constellation-scroll-hint{display:block;font-size:12px;margin:0 20px 10px;color:var(--muted)}}
+.memory-list-toolbar button {min-height:44px;border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px 14px;color:var(--ink);font-size:13px}

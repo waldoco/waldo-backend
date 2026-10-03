@@ -38,7 +38,7 @@ describe('console owner-DO routing', () => {
   it('routes /console to the directory-resolved owner DO, not the env telegram id', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([{ do_name: 'owner-test-uuid', subject: '5458446350', timezone: null }]))));
     const res = await worker.fetch(
-      new Request('https://waldo.invalid/console', { headers: { cookie: 'waldo_console=a.b.c' } }),
+      new Request('https://waldo.invalid/console', { headers: { cookie: 'waldo_console=a.b.c', accept: 'application/json' } }),
       { ...baseEnv, ...supabaseEnv } as unknown as Cloudflare.Env,
     );
     expect(await res.text()).toBe('do:owner-test-uuid');
@@ -47,14 +47,14 @@ describe('console owner-DO routing', () => {
   it('does not route to the legacy DO when the directory has no presence row', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('[]')));
     const res = await worker.fetch(
-      new Request('https://waldo.invalid/console', { headers: { cookie: 'waldo_console=a.b.c' } }),
+      new Request('https://waldo.invalid/console', { headers: { cookie: 'waldo_console=a.b.c', accept: 'application/json' } }),
       { ...baseEnv, ...supabaseEnv } as unknown as Cloudflare.Env,
     );
     expect(res.status).toBe(503);
   });
 
   it('uses the deploy-owner path when Supabase is not configured', async () => {
-    const res = await worker.fetch(new Request('https://waldo.invalid/console'), baseEnv as unknown as Cloudflare.Env);
+    const res = await worker.fetch(new Request('https://waldo.invalid/console', { headers: { accept: 'application/json' } }), baseEnv as unknown as Cloudflare.Env);
     expect(await res.text()).toBe('do:5458446350');
   });
 });
@@ -68,10 +68,20 @@ it('routes a private artifact path through the same owner gate, never a public b
  expect(signedOut.status).toBe(303);expect(signedOut.headers.get('location')).toBe('/console/signin');
 });
 
+it('replaces caller-supplied owner routing headers on the ticket fallback before the DO sees them', async () => {
+ const seen: string[] = [];
+ const ns = { idFromName: (name: string) => name, get: (name: string) => ({ fetch: async (request: Request) => { seen.push(request.headers.get('x-waldo-do-name')!); return new Response(name + ':' + request.headers.get('x-waldo-do-name')); } }) };
+ for (const path of ['/console/legacy', '/console/dashboard']) {
+  const response = await worker.fetch(new Request('https://waldo.invalid' + path, { headers: { cookie: 'waldo_console=invalid', 'x-waldo-do-name': 'attacker-selected-owner' } }), { ...baseEnv, TELEGRAM_OWNER_DO: ns, ASSETS: { fetch: async () => new Response('shell') } } as unknown as Cloudflare.Env);
+  expect(await response.text()).toBe(path.endsWith('/dashboard') ? 'shell' : '5458446350:5458446350');
+  expect(seen.at(-1)).toBe('5458446350');
+ }
+});
 it('never selects a legacy console DO when directory lookup fails', async () => {
   const get = vi.fn();
   vi.stubGlobal('fetch', vi.fn(async () => new Response('unavailable', { status: 503 })));
-  await expect(worker.fetch(new Request('https://waldo.invalid/console', { headers: { cookie: 'waldo_console=a.b.c' } }),
-    { ...baseEnv, ...supabaseEnv, TELEGRAM_OWNER_DO: { idFromName: (name: string) => name, get } } as unknown as Cloudflare.Env)).rejects.toThrow('owner directory 503');
+  const result = await worker.fetch(new Request('https://waldo.invalid/console', { headers: { cookie: 'waldo_console=a.b.c' } }),
+    { ...baseEnv, ...supabaseEnv, TELEGRAM_OWNER_DO: { idFromName: (name: string) => name, get } } as unknown as Cloudflare.Env);
+  expect(result.status).toBe(503);
   expect(get).not.toHaveBeenCalled();
 });

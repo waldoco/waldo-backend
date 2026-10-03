@@ -18,7 +18,9 @@ export const serveDashboard = async (
   verifyOwner: (request: Request) => Promise<Response>,
 ): Promise<Response | null> => {
   const url = new URL(request.url);
-  const isShell = url.pathname === DASHBOARD_SHELL_PATH || url.pathname === `${DASHBOARD_SHELL_PATH}/`;
+  const rootEntry = url.pathname === CONSOLE_PATH || url.pathname === `${CONSOLE_PATH}/`;
+  if (rootEntry && (request.method !== 'GET' && request.method !== 'HEAD' || url.searchParams.has('t') || url.searchParams.has('m') || (request.headers.get('accept') ?? '').includes('application/json'))) return null;
+  const isShell = rootEntry || url.pathname === DASHBOARD_SHELL_PATH || url.pathname === `${DASHBOARD_SHELL_PATH}/`;
   const isAsset = url.pathname.startsWith(ASSET_PREFIX);
   if (!isShell && !isAsset) return null;
   if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('method not allowed', { status: 405, headers: DASHBOARD_OVERVIEW_HEADERS });
@@ -28,10 +30,14 @@ export const serveDashboard = async (
     // Ask the same owner-session path as the read API. A successful narrow read proves
     // the signed owner routing and DO session, without making a second auth authority.
     let auth: Response;
-    try { auth = await verifyOwner(new Request(new URL(DASHBOARD_OVERVIEW_PATH, url), request)); }
-    catch { return new Response('dashboard unavailable', { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS }); }
-    if (!auth.ok) return new Response(auth.status === 401 ? 'Sign in to see your dashboard.' : 'dashboard unavailable', {
-      status: auth.status === 401 ? 401 : 503,
+    try { auth = await verifyOwner(new Request(new URL(DASHBOARD_OVERVIEW_PATH, url), { method: 'GET', headers: request.headers })); }
+    catch {
+      console.error(JSON.stringify({ hop: 'dashboard_static', ok: false, code: 'owner_verification_failed' }));
+      return new Response('dashboard unavailable', { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS });
+    }
+    if (auth.status === 401) return new Response(null, { status: 303, headers: { ...DASHBOARD_OVERVIEW_HEADERS, location: `${CONSOLE_PATH}/signin` } });
+    if (!auth.ok) return new Response('dashboard unavailable', {
+      status: 503,
       headers: { ...DASHBOARD_OVERVIEW_HEADERS, 'content-type': 'text/plain; charset=utf-8' },
     });
   }
