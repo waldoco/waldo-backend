@@ -45,10 +45,10 @@ export function DayControls({ record, busy, onAction }: { record: DayRecord } & 
   </>;
 }
 
-export function ConnectionsControls({ record, busy, onAction }: { record: ConnectionsRecord } & ActionProps) {
+export function ConnectionsControls({ record, busy, onAction, section }: { record: ConnectionsRecord; section?: 'connections'|'sessions' } & ActionProps) {
   const { google, telegram, sessions } = record.data;
   return <>
-    <section className="panel"><h2>Google accounts</h2><p>Saved access is permission, not proof that a live Calendar, Gmail or Tasks request worked.</p>
+    {section!=='sessions'&&<><section className="panel"><h2>Google accounts</h2><p>Saved access is permission, not proof that a live Calendar, Gmail or Tasks request worked.</p>
       <div className="account-list">{google.accounts.map(account => <section className="control-account" key={account.id}>
         <h3>{account.email}</h3><span className={`access-label${account.health === 'needs_reconnect' ? ' reconnect' : ''}`}>{account.health === 'needs_reconnect' ? 'Reconnect needed' : 'Access granted · read unverified'}</span>
         <ul className="grant-list">{[account.calendar ? 'Calendar' : null, account.mail ? 'Gmail' : null, account.tasks ? 'Tasks' : null].filter(Boolean).map(grant => <li key={grant}>{grant}</li>)}</ul>
@@ -64,9 +64,10 @@ export function ConnectionsControls({ record, busy, onAction }: { record: Connec
     <section className="panel"><div className="connection-heading"><h2>Telegram</h2><span className="access-label">{telegram.linked ? 'Linked' : 'Unlinked'}</span></div><p>Your owner DM carries chat, cards and reminders. Linking instructions appear here after you request them.</p>
       <div className="control-actions"><button disabled={busy} onClick={() => onAction('telegram.link')}>Link a Telegram account</button>{telegram.linked && telegram.unlinkAvailable && <button disabled={busy} onClick={() => { if (window.confirm('Unlink Telegram? Waldo stops messaging it. Sign in with your email to link again.')) onAction('telegram.unlink'); }}>Unlink Telegram</button>}</div>
     </section>
-    <section className="panel"><h2>Console sessions</h2><p>{sessions.count} active {sessions.count === 1 ? 'browser session' : 'browser sessions'} recorded. This session is valid until {sessions.until}.</p>
+    </>}
+    {section!=='connections'&&<section className="panel"><h2>Console sessions</h2><p>{sessions.count} active {sessions.count === 1 ? 'browser session' : 'browser sessions'} recorded. This session is valid until {sessions.until}.</p>
       <div className="control-actions"><button disabled={busy} onClick={() => onAction('session.signout')}>Sign out of this browser</button>{sessions.count > 1 && <button disabled={busy} onClick={() => { if (window.confirm('Sign out of every browser?')) onAction('session.signout.all'); }}>Sign out everywhere</button>}</div>
-    </section>
+    </section>}
   </>;
 }
 
@@ -88,7 +89,7 @@ export function ControlReceipt({ result, onCheck, onRefresh, busy }: { result: A
 type Attempt = { record: ControlRecord; action: ControlAction; fields: ControlFields; id: string };
 const headings: Record<ControlsView, { eyebrow: string; title: string; description: string }> = {
   day: { eyebrow: 'Your rhythm', title: 'Your day.', description: 'Plan when Waldo reaches you, and keep the rhythm yours.' },
-  connections: { eyebrow: 'Permission, with control', title: 'Connections.', description: 'Manage saved access and the sessions that reach your Waldo.' },
+  connections: { eyebrow: 'Permission, with control', title: 'Connections.', description: 'Manage the accounts and channels connected to your Waldo.' },
   waiting: { eyebrow: 'Your decision comes first', title: 'Waiting.', description: 'Review the full proposal before deciding. Send approval stays in chat.' },
   activity: { eyebrow: 'Recorded work', title: 'Patrol.', description: 'Inspect recorded attempts, reasons and outcomes without assuming completion.' },
   profile: { eyebrow: 'Correctable context', title: 'Profile.', description: 'Read the saved context behind your Waldo, and correct it in chat.' },
@@ -96,7 +97,7 @@ const headings: Record<ControlsView, { eyebrow: string; title: string; descripti
   usage: { eyebrow: 'Recorded estimates', title: 'Usage.', description: 'Inspect model calls and their recorded estimated cost.' },
   files: { eyebrow: 'Telegram references', title: 'Files.', description: 'Open what you sent Waldo, or remove a reference from the list.' },
 };
-export function ControlsPanel({ view, embedded=false }: { view: ControlsView; embedded?:boolean }) {
+export function ControlsPanel({ view, embedded=false, section }: { view: ControlsView; embedded?:boolean; section?: 'connections'|'sessions' }) {
   const [state, setState] = useState<ControlsState>({ kind: 'loading' });
   const [retry, setRetry] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -140,7 +141,7 @@ export function ControlsPanel({ view, embedded=false }: { view: ControlsView; em
   const onPage = (next: ActivityCursors) => { if (inFlight.current) return; setState({ kind: 'loading' }); setPage(next); setRetry(n => n + 1); };
   const heading = headings[view];
   const content = state.kind === 'ready' ? state.data.view === 'day' ? <DayControls record={state.data} busy={disabled} onAction={act}/>
-    : state.data.view === 'connections' ? <ConnectionsControls record={state.data} busy={disabled} onAction={act}/>
+    : state.data.view === 'connections' ? <ConnectionsControls record={state.data} busy={disabled} onAction={act} section={section}/>
       : state.data.view === 'waiting' ? <WaitingControls record={state.data} busy={disabled} onAction={act}/>
         : state.data.view === 'activity' ? <ActivityControls record={state.data} busy={disabled} onPage={onPage}/>
           : state.data.view === 'profile' ? <ProfileControls record={state.data}/>
@@ -149,6 +150,7 @@ export function ControlsPanel({ view, embedded=false }: { view: ControlsView; em
                 : <FilesControls record={state.data} busy={disabled} onAction={act}/> : null;
   return <>
     {!embedded&&<div className="page-heading"><span className="eyebrow">{heading.eyebrow}</span><h1>{heading.title}</h1><p>{heading.description}</p><button disabled={busy} onClick={refresh}>Refresh controls</button></div>}
+    {embedded&&<button disabled={busy} onClick={refresh}>Refresh {section==='sessions'?'sessions':'settings'}</button>}
     {result && <ControlReceipt result={result} onCheck={result.receipt.state === 'unconfirmed' ? check : undefined} onRefresh={refresh} busy={busy}/>}
     {error && <section className="panel" role="alert"><h2>{error.uncertain ? 'Outcome unavailable.' : 'Review the controls again.'}</h2><p>{error.message}</p>{error.signedOut ? <a href="/console/signin">Sign in</a> : <div className="control-actions">{error.uncertain && <button disabled={busy} onClick={check}>Check this request</button>}<button disabled={busy} onClick={refresh}>Refresh controls</button></div>}</section>}
     {state.kind !== 'ready' ? <ControlsFeedback state={state} onRefresh={refresh}/> : <div className="controls-stack" key={`${state.data.view}:${state.data.revision}`}>{content}</div>}
