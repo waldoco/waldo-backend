@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { GoogleError } from '../src/connectors/google';
 import { googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 
-// Issue #663. Pins how each Google READ tool turns a provider status into an owner-facing result.
+// Issue #665. Pins how each Google READ tool turns a provider status into an owner-facing result.
 // Layer: SOURCE unit. Drive (read-drive.test.ts) and MCP (mcp-google-auth.test.ts) are pinned elsewhere.
 // 401 = stored grant dead -> reconnect intent. 5xx/other = transient, no connect prompt.
-// 403 is CHARACTERIZATION of current behavior: these four-feature reads answer a blanket scope_missing
+// 403 is CHARACTERIZATION of current behavior: these five reads (calendar, mail, tasks) answer a blanket scope_missing
 // consent prompt, while Drive refuses with the provider's words and no prompt. That divergence is
 // recorded here, not endorsed; changing it is a behavior decision for the owner/Dalda, not this slice.
 const clock = { timezone: 'Asia/Kolkata', now: () => new Date('2026-10-03T08:00:00Z') };
