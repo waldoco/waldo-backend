@@ -24,6 +24,7 @@ const TABLES: Record<string, Row> = {
   purge_pending: exempt('claim id and fingerprint hash'), topic_purge_pending: exempt('fingerprint hash, a marker and a time'), settle_pending: exempt('trace id and time'),
   claim_recall_ready: exempt('claim ids'),
   owner_source_scope: exempt('an enum value (none or pasted_only) and a time; no owner text'),
+  owner_task_source_scope: exempt('owner/task ids, revision, source-family enums, readiness, bounded nonce/expiry confirmation and host input reference; no owner instruction, fact or forgotten spans'),
   // Operational: counters, flags, hashes, leases, ids, times
   class_state: exempt('counts and times per push class'), daily_push_budget: exempt('counts per day'), event_cooldowns: exempt('event id and time'),
   exempt_telemetry: exempt('counts'), subkind_state: exempt('counts and times'), loop_kill_flags: exempt('flag keys'), loop_progress: exempt('counts'),

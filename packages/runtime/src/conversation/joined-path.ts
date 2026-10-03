@@ -24,6 +24,7 @@ export type JoinedConversationRequest = Readonly<{
   context: RuntimeOwnedContextInputs;
   userEntry: ConversationEntry;
   assistantEntryId: string;
+  historyStartRef?: string;
 }>;
 
 export type JoinedConversationPublication = Readonly<{
@@ -60,7 +61,8 @@ export class JoinedConversationPath {
     if (!composition.ok) throw new Error(`conversation context failed: ${composition.failure.code}`);
     // F1: bound the model input before the call - the full ancestor path grows without limit
     // otherwise, and provider-side overflow is a failed turn (paper audit, arXiv 2609.20804).
-    const windowed = windowModelMessages(this.tree.modelContext(request.userEntry.id));
+    const history = taskHistoryMessages(this.tree, request.userEntry.id, request.historyStartRef);
+    const windowed = windowModelMessages(history);
     this.observers?.onWindow?.(windowed.stats);
     request.runScope?.admit();
     const text = await this.model.complete({
@@ -105,3 +107,13 @@ export class JoinedConversationPath {
     return publication;
   }
 }
+
+export const taskHistoryMessages = (tree: ConversationTree, leafId: string, startRef?: string): readonly ConversationModelMessage[] => {
+  if (!startRef) return tree.modelContext(leafId);
+  const entries = tree.path(leafId);
+  const first = entries.findIndex(entry => entry.id === startRef);
+  const taskEntries = first < 0 ? entries.slice(-1) : entries.slice(first);
+  const taskTree = new ConversationTree();
+  taskEntries.forEach((entry, index) => taskTree.append({ ...entry, parentId: index === 0 ? null : entry.parentId }));
+  return taskTree.modelContext(leafId);
+};

@@ -74,7 +74,7 @@ async function proof(work: (h: {
 
         if (!request.response_format && paused) { const slot = paused; paused = undefined; slot.entered(); await slot.wait; }
         const calls = !request.response_format && !request.tool_turns?.length && request.tools?.some(t => t.name === 'get_context') ? [{ call_id: 'fixture-clock', name: 'get_context', arguments: '{}' }] : undefined;
-        return { ok: true, data: { text: writer ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : calls ? '' : 'Synthetic admitted reply.', ...(calls ? { tool_calls: calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, model: request.model, latency_ms: 1 } };
+        return { ok: true, data: { text: request.response_format?.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : writer ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : calls ? '' : 'Synthetic admitted reply.', ...(calls ? { tool_calls: calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, model: request.model, latency_ms: 1 } };
       } },
     };
     const privateEnv = { ...env, TELEGRAM_BOT_TOKEN: '12345:fictional', TELEGRAM_WEBHOOK_SECRET: 'fictional-inbox-secret', OPENAI_API_KEY: 'fictional-model-key' };

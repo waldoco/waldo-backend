@@ -23,10 +23,13 @@ function sources(admission: OwnerMessageAdmission): ContextComposerDependencies 
 // Explicit synthetic authority for the existing hermetic ingress fixtures only.
 export function admittedOwnerHost(doName: string, subject: string, gateway: LLMGatewayAdapter, tools: readonly ToolName[] = []): TelegramOwnerPrivateHost {
   const suffix = subject.padStart(12, '0');
+  let materials: ContextComposerDependencies['materials'] | undefined;
   return {
     environment: 'staging', namespace: 'hermetic-owner-host', allowedDoNames: [doName],
     lookup: async (provider, suppliedSubject) => provider === 'telegram' && suppliedSubject === subject ? { owner_id: `10000000-0000-0000-0000-${suffix}`, presence_id: `20000000-0000-0000-0000-${suffix}`, state_version: 0, admission_revision: '9007199254740993', do_name: doName, provider, subject } : null,
-    context: sources,
+    context: admission => { const deps = sources(admission); materials = deps.materials; return deps; },
+    // This fixture supplier has static mandatory material and zero optional data reads.
+    taskMaterials: async request => { if (!materials) throw new Error('Fixture material unavailable'); return materials.load(request); },
     access: async () => ({ grants: { status: 'available', tools }, connectors: { status: 'available', tools } }),
     connectorBacked: handler => tools.includes(handler.name as ToolName),
     gateway,

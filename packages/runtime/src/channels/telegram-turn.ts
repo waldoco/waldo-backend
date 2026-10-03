@@ -23,7 +23,7 @@ export const createTelegramResponder = (...args: [...AdapterArgs, surface?: stri
   const readers = args[4];
   const coreArgs: CoreArgs = [args[0], args[1], args[2], args[3], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15], args[16], args[17], args[18], args[19]];
   coreArgs[18] = coreArgs[18] ?? TELEGRAM_REACTIONS;
-  coreArgs[21] = args[21] || args[22] ? { ...(args[21] ? { host: args[21] } : {}), ...(args[22] ? { skillHost: args[22] } : {}) } : undefined;
+  coreArgs[21] = args[21] || args[22] ? { ...(args[21] ? { host: args[21] } : {}), ...(args[22] ? { skillHost: args[22] } : {}), requireTaskScope: true } : undefined;
   const core = createOwnerResponder(...coreArgs);
   const envelope = (turn: TelegramInboundTurn) => telegramTurnEnvelope(turn, surface);
   const respond: TelegramOwnerListenerOptions['respond'] = async (turn, time) => {

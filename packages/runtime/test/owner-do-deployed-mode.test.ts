@@ -13,7 +13,7 @@ vi.mock('openai', () => ({ default: class {
   responses = { create: async (body: unknown) => {
     seen.requests.push(body);
     const name = (body as { text?: { format?: { name?: string } } }).text?.format?.name;
-    return { id: 'fixture', output_text: name === 'claim_ops'
+    return { id: 'fixture', output_text: name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : name === 'claim_ops'
       ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}'
       : name === 'reaction' ? '{"reaction":"👌"}' : 'Deployed mode fixture reply.', output: [], usage: { input_tokens: 1, output_tokens: 1 } };
   } };

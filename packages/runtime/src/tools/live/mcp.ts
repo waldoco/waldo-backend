@@ -203,7 +203,13 @@ export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: 
     // so the host sets it after the model's args, and the model cannot turn snippets back on.
     const intent: ProxyIntent = { id: `mcpread:${await sha256Hex(JSON.stringify([ctx.authenticatedUserId, ctx.turnId, ctx.toolCallId]))}`, readOnly: true };
     try {
-      const { content, protocolVersion } = await executeMcp(found, tool, { ...args, excludeContentSnippets: true }, googleAuth, fetch, intent);
+      const { content, protocolVersion } = await executeMcp(found, tool, { ...args, excludeContentSnippets: true }, googleAuth, async (input, init) => {
+        await ctx.assertTaskSourceCurrent?.();
+        const response = await fetch(input, init);
+        await ctx.assertTaskSourceCurrent?.();
+        return response;
+      }, intent);
+      await ctx.assertTaskSourceCurrent?.();
       return { ok: true, data: { output: content, protocol: protocolVersion, source_taint: 'external' as const }, source_taint: 'external' };
     } catch (error) {
       if (error instanceof McpConnectError) {

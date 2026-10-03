@@ -1,0 +1,117 @@
+import { env, runInDurableObject } from 'cloudflare:test';
+import { expect, it, vi } from 'vitest';
+import { approveTaskSourceProposal, createTaskSourceScope, TASK_SOURCE_FAMILIES, taskSourceAllowed } from '../src/channels/task-source-scope';
+import { taskSourceClient } from '../src/tools/task-source-io';
+import type { RunEffectScope } from '../src/channels/run-effect-scope';
+import type { ToolDispatcherContext } from '../src/tools/dispatcher';
+
+const run = (name: string, work: (sql: SqlStorage, scope: RunEffectScope) => Promise<void>) => runInDurableObject(
+  env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    const scope: RunEffectScope = { runId: name, attempt: 'test', deadline: Date.now() + 30_000, signal: new AbortController().signal, admit() {}, commit: fn => fn() };
+    await work(state.storage.sql, scope);
+  });
+const decision = (value: string, sources: readonly string[] = []) => JSON.stringify({ decision: value, sources });
+
+it('recreated custody preserves narrowed sources and retain cannot grant classifier-supplied sources', () => run('task-custody-recreate', async (sql, scope) => {
+  const capability = createTaskSourceScope(sql, 'owner-one', scope, async () => {});
+  const restricted = (await capability.classify(decision('restrict'))).snapshot;
+  expect(taskSourceAllowed(restricted, { name: 'search_communication', requires_connector: true })).toBe(false);
+  const recreated = createTaskSourceScope(sql, 'owner-one', scope, async () => {});
+  const retained = (await recreated.classify(decision('retain', TASK_SOURCE_FAMILIES))).snapshot;
+  expect(retained.sources).toEqual([]);
+  expect(taskSourceAllowed(retained, { name: 'workspace_render', mutates_state: true })).toBe(false);
+  expect(sql.exec<{ sources_json: string }>('SELECT sources_json FROM owner_task_source_scope').one().sources_json).toBe('[]');
+}));
+
+it('malformed and uncertain decisions fail closed without erasing active restrictions', () => run('task-custody-failure', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {});
+  await cap.classify(decision('restrict', ['mail']));
+  for (const raw of ['not json', decision('restrict', ['invented']), JSON.stringify({ decision: 'retain', sources: [], ownerText: 'forbidden retention' }), decision('uncertain')]) {
+    const result = await cap.classify(raw);
+    expect(result.snapshot.ready).toBe(false);
+    expect(result.snapshot.sources).toEqual(['mail']);
+    expect(taskSourceAllowed(result.snapshot, { name: 'search_communication', requires_connector: true })).toBe(false);
+  }
+  expect(JSON.stringify(sql.exec('SELECT * FROM owner_task_source_scope').toArray())).not.toContain('forbidden retention');
+}));
+
+it('new, change and close need exact single-use owner decisions; expiry does not drop restrictions', () => run('task-custody-decisions', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {});
+  await cap.classify(decision('restrict'));
+  for (const action of ['change', 'new', 'close']) {
+    const { snapshot, proposal } = await cap.classify(decision(action, ['mail']));
+    expect(proposal).toBeDefined();
+    expect(snapshot.ready).toBe(false);
+    expect(snapshot.sources).toEqual([]);
+    expect(approveTaskSourceProposal(sql, 'foreign-owner', proposal!, Date.now(), scope)).toBe(false);
+    expect(approveTaskSourceProposal(sql, 'owner-one', { ...proposal!, nonce: 'forged' }, Date.now(), scope)).toBe(false);
+    expect(approveTaskSourceProposal(sql, 'owner-one', proposal!, proposal!.expiresAt, scope)).toBe(false);
+    expect((await cap.current()).sources).toEqual([]);
+    expect(approveTaskSourceProposal(sql, 'owner-one', proposal!, Date.now(), scope)).toBe(true);
+    expect(approveTaskSourceProposal(sql, 'owner-one', proposal!, Date.now(), scope)).toBe(false);
+    const approved = await cap.current();
+    expect(approved.sources).toEqual(action === 'close' ? [...TASK_SOURCE_FAMILIES] : ['mail']);
+    expect(approved.taskId === snapshot.taskId).toBe(action === 'change');
+    await cap.classify(decision('restrict'));
+  }
+}));
+
+it('stale cards and captured read snapshots cannot outlive a task revision', () => run('task-custody-revision', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {});
+  const previous = (await cap.classify(decision('retain'))).snapshot;
+  const proposal = (await cap.classify(decision('change', ['mail']))).proposal!;
+  await cap.classify(decision('restrict'));
+  expect(approveTaskSourceProposal(sql, 'owner-one', proposal, Date.now(), scope)).toBe(false);
+  await expect(cap.assertSame(previous)).rejects.toThrow('Task source scope changed');
+}));
+
+it('fresh owner checks fence custody reads and changes', () => run('task-custody-owner', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => { throw new Error('Owner changed'); });
+  await expect(cap.classify(decision('retain'))).rejects.toThrow('Owner changed');
+  expect(sql.exec<{ revision: number }>('SELECT revision FROM owner_task_source_scope').one().revision).toBe(1);
+}));
+
+it('client operations recheck after authentication and withhold results if scope changes during IO', async () => {
+  let current = true;
+  const physical = vi.fn(async () => 'private fixture');
+  const ctx = { assertTaskSourceCurrent: async () => { if (!current) throw new Error('Task changed'); } } as ToolDispatcherContext;
+  const client = taskSourceClient({ read: physical }, ctx);
+  current = false;
+  await expect(client.read()).rejects.toThrow('Task changed');
+  expect(physical).not.toHaveBeenCalled();
+  current = true;
+  physical.mockImplementationOnce(async () => { current = false; return 'private fixture'; });
+  await expect(client.read()).rejects.toThrow('Task changed');
+  expect(physical).toHaveBeenCalledTimes(1);
+});
+
+it('Gmail transport fences internal list-to-message reads after a scope change', async () => {
+  const { googleClient } = await import('../src/connectors/google');
+  const { taskSourceFetch } = await import('../src/tools/task-source-io');
+  let current = true;
+  const calls: string[] = [];
+  const fetcher: typeof fetch = async input => {
+    const url = String(input); calls.push(url);
+    if (url.includes('oauth2.googleapis.com')) return Response.json({ access_token: 'synthetic-token' });
+    current = false;
+    return Response.json({ messages: [{ id: 'synthetic-message' }] });
+  };
+  const client = googleClient({ clientId: 'fixture', clientSecret: 'fixture', redirectUri: 'https://fixture.invalid' }, { refresh_token: 'fixture' }, taskSourceFetch(async () => { if (!current) throw new Error('Task changed'); }, fetcher));
+  await expect(client.searchMail('fictional', 1)).rejects.toThrow('Task changed');
+  expect(calls).toHaveLength(2); // token + list only; no message content fetch
+});
+
+it('browser scope change during session start prevents navigation while still closing the session', async () => {
+  const { browsePageHandler } = await import('../src/tools/live/browser');
+  let current = true;
+  const calls: string[] = [];
+  const fetcher: typeof fetch = async input => {
+    const url = String(input); calls.push(url);
+    if (url.endsWith('/start')) { current = false; return Response.json({ success: true, data: { sessionId: 'fixture-session' } }); }
+    return Response.json({ success: true });
+  };
+  const handler = browsePageHandler('fixture', 'fixture', 'fixture', fetcher);
+  const result = await handler.handle({ url: 'https://fixture.invalid', instruction: 'read fictional text' }, { assertTaskSourceCurrent: async () => { if (!current) throw new Error('Task changed'); } } as ToolDispatcherContext);
+  expect(result.ok).toBe(false);
+  expect(calls.map(url => url.split('/').at(-1))).toEqual(['start', 'end']);
+});

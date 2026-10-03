@@ -4,6 +4,7 @@ export const STOPPED_REPLY = 'Stopped. Nothing more on that one.';
 
 export const turnControl = () => {
   let child: { bindTarget(id: string): void; durableConsume(hook: (ids: readonly number[]) => Promise<void>): void; stopTarget(id: string): boolean; steerTarget(targetId: string, id: number, text: string): boolean; stop(): boolean; steer(id: number, text: string): boolean } | undefined;
+  let revision = 0;
   let running = false;
   let target: string | null = null;
   let steerable = false;
@@ -17,11 +18,11 @@ export const turnControl = () => {
     route(next: NonNullable<typeof child>): void { child = next; if (target) next.bindTarget(target); if (consume) next.durableConsume(consume); },
     unroute(next: NonNullable<typeof child>): void { if (child === next) child = undefined; },
     bindTarget(id: string): void { target = id; child?.bindTarget(id); },
-    stopTarget(id: string): boolean { if (child) return child.stopTarget(id); if (target !== id || !running) return false; stopped = true; return true; },
+    stopTarget(id: string): boolean { if (child) return child.stopTarget(id); if (target !== id || !running) return false; stopped = true; revision++; return true; },
     steerTarget(targetId: string, id: number, text: string): boolean {
       if (child) return child.steerTarget(targetId, id, text);
       if (target !== targetId || !running || !steerable || stopped) return false;
-      pending.push({ id, text }); return true;
+      pending.push({ id, text }); revision++; return true;
     },
     durableConsume(hook: (ids: readonly number[]) => Promise<void>): void { consume = hook; child?.durableConsume(hook); },
     async roundAsync(): Promise<string | null> {
@@ -50,17 +51,18 @@ export const turnControl = () => {
       target = null;
       return heard;
     },
+    revision: () => revision,
     heard: (): readonly string[] => heard,
     unconsumed: (): readonly { id: number; text: string }[] => leftover,
     stop(): boolean {
       if (child) return child.stop();
-      if (running) stopped = true;
+      if (running) { stopped = true; revision++; }
       return running;
     },
     steer(id: number, text: string): boolean {
       if (child) return child.steer(id, text);
       const open = running && steerable && !stopped;
-      if (open) pending.push({ id, text });
+      if (open) { pending.push({ id, text }); revision++; }
       return open;
     },
     // Called before each model round: null means stop, otherwise the owner's additions so far.

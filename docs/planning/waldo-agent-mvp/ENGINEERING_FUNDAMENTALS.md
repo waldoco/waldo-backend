@@ -434,3 +434,13 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 |---|---|---|
 | Pasted-only task restriction is present in the reply context but does not constrain a drifting provider's connected-source reads | pasted-task-scope.test.ts actual responder/durable DO storage/Google handler mock ports, five-search/two-read RED; ordinary recreation and structural no-effect read scorer controls pass | Scripted host-admission diagnosis, not a real-model replay, semantic answer grade or full authenticated inbox proof |
 | An unrelated incomplete-forgetting hold removes earlier task restrictions from reply context | pasted-task-scope.test.ts coverage marker plus recreated responder RED at66854e71 | Independent later condition; cannot explain N03 at74f1e763. Future repair must retain privacy withholding and prove forbidden-source exclusion |
+
+### Owner task source custody and physical reads
+- [ ] Task classifiers may retain or intersect current source families, never widen authorization. Require authenticated owner confirmation bound to owner/task/revision/nonce for new/change/close; stale, foreign, expired and replayed decisions must fail. Active restrictions outlive card expiry and forgetting of task content.
+- [ ] Fence steering on arrival and every physical provider operation after awaited authentication; discard old results and tool turns after scope changes. Permit cleanup of opened browser sessions independently.
+- [ ] Gate automatic memory, standing order, workspace metadata and canonical recall suppliers before reads. Limited canonical tasks require a trusted task-safe mandatory-material supplier; absence fails closed. Restrict history to the current task's host-owned input boundary; recall holds still withhold historical task facts.
+
+| Adversarial failure | Regression evidence | Verification limit |
+|---|---|---|
+| Owner steering arrives during connector authentication or a Gmail list response | pasted-task-scope.test.ts steering-auth control; task-source-scope.test.ts Gmail transport and browser session-start controls | Scripted provider; an admitted remote operation cannot be rolled back |
+| Tool-only scope policy leaves automatic retained suppliers unconstrained | pasted-task-scope.test.ts forbidden memory/order/workspace sentinels; owner-message-context-adapter.test.ts absent task-safe supplier and zero ordinary material/recall reads | Mandatory base is host-trusted; real-model restriction recognition still needs live acceptance |

@@ -4,6 +4,7 @@ import type { ProposeCalendarChangeArgs } from '@waldo/contracts';
 import { GoogleError, sha256Hex, type GoogleClient } from '../connectors/google';
 import type { BrowserSubmitOutcome } from '../tools/live/browser';
 import type { TurnLogEntry } from './telegram-listener';
+import { TASK_SOURCE_FAMILIES, type TaskSourceProposal } from './task-source-scope';
 
 export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
@@ -54,6 +55,7 @@ export type ApprovalReview =
   | Readonly<{ kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string }>;
 export type ApprovalItem = Readonly<{ id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; undoable: boolean; review: ApprovalReview | null }>;
 export type ApprovalDesk = Readonly<{
+  proposeTaskSources(payload: TaskSourceProposal): Promise<string>;
   propose(args: ProposeCalendarChangeArgs): Promise<string>;
   proposeBrowserSubmit(payload: BrowserSubmitProposal): Promise<string>;
   proposeSendEmail(payload: EmailSendProposal): Promise<string>;
@@ -82,6 +84,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   sendMessage?: (proposal: MessageSendProposal) => Promise<void>;
   // Returns a bounded owner-facing outcome line (the result is external content).
   mcpCall?: (proposal: McpCallProposal, intent: ProxyIntent) => Promise<string>;
+  taskSources?: (proposal: TaskSourceProposal) => Promise<boolean>;
 }>): ApprovalDesk => {
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
@@ -121,12 +124,16 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const unreviewable = (kind: string, summary: string) =>
     `${kind} ${summary}\n\nThe full content doesn't fit in this card, so it can't be approved here - approving would send text you haven't reviewed. Use the Not now instruction on the card and ask me to show you the full text first.`;
   const describeAny = (entry: LedgerRow) => {
+    if (entry.kind === 'task_sources') return describeTaskSources(JSON.parse(entry.payload_json) as TaskSourceProposal);
     if (entry.kind === 'browser_submit') return describeBrowser(JSON.parse(entry.payload_json) as BrowserSubmitProposal);
     if (entry.kind === 'email_send') return describeEmail(JSON.parse(entry.payload_json) as EmailSendProposal);
     if (entry.kind === 'message_send') return describeMessage(JSON.parse(entry.payload_json) as MessageSendProposal);
     if (entry.kind === 'mcp_call') return describeMcp(JSON.parse(entry.payload_json) as McpCallProposal);
     return describe(JSON.parse(entry.payload_json) as Stored);
   };
+  const describeTaskSources = (p: TaskSourceProposal) => p.action === 'close'
+    ? 'Close the current task and return future tasks to separately permitted owner sources'
+    : `${p.action === 'new' ? 'Start a new task' : 'Change the current task'} with read access only to: ${p.sources.length ? p.sources.join(', ') : 'supplied task data'}`;
   // ADR-0054 exactly-once: a second approval of the same idempotency key collapses onto the
   // first send instead of double-delivering.
   const alreadySent = (key: string, selfId: string) =>
@@ -175,6 +182,15 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       } else if (action === 'e') {
         setStatus(id, 'changing');
         out = { toast: 'Tell me what to change', message: `What should I change? (${describeAny(entry)})` };
+      } else if (entry.kind === 'task_sources') {
+        const p = JSON.parse(entry.payload_json) as TaskSourceProposal;
+        if (action !== 'a' || !deps.taskSources) return { toast: 'Not changed', message: 'Task sources were not changed.' };
+        sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
+        if (sql.exec<{ changed: number }>('SELECT changes() AS changed').one().changed !== 1) return { toast: 'Already handled.', message: 'Already handled.' };
+        const changed = await deps.taskSources(p);
+        setStatus(id, changed ? 'done' : 'rejected');
+        out = changed ? { toast: 'Task sources updated', message: 'Task sources updated as shown on the card. Send the request again to continue; nothing was read or sent by this confirmation.' }
+          : { toast: 'Task changed', message: 'That task confirmation is stale or unavailable. No task sources were changed.' };
       } else if (entry.kind === 'browser_submit') {
         const bp = JSON.parse(entry.payload_json) as BrowserSubmitProposal;
         if (action === 'a') {
@@ -312,6 +328,21 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
   return {
     decide,
+    async proposeTaskSources(payload) {
+      if (!['new', 'change', 'close'].includes(payload.action) || payload.sources.some(x => !TASK_SOURCE_FAMILIES.includes(x)) || payload.sources.length > TASK_SOURCE_FAMILIES.length) throw new Error('Task source proposal unavailable');
+      const prior = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'task_sources' AND json_extract(payload_json, '$.nonce') = ?", payload.nonce).toArray()[0];
+      if (prior) {
+        if (prior.payload_json !== JSON.stringify(payload) || prior.status !== 'open') throw new Error('Task source card not confirmed');
+        return prior.id;
+      }
+      const id = `p${deps.newId()}`;
+      const summary = describeTaskSources(payload);
+      sql.exec("INSERT INTO ledger VALUES (?, 'task_sources', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
+      const delivered = await say(`${summary}? This changes only this task's read scope; separately current source permissions still apply.`, [[payload.action === 'close' ? 'Close task' : 'Use these sources', `a:${id}`], ['Not now', `s:${id}`]]);
+      if (delivered == null) throw new Error('Task source card not confirmed');
+      sql.exec("UPDATE ledger SET status = 'open' WHERE id = ? AND status = 'card_unconfirmed'", id);
+      return id;
+    },
     async proposeBrowserSubmit(payload) {
       const id = `p${deps.newId()}`;
       const summary = describeBrowser(payload);

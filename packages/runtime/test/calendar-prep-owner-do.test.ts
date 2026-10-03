@@ -35,7 +35,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const prep = content.includes('[Meeting prep decision');
     if (prep) { const mutate = fixture.mutate; fixture.mutate = null; mutate?.(); }
     const writer = request.request.response_format?.name === 'claim_ops';
-    const text = writer ? JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: content.includes('Forget') ? 'Bring the onboarding mocks' : null })
+    const text = request.request.response_format?.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : writer ? JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: content.includes('Forget') ? 'Bring the onboarding mocks' : null })
       : prep ? JSON.stringify({ kind: fixture.decision, text: fixture.decision === 'notify' ? 'Design review at 10:30 IST. Bring the onboarding mocks; Pat is listed. Participant details are incomplete.' : '' }) : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };

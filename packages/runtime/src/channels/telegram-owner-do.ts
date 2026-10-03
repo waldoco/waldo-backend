@@ -1,3 +1,4 @@
+import { taskSourceFetch } from '../tools/task-source-io';
 import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerControlsRead,ownerControlsAction} from './dashboard-owner-controls';
 import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
 import {CONTROLS_PATH,readControlsQuery,projectControls} from './dashboard-controls';
@@ -90,6 +91,7 @@ import { selectTranscriber } from '../llm/transcriber';
 import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
 import { TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
+import { createTaskSourceScope, approveTaskSourceProposal } from './task-source-scope';
 import type { TurnControl } from './turn-control';
 import { turnFailureCode } from './turn-failure-code';
 import type { TelegramWebhookEnv } from './telegram-webhook';
@@ -174,6 +176,7 @@ export type TelegramOwnerPrivateHost = Readonly<{
   allowedDoNames: readonly string[];
   lookup(provider: 'telegram', subject: string): Promise<unknown>;
   context(admission: OwnerMessageAdmission): ContextComposerDependencies;
+  taskMaterials?: Parameters<typeof createOwnerMessageContextAdapter>[0]['taskMaterials'];
   access: Parameters<typeof createOwnerMessageContextAdapter>[0]['access'];
   connectorBacked(handler: Parameters<OwnerResponderHost['prepare']>[1][number]): boolean;
   gateway: LLMGatewayAdapter;
@@ -1213,6 +1216,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return null;
       }
     };
+    const googleEnvironment = this.env;
     const google = {
       // With Supabase configured each account's token goes to Vault and the DO keeps only its connection id.
       // A proxy link carries only the connection id. A raw token is kept here only when no proxy exists.
@@ -1241,7 +1245,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: vault ? 'moved to vault' : 'moved to account list' });
       },
       // The first healthy account whose grant covers the feature serves it.
-      async client(feature: GoogleFeature = 'calendar', intent?: ProxyIntent) {
+      async client(feature: GoogleFeature = 'calendar', intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>) {
         const app = await googleApp();
         if (!app) {if(intent)throw new ProxyIntentError('intent_unavailable');return null;}
         await google.migrate();
@@ -1250,9 +1254,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const account = pinProxyIntentRoute(storage.sql,intent,`google:${feature}`,fit,fit.find((candidate) => !failing[candidate.id]) ?? fit[0]);
         if (!account) return null;
         const metadata = { connection_id: account.id, email: account.email };
-        if (account.refresh_token) return { ...googleClient(app, { refresh_token: account.refresh_token, email: account.email }, fetch, (error) => noteHealth(account.id, error), metadata), account: metadata };
+        const scopedFetch = taskSourceFetch(assertTaskSourceCurrent);
+        if (account.refresh_token) return { ...googleClient(app, { refresh_token: account.refresh_token, email: account.email }, scopedFetch, (error) => noteHealth(account.id, error), metadata), account: metadata };
         if(!vault||!doName){if(intent)throw new ProxyIntentError('intent_unavailable');return null;}
-        return { ...vault.client(doName, account.id, (error) => noteHealth(account.id, error), intent), account: metadata };
+        return { ...(googleProxy(googleEnvironment, scopedFetch) ?? vault).client(doName, account.id, (error) => noteHealth(account.id, error), intent), account: metadata };
       },
       async state() {
         await google.migrate();
@@ -1330,9 +1335,40 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return { outcome, fresh, bot: await botUsername() };
       },
     };
+    const currentTaskOwnerKey = async () => {
+      const currentOwner = resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
+      if (channel !== 'telegram' || owner <= 0 || (!this.canonicalPreparation && currentOwner !== owner)) throw new ClosedRunError();
+      let boundOwner = String(owner);
+      if (this.canonicalPreparation) {
+        const host = this.ownerHost;
+        const occurrence = this.activeInbox;
+        if (!host || !occurrence || occurrence.subject !== String(owner) || !host.allowedDoNames.includes(occurrence.doName)
+          || this.env.TELEGRAM_OWNER_DO?.idFromName(occurrence.doName).toString() !== this.ctx.id.toString()) throw new ClosedRunError();
+        const scope = this.activeScope;
+        if (!scope) throw new ClosedRunError();
+        const admitted = await ownerMessageAdmission({ lookup: host.lookup.bind(host), scope,
+          locator: { environment: host.environment, namespace: host.namespace, doName: occurrence.doName, doId: this.ctx.id.toString() },
+          actualDoId: this.ctx.id.toString(), expectedDoId: name => this.env.TELEGRAM_OWNER_DO!.idFromName(name).toString(),
+          allowedDoNames: host.allowedDoNames, provider: 'telegram', subject: String(owner),
+          text: 'Task source custody admission', occurrenceKey: occurrence.id, occurredAt: occurrence.admittedAt, now: Date.now });
+        await admitted.assertCurrent();
+        boundOwner = admitted.invocation.verified_authority.principal_ref;
+      }
+      return `telegram:${this.ctx.id.toString()}:${boundOwner}`;
+    };
     const desk = approvalDesk(storage.sql, {
       call: routedCall, owner, google: (intent,feature) => google.client(feature??'calendar',intent), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
       timezone: clock.timezone, log,
+      taskSources: async proposal => {
+        const scope = this.activeScope;
+        const occurrence = this.activeInbox;
+        if (!scope || !occurrence || occurrence.subject !== String(owner)) return false;
+        scope.admit();
+        const ownerKey = await currentTaskOwnerKey();
+        scope.admit();
+        if (scope !== this.activeScope || occurrence !== this.activeInbox) return false;
+        return approveTaskSourceProposal(storage.sql, ownerKey, proposal, Date.now(), scope);
+      },
       reviewUrl: async () => {
         const origin = await storage.get<string>('origin');
         return origin && /^https:\/\/[^/?#]+$/.test(origin) ? `${origin}${CONSOLE_PATH}/waiting` : null;
@@ -1449,10 +1485,17 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         });
         const skills = createCuratedSkillCapability(storage.sql, admission, turn.text, turn.traceId, scope);
         const adapter = createOwnerMessageContextAdapter({ admission, scope, dependencies: host.context(admission),
-          retainedRecallAvailable: () => memory.incompleteTopics().length === 0,
+          retainedRecallAvailable: () => memory.incompleteTopics().length === 0, taskMaterials: host.taskMaterials,
           registeredHandlers: [...handlers, ...skills.handlers].map(handler => handler.name), connectorBacked: handlers.filter(handler => host.connectorBacked(handler)).map(handler => handler.name), access: host.access.bind(host) });
         this.activeOwnerContext = adapter;
-        return { admission, adapter, store: ownerCanonicalHistory(storage, admission, adapter), skills, forgetting: { principal_ref: admission.invocation.verified_authority.principal_ref, tenant_ref: admission.invocation.verified_authority.tenant_ref, store: memory } };
+        const taskOwnerKey = await currentTaskOwnerKey();
+        const sourceScope = createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
+          await admission.assertCurrent();
+          if (await currentTaskOwnerKey() !== taskOwnerKey) throw new ClosedRunError();
+        });
+        return { admission, adapter, store: ownerCanonicalHistory(storage, admission, adapter), skills,
+          sourceScope: { ...sourceScope, propose: async proposal => { await admission.assertCurrent(); await desk.proposeTaskSources(proposal); await admission.assertCurrent(); } },
+          forgetting: { principal_ref: admission.invocation.verified_authority.principal_ref, tenant_ref: admission.invocation.verified_authority.tenant_ref, store: memory } };
       } } : undefined, !this.canonicalPreparation && channel === 'telegram' ? { prepare: async (turn, contextOwnerId, scope) => {
         if (turn.attachment || turn.mediaNote || probeCapture.current !== null) return undefined;
         const occurrence = this.activeInbox;
@@ -1473,7 +1516,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await assertSkillOwnerCurrent();
         const capability = createScopedCuratedSkillCapability(storage.sql, { owner: contextOwnerId, custodyKey: `telegram:${owner}`, turnId: turn.traceId,
           trigger: 'user_message', ownerText: turn.text, assertCurrent: assertSkillOwnerCurrent }, scope);
-        return Object.freeze({ ...capability, taskContext: async () => {
+        const taskOwnerKey = await currentTaskOwnerKey();
+        const sourceScope = createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
+          await assertSkillOwnerCurrent();
+          if (await currentTaskOwnerKey() !== taskOwnerKey) throw new ClosedRunError();
+        });
+        return Object.freeze({ ...capability, sourceScope: { ...sourceScope, propose: async proposal => {
+          await assertSkillOwnerCurrent(); await desk.proposeTaskSources(proposal); await assertSkillOwnerCurrent();
+        } }, taskContext: async () => {
           await assertSkillOwnerCurrent();
           let receipts: Awaited<ReturnType<Awaited<ReturnType<typeof workspaceOwnerHost>>['recentWrites']>>;
           try {

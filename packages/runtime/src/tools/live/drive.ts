@@ -1,3 +1,4 @@
+import { taskSourceClient } from '../task-source-io';
 import { readDriveArgsSchema, triggerTypeSchema, TOOL_PERMISSIONS, type ReadDriveArgs, type ToolHandler, type ToolResult } from '@waldo/contracts';
 import { GoogleError, type DriveFileMeta, type DriveFilePage } from '../../connectors/google';
 import type { ToolDispatcherContext } from '../dispatcher';
@@ -29,7 +30,8 @@ export const readDriveHandler = (google: GoogleAccess, enabled = false, contentE
   handle: async (args: ReadDriveArgs, ctx): Promise<ToolResult<unknown>> => {
     if (!enabled) return { ok: false, code: 'forbidden', error: 'Drive reads are not enabled on this Waldo yet.', source_taint: 'external' };
     if (args.action === 'content' && !contentEnabled) return { ok: false, code: 'forbidden', error: 'Drive content reads are not enabled on this Waldo yet.', source_taint: 'external' };
-    const client = await google.client('drive');
+    const connected = await google.client('drive', undefined, ctx?.assertTaskSourceCurrent);
+    const client = connected && taskSourceClient(connected, ctx);
     if (client === null) return { ok: false, code: 'auth_failed', error: CONNECT_SENT_TEXT, source_taint: 'external', connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: 'drive' } };
     const pageSize = args.page_size;
     try {

@@ -3,8 +3,10 @@ import type { OwnerMessageAdmission } from '../identity/owner-message-admission'
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { ToolDispatcherContext, DispatchToolOptions } from '../tools/dispatcher';
 import { CuratedOwnerSkills, type CuratedSkillTurn } from './curated-owner';
+import type { OwnerTaskSourceScope } from '../channels/task-source-scope';
 
 export type OwnerSkillCapability = Readonly<{
+ sourceScope?: OwnerTaskSourceScope;
  handlers: DispatchToolOptions<ToolDispatcherContext>['handlers'];
  // Optional host-owned metadata only; never skill/file instruction bytes.
  taskContext?(): Promise<string>;

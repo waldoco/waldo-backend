@@ -8,7 +8,7 @@ vi.mock('../src/channels/telegram-api',async(load)=>({...await load<typeof impor
 vi.mock('../src/channels/workspace-host',async(load)=>({...await load<typeof import('../src/channels/workspace-host')>(),workspaceOwnerHost:async()=>seen.store!}));
 vi.mock('openai',()=>({default:class {responses={create:async(body:{instructions:string;input:unknown;text?:{format?:{name:string}};tools?:Array<{name:string}>})=>{
  const format=body.text?.format?.name;
- if(format) return {id:'fixture-format',output_text:format==='claim_ops'?'{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}':format==='reaction'?'{"reaction":"👌"}':'{}',output:[],usage:{input_tokens:1,output_tokens:1}};
+ if(format) return {id:'fixture-format',output_text:format==='task_source_scope'?'{"decision":"retain","sources":[]}':format==='claim_ops'?'{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}':format==='reaction'?'{"reaction":"👌"}':'{}',output:[],usage:{input_tokens:1,output_tokens:1}};
  seen.requests.push(structuredClone(body));
  const call=(name:string,args:unknown)=>{seen.calls.push(name);return ({id:`fixture-${seen.step}`,output_text:'',output:[{type:'function_call',call_id:`call-${seen.step}`,name,arguments:JSON.stringify(args)}],usage:{input_tokens:1,output_tokens:1}});};
  const step=seen.step++;

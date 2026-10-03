@@ -25,7 +25,7 @@ vi.mock('openai', () => ({ default: class {
   responses = { create: async (body: RequestBody) => {
     model.requests.push(structuredClone(body));
     const format = body.text?.format?.name;
-    const result = format ? format === 'claim_ops'
+    const result = format ? format === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : format === 'claim_ops'
       ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}'
       : format === 'reaction' ? '{"reaction":"👌"}' : 'Local structured fixture.'
       : await model.reply?.(body) ?? 'Workspace fixture reply.';

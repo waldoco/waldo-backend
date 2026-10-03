@@ -1,3 +1,4 @@
+import { TASK_SOURCE_FAMILIES, type TaskSourceFamily, type TaskSourceSnapshot } from './task-source-scope';
 import { ConversationTree, intersectToolAcl, type ToolAclSource, type ToolName, type ConversationEntry } from '@waldo/contracts';
 import { createContextComposer, type ContextComposer, type ContextComposerDependencies } from '../context-composer';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
@@ -23,6 +24,7 @@ type Options = Readonly<{
     registeredHandlers: readonly ToolName[];
     connectorBacked: readonly ToolName[];
     retainedRecallAvailable?: () => boolean;
+    taskMaterials?: (request: Parameters<ContextComposerDependencies['materials']['load']>[0], sources: readonly TaskSourceFamily[]) => ReturnType<ContextComposerDependencies['materials']['load']>;
     access(): Promise<Readonly<{
         grants: Access;
         connectors: Access;
@@ -64,6 +66,9 @@ export function createOwnerMessageContextAdapter(options: Options) {
     const registered = new Set(options.registeredHandlers);
     const connectorBacked = [...options.connectorBacked];
     const deps = options.dependencies;
+    let taskSources: TaskSourceSnapshot | undefined;
+    const permits = (family: TaskSourceFamily) => !taskSources || taskSources.ready && taskSources.sources.includes(family);
+    const setTaskSources = (snapshot: TaskSourceSnapshot) => { taskSources = snapshot; };
     const readAccess = options.access;
     let accessAdmission: Promise<Awaited<ReturnType<Options['access']>>> | undefined;
     const accessKey = (value: Awaited<ReturnType<Options['access']>>) => JSON.stringify([value.grants.status,
@@ -128,7 +133,10 @@ export function createOwnerMessageContextAdapter(options: Options) {
             } },
         materials: { load: async (supplied) => {
                 const request = copy(supplied); check(request);
-                const result = await bound(() => materialsLoad(request));
+                const limited = taskSources && (!taskSources.ready || taskSources.sources.length < TASK_SOURCE_FAMILIES.length);
+                if (limited && !options.taskMaterials) reject();
+                const result = await bound(() => limited ? options.taskMaterials!(request, taskSources!.ready ? taskSources!.sources : []) : materialsLoad(request));
+                if ((!permits('local') && (result.health || result.tool_outputs.length)) || (!permits('workspace') && result.workspace.length)) reject();
                 return options.retainedRecallAvailable?.() === false ? { ...result, tool_outputs: [] } : result;
             } },
         owner_binding: { bind: async (supplied) => { const request = copy(supplied); check(request); return bound(() => ownerBind(request)); } },
@@ -153,9 +161,9 @@ export function createOwnerMessageContextAdapter(options: Options) {
                     source: null, capability: 'owner_bound_local_temporal_snapshot' as const,
                 });
                 await assertCurrent();
-                if (options.retainedRecallAvailable?.() === false) return unavailable();
+                if (options.retainedRecallAvailable?.() === false || !permits('local')) return unavailable();
                 const result = await bound(() => recall(request));
-                return options.retainedRecallAvailable?.() === false ? unavailable() : result;
+                return options.retainedRecallAvailable?.() === false || !permits('local') ? unavailable() : result;
             } },
     });
     const base = createContextComposer(dependencies);
@@ -194,5 +202,5 @@ export function createOwnerMessageContextAdapter(options: Options) {
         }
         return Object.freeze(result.entries.map(row => tree.get(row.entry.id)!));
     };
-    return Object.freeze({ dependencies, composer, assertCurrent, readCanonicalHistory });
+    return Object.freeze({ dependencies, composer, assertCurrent, readCanonicalHistory, setTaskSources });
 }

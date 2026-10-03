@@ -1,3 +1,4 @@
+import { taskSourceClient } from '../task-source-io';
 import { availabilityWindows } from './availability';
 import type { ProxyIntent } from '../../connectors/proxy-intent';
 import { artifactMarker, extractArtifacts, quarantineArtifacts, type ArtifactKind, type ExtractedArtifact } from '../../security/artifact-hygiene';
@@ -12,7 +13,7 @@ import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 
 export type GoogleAccess = Readonly<{
-  client(feature?: GoogleFeature, intent?: ProxyIntent): Promise<GoogleClient | null>;
+  client(feature?: GoogleFeature, intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>): Promise<GoogleClient | null>;
   state?():Promise<readonly Readonly<{id:string;email:string;error:string|null;calendar:boolean;mail:boolean;tasks:boolean}>[]>;
 }>;
 
@@ -36,11 +37,11 @@ const authFailed = (reason: ConnectIntent['reason'], feature: GoogleFeature): To
   connect: { status: 'auth_required', service: 'google', reason, feature },
 });
 
-async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, work: (client: GoogleClient) => Promise<T>): Promise<ToolResult<T>> {
-  const client = await google.client(feature);
+async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, ctx: ToolDispatcherContext | undefined, work: (client: GoogleClient) => Promise<T>): Promise<ToolResult<T>> {
+  const client = await google.client(feature, undefined, ctx?.assertTaskSourceCurrent);
   if (client === null) return authFailed('not_connected', feature);
   try {
-    return { ok: true, data: await work(client), source_taint: 'external' };
+    return { ok: true, data: await work(taskSourceClient(client, ctx)), source_taint: 'external' };
   } catch (error) {
     // 401 = the stored grant is dead. A 403 prompts for consent only on structured evidence that the scope is
     // missing; a disabled API, a quota or a plain denial is not fixed by consent, so it returns the provider's words.
@@ -94,7 +95,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('query_calendar'),
     autonomy_gated: false,
     requires_connector: true,
-    handle: ({ date_range, include_declined, limit, calendar_id = 'primary', page_token }: QueryCalendarArgs) => withGoogle(google, 'calendar', async (client) => {
+    handle: ({ date_range, include_declined, limit, calendar_id = 'primary', page_token }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'calendar', ctx, async (client) => {
       const now = clock.now().getTime();
       const from = date_range?.from ?? new Date(now).toISOString();
       const to = date_range?.to ?? new Date(now + DAY_MS).toISOString();
@@ -128,7 +129,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('get_communication'),
     autonomy_gated: false,
     requires_connector: true,
-    handle: ({ date_range,limit=10,page_token }: GetCommunicationArgs) => withGoogle(google, 'mail', async (client) => {
+    handle: ({ date_range,limit=10,page_token }: GetCommunicationArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
       const since = date_range?.from ? Date.parse(date_range.from) : clock.now().getTime() - DAY_MS;
       const to = date_range?.to ?? clock.now().toISOString();
       const from = new Date(since).toISOString();
@@ -167,7 +168,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('search_communication'),
     autonomy_gated: false,
     requires_connector: true,
-    handle: ({ query, date_range, limit }: SearchCommunicationArgs) => withGoogle(google, 'mail', async (client) => {
+    handle: ({ query, date_range, limit }: SearchCommunicationArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
       const clauses = [query];
       if (date_range?.from) clauses.push(`after:${Math.floor(Date.parse(date_range.from) / 1000)}`);
       if (date_range?.to) clauses.push(`before:${Math.floor(Date.parse(date_range.to) / 1000)}`);
@@ -188,7 +189,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('read_thread'),
     autonomy_gated: false,
     requires_connector: true,
-    handle: ({ thread_id, limit }: ReadThreadArgs) => withGoogle(google, 'mail', async (client) => ({
+    handle: ({ thread_id, limit }: ReadThreadArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => ({
       thread_id,
       messages: await Promise.all((await client.readThread(thread_id, limit)).map((message) => relayThreadMessage(message, relayArtifact))),
     })),
@@ -200,7 +201,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('get_tasks'),
     autonomy_gated: false,
     requires_connector: true,
-    handle: ({ status, limit }: GetTasksArgs) => withGoogle(google, 'tasks', async (client) => ({
+    handle: ({ status, limit }: GetTasksArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'tasks', ctx, async (client) => ({
       status,
       tasks: await client.tasks(status, limit),
       ...(status === 'in_progress' ? { note: 'Google Tasks has no in-progress state; showing open tasks.' } : {}),
@@ -231,8 +232,8 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     handle: async (args: DraftEmailArgs, ctx?: ToolDispatcherContext) => {
       if (!ctx?.turnId || !ctx.toolCallId) return { ok: false as const, code: 'rejected' as const, error: 'Draft invocation identity is unavailable.' };
       const intent = { id: `draft:${await sha256Hex(JSON.stringify([ctx.authenticatedUserId,ctx.turnId,ctx.toolCallId]))}` };
-      const access: GoogleAccess = { client: (feature) => google.client(feature,intent) };
-      const result = await withGoogle(access, 'mail', async (client) => {
+      const access: GoogleAccess = { client: (feature, _intent, guard) => google.client(feature,intent,guard) };
+      const result = await withGoogle(access, 'mail', ctx, async (client) => {
         const draft = await client.draft({
           to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
           subject: args.subject, body: args.body_markdown, ...(args.reply_to_thread_id ? { threadId: args.reply_to_thread_id } : {}),
@@ -258,7 +259,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     handle: async (args: SendEmailArgs, ctx?: ToolDispatcherContext) => {
       // Connectivity is gated at propose time (same tier-2 contract as the other google
       // handlers): no client -> typed connect intent, no half-proposed card.
-      const gate = await withGoogle(google, 'mail', async () => null);
+      const gate = await withGoogle(google, 'mail', ctx, async () => null);
       if (!gate.ok) return { ...gate, source_taint: null };
       // A replay of the same ingress turn with the same final email arguments must reuse its
       // proposal, even though each invocation mints fresh wire Message-ID bytes. Later turns
@@ -296,7 +297,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   {
     name:'query_availability',description:'Find duration-fitting free windows across explicit connected calendar IDs and supplied work windows. Reports unknown coverage instead of assuming inaccessible calendars are free. Read-only, no booking.',
     schema:queryAvailabilityArgsSchema,trigger_allowlist:allowlist('query_availability'),autonomy_gated:false,requires_connector:true,
-    handle:(args:QueryAvailabilityArgs)=>withGoogle(google,'availability',async client=>{
+    handle:(args:QueryAvailabilityArgs, ctx?: ToolDispatcherContext)=>withGoogle(google,'availability',ctx,async client=>{
       const {date_range:range,calendar_ids:ids,work_windows:windows,duration_minutes:duration}=args;
       const observed=await client.freeBusy(range.from,range.to,ids,clock.timezone);
       if(Date.parse(observed.from)!==Date.parse(range.from)||Date.parse(observed.to)!==Date.parse(range.to))throw new Error('availability coverage differs');

@@ -45,7 +45,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
     selection = JSON.stringify({ complete: !!seen.selectedText, reviewed_refs: supplied.sources.map(row => row.ref), spans: supplied.sources.filter(row => seen.selectedText && row.text.includes(seen.selectedText)).map(row => ({ ref: row.ref, text: seen.selectedText })) });
   }
   if (!name && seen.reasoning) output.push({ type: 'reasoning', summary: [{ type: 'summary_text', text: seen.reasoning }] });
-  return { id: 'local-fixture', output_text: name === 'claim_ops' ? seen.writer
+  return { id: 'local-fixture', output_text: name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : name === 'claim_ops' ? seen.writer
     : name === 'forget_source_spans' ? selection : name === 'reaction' ? '{"reaction":null}' : seen.replyText, output,
     usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
 } }; } }));

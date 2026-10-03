@@ -26,12 +26,15 @@ export const browsePageHandler = (
   schema: browsePageArgsSchema,
   trigger_allowlist: allowlist('browse_page'),
   autonomy_gated: false,
-  async handle({ url, instruction }: BrowsePageArgs) {
+  async handle({ url, instruction }: BrowsePageArgs, ctx) {
     if (!apiKey || !projectId) return { ok: false, code: 'auth_failed', error: 'Browsing is not set up on this Waldo yet.', source_taint: 'external' };
     const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json' };
-    const call = (path: string, body: object) => fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+    const call = async (path: string, body: object) => {
+      await ctx?.assertTaskSourceCurrent?.();
+      return fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+    };
     let session: string | null = null;
-    const end = () => (session ? call(`/v1/sessions/${session}/end`, {}).catch(() => undefined) : Promise.resolve());
+    const end = () => (session ? fetcher(`${BASE}/v1/sessions/${session}/end`, { method: 'POST', headers, body: '{}' }).catch(() => undefined) : Promise.resolve());
     try {
       const started = await call('/v1/sessions/start', { modelName: MODEL, verbose: 0 });
       if (started.status === 401 || started.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${started.status}) - it needs replacing.`, source_taint: 'external' };
@@ -103,13 +106,16 @@ export const browseActHandler = (
   trigger_allowlist: allowlist('browse_act'),
   autonomy_gated: false,
   mutates_state: true,
-  async handle({ url, task, max_actions }: BrowseActArgs) {
+  async handle({ url, task, max_actions }: BrowseActArgs, ctx) {
     if (!apiKey || !projectId) return { ok: false, code: 'auth_failed', error: 'Browsing is not set up on this Waldo yet.', source_taint: 'external' };
     const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json' };
-    const call = (path: string, body: object) => fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+    const call = async (path: string, body: object) => {
+      await ctx?.assertTaskSourceCurrent?.();
+      return fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+    };
     const model = modelApiKey ? { modelName: MODEL, apiKey: modelApiKey } : MODEL;
     let session: string | null = null;
-    const end = () => (session ? call(`/v1/sessions/${session}/end`, {}).catch(() => undefined) : Promise.resolve());
+    const end = () => (session ? fetcher(`${BASE}/v1/sessions/${session}/end`, { method: 'POST', headers, body: '{}' }).catch(() => undefined) : Promise.resolve());
     const taken: string[] = [];
     try {
       const started = await call('/v1/sessions/start', { modelName: MODEL, verbose: 0 });
@@ -197,7 +203,7 @@ export const executeBrowserSubmit = async (
   const call = (path: string, body: object) => fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
   const model = modelApiKey ? { modelName: MODEL, apiKey: modelApiKey } : MODEL;
   let session: string | null = null;
-  const end = () => (session ? call(`/v1/sessions/${session}/end`, {}).catch(() => undefined) : Promise.resolve());
+  const end = () => (session ? fetcher(`${BASE}/v1/sessions/${session}/end`, { method: 'POST', headers, body: '{}' }).catch(() => undefined) : Promise.resolve());
   try {
     const started = await call('/v1/sessions/start', { modelName: MODEL, verbose: 0 });
     if (!started.ok) return rejected(`The browser session could not start (HTTP ${started.status}), so nothing happened.`);

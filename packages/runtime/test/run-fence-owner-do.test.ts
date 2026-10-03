@@ -8,7 +8,7 @@ vi.mock('../src/channels/telegram-api',async(load)=>({...await load<typeof impor
 vi.mock('openai',()=>({default:class {responses={create:async(body:unknown)=>{
  const name=(body as {text?:{format?:{name:string}}}).text?.format?.name;
  if(seen.pause&&!name){seen.entered?.();return new Promise(r=>{seen.finish=r;});}
- return {id:'fixture',output_text:name==='claim_ops'?'{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}':name==='reaction'?'{"reaction":"👌"}':'fenced answer',output:[],usage:{input_tokens:1,output_tokens:1}};
+ return {id:'fixture',output_text:name==='task_source_scope'?'{"decision":"retain","sources":[]}':name==='claim_ops'?'{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}':name==='reaction'?'{"reaction":"👌"}':'fenced answer',output:[],usage:{input_tokens:1,output_tokens:1}};
 }};}}));
 const setup=async(name:string,work:(i:TelegramOwnerDO,s:DurableObjectState)=>Promise<void>,omitHost=false)=>runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)),async(_i,s)=>{await s.storage.put({telegram_subject:'42',do_name:name,origin:'https://fixture.invalid'});const host=admittedOwnerHost(name,'42',new OpenAIResponsesAdapter({apiKey:env.OPENAI_API_KEY}));const i=new TelegramOwnerDO(s,env,{mode:'canonical',host:omitHost?undefined:host});await work(i,s);});
 const admit=async(i:TelegramOwnerDO,s:DurableObjectState,id:number)=>{
