@@ -22,6 +22,18 @@ const baseEnv = {
 
 afterEach(() => vi.unstubAllGlobals());
 
+it('retains a read-only download intent when the legacy ticket session expires', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('[]')));
+  const ns = { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response('unauthorized', { status: 401 }) }) };
+  const target = '/console/workspace/file?id=def993c9-db4d-49c4-8998-8465bed3606e&revision=1';
+  const request = () => new Request(`https://waldo.invalid${target}`, { headers: { cookie: 'waldo_console=expired-ticket' } });
+  const result = await worker.fetch(request(), { ...baseEnv, ...supabaseEnv, TELEGRAM_OWNER_DO: ns } as unknown as Cloudflare.Env);
+  expect(result.status).toBe(303);
+  expect(result.headers.get('location')).toBe(`/console/signin?return_to=${encodeURIComponent(target)}`);
+  const unconfigured = await worker.fetch(request(), { ...baseEnv, TELEGRAM_OWNER_DO: ns } as unknown as Cloudflare.Env);
+  expect(unconfigured.status).toBe(401);
+});
+
 describe('console owner-DO routing', () => {
   it('routes /console to the directory-resolved owner DO, not the env telegram id', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([{ do_name: 'owner-test-uuid', subject: '5458446350', timezone: null }]))));
