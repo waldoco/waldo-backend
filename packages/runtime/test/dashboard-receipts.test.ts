@@ -14,6 +14,7 @@ describe('dashboard write receipts', () => {
   it('returns the console message with a closed outcome', () => {
     expect(dashboardReceipt('spot.dismiss')).toEqual({ version: 1, key: 'spot.dismiss', outcome: 'applied', message: NOTICES['spot.dismiss'] });
     expect(dashboardReceipt('spot.forget.incomplete')).toMatchObject({ outcome: 'incomplete', message: NOTICES['spot.forget.incomplete'] });
+    expect(dashboardReceipt('node.forget.incomplete')).toMatchObject({ outcome: 'incomplete', message: NOTICES['node.forget.incomplete'] });
     for (const key of ['google.connect.failed', 'file.unavailable', 'invalid']) expect(dashboardReceipt(key)).toMatchObject({ outcome: 'failed' });
   });
   it('an unknown or hostile key collapses to the invalid receipt and is never echoed', () => {

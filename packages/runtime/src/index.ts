@@ -115,6 +115,16 @@ export class RuntimeProbeDO extends DurableObject<Env> {
   }
 }
 
+const forwardTicketConsole = async (request: Request, env: Env): Promise<Response> => {
+  if (!env.TELEGRAM_OWNER_DO || !env.WALDO_OWNER_TELEGRAM_ID) return new Response('unauthorized', { status: 401 });
+  const ownerRoute = await ownerDirectory(env).byPresence('telegram', env.WALDO_OWNER_TELEGRAM_ID);
+  if (!ownerRoute) return new Response('owner unavailable', { status: 503 });
+  const doName = ownerRoute.doName;
+  const forwarded = new Request(request);
+  forwarded.headers.set('x-waldo-do-name', doName);
+  return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(doName)).fetch(forwarded);
+};
+
 export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     if (new URL(request.url).pathname === '/healthz') {
@@ -134,7 +144,7 @@ export default {
     }
     // The authenticated dashboard API is still owned by handleConsole/owner DO.
     // This adapter handles only the read-only shell and content-hashed static assets.
-    const dashboard = await serveDashboard(request, env.ASSETS, (authRequest) => handleConsole(authRequest, env).then((result) => result ?? new Response('unauthorized', { status: 401 })));
+    const dashboard = await serveDashboard(request, env.ASSETS, (authRequest) => handleConsole(authRequest, env).then((result) => result ?? forwardTicketConsole(authRequest, env)));
     if (dashboard) return dashboard;
     const consoleRequest = new URL(request.url).pathname.startsWith(CONSOLE_PATH);
     const consoleRequestTrace = consoleRequest ? consoleTrace() : null;
@@ -147,12 +157,9 @@ export default {
       // turns to. With Supabase configured that name comes from the owner directory (e.g.
       // 'owner-<uuid>' from console signup), not the env telegram id. Routing by the env id
       // served an empty shell DO: one-time links minted in the turn DO never redeemed (403),
-      // and account.delete would have wiped the wrong DO. Directory errors propagate loudly;
-      // no fallback to a possibly-wrong DO beyond the designed no-directory single-owner path.
-      const ownerRoute = await ownerDirectory(env).byPresence('telegram', env.WALDO_OWNER_TELEGRAM_ID);
-      if (!ownerRoute) return new Response('owner unavailable', { status: 503 });
-      const consoleDoName = ownerRoute.doName;
-      const response = await env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(consoleDoName)).fetch(request);
+      // and account.delete would have wiped the wrong DO. Directory failures stay fail-closed; the shell adapter logs a content-free failure class.
+      // No fallback to a possibly-wrong DO beyond the designed no-directory single-owner path.
+      const response = await forwardTicketConsole(request, env);
       // A ticket-only session uses this existing owner route. Preserve file intent
       // on expiry only when the email sign-in route is available.
       const resume = request.method === 'GET' ? downloadReturnTarget([new URL(request.url).pathname + new URL(request.url).search]) : null;

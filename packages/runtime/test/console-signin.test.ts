@@ -451,3 +451,9 @@ it('keeps download intent and recipient across OTP retry, edit and resend', asyn
     expect(html).not.toContain('id="signin-download"');
   }
 });
+it('keeps dashboard control JSON authentication failures private without download HTML recovery',async()=>{
+ for(const path of ['/console/dashboard/api/v1/controls','/console/dashboard/api/v1/actions','/console/dashboard/api/v1/memory-controls','/console/dashboard/api/v1/owner','/console/dashboard/api/v1/owner/actions','/console/workspace']){
+  const ns=owners();const response=(await handleConsole(new Request('https://w.test'+path,{headers:{accept:'application/json'}}),{TELEGRAM_OWNER_DO:ns.ns},auth()))!;
+  expect(response.status).toBe(401);expect(response.headers.get('cache-control')).toBe('private, no-store');expect(response.headers.get('location')).toBeNull();expect(ns.fetch).not.toHaveBeenCalled();
+ }
+});

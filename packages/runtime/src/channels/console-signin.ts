@@ -1,3 +1,7 @@
+import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH} from './dashboard-owner-controls';
+import {MEMORY_CONTROL_PATH} from './dashboard-memory-actions';
+import {CONTROLS_PATH} from './dashboard-controls';
+import {CONTROL_ACTION_PATH} from './dashboard-control-actions';
 import { handleSignup, CONSOLE_SIGNUP_PATH } from './console-signup';
 import { MEMORY_GRAPH_PATH } from './memory-graph';
 import { consoleLog, consoleTrace, withConsoleTrace } from '../observability/console-correlation';
@@ -323,12 +327,12 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   let doName: string | null;
   try { doName = await auth.readOwnerCookie(request); }
   catch {
-    if ((url.pathname === DASHBOARD_OVERVIEW_PATH || url.pathname === MEMORY_GRAPH_PATH)) return finish(new Response('unauthorized', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }));
+    if ([DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) return finish(new Response('unauthorized', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }));
     throw new Error('owner session validation failed');
   }
   if (!doName) {
     event('console_route', false, 'no_valid_owner_cookie');
-    if ((url.pathname === DASHBOARD_OVERVIEW_PATH || url.pathname === MEMORY_GRAPH_PATH)) return finish(new Response('unauthorized', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }));
+    if ([DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) return finish(new Response('unauthorized', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }));
     return finish(signin());
   }
   const forwarded = new Request(request);
@@ -336,12 +340,12 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   let response: Response;
   try { response = await owners.get(owners.idFromName(doName)).fetch(forwarded); }
   catch (error) {
-    if ((url.pathname === DASHBOARD_OVERVIEW_PATH || url.pathname === MEMORY_GRAPH_PATH)) return finish(new Response('overview unavailable', { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS }));
+    if ([DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) return finish(new Response('overview unavailable', { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS }));
     throw error;
   }
   event('console_route', response.ok, response.ok ? 'forwarded' : 'forward_failed');
   if (resume && response.status === 401) return finish(signin());
-  if ((url.pathname === DASHBOARD_OVERVIEW_PATH || url.pathname === MEMORY_GRAPH_PATH)) {
+  if ([DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) {
     const headers = new Headers(response.headers);
     for (const [key, value] of Object.entries(DASHBOARD_OVERVIEW_HEADERS)) headers.set(key, value);
     return finish(new Response(response.body, { status: response.status, headers }));
