@@ -623,7 +623,7 @@ function nextOccurrence(recurrence: ScheduleRecurrence, now: number): number {
   return nextDailyLocalOccurrence(recurrence.time, recurrence.timezone, now);
 }
 
-function nextDailyLocalOccurrence(time: string, timezone: string, now: number): number {
+export function nextDailyLocalOccurrence(time: string, timezone: string, now: number): number {
   const [hourText, minuteText] = time.split(':');
   const hour = Number(hourText);
   const minute = Number(minuteText);

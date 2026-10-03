@@ -13,6 +13,11 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 ## Checklist
 
+- [ ] Scheduled meeting decisions stay transient until a current source and verified delivery justify publication; reject stale decision caches and do not treat unsent/no-op JSON as Waldo conversation or nightly evidence
+- [ ] Preserve curated owner skill revocation checks on every physical retry while transient background decisions neither load nor inherit earlier selected/revoked owner procedures
+- [ ] Forget source-derived prep metadata as well as payload text; hash dedup/cooldown keys and cancel metadata-only unsent matches
+- [ ] Evaluate finite expiry before quiet deferral and clamp held wakes to expiry; pass one trusted owner timezone through every daily counter read/write without silently rebucketing legacy aggregates
+
 ### Tokens, auth and sessions
 - A one-time token is spent only by a deliberate user action (a POST from our own page), never by a GET. Link previews, scanners and prefetchers issue GETs.
 - Every URL we send in chat has previews turned off unless the preview is the point.
@@ -114,6 +119,8 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - An env var the code reads but wrangler never sets fails silently to its fallback forever. Every env read with a fallback needs a guard that the var is actually pinned in every deployable environment, and environment-identity vars must differ per environment (staging traces must never land as production).
 
 ## Bug log
+
+| 2026-10-03 | Existing conversational publication cached stale meeting decisions and indexed undelivered JSON; payload-only forgetting left source codes in metadata; quiet deferral preceded expiry | Calendar preparation / final delivery | Default-DO cancelled-history, changed-source retry, metadata-only forget, quiet-expiry and owner-local delivery regressions | Transient structured decisions, hashed derived keys, literal metadata cleanup and expiry-before-deferral |
 
 | Date | Bug | Class | Test added | Checklist line |
 |---|---|---|---|---|

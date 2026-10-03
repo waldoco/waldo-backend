@@ -15,7 +15,9 @@ import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
 import { persistInboxWake, persistTransportWake } from '../scheduler/alarm-slot';
-import { TelegramFinalOutbox, redactMailFollowupEntries, type FinalRecord } from './telegram-final-outbox';
+import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
+import { computeAdmission } from '../delivery-gate/gate';
+import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace } from './owner-turn-envelope';
 import { adminRead, adminAction } from './dashboard-admin';
 import { pinProxyIntentRoute } from '../connectors/proxy-intent-route';
@@ -48,7 +50,7 @@ import { parseEgressAllowlistEnv } from '../hooks/egress-policy';
 import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
 import { armNightly, backfillEpisodes, consolidationDay, episodeIndex, indexedConversationStore, transcript } from './episodes';
 import { nightlyDiagnostic } from './nightly-diagnostic';
-import { armBriefSweep, eventBriefs } from './event-briefs';
+import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT } from './event-briefs';
 import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
 import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview } from './dashboard-overview';
@@ -64,7 +66,7 @@ import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standi
 import { artifactDelivery, artifactPage, artifactReadAdmission, ARTIFACT_PATH } from './artifact-delivery';
 import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
 import { runBook } from './background-runs';
-import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
+import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, sha256Hex, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
 import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
 import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
 import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
@@ -120,6 +122,7 @@ type OwnerRuntime = Readonly<{
   briefs(entry: ScheduleEntry): Promise<void>;
   cards(entry: ScheduleEntry): Promise<void>;
   updateCheck(trace: string): Promise<void>;
+  calendarPrepCurrent(receipt: CalendarPrepReceipt): Promise<boolean>;
   view(session: ConsoleSession, notice: string | null, page?: { traceBefore?: number; runsBefore?: number }): Promise<ConsoleView & { page: { trace_before: number | null; runs_before: number | null; trace_applied: number | null; runs_applied: number | null } }>;
   overview(): Promise<ReturnType<typeof dashboardOverview>>;
   act(action: ConsoleAction): Promise<boolean | string>;
@@ -731,7 +734,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const mode=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);
     if(mode){await this.serial(()=>this.drainLink(mode));return;}
     await this.serial(async () => {
-      const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal, call, owner } = this.setup();
+      const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal, call, owner, calendarPrepCurrent } = this.setup();
       await ready;
       await finalOutbox.maintain();
       // Reconcile finals before quarantining recovered claims with committed payloads.
@@ -759,8 +762,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             && r.doName === (this.ctx.storage.kv.get<string>('do_name') ?? '')
             && this.ctx.storage.kv.get<boolean>('telegram_unlinked') !== true
             && (!r.mailFollowup || (loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume !== 'low' && loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).reviewEligible(r.mailFollowup, this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')))
+            && (!r.calendarPrep || await calendarPrepCurrent(r.calendarPrep))
             && heartbeatEligible(r, this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', Date.now()),
-          defer: async r => r.mailFollowup && (this.env.MAIL_SOURCE_FOLLOWUPS !== '1' || loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume === 'low' || isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) ? Date.now() + 10 * 60_000 : null,
+          defer: async r => (r.mailFollowup || r.calendarPrep) && ((r.mailFollowup && this.env.MAIL_SOURCE_FOLLOWUPS !== '1') || (r.calendarPrep && this.env.CALENDAR_GROUNDED_PREP !== '1') || loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume === 'low' || isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) ? Date.now() + 10 * 60_000 : null,
           send: payload => call('sendMessage', payload), settled: settleFinal,
         }); } finally { await scheduler.rearm(); }
         return;
@@ -1149,9 +1153,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const fit = all.filter((account) => googleHas(account.scopes, feature)).map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
         const account = pinProxyIntentRoute(storage.sql,intent,`google:${feature}`,fit,fit.find((candidate) => !failing[candidate.id]) ?? fit[0]);
         if (!account) return null;
-        if (account.refresh_token) return googleClient(app, { refresh_token: account.refresh_token, email: account.email }, fetch, (error) => noteHealth(account.id, error));
+        const metadata = { connection_id: account.id, email: account.email };
+        if (account.refresh_token) return { ...googleClient(app, { refresh_token: account.refresh_token, email: account.email }, fetch, (error) => noteHealth(account.id, error), metadata), account: metadata };
         if(!vault||!doName){if(intent)throw new ProxyIntentError('intent_unavailable');return null;}
-        return vault.client(doName, account.id, (error) => noteHealth(account.id, error), intent);
+        return { ...vault.client(doName, account.id, (error) => noteHealth(account.id, error), intent), account: metadata };
       },
       async state() {
         await google.migrate();
@@ -1330,7 +1335,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` });
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }), readDriveHandler(google, this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerHost?.gateway, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining }; }), undefined,
+      }), readDriveHandler(google, this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerHost?.gateway, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
       () => standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
@@ -1576,10 +1581,99 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
     };
     const briefBook = eventBriefs(storage.sql, clock.timezone);
+    const calendarGate = new DeliveryGateStore(storage.sql);
+    // These existing aggregates have no historical timezone provenance. Only a clean
+    // owner DO can adopt local counters; preserve populated legacy rows for review.
+    const calendarCounterReady = (): boolean => {
+      const previous = identity.get<string>('calendar_prep_counter_timezone_v1');
+      if (!previous) {
+        if (['class_state', 'subkind_state', 'daily_push_budget'].some(table => storage.sql.exec(`SELECT 1 FROM ${table} LIMIT 1`).toArray().length)) return false;
+        identity.put('calendar_prep_counter_timezone_v1', clock.timezone);
+      } else if (previous !== clock.timezone) {
+        const last = storage.sql.exec<{ at: number | null }>('SELECT MAX(last_sent_at) AS at FROM class_state').one().at;
+        if (last !== null && [previous, clock.timezone].some(zone => localIso(last, zone).slice(0, 10) === localIso(Date.now(), zone).slice(0, 10))) return false;
+        identity.put('calendar_prep_counter_timezone_v1', clock.timezone);
+      }
+      return true;
+    };
+    const calendarOwnerCurrent = async (connectionId: string, timezone: string): Promise<void> => {
+      const check = () => {
+        const doName = identity.get<string>('do_name');
+        const currentAccounts = storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? [];
+        if (channel !== 'telegram' || !doName || owner <= 0 || identity.get<string>('telegram_subject') !== String(owner)
+          || identity.get<boolean>('telegram_unlinked') === true || timezone !== clock.timezone || this.env.TELEGRAM_BOT_TOKEN !== token
+          || !this.env.TELEGRAM_OWNER_DO || this.env.TELEGRAM_OWNER_DO.idFromName(doName).toString() !== this.ctx.id.toString()
+          || !currentAccounts.some(account => account.id === connectionId && googleHas(account.scopes, 'calendar'))) throw new Error('calendar prep authority changed');
+        return doName;
+      };
+      const doName = check();
+      const present = presenceRecheck(consoleAuth(this.env), doName, 'telegram', String(owner));
+      if (present && !(await present())) throw new Error('calendar prep presence revoked');
+      check();
+    };
+    const calendarPrepCurrent = async (receipt: CalendarPrepReceipt): Promise<boolean> => {
+      try {
+        if (this.env.CALENDAR_GROUNDED_PREP !== '1' || receipt.calendarId !== 'primary' || Date.now() >= Date.parse(receipt.start)) return false;
+        await calendarOwnerCurrent(receipt.connectionId, receipt.timezone);
+        const client = await google.client('calendar');
+        if (!client || client.account?.connection_id !== receipt.connectionId) return false;
+        const event = await client.event(receipt.eventId);
+        await calendarOwnerCurrent(receipt.connectionId, receipt.timezone);
+        const digest = await calendarPrepDigest(event);
+        await calendarOwnerCurrent(receipt.connectionId, receipt.timezone);
+        return event.status !== 'cancelled' && digest === receipt.sourceDigest && Date.now() < Date.parse(receipt.start)
+          && !quiet() && loops.proactivity().volume !== 'low' && this.env.CALENDAR_GROUNDED_PREP === '1';
+      } catch { return false; }
+    };
     const briefs = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
       try {
+        if (this.env.CALENDAR_GROUNDED_PREP === '1') {
+          if (channel !== 'telegram' || loops.proactivity().volume === 'low') return;
+          if (!calendarCounterReady()) {
+            log({ trace, hop: 'brief_sweep', ms: 0, ok: false, code: 'calendar_counter_cutover_required', detail: 'Existing counters need reviewed timezone cutover before meeting prep can activate.' });
+            return;
+          }
+          const client = await google.client('calendar');
+          const connectionId = client?.account?.connection_id;
+          const timezone = clock.timezone;
+          if (!connectionId) return;
+          const current = async () => {
+            await calendarOwnerCurrent(connectionId, timezone);
+            if (this.env.CALENDAR_GROUNDED_PREP !== '1' || loops.proactivity().volume === 'low') throw new Error('calendar prep disabled');
+          };
+          const queued = await briefBook.groundedSweep({ client, now: Date.now(), timezone, current,
+            known: id => finalOutbox.records().some(record => record.id === id),
+            decide: (id, prompt) => responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, CALENDAR_PREP_FORMAT),
+            enqueue: async (id, text, calendarPrep, commit) => {
+              await current();
+              const cooldownKey = await sha256Hex(JSON.stringify([connectionId, calendarPrep.occurrence]));
+              const doName = identity.get<string>('do_name')!;
+              let admitted = false;
+              await finalOutbox.enqueueFenced({ id, trace: id, payload: { chat_id: owner, text: redactSecretUrls(text).text },
+                ownerSubject: String(owner), doName, bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: Date.parse(calendarPrep.start), calendarPrep,
+              }, work => storage.transactionSync(() => {
+                if (clock.timezone !== timezone || identity.get<string>('do_name') !== doName || identity.get<string>('telegram_subject') !== String(owner)
+                  || identity.get<boolean>('telegram_unlinked') || !calendarCounterReady() || this.env.CALENDAR_GROUNDED_PREP !== '1'
+                  || loops.proactivity().volume === 'low' || Date.now() >= Date.parse(calendarPrep.start)) throw new Error('calendar prep admission changed');
+                const now = Date.now();
+                const candidate = { event_id: cooldownKey, push_class: 'pre_activity_spot' as const, trigger: 'pre_activity_spot' as const, expires_at: Date.parse(calendarPrep.start) };
+                const admission = computeAdmission({ candidate, classState: calendarGate.readClassState(String(owner), candidate, now, timezone), countedSends: calendarGate.readBudget(String(owner), now, timezone).sends_total, now, timezone });
+                if (!['send', 'degrade'].includes(admission.verdict) || !admission.channels.includes('telegram')) return;
+                work(); commit();
+                // Telegram-only output never consumes an APNs budget reservation.
+                calendarGate.applyAdmission(String(owner), candidate, { ...admission, budget_charged: false }, now, timezone);
+                admitted = true;
+              }));
+              if (admitted) await scheduler.rearm();
+              return admitted;
+            },
+          });
+          log({ trace, hop: 'brief_sweep', ms: Date.now() - started, ok: true, detail: `${queued} prep intents queued; delivery unconfirmed` });
+          await updateCheck(`update:${entry.occurrence_at}`);
+          return;
+        }
         if (quiet()) {
           log({ trace, hop: 'brief_sweep', ms: 0, ok: true, detail: 'held: quiet hours' });
           return void (await updateCheck(`update:${entry.occurrence_at}`));
@@ -1700,7 +1794,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
         message_id: record.reaction.message_id, reaction: [{ type: 'emoji', emoji: record.reaction.emoji }] }).catch(() => undefined);
     };
-    const runtime: OwnerRuntime = { finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, nightly, briefs, cards, updateCheck, traces, log, google,
+    const runtime: OwnerRuntime = { finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, nightly, briefs, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       view: async (session, notice, page) => {
         const linked = await google.state();
         const tracePage = traces.rowsPage(clock.timezone, 60, page?.traceBefore);
@@ -1761,6 +1855,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
               // marker, so a touched row is a redacted row there.
               kvRemaining += (await redactConversationEntries(this.ctx.storage, result.texts, FORGOTTEN)).remaining;
               kvRemaining += redactMailFollowupEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
+              kvRemaining += redactCalendarPrepEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               await redactToolOutputLedger(this.ctx.storage, result.texts, FORGOTTEN);
             }
             if (result.failed.length || Object.keys(result.remaining).length || kvRemaining > 0) {
@@ -1781,7 +1876,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           const conv = await redactConversationEntries(this.ctx.storage, [node.label], FORGOTTEN);
           await redactToolOutputLedger(this.ctx.storage, [node.label], FORGOTTEN);
           const mail = redactMailFollowupEntries(this.ctx.storage.kv, [node.label], FORGOTTEN);
-          if (conv.remaining + mail.remaining > 0) log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: 'node.forget conversation redaction incomplete' });
+          const prep = redactCalendarPrepEntries(this.ctx.storage.kv, [node.label], FORGOTTEN);
+          if (conv.remaining + mail.remaining + prep.remaining > 0) log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: 'node.forget conversation redaction incomplete' });
         } else if (action === 'file.remove') {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {
