@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import {act} from 'react';import {createRoot} from 'react-dom/client';import {it,expect,vi} from 'vitest';import {GraphMap} from './GraphMap';
+import {act,useState} from 'react';import {createRoot} from 'react-dom/client';import {it,expect,vi} from 'vitest';import {GraphMap} from './GraphMap';
 it('preserves nodes, highlights keyboard neighbors, selects, zooms, pans and resets',async()=>{
  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);const select=vi.fn();const host=document.createElement('div');document.body.append(host);const root=createRoot(host);
  const nodes=[{id:'a',kind:'pattern' as const,label:'A long tentative saved pattern'},{id:'b',kind:'pattern' as const,label:'Neighbor'},{id:'c',kind:'spot' as const,label:'An isolated Spot'}];
@@ -20,5 +20,21 @@ it('preserves nodes, highlights keyboard neighbors, selects, zooms, pans and res
   expect(a.getAttribute('transform')).not.toBe(initial);
   await act(async()=>host.querySelector('svg')!.dispatchEvent(new PointerEvent('pointerup',{pointerId:1,bubbles:true})));
   await act(async()=>a.dispatchEvent(new MouseEvent('click',{bubbles:true})));expect(select).toHaveBeenCalledTimes(1);
+ }finally{await act(async()=>root.unmount());host.remove();vi.unstubAllGlobals();}
+});
+it('preserves zoom, pan and dragged positions when a parent rerenders inline nodes after Enter selection',async()=>{
+ vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);const host=document.createElement('div');document.body.append(host);const root=createRoot(host);
+ function Parent(){const [selected,setSelected]=useState('a');return <GraphMap nodes={[{id:'a',kind:'pattern',label:'First'},{id:'b',kind:'pattern',label:'Second'}]} links={[{from:'a',to:'b',relation:'saved',kind:'association'}]} selected={selected} onSelect={setSelected} reduced/>;}
+ try{
+  await act(async()=>root.render(<Parent/>));
+  await act(async()=>host.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]')!.click());
+  await act(async()=>host.querySelector<HTMLButtonElement>('[aria-label="Pan right"]')!.click());
+  const a=host.querySelector('[data-node=a]')!;
+  await act(async()=>a.dispatchEvent(new PointerEvent('pointerdown',{pointerId:1,clientX:10,clientY:10,bubbles:true,pointerType:'mouse'})));
+  await act(async()=>host.querySelector('svg')!.dispatchEvent(new PointerEvent('pointermove',{pointerId:1,clientX:50,clientY:40,bubbles:true,pointerType:'mouse'})));
+  await act(async()=>host.querySelector('svg')!.dispatchEvent(new PointerEvent('pointerup',{pointerId:1,bubbles:true})));
+  const moved=a.getAttribute('transform'),view=host.querySelector('svg>g')!.getAttribute('transform');
+  await act(async()=>host.querySelector('[data-node=b]')!.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})));
+  expect(host.querySelector('output')?.textContent).toBe('115%');expect(a.getAttribute('transform')).toBe(moved);expect(host.querySelector('svg>g')!.getAttribute('transform')).toBe(view);
  }finally{await act(async()=>root.unmount());host.remove();vi.unstubAllGlobals();}
 });
