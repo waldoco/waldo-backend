@@ -24,6 +24,67 @@ export type ConversationEntry = Readonly<{
   role?: ConversationRole;
 }>;
 
+// Privacy redaction uses literal text only; it never decides what the owner meant.
+export const literalTextRedactor = (texts: readonly string[], marker: string): ((value: string) => string) => {
+  const patterns = [...new Set(texts.map(text => text.trim()).filter(Boolean))]
+    .map(text => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'));
+  return value => patterns.reduce((text, pattern) => text.replace(pattern, () => marker), value);
+};
+
+// Protocol wrappers are preserved; arbitrary data keys are only data.
+export const literalJsonTextRedactor = (
+  texts: readonly string[], marker: string, mode: 'data' | 'arguments' | 'tool_result' = 'data',
+): ((value: string) => string) => {
+  if (texts.every(text => !text.trim())) return value => value;
+  const redact = literalTextRedactor(texts, marker);
+  const encode = (text: string) => JSON.stringify(text).slice(1, -1);
+  const escaped = literalTextRedactor(texts.map(encode), encode(marker));
+  const failure = () => { throw new Error('forget JSON context cannot be safely sanitised'); };
+  const visit = (item: unknown, preserveKeys = false): unknown => {
+    if (typeof item === 'string') return redact(item);
+    if (Array.isArray(item)) return item.map(child => visit(child, preserveKeys));
+    if (item === null || typeof item !== 'object') return item;
+    const seen = new Set<string>();
+    return Object.fromEntries(Object.entries(item).map(([key, child]) => {
+      const clean = redact(key);
+      if ((preserveKeys && clean !== key) || seen.has(clean)) return failure();
+      seen.add(clean);
+      return [preserveKeys ? key : clean, visit(child, preserveKeys)];
+    }));
+  };
+  return value => {
+    const split = mode === 'tool_result' ? value.indexOf('\n[budget:') : -1;
+    const body = split < 0 ? value : value.slice(0, split);
+    const suffix = split < 0 ? '' : value.slice(split);
+    let parsed: unknown;
+    try { parsed = JSON.parse(body) as unknown; }
+    catch {
+      const clean = escaped(redact(value));
+      if (clean !== value && (mode === 'arguments' || (mode === 'tool_result' && /^[\s]*[\[{]/.test(body)))) return failure();
+      return clean;
+    }
+    if (mode === 'tool_result') {
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        if (JSON.stringify(visit(parsed)) !== JSON.stringify(parsed)) return failure();
+        return value;
+      }
+      const result = Object.fromEntries(Object.entries(parsed).map(([key, item]) => {
+        if (redact(key) !== key) return failure();
+        return [key, key === 'data' ? visit(item) : key === 'error' ? visit(item, true) : item];
+      }));
+      return JSON.stringify(result) + suffix;
+    }
+    return JSON.stringify(visit(parsed, mode === 'arguments')) + suffix;
+  };
+};
+
+export const redactConversationEntry = (entry: ConversationEntry, redact: (value: string) => string): ConversationEntry => ({
+  ...entry,
+  modelPayload: redact(entry.modelPayload), appPayload: redact(entry.appPayload),
+  modelProjection: entry.modelProjection.mode === 'replace'
+    ? { mode: 'replace', payload: redact(entry.modelProjection.payload) } : entry.modelProjection,
+});
+
 export class ConversationTree {
   private readonly entries = new Map<string, ConversationEntry>();
 
@@ -52,6 +113,14 @@ export class ConversationTree {
       ...entry,
       modelProjection: Object.freeze({ ...entry.modelProjection }),
     }));
+  }
+
+  redact(texts: readonly string[], marker: string): void {
+    const redact = literalTextRedactor(texts, marker);
+    for (const [id, entry] of this.entries) {
+      const clean = redactConversationEntry(entry, redact);
+      this.entries.set(id, Object.freeze({ ...clean, modelProjection: Object.freeze({ ...clean.modelProjection }) }));
+    }
   }
 
   get(id: string): ConversationEntry | undefined {

@@ -4,6 +4,10 @@ import { describe, expect, it } from 'vitest';
 import { Scheduler, type ScheduleExecutors } from '../src/scheduler/multiplexer';
 import type { Deps } from '../src/seams/deps';
 import type { TracerDO } from '../src/tracer/tracer-do';
+import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
+import { heartbeatEligible, heartbeatTick, settleHeartbeat } from '../src/channels/heartbeat';
+import { loopBook } from '../src/channels/loops';
+import { dayPlanBook } from '../src/channels/day-cards';
 
 let seq = 0;
 const stub = () => env.TRACER_DO.get(env.TRACER_DO.idFromName(`schedule-runs-${(seq += 1)}`)) as DurableObjectStub<TracerDO>;
@@ -106,6 +110,125 @@ describe('schedule_runs history (C4)', () => {
 // consumer via the #223 rework); these tests drive them with 'brief' since 'heartbeat'
 // joins the kind enum in the heartbeat PR.
 describe('run decision + delivery lifecycle (owner shape call)', () => {
+  it('a regular postcommit error keeps the heartbeat pending until its ACK settles delivery', async () => {
+    const result = await runInDurableObject(stub(), async (_instance, state) => {
+      let now = Date.parse('2026-10-02T12:00:00Z');
+      const scheduler = new Scheduler(state.storage.sql, state.storage, { ...deps(now), now: () => now });
+      const loops = loopBook(state.storage.sql, { newId: () => 'due-loop', now: () => now });
+      loops.open({ title: 'Synthetic errand', due: '2026-10-02T11:00' });
+      const outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
+      const tick = heartbeatTick({ scheduler, sql: state.storage.sql, loops, plans: dayPlanBook(state.storage.sql),
+        timezone: 'Etc/UTC', now: () => now, enqueue: async (text, heartbeat) => outbox.enqueue({
+          id: `final:${heartbeat.id}:${heartbeat.occurrence}`, trace: 'heartbeat-trace', payload: { chat_id: 7, text },
+          ownerSubject: 'owner', doName: 'owner-do', heartbeat,
+        }) });
+      await scheduler.schedule({ id: 'postcommit-heartbeat', kind: 'heartbeat', occurrenceAt: now, dueAt: now,
+        recurrence: { type: 'interval', every_ms: 60_000, phase_ms: 0 }, payloadRefs: {} });
+      const dispatched = await scheduler.dispatchDue({ heartbeat: async entry => {
+        await tick(entry);
+        throw new Error('postcommit logging failed');
+      } });
+      const before = state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs').toArray();
+      const nextOccurrence = scheduler.read('postcommit-heartbeat')?.occurrence_at;
+      now += 1_000;
+      await outbox.drain({ allowed: async record => heartbeatEligible(record, state.storage.sql, loops, 'Etc/UTC', now),
+        send: async () => ({ message_id: 11, chat: { id: 7 } }),
+        settled: async record => { settleHeartbeat(record, state.storage.sql, scheduler); } });
+      return { dispatched, before, nextOccurrence, final: outbox.records()[0],
+        after: state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs').toArray() };
+    });
+    expect(result.before).toHaveLength(1);
+    expect(result.before[0]).toMatchObject({ outcome: 'running', heartbeat_result: 'acted', delivery: 'pending', settled_at: null });
+    expect(result.dispatched).toHaveLength(1);
+    expect(result.nextOccurrence).toBe(Date.parse('2026-10-02T12:01:00Z'));
+    expect(result.final).toMatchObject({ status: 'delivered', settled: true });
+    expect(result.after[0]).toMatchObject({ outcome: 'ok', delivery: 'sent' });
+  });
+
+  it('a reminder postcommit error also leaves its frozen final to settle delivery', async () => {
+    const result = await runInDurableObject(stub(), async (_instance, state) => {
+      let now = 60_000;
+      const scheduler = new Scheduler(state.storage.sql, state.storage, { ...deps(now), now: () => now });
+      const outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
+      await scheduler.schedule({ id: 'postcommit-reminder', kind: 'reminder', occurrenceAt: now, dueAt: now, payloadRefs: {} });
+      const dispatched = await scheduler.dispatchDue({ reminder: async entry => {
+        await outbox.enqueue({ id: 'reminder-final', trace: 'reminder-trace', payload: { chat_id: 7, text: 'Synthetic reminder' },
+          ownerSubject: 'owner', doName: 'owner-do', reminder: { id: entry.id, occurrence: entry.occurrence_at,
+            runId: 'producer-run', schedulerRunId: scheduler.runningRunId(entry.id, entry.occurrence_at), once: true } });
+        throw new Error('postcommit logging failed');
+      } });
+      const before = state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs').toArray();
+      now += 1_000;
+      await outbox.drain({ allowed: async () => true, send: async () => ({ message_id: 11, chat: { id: 7 } }),
+        settled: async record => { scheduler.settleDelivery(record.reminder!.schedulerRunId!, record.status === 'delivered'); } });
+      return { dispatched, before, entry: scheduler.read('postcommit-reminder'),
+        after: state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs').toArray() };
+    });
+    expect(result.before[0]).toMatchObject({ outcome: 'running', heartbeat_result: 'acted', delivery: 'pending', settled_at: null });
+    expect(result.dispatched).toHaveLength(1);
+    expect(result.entry).toBeNull();
+    expect(result.after[0]).toMatchObject({ outcome: 'ok', delivery: 'sent' });
+  });
+
+  it('an ordinary heartbeat failure before final commitment still retries as failed', async () => {
+    const result = await withScheduler(60_000, async (scheduler, readRuns) => {
+      await scheduler.schedule({ id: 'precommit-heartbeat', kind: 'heartbeat', occurrenceAt: 60_000, dueAt: 60_000,
+        recurrence: { type: 'interval', every_ms: 60_000, phase_ms: 0 }, payloadRefs: {} });
+      const dispatched = await scheduler.dispatchDue({ heartbeat: async () => { throw new Error('precommit failure'); } });
+      return { dispatched, entry: scheduler.read('precommit-heartbeat'), runs: readRuns() };
+    });
+    expect(result.dispatched).toEqual([]);
+    expect(result.entry).toMatchObject({ occurrence_at: 60_000, due_at: 90_000, attempts: 1 });
+    expect(result.runs[0]).toMatchObject({ outcome: 'failed', delivery: null, error_class: 'run', settled_at: 60_000 });
+  });
+
+  it('a committed heartbeat final advances its producer without rerunning or claiming delivery', async () => {
+    const result = await runInDurableObject(stub(), async (_instance, state) => {
+      const scheduler = new Scheduler(state.storage.sql, state.storage, deps(60_000));
+      const outbox = new TelegramFinalOutbox(state.storage.kv, () => 60_000);
+      await scheduler.schedule({ id: 'committed-heartbeat', kind: 'heartbeat', occurrenceAt: 60_000, dueAt: 60_000,
+        recurrence: { type: 'interval', every_ms: 60_000, phase_ms: 0 }, payloadRefs: {} });
+      await expect(scheduler.dispatchDue({ heartbeat: async (entry) => {
+        const schedulerRunId = scheduler.runningRunId(entry.id, entry.occurrence_at)!;
+        scheduler.markHeartbeatDecision(schedulerRunId, 'acted');
+        scheduler.markDelivery(schedulerRunId, 'pending');
+        await outbox.enqueue({ id: 'heartbeat-final', trace: 'heartbeat-trace', payload: { chat_id: 42, text: 'Useful update' },
+          ownerSubject: 'owner', doName: 'owner-do', heartbeat: { id: entry.id, occurrence: entry.occurrence_at,
+            schedulerRunId, runId: 'producer-run', loops: [{ id: 'due-loop', due: '2026-10-02T12:00:00Z' }] } });
+        throw new Error('crash-injection: after final enqueue');
+      } })).rejects.toThrow('crash-injection');
+      let replayed = 0;
+      const dispatched = await scheduler.dispatchDue({ heartbeat: async () => { replayed += 1; } });
+      return { replayed, dispatched, entry: scheduler.read('committed-heartbeat'), finals: outbox.records(),
+        runs: state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs').toArray() };
+    });
+    expect(result.replayed).toBe(0);
+    expect(result.dispatched).toEqual([]);
+    expect(result.entry).toMatchObject({ occurrence_at: 120_000, due_at: 120_000, attempts: 0 });
+    expect(result.finals).toHaveLength(1);
+    expect(result.finals[0]).toMatchObject({ status: 'pending', attempts: 0 });
+    expect(result.runs).toHaveLength(1);
+    expect(result.runs[0]).toMatchObject({ outcome: 'running', delivery: 'pending', settled_at: null });
+  });
+
+  it.each(['schedule id', 'occurrence', 'producer kind'])('a committed final with a different %s does not suppress a heartbeat', async (difference) => {
+    const dispatched = await runInDurableObject(stub(), async (_instance, state) => {
+      const scheduler = new Scheduler(state.storage.sql, state.storage, deps(60_000));
+      const outbox = new TelegramFinalOutbox(state.storage.kv, () => 60_000);
+      await scheduler.schedule({ id: 'current-heartbeat', kind: 'heartbeat', occurrenceAt: 60_000, dueAt: 60_000,
+        recurrence: { type: 'interval', every_ms: 60_000, phase_ms: 0 }, payloadRefs: {} });
+      const receipt = { id: difference === 'schedule id' ? 'other-heartbeat' : 'current-heartbeat',
+        occurrence: difference === 'occurrence' ? 30_000 : 60_000, schedulerRunId: 'previous-scheduler-run', runId: 'producer-run' };
+      await outbox.enqueue({ id: 'unrelated-final', trace: 'prior-trace', payload: { chat_id: 42, text: 'Prior update' },
+        ownerSubject: 'owner', doName: 'owner-do', ...(difference === 'producer kind'
+          ? { reminder: { ...receipt, once: false } }
+          : { heartbeat: { ...receipt, loops: [] } }) });
+      return scheduler.dispatchDue({ heartbeat: async () => undefined });
+    });
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).toMatchObject({ id: 'current-heartbeat', occurrence_at: 60_000 });
+  });
+
   it('records a quiet decision with no delivery, distinct from the run outcome', async () => {
     const runs = await withScheduler(1_000, async (scheduler, readRuns) => {
       await scheduler.schedule({ id: 'hb1', kind: 'brief', occurrenceAt: 900, dueAt: 900, payloadRefs: {} });
@@ -218,6 +341,126 @@ describe('C3 dedupe + missed-run policy', () => {
       ['d1:120000:0', 'missed'],
       ['d1:60000:1', 'running'],
     ]);
+    expect(result.entry).toMatchObject({ occurrence_at: 180_000, status: 'armed' });
+  });
+
+  it.each([1, 9])('a successfully recovered occurrence does not let %s crashed attempts block the next occurrence', async (crashes) => {
+    const scheduleId = `heartbeat:${crypto.randomUUID()}`;
+    const result = await runInDurableObject(stub(), async (_instance, state) => {
+      let now = 60_000;
+      const at = () => new Scheduler(state.storage.sql, state.storage, deps(now));
+      const recurrence = { type: 'interval', every_ms: 60_000, phase_ms: 0 } as const;
+      await at().schedule({ id: scheduleId, kind: 'heartbeat', occurrenceAt: now, dueAt: now, recurrence, payloadRefs: {} });
+      for (let attempt = 0; attempt < crashes; attempt += 1) {
+        await expect(at().dispatchDue({
+          heartbeat: async () => { throw new Error('crash-injection: forced'); },
+        })).rejects.toThrow('crash-injection');
+      }
+      const fired: number[] = [];
+      await at().dispatchDue({ heartbeat: async (entry) => { fired.push(entry.occurrence_at); } });
+      now = 120_000;
+      await at().dispatchDue({ heartbeat: async (entry) => { fired.push(entry.occurrence_at); } });
+      return { fired, runs: state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs ORDER BY fired_at, attempt').toArray() };
+    });
+    expect(result.fired).toEqual([60_000, 120_000]);
+    expect(result.runs.map(r => [r.id, r.outcome])).toEqual([
+      ...Array.from({ length: crashes }, (_, index) => [`${scheduleId}:60000:${index + 1}`, 'running']),
+      [`${scheduleId}:60000:${crashes + 1}`, 'ok'],
+      [`${scheduleId}:120000:1`, 'ok'],
+    ]);
+  });
+
+  it('a heartbeat ACK settles attempt 10 and allows the next occurrence after nine crashes', async () => {
+    const scheduleId = `heartbeat:${crypto.randomUUID()}`;
+    const occurrence = Date.parse('2026-10-02T12:00:00Z');
+    const result = await runInDurableObject(stub(), async (_instance, state) => {
+      let now = occurrence;
+      const scheduler = new Scheduler(state.storage.sql, state.storage, { ...deps(now), now: () => now });
+      const loops = loopBook(state.storage.sql, { newId: () => 'due-loop', now: () => now });
+      loops.open({ title: 'Synthetic errand', due: '2026-10-02T11:00' });
+      const outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
+      const tick = heartbeatTick({ scheduler, sql: state.storage.sql, loops, plans: dayPlanBook(state.storage.sql),
+        timezone: 'Etc/UTC', now: () => now, enqueue: async (text, heartbeat) => outbox.enqueue({
+          id: `final:${heartbeat.id}:${heartbeat.occurrence}`, trace: 'heartbeat-trace', payload: { chat_id: 7, text },
+          ownerSubject: 'owner', doName: 'owner-do', heartbeat,
+        }) });
+      await scheduler.schedule({ id: scheduleId, kind: 'heartbeat', occurrenceAt: occurrence, dueAt: occurrence,
+        recurrence: { type: 'interval', every_ms: 60_000, phase_ms: 0 }, payloadRefs: {} });
+      for (let attempt = 0; attempt < 9; attempt += 1) {
+        await expect(scheduler.dispatchDue({ heartbeat: async () => { throw new Error('crash-injection: forced'); } }))
+          .rejects.toThrow('crash-injection');
+      }
+      await scheduler.dispatchDue({ heartbeat: tick });
+      now += 1_000;
+      await outbox.drain({ allowed: async record => heartbeatEligible(record, state.storage.sql, loops, 'Etc/UTC', now),
+        send: async () => ({ message_id: 11, chat: { id: 7 } }),
+        settled: async record => { settleHeartbeat(record, state.storage.sql, scheduler); } });
+      now = occurrence + 60_000;
+      const next = await scheduler.dispatchDue({ heartbeat: tick });
+      return { receipt: outbox.records()[0], next,
+        runs: state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs ORDER BY fired_at, attempt').toArray() };
+    });
+    expect(result.receipt?.heartbeat?.schedulerRunId).toBe(`${scheduleId}:${occurrence}:10`);
+    expect(result.runs[9]).toMatchObject({ id: `${scheduleId}:${occurrence}:10`, outcome: 'ok', delivery: 'sent' });
+    expect(result.next.map(entry => entry.occurrence_at)).toEqual([occurrence + 60_000]);
+    expect(result.runs[10]).toMatchObject({ outcome: 'ok', heartbeat_result: 'quiet', delivery: null });
+  });
+
+  it.each([true, false])('a terminal recovered delivery releases the next occurrence (delivered=%s)', async (delivered) => {
+    const result = await runInDurableObject(stub(), async (_instance, state) => {
+      let now = 60_000;
+      const at = () => new Scheduler(state.storage.sql, state.storage, deps(now));
+      const recurrence = { type: 'interval', every_ms: 60_000, phase_ms: 0 } as const;
+      await at().schedule({ id: 'delivery-recovery', kind: 'heartbeat', occurrenceAt: now, dueAt: now, recurrence, payloadRefs: {} });
+      await expect(at().dispatchDue({
+        heartbeat: async () => { throw new Error('crash-injection: forced'); },
+      })).rejects.toThrow('crash-injection');
+      let recoveredRunId = '';
+      await at().dispatchDue({ heartbeat: async (entry) => {
+        recoveredRunId = at().runningRunId(entry.id, entry.occurrence_at)!;
+        return 'delivery_pending';
+      } });
+      at().settleDelivery(recoveredRunId, delivered);
+      now = 120_000;
+      const next = await at().dispatchDue({ heartbeat: async () => undefined });
+      return { next, runs: state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs ORDER BY fired_at, attempt').toArray() };
+    });
+    expect(result.next.map(entry => entry.occurrence_at)).toEqual([120_000]);
+    expect(result.runs.map(r => [r.outcome, r.delivery])).toEqual([
+      ['running', null],
+      [delivered ? 'ok' : 'quarantined', delivered ? 'sent' : 'failed'],
+      ['ok', null],
+    ]);
+  });
+
+  it.each([
+    { label: 'a failed retry', occurrence: 60_000, attempt: 3, outcome: 'failed', delivery: null, otherSchedule: false },
+    { label: 'a pending retry', occurrence: 60_000, attempt: 3, outcome: 'running', delivery: 'pending', otherSchedule: false },
+    { label: 'an earlier successful attempt', occurrence: 60_000, attempt: 1, outcome: 'ok', delivery: null, otherSchedule: false },
+    { label: 'a different occurrence success', occurrence: 90_000, attempt: 3, outcome: 'ok', delivery: null, otherSchedule: false },
+    { label: 'a different schedule success', occurrence: 60_000, attempt: 3, outcome: 'ok', delivery: null, otherSchedule: true },
+  ])('$label does not release a genuinely unresolved occurrence', async (history) => {
+    const scheduleId = `heartbeat:${crypto.randomUUID()}`;
+    const result = await runInDurableObject(stub(), async (_instance, state) => {
+      const scheduler = new Scheduler(state.storage.sql, state.storage, deps(120_000));
+      await scheduler.schedule({ id: scheduleId, kind: 'heartbeat', occurrenceAt: 120_000, dueAt: 120_000,
+        recurrence: { type: 'interval', every_ms: 60_000, phase_ms: 0 }, payloadRefs: {} });
+      state.storage.sql.exec(
+        `INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt) VALUES (?, ?, 'heartbeat', 60_000, 2)`,
+        `${scheduleId}:60000:2`, scheduleId,
+      );
+      const recoveredScheduleId = history.otherSchedule ? `${scheduleId}:other` : scheduleId;
+      state.storage.sql.exec(
+        `INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt, outcome, heartbeat_result, delivery, settled_at)
+         VALUES (?, ?, 'heartbeat', ?, ?, ?, ?, ?, ?)`,
+        `${recoveredScheduleId}:${history.occurrence}:${history.attempt}`, recoveredScheduleId, history.occurrence,
+        history.attempt, history.outcome, history.delivery ? 'acted' : null, history.delivery,
+        history.outcome === 'running' ? null : 120_000,
+      );
+      const dispatched = await scheduler.dispatchDue({ heartbeat: async () => undefined });
+      return { dispatched, entry: scheduler.read(scheduleId) };
+    });
+    expect(result.dispatched).toEqual([]);
     expect(result.entry).toMatchObject({ occurrence_at: 180_000, status: 'armed' });
   });
 

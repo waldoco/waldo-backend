@@ -7,7 +7,7 @@ assert(p, 'PR previews require an explicit block');
 assert.deepEqual(Object.keys(p).sort(), ['vars','observability','durable_objects','ratelimits'].sort(), 'preview keys are allowlisted, not just denied individually');
 assert.deepEqual(p.observability, { enabled:true, logs:{enabled:true,invocation_logs:false}, traces:{enabled:false} });
 assert.deepEqual(p.ratelimits, [{name:'RESPONSIBILITY_RATE_LIMITER',namespace_id:'1002',simple:{limit:120,period:60}}]);
-assert.deepEqual(p.vars, { WALDO_ENVIRONMENT: 'preview', WALDO_RELEASE: 'unreleased', WALDO_OWNER_TELEGRAM_ID: '', LANGFUSE_CAPTURE_TEXT: 'false', WALDO_EGRESS_ALLOWLIST: '' });
+assert.deepEqual(p.vars, { WALDO_ENVIRONMENT: 'preview', WALDO_OWNER_DO_NAMESPACE: '', WALDO_RELEASE: 'unreleased', WALDO_OWNER_TELEGRAM_ID: '', LANGFUSE_CAPTURE_TEXT: 'false', WALDO_EGRESS_ALLOWLIST: '' });
 assert.deepEqual(p.durable_objects, cfg.durable_objects, 'env DO bindings must be declared for isolated previews');
 assert.equal(p.ratelimits[0].name, 'RESPONSIBILITY_RATE_LIMITER');
 assert.notEqual(p.ratelimits[0].namespace_id, cfg.ratelimits[0].namespace_id);

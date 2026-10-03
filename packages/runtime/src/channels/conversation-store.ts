@@ -1,5 +1,5 @@
 import type { RunEffectScope } from './run-effect-scope';
-import type { ConversationEntry, ConversationTree } from '@waldo/contracts';
+import { literalTextRedactor, redactConversationEntry, type ConversationEntry, type ConversationTree } from '@waldo/contracts';
 import { redactSecretUrls } from './egress-guard';
 
 export type ConversationStore = Readonly<{
@@ -60,6 +60,18 @@ export const scrubConversationHistory = async (storage: KeyValueStorage): Promis
 // structure are untouched. Matching is case-insensitive literal text (same coverage as the sql
 // stores' LIKE checks): a paraphrase of the forgotten fact in hot context is NOT caught - the
 // forget barrier covers model behavior for those. The returned counts are all a trace may log.
+// Admitted-owner history lives under canonical-owner-v1:<principal>:<tenant>: as conv:* rows plus a witness:<id> copy of each
+// entry (owner-canonical-history.ts). load() requires row and witness to be identical, so both are rewritten together.
+const CANONICAL_PREFIX = 'canonical-owner-v1:';
+type Witness = { entry: ConversationEntry } & Record<string, unknown>;
+// Row kind from the key structure, not substring luck: canonical-owner-v1:<principal>:<tenant>:(conv|witness):<rest>.
+const canonicalKind = (key: string): 'conv' | 'witness' | null => {
+  if (!key.startsWith(CANONICAL_PREFIX)) return null;
+  const kind = key.slice(CANONICAL_PREFIX.length).split(':')[2];
+  return kind === 'conv' || kind === 'witness' ? kind : null;
+};
+const entryText = (entry: ConversationEntry): string => `${entry.modelPayload}\n${entry.appPayload}\n${entry.modelProjection.mode === 'replace' ? entry.modelProjection.payload : ''}`.toLowerCase();
+
 export const redactConversationEntries = async (
   storage: KeyValueStorage,
   texts: readonly string[],
@@ -68,28 +80,62 @@ export const redactConversationEntries = async (
 ): Promise<Readonly<{ rewritten: number; remaining: number }>> => {
   const needles = [...new Set(texts.map((text) => text.trim()).filter(Boolean))];
   if (needles.length === 0) return { rewritten: 0, remaining: 0 };
-  const patterns = needles.map((needle) => new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'));
-  const rows = await storage.list<ConversationEntry>({ prefix: 'conv:' });
+  const redact = literalTextRedactor(needles, marker);
+  const legacy = await storage.list<ConversationEntry>({ prefix: 'conv:' });
+  const canonical = await storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX });
+  const writes: Record<string, unknown> = {};
   let rewritten = 0;
-  for (const [key, entry] of rows) {
-    let model = entry.modelPayload;
-    let app = entry.appPayload;
-    for (const pattern of patterns) {
-      model = model.replace(pattern, marker);
-      app = app.replace(pattern, marker);
-    }
-    if (model !== entry.modelPayload || app !== entry.appPayload) {
-      const rewrittenEntry = { ...entry, modelPayload: model, appPayload: app };
-      if (scope) { if (!storage.kv) throw new Error('fenced redaction store unavailable'); scope.commit(() => storage.kv!.put(key, rewrittenEntry)); }
-      else await storage.put(key, rewrittenEntry);
-      rewritten += 1;
+  for (const [key, entry] of legacy) {
+    const next = redactConversationEntry(entry, redact);
+    if (JSON.stringify(next) !== JSON.stringify(entry)) { writes[key] = next; rewritten += 1; }
+  }
+  for (const [key, value] of canonical) {
+    if (canonicalKind(key) === 'conv') {
+      const entry = value as ConversationEntry;
+      const next = redactConversationEntry(entry, redact);
+      if (JSON.stringify(next) !== JSON.stringify(entry)) { writes[key] = next; rewritten += 1; }
+    } else if (canonicalKind(key) === 'witness') {
+      const witness = value as Witness;
+      if (!witness?.entry) continue;
+      const next = redactConversationEntry(witness.entry, redact);
+      if (JSON.stringify(next) !== JSON.stringify(witness.entry)) writes[key] = { ...witness, entry: next };
     }
   }
-  const after = rewritten > 0 ? await storage.list<ConversationEntry>({ prefix: 'conv:' }) : rows;
+  if (Object.keys(writes).length > 0) {
+    if (scope) { if (!storage.kv) throw new Error('fenced redaction store unavailable'); scope.commit(() => { for (const [key, value] of Object.entries(writes)) storage.kv!.put(key, value); }); }
+    else {
+      // Durable Object put takes at most 128 keys, and a failure between puts must never leave a redacted canonical row next to
+      // an old-text witness (load() throws on a mismatch). So a conv row and its witness are one unit and always share a put;
+      // units are packed up to 100 keys; legacy rows stand alone.
+      const units: string[][] = [];
+      const taken = new Set<string>();
+      for (const [key, value] of Object.entries(writes)) {
+        if (taken.has(key)) continue;
+        const unit = [key];
+        if (canonicalKind(key) === 'conv') {
+          const witnessKey = `${key.split(':').slice(0, 3).join(':')}:witness:${(value as ConversationEntry).id}`;
+          if (witnessKey in writes) unit.push(witnessKey);
+        }
+        for (const k of unit) taken.add(k);
+        units.push(unit);
+      }
+      let chunk: string[] = [];
+      const flush = async () => { if (chunk.length) await storage.put(Object.fromEntries(chunk.map((k) => [k, writes[k]]))); chunk = []; };
+      for (const unit of units) {
+        if (chunk.length + unit.length > 100) await flush();
+        chunk.push(...unit);
+      }
+      await flush();
+    }
+  }
+  const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryText(entry).includes(needle.toLowerCase()));
+  const afterLegacy = rewritten > 0 ? await storage.list<ConversationEntry>({ prefix: 'conv:' }) : legacy;
+  const afterCanonical = Object.keys(writes).length > 0 ? await storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX }) : canonical;
   let remaining = 0;
-  for (const [, entry] of after) {
-    const hay = `${entry.modelPayload}\n${entry.appPayload}`.toLowerCase();
-    if (needles.some((needle) => hay.includes(needle.toLowerCase()))) remaining += 1;
+  for (const [, entry] of afterLegacy) if (hit(entry)) remaining += 1;
+  for (const [key, value] of afterCanonical) {
+    if (canonicalKind(key) === 'conv' && hit(value as ConversationEntry)) remaining += 1;
+    else if (canonicalKind(key) === 'witness' && (value as Witness)?.entry && hit((value as Witness).entry)) remaining += 1;
   }
   return { rewritten, remaining };
 };

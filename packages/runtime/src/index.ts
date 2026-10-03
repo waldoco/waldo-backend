@@ -18,7 +18,8 @@ import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-lin
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH } from './channels/console';
 import { ownerDirectory } from './identity/owner-directory';
-import { handleConsole } from './channels/console-signin';
+import { downloadReturnTarget, handleConsole, CONSOLE_SIGNIN_PATH } from './channels/console-signin';
+import { consoleAuth } from './identity/console-auth';
 import { serveDashboard } from './channels/dashboard-static';
 import { consoleLog, consoleTrace, withConsoleTrace } from './observability/console-correlation';
 import type { GatewaySecretBinding } from './llm/gateway';
@@ -35,18 +36,10 @@ import {
   type TrustedResponsibilityContext,
 } from './responsibility/worker-adapter';
 
-export * from './hooks/registry';
-export * from './context-composer';
-export * from './llm/provider';
-export * from './do-schema';
-export * from './run-loop/do';
-export * from './responsibility/raw-json';
-export * from './responsibility/constants';
-export * from './responsibility/errors';
-export * from './responsibility/ingress-signature';
-export * from './responsibility/supabase-authority';
-export * from './responsibility/worker-adapter';
-export * from './tools/dispatcher';
+// The entry exports only Durable Object classes and the default handler. `wrangler dev --local`
+// rejects constants or arrays exported from the Worker entry, so helpers are imported from their
+// own modules, never re-exported here (pinned by test/worker-entry-exports.test.ts).
+export { RunLoopDO } from './run-loop/do';
 export { TelegramOwnerDO } from './channels/telegram-owner-do';
 export { TracerDO } from './tracer/tracer-do';
 import type { RunLoopDO } from './run-loop/do';
@@ -125,7 +118,8 @@ export class RuntimeProbeDO extends DurableObject<Env> {
 const forwardTicketConsole = async (request: Request, env: Env): Promise<Response> => {
   if (!env.TELEGRAM_OWNER_DO || !env.WALDO_OWNER_TELEGRAM_ID) return new Response('unauthorized', { status: 401 });
   const ownerRoute = await ownerDirectory(env).byPresence('telegram', env.WALDO_OWNER_TELEGRAM_ID);
-  const doName = ownerRoute?.doName ?? env.WALDO_OWNER_TELEGRAM_ID;
+  if (!ownerRoute) return new Response('owner unavailable', { status: 503 });
+  const doName = ownerRoute.doName;
   const forwarded = new Request(request);
   forwarded.headers.set('x-waldo-do-name', doName);
   return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(doName)).fetch(forwarded);
@@ -166,6 +160,12 @@ export default {
       // and account.delete would have wiped the wrong DO. Directory errors propagate loudly;
       // no fallback to a possibly-wrong DO beyond the designed no-directory single-owner path.
       const response = await forwardTicketConsole(request, env);
+      // A ticket-only session uses this existing owner route. Preserve file intent
+      // on expiry only when the email sign-in route is available.
+      const resume = request.method === 'GET' ? downloadReturnTarget([new URL(request.url).pathname + new URL(request.url).search]) : null;
+      if (response.status === 401 && resume && consoleAuth(env)) {
+        return withConsoleTrace(new Response(null, { status: 303, headers: { location: `${CONSOLE_SIGNIN_PATH}?return_to=${encodeURIComponent(resume)}` } }), consoleRequestTrace ?? consoleTrace());
+      }
       if (consoleRequestTrace) {
         consoleLog(consoleRequestTrace, 'console_route', response.ok, response.ok ? 'forwarded' : 'forward_failed');
         return withConsoleTrace(response, consoleRequestTrace);

@@ -1,5 +1,6 @@
 // Host-only approval/invocation identity. Caller content is never an authority key.
-export type ProxyIntent = Readonly<{ id: string; requireRoute?: boolean }>;
+// readOnly: a host-derived read identity. It never pins a route (no durable row per read); effects keep full custody.
+export type ProxyIntent = Readonly<{ id: string; requireRoute?: boolean; readOnly?: boolean }>;
 export type IntentClaim = Readonly<{ state: 'new' | 'pending' | 'conflict' } | { state: 'done'; result: unknown }>;
 export type IntentLedger = Readonly<{
   claim(id: string, digest: string): Promise<IntentClaim | null>;

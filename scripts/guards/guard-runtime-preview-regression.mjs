@@ -19,6 +19,7 @@ try {
  const attacks = [
   c=>{delete c.previews;},
   c=>{c.previews.vars.WALDO_OWNER_TELEGRAM_ID='owner';},
+  c=>{c.previews.vars.WALDO_OWNER_DO_NAMESPACE='5fe34e5daa754791b45bd80638402ac6';},
   c=>{c.previews.vars.WALDO_EGRESS_ALLOWLIST='private.example';},
   c=>{c.previews.vars.LANGFUSE_CAPTURE_TEXT='true';},
   c=>{c.previews.durable_objects.bindings[0].script_name='waldo-runtime-staging';},
@@ -33,5 +34,5 @@ try {
  assert.notEqual(check(cfg,wrapper.replace('--ignore-base-config','')),0);
  assert.notEqual(check(cfg,wrapper.replace('wrangler preview','wrangler deploy')),0);
  assert.notEqual(check(cfg,wrapper.replace('--worker-name waldo-runtime-staging','--worker-name waldo-runtime')),0);
- console.log('runtime-preview-config adversarial: 15 checks passed');
+ console.log('runtime-preview-config adversarial: 16 checks passed');
 } finally {rmSync(dir,{recursive:true,force:true});}

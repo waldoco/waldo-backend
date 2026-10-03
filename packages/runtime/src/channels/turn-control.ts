@@ -10,6 +10,7 @@ export const turnControl = () => {
   let stopped = false;
   let pending: { id: number; text: string }[] = [];
   let heard: string[] = [];
+  let leftover: { id: number; text: string }[] = [];
   const absorbed = new Set<number>();
   let consume: ((ids: readonly number[]) => Promise<void>) | undefined;
   return {
@@ -38,14 +39,19 @@ export const turnControl = () => {
       steerable = fromOwner;
       stopped = false;
       pending = [];
+      leftover = [];
       heard = [];
     },
     end(): readonly string[] {
+      // Steers that arrived after the last round were never seen by the model; the host must answer them as their own turn.
+      leftover = pending.filter(note => !absorbed.has(note.id));
+      pending = [];
       running = false;
       target = null;
       return heard;
     },
     heard: (): readonly string[] => heard,
+    unconsumed: (): readonly { id: number; text: string }[] => leftover,
     stop(): boolean {
       if (child) return child.stop();
       if (running) stopped = true;

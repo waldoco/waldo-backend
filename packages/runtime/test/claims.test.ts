@@ -59,6 +59,41 @@ describe('claims', () => {
     });
   });
 
+  it.each(['straight', 'typographic'])('grounds the live synthetic workshop correction inside %s quotation marks', async (quotes) => {
+    await withSql((sql, transaction) => {
+      const store = claimStore(sql, transaction);
+      const oldText = "For project WBX-20261002-M1, the workshop start time is 08:40 UTC; this is temporary fictional test context, not the owner's real schedule.";
+      const text = "For project WBX-20261002-M1, the fictional workshop start time is 09:10 UTC; this is disposable test context, not the owner's real schedule.";
+      const owner = 'WBX-20261002-M1 correction: replace that fictional project workshop preference with 09:10 UTC. The previous time is no longer current. Keep this as disposable test memory only, with no calendar, reminder, file or external-message action. What is the current saved preference now?';
+      const evidence = 'Owner: “WBX-20261002-M1 correction: replace that fictional project workshop preference with 09:10 UTC. The previous time is no longer current. Keep this as disposable test memory only”';
+      store.add({ kind: 'preference', text: oldText, source: 'stated', evidence: oldText, origin: 'owner', source_ref: 'owner, tg-904957878' }, AT, 75);
+      const payload = ops({ corrections: [{ old_id: 75, kind: 'preference', text, evidence: quotes === 'straight' ? evidence.replace(/“|”/g, '"') : evidence }] });
+      const result = applyClaimOps(store, payload, '2026-10-02T18:23:06Z', 'owner, tg-904957879', undefined, { owner });
+      expect(result).toContain('corrected1');
+      expect(store.claims()).toHaveLength(1);
+      expect(store.claims()[0]).toMatchObject({ text, origin: 'owner', source_ref: 'owner, tg-904957879', supersedes_id: 75 });
+      expect(store.claims('superseded')[0]).toMatchObject({ id: 75, text: oldText });
+      expect(turnMemoryPrompt(store, 'current workshop preference')).toContain('09:10 UTC');
+      expect(turnMemoryPrompt(store, 'current workshop preference')).not.toContain('08:40 UTC');
+    });
+  });
+
+  it.each(['shared', 'waldo', 'mixed', 'mismatched'])('rejects typographic correction evidence from %s instead of owner-only spans', async (source) => {
+    await withSql((sql, transaction) => {
+      const store = claimStore(sql, transaction);
+      store.add({ kind: 'fact', text: 'Lives in Pune', source: 'stated', evidence: 'I moved to Pune', origin: 'owner', source_ref: 'owner, tg-before' }, AT);
+      const old = store.claims()[0]!;
+      const quote = 'actually I am back in Mumbai';
+      const evidence = `Owner: “${quote}${source === 'mismatched' ? '"' : '”'}${source === 'mixed' ? ' and “this separate assertion was never owner authored”' : ''}`;
+      const grounding = source === 'mixed' || source === 'mismatched' ? { owner: quote } : { owner: 'Correction: my saved city is Mumbai now', [source]: quote };
+      const result = applyClaimOps(store, ops({ corrections: [{ old_id: old.id, kind: 'fact', text: 'Lives in Mumbai', evidence }] }), AT, 'owner, tg-after', undefined, grounding);
+      expect(result).not.toContain('corrected1');
+      expect(store.claims()).toHaveLength(1);
+      expect(store.claims()[0]!.id).toBe(old.id);
+      expect(store.claims('superseded')).toEqual([]);
+    });
+  });
+
   it('holds an ungrounded or shared correction without retiring the old claim', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
@@ -110,9 +145,11 @@ describe('claims', () => {
         { old_id: old.id, kind: 'fact', text: 'Lives in Mumbai', evidence: '"actually I am back in Mumbai"' },
       ], add: [{ kind: 'fact', text: 'Lives in Mumbai', source: 'stated', evidence: '"actually I am back in Mumbai"', touches_forgotten: false }] }),
       AT, 'owner, tg-mumbai', undefined, { owner: 'actually I am back in Mumbai' });
-      expect(detail).not.toContain('corrected1');
+      // Behaviour change (deliberate): the replacement is already active, so the correction retires the old claim only.
+      expect(detail).toContain('corrected1');
       expect(store.claims().filter((claim) => claim.text === 'Lives in Mumbai')).toHaveLength(1);
-      expect(store.claims('superseded')).toEqual([]);
+      expect(store.claims().some((claim) => claim.text === 'Lives in Pune')).toBe(false);
+      expect(store.claims('superseded').map((claim) => claim.text)).toEqual(['Lives in Pune']);
     });
   });
 

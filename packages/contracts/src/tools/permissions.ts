@@ -35,6 +35,7 @@ export const toolNameSchema = z.enum([
   'read_artifact',
   'call_mcp_tool',
   'read_mcp_tool',
+  'read_drive',
   'write_task',
   'update_task',
   'draft_document',
@@ -77,6 +78,15 @@ export const toolNameSchema = z.enum([
   'set_standing_order',
   'list_standing_orders',
   'cancel_standing_order',
+  // workspace 50-52 (files slice): owner-private file store, owner-initiated (user_message) only; list/read stamped external.
+  'workspace_list',
+  'workspace_read',
+  'workspace_write',
+  'workspace_render',
+  'skills_list',
+  'skills_install',
+  'skills_disable',
+  'skills_load',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -198,6 +208,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'read_artifact',
     'call_mcp_tool',
     'read_mcp_tool',
+    'read_drive',
     'write_task',
     'update_task',
     'draft_document',
@@ -231,6 +242,14 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'set_standing_order',
     'list_standing_orders',
     'cancel_standing_order',
+    'workspace_list',
+    'workspace_read',
+    'workspace_write',
+    'workspace_render',
+    'skills_list',
+    'skills_install',
+    'skills_disable',
+    'skills_load',
   ],
   dreaming_mode: ['read_memory', 'update_memory', 'search_episodes'],
   // Always carries send_message — a Spot is never silent (ADR-0042).
@@ -264,6 +283,7 @@ export const ALWAYS_ON_TOOLS: readonly ToolName[] = [
   'propose_action',
   'search_tools',
   'connect_service',
+  'skills_list',
 ];
 
 // search_tools returns top-K by query relevance only — "show me everything" is

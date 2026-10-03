@@ -21,6 +21,7 @@
     "@cloudflare/playwright": "1.3.6",
     "@waldo/contracts": "workspace:*",
     "@waldo/workspace": "workspace:*",
+    "docx": "9.8.1",
     "openai": "5.12.2",
     "pdf-lib": "1.17.1"
   },
@@ -34,6 +35,7 @@
     "tsx": "4.20.6",
     "typescript": "5.9.3",
     "vitest": "4.1.9",
-    "wrangler": "4.135.0"
+    "wrangler": "4.135.0",
+    "jszip": "3.10.2"
   }
 }

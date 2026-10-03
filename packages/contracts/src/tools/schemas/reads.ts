@@ -46,10 +46,26 @@ export type GetHealthArgs = z.infer<typeof getHealthArgsSchema>;
 // 'query_calendar' is the ADR-0040 rename of the legacy schedule read.
 export const queryCalendarArgsSchema = z.strictObject({
   date_range: dateRangeSchema.optional(),
+  calendar_id: z.string().min(1).max(254).default('primary'),
+  page_token: z.string().min(1).max(4096).optional(),
   include_declined: z.boolean().default(false),
   limit: z.int().min(1).max(50).default(20),
-});
+}).refine(args => !args.page_token || Boolean(args.date_range), {error:'page_token requires the same explicit date_range',path:['date_range']}).refine(args => !args.date_range || Date.parse(args.date_range.from) < Date.parse(args.date_range.to), {error:'Calendar range must advance',path:['date_range']});
 export type QueryCalendarArgs = z.infer<typeof queryCalendarArgsSchema>;
+
+// Provider receipt validation is also used after the proxy boundary, before claiming coverage.
+export const calendarPageSchema = z.strictObject({
+  events: z.array(z.strictObject({
+    id:z.string().min(1).max(1024),title:z.string().max(2000),start:z.string().min(1).max(64),end:z.string().min(1).max(64),all_day:z.boolean(),
+    location:z.string().max(2000).optional(),description:z.string().max(2000).optional(),attendees:z.int().min(0).optional(),etag:z.string().max(1024).optional(),
+  }).refine(event => {
+    const time = event.all_day ? z.iso.date() : iso8601Schema;
+    return time.safeParse(event.start).success && time.safeParse(event.end).success && Date.parse(event.start) < Date.parse(event.end);
+  }, 'invalid Calendar event range')).max(50),
+  next_page_token:z.string().min(1).max(4096).nullable(), fetched_count:z.int().min(0).max(50),
+  account:z.strictObject({connection_id:z.string().min(1).max(1024).nullable(),email:z.string().min(1).max(320).nullable()}),
+  observed_at:iso8601Schema,
+}).refine(page=>page.fetched_count>=page.events.length,'returned events exceed fetched count');
 
 // Connect intent is its own tool, never a side effect of a failed service call: the consent
 // URL must be reachable on demand (owner direction 2026-09-24).
@@ -91,6 +107,19 @@ export const getTasksArgsSchema = z.strictObject({
   limit: z.int().min(1).max(100).default(20),
 });
 export type GetTasksArgs = z.infer<typeof getTasksArgsSchema>;
+
+// Drive reads over the REST adapter (explicit, no MCP). The query is a typed field the edge turns into
+// a Drive query; the model never writes Drive query syntax. file_id is a closed id shape, not free text.
+export const readDriveArgsSchema = z.strictObject({
+  action: z.enum(['recent', 'search', 'get', 'content']),
+  name_contains: z.string().min(1).max(200).optional(),
+  file_id: z.string().regex(/^[A-Za-z0-9_-]{10,128}$/).optional(),
+  page_size: z.int().min(1).max(50).default(10),
+  page_token: z.string().min(1).max(2048).optional(),
+  connection_id: z.string().min(1).max(256).optional(),
+  expected_modified_time: z.string().datetime({ offset: true }).optional(),
+}).refine((a) => (a.action !== 'search' || a.name_contains !== undefined) && (a.action !== 'get' || a.file_id !== undefined) && (a.action !== 'content' || (a.file_id !== undefined && a.connection_id !== undefined && a.expected_modified_time !== undefined)), { message: 'search needs name_contains; get needs file_id; content needs file_id, connection_id and expected_modified_time from a current metadata read' });
+export type ReadDriveArgs = z.infer<typeof readDriveArgsSchema>;
 
 export const getMasterMetricsArgsSchema = z.strictObject({
   date: iso8601Schema.optional(),

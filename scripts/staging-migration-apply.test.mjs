@@ -153,3 +153,62 @@ test('real-fs cache and project-index roots cannot redirect outside isolated hom
  }}finally{rmSync(parent,{recursive:true,force:true});}
 });
 import {dirname} from 'node:path';
+
+const linkedFilesystemFixture = (t, afterDryRun) => {
+ const dir=mkdtempSync(join(tmpdir(),'waldo-cli-output-'));
+ t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const supabase=join(dir,'supabase');mkdirSync(join(supabase,'migrations'),{recursive:true});
+ writeFileSync(join(supabase,'config.toml'),'project_id="fixture"');
+ writeFileSync(join(supabase,'migrations','20260930070000_second.sql'),'SELECT 1;');
+ const f=fixture();Object.assign(f.options,{prepare:()=>dir,configDigest:effectiveConfigDigest,makeDir:mkdirSync,cleanup:()=>{},read:readFileSync});
+ const run=f.options.run;f.options.run=(cmd,argv,opts)=>{
+  const result=run(cmd,argv,opts);
+  if(cmd==='pnpm'&&argv.includes('link')){
+   mkdirSync(join(supabase,'.temp'));
+   writeFileSync(join(supabase,'.temp','project-ref'),args.project);
+   writeFileSync(join(supabase,'.temp','pooler-url'),'postgres://fixture.example/postgres');
+   writeFileSync(join(supabase,'.temp','postgres-version'),'17.6');
+  }
+  if(cmd==='pnpm'&&argv.includes('--dry-run'))afterDryRun(supabase);
+  return result;
+ };
+ return f;
+};
+
+test('real-fs fake CLI: dry-run may add only its upgrade-hint cache before apply',async t=>{
+ const f=linkedFilesystemFixture(t,root=>writeFileSync(join(root,'.temp','cli-latest'),'v2.109.1'));
+ await main(f.options);
+ assert.equal(f.calls.filter(c=>c.argv.includes('--yes')).length,1);
+});
+
+for(const path of ['config.toml','.temp/project-ref','.temp/pooler-url','.temp/postgres-version','migrations/20260930070000_second.sql','.temp/unrecognized-cache']){
+ test('real-fs fake CLI: dry-run change to '+path+' still blocks apply',async t=>{
+  const f=linkedFilesystemFixture(t,root=>writeFileSync(join(root,path),'changed'));
+  await assert.rejects(main(f.options),/effective_config_drift/);
+  assert.ok(!f.calls.some(c=>c.argv.includes('--yes')));
+ });
+}
+
+test('upgrade-hint cache additions and updates do not change effective configuration',t=>{
+ const dir=mkdtempSync(join(tmpdir(),'waldo-cli-hint-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ mkdirSync(join(dir,'supabase','.temp'),{recursive:true});writeFileSync(join(dir,'supabase','config.toml'),'project_id="fixture"');
+ const before=effectiveConfigDigest(dir),path=join(dir,'supabase','.temp','cli-latest');
+ writeFileSync(path,'v2.109.1');assert.equal(effectiveConfigDigest(dir),before);
+ writeFileSync(path,'v2.110.0');assert.equal(effectiveConfigDigest(dir),before);
+});
+
+for(const kind of ['symlink','directory'])test('upgrade-hint cache cannot be a '+kind,t=>{
+ const dir=mkdtempSync(join(tmpdir(),'waldo-cli-hint-type-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ mkdirSync(join(dir,'supabase','.temp'),{recursive:true});const path=join(dir,'supabase','.temp','cli-latest');
+ if(kind==='symlink')symlinkSync('../config.toml',path);else mkdirSync(path);
+ assert.throws(()=>effectiveConfigDigest(dir),/local_not_regular/);
+});
+
+test('CLI children use supplied credentials with process-local keyring disabled',async()=>{
+ const f=fixture();f.options.env.SUPABASE_NO_KEYRING='0';await main(f.options);
+ for(const c of f.calls.filter(c=>c.cmd==='pnpm')){
+  assert.equal(c.opts.env.SUPABASE_NO_KEYRING,'1');
+  assert.equal(c.opts.env.SUPABASE_ACCESS_TOKEN,f.options.env.SUPABASE_ACCESS_TOKEN);
+  assert.equal(c.opts.env.SUPABASE_DB_PASSWORD,f.options.env.SUPABASE_DB_PASSWORD);
+ }
+});

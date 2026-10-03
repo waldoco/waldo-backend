@@ -7,8 +7,12 @@ export type InboxBinding = { bot: string; subject: string; doName: string };
 export type InboxRecord = InboxBinding & {
   id: string; digest: string; sequence: number; updateId: number; body: string;
   admittedAt: number; state: 'admitted' | 'claimed' | 'awaiting_delivery' | 'consumed' | 'completed' | 'quarantined';
-  attempt?: string; runId?: string; deadline?: number; reason?: string; closedAt?: number;
+  attempt?: string; runId?: string; deadline?: number; reason?: string; closedAt?: number; outcomeNoticeQueued?: boolean;
   control?: { kind: 'stop' | 'steer'; targetRun: string };
+};
+const ordinaryAdmission = (row: InboxRecord): void => {
+  row.state = 'admitted';
+  delete row.control; delete row.attempt; delete row.runId; delete row.deadline; delete row.reason; delete row.closedAt; delete row.outcomeNoticeQueued;
 };
 export type Admission = 'admitted' | 'duplicate' | 'conflict' | 'capacity';
 type Storage = Pick<DurableObjectStorage, 'transaction' | 'get'>;
@@ -16,7 +20,7 @@ export class TelegramOwnerInbox {
   constructor(private readonly storage: Storage, private readonly persist: (txn: DurableObjectTransaction, rows: InboxRecord[], due: number | null) => Promise<void>, private readonly now: () => number = Date.now) {}
   async records(): Promise<InboxRecord[]> { return (await this.storage.get<InboxRecord[]>(OWNER_INBOX_KEY)) ?? []; }
   private due(rows: InboxRecord[]): number | null {
-    const due = rows.flatMap(r => r.state === 'admitted' ? [this.now() + 250] : r.state === 'claimed' || r.state === 'consumed' ? [r.deadline ?? this.now() + 250] : r.state === 'completed' ? [r.admittedAt + RETENTION_MS] : []);
+    const due = rows.flatMap(r => r.state === 'admitted' ? [this.now() + 250] : r.state === 'claimed' || r.state === 'consumed' ? [r.deadline ?? this.now() + 250] : r.state === 'quarantined' && r.control?.kind === 'steer' && !r.outcomeNoticeQueued && ['not_consumed', 'consumed_target_outcome_uncertain', 'recovered_uncertain'].includes(r.reason ?? '') ? [this.now() + 250] : r.state === 'completed' ? [r.admittedAt + RETENTION_MS] : []);
     return due.length ? Math.min(...due) : null;
   }
   async admit(binding: InboxBinding, updateId: number, body: string, control?: InboxRecord['control']): Promise<Admission> {
@@ -45,6 +49,17 @@ export class TelegramOwnerInbox {
       if (!row || row.state !== 'admitted') return null;
       row.state = 'claimed'; row.attempt = attempt; row.runId = runId; row.deadline = deadline;
       await this.persist(txn, rows, this.due(rows)); return structuredClone(row);
+    });
+  }
+  // Only a steering message proven never consumed can become its original ordinary FIFO turn.
+  async returnUnconsumedSteer(id: string, attempt?: string): Promise<boolean> {
+    return this.storage.transaction(async txn => {
+      const rows = (await txn.get<InboxRecord[]>(OWNER_INBOX_KEY)) ?? [];
+      const row = rows.find(r => r.id === id);
+      if (!row || row.control?.kind !== 'steer' || row.closedAt !== undefined
+        || (row.state !== 'admitted' && row.state !== 'claimed') || row.attempt !== attempt) return false;
+      ordinaryAdmission(row);
+      await this.persist(txn, rows, this.due(rows)); return true;
     });
   }
   // Caller work is restricted to this transaction. No provider I/O belongs here.
@@ -91,7 +106,8 @@ export class TelegramOwnerInbox {
     await this.storage.transaction(async txn => {
       const rows = ((await txn.get<InboxRecord[]>(OWNER_INBOX_KEY)) ?? []).filter(r => r.state === 'admitted' || r.state === 'claimed' || r.state === 'awaiting_delivery' || r.state === 'consumed' || r.state === 'quarantined' || r.admittedAt + RETENTION_MS > this.now());
       for (const row of rows) if ((row.state === 'claimed' || row.state === 'consumed') && (!row.attempt || !liveAttempts.has(row.attempt))) {
-        row.state = 'quarantined'; row.reason = 'recovered_uncertain'; row.body = '';
+        if (row.state === 'claimed' && row.control?.kind === 'steer' && row.closedAt === undefined) ordinaryAdmission(row);
+        else { row.state = 'quarantined'; row.reason = 'recovered_uncertain'; row.body = ''; }
       }
       await this.persist(txn, rows, this.due(rows));
     });

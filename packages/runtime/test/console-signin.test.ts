@@ -1,6 +1,35 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handleConsole } from '../src/channels/console-signin';
+import { handleConsole, downloadReturnTarget } from '../src/channels/console-signin';
 import type { ConsoleAuth } from '../src/identity/console-auth';
+
+const downloadTarget = '/console/workspace/file?id=def993c9-db4d-49c4-8998-8465bed3606e&revision=1';
+it('returns expired DO download sessions to sign-in while preserving the exact file intent', async () => {
+  const ns = { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response('unauthorized', { status: 401 }) }) } as unknown as DurableObjectNamespace;
+  const response = (await handleConsole(new Request(`https://w.test${downloadTarget}`, { headers: { cookie: 'waldo_owner=signed' } }),
+    { TELEGRAM_OWNER_DO: ns }, auth({ readOwnerCookie: async () => 'do-a' })))!;
+  expect(response.status).toBe(303);
+  expect(response.headers.get('location')).toBe(`/console/signin?return_to=${encodeURIComponent(downloadTarget)}`);
+});
+it('retains download intent when authentication is absent without reading file metadata', async () => {
+  const ns = owners();
+  const response = (await handleConsole(new Request(`https://w.test${downloadTarget}`), { TELEGRAM_OWNER_DO: ns.ns }, auth()))!;
+  expect(response.status).toBe(303);
+  expect(response.headers.get('location')).toBe(`/console/signin?return_to=${encodeURIComponent(downloadTarget)}`);
+  expect(ns.fetch).not.toHaveBeenCalled();
+  const page = (await handleConsole(new Request(`https://w.test/console/signin?return_to=${encodeURIComponent(downloadTarget)}`), { TELEGRAM_OWNER_DO: ns.ns }, auth()))!;
+  const html = await page.text();
+  expect(html).toContain('Continue to download');
+  expect(html).toContain('name="return_to"');
+});
+it('finishes download OTP with an HTML link and unchanged cookie protections', async () => {
+  const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', code: '123456', return_to: downloadTarget }),
+    { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as unknown as RateLimit },
+    auth({ verify: async () => 'do-a' })))!;
+  expect(response.status).toBe(200);
+  expect(response.headers.get('location')).toBeNull();
+  expect(response.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Strict');
+  expect(await response.text()).toContain('id="signin-download"');
+});
 
 const owners = () => {
   const fetch = vi.fn(async (input: RequestInfo) => new Response(typeof input === 'string' && input.endsWith('/grant-console') ? 'session-token' : 'console page'));
@@ -220,14 +249,14 @@ describe('invite-gated signup', () => {
     expect(verify).toHaveBeenCalledWith('new@example.com', '123456', '+919876543210', '');
   });
 
-  it('refuses code send without a phone, and refuses an un-normalizable phone', async () => {
+  it('allows code send without a phone, and refuses an un-normalizable supplied phone', async () => {
     const sendCode = vi.fn(async () => true);
     const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit };
     const missing = await handleConsole(form('/console/signin', { email: 'a@b.com' }), env, auth({ sendCode }));
-    expect(await missing!.text()).toContain('Enter your phone number');
+    expect(await missing!.text()).toContain('Email sign-in code');
     const bad = await handleConsole(form('/console/signin', { email: 'a@b.com', phone: 'call me maybe' }), env, auth({ sendCode }));
     expect(await bad!.text()).toContain('Enter your phone number');
-    expect(sendCode).not.toHaveBeenCalled();
+    expect(sendCode).toHaveBeenCalledTimes(1);
   });
 
   it('a tampered verify form with an invalid hidden phone never reaches auth.verify', async () => {
@@ -312,4 +341,119 @@ it('associates visible legacy labels and preserves a labelled OTP retry after tr
   expect(retry).toContain('<label for="signin-code">Email sign-in code</label>');
   expect(retry).toContain('Verification is temporarily unavailable');
   expect(a.ownerCookie).not.toHaveBeenCalled();
+});
+
+it('keeps editable details after a send refusal without retaining an OTP', async () => {
+  const response = await handleConsole(form('/console/signin', {
+    email: 'person@test.invalid', phone: 'bad phone', invite: 'A<"B', code: 'synthetic-secret-otp',
+  }), { TELEGRAM_OWNER_DO: owners().ns }, auth());
+  const html = await response!.text();
+  expect(html).toContain('value="person@test.invalid"');
+  expect(html).toContain('value="bad phone"');
+  expect(html).toContain('value="A&#60;&#34;B"');
+  expect(html).not.toContain('synthetic-secret-otp');
+});
+
+it('opens populated resend details without requesting or checking a code', async () => {
+  const a = auth();
+  const limit = vi.fn(async () => ({ success: true }));
+  const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit } as unknown as RateLimit };
+  const html = await (await handleConsole(form('/console/verify', { email: 'person@test.invalid', phone: '+14155550100', invite: 'ABC', code: 'synthetic-secret-otp' }), env, a))!.text();
+  expect(html).toContain('name="intent" value="edit"');
+  expect(html).not.toContain('href="/console/signin"');
+  expect(html).not.toContain('synthetic-secret-otp');
+  vi.clearAllMocks();
+  const edited = await (await handleConsole(form('/console/signin', { intent: 'edit', email: 'person@test.invalid', phone: '+14155550100', invite: 'ABC' }), env, a))!.text();
+  expect(edited).toContain('id="signin-email" name="email" value="person@test.invalid"');
+  expect(edited).toContain('id="signin-phone" name="phone" value="+14155550100"');
+  expect(edited).toContain('id="signin-invite" name="invite" value="ABC"');
+  expect(a.sendCode).not.toHaveBeenCalled();
+  expect(a.verify).not.toHaveBeenCalled();
+  expect(a.throttle).not.toHaveBeenCalled();
+  expect(limit).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['email', { email: 'invalid', phone: '+14155550100', invite: 'ABC' }, 'email'],
+  ['phone', { email: 'person@test.invalid', phone: 'bad', invite: 'ABC' }, 'phone'],
+  ['limiter absent', { email: 'person@test.invalid', phone: '+14155550100', invite: 'ABC' }, 'absent'],
+  ['binding throttle', { email: 'person@test.invalid', phone: '+14155550100', invite: 'ABC' }, 'binding'],
+  ['durable throttle', { email: 'person@test.invalid', phone: '+14155550100', invite: 'ABC' }, 'durable'],
+])('retains details on %s refusal', async (_name, details, mode) => {
+  const a = auth({ throttle: vi.fn(async () => mode !== 'durable') });
+  const env = { TELEGRAM_OWNER_DO: owners().ns, ...(mode === 'absent' ? {} : { RESPONSIBILITY_RATE_LIMITER: { limit: vi.fn(async () => ({ success: mode !== 'binding' })) } as unknown as RateLimit }) };
+  const html = await (await handleConsole(form('/console/signin', details), env, a))!.text();
+  for (const value of Object.values(details)) expect(html).toContain(`value="${value}"`);
+  expect(a.sendCode).not.toHaveBeenCalled();
+});
+
+it('offers explicit loading messages on request, verify and edit forms', async () => {
+  const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as RateLimit };
+  const start = await (await handleConsole(new Request('https://w.test/console/signin'), env, auth()))!.text();
+  expect(start).toContain('data-pending="Requesting an email code…"');
+  const retry = await (await handleConsole(form('/console/verify', { email: 'person@test.invalid', phone: '+14155550100', code: '000000' }), env, auth()))!.text();
+  expect(retry).toContain('data-pending="Checking your code…"');
+  expect(retry).toContain('data-pending="Opening your details…"');
+});
+
+it.each(['send unavailable', 'verify unavailable', 'invalid or expired code', 'invalid verify phone'])('%s preserves retry details and omits the submitted OTP', async mode => {
+  const fields = { email: 'person@test.invalid', phone: mode === 'invalid verify phone' ? 'bad phone' : '+14155550100', invite: 'ABC', code: 'synthetic-secret-otp' };
+  const a = auth({
+    sendCode: async () => { throw new Error('synthetic send unavailable'); },
+    verify: async () => { if (mode === 'verify unavailable') throw new Error('synthetic verify unavailable'); return null; },
+  });
+  const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as RateLimit };
+  const response = (await handleConsole(form(mode === 'send unavailable' ? '/console/signin' : '/console/verify', fields), env, a))!;
+  const html = await response.text();
+  for (const value of [fields.email, fields.phone, fields.invite]) expect(html).toContain(`value="${value}"`);
+  expect(html).not.toContain(fields.code);
+  expect(response.headers.get('set-cookie')).toBeNull();
+});
+
+it.each([
+  'https://evil.test'+downloadTarget, 'https://w.test'+downloadTarget, '//evil.test'+downloadTarget,
+  '/console/workspace/%66ile?id=def993c9-db4d-49c4-8998-8465bed3606e&revision=1',
+  '/console/workspace/../workspace/file?id=def993c9-db4d-49c4-8998-8465bed3606e&revision=1',
+  '/console/workspace/%2e%2e/workspace/file?id=def993c9-db4d-49c4-8998-8465bed3606e&revision=1',
+  downloadTarget+'&id=def993c9-db4d-49c4-8998-8465bed3606e', downloadTarget+'&revision=2',
+  downloadTarget+'&extra=1', downloadTarget+'#fragment', downloadTarget+'\n',
+  downloadTarget.replace('revision=1', 'revision=0'), downloadTarget.replace('revision=1', 'revision=01'),
+  downloadTarget.replace('revision=1', 'revision=9007199254740992'), downloadTarget.replace('id=d', 'id=%64'),
+  '/console/workspace/remove',
+])('rejects unsafe or noncanonical continuation %s', async target => {
+  expect(downloadReturnTarget([target])).toBeNull();
+  const response = (await handleConsole(new Request(`https://w.test/console/signin?return_to=${encodeURIComponent(target)}`), { TELEGRAM_OWNER_DO: owners().ns }, auth()))!;
+  expect(await response.text()).not.toContain('Continue to download');
+});
+it('rejects duplicate continuation fields on GET and POST', async () => {
+  const query = `return_to=${encodeURIComponent(downloadTarget)}&return_to=${encodeURIComponent(downloadTarget)}`;
+  const page = (await handleConsole(new Request(`https://w.test/console/signin?${query}`), { TELEGRAM_OWNER_DO: owners().ns }, auth()))!;
+  expect(await page.text()).not.toContain('Continue to download');
+  const body = new URLSearchParams({ email: 'owner@example.com', code: '123456' });
+  body.append('return_to', downloadTarget); body.append('return_to', downloadTarget);
+  const done = (await handleConsole(new Request('https://w.test/console/verify', { method: 'POST', body }),
+    { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as unknown as RateLimit }, auth({ verify: async () => 'do-a' })))!;
+  expect(done.status).toBe(303); expect(done.headers.get('location')).toBe('/console');
+});
+it('keeps download intent and recipient across OTP retry, edit and resend', async () => {
+  const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as unknown as RateLimit };
+  const a = auth();
+  for (const fields of [
+    { email: 'owner@example.com', return_to: downloadTarget },
+    { email: 'owner@example.com', return_to: downloadTarget, code: 'wrong' },
+    { email: 'owner@example.com', return_to: downloadTarget, intent: 'edit' },
+    { email: 'owner@example.com', return_to: downloadTarget },
+  ] as Record<string, string>[]) {
+    const page = (await handleConsole(form('code' in fields ? '/console/verify' : '/console/signin', fields), env, a))!;
+    const html = await page.text();
+    expect(html).toContain('name="return_to" value="'+downloadTarget.replace('&','&#38;')+'"');
+    expect(html).toContain('name="email" value="owner@example.com"');
+    expect(html).not.toContain('id="signin-download"');
+  }
+});
+it('keeps dashboard control JSON authentication failures private without download HTML recovery',async()=>{
+ for(const path of ['/console/dashboard/api/v1/controls','/console/dashboard/api/v1/actions','/console/dashboard/api/v1/memory-controls','/console/dashboard/api/v1/owner','/console/dashboard/api/v1/owner/actions','/console/workspace']){
+  const ns=owners();const response=(await handleConsole(new Request('https://w.test'+path,{headers:{accept:'application/json'}}),{TELEGRAM_OWNER_DO:ns.ns},auth()))!;
+  expect(response.status).toBe(401);expect(response.headers.get('cache-control')).toBe('private, no-store');expect(response.headers.get('location')).toBeNull();expect(ns.fetch).not.toHaveBeenCalled();
+ }
 });

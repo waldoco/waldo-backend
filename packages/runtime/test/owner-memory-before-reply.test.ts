@@ -20,7 +20,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
 } }; } }));
 const { createOwnerResponder } = await import('../src/channels/owner-turn');
 const { loopHandlers } = await import('../src/channels/loops');
-const memory = { claims: () => [], recall: () => [], nodes: () => [], edges: () => [], barriers: () => [], beginSettle: () => {}, endSettle: () => {}, settle: () => {}, sweepInterruptedSettles: () => 0 };
+const memory = { pendingTopics: () => [], claims: () => [], recall: () => [], nodes: () => [], edges: () => [], barriers: () => [], beginSettle: () => {}, endSettle: () => {}, settle: () => {}, sweepInterruptedSettles: () => 0 };
 const loopBook = { close: () => true, open: () => ({}), list: () => [], closed: () => [], proactivity: () => ({}), setProactivity: () => ({}) };
 const NOTICE = 'nothing was stored';
 

@@ -169,6 +169,8 @@ describe('privileged-action set — ADR-0049', () => {
       'restore_message',
       'archive_thread',
       'update_thread_topics',
+      'skills_install',
+      'skills_disable',
     ]);
   });
 
@@ -267,9 +269,12 @@ describe('external-origin tool classification — ADR-0049', () => {
       'read_document',
       'call_mcp_tool',
       'read_mcp_tool',
+      'read_drive',
       'search_connector',
       'read_tool_output',
       'read_artifact',
+      'workspace_list',
+      'workspace_read',
       'search_episodes',
       'browse_page',
       'browse_act',

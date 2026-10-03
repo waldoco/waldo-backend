@@ -5,7 +5,8 @@ class ToolExecutionError extends Error {}
 // also used by the connector-proxy Edge Function). Server auth modes: a static deploy-config
 // token, or 'google' - the owner's connected Google account supplies the OAuth bearer. Vault-backed
 // accounts keep the token edge-side: the runtime sends server/tool/args and the edge attaches it.
-import type { ProxyIntent } from '../../connectors/proxy-intent';
+import { sha256Hex } from '../../connectors/google';
+import { ProxyIntentError, type ProxyIntent } from '../../connectors/proxy-intent';
 import { isGoogleFeature, isReadOnlyGoogleFeature, type GoogleFeature } from '../../connectors/google';
 import { callMcpToolArgsSchema, triggerTypeSchema, TOOL_PERMISSIONS, type CallMcpToolArgs, type ToolHandler, type ToolName, type ToolResult } from '@waldo/contracts';
 import type { McpCallProposal } from '../../channels/approvals';
@@ -141,7 +142,9 @@ export const callMcpToolHandler = (serversRaw: string | undefined, desk?: McpDes
   },
 });
 
-// Read-only MCP bridge (main's decision under the owner's overnight delegation, logged): reads of a server whose
+// Read-only MCP bridge. Owner evidence: his 8:11:06 AM "1. Yes" to main's question about Drive reads without an approve
+// button. Retention of read results at the edge was NOT put to him, so the intent-backed reads below are off by default
+// (readIntents) until the edge stops storing them or bounds them with a TTL. Reads of a server whose
 // grant feature is read-only (Drive/Docs/Sheets/Slides) run without the owner button. Fail closed:
 // the server must declare a read-only Google feature, an explicit allow_tools list AND a separate
 // read_tools list, and the tool must be on both. Anything else is refused here, never proposed or executed; writes stay on
@@ -158,19 +161,21 @@ const readMcpToolDescription = (serversRaw: string | undefined): string => {
 
 // A missing or insufficient Google grant is reported with closed enums only (feature and reason), so the
 // model can tell the owner what to fix. The reconnect button itself is the typed connect intent, never text.
+// Metadata and listing reads only. read_file_content is held (no Drive text into the intent ledger).
+const INTENT_READ_TOOLS: readonly string[] = ['list_recent_files', 'search_files', 'get_file_metadata'];
 const readAuthText = (reason: 'not_connected' | 'reauth_needed' | 'scope_missing', feature: GoogleFeature | undefined): string => {
   const what = feature ?? 'Google';
   const state = reason === 'not_connected' ? `${what} is not connected` : reason === 'reauth_needed' ? `the ${what} grant expired` : `${what} is not authorized for this account yet`;
   return `${state}. A reconnect button is in the chat (or was just sent). Tell the owner to tap it - never quote or retype any link yourself.`;
 };
 
-export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: McpGoogleAuth): ToolHandler<CallMcpToolArgs, unknown, ToolDispatcherContext> => ({
+export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: McpGoogleAuth, readIntents = false): ToolHandler<CallMcpToolArgs, unknown, ToolDispatcherContext> => ({
   name: 'read_mcp_tool',
   description: readMcpToolDescription(serversRaw),
   schema: callMcpToolArgsSchema,
   trigger_allowlist: allowlist('read_mcp_tool'),
   autonomy_gated: false,
-  handle: async ({ server, tool, args }: CallMcpToolArgs): Promise<ToolResult<unknown>> => {
+  handle: async ({ server, tool, args }: CallMcpToolArgs, ctx?: ToolDispatcherContext): Promise<ToolResult<unknown>> => {
     const servers = mcpServers(serversRaw);
     const found = servers.find((s) => s.name === server);
     if (!found) {
@@ -183,14 +188,32 @@ export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: 
     if (!found.read_tools.includes(tool) || !found.allow_tools.includes(tool)) {
       return { ok: false, code: 'forbidden', error: `tool "${tool}" is not on the read allowlist of MCP server "${server}"`, source_taint: 'external' };
     }
+    // The proxy rail requires a host-derived intent on every MCP call. A read gets one from the turn
+    // and tool-call identity (same shape as draft_email), never from model args. Reads whose result
+    // is file text stay off this path until the ledger's storage of that text is confirmed.
+    if (!readIntents) {
+      return { ok: false, code: 'forbidden', error: 'owner-button-free reads are not enabled on this Waldo yet.', source_taint: 'external' };
+    }
+    if (!INTENT_READ_TOOLS.includes(tool)) {
+      return { ok: false, code: 'forbidden', error: `tool "${tool}" is not enabled for owner-button-free reads yet.`, source_taint: 'external' };
+    }
+    if (!ctx?.turnId || !ctx.toolCallId) return { ok: false, code: 'rejected', error: 'Read invocation identity is unavailable.', source_taint: 'external' };
+    // Drive's list/search/metadata tools return a generated contentSnippet about the file body unless excludeContentSnippets is true
+    // (https://developers.google.com/workspace/drive/api/reference/mcp/tools_list/list_recent_files). Reads here are metadata only,
+    // so the host sets it after the model's args, and the model cannot turn snippets back on.
+    const intent: ProxyIntent = { id: `mcpread:${await sha256Hex(JSON.stringify([ctx.authenticatedUserId, ctx.turnId, ctx.toolCallId]))}`, readOnly: true };
     try {
-      const { content, protocolVersion } = await executeMcp(found, tool, args, googleAuth);
+      const { content, protocolVersion } = await executeMcp(found, tool, { ...args, excludeContentSnippets: true }, googleAuth, fetch, intent);
       return { ok: true, data: { output: content, protocol: protocolVersion, source_taint: 'external' as const }, source_taint: 'external' };
     } catch (error) {
       if (error instanceof McpConnectError) {
         return { ok: false, code: 'auth_failed', error: readAuthText(error.reason, error.feature), source_taint: 'external', connect: { status: 'auth_required', service: 'google', reason: error.reason, ...(error.feature === undefined ? {} : { feature: error.feature }) } };
       }
       const message = error instanceof Error ? error.message : String(error);
+      // A read has no ledger, so an intent error here means the edge could not run it (for example a revoked or missing grant). Retrying would not change that.
+      if (error instanceof ProxyIntentError) return { ok: false, code: 'rejected', error: 'The connector could not run this read.', source_taint: 'external' };
+      // The edge's stable code for a read it refused (unregistered server or tool, malformed id). Exact match on a code, not text parsing.
+      if ((error as { status?: number }).status === 400 && message === 'mcp_read_rejected') return { ok: false, code: 'rejected', error: 'The connector refused this read.', source_taint: 'external' };
       return { ok: false, code: error instanceof ToolExecutionError ? 'rejected' : 'transient', error: message, source_taint: 'external' };
     }
   },

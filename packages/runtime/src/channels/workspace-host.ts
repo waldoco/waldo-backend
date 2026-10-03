@@ -1,10 +1,11 @@
 import { WorkspaceError, r2Bodies, workspaceStore, type Admission, type Metadata, type OwnerBinding, type WorkspaceState } from '@waldo/workspace';
 import { signedRpc, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import type { RunEffectScope } from './run-effect-scope';
 
 // SQLite callback is synchronous. No network, body writes or thenables belong here.
-export const workspaceMetadata = (storage: Pick<DurableObjectStorage, 'sql' | 'transactionSync'>): Metadata => ({
+export const workspaceMetadata = (storage: Pick<DurableObjectStorage, 'sql' | 'transactionSync'>, scope?: RunEffectScope): Metadata => ({
   transaction<T>(work: (state: WorkspaceState) => T): T {
-    return storage.transactionSync(() => {
+    const transaction = () => {
       storage.sql.exec('CREATE TABLE IF NOT EXISTS workspace_manifest (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), state_json TEXT NOT NULL)');
       const row = storage.sql.exec<{ state_json: string }>('SELECT state_json FROM workspace_manifest WHERE singleton = 1').toArray()[0];
       const state: WorkspaceState = row ? JSON.parse(row.state_json) : { binding: null, files: [], bodies: [], operations: [] };
@@ -12,7 +13,8 @@ export const workspaceMetadata = (storage: Pick<DurableObjectStorage, 'sql' | 't
       if (result && typeof result === 'object' && 'then' in result) throw new WorkspaceError('invalid');
       storage.sql.exec('INSERT INTO workspace_manifest(singleton,state_json) VALUES (1,?) ON CONFLICT(singleton) DO UPDATE SET state_json=excluded.state_json', JSON.stringify(state));
       return result;
-    });
+    };
+    return scope ? scope.commit(transaction) : storage.transactionSync(transaction);
   },
 });
 
@@ -31,11 +33,13 @@ export const workspaceOwnerHost = async (
   actualDoId: string,
   doName: string | undefined,
   fetcher: typeof fetch = fetch,
+  scope?: RunEffectScope,
 ) => {
   const call = signedRpc(env, async (input,init) => {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
+      scope?.admit();
       return await Promise.race([
         fetcher(input,{...init,signal:controller.signal}).then(async response => {
           if(!response.body)return new Response(null,{status:response.status,headers:response.headers});
@@ -43,6 +47,7 @@ export const workspaceOwnerHost = async (
           try { while(true){const part=await reader.read();if(part.done)break;total+=part.value.byteLength;if(total>16_384){await reader.cancel();throw new WorkspaceError('unavailable');}chunks.push(part.value);} }
           finally {controller.signal.removeEventListener('abort',cancel);reader.releaseLock();}
           const bytes=new Uint8Array(total);let offset=0;for(const part of chunks){bytes.set(part,offset);offset+=part.byteLength;}
+          scope?.admit();
           return new Response(bytes,{status:response.status,headers:response.headers});
         }),
         new Promise<Response>((_resolve,reject)=> { timer=setTimeout(()=> { controller.abort();reject(new WorkspaceError('unavailable')); },5_000); }),
@@ -57,17 +62,26 @@ export const workspaceOwnerHost = async (
   const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(locator)))].map(b => b.toString(16).padStart(2, '0')).join('');
   const resolve = async (): Promise<OwnerBinding | null> => rowBinding(await call('workspace_owner_binding', `workspace.bind.${hash}`, args));
   const binding = await resolve();
+  scope?.admit();
   if (!binding || binding.environment !== environment || binding.namespace !== namespace || binding.doName !== doName || binding.doId !== actualDoId) throw new WorkspaceError('rejected');
   const admit: Admission = async supplied => {
     try {
       const current = await resolve();
+      scope?.admit();
       if (!current) return { status: 'rejected' };
       if (Object.keys(binding).some(key => supplied[key as keyof OwnerBinding] !== current[key as keyof OwnerBinding])) return { status: 'rejected' };
       return { status: 'ok' };
     } catch { return { status: 'unavailable' }; }
   };
-  const bodies = await r2Bodies(env.ARTIFACTS, binding, admit);
-  return workspaceStore({ binding, admit, metadata: workspaceMetadata(storage), bodies, now: Date.now, newId: () => crypto.randomUUID() });
+  // Capture the invocation capability, never a mutable current-turn slot. Admission at
+  // the raw bucket boundary prevents an async mapping check from granting later I/O.
+  const bucket = env.ARTIFACTS;
+  const bodies = await r2Bodies({
+    put: (key, bytes) => { scope?.admit(); return bucket.put(key, bytes); },
+    get: key => { scope?.admit(); return bucket.get(key); },
+    delete: key => { scope?.admit(); return bucket.delete(key); },
+  }, binding, admit);
+  return workspaceStore({ binding, admit, metadata: workspaceMetadata(storage, scope), bodies, now: Date.now, newId: () => crypto.randomUUID() });
 };
 
 export const workspaceRequest = async (

@@ -205,7 +205,13 @@ export const artifactHandlers = (book: ArtifactBook, deliver?: DeliverArtifact) 
     // quote provider text; membership in EXTERNAL_ORIGIN_TOOLS makes a null stamp unrepresentable.
     handle: async (args: ReadArtifactArgs) => {
       const result = await book.read(args.artifact_id, args.offset, args.length);
-      if (result === null) return { ok: false, code: 'not_found', error: 'No readable artifact with that id. Use list_artifacts to see what exists.', source_taint: 'external' };
+      if (result === null) {
+        // The row exists but its body could not be read (R2 eviction or loss): say so, so the model does not
+        // treat it as an unknown id or silently recreate it. Fixed words only; the name is not echoed.
+        const meta = book.byId(args.artifact_id);
+        if (meta !== null) return { ok: false, code: 'rejected', error: 'body_unavailable: this artifact exists but its stored body could not be read. Do not recreate it on your own; tell the owner and offer to recreate it if they want.', source_taint: 'external' };
+        return { ok: false, code: 'not_found', error: 'No readable artifact with that id. Use list_artifacts to see what exists.', source_taint: 'external' };
+      }
       return {
         ok: true,
         data: {

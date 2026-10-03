@@ -13,11 +13,17 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 ## Checklist
 
+- [ ] Scheduled meeting decisions stay transient until a current source and verified delivery justify publication; reject stale decision caches and do not treat unsent/no-op JSON as Waldo conversation or nightly evidence
+- [ ] Preserve curated owner skill revocation checks on every physical retry while transient background decisions neither load nor inherit earlier selected/revoked owner procedures
+- [ ] Forget source-derived prep metadata as well as payload text; hash dedup/cooldown keys and cancel metadata-only unsent matches
+- [ ] Evaluate finite expiry before quiet deferral and clamp held wakes to expiry; pass one trusted owner timezone through every daily counter read/write without silently rebucketing legacy aggregates
+
 ### Tokens, auth and sessions
 - A one-time token is spent only by a deliberate user action (a POST from our own page), never by a GET. Link previews, scanners and prefetchers issue GETs.
 - Every URL we send in chat has previews turned off unless the preview is the point.
 - Tokens have an expiry, a single use, and are compared in full. Minting a new one invalidates the old one on purpose, and the tests say so.
 - Cookies: HttpOnly, Secure, a narrow Path, and a SameSite value that works for the actual navigation (Strict cookies are dropped on cross-site redirects).
+- Private download sign-in preserves only a canonical read-only file/revision target across expiry, OTP retry and edit. Resume through an explicit same-origin link with unchanged owner/session checks; test malicious targets, account switches, terminal history and absence of binary fetches.
 - Every state-changing request checks CSRF and the owner identity. Callback data from buttons is checked against the owner before it acts.
 - Secrets never reach the repo, chat, logs or traces.
 
@@ -27,6 +33,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - A refusal precedes any one-use consumption: validate first, then spend the invite, token or code. An error branch re-rendering a form puts the error in the note, never in a data field.
 
 ### Idempotency and retries
+- Sign-in retries retain escaped email/contact/invite details only in form responses, never OTP values in restored pages or storage. Test send refusals, edit-before-resend, repeated submits, history restoration and explicit stop-waiting recovery; interrupted requests may already have completed.
 - Every webhook, callback, scheduled fire and migration can run twice without a second effect. Store the offset or the key before or atomically with the effect.
 - Every button press is safe when pressed twice or late ("Already handled", "expired").
 - Retries have a bound and a backoff. A failed step logs and leaves state that the next run can resume.
@@ -34,6 +41,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - An OAuth callback settles its attempt once. The state is a single-use nonce with its PKCE verifier stored server-side; a reloaded callback replays the settled outcome and never re-exchanges the single-use code. Every outcome renders a page; none throws.
 
 ### Concurrency and ordering
+- Workspace tool invocations carry their captured owner-run scope through mapping and body awaits. Reserve and publish metadata inside that scope’s synchronous commit fence; closure before reservation leaves nothing, while closure after body admission retains pending custody/orphan bytes without a ready revision. Test direct metadata closure and rollback as well as mapping/body interruption through the default owner constructor, actual registered tool dispatcher and authenticated inbox; await losing handler continuations after /stop.
 - Writes that belong to one turn settle before the next turn reads them.
 - Anything that reads and then writes shared state runs inside the DO's serial queue or one transaction.
 - External writes use a version check (etag / If-Match) so we never overwrite a change the owner made meanwhile.
@@ -45,6 +53,9 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - A snapshot or attestation timestamp used as a provenance bound is the truthful as-of time of the requesting turn. A frozen fixture time silently poisons every later real-time artifact; replay two sequential turns with a persisted time-stamped artifact to catch it.
 
 ### Data and migrations
+- Owner correction evidence recognizes matched straight and typographic double quotes; require every substantive quoted span to ground in owner text and retain shared/agent rejection.
+- Capped ledger summaries are display data with provenance on their outer entry; redact exact and JSON-escaped text without applying typed tool-protocol validation to an intentionally truncated display.
+- Owner forget suppresses known exact forgotten data before the current provider call, including already-loaded history, replacement projections, pending/captured tool text, ephemeral offload caches and cached publication replay. Partial cleanup stays pending; unsafe or over-budget transient context blocks provider and replay without changing trusted safeguards. Test normal DO, steering, eviction and dirty-store recovery.
 - Every migration takes a backup first, is idempotent, and leaves the old data in place until a later cleanup.
 - Schema changes on existing Durable Object storage are additive (new table, `ADD COLUMN`) and tolerate the column already existing.
 - Invariants are enforced in the database where possible (primary keys, CHECK, UNIQUE), not only in code.
@@ -76,11 +87,15 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Signed or secret-bearing URLs never pass through model-visible text. They travel in structured channels only (Telegram URL buttons, direct sends). Tool results must not contain them.
 - Verification artifacts (OTP codes, password-reset and magic-link URLs) are quarantined deterministically at communication ingress (gmail read, whatsapp inbound) before model context, so persistence and traces never carry them; the item stays owner-inspectable in the source app (E1, src/security/artifact-hygiene.ts).
 - An owner Durable Object never borrows the deploy owner's Telegram identity; when Telegram is unlinked, sends drop (logged) instead of rerouting.
+- Signup completion has its own attempt bucket (OTP send/contact saves cannot exhaust it), and console grant fetch/body decoding is time-bounded.
+- Signup completion retries keep verified progress across uncertain admission or session/grant failures, resolve the same canonical owner without replaying OTP, and never turn optional contact into phone proof.
 - Signup self-provisions: one owner per auth user and per email (unique guards, conflict-safe create), settings in the same transaction, never admin, phone stored unverified until the WhatsApp pairing proves it (#156).
 - The rule covers every path that can mint the link, not only the connect tool: tool failure branches (not connected, missing scope) and prompts built for scheduled cards too.
 - A percent sequence the strict decoder rejects is plain text, not a pending decode layer: scan it raw, never deny the payload for it. Fail-closed stays for encodings that DO decode (nested/base64/oversize) - those are real obfuscation (#152).
 
 ### Observability
+- Redacted provider failures must retain a closed operational diagnosis when supplied as structured Google RPC ErrorInfo: status, known reason and exact service only. Unknown/free-text errors remain unknown; never retain provider messages, file metadata, project/token fields or arbitrary URLs to make debugging easier.
+- Non-retaining connector reads must reject unsupported read-marked requests before the effect ledger. Provider error content is external data: response errors, health telemetry and logs use closed codes, never opaque provider messages; signed-read repeats are independent observations, not durable result replay. Cover private error canaries, current owner/connection/scopes, and zero ledger writes.
 - Before enabling automatic invocation logs or traces, prove with synthetic canaries that every persisted request URL excludes one-time tickets, OAuth codes/state and other credentials. Query redaction does not protect a secret in a URL path; custom hop logs remain available when invocation logs are disabled (#205).
 - A fallback that keeps the user surface green (e.g. single-owner routing) masks a broken integration; verify the integration path directly (edge logs, probes), not the fallback.
 - Every hop logs trace id, duration, ok/failed and a short detail. The E2E checklist names the hops that prove each step.
@@ -112,6 +127,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 | Date | Bug | Class | Test added | Checklist line |
 |---|---|---|---|---|
 | 2026-10-01 | Dashboard shell returned plain-text 401 before React could expose login recovery; HEAD used a method the overview read rejects | Routing / authentication | dashboard-static.test.ts and dashboard-static-worker.test.ts: fixed signin redirect, root/alias/HEAD, legacy and ticket/JSON/receipt exclusions | Console entry preserves protected routes and receipts; HEAD uses GET auth |
+| 2026-10-03 | Existing conversational publication cached stale meeting decisions and indexed undelivered JSON; payload-only forgetting left source codes in metadata; quiet deferral preceded expiry | Calendar preparation / final delivery | Default-DO cancelled-history, changed-source retry, metadata-only forget, quiet-expiry and owner-local delivery regressions | Transient structured decisions, hashed derived keys, literal metadata cleanup and expiry-before-deferral |
 | 2026-09-30 | Owner-local artifact metadata used shared R2 body keys based on short IDs; two owners with the same ID overwrote and read each other | Trust boundaries | artifacts.test.ts: same-ID shared bucket create/revise/restart, missing namespace, percent/slash namespace collision, no legacy fallback | Shared object-storage keys include immutable owner scope |
 | 2026-09-30 | Browser binding extraction failures became empty approvals; old-key-only lowercase comparison missed additional facts and case-sensitive recipient drift | Trust boundaries | browse-act.test.ts: failed/empty/malformed extraction and old approvals, added/removed facts, exact recipient case, key-order success; original source fails 6/32 tests | Browser approvals need valid nonempty evidence and exact complete-set comparison |
 | 2026-09-26 | Forget deleted the claim row but left the forgotten text live in five stores: the episodes FTS index (search_episodes could resurface it), memory_backups payloads, the frozen legacy spots and core_file_revisions tables, and constellation nodes kept quoting it and referencing its id in supporting_spots; the console forget path added a re-admission barrier while the model-facing path did not. Found by the forget-coverage audit: red-first survivor scan showed {episodes:1, backups:1, spots:1, revisions:1, nodes:1} after a forget | Memory / trust boundaries | forget-coverage.test.ts: marker planted in all six stores, forgotten through the real applyClaimOps path, fresh-state scan asserts zero everywhere, node stops quoting the claim and drops its id, barrier blocks re-admission, absent legacy tables skip cleanly, result reports purged vs purge-incomplete:<stores> | Deletes that the owner asked for are real across every store, proven by a fresh-state re-scan |
@@ -231,3 +247,136 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 | 2026-10-02 | Memory list/detail navigation lost the originating cursor; permissive routing ignored unsupported selectors | Memory navigation | destinations.test.ts strict parser/builder; Memory component origin links and invalid-selector recovery | Persist read position in bounded typed URLs; unsupported selectors never launch actions |
 | 2026-10-02 | Unbounded wire selectors crashed destination rendering, mismatched reads could show a different target, and error recovery discarded cross-view list context | Memory decoder/navigation | Three regressions fail against 5e04209; selector bounds and exact-target wire tests plus mounted 404 origin recovery pass with fixes | Validate all returned selectors and read target before display; preserve originating list on failure as well as success |
 | 2026-10-02 | Valid maximum Unicode selectors exceeded the raw fragment cap after percent encoding | Memory destination | destinations.test.ts maximum ID plus expansion and return cursors round trip | Derive encoded fragment cap from selector bounds, including worst-case encoding expansion |
+| 2026-10-02 | Console resend GET and send refusals lost email/contact/invite details; submit locking could strand an interrupted request | Console retries | console-signin.test.ts field retention/escaping and effect-free edit; console-signin-browser.test.ts submit lock, OTP clearing, stop-waiting recovery; synthetic Chrome fixture | Preserve retry context separately from OTP, and provide explicit recovery for uncertain navigation |
+
+- [ ] Retry POSTs must not become document-history entries: keep phase-only history, preserve details only in the running page, clear OTP before transport/restoration, and invalidate late results on cancellation or navigation. Test request counters across Back/Forward/refresh and verify the existing success cookies/303 through browser fetch. No-JavaScript native POST fallback remains an explicit limitation.
+
+| 2026-10-02 | Native console retry POST history prompted resubmission on Back/Forward; stopping a fetch needed protection against late content/redirects | Console retry navigation | console-signin-browser.test.ts same-origin async submission, phase-only history, cancellation/generation, unexpected redirects and uncertain errors; synthetic Chrome send/verify counters and existing cookie/303 success | No POST document history with script enabled; late results never revive cancelled work |
+
+- [ ] Back-edit-Forward must retain the outstanding code's original email/phone/invite; unsent details belong only to the details phase. A newly requested code replaces that phase's recipient context.
+
+| 2026-10-02 | Broadcasting Back edits to cached code form retargeted an outstanding code without requesting another | Console history recipient | Distinct A/B email/phone/invite edit-before-Forward regression and native Chrome; each phase retains its own details | Unsent edits never retarget an existing code |
+
+- [ ] Rate-ceiling integration tests must preserve all real authenticated admissions and exact persisted counts without multiplying RPC transport overhead by the ceiling. Keep per-session boundary calls and overflow rejection; verify failed admission leaves authority and rate state unchanged.
+
+| 2026-10-02 | Owner-global rate test timed out after 239 sequential projection RPCs; controlled per-call latency reproduced the baseline failure | Rate-limit test transport | responsibility-public-do.test.ts batches real signed admissions inside the DO, retains each session RPC and overflow RPC, asserts owner240/session60 counts and unchanged rejection state | Test security behavior rather than cumulative transport latency; retain the five-second timeout |
+
+### Owner admission custody epochs
+
+- [ ] Preserve an admission epoch across same-row presence unlink/reactivation and locator away/back; state_version alone cannot detect these ABA changes.
+- [ ] Lock affected owners in UUID order with NO KEY UPDATE for non-key epoch writes; presence transfers already hold destination FK KEY SHARE. Exercise opposing transfers and concurrent owner-state updates.
+- [ ] Reject direct caller epoch edits and unrelated unprivileged nested triggers, while existing service-role custody writes allocate privately.
+
+| Date | Bug found | Surface | Adversarial proof | Checklist change |
+| --- | --- | --- | --- | --- |
+| 2026-10-02 | State-only and presence-ID receipts miss same-row unlink/reactivation and locator ABA | Owner admission custody | waldo_owner_admission_revision.sql persisted receipt regressions | Require custody epoch for currentness |
+| 2026-10-02 | FOR UPDATE owner locking deadlocked opposing presence transfers against destination FK KEY SHARE | Owner revision preparation | prove-local.mjs concurrent transfers/lifecycle; preserved red receipt, then 100 monotonic epochs | Use compatible non-key locks in deterministic UUID order |
+
+### Owner admission integration gates
+- An admitted composer result must reach the actual provider system prompt. Its tool availability statement and model/dispatcher handlers must agree on current grants. An explicitly labelled trigger ACL ceiling may be broader than the current function list; it grants no callable tools. Preserve canonical composed bytes and their digest at delivery. A helper/composer-only pass cannot prove this provider boundary.
+- Fresh canonical history has its own namespace and row lineage. Legacy memory, standing orders and tool ledgers remain excluded until owner-bound suppliers and canonical forget/redaction are reviewed together.
+
+| Date | Bug found | Surface | Adversarial proof | Checklist change |
+| --- | --- | --- | --- | --- |
+| 2026-10-02 | Existing responder discards composed system; private composer renders trigger ACL before host grants | Canonical owner turn integration, Core-gated | Actual DO reply exists, then unique admitted-material provider assertion fails; evidence/owner-turn/material-delivery-red.log | Require provider-system delivery and rendered/evidence/dispatch ACL agreement |
+
+| 2026-10-02 | A ceiling was incorrectly treated as a current-tool grant, causing an unnecessary Core renderer blocker | Local owner-turn material follow-up | Existing ceiling wording inspected at 1d938b63; actual DO material assertion red then green through public compose result | Verify precise producer wording before requesting reserved ownership; deliver canonical request.system unchanged |
+
+| 2026-10-02 | A new currentness await delayed capture of host memoryWrites, permitting caller mutation before use | Owner responder | Existing opt-out mutation regression red, then green with scoped sibling case | Capture host controls synchronously and carry them into scoped continuation |
+| 2026-10-02 | Canonical pgTAP required a seed only the private upgrade runner created | Owner revision test portability | Exact CI test1 returned NULL; canonical column assertion and separate mandatory preseed backfill proof | Canonical tests must not depend on private runner fixtures; keep upgrade proof explicit and non-vacuous |
+
+| 2026-10-02 | Legacy hermetic ingress fixtures expected provider effects without supplying current owner authority | Authenticated owner ingress tests |22 focused cases reproduced12 failures, then explicit synthetic constructor hosts restored existing effect checks with canonical owner cache/history assertions | Positive fixtures supply exact private authority; retain missing-host/revocation rejection and never add runtime fallback |
+
+- [ ] Private canonical-preparation construction must select the mode separately from supplier availability. Test the actual deployed two-argument constructor through authenticated inbox text, photo, document and voice to a fenced final; explicit canonical construction without a supplier still rejects without model fallback. Keep currentness, history, reaction and final-publication requirements in the same mode.
+
+| 2026-10-02 | Private canonical prepare was installed for normal deployed owner DOs and quarantined ordinary text/media before reply | Owner DO construction | owner-do-deployed-mode.test.ts red on exact 49ce for four content types; explicit canonical missing-host/currentness/revocation tests retained | Test both deployed construction and explicit private canonical rejection |
+
+| 2026-10-02 | A single alarm served a prior outbox while a corrupt-history continuation stayed admitted, making its rejection assertion premature | Canonical owner fixture | Ready-outbox ordering reproduced red; at most three real alarms require the exact update's closed outcome, quarantine, unchanged history and no new reply | Drive the real scheduling boundary to a bounded observed result; never replace rejection assertions or sleep until lucky |
+### Heartbeat delivery receipts
+- Scheduled nudges commit frozen outbox intent before transport. A resolved send is not delivery proof: undefined or wrong-chat ACK must leave cooldown untouched. Test attempted-send restart quarantine, definite-rejection same-byte retries and ACK-before-bookkeeping replay.
+- An older crashed schedule attempt stays as audit evidence, but a later successful or terminal-delivery attempt of the same occurrence must not suppress future occurrences. An unresolved older occurrence still blocks overlap. Select the latest attempt numerically across 9→10; ACK-bookkeeping replay preserves the first background completion time, and enqueue-commit crashes leave delivery pending.
+
+| 2026-10-02 | Heartbeat discarded blocked Telegram sends and started cooldown; send-before-cooldown crashes could duplicate nudges; stale crashed attempts could suppress later ticks | Heartbeat / scheduler | heartbeat-outbox.test.ts frozen intent, ACK truth, fresh eligibility, transport/receipt crashes and same-byte429; schedule-runs.test.ts recovered occurrence liveness and unresolved controls | Commit intent before I/O, settle from ACK, preserve audit without wedging future ticks |
+
+| 2026-10-02 | Workspace mapping stayed valid after owner-turn closure, so a delayed tool could publish a ready file before dispatcher refusal | Workspace host / owner-run fence | workspace-turn-fence.test.ts closes mapping and R2 awaits, proves pending orphan custody without ready publication, and checks scoped metadata closure/rollback | Capture invocation scope; admit actual I/O and atomically fence every metadata transaction |
+
+| 2026-10-02 | Workspace adapters were absent from the normal owner tool list, and post-open admission alone did not carry invocation authority into host I/O | Default owner workspace registration | owner-do-registered-workspace.test.ts advertised/called/returned exact bytes, same-call retry/restart, signed mapping isolation, /stop during mapping/reservation/body, stopped A resumes during B, taint and missing-scope scheduled refusal; workspace-open-context.test.ts exact context forwarding | Register the actual host-backed handlers and capture invocation scope before async I/O; prove the default constructor rather than a private host override |
+| 2026-10-02 | Owner forget redacted durable history but the already-restored conversation tree still sent forgotten text to the same-turn provider; replacement projections and escaped pending tool copies were sibling retained paths | Owner memory/privacy | memory-forget-do-provider.test.ts exercises the real normal owner DO plus same-turn, reused/fresh partial cleanup, steering, projection eviction, trusted-safeguard collision and cached replay; conversation-entry.test.ts covers literal/escaped redaction | Forget is enforced at retained data and publication boundaries before use; incomplete stores never become a completed receipt |
+
+| 2026-10-02 | Independent local review found forgotten text still retained beyond the offload head on a reused responder; cache readback could send it again after settled forget | Owner memory/privacy | memory-forget-do-provider.test.ts proves cache invalidation and post-forget oversized-tool eviction; tool-output-offload.test.ts verifies cleared payload/length/provenance/budget with monotonically increasing IDs | Re-derivable caches are retained stores too; invalidate before future reads, preserve identifier provenance, and route fictional-binding regressions through the required isolated CI/local pool |
+
+### Migration executor configuration
+- [ ] Distinguish verified CLI outputs from execution inputs before excluding anything from configuration drift checks. Exclude only the regular `.temp/cli-latest` upgrade-hint file; retain project-ref, pooler URL, configuration, migrations and unknown-file checks, plus symlink/directory rejection.
+- [ ] Non-interactive migration children use the supplied environment credentials with `SUPABASE_NO_KEYRING=1`; never modify Keychain permissions or persist replacement credentials to avoid prompts.
+
+| Date | Bug found | Surface | Adversarial proof | Checklist change |
+| --- | --- | --- | --- | --- |
+| 2026-10-02 | Supabase dry-run added only `.temp/cli-latest`, causing the reviewed executor to reject benign output as configuration drift; sanitized child environment also omitted the supported no-keyring control | Migration apply helper | Real-filesystem fake CLI reproduces cache addition, retains rejection of target/config/migration/unknown-file drift, and checks process-local keyring disablement with unchanged supplied credentials | Trace pinned CLI producers/consumers; narrowly separate output cache from effective inputs |
+
+Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabase/cli/blob/v2.109.1/apps/cli-go/cmd/root.go#L242-L268), [process-scoped keyring control](https://github.com/supabase/cli/blob/v2.109.1/apps/cli/src/legacy/auth/legacy-credentials.layer.ts#L326-L335). Source and synthetic executor checks do not prove hosted migration application.
+| 2026-10-02 | Non-retaining MCP read bypass exposed provider error content to response-error logs; unsupported read flags could silently fall back to retained effect receipts | Connector reads / observability | connector-proxy-entry.test.ts signed metadata read, registry mismatch zero hops, current owner/grant checks, provider-error canaries and unchanged effect replay | Explicit read registry; no retaining fallback; closed failure codes and log allowlist |
+
+| 2026-10-02 | Live Drive metadata tools/call returned isError after grant admission, but privacy-safe rejection collapsed provider reason and registry rejection into one code | MCP read diagnostics | Existing v9 log and proxy_access200 establish provider-stage failure; connector-proxy-entry fixture preserves SERVICE_DISABLED/status/service with private canaries absent; mcp-error-diagnostic tests reject free text/unknown fields | Preserve structured closed operational diagnostics without retaining provider content |
+| 2026-10-02 | A live synthetic correction used typographic quotation marks; the quote extractor fell back to the entire Owner-prefixed citation, so grounded correction was silently rejected | Owner memory/provenance | claims.test.ts exact live payload red, ASCII-only control green, paired quote and shared/Waldo/mixed/mismatched negatives; normal-DO provider/eviction proof | Citation punctuation must not change grounded owner authority; recognize paired formats while preserving all provenance and correction gates |
+
+| 2026-10-02 | Forget failed after SQL purge because a capped read-owner-context ledger display was validated as whole tool-result JSON; legacy unwrapped displays could also retain text | Owner memory/privacy | tool-output-ledger.test.ts raw-capped, escaped and legacy summary red proofs; normal-DO exact forget receipt, ledger cleanup and eviction | Sanitize at the actual data boundary while retaining outer provenance and strict provider protocol validation |
+
+### Stable metadata read transports
+- [ ] Metadata adapters fix endpoint, GET verb, field mask and one-page limits in server code; reject content flags and unknown arguments before credential refresh. Project provider output again, require an existing read scope, and prove owner/revocation checks plus zero result-ledger calls through the actual signed Edge entry.
+- [ ] Preserve safe HTTP error meaning even when a provider returns non-JSON, an empty body or an oversized body. A generic 403 is access denial; offer new consent only when stored scopes or recognized structured provider evidence identifies missing scope.
+
+| 2026-10-02 | Drive MCP returned an opaque tools/call rejection for an authorized metadata read, preventing a working capability despite an existing read grant | Drive metadata transport | drive-rest.test.ts fixed GET/fields/page cap, literal search, unknown/content args, projected output and safe provider errors; drive-rest-edge.test.ts actual signed Edge owner/scope/revocation and zero-ledger proofs | Expose the stable REST metadata transport explicitly; avoid unannounced fallbacks or provider-text disclosure |
+
+### Pending forget cleanup consumers
+- [ ] A topic-only forget has a cleanup lifecycle even when no claim ID survives. Capture verified topic settlement arguments; independently reread every conversation and retained ledger row before settling either topics or IDs. A clean callback receipt or clean six-fragment display is not full-store verification.
+- [ ] Before fresh/reused responder history and dynamic ledger fragments reach composition, rehydrate pending owner-local cleanup targets, retry durable cleanup and suppress those bytes transiently. Keep pending receipts on cleanup/readback failure; preserve fixed safeguards and provenance, and retain no permanent plaintext blacklist or payload-bearing cleanup logs.
+
+| 2026-10-02 | Zero-ID topic forgets could lose consumer settlement/retry semantics; fresh responders could replay topic text and a conversation-only receipt could hide a retained ledger survivor | Owner memory/privacy | memory-forget-do-provider.test.ts topic-only KV failure/recreation/recovery, false-clean receipt, independent conversation/ledger readback failures and trusted safeguard regressions; tool-output-ledger.test.ts escaped rows outside staged ring | Settle source-last only after all retained stores independently verify clean; transiently suppress durable pending targets at actual composition boundaries |
+
+- [ ] Apply ledger forget redaction to the raw summary before adding a tool display prefix. Valid JSON uses decoded literal matching; ambiguous malformed Unicode-escaped display text is neutralized during active cleanup instead of guessed, while tool provenance and authority remain unchanged.
+
+- [ ] An admitted steering message needs its own durable outcome. If never consumed, return only that exact child to its original FIFO admission; if consumed, never replay effects and publish a deduplicated fixed uncertainty notice. Model exposure follows successful durable consumption, and notice publication failure retains a durable wake.
+
+| 2026-10-02 | Final-round steering was ACKed but ignored/quarantined with its body erased and no child outcome | Owner inbox/delivery | normal-DO concurrent final-round and refused steering RED/GREEN, late-target FIFO/dedup, consumed/missing transition fences, restart and outbox-capacity notice recovery | Reuse the existing durable inbox and fenced final outbox; preserve never-consumed message identity, prohibit consumed replay, and retain publication intent until enqueue |
+
+### Bounded document rendering
+- [ ] PDF line wrapping bounds font-measurement work for long unbroken tokens as well as ordinary words. Cover geometry and the maximum admitted source length in workerd; rendering must not turn a bounded owner input into quadratic CPU work.
+
+| 2026-10-03 | PDF wrapping measured 42,529 font widths for a 2,000-character unbroken token | Workspace document export | artifact-export.test.ts long-token measurement/geometry regression and workspace-render.test.ts maximum 32,000-character token in workerd | Binary-search wrapping keeps bounded inputs within bounded rendering work; retain real-byte and authenticated-download acceptance |
+
+### Curated skill authority and revocation
+- [ ] Hook snapshots may clone scope objects. Verify captured admit/commit authority and exact owner/update/run/attempt identity rather than object equality; valid cloned snapshots must work while forged scopes fail.
+- [ ] Recheck enabled reviewed-procedure identity and current owner/run authority at every physical provider call, including reduced-context retry and medical recursion. Disable suppresses captured instructions before any subsequent call; bodies never enter tool results or retained conversation history.
+- [ ] Bound every stored skill text/scalar field in SQL before JavaScript materialization, using UTF-8 BLOB byte lengths. Preserve invalid-row presence so rejected oversized or NUL-tail rows cannot be treated as missing and reactivated by ON CONFLICT.
+
+| 2026-10-03 | Hook-cloned scope identity rejected valid owner skill lifecycle tools | Curated skill authority | curated-skills-owner-do.test.ts actual dispatcher install/disable and curated-skills-tools.test.ts forged-scope rejection | Captured authority closures and pinned run identity govern mutations, not scope object equality |
+| 2026-10-03 | Captured procedure instructions survived disable during reduced-context retry and medical recursion | Curated skill revocation | curated-skills-retry.test.ts physical provider-boundary disable regressions | Check revocation for each physical provider request, including recursive paths |
+| 2026-10-03 | Oversized and NUL-tail stored skill fields were materialized before rejection | Curated skill storage | curated-skills.test.ts actual-SQL byte-bound and rejected-row-presence regressions | Project bounded fields before JavaScript and retain rejected presence; never reactivate hostile rows as absent |
+| 2026-10-03 | A Telegram document link redirected to sign-in and lost its file target although direct navigation downloaded the retained PDF | Console private downloads | console-signin.test.ts target validation/retry/expiry, console-owner-routing.test.ts ticket expiry, console-signin-browser.test.ts terminal/history/no binary fetch, owner-do-registered-workspace.test.ts expired/revoked/foreign account and exact PDF/DOCX bytes | Preserve Strict cookies and download intent; resume with an explicit same-origin link after existing authentication admission |
+
+### Calendar counter timezone adoption
+- [ ] Timezone adoption retains every aggregate row and lifetime/event cooldown. Missing provenance means legacy UTC. Before changing the existing marker, require valid retained dates and class/subkind sends strictly before both old and new civil days; current budget-only/subkind-only, future or malformed state holds. Cover safe later adoption, DST and negative offsets through the actual owner DO, with the Calendar flag absent and zero unchanged.
+
+| Date | Bug found | Surface | Adversarial proof | Checklist change |
+| --- | --- | --- | --- | --- |
+| 2026-10-03 | Historical daily rows permanently blocked initial Calendar activation; later timezone changes ignored budget/subkind rows | Owner DO Calendar counter marker | calendar-prep-owner-do.test.ts historical adoption RED, boundary/sibling/malformed/finite-transition matrix and exact retained-row/lifetime/cooldown assertions | Adopt only after both civil days have advanced; preserve SQL state and default-off behavior |
+| 2026-10-03 | Future send timestamps later in the current civil day were reported as ordinary rollover holds | Owner DO Calendar counter marker | calendar-prep-owner-do.test.ts same-day future class/subkind send regressions | Compare send instants with now before civil-day checks; future instants require inspection |
+
+### Unbound owner alarm admission
+- [ ] Directory-backed scheduled work requires the persisted canonical owner name to match the physical DO and a linked Telegram subject before runtime setup. Retain schedule/data and inbox/outbox/link recovery wakes with bounded backoff; canonical restoration resumes dispatch. Missing/failed directory routes never select a legacy subject DO, while no-directory deploy-owner routing remains supported.
+
+| 2026-10-03 | An unresolved alarm reached legacy Google refresh after Calendar prep alone rejected missing owner identity | Owner DO alarm and probe/console routing | unbound-owner-alarm.test.ts actual DO no-setup/physical mismatch/unlinked/retained wakes/restoration; probe-turn.test.ts and console-owner-routing.test.ts null/error no-fallback proofs | Reuse canonical physical binding and shared alarm arbitration before scheduled runtime setup |
+
+### Owner artifact continuity
+| 2026-10-03 | Successful workspace write receipts were not projected into a later owner prompt; a test-only file ID hid same-file recovery failure | Owner task continuity | curated-skills-owner-do.test.ts drops conversation/restarts, parses host-projected receipt, revises same ID once and reads back with unrelated older file unchanged; store.test.ts pending/stale/tombstone/foreign/byte-row boundary rejection | Project bounded current committed host metadata independently of history; preserve current-request precedence and model ambiguity judgment; receipts grant no authority |
+
+- [ ] Recent artifact metadata retains external provenance: Scribe must admit unchanged bytes before names join the owner prompt. Health/instruction filenames, rewritten email paths and active-forget matches are withheld, never offered as exact replacement targets. Host-verified receipts do not authorize tools, overwrite a current owner target, or establish model relevance quality.
+
+- [ ] Workspace continuity reads precede tool selection. Cancellation fixtures pause the actual write dispatch, while foreign ingress and scheduled-write rejection retain the pre-existing read-only manifest and perform no additional workspace I/O.
+
+### Bounded provider document previews
+- [ ] Apply the existing external Scribe policy before bounding a content preview, then measure the complete escaped metadata/body/account envelope. Redaction expansion must not silently spill a supposedly inline preview to offload. Test dense emails, escaped metadata and Unicode through the actual dispatcher with an offload spy; recompute visible byte count and preserve truncation after each cut.
+
+| 2026-10-03 | External PII redaction expanded a pre-bounded Google document body beyond the dispatcher inline cap | Drive content preview | read-drive.test.ts dense-email real-Scribe dispatcher/offload-spy RED/GREEN and escaped-metadata Unicode envelope case | Prepare with the existing external Scribe policy before the final whole-envelope bound, retaining normal dispatcher verification and honest visible bytes |
+
+- [ ] Google client inventory parity distinguishes host-bound account metadata from callable proxy operations. Account identity is data, never a new remote operation; retain exact Calendar wire-argument coverage.

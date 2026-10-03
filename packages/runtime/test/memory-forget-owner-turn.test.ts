@@ -19,10 +19,12 @@ const ops = (o: Record<string, unknown>) => JSON.stringify({ add: [], correction
 // save nor deny a forget it has no receipt for. Not covered: a live writer or staging.
 const system = (): string => (JSON.parse(seen.replyInputs.at(-1)!) as { instructions: string }).instructions;
 type Redact = (texts: readonly string[]) => Promise<{ rewritten: number; remaining: number }>;
-const session = async (name: string, work: (turn: (id: string, text: string, writer: string) => Promise<void>, store: ReturnType<typeof claimStore>, responder: ReturnType<typeof createOwnerResponder>) => Promise<void>, redact?: Redact) => {
+const session = async (name: string, work: (turn: (id: string, text: string, writer: string) => Promise<void>, store: ReturnType<typeof claimStore>, responder: ReturnType<typeof createOwnerResponder>) => Promise<void>, redact?: Redact, taskContext?: () => Promise<string>) => {
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_i, state) => {
     const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
-    const responder = createOwnerResponder('fixture', undefined, store as never, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, redact);
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', undefined, store as never, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, redact];
+    if(taskContext) args[21]={skills:{handlers:[],metadata:()=>'',prompt:async()=>'',assertProcedureCurrent:async()=>undefined,taskContext}};
+    const responder = createOwnerResponder(...args);
     await work(async (id, text, writer) => { seen.writerOps.push(writer); await responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text }, (_n, w) => w()); }, store, responder);
   });
 };
@@ -183,3 +185,15 @@ it('a purge that fails verification is reported as tried and incomplete, never r
     expect(receiptOf(system())).not.toContain('removed 1 claim');
   });
 });
+
+ it('pending literal forget also scrubs host task metadata without changing saved artifacts',async()=>{
+ const rawMetadata=JSON.stringify({backend:'workspace',path:`Prefers a ${PREF}`,file_id:'host-only-identity',revision:1});
+ await session('forget-task-metadata',async(turn,store)=>{
+  await saved(turn);expect(system()).toContain(`Prefers a ${PREF}`);
+  await turn('tg-2','forget only that pref',ops({forget_claims:[1]}));
+  expect(store.claims('purging').map(claim=>claim.id)).toEqual([1]);
+  expect(system()).not.toContain(`Prefers a ${PREF}`);
+  expect(system()).toContain('withheld by the active forget barrier');
+  expect(rawMetadata).toContain(`Prefers a ${PREF}`);
+ },async()=>({rewritten:0,remaining:1}),async()=>rawMetadata);
+ });

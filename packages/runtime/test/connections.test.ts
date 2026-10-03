@@ -16,7 +16,8 @@ describe('proxy method parity', () => {
     const missing: Exclude<keyof GoogleClient, GoogleMethod> = undefined as never;
     expect(missing).toBe(undefined);
     // Runtime: the vault client is built from exactly the allowlist, in both directions.
-    expect(Object.keys(client).sort()).toEqual([...GOOGLE_METHODS].sort());
+    expect(Object.keys(client).sort()).toEqual(['account', ...GOOGLE_METHODS].sort());
+    expect(client.account).toEqual({connection_id:'c-1',email:null});
     for (const name of GOOGLE_METHODS) expect(typeof client[name]).toBe('function');
   });
 });

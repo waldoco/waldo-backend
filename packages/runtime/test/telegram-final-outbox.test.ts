@@ -12,6 +12,22 @@ const fixture = () => {
   return { kv, outbox, input, settled, advance: () => { now += 31000; }, now: () => now };
 };
 describe('frozen Telegram final outbox', () => {
+  it('expires before quiet deferral and clamps a future hold to expiry for every receipt kind', async () => {
+    for (const receipt of [{}, { mailFollowup: { loopId: 'l', due: '2026-10-03T10:00', sourceRef: 'mail:t', timezone: 'UTC', messageId: 'm' } }, { heartbeat: { id: 'h', occurrence: 1, schedulerRunId: 'r', loops: [] } }]) {
+      const f = fixture();
+      await f.outbox.enqueue({ ...f.input, ...receipt, expiresAt: f.now() + 40_000 });
+      f.advance();
+      const send = vi.fn(async () => undefined);
+      const defer = vi.fn(async () => f.now() + 60_000);
+      await f.outbox.drain({ allowed: async () => true, send, defer, settled: f.settled });
+      expect(f.outbox.records()[0]?.dueAt).toBe(41_000);
+      f.advance();
+      await f.outbox.drain({ allowed: async () => true, send, defer, settled: f.settled });
+      expect(f.outbox.records()[0]).toMatchObject({ status: 'blocked', reason: 'expired', settled: true, attempts: 0 });
+      expect(send).not.toHaveBeenCalled();
+      expect(defer).toHaveBeenCalledTimes(1);
+    }
+  });
   it('persists final before transport and deduplicates exact payload, conflicts different bytes', async () => {
     const f = fixture(); await f.outbox.enqueue(f.input); await f.outbox.enqueue(f.input);
     expect(f.outbox.records()).toHaveLength(1);

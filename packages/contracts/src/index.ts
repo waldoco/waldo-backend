@@ -29,7 +29,9 @@ export * from './auth/consent';
 export * from './tools/connect-intent';
 export * from './tools/permissions';
 export * from './tools/handler';
+export * from './tools/acl-intersection';
 export * from './tools/schemas/artifacts';
+export * from './tools/schemas/workspace';
 export * from './tools/schemas/reads';
 export * from './tools/schemas/writes';
 export * from './tools/schemas/delegate';
@@ -185,3 +187,5 @@ export * from './runtime/approval';
 export * from './runtime/activity';
 export * from './runtime/trusted-coordination';
 export * from './channels/imessage-v1';
+
+export * from './tools/schemas/skills';

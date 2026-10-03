@@ -107,9 +107,13 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'read_document',
   'call_mcp_tool',
   'read_mcp_tool',
+  'read_drive',
   'search_connector',
   'read_tool_output',
   'read_artifact',
+  // workspace files hold owner uploads and agent text that can quote provider content; names and bodies are data.
+  'workspace_list',
+  'workspace_read',
   // search_episodes: stored history can hold Waldo replies and machine rows that quoted email or
   // web text, so hits and recovered turns are data, never instructions or owner authority.
   'search_episodes',
@@ -149,6 +153,9 @@ export const PRIVILEGED_ACTION_TOOLS: readonly ToolName[] = [
   'restore_message',
   'archive_thread',
   'update_thread_topics',
+  // Changing durable procedure availability is owner-controlled, never provider-authorized.
+  'skills_install',
+  'skills_disable',
 ];
 
 // The single authority of the ADR-0049 taint gate, pure so hook and dispatcher share one law:
@@ -191,6 +198,10 @@ export interface ToolHandler<Args, Result, Ctx> {
   // keys its no-progress epoch reset on autonomy_gated || mutates_state so live mutation
   // handlers (which are desk-routed, not privilege-gated) still open a new epoch.
   mutates_state?: true;
+  // requires_connector marks a handler that cannot run without a live connector (for example a Google account).
+  // The host derives the connector_backed list for ACL intersection from this declaration, never from a host-supplied
+  // list that can be omitted (see connectorBackedTools in tools/acl-intersection.ts).
+  requires_connector?: true;
   handle(args: Args, ctx: Ctx): Promise<ToolResult<Result>>;
   idempotentOnKey?: true;
   executeOrReconcile?(

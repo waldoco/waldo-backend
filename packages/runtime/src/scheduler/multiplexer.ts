@@ -11,6 +11,7 @@ import {
   type ScheduleRecurrence,
 } from '@waldo/contracts';
 import type { Deps } from '../seams/deps';
+import { FINAL_OUTBOX_KEY, type FinalRecord } from '../channels/telegram-final-outbox';
 import { rearmSharedAlarm } from './alarm-slot';
 
 const MAX_MISSED_CHAIN = 64;
@@ -146,9 +147,7 @@ export class Scheduler {
         }
         // Telegram final already committed before a crash at executor-return/complete.
         // Advance scheduling without replaying its model/tools; outbox owns delivery settlement.
-        const finals = this.storage.kv.get<readonly { reminder?: { id: string; occurrence: number } }[]>('telegram_final_outbox_v1') ?? [];
-        const committedId = fresh.id, committedOccurrence = fresh.occurrence_at;
-        if (fresh.kind === 'reminder' && finals.some(r => r.reminder?.id === committedId && r.reminder.occurrence === committedOccurrence)) {
+        if (this.hasCommittedFinal(fresh)) {
           this.complete(fresh, now);
           continue;
         }
@@ -202,6 +201,13 @@ export class Scheduler {
             // No settle: a row stuck in 'running' is the crashed-run evidence.
             throw err;
           }
+          if (this.hasCommittedFinal(bumped)) {
+            this.complete(bumped, now);
+            this.markHeartbeatDecision(runId, 'acted');
+            this.markDelivery(runId, 'pending');
+            dispatched.push(bumped);
+            continue;
+          }
           const disposition = this.applyFailurePolicy(bumped, now);
           if (this.runOutcome(runId) === 'running') {
             this.settleRun(runId, disposition === 'quarantined' ? 'quarantined' : 'failed', 'run', now);
@@ -215,6 +221,15 @@ export class Scheduler {
     } finally {
       await this.rearm();
     }
+  }
+
+  private hasCommittedFinal(entry: ScheduleEntry): boolean {
+    if (entry.kind !== 'reminder' && entry.kind !== 'heartbeat') return false;
+    const finals = this.storage.kv.get<readonly FinalRecord[]>(FINAL_OUTBOX_KEY) ?? [];
+    return finals.some(record => {
+      const receipt = entry.kind === 'reminder' ? record.reminder : record.heartbeat;
+      return receipt?.id === entry.id && receipt.occurrence === entry.occurrence_at;
+    });
   }
 
   private dueEntries(now: number): ScheduleEntry[] {
@@ -344,7 +359,7 @@ export class Scheduler {
     const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
     const row = this.sql
       .exec<{ id: string }>(
-        `SELECT id FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ? AND outcome = 'running' ORDER BY id DESC LIMIT 1`,
+        `SELECT id FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ? AND outcome = 'running' ORDER BY attempt DESC, id DESC LIMIT 1`,
         scheduleId,
         lower,
         upper,
@@ -406,11 +421,20 @@ export class Scheduler {
 
   private hasRunningRun(scheduleId: string, occurrenceAt: number): boolean {
     const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
+    // Preserve crashed attempts as evidence; a later terminal attempt of that exact
+    // occurrence supersedes them. Removing the numeric attempt suffix isolates its prefix.
     return (
       this.sql
         .exec(
-          `SELECT 1 FROM schedule_runs
-            WHERE schedule_id = ? AND outcome = 'running' AND NOT (id >= ? AND id < ?)
+          `SELECT 1 FROM schedule_runs AS running
+            WHERE running.schedule_id = ? AND running.outcome = 'running' AND NOT (running.id >= ? AND running.id < ?)
+              AND NOT EXISTS (
+                SELECT 1 FROM schedule_runs AS recovered
+                 WHERE recovered.schedule_id = running.schedule_id
+                   AND recovered.attempt > running.attempt
+                   AND (recovered.outcome = 'ok' OR recovered.delivery IN ('sent', 'failed'))
+                   AND recovered.id = substr(running.id, 1, length(running.id) - length(CAST(running.attempt AS TEXT))) || recovered.attempt
+              )
             LIMIT 1`,
           scheduleId,
           lower,
@@ -599,7 +623,7 @@ function nextOccurrence(recurrence: ScheduleRecurrence, now: number): number {
   return nextDailyLocalOccurrence(recurrence.time, recurrence.timezone, now);
 }
 
-function nextDailyLocalOccurrence(time: string, timezone: string, now: number): number {
+export function nextDailyLocalOccurrence(time: string, timezone: string, now: number): number {
   const [hourText, minuteText] = time.split(':');
   const hour = Number(hourText);
   const minute = Number(minuteText);
