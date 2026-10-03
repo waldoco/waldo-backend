@@ -42,7 +42,7 @@ it('NEGATIVE: before the owner confirms, and for ambiguous or restrictive classi
   }
 }));
 
-it('FINDING: while a proposal is pending, even sources the owner already had are blocked until the owner decides', () => run('pair-pending-blocks-existing', async (sql, scope) => {
+it('CHARACTERIZATION (not a defect claim): while a proposal is pending, even sources the owner already had are blocked until the owner decides', () => run('pair-pending-blocks-existing', async (sql, scope) => {
   const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {});
   await cap.classify(decision('restrict', ['workspace', 'local']));
   expect(allowed(await cap.current(), 'workspace_list')).toBe(true);
