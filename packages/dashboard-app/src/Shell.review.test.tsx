@@ -47,3 +47,20 @@ it('unknown hashes show a not-found destination and recover to Today through nav
   expect(host.querySelector('main')?.textContent).toContain('Nothing waiting.');
  }finally{await act(async()=>root.unmount());host.remove();window.location.hash='';vi.unstubAllGlobals();}
 });
+it('removes the greeting timer and both refresh listeners on unmount',async()=>{
+ vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
+ vi.stubGlobal('matchMedia',vi.fn(()=>({matches:false,addEventListener(){},removeEventListener(){}})));
+ vi.stubGlobal('fetch',vi.fn(async()=>new Response('{}',{status:404})));
+ const interval=vi.spyOn(window,'setInterval'),clear=vi.spyOn(window,'clearInterval');
+ const addWindow=vi.spyOn(window,'addEventListener'),removeWindow=vi.spyOn(window,'removeEventListener');
+ const addDocument=vi.spyOn(document,'addEventListener'),removeDocument=vi.spyOn(document,'removeEventListener');
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host);
+ try{
+  await act(async()=>root.render(<App/>));
+  const index=interval.mock.calls.findIndex(call=>call[1]===60000);expect(index).toBeGreaterThanOrEqual(0);
+  const tick=interval.mock.calls[index]![0],timer=interval.mock.results[index]!.value;
+  expect(addWindow).toHaveBeenCalledWith('focus',tick);expect(addDocument).toHaveBeenCalledWith('visibilitychange',tick);
+  await act(async()=>root.unmount());
+  expect(clear).toHaveBeenCalledWith(timer);expect(removeWindow).toHaveBeenCalledWith('focus',tick);expect(removeDocument).toHaveBeenCalledWith('visibilitychange',tick);
+ }finally{host.remove();vi.restoreAllMocks();vi.unstubAllGlobals();}
+});

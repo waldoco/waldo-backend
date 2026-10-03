@@ -91,7 +91,7 @@ export function Dashboard({ data, route, now = new Date() }: { data: OverviewV1;
   const brief = data.brief.status === 'sent_recorded' ? 'The Brief is marked sent.'
     : data.brief.status === 'not_scheduled' ? 'No Brief is scheduled.' : 'The Brief has not been sent.';
   return <>
-    <Heading eyebrow="Your Waldo" title={greeting(data.timezone,now)}><p>{homeBrief(data)}</p></Heading>
+    <Heading eyebrow="Your Waldo" title={greeting(data.timezone,now)}><p>{homeBrief(data,now)}</p></Heading>
     <div className={`overview-grid${data.waiting.count ? ' has-waiting' : ''}`}>
       <section className={`waiting-panel${data.waiting.count ? ' needs-you' : ''}`}>
         <div className="section-label"><span className="eyebrow">Waiting on you</span><span className="count" aria-label={`${data.waiting.count} waiting ${data.waiting.count === 1 ? 'decision' : 'decisions'}`}>{data.waiting.count}</span></div>
@@ -99,7 +99,7 @@ export function Dashboard({ data, route, now = new Date() }: { data: OverviewV1;
         <p>{waitingSummary(data)}</p><a className="button-link" href="#/waiting">Review what’s waiting <span aria-hidden="true">→</span></a>
         <p className="muted">A proposal is pending work. Review the full details before deciding.</p>
       </section>
-      <section className="next-panel"><span className="eyebrow">Next on your day</span><h2>{data.next_card?.label ?? 'No card scheduled ahead.'}</h2>
+      <section className="next-panel"><span className="eyebrow">{data.next_card && Date.parse(data.next_card.scheduled_at)<=now.getTime()?'On your recorded plan':'Next on your day'}</span><h2>{data.next_card?.label ?? 'No card scheduled ahead.'}</h2>
         <p>{data.next_card ? date(data.next_card.scheduled_at, data.timezone) : 'No future card is recorded in this plan.'}</p>
         <a href="#/settings/day">Adjust timing &amp; pins <span aria-hidden="true">↗</span></a>
       </section>
