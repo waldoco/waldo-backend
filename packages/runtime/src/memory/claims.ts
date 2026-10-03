@@ -281,7 +281,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     // leaves the search index, backups, and frozen legacy tables (redacted, preserving
     // unrelated content), constellation nodes stop quoting it and stop referencing its id,
     // and a barrier blocks re-admission. Fresh-state verification reports what survived.
-    purge(ids: readonly number[], at: string, topics: readonly string[] = []): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } } {
+    purge(ids: readonly number[], at: string, topics: readonly string[] = []): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; sourceTurns: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } } {
       const forgotten = ids.length
         ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
         : [];
@@ -333,6 +333,16 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } = { deleted: {}, redacted: {}, terminalised: {} };
       const tally = (kind: keyof typeof receipt, store: string) => { receipt[kind][store] = (receipt[kind][store] ?? 0) + 1; };
       const hasRunCandidates = tableExists(sql, 'run_candidates');
+      // Provenance by source turn: an OWNER-origin claim carries source_ref "owner, <turn id>", set by the admission gate and never by
+      // the model. The owner's message of that turn and Waldo's reply to it are retained history of where the forgotten claim came
+      // from, so both are redacted whole, whatever words they used. Only the claims this forget names are followed. Cost, stated:
+      // a turn that carried other facts loses its retained text too (the other facts stay as their own claims).
+      const sourceTurns = [...new Set(forgotten.filter((claim) => claim.origin === 'owner' && claim.source_ref?.startsWith('owner, tg-')).map((claim) => claim.source_ref!.slice('owner, '.length).trim()))];
+      if (hasEpisodes) for (const turn of sourceTurns) attempt('episodes', () => {
+        for (const row of sql.exec<{ rid: number; text: string }>('SELECT rowid AS rid, text FROM episodes WHERE entry_id IN (?, ?)', turn, `${turn}-reply`).toArray()) {
+          if (row.text !== FORGOTTEN) { sql.exec('UPDATE episodes SET text = ? WHERE rowid = ?', FORGOTTEN, row.rid); tally('redacted', 'source_turn_episodes'); }
+        }
+      });
       const hasOutbox = tableExists(sql, 'outbox');
       const hasHeld = tableExists(sql, 'held_candidates');
       const hasSchedule = tableExists(sql, 'schedule');
@@ -511,7 +521,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // source on SQL verification alone would orphan a KV failure: the UI says incomplete
       // but the retry could no longer find the claim. Until settle() runs, the 'purging' row
       // and pending marker remain, so every retry path still works.
-      return { ready: failed.length === 0 && Object.keys(remaining).length === 0, remaining, texts, failed, receipt };
+      return { ready: failed.length === 0 && Object.keys(remaining).length === 0, remaining, texts, sourceTurns, failed, receipt };
     },
 
     // Final step of a purge, run only once SQL AND the caller's KV stores verify clean.
@@ -718,7 +728,7 @@ const correctionMatches = (old: Claim, replacement: { kind: string; text: string
 type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean; aliases_touch_forgotten?: boolean })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null }>;
 
 // What this application of claim ops actually did, as counts the caller can report truthfully.
-export type ClaimOutcome = Readonly<{ written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[]; episodesRedacted?: number }>;
+export type ClaimOutcome = Readonly<{ written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[]; episodesRedacted?: number; sourceTurns?: readonly string[]; sourceTurnEpisodesRedacted?: number }>;
 
 export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[], topics?: readonly string[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean, onOutcome?: (outcome: ClaimOutcome) => void): string => {
   // Destructive ops need an explicit forget request in the text under review (see
@@ -862,7 +872,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     // Unique ids, so a repeated id counts once; removed only when every store verified clean.
     forgetClaimsAttempted: new Set(forgetIds).size, forgetClaimsRemoved: purge?.ready ? new Set(forgetIds).size : 0,
     forgetNodes: forgetsAllowed ? new Set(ops.forget_nodes.filter((id) => nodes.has(id))).size : 0,
-    forgetAllowed: forgetsAllowed, purgeIncomplete: leftover, episodesRedacted: purge?.receipt.redacted.episodes ?? 0,
+    forgetAllowed: forgetsAllowed, purgeIncomplete: leftover, episodesRedacted: purge?.receipt.redacted.episodes ?? 0, sourceTurns: purge?.sourceTurns ?? [], sourceTurnEpisodesRedacted: purge?.receipt.redacted.source_turn_episodes ?? 0,
   });
   const reasons = holdReasons.size ? `(${[...holdReasons].join(',')})` : '';
   const blockedForgets = forgetsAllowed ? 0 : ops.forget_claims.length + ops.forget_nodes.length + (ops.forget_topic?.trim() ? 1 : 0);

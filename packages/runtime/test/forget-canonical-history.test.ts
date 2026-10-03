@@ -82,3 +82,29 @@ describe('forget reaches the canonical owner history', () => {
     });
   });
 });
+
+describe('forget by source turn', () => {
+  it('redacts the owner entry and the reply of a source turn whole, in conv rows and witnesses, and leaves other turns', async () => {
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-source-turn-history')), async (_i, state) => {
+      const rows = [entry('tg-1', 'I like the workshop early, nine sharp'), entry('tg-1-reply', 'Saved: mornings at 09:00.'), entry('tg-2', 'unrelated lunch plan')];
+      const put: Record<string, unknown> = {};
+      rows.forEach((e, i) => { put[`${P}conv:${String(i).padStart(10, '0')}`] = e; put[`${P}witness:${e.id}`] = { lineage: 'canonical_v1', principal_ref: 'prn_x', tenant_ref: 'ten_x', entry: e }; });
+      await state.storage.put(put);
+      const receipt = await redactConversationEntries(state.storage, [], '[forgotten]', undefined, ['tg-1']);
+      expect(receipt.rewritten).toBe(2);
+      const all = JSON.stringify([...(await state.storage.list({ prefix: P })).values()]);
+      expect(all).not.toMatch(/nine sharp|09:00/);
+      expect(all).toContain('unrelated lunch plan');
+    });
+  });
+  it('counts a source-turn entry that is not in its whole-redacted form as remaining', async () => {
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-source-turn-remaining')), async (_i, state) => {
+      const e = entry('tg-1', 'I like the workshop early, nine sharp');
+      await state.storage.put({ [`${P}conv:0000000000`]: e, [`${P}witness:tg-1`]: { lineage: 'canonical_v1', principal_ref: 'prn_x', tenant_ref: 'ten_x', entry: e } });
+      // A fenced commit that writes nothing leaves the entry as it was: that must show as remaining, not as clean.
+      const receipt = await redactConversationEntries(state.storage, [], '[forgotten]', { commit: () => undefined } as never, ['tg-1']);
+      expect(receipt.remaining).toBeGreaterThan(0);
+    });
+  });
+});
+
