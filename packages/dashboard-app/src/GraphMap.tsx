@@ -9,7 +9,9 @@ export function GraphMap({nodes,links,selected,onSelect,reduced,resetKey}:{nodes
  const [view,setView]=useState({x:0,y:0,zoom:1});
  const gesture=useRef<{id:number;node:string|null;clientX:number;clientY:number;start:GraphPoint;dragged:boolean}|null>(null);
  const svg=useRef<SVGSVGElement>(null),scroll=useRef<HTMLDivElement>(null),dragged=useRef(false);
+ const focusTarget=useRef<SVGGElement|null>(null);
  useEffect(()=>{setMoved(new Map());setView({x:0,y:0,zoom:1});const p=scene.nodes.find(n=>n.id===selected);if(scroll.current&&p)scroll.current.scrollLeft=Math.max(0,p.x-scroll.current.clientWidth/2);},[resetKey]);
+ useEffect(()=>{const target=focusTarget.current;if(target){target.scrollIntoView({block:'nearest',inline:'center'});focusTarget.current=null;}},[view,hover]);
  const active=hover??selected,neighbors=new Set(links.filter(l=>l.from===active||l.to===active).flatMap(l=>[l.from,l.to]));
  const point=(id:string)=>moved.get(id)??scene.nodes.find(n=>n.id===id);
  const zoom=(amount:number)=>setView(v=>({...v,zoom:Math.max(g.zoomMin,Math.min(g.zoomMax,v.zoom+amount))}));
@@ -29,6 +31,14 @@ export function GraphMap({nodes,links,selected,onSelect,reduced,resetKey}:{nodes
   else setView(v=>({...v,x:state.start.x+dx,y:state.start.y+dy}));
  };
  const reset=()=>{setView({x:0,y:0,zoom:1});setMoved(new Map());};
+ const focus=(node:string,p:GraphPoint,target:SVGGElement)=>{
+  focusTarget.current=target;setHover(node);
+  setView(v=>{
+   const x=scene.width/2+v.x+v.zoom*(p.x-scene.width/2),y=scene.height/2+v.y+v.zoom*(p.y-scene.height/2);
+   // Recover a target clipped by the SVG before native scrolling uses its rendered bounds.
+   return {...v,x:x<g.labelWidth/2*v.zoom||x>scene.width-g.labelWidth/2*v.zoom?v.x+scene.width/2-x:v.x,y:y<g.above*v.zoom||y>scene.height-g.below*v.zoom?v.y+scene.height/2-y:v.y};
+  });
+ };
  return <div className="force-map" data-reduced-motion={reduced}>
   <div className="graph-tools" aria-label="Graph view controls"><button onClick={()=>zoom(-g.zoomStep)} aria-label="Zoom out" disabled={view.zoom<=g.zoomMin}>-</button><output aria-live="polite">{Math.round(view.zoom*100)}%</output><button onClick={()=>zoom(g.zoomStep)} aria-label="Zoom in" disabled={view.zoom>=g.zoomMax}>+</button><button onClick={reset}>Reset view</button><button onClick={()=>setView(v=>({...v,x:v.x+g.margin}))} aria-label="Pan left">←</button><button onClick={()=>setView(v=>({...v,x:v.x-g.margin}))} aria-label="Pan right">→</button><button onClick={()=>setView(v=>({...v,y:v.y+g.margin}))} aria-label="Pan up">↑</button><button onClick={()=>setView(v=>({...v,y:v.y-g.margin}))} aria-label="Pan down">↓</button></div>
   <div ref={scroll} className="force-map-scroll" role="region" aria-label="Saved graph map; horizontal scroll available" tabIndex={0}>
@@ -42,7 +52,7 @@ export function GraphMap({nodes,links,selected,onSelect,reduced,resetKey}:{nodes
     <g transform={`translate(${scene.width/2+view.x} ${scene.height/2+view.y}) scale(${view.zoom}) translate(${-scene.width/2} ${-scene.height/2})`}>
     {links.map((link,i)=>{const a=point(link.from),b=point(link.to);if(!a||!b)return null;return <path key={i} d={circuitTrace(a,b,JSON.stringify([link.from,link.to,link.kind,link.relation]))} className={`graph-edge ${link.kind} ${link.from===active||link.to===active?'active':'subdued'}`}><title>{link.relation} · {link.kind==='support'?'Saved support, not independent evidence':'Unverified association'}</title></path>;})}
     {scene.nodes.map(node=>{const p=point(node.id)!;return <g key={node.id} data-node={node.id} transform={`translate(${p.x} ${p.y})`} className={`graph-node ${node.kind} ${node.id===selected?'selected':neighbors.has(node.id)?'neighbor':'subdued'}`} role="button" tabIndex={0} aria-label={`Inspect ${node.kind==='pattern'?'tentative pattern':'supporting Spot'} ${node.label}; ${node.degree} links on this returned page`} aria-pressed={node.id===selected}
-     onPointerEnter={()=>setHover(node.id)} onPointerLeave={()=>setHover(null)} onFocus={()=>{setHover(node.id);if(scroll.current)scroll.current.scrollLeft=Math.max(0,p.x-scroll.current.clientWidth/2);}} onBlur={()=>setHover(null)} onClick={()=>{if(!dragged.current)onSelect(node.id);dragged.current=false;}} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();onSelect(node.id);}if(e.key==='Escape'){setHover(null);svg.current?.focus();}}}>
+     onPointerEnter={()=>setHover(node.id)} onPointerLeave={()=>setHover(null)} onFocus={event=>focus(node.id,p,event.currentTarget)} onBlur={()=>setHover(null)} onClick={()=>{if(!dragged.current)onSelect(node.id);dragged.current=false;}} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();onSelect(node.id);}if(e.key==='Escape'){setHover(null);svg.current?.focus();}}}>
      <circle r="30" className="graph-hit"/>{node.kind==='pattern'?<circle r={node.radius} className="graph-glyph"/>:<circle r={node.radius} className="graph-glyph spot"/>}
      <rect className="graph-label-surface" x={-g.labelWidth/2} y="20" width={g.labelWidth} height={graphLabel(node.label).length*16+10} rx="5"/><text y="34" textAnchor="middle">{graphLabel(node.label).map((label,i)=><tspan x="0" dy={i?16:0} key={i}>{label}</tspan>)}</text><title>{node.label}</title>
     </g>;})}</g>
