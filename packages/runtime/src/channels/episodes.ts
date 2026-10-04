@@ -64,6 +64,7 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
 };
 
 export const indexedConversationStore = (store: ConversationStore, index: EpisodeIndex, now: () => number): ConversationStore => ({
+  ...store,
   load: () => store.load(),
   async save(entries, leafId, scope) {
     await store.save(entries, leafId, scope);
