@@ -247,7 +247,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           || this.ctx.storage.kv.get<string>('do_name') !== child.doName || this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] !== child.bot || this.ctx.storage.kv.get<boolean>('telegram_unlinked')
           || !this.env.TELEGRAM_OWNER_DO || this.env.TELEGRAM_OWNER_DO.idFromName(child.doName).toString() !== this.ctx.id.toString()) return;
         // An in-process failure may already have frozen a notice for this same attempt.
-        if (!ordinary || !this.setup().finalOutbox.records().some(row => row.id === noticeId)) work();
+        const known = ordinary ? this.setup().finalOutbox.records().find(row => row.id === noticeId) : undefined;
+        if (known && (known.ownerSubject !== child.subject || known.doName !== child.doName || known.bot !== child.bot
+          || known.trace !== ownerTurnTrace('telegram', child.updateId) || known.payload.chat_id !== Number(child.subject))) throw new Error('failure notice binding mismatch');
+        if (!known) work();
         current.state = 'quarantined'; current.body = ''; current.reason = child.reason ?? 'consumed_target_outcome_uncertain'; current.outcomeNoticeQueued = true;
         this.ctx.storage.kv.put('telegram_owner_inbox_v1', rows);
       }));

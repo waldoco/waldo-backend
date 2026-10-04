@@ -115,8 +115,8 @@ describe('actual owner interruption recovery', () => {
     for (const subject of [81101, 81102]) await runInDurableObject(doStub(subject), async (_instance, state) => {
       const rows = state.storage.kv.get<import('../src/channels/telegram-owner-inbox').InboxRecord[]>('telegram_owner_inbox_v1') ?? [];
       const finals = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
-      await state.storage.put({ telegram_owner_inbox_v1: rows.filter(row => row.updateId < 995001 || row.updateId > 995006),
-        telegram_final_outbox_v1: finals.filter(row => ![995001, 995002, 995003, 995004, 995005, 995006].some(id => row.trace === `tg-${id}`)) });
+      await state.storage.put({ telegram_owner_inbox_v1: rows.filter(row => row.updateId < 995001 || row.updateId > 995007),
+        telegram_final_outbox_v1: finals.filter(row => ![995001, 995002, 995003, 995004, 995005, 995006, 995007].some(id => row.trace === `tg-${id}`)) });
       await state.storage.deleteAlarm();
     });
   });
@@ -231,6 +231,22 @@ it('actual failed run keeps a retry wake when its once-only status cannot be enq
     expect(await state.storage.getAlarm()).not.toBeNull();
     await instance.alarm(); await instance.alarm();
     expect(box.records().filter(row => row.trace === 'tg-995006')).toHaveLength(1);
+    await state.storage.deleteAlarm();
+  });
+});
+
+it('a mismatched persisted failure ID cannot acknowledge an interrupted owners status', async () => {
+  await runInDurableObject(doStub(81102), async (instance, state) => {
+    const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+    const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit({ bot: 'hermetic-test-bot-token', subject: '81102', doName: route(81102).doName }, 995007, 'PRIVATE_DEDUP_REQUEST');
+    await inbox.claim('hermetic-test-bot-token:telegram:995007', 'dedup-attempt', 'dedup-run', Date.now() - 1);
+    await inbox.recover(new Set());
+    state.storage.kv.put('telegram_final_outbox_v1', [{ id: 'failure:hermetic-test-bot-token:telegram:995007:dedup-attempt', trace: 'tg-995007', payload: { chat_id: 81101, text: 'Foreign fixture notice.' }, ownerSubject: '81101', doName: route(81101).doName, bot: 'foreign-bot', digest: 'fixture', status: 'blocked', settled: true, dueAt: 0, createdAt: Date.now(), attempts: 0 }]);
+    await instance.alarm();
+    expect((await inbox.records()).find(row => row.updateId === 995007)?.outcomeNoticeQueued).not.toBe(true);
+    expect(state.storage.kv.get<number>('telegram_owner_inbox_due_v1')).toBeGreaterThan(Date.now() - 1000);
     await state.storage.deleteAlarm();
   });
 });
