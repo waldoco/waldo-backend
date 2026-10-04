@@ -35,6 +35,7 @@ import { workspaceDownload, workspacePage, workspaceRead } from './console-works
 import { setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, claimStore, profile } from '../memory/claims';
+import { proactiveGate, type ProactiveKind } from './proactive-gate';
 import { isQuiet, loopBook, loopHandlers, loopsSection, proactivityLine } from './loops';
 import { armHeartbeat, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
@@ -130,6 +131,7 @@ type OwnerRuntime = Readonly<{
   updateCheck(trace: string): Promise<void>;
   calendarPrepCurrent(receipt: CalendarPrepReceipt): Promise<boolean>;
   retainedRecallAvailable(): boolean;
+  sourceAllowed(kind: ProactiveKind): Promise<boolean>;
   view(session: ConsoleSession, notice: string | null, page?: { traceBefore?: number; runsBefore?: number }): Promise<ConsoleView & { page: { trace_before: number | null; runs_before: number | null; trace_applied: number | null; runs_applied: number | null } }>;
   overview(): Promise<ReturnType<typeof dashboardOverview>>;
   act(action: ConsoleAction): Promise<boolean | string>;
@@ -848,7 +850,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           return;
         }
       }
-      const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal, call, owner, calendarPrepCurrent, retainedRecallAvailable } = this.setup();
+      const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal, call, owner, calendarPrepCurrent, retainedRecallAvailable, sourceAllowed } = this.setup();
       await ready;
       await finalOutbox.maintain();
       // Reconcile finals before quarantining recovered claims with committed payloads.
@@ -871,7 +873,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (selected === 0) { try { await this.drainInbox(); } finally { await scheduler.rearm(); } return; }
       if (selected === 1) {
         try { await finalOutbox.drain({
-          allowed: async r => (!(r.mailFollowup || r.calendarPrep) || retainedRecallAvailable()) && r.payload.chat_id === owner && r.ownerSubject === String(owner)
+          allowed: async r => (!r.mailFollowup || await sourceAllowed('mail_followup')) && (!r.calendarPrep || await sourceAllowed('calendar_prep')) && (!(r.mailFollowup || r.calendarPrep) || retainedRecallAvailable()) && r.payload.chat_id === owner && r.ownerSubject === String(owner)
             && (!r.bot || r.bot === this.env.TELEGRAM_BOT_TOKEN?.split(':')[0])
             && r.doName === (this.ctx.storage.kv.get<string>('do_name') ?? '')
             && this.ctx.storage.kv.get<boolean>('telegram_unlinked') !== true
@@ -882,7 +884,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             // Frozen source-derived outputs cannot replay retained facts while coverage is unproved.
             // Keep bytes and transport state intact; current owner replies use a separate lane.
             if ((r.mailFollowup || r.calendarPrep) && !retainedRecallAvailable()) return Math.min(Date.now() + 10 * 60_000, r.expiresAt ?? r.createdAt + 86400000);
-            return (r.mailFollowup || r.calendarPrep) && ((r.mailFollowup && this.env.MAIL_SOURCE_FOLLOWUPS !== '1') || (r.calendarPrep && this.env.CALENDAR_GROUNDED_PREP !== '1') || loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume === 'low' || isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) ? Date.now() + 10 * 60_000 : null;
+            return ((r.mailFollowup && !(await sourceAllowed('mail_followup'))) || (r.calendarPrep && !(await sourceAllowed('calendar_prep')))) ? Date.now() + 10 * 60_000 : null;
           },
           send: payload => call('sendMessage', payload), settled: settleFinal,
         }); } finally { await scheduler.rearm(); }
@@ -1430,6 +1432,17 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         .filter((section) => section !== '')
         .join('\n\n');
     const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
+    const sourceGate = (kind: ProactiveKind, connected: boolean) => proactiveGate({ kind,
+      flag: kind === 'calendar_prep' ? this.env.CALENDAR_GROUNDED_PREP : this.env.MAIL_SOURCE_FOLLOWUPS,
+      ownerEnabled: loops.proactivity().source_proactivity === true, googleConnected: connected,
+      proactivity: loops.proactivity(), now: Date.now(), timezone: clock.timezone,
+    }).open && memory.incompleteTopics().length === 0;
+    const sourceAllowed = async (kind: ProactiveKind): Promise<boolean> => {
+      if (!sourceGate(kind, true)) return false;
+      const connected = (await accounts()).some(account => googleHas(account.scopes, kind === 'calendar_prep' ? 'calendar' : 'mail'));
+      return sourceGate(kind, connected);
+    };
+
     // Media reads are per-channel: Telegram file ids go through getFile; WhatsApp media ids go
     // through the Graph two-step (W4). Both feed the same transcriber/attachment pipeline.
     const download = channel === 'whatsapp'
@@ -1488,7 +1501,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` });
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerHost?.gateway, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
+      }), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops, () => sourceAllowed('mail_followup'))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerHost?.gateway, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
       () => standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
@@ -1822,7 +1835,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const calendarPrepCurrent = async (receipt: CalendarPrepReceipt): Promise<boolean> => {
       try {
-        if (this.env.CALENDAR_GROUNDED_PREP !== '1' || receipt.calendarId !== 'primary' || Date.now() >= Date.parse(receipt.start)) return false;
+        if (!(await sourceAllowed('calendar_prep')) || receipt.calendarId !== 'primary' || Date.now() >= Date.parse(receipt.start)) return false;
         await calendarOwnerCurrent(receipt.connectionId, receipt.timezone);
         const client = await google.client('calendar');
         if (!client || client.account?.connection_id !== receipt.connectionId) return false;
@@ -1831,70 +1844,57 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const digest = await calendarPrepDigest(event);
         await calendarOwnerCurrent(receipt.connectionId, receipt.timezone);
         return event.status !== 'cancelled' && digest === receipt.sourceDigest && Date.now() < Date.parse(receipt.start)
-          && !quiet() && loops.proactivity().volume !== 'low' && this.env.CALENDAR_GROUNDED_PREP === '1';
+          && await sourceAllowed('calendar_prep');
       } catch { return false; }
     };
     const briefs = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
       try {
-        if (this.env.CALENDAR_GROUNDED_PREP === '1') {
-          if (channel !== 'telegram' || loops.proactivity().volume === 'low') return;
-          const counterHold = calendarCounterHold();
-          if (counterHold) {
-            log({ trace, hop: 'brief_sweep', ms: 0, ok: false, code: 'calendar_counter_cutover_required', detail: `Counter timezone transition held: ${counterHold}.` });
-            return void (await updateCheck(`update:${entry.occurrence_at}`));
-          }
-          const client = await google.client('calendar');
-          const connectionId = client?.account?.connection_id;
-          const timezone = clock.timezone;
-          if (!connectionId) return;
-          const current = async () => {
-            await calendarOwnerCurrent(connectionId, timezone);
-            if (this.env.CALENDAR_GROUNDED_PREP !== '1' || loops.proactivity().volume === 'low') throw new Error('calendar prep disabled');
-          };
-          const queued = await briefBook.groundedSweep({ client, now: Date.now(), timezone, current,
-            known: id => finalOutbox.records().some(record => record.id === id),
-            decide: (id, prompt) => responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, CALENDAR_PREP_FORMAT),
-            enqueue: async (id, text, calendarPrep, commit) => {
-              await current();
-              const cooldownKey = await sha256Hex(JSON.stringify([connectionId, calendarPrep.occurrence]));
-              const doName = identity.get<string>('do_name')!;
-              let admitted = false;
-              await finalOutbox.enqueueFenced({ id, trace: id, payload: { chat_id: owner, text: redactSecretUrls(text).text },
-                ownerSubject: String(owner), doName, bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: Date.parse(calendarPrep.start), calendarPrep,
-              }, work => storage.transactionSync(() => {
-                if (clock.timezone !== timezone || identity.get<string>('do_name') !== doName || identity.get<string>('telegram_subject') !== String(owner)
-                  || identity.get<boolean>('telegram_unlinked') || calendarCounterHold() !== null || this.env.CALENDAR_GROUNDED_PREP !== '1'
-                  || loops.proactivity().volume === 'low' || Date.now() >= Date.parse(calendarPrep.start)) throw new Error('calendar prep admission changed');
-                const now = Date.now();
-                const candidate = { event_id: cooldownKey, push_class: 'pre_activity_spot' as const, trigger: 'pre_activity_spot' as const, expires_at: Date.parse(calendarPrep.start) };
-                const admission = computeAdmission({ candidate, classState: calendarGate.readClassState(String(owner), candidate, now, timezone), countedSends: calendarGate.readBudget(String(owner), now, timezone).sends_total, now, timezone });
-                if (!['send', 'degrade'].includes(admission.verdict) || !admission.channels.includes('telegram')) return;
-                work(); commit();
-                // Telegram-only output never consumes an APNs budget reservation.
-                calendarGate.applyAdmission(String(owner), candidate, { ...admission, budget_charged: false }, now, timezone);
-                admitted = true;
-              }));
-              if (admitted) await scheduler.rearm();
-              return admitted;
-            },
-          });
-          log({ trace, hop: 'brief_sweep', ms: Date.now() - started, ok: true, detail: `${queued} prep intents queued; delivery unconfirmed` });
-          await updateCheck(`update:${entry.occurrence_at}`);
-          return;
-        }
-        if (quiet()) {
-          log({ trace, hop: 'brief_sweep', ms: 0, ok: true, detail: 'held: quiet hours' });
+        if (channel !== 'telegram' || !(await sourceAllowed('calendar_prep'))) return void (await updateCheck(`update:${entry.occurrence_at}`));
+        const counterHold = calendarCounterHold();
+        if (counterHold) {
+          log({ trace, hop: 'brief_sweep', ms: 0, ok: false, code: 'calendar_counter_cutover_required', detail: `Counter timezone transition held: ${counterHold}.` });
           return void (await updateCheck(`update:${entry.occurrence_at}`));
         }
-        const sent = await briefBook.sweep(await google.client(), Date.now(), async (id, event, said) => {
-          const at = Date.now();
-          const text = (await responder.prompt(id, owner, said, async (hop, work) => work())).trim();
-          if (text) await api.sendMessage({ chat_id: owner, text });
-          log({ trace: id, hop: 'event_brief', ms: Date.now() - at, ok: true, detail: event.id, text: { input: said, output: text } });
+        const client = await google.client('calendar');
+        const connectionId = client?.account?.connection_id;
+        const timezone = clock.timezone;
+        if (!connectionId) return;
+        const current = async () => {
+          await calendarOwnerCurrent(connectionId, timezone);
+          if (!(await sourceAllowed('calendar_prep'))) throw new Error('calendar prep disabled');
+        };
+        const queued = await briefBook.groundedSweep({ client, now: Date.now(), timezone, current,
+          known: id => finalOutbox.records().some(record => record.id === id),
+          decide: (id, prompt) => responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, CALENDAR_PREP_FORMAT),
+          enqueue: async (id, text, calendarPrep, commit) => {
+            await current();
+            const cooldownKey = await sha256Hex(JSON.stringify([connectionId, calendarPrep.occurrence]));
+            const doName = identity.get<string>('do_name')!;
+            let admitted = false;
+            await finalOutbox.enqueueFenced({ id, trace: id, payload: { chat_id: owner, text: redactSecretUrls(text).text },
+              ownerSubject: String(owner), doName, bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: Date.parse(calendarPrep.start), calendarPrep,
+            }, work => storage.transactionSync(() => {
+              if (clock.timezone !== timezone || identity.get<string>('do_name') !== doName || identity.get<string>('telegram_subject') !== String(owner)
+                || identity.get<boolean>('telegram_unlinked') || calendarCounterHold() !== null || this.env.CALENDAR_GROUNDED_PREP !== '1'
+                || !sourceGate('calendar_prep', true) || Date.now() >= Date.parse(calendarPrep.start)) throw new Error('calendar prep admission changed');
+              const now = Date.now();
+              const candidate = { event_id: cooldownKey, push_class: 'pre_activity_spot' as const, trigger: 'pre_activity_spot' as const, expires_at: Date.parse(calendarPrep.start) };
+              const admission = computeAdmission({ candidate, classState: calendarGate.readClassState(String(owner), candidate, now, timezone), countedSends: calendarGate.readBudget(String(owner), now, timezone).sends_total, now, timezone });
+              if (!['send', 'degrade'].includes(admission.verdict) || !admission.channels.includes('telegram')) return;
+              work(); commit();
+              // Telegram-only output never consumes an APNs budget reservation.
+              calendarGate.applyAdmission(String(owner), candidate, { ...admission, budget_charged: false }, now, timezone);
+              admitted = true;
+            }));
+            if (admitted) await scheduler.rearm();
+            return admitted;
+          },
         });
-        if (sent) log({ trace, hop: 'brief_sweep', ms: Date.now() - started, ok: true, detail: `${sent} sent` });
+        log({ trace, hop: 'brief_sweep', ms: Date.now() - started, ok: true, detail: `${queued} prep intents queued; delivery unconfirmed` });
+        await updateCheck(`update:${entry.occurrence_at}`);
+        return;
       } catch (error) {
         log({ trace, hop: 'brief_sweep', ms: Date.now() - started, ok: false, error: String(error) });
       }
@@ -1906,7 +1906,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const started = Date.now();
       try {
         const now = Date.now();
-        const sourceFollowups = this.env.MAIL_SOURCE_FOLLOWUPS === '1';
+        // Preserve observed source identity while quiet; creation and delivery still require the full gate.
+        const sourceFollowups = this.env.MAIL_SOURCE_FOLLOWUPS === '1' && loops.proactivity().source_proactivity === true;
         const changes = await collectChanges(updates, client, now, sourceFollowups);
         const day = localIso(now, clock.timezone).slice(0, 10);
         let id = changes.length ? updates.record(day, now, changes, null) : null;
@@ -1917,21 +1918,22 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const pendingMail = sourceFollowups ? updates.pendingMail() : [];
         const analysisChanges = sourceFollowups ? [...changes.filter(change => change.source !== 'mail'), ...pendingMail] : changes;
         let text: string | null = null;
-        if (canSend && analysisChanges.length) {
+        if (canSend && analysisChanges.length && (!sourceFollowups || await sourceAllowed('mail_followup'))) {
           const said = updateCardPrompt(localIso(now, clock.timezone), { changes: changeLines(analysisChanges), ledger: await ledger(), feedback: updates.feedback(), volume: volume === 'high' ? 'high' : 'normal', sourceFollowups });
-          const reply = (await responder.prompt(trace, owner, said, async (hop, work) => work(), sourceFollowups ? ['get_context', 'read_owner_context', 'search_episodes', 'open_loop'] : undefined)).trim();
+          const reply = (await responder.prompt(trace, owner, said, async (hop, work) => work(), sourceFollowups ? ['get_context', 'read_owner_context', 'search_episodes', 'open_loop'] : undefined, sourceFollowups ? async () => { if (!(await sourceAllowed('mail_followup'))) throw new Error('source proactivity disabled'); } : undefined)).trim();
           if (reply && reply !== SKIP_UPDATE) text = reply;
           updates.judgedMail(pendingMail);
         }
         if (text) { if (id === null) id = updates.record(day, now, [], text); else updates.pushed(id, text); }
-        if (text) await routedCall('sendMessage', { chat_id: owner, text, reply_markup: { inline_keyboard: [[{ text: 'Useful', callback_data: `fb:${id}:u` }, { text: 'Not useful', callback_data: `fb:${id}:n` }]] } });
-        await reviewMailFollowup({ loops, now, timezone: clock.timezone, allowed: sourceFollowups && canSend && analysisChanges.length === 0,
+        if (text && (!sourceFollowups || await sourceAllowed('mail_followup'))) await routedCall('sendMessage', { chat_id: owner, text, reply_markup: { inline_keyboard: [[{ text: 'Useful', callback_data: `fb:${id}:u` }, { text: 'Not useful', callback_data: `fb:${id}:n` }]] } });
+        await reviewMailFollowup({ loops, now, timezone: clock.timezone, allowed: sourceFollowups && await sourceAllowed('mail_followup') && canSend && analysisChanges.length === 0,
           ledger, prompt: said => responder.prompt(`${trace}:mail-followup`, owner, said, async (_hop, work) => work(), ['get_context', 'read_owner_context', 'search_episodes']),
           enqueue: async (text, mailFollowup) => {
+            if (!(await sourceAllowed('mail_followup'))) return;
             const id = `mail-followup:${mailFollowup.loopId}:${mailFollowup.due}:${mailFollowup.timezone}:${mailFollowup.messageId}`;
             const known = finalOutbox.records().find(record => record.id === id);
             if (known) {
-              const retried = await finalOutbox.retryBlockedMailFollowup(id, work => storage.transactionSync(() => { work(); loops.claimReview(mailFollowup); }));
+              const retried = await finalOutbox.retryBlockedMailFollowup(id, work => storage.transactionSync(() => { if (!sourceGate('mail_followup', true)) throw new Error('source proactivity disabled'); work(); loops.claimReview(mailFollowup); }));
               if (!retried && known.status !== 'pending') loops.settleReview(known);
               await scheduler.rearm(); return;
             }
@@ -1939,7 +1941,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
               trace: `${trace}:mail-followup`, payload: { chat_id: owner, text: redactSecretUrls(text).text },
               ownerSubject: String(owner), doName: storage.kv.get<string>('do_name') ?? '',
               ...(channel === 'telegram' ? { bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] } : {}), mailFollowup,
-            }, work => storage.transactionSync(() => { work(); loops.claimReview(mailFollowup); }));
+            }, work => storage.transactionSync(() => { if (!sourceGate('mail_followup', true)) throw new Error('source proactivity disabled'); work(); loops.claimReview(mailFollowup); }));
             await scheduler.rearm();
           },
         });
@@ -2004,7 +2006,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
         message_id: record.reaction.message_id, reaction: [{ type: 'emoji', emoji: record.reaction.emoji }] }).catch(() => undefined);
     };
-    const runtime: OwnerRuntime = { finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, nightly, briefs, cards, updateCheck, calendarPrepCurrent, retainedRecallAvailable: () => memory.incompleteTopics().length === 0, traces, log, google,
+    const runtime: OwnerRuntime = { finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, nightly, briefs, cards, updateCheck, calendarPrepCurrent, sourceAllowed, retainedRecallAvailable: () => memory.incompleteTopics().length === 0, traces, log, google,
       view: async (session, notice, page) => {
         const linked = await google.state();
         const tracePage = traces.rowsPage(clock.timezone, 60, page?.traceBefore);
@@ -2040,10 +2042,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const now = Date.now();
         const spotId = Number(id);
         if (action === 'proactivity.set') {
-          const [quietStart = '', quietEnd = '', volume = ''] = (value ?? '').split('|');
+          const [quietStart = '', quietEnd = '', volume = '', sourceOptIn = ''] = (value ?? '').split('|');
           const parsed = setProactivityArgsSchema.safeParse({ quiet_start: quietStart || null, quiet_end: quietEnd || null, volume });
-          if (!parsed.success || !(await saveSettings({ timezone: clock.timezone, ...parsed.data }))) return false;
-          loops.setProactivity(parsed.data);
+          if (!['', 'true', 'false'].includes(sourceOptIn) || !parsed.success || !(await saveSettings({ timezone: clock.timezone, ...parsed.data }))) return false;
+          loops.setProactivity({ ...parsed.data, source_proactivity: sourceOptIn === 'true' });
         } else if (action === 'timezone.set') {
           if (!validZone(value) || !(await saveSettings({ timezone: value, ...loops.proactivity() }))) return false;
           identity.put('timezone', value);
