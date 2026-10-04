@@ -169,7 +169,7 @@ export const taskSourceAllowed = (snapshot: TaskSourceSnapshot, handler: Readonl
   const family = taskSourceFamily(handler, args);
   // Unknown connector routes cannot escape through an omitted family declaration.
   // Host default read families stay usable when the classifier could not settle the task (unready), for non-mutating tools only; they never widen past an explicit owner narrowing.
-  const unreadyDefault = (name: TaskSourceFamily) => !handler.mutates_state && snapshot.defaults?.includes(name) === true;
+  const unreadyDefault = (name: TaskSourceFamily) => !handler.mutates_state && !handler.autonomy_gated && snapshot.defaults?.includes(name) === true;
   if (family) return (snapshot.ready && snapshot.sources.includes(family)) || unreadyDefault(family);
   if (handler.requires_connector) return snapshot.ready && snapshot.sources.length === TASK_SOURCE_FAMILIES.length;
   if (handler.mutates_state || handler.autonomy_gated || ['delegate_task', 'skills_list', 'skills_load', 'skills_install', 'skills_disable'].includes(handler.name)) return true;
