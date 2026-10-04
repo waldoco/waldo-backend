@@ -60,7 +60,8 @@ it('explicit owner retry retires previously selected empty coverage but never un
         const store = ownerCanonicalHistory(state.storage, s.admission, adapter);
         const gateway: LLMGatewayAdapter = { complete: async request => {
             const phase = request.request.response_format?.name;
-            const text = phase === 'claim_ops' ? JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: topic }) : 'pong';
+            const supplied = phase === 'forget_source_spans' ? JSON.parse(request.request.messages[0]!.content) as { sources: { ref: string; text: string }[] } : null;
+            const text = phase === 'claim_ops' ? JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: topic }) : supplied ? JSON.stringify({ spans: supplied.sources.map(row => ({ ref: row.ref, text: `Retry: forget only ${topic}` })), reviewed_refs: supplied.sources.map(row => row.ref), complete: true }) : 'pong';
             return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, output_items: [], latency_ms: 0 } };
         } };
         const args: Parameters<typeof createOwnerResponder> = ['fixture', store, memory];
@@ -152,7 +153,7 @@ it('canonical owner request reaches the source selector and verified cleanup wit
             const phase = request.request.response_format?.name ?? 'reply';
             captured.push({ phase, request: JSON.stringify(request.request) });
             const supplied = phase === 'forget_source_spans' ? JSON.parse(request.request.messages[0]!.content) as { sources: { ref: string; text: string }[] } : null;
-            const text = phase === 'claim_ops' ? JSON.stringify({ corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: topic, add: [{ kind: 'preference', text: 'Unauthorized new legacy claim', source: 'stated', evidence: 'invented', touches_forgotten: false }] }) : supplied ? JSON.stringify({ spans: supplied.sources.map(row => ({ ref: row.ref, text: fact })), reviewed_refs: supplied.sources.map(row => row.ref), complete: true }) : 'pong';
+            const text = phase === 'claim_ops' ? JSON.stringify({ corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: topic, add: [{ kind: 'preference', text: 'Unauthorized new legacy claim', source: 'stated', evidence: 'invented', touches_forgotten: false }] }) : supplied ? JSON.stringify({ spans: supplied.sources.flatMap(row => [fact, `Forget only ${topic}.`].filter(text => row.text.includes(text)).map(text => ({ ref: row.ref, text }))), reviewed_refs: supplied.sources.map(row => row.ref), complete: true }) : 'pong';
             return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, output_items: [], latency_ms: 0 } };
         } };
         const store = ownerCanonicalHistory(state.storage, s.admission, adapter);
@@ -412,4 +413,28 @@ it('limited canonical tasks never invoke the ordinary material bundle or retaine
     absent.setTaskSources({ taskId: 'task', revision: 1, ready: true, sources: [], startRef: 'owner-input' });
     await expect(absent.dependencies.materials.load(request)).rejects.toThrow('owner context rejected');
     expect(s.load).not.toHaveBeenCalled();
+});
+
+it('ADVERSARIAL ordinary canonical turn must retry stored incomplete topic', async () => {
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('adversarial-canonical-retry')), async (_instance, state) => {
+        const topic = 'REVIEW-757-TOPIC'; const fact = `${topic} likes cobalt paper`;
+        const memory = claimStore(state.storage.sql); const episodes = episodeIndex(state.storage.sql);
+        episodes.add('source', 'owner', fact, 1); memory.beginTopicCoverage(topic, new Date().toISOString());
+        const s = await setup('What unrelated preference remains?');
+        const adapter = createOwnerMessageContextAdapter({ ...s, retainedRecallAvailable: () => memory.incompleteTopics().length === 0, registeredHandlers: [], connectorBacked: [], access: unavailable });
+        const phases: string[] = [];
+        const gateway: LLMGatewayAdapter = { complete: async request => {
+            const phase = request.request.response_format?.name ?? 'reply'; phases.push(phase);
+            const supplied = phase === 'forget_source_spans' ? JSON.parse(request.request.messages[0]!.content) as { sources: {ref:string;text:string}[] } : null;
+            const text = phase === 'claim_ops' ? JSON.stringify({add:[],corrections:[],seen:[],confirm:[],dismiss:[],forget_claims:[],forget_nodes:[],forget_topic:null}) : supplied ? JSON.stringify({spans:supplied.sources.map(row=>({ref:row.ref,text:fact})),reviewed_refs:supplied.sources.map(row=>row.ref),complete:true}) : 'pong';
+            return {ok:true,data:{model:request.request.model,text,input_tokens:1,output_tokens:1,cache_read_input_tokens:0,output_items:[],latency_ms:0}};
+        }};
+        const store = ownerCanonicalHistory(state.storage, s.admission, adapter);
+        const args: Parameters<typeof createOwnerResponder> = ['fixture',store,memory];
+        args[10]=gateway; args[11]=(texts,scope)=>redactConversationEntries(state.storage,texts,FORGOTTEN,scope); args[19]=s.scope;
+        args[21]={binding:{admission:s.admission,adapter,store,forgetting:{...s.admission.invocation.verified_authority,store:memory}}};
+        await createOwnerResponder(...args).respond({traceId:'ordinary',conversationRef:'owner',surface:'telegram',text:'What unrelated preference remains?'},(_n,w)=>w());
+        expect(phases).toContain('forget_source_spans');
+        expect(memory.incompleteTopics()).toEqual([]);
+    });
 });

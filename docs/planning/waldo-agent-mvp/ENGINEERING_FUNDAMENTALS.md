@@ -1,5 +1,13 @@
 # Engineering fundamentals (standing owner directive, 2026-09-24)
 
+### Incomplete forget recovery and request retention
+
+- [ ] Retry one owner-local incomplete topic per memory record from durable custody. Retained forget commands remain inert quoted sources and require exact reviewed instruction spans; never exempt a row by a model label or erase only its bare marker. Include every unsaved main/steered request and shared retention projection in both supplied and fresh coverage snapshots, and reject settlement while any projection still contains the topic. Preserve coverage suppliers through episode-index wrappers. Prove restart, partial/mismatched selection, interruption and steering through the actual registered two-argument owner DO, with unchanged unrelated claim provenance and honest host receipts.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| A retained forget command kept topic coverage incomplete forever; a successful scrub could also settle before an unsaved request reintroduced the topic; the episode wrapper omitted current conversation coverage | memory-forget-do-provider.test.ts authenticated queue/alarm remember → interrupted forget → restart → ordinary retry; mixed request, mismatched/partial coverage and concurrent steering controls | Existing exact ASCII clause proof, owner-local custody and blanket recall hold remain intact; model clause quality, semantic associations and private canonical ordinary retry are separate limits |
+
 The owner wants senior product-engineer rigor on every slice, so a bug class shows up in our tests before it shows up in his hands. This file is the checklist. It applies at build time and at review time.
 
 ## How it is applied
