@@ -50,9 +50,9 @@ export class DeviceCommandStore {
     });
   }
   pending(at: number): { command_id: string; wire: string; state: string; delivered_generation: string | null }[] {
-    // Expired queued commands never enter the wire; sent work retains identity for a late result.
+    // Expired queued commands never enter the wire; possibly delivered work reuses its bytes for an expired ack or journaled result.
     this.storage.sql.exec("UPDATE commands SET state='expired',wire=NULL WHERE state='queued' AND expires_at<=?", at);
-    return this.storage.sql.exec<{ command_id: string; wire: string; state: string; delivered_generation: string | null }>("SELECT command_id,wire,state,delivered_generation FROM commands WHERE state IN ('queued','sent','acked') AND expires_at>? ORDER BY issued_at,command_id", at).toArray();
+    return this.storage.sql.exec<{ command_id: string; wire: string; state: string; delivered_generation: string | null }>("SELECT command_id,wire,state,delivered_generation FROM commands WHERE state IN ('queued','sent','acked') ORDER BY issued_at,command_id").toArray();
   }
   hasInFlight(): boolean { return this.storage.sql.exec("SELECT command_id FROM commands WHERE state IN ('sent','acked') LIMIT 1").toArray().length > 0; }
   markSent(command: string, generation = ''): void { this.storage.sql.exec("UPDATE commands SET state=CASE WHEN state='queued' THEN 'sent' ELSE state END,delivered_generation=? WHERE command_id=? AND state IN ('queued','sent','acked')", generation, command); }
