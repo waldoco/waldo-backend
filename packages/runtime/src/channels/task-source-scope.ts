@@ -62,7 +62,7 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
   const isNarrowed = () => sql.exec<{ narrowed: number }>('SELECT narrowed FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).one().narrowed === 1;
   // Private host supplies admitted bytes and occurrence; the classifier cannot construct this witness.
   const instruction = ownerInput && Object.freeze({ ...ownerInput, quotedRanges: ownerInput.quotedRanges?.map(range => Object.freeze({ ...range })) });
-  initialise(sql);
+  scope.commit(() => initialise(sql));
   scope.commit(() => sql.exec('INSERT OR IGNORE INTO owner_task_source_scope (owner_key, task_id, revision, sources_json, ready, pending_json, start_ref) VALUES (?, ?, 1, ?, 0, NULL, NULL)', ownerKey, crypto.randomUUID(), JSON.stringify(TASK_SOURCE_FAMILIES)));
   const current = async () => { scope.admit(); await assertOwnerCurrent(); scope.admit(); return readTaskSourceSnapshot(sql, ownerKey); };
   const assertSame = async (expected: TaskSourceSnapshot) => {
@@ -140,7 +140,7 @@ export type OwnerTaskSourceScope = ReturnType<typeof createTaskSourceScope> & Re
 // Called only by the existing authenticated owner decision channel. Stored nonce and CAS
 // prevent a model proposal, an old card, or a foreign/replayed decision from expanding scope.
 export const approveTaskSourceProposal = (sql: SqlStorage, ownerKey: string, supplied: TaskSourceProposal, now: number, scope: RunEffectScope): boolean => {
-  initialise(sql);
+  scope.commit(() => initialise(sql));
   if (supplied.ownerKey !== ownerKey || supplied.expiresAt <= now || supplied.revision >= Number.MAX_SAFE_INTEGER) return false;
   const row = sql.exec<Row>('SELECT * FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).toArray()[0];
   if (!row || row.pending_json !== JSON.stringify(supplied) || row.task_id !== supplied.taskId || row.revision !== supplied.revision) return false;
