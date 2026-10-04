@@ -5,7 +5,7 @@ import type {
 } from '@waldo/contracts';
 import { ROSTER } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
-import { sanitise, sanitiseVerifyOnly, scoreInjection } from '../src/scribe/sanitiser';
+import { guardForOffload, sanitise, sanitiseVerifyOnly, scoreInjection } from '../src/scribe/sanitiser';
 
 const CANARIES = ['1111111111111111', '2222222222222222', '3333333333333333'] as const;
 
@@ -1042,6 +1042,33 @@ describe('Scribe sanitiser', () => {
       expect(inspectExternal({ attendees: ['Alice Example', 'Bob Example'] }, destination)).toMatchObject({ ok: true, payload: { attendees: ['Alice Example', 'Bob Example'] }, redactions: [] });
     }
     expect(inspectExternal({ attendee: 'Alice Example' }, 'send_message')).toMatchObject({ ok: true, payload: { attendee: '[REDACTED_ATTENDEE_NAME]' } });
+  });
+
+  it('offload store still redacts email and phone even though internal_context is readable', () => {
+    const out = guardForOffload({ payload: 'mail me at jo@example.com or call +1 415 555 0142', destination: 'internal_context', canary_tokens: [...CANARIES], source_taint: 'external' });
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(out.payload).not.toContain('jo@example.com');
+      expect(out.payload).not.toContain('555 0142');
+    }
+  });
+
+  it('email and phone at the start, middle and end of a long external payload stay readable at internal_context and redact in the offload store', () => {
+    const pad = 'lorem '.repeat(20);
+    const text = `jo@example.com ${pad} +1 415 555 0142 ${pad} end@example.com`;
+    const ctx = inspectExternal({ body: text }, 'internal_context');
+    expect(ctx.ok).toBe(true);
+    const shown = JSON.stringify(ctx);
+    expect(shown).toContain('jo@example.com');
+    expect(shown).toContain('555 0142');
+    expect(shown).toContain('end@example.com');
+    const stored = guardForOffload({ payload: text, destination: 'internal_context', canary_tokens: [...CANARIES], source_taint: 'external' });
+    expect(stored.ok).toBe(true);
+    if (stored.ok) {
+      expect(stored.payload).not.toContain('jo@example.com');
+      expect(stored.payload).not.toContain('555 0142');
+      expect(stored.payload).not.toContain('end@example.com');
+    }
   });
 
   it('propagates attendee-key context through arrays', () => {

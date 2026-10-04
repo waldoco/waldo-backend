@@ -708,15 +708,15 @@ function redactEncodedPii(
   return output;
 }
 
-// Owner seam split (owner direction 2026-09-27: "no need to redact things a personal agent
-// would need"). When the payload is owner-authored (source_taint null) and its destination is
-// the model itself or the owner's own channel, the owner's own contact details stay readable:
-// redacting them broke draft_email ("REDACTED_EMAIL" recipient) and leaked redaction machinery
-// into replies. External-tainted payloads and every persistence/egress destination (memory_block,
-// draft_document, skill_body, audit_log, r2_summary, outbox, sandbox_stdout) keep full redaction.
-// Two kinds never skip, whatever the taint: credit_card (no owner flow needs a full PAN in
-// context) and, outside model/owner destinations, attendee_name (third-party PII). Attendee names
-// stay readable to the model and the owner reply (product direction relayed by main 2026-10-04): calendar answers need them.
+// Owner seam split. Two readable cases:
+// 1. Owner-authored payload (source_taint null) headed to the model or the owner's own channel
+//    (OWNER_READABLE_DESTINATIONS): contact details stay readable; redacting them broke draft_email.
+// 2. Any taint (mail, calendar, files, web results) headed to the model or the owner reply
+//    (MODEL_AND_OWNER_DESTINATIONS): email/phone/address and attendee names stay readable, because
+//    redaction made the agent dumber. Accepted trade-off: internal_context also carries web_search
+//    third-party content.
+// Persistence and outbound destinations (memory_block, draft_document, skill_body, audit_log,
+// r2_summary, outbox, sandbox_stdout, the offload store) keep full redaction. credit_card never skips.
 const OWNER_READABLE_DESTINATIONS: ReadonlySet<SanitiseDestination> = new Set([
   'system_prompt',
   'internal_context',
@@ -1003,7 +1003,8 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   if (health.invalid) return deny('size_cap', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
 
-  const pii = redactPii(input.payload, input.destination, input.source_taint);
+  // The offload store persists, so it never gets the model/owner readable seam: redact as memory_block.
+  const pii = redactPii(input.payload, 'memory_block', input.source_taint);
   if (pii.invalid) return deny('size_cap', 'invalid_payload');
 
   const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
