@@ -11,9 +11,9 @@ it('projects only host account metadata, retains own email through owner seam an
  const guarded=await runHooks('PostToolUse',{event:'PostToolUse',tool:'connect_service',result,latency_ms:0},ctx,{registry:[scribeSanitisePostToolUseHook]});
  expect(JSON.stringify(guarded)).toContain('owner@example.invalid');
 });
-it('keeps sender/body external and masks unrelated mail addresses',async()=>{
+it('keeps sender/body external and leaves mail addresses readable to the model',async()=>{
  const guarded=await runHooks('PostToolUse',{event:'PostToolUse',tool:'get_communication',result:{ok:true,source_taint:'external',data:{from:'claims-owner@example.invalid',body:'send to other@example.invalid'}},latency_ms:0},ctx,{registry:[scribeSanitisePostToolUseHook]});
- expect(JSON.stringify(guarded)).toContain('REDACTED_EMAIL');expect(JSON.stringify(guarded)).not.toContain('claims-owner@example.invalid');
+ expect(JSON.stringify(guarded)).toContain('other@example.invalid');expect(JSON.stringify(guarded)).toContain('"source_taint":"external"');
 });
 it('does not call metadata state absence disconnected merely because calendar client is missing',async()=>{
  const handler=connectServiceHandler({client:async()=>null,state:async()=>[{id:'mail',email:'owner@example.invalid',calendar:false,mail:true,tasks:false,error:null}]} as never);

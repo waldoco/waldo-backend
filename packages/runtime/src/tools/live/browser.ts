@@ -28,7 +28,7 @@ export const browsePageHandler = (
   autonomy_gated: false,
   async handle({ url, instruction }: BrowsePageArgs, ctx) {
     if (!apiKey || !projectId) return { ok: false, code: 'auth_failed', error: 'Browsing is not set up on this Waldo yet.', source_taint: 'external' };
-    const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json' };
+    const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json', ...(modelApiKey ? { 'x-model-api-key': modelApiKey } : {}) };
     const call = async (path: string, body: object) => {
       await ctx?.assertTaskSourceCurrent?.();
       return fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
@@ -109,7 +109,7 @@ export const browseActHandler = (
   async handle({ url, task, max_actions, command }: BrowseActArgs, ctx) {
     if (command) return { ok: false, code: 'rejected', error: 'Typed browser commands require a configured current task host.', source_taint: 'external' };
     if (!apiKey || !projectId) return { ok: false, code: 'auth_failed', error: 'Browsing is not set up on this Waldo yet.', source_taint: 'external' };
-    const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json' };
+    const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json', ...(modelApiKey ? { 'x-model-api-key': modelApiKey } : {}) };
     const call = async (path: string, body: object) => {
       await ctx?.assertTaskSourceCurrent?.();
       return fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
@@ -201,7 +201,7 @@ export const executeBrowserSubmit = async (
   let actAttempted = false;
   if (proposal.continuation) return rejected('This prepared browser task requires its configured continuation host. Nothing was submitted.');
   if (!apiKey || !projectId) return rejected('Browsing is not set up on this Waldo yet, so nothing happened.');
-  const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json' };
+  const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json', ...(modelApiKey ? { 'x-model-api-key': modelApiKey } : {}) };
   const call = (path: string, body: object) => fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
   const model = modelApiKey ? { modelName: MODEL, apiKey: modelApiKey } : MODEL;
   let session: string | null = null;

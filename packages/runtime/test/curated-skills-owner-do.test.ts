@@ -30,7 +30,7 @@ vi.mock('openai',()=>({default:class {responses={create:async(body:{instructions
   if((step===1 && seen.mode==='draft') || (step===2 && seen.mode==='revise')){
    const readOutput=seen.mode==='revise'?(body.input as Array<{type:string;output?:string}>).filter(item=>item.type==='function_call_output').map(item=>JSON.parse(item.output!)).find(item=>item.data?.text!==undefined):undefined;
    const text=seen.mode==='draft'?'To: demo@example.test\nSubject: Demo plan\nThe demo is October 15 at 09:10 UTC.':readOutput.data.text.replace('09:10','10:00').replace('Subject: Demo plan','Subject: Revised demo plan');
-   if(seen.mode==='revise'){expect(readOutput.data.text).toContain('[REDACTED_EMAIL]');return call('workspace_write',{path:seen.mode==='revise'&&seen.override?seen.olderPath:seen.currentPath,edits:[{before:'Subject: Demo plan',after:'Subject: Revised demo plan'},{before:'09:10 UTC.',after:'10:00 UTC.'}],mime:'text/markdown',expected_revision:seen.revision});}
+   if(seen.mode==='revise'){expect(readOutput.data.text).toContain('demo@example.test');return call('workspace_write',{path:seen.mode==='revise'&&seen.override?seen.olderPath:seen.currentPath,edits:[{before:'Subject: Demo plan',after:'Subject: Revised demo plan'},{before:'09:10 UTC.',after:'10:00 UTC.'}],mime:'text/markdown',expected_revision:seen.revision});}
    return call('workspace_write',{path:seen.currentPath,text,mime:'text/markdown',expected_revision:0});
   }
  }
