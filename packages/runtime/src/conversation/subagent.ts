@@ -38,7 +38,12 @@ export const assertChildEffectsReceivable = (names: readonly string[], parentRec
 // The parent-receipt form of one child tool event: null for a tool with no claimable effect.
 export const childReceiptEvent = (event: ToolLoopEvent, seq: number): LoopEventLike | null => {
   if (TOOL_CLAIM_EFFECT[event.call.name as ToolName] == null) return null;
-  const args: unknown = (() => { try { return JSON.parse(event.call.arguments); } catch { return undefined; } })();
+  let args: unknown;
+  try { args = JSON.parse(event.call.arguments); } catch (error) {
+    // Match the parent receipt parser: malformed args keep a failed call diagnosable,
+    // but cannot supply a file ref. Never recover one from partial JSON.
+    console.warn(JSON.stringify({ hop: 'receipt_args_parse', ms: 0, ok: false, error: `${event.call.name}: ${String(error).slice(0, 120)}` }));
+  }
   return { seq, call: { name: event.call.name, args }, ok: event.ok, ...(event.code ? { code: event.code } : {}), delegated: true };
 };
 

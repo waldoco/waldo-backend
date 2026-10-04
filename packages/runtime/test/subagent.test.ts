@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildSessionState,
   delegateTaskArgsSchema,
   getCrsArgsSchema,
   triggerTypeSchema,
   webSearchArgsSchema,
+  workspaceWriteArgsSchema,
+  type WorkspaceWriteArgs,
   type DelegateTaskArgs,
   type LLMTool,
   type ToolHandler,
@@ -365,5 +367,90 @@ describe('delegated effects are receipted (slice 9, S2b finding 3)', () => {
     expect(() => assertChildEffectsReceivable(['web_search', 'workspace_write'], false)).toThrow(/effect tool.*workspace_write/);
     expect(() => assertChildEffectsReceivable(['workspace_write'], true)).not.toThrow();
     expect(() => assertChildEffectsReceivable(CHILD_TOOL_NAMES, false)).not.toThrow();
+  });
+});
+
+// Exercise future effect-tool admission through the real child loop without changing today's
+// read-only production list. Restore the list even if dispatch or an assertion fails.
+describe('runChildLoop delegated effect receipts', () => {
+  const withEffectTool = async (run: () => Promise<void>) => {
+    const names = CHILD_TOOL_NAMES as ToolName[];
+    const original = [...names];
+    names.push('workspace_write');
+    try { await run(); } finally { names.splice(0, names.length, ...original); }
+  };
+  const writeArgs: WorkspaceWriteArgs = { path: 'notes.md', text: 'note', mime: 'text/markdown', expected_revision: 0 };
+  const writeHandler = (handle = vi.fn(async () => ({ ok: true as const, data: {}, source_taint: null }))) => ({
+    name: 'workspace_write' as const,
+    description: 'test workspace write',
+    schema: workspaceWriteArgsSchema,
+    trigger_allowlist: ['user_message'] as const,
+    autonomy_gated: false,
+    handle,
+  });
+
+  it('refuses an admitted effect tool before completion or dispatch when no receipt sink exists', async () => {
+    await withEffectTool(async () => {
+      const handler = writeHandler();
+      const complete = vi.fn(async () => ({ text: 'must not run' }));
+      const onTool = vi.fn();
+      const budget = { remaining: 3 };
+      await expect(runChildLoop('write a note', {
+        handlers: [handler], ctx: { ...ctx }, budget, controlRound: () => '', complete, onTool,
+      })).rejects.toThrow('Child task holds effect tool(s) workspace_write but the parent has no receipt path');
+      expect(complete).not.toHaveBeenCalled();
+      expect(handler.handle).not.toHaveBeenCalled();
+      expect(onTool).not.toHaveBeenCalled();
+      expect(budget.remaining).toBe(3);
+    });
+  });
+
+  it.each([
+    { label: 'accepted', args: JSON.stringify(writeArgs), parsedArgs: writeArgs, ok: true, ref: 'notes.md', calls: 1, code: undefined },
+    { label: 'schema-rejected', args: JSON.stringify({ path: 'notes.md' }), parsedArgs: { path: 'notes.md' }, ok: false, ref: 'notes.md', calls: 0, code: 'invalid_args' },
+    { label: 'malformed JSON', args: '{"path":"notes.md"', parsedArgs: undefined, ok: false, ref: undefined, calls: 0, code: undefined },
+  ])('forwards exactly one delegated receipt for a $label call through real dispatch', async ({ args, parsedArgs, ok, ref, calls, code }) => {
+    await withEffectTool(async () => {
+      const handler = writeHandler();
+      const onTool = vi.fn();
+      const onReceipt = vi.fn();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const result = await runChildLoop('write a note', {
+          handlers: [handler, stubRead('read_memory')], ctx: { ...ctx }, budget: { remaining: 3 },
+          controlRound: () => '', onTool, onReceipt,
+          complete: async (_content, tools, turns) => {
+            expect(tools?.map(tool => (tool as LLMTool).name)).toContain('workspace_write');
+            return turns.length === 0
+              ? { text: '', tool_calls: [
+                { call_id: 'read', name: 'read_memory', arguments: '{}' },
+                { call_id: 'write', name: 'workspace_write', arguments: args },
+              ] }
+              : { text: 'child report' };
+          },
+        });
+        expect(result).toEqual({ exit: 'completed', text: 'child report' });
+        expect(handler.handle).toHaveBeenCalledTimes(calls);
+        expect(onTool).toHaveBeenCalledTimes(2);
+        expect(onReceipt).toHaveBeenCalledTimes(1);
+        const receipt = onReceipt.mock.calls[0]![0] as LoopEventLike;
+        expect(receipt).toEqual({
+          seq: 0, call: { name: 'workspace_write', args: parsedArgs },
+          ok, delegated: true, ...(code ? { code } : {}),
+        });
+        const [typed] = receiptsFromLoopEvents([receipt]);
+        expect(typed).toEqual({ seq: 0, tool: 'workspace_write', effect: 'workspace_file_written', ok, state: ok ? 'accepted' : 'failed', delegated: true, ...(ref === undefined ? {} : { ref }) });
+        expect(evaluateTurnClaims([{ seq: 1, effect: 'workspace_file_written' }], [receipt])).toEqual(ok ? [] : [{ claim_seq: 1, effect: 'workspace_file_written', reason: 'receipt_failed' }]);
+        if (parsedArgs === undefined) {
+          expect(warn).toHaveBeenCalledTimes(1);
+          expect(JSON.parse(warn.mock.calls[0]![0] as string)).toEqual({
+            hop: 'receipt_args_parse', ms: 0, ok: false,
+            error: expect.stringContaining('workspace_write: SyntaxError:'),
+          });
+          const diagnostic = JSON.parse(warn.mock.calls[0]![0] as string) as { error: string };
+          expect(diagnostic.error.length).toBeLessThanOrEqual('workspace_write: '.length + 120);
+        } else expect(warn).not.toHaveBeenCalled();
+      } finally { warn.mockRestore(); }
+    });
   });
 });
