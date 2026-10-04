@@ -72,6 +72,9 @@ it('keeps incomplete coverage durable while current requests and ordinary live t
     await responder.respond({ traceId: 'tg-current-request', conversationRef: 'owner', surface: 'telegram', text: 'What time is it now?', memoryWrites: false }, (_n, w) => w());
     expect(seen.logs.some(entry => (entry as { hop: string; ok: boolean }).hop === 'tool_get_context' && (entry as { ok: boolean }).ok)).toBe(true);
     expect(seen.replyInputs.at(-1)).toContain('What time is it now?');
+    const blockedRead = seen.logs.find(entry => (entry as { hop: string }).hop === 'tool_read_owner_context') as { ok: boolean; code?: string } | undefined;
+    expect(blockedRead, JSON.stringify(blockedRead)).toMatchObject({ ok: false, code: 'transient:tool_result_error', error: 'Recall is temporarily limited while requested forgetting coverage is incomplete.' });
+    expect(JSON.stringify(seen.replyInputs.at(-1))).not.toContain('invalid_handler_result');
     expect(seen.replyInputs.at(-1)).toContain('Recall is temporarily limited');
     expect(seen.replyInputs.at(-1)).not.toContain('09:10 UTC');
     expect(store.incompleteTopics()).toEqual([topic]);

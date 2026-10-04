@@ -11,7 +11,7 @@ import type { TrustedToolExecutionResult } from '@waldo/contracts';
 // existing receipt_status:'unavailable' result is 'unresolved' (the effect may or may not have
 // happened and cannot be recovered). A finding says which of those explains the gap.
 export type ReceiptState = 'accepted' | 'failed' | 'unresolved';
-export type ToolReceipt = { readonly seq: number; readonly tool: string; readonly effect: string; readonly ok: boolean; readonly ref?: string; readonly state?: ReceiptState };
+export type ToolReceipt = { readonly seq: number; readonly tool: string; readonly effect: string; readonly ok: boolean; readonly ref?: string; readonly state?: ReceiptState; readonly delegated?: boolean };
 export type DoneClaim = { readonly seq: number; readonly effect: string; readonly ref?: string };
 export type ClaimFinding = { readonly claim_seq: number; readonly effect: string; readonly reason: 'no_matching_receipt' | 'receipt_failed' | 'receipt_unresolved' };
 

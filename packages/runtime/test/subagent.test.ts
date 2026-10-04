@@ -12,9 +12,12 @@ import {
   type TriggerType,
   type WebSearchArgs,
 } from '@waldo/contracts';
-import { runToolLoop, type LoopExit } from '../src/conversation/tool-loop';
-import { CHILD_TOOL_NAMES, delegateTaskHandler, runChildLoop, SUBAGENT_MAX_ROUNDS, SUBAGENT_MAX_SPAWNS_PER_TURN, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../src/conversation/subagent';
+import { runToolLoop, type LoopExit, type ToolLoopEvent } from '../src/conversation/tool-loop';
+import { assertChildEffectsReceivable, childReceiptEvent, CHILD_TOOL_NAMES, delegateTaskHandler, runChildLoop, SUBAGENT_MAX_ROUNDS, SUBAGENT_MAX_SPAWNS_PER_TURN, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../src/conversation/subagent';
 import { dispatchTool, type ToolDispatcherContext } from '../src/tools/dispatcher';
+import type { LoopEventLike } from '../src/hooks/claim-hook';
+import { evaluateTurnClaims, receiptsFromLoopEvents } from '../src/hooks/claim-hook';
+import { receiptLine } from '../src/hooks/receipt-line';
 import { sanitise } from '../src/scribe/sanitiser';
 import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
 
@@ -339,5 +342,28 @@ describe('Codex #224 holds (regressions)', () => {
     expect(offered).toBe(2);
     expect(budget.remaining).toBe(0);
     expect(result.exit).toBe('budget_exhausted');
+  });
+});
+
+describe('delegated effects are receipted (slice 9, S2b finding 3)', () => {
+  const event = (name: string, ok: boolean, args: string, code?: string): ToolLoopEvent => ({ call: { call_id: 'c', name, arguments: args }, ok, ms: 1, output: '', taint: null, ...(code ? { code } : {}) });
+
+  it('turns a child effect call into a delegated typed event for the parent; reads give none', () => {
+    expect(childReceiptEvent(event('web_search', true, '{}'), 1)).toBeNull();
+    const write = childReceiptEvent(event('workspace_write', true, '{"path":"notes.md"}'), 4)!;
+    expect(write).toEqual({ seq: 4, call: { name: 'workspace_write', args: { path: 'notes.md' } }, ok: true, delegated: true });
+    expect(receiptsFromLoopEvents([write])).toMatchObject([{ effect: 'workspace_file_written', ref: 'notes.md', state: 'accepted', delegated: true }]);
+    expect(receiptLine([write])).toBe('Receipts: workspace file written notes.md (accepted, via task)');
+  });
+
+  it('a failed child effect is a failed receipt, so the reply cannot claim it', () => {
+    const failed = childReceiptEvent(event('set_reminder', false, '{}', 'rejected'), 1)!;
+    expect(evaluateTurnClaims([{ seq: 2, effect: 'reminder_set' }], [failed])).toEqual([{ claim_seq: 2, effect: 'reminder_set', reason: 'receipt_failed' }]);
+  });
+
+  it('refuses a child that holds an effect tool when the parent cannot receive its receipts', () => {
+    expect(() => assertChildEffectsReceivable(['web_search', 'workspace_write'], false)).toThrow(/effect tool.*workspace_write/);
+    expect(() => assertChildEffectsReceivable(['workspace_write'], true)).not.toThrow();
+    expect(() => assertChildEffectsReceivable(CHILD_TOOL_NAMES, false)).not.toThrow();
   });
 });
