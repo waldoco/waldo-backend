@@ -509,3 +509,11 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - Browser trial consent must return default404 before work; configured owner-keyed rate admission and declared/chunked body bounds precede directory/storage. Stop, expiry and rebinding during final lookup cannot install or resurrect consent; replay preserves usage.
 - Typed browser source withdrawal during lookup, SDK load/connect or DOM observation denies subsequent allocation/read/fill/submit/receipt and stale result publication; cleanup remains independent. Approval rechecks durable task revision without a completed turn closure.
 - An unavailable optional browser binding RPC must leave the existing ordinary default responder usable while its noncanonical principal remains unable to resolve the canonical browser host. Test the default preparation path, not only the injected canonical host.
+
+
+| 2026-10-04 | A code-styled link label made an entire generated Telegram file readback literal; entity rejection had no plain fallback | Channel presentation | Representative readback RED→GREEN, literal/code/URL escaping, definite-rejection fallback and concurrent-forget/owner/ambiguity controls in telegram-presentation.test.ts | Exact N01T output and live Telegram acceptance remain unverified; unsupported Markdown nesting stays literal. |
+
+- [ ] Render generated Telegram finals at the channel boundary only: preserve artifact/tool bytes and opaque code, escape HTML and exact receipt URLs, and avoid unsupported nested code entities.
+- [ ] Plain fallback requires a definite entity-format rejection and the same current frozen attempt, owner eligibility and expiry; concurrent cancellation/forget must prevent fallback and stale payload restoration. Network uncertainty never authorizes a retry.
+
+- [ ] A generated final's frozen plain fallback crosses the same secret-URL persistence and egress boundary as its rich copy. Redact before HTML escaping and at both enqueue lanes; synthetic provider OAuth URLs must disappear from both copies and fallback transport. Literal escaped backslashes remain data.

@@ -21,6 +21,13 @@ export const workspaceReadArgsSchema = z.strictObject({
   offset: z.int().nonnegative().optional(),
   length: z.int().min(1).max(8000).optional(),
 });
+export const workspaceSearchArgsSchema = z.strictObject({
+  query: z.string().min(1).max(200),
+  path_prefix: z.string().min(1).max(200).optional(),
+  limit: z.int().min(1).max(20).optional(),
+});
+export type WorkspaceSearchArgs = z.infer<typeof workspaceSearchArgsSchema>;
+
 export type WorkspaceReadArgs = z.infer<typeof workspaceReadArgsSchema>;
 
 // UTF-8 byte length without TextEncoder (this package has no DOM/node lib).
