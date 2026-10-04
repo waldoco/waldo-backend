@@ -406,3 +406,17 @@ it('a fresh owner with Google connected gets the read defaults on first retain, 
   expect(taskSourceAllowed(snapshot, { name: 'search_communication', requires_connector: true })).toBe(true);
   expect(narrowedFlag(sql)).toBe(0);
 }));
+
+it('a classifier miss (uncertain or malformed) never turns the default read sources off, but never widens past them', () => run('task-custody-uncertain-defaults', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, undefined, ['web', 'mail']);
+  for (const raw of [decision('uncertain'), 'not json']) {
+    const snapshot = (await cap.classify(raw)).snapshot;
+    expect(snapshot.ready).toBe(false);
+    expect(taskSourceAllowed(snapshot, { name: 'web_search' }), 'public web stays on').toBe(true);
+    expect(taskSourceAllowed(snapshot, { name: 'search_communication', requires_connector: true })).toBe(true);
+    expect(taskSourceAllowed(snapshot, { name: 'workspace_read' }), 'workspace is not in this default list').toBe(false);
+  }
+  await cap.classify(decision('restrict'));
+  const narrowed = (await cap.classify(decision('uncertain'))).snapshot;
+  expect(taskSourceAllowed(narrowed, { name: 'web_search' }), 'explicit narrowing wins over defaults').toBe(false);
+}));
