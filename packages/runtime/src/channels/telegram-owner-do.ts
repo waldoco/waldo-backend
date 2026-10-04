@@ -89,7 +89,7 @@ import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
-import { WA_UPDATE_BASE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
+import { WA_UPDATE_BASE, WHATSAPP_FAILURE_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
@@ -566,12 +566,27 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       // The counter is persisted before each turn, so a turn that throws can never lead the next message to reuse
       // its update_id. Every claimed message still gets its turn; the first failure is rethrown afterwards.
       let failure: { error: unknown } | null = null;
+      let started = 0;
       for (const update of updates) {
-        await this.ctx.storage.put('wa_seq', Number(update.update_id) - WA_UPDATE_BASE);
+        try { await this.ctx.storage.put('wa_seq', Number(update.update_id) - WA_UPDATE_BASE); }
+        catch (error) {
+          // The turn never started. Release this payload's claims so a redelivery is processed, and tell the owner.
+          if (started === 0) for (const message of claimed) if (typeof message.id === 'string' && message.id !== '') this.ctx.storage.kv.delete(`wamid:${message.id}`);
+          failure ??= { error }; break;
+        }
+        started += 1;
         try { await this.turn(update, 'whatsapp'); } catch (error) { failure ??= { error }; }
       }
-      await this.ctx.storage.put('wa_seq', seq);
-      if (failure) throw failure.error;
+      try { await this.ctx.storage.put('wa_seq', seq); } catch (error) { failure ??= { error }; }
+      if (failure) {
+        // A failed or unstarted turn used to leave only a Worker console line. The owner gets one fixed notice (no message
+        // text, no error text) and can resend; a resend is a new wamid. A turn that already started is never replayed.
+        try {
+          const { api, owner } = this.setup('whatsapp');
+          await api.sendMessage({ chat_id: owner, text: WHATSAPP_FAILURE_NOTICE });
+        } catch { console.error('whatsapp failure notice unavailable'); }
+        throw failure.error;
+      }
     });
     return new Response('ok');
   }
