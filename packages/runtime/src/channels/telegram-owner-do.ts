@@ -1606,7 +1606,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const artifacts = artifactBook(storage.sql, artifactBodies, clock, () => deps.newRunId().slice(0, 8));
     // PDF export is registered only where files are durable (R2 bound) and the owner-session download route can serve them.
     const exportTool = this.env.ARTIFACTS ? [exportArtifactHandler(
-      artifactExports(storage.sql, artifacts, artifactBodies, r2ArtifactBinaries(this.env.ARTIFACTS, this.ctx.id.toString()), clock, () => deps.newRunId().slice(0, 8)),
+      artifactExports(storage.sql, artifacts, artifactBodies, r2ArtifactBinaries(this.env.ARTIFACTS, this.ctx.id.toString()), clock, () => crypto.randomUUID()),  // full uuid: the export id is part of the link
       async id => exportDownloadUrl(await storage.get<string>('origin') ?? null, id))] : [];
     const runs = runBook(storage.sql, clock, () => deps.newRunId().slice(0, 8));
     // A9: recent meal/workout logs join the proactive context; the read degrades to empty

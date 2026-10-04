@@ -1,11 +1,11 @@
-// Download helper for exported PDF snapshots. INERT: not routed, not registered, no DO hook.
+// Download helper for exported PDF snapshots. Served by the owner DO at /console/exports/<id> behind the console session (the helper itself
+// authenticates no one; the caller must have validated the session and scoped the store and bucket to that owner).
 //
 // This helper does NOT authenticate anyone. The caller must construct `exports` and `binaries`
 // for ONE owner, and only after the console host has validated that owner's session and selected
 // that owner's Durable Object (the same contract as artifactPage in artifact-delivery.ts). Isolation
 // between owners comes from those per-owner stores; the helper only refuses to read outside them.
-// Live creation and readback of exports through a route is unwired: until a reviewed route calls this,
-// nothing serves an export. Snapshots have no expiry and stay downloadable if the source artifact
+// The owner DO's /console/exports/<id> route calls this after the session check. Snapshots have no expiry and stay downloadable if the source artifact
 // moves to a newer revision; missing bytes are a 404.
 import { artifactReadAdmission } from './artifact-delivery';
 import type { ArtifactBinaries, ExportRow } from './artifact-exports';

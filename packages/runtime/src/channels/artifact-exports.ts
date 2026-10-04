@@ -57,8 +57,17 @@ export const artifactExports = (sql: Sql, book: ArtifactBook, bodies: ArtifactBo
       // One export per source id + revision + format: a retry returns the stored receipt instead of
       // writing another file. (PDF bytes embed a creation date, so sha256 differs per render and
       // cannot be the dedupe key; the revision is immutable, so id + revision identifies the content.)
-      const prior = sql.exec<ExportRow>('SELECT * FROM artifact_exports WHERE source_artifact_id = ? AND source_revision = ? AND format = ?', meta.id, meta.revision, 'pdf').toArray()[0];
-      if (prior !== undefined) return { ok: true as const, id: prior.id, bytes: prior.byte_size, mime_type: prior.mime_type, sha256: prior.sha256, key: prior.r2_key, deduped: true };
+      const lookup = () => sql.exec<ExportRow>('SELECT * FROM artifact_exports WHERE source_artifact_id = ? AND source_revision = ? AND format = ?', meta.id, meta.revision, 'pdf').toArray()[0];
+      const receipt = (row: ExportRow) => ({ ok: true as const, id: row.id, bytes: row.byte_size, mime_type: row.mime_type, sha256: row.sha256, key: row.r2_key, deduped: true });
+      const prior = lookup();
+      if (prior !== undefined) {
+        // The stored receipt is only true while its file still exists. A missing or unreadable object (bucket lifecycle, manual delete,
+        // size no longer matching the row) drops the stale row and renders again, so a repeat export never hands back a link that 404s.
+        let stillStored = false;
+        try { stillStored = await binaries.getBytes(prior.r2_key, prior.byte_size) !== null; } catch { stillStored = false; }
+        if (stillStored) return receipt(prior);
+        sql.exec('DELETE FROM artifact_exports WHERE id = ?', prior.id);
+      }
       await assertSourceCurrent?.();
       const body = await bodies.get(meta.r2_key);
       await assertSourceCurrent?.();
@@ -73,6 +82,9 @@ export const artifactExports = (sql: Sql, book: ArtifactBook, bodies: ArtifactBo
       // Re-check the source did not move while we wrote bytes; orphan bytes are harmless, a stale row is not.
       const after = book.byId(args.artifact_id);
       if (after === null || after.revision !== args.expected_revision) return { ok: false as const, code: 'conflict', current_revision: after?.revision ?? 0 };
+      // Two exports of the same revision can interleave across the awaits above; the first row wins and this one's bytes are an orphan.
+      const raced = lookup();
+      if (raced !== undefined) return receipt(raced);
       sql.exec('INSERT INTO artifact_exports (id, source_artifact_id, source_revision, format, mime_type, byte_size, sha256, r2_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
         id, meta.id, meta.revision, 'pdf', rendered.mime_type, rendered.bytes.length, rendered.sha256, key, clock.now().getTime());
       return { ok: true as const, id, bytes: rendered.bytes.length, mime_type: rendered.mime_type, sha256: rendered.sha256, key, deduped: false };
