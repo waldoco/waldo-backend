@@ -64,7 +64,7 @@ describe('messagingSystemPrompt', () => {
   });
 
   it('pins the memory-write rule and the proactive never-list (archive adopt #4; ordering aligned to the post-reply settle, owner-ratified 2026-09-27)', () => {
-    expect(MESSAGING_BEHAVIOR).toContain('memory tries to record it right after your reply');
+    expect(MESSAGING_BEHAVIOR).toContain('memory tries to record it with provenance before your reply');
     expect(MESSAGING_BEHAVIOR).toContain('Never send generic check-ins');
     expect(MESSAGING_BEHAVIOR).toContain('congratulations on normal metrics');
     expect(MESSAGING_BEHAVIOR).toContain('new information or a decision');
