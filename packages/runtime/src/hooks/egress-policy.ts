@@ -187,7 +187,7 @@ function isTrimmedString(value: unknown): value is string {
 }
 
 function normaliseHost(host: string): string | null {
-  const normalised = host.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  const normalised = host.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   return normalised.length > 0 ? normalised : null;
 }
 

@@ -132,3 +132,13 @@ describe('declared egress policy', () => {
     ).toEqual({ ok: false, reason: 'blocked_host' });
   });
 });
+
+describe('open public mode: repeated trailing dots cannot hide an internal name', () => {
+  const open = { openPublic: true } as const;
+  it.each(['http://localhost../', 'http://foo.local../', 'http://a.b.internal../', 'http://svc.svc.../', 'http://box.localdomain../'])('url %s is denied', (target) => {
+    expect(evaluateDeclaredEgress({ callbacks: [{ target }] }, NESTED_URL_PATHS, ['*'], open).ok).toBe(false);
+  });
+  it.each(['localhost..', 'foo.local..', 'a.b.internal..'])('bare host %s is denied', (host) => {
+    expect(evaluateDeclaredEgress({ allow_hosts: [host] }, HOST_PATHS, ['*'], open).ok).toBe(false);
+  });
+});
