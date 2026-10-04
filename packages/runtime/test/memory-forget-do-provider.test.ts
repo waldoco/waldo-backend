@@ -13,6 +13,8 @@ import { toolOutputLedger } from '../src/conversation/tool-output-ledger';
 import { capToolOutput } from '../src/conversation/tool-loop';
 import { readToolOutputHandler } from '../src/tools/read-tool-output';
 import { webSearchArgsSchema } from '@waldo/contracts';
+import { artifactBook, r2ArtifactBodies } from '../src/channels/artifacts';
+import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 
 // Real registered two-argument owner DO and its fenced inbox/listener/responder path.
 // Only the model SDK and Telegram transport are scripted. No live provider or source service.
@@ -940,4 +942,27 @@ it('a forgotten clause with quotes and backslashes is gone from every provider r
   const next = request();
   expect(next).toContain(KEEP);
   for (const needle of [tricky, escaped, 'C:\\\\temp', 'C:\\temp\\x', topic]) expect(next).not.toContain(needle);
+});
+
+it('the registered DO export_artifact tool returns an owner link with a full-uuid export id that the console route then serves', async () => {
+  const name = 'export-tool-real-path';
+  const bucket = (env as typeof env & { ARTIFACTS: R2Bucket }).ARTIFACTS;
+  const seeded = await runInDurableObject(stub(name), async (_instance, state) => {
+    await state.storage.put({ telegram_subject: '42', do_name: name, origin: 'https://fixture.invalid' });
+    const book = artifactBook(state.storage.sql, r2ArtifactBodies(bucket, state.id.toString()), { timezone: 'UTC', now: () => new Date() }, () => crypto.randomUUID().slice(0, 8));
+    const meta = await book.create({ name: 'Brief', kind: 'document', body_markdown: '# Brief\n\nexport me' }, 'test');
+    return { id: meta.id, token: await consoleAccess(state.storage).grant() };
+  });
+  let rounds = 0;
+  seen.onReply = () => ++rounds === 1 ? [{ type: 'function_call', call_id: 'export-call', name: 'export_artifact', arguments: JSON.stringify({ artifact_id: seeded.id, expected_revision: 1, format: 'pdf' }) }] : [];
+  await admittedTurn(name, 801, 'Export my brief as a PDF.', ops());
+  const provider = seen.requests.at(-1) as { input: Array<{ type: string; call_id?: string; output?: string }> };
+  const output = provider.input.find(item => item.type === 'function_call_output' && item.call_id === 'export-call');
+  expect(output).toBeDefined();
+  const receipt = JSON.parse(output!.output!) as { ok: boolean; data: { delivery: { status: string; url: string } } };
+  expect(receipt).toMatchObject({ ok: true, data: { delivery: { status: 'owner_link' } } });
+  expect(receipt.data.delivery.url).toMatch(/^https:\/\/fixture\.invalid\/console\/exports\/exp%3A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  const served = await stub(name).fetch(receipt.data.delivery.url, { headers: { cookie: `${CONSOLE_COOKIE}=${seeded.token}` } });
+  expect(served.status).toBe(200);
+  expect(new TextDecoder().decode((await served.arrayBuffer()).slice(0, 5))).toBe('%PDF-');
 });

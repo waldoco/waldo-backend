@@ -43,11 +43,11 @@ const fakeSql = () => {
 
 const clock = { timezone: 'Asia/Kolkata', now: () => new Date('2026-10-02T01:00:00Z') };
 const hex = async (b: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))].map((x) => x.toString(16).padStart(2, '0')).join('');
-const setup = async (body: string) => {
+const setup = async (body: string, newId: () => string = () => 'e1') => {
   const sql = fakeSql(); const bodies = inMemoryArtifactBodies(); const bins = inMemoryArtifactBinaries();
   const book = artifactBook(sql as never, bodies, clock, () => 'abc');
   const meta = await book.create({ name: 'Brief', kind: 'note', body_markdown: body } as never, 'test');
-  const ex = artifactExports(sql as never, book, bodies, bins, clock, () => 'e1');
+  const ex = artifactExports(sql as never, book, bodies, bins, clock, newId);
   return { meta, ex, bins, bodies, handler: exportArtifactHandler(ex) };
 };
 const args = (id: string, rev = 1, format = 'pdf') => exportArtifactArgsSchema.parse({ artifact_id: id, expected_revision: rev, format });
@@ -96,17 +96,37 @@ describe('export_artifact', () => {
     expect(second.data).toMatchObject({ sha256: first.data.sha256, deduped: true });
     expect(ex.rows(meta.id)).toHaveLength(1);
   });
-  it('a repeat export whose stored file is gone renders again and replaces the stale row', async () => {
-    const { meta, ex, bins, handler } = await setup('# Hi\n\ntext');
+  it('a repeat export whose stored file is gone renders again: new id, readable new object, one row', async () => {
+    let n = 0;
+    const { meta, ex, bins, handler } = await setup('# Hi\n\ntext', () => `e${++n}`);
     const first = await handler.handle(args(meta.id)) as { data: { deduped: boolean } };
-    const row = ex.rows(meta.id)[0]!;
-    // Lose the object, as a bucket lifecycle rule or manual delete would.
-    await bins.putBytes(row.r2_key, new Uint8Array(0));
-    (bins as { getBytes: typeof bins.getBytes }).getBytes = async () => null;
+    const old = ex.rows(meta.id)[0]!;
+    const realGet = bins.getBytes;
+    (bins as { getBytes: typeof realGet }).getBytes = async (key: string, max?: number) => key === old.r2_key ? null : realGet(key, max); // the old object is gone
     const second = await handler.handle(args(meta.id)) as { ok: boolean; data: { deduped: boolean } };
     expect(first.data.deduped).toBe(false);
     expect(second).toMatchObject({ ok: true, data: { deduped: false } });
+    const rows = ex.rows(meta.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).not.toBe(old.id);
+    expect(new TextDecoder().decode((await bins.getBytes(rows[0]!.r2_key))!.slice(0, 5))).toBe('%PDF-');
+  });
+  it('a stored object that no longer fits its recorded size is treated as stale, not surfaced as an error', async () => {
+    let n = 0;
+    const { meta, ex, bins, handler } = await setup('# Hi\n\ntext', () => `e${++n}`);
+    await handler.handle(args(meta.id));
+    const old = ex.rows(meta.id)[0]!;
+    const realGet = bins.getBytes;
+    (bins as { getBytes: typeof realGet }).getBytes = async (key: string, max?: number) => { if (key === old.r2_key) throw new Error('artifact binary exceeds read bound'); return realGet(key, max); };
+    expect(await handler.handle(args(meta.id))).toMatchObject({ ok: true, data: { deduped: false } });
+    expect(ex.rows(meta.id)[0]!.id).not.toBe(old.id);
+  });
+  it('two exports of one revision racing across the write leave one row and both get the same receipt', async () => {
+    let n = 0;
+    const { meta, ex, handler } = await setup('# Hi\n\ntext', () => `e${++n}`);
+    const [a, b] = await Promise.all([handler.handle(args(meta.id)), handler.handle(args(meta.id))]) as Array<{ data: { sha256: string } }>;
     expect(ex.rows(meta.id)).toHaveLength(1);
+    expect(a!.data.sha256).toBe(b!.data.sha256);
   });
   it('owner-scoped R2 keys cannot read across owners', async () => {
     const store = new Map<string, Uint8Array>();
