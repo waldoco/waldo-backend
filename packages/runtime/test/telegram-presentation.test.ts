@@ -166,3 +166,17 @@ it('rechecks expiry after the asynchronous fallback owner gate', async () => {
   expect(send).toHaveBeenCalledTimes(1);
   expect(f.outbox.records()[0]!.status).toBe('blocked');
 });
+
+it.each(['ack', 'unknown'])('preserves a different record forgotten during fallback after %s', async outcome => {
+  const f = await fixture();
+  await f.outbox.enqueue({ ...f.input, id: 'mail:2', mailFollowup: { loopId: 'l', due: 'd', sourceRef: 's', timezone: 'UTC', messageId: 'm' } });
+  const send = vi.fn().mockRejectedValueOnce(rejection()).mockImplementationOnce(async () => {
+    redactMailFollowupEntries(f.kv, ['private'], '[forgotten]');
+    if (outcome === 'unknown') throw new Error('network unknown');
+    return { message_id: 3, chat: { id: 7 } };
+  });
+  await f.outbox.drain({ allowed: async () => true, send, settled: async () => undefined });
+  const other = f.outbox.records().find(row => row.id === 'mail:2')!;
+  expect(other.payload.fallback_text).not.toContain('private');
+  expect(other).toMatchObject({ status: 'blocked', reason: 'owner_forget' });
+});

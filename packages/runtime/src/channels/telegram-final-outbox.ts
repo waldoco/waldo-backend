@@ -123,6 +123,16 @@ export class TelegramFinalOutbox {
     if (!allowed) { row.status = 'blocked'; row.reason = 'owner_binding'; await this.save(rows); await options.settled(row); row.settled = true; await this.save(rows); return; }
     row.status = 'attempting'; row.attempts += 1;
     await this.save(rows);
+    let persistedRow = JSON.stringify(row);
+    const saveCurrentRow = async (): Promise<boolean> => {
+      const latest = this.records();
+      const index = latest.findIndex(current => current.id === row.id);
+      if (index < 0 || JSON.stringify(latest[index]) !== persistedRow) return false;
+      latest[index] = row;
+      await this.save(latest);
+      persistedRow = JSON.stringify(row);
+      return true;
+    };
     const currentAttempt = () => this.records().find(current => current.id === row.id
       && current.status === 'attempting' && current.digest === row.digest && current.attempts === row.attempts
       && JSON.stringify(current.payload) === JSON.stringify(row.payload));
@@ -152,9 +162,9 @@ export class TelegramFinalOutbox {
         row.status = 'quarantined'; row.reason = error instanceof TelegramRejection ? 'provider_rejected_terminal' : 'send_unknown';
       }
     }
-    await this.save(rows);
+    if (!(await saveCurrentRow())) return;
     await options.settled(row);
-    if (row.status !== 'pending') { row.settled = true; await this.save(rows); }
+    if (row.status !== 'pending') { row.settled = true; await saveCurrentRow(); }
   }
 }
 
