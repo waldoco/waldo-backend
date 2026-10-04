@@ -862,3 +862,35 @@ it('forgets an exact source-derived loop marker and an unsent frozen mail follow
     await state.storage.deleteAlarm();
   });
 });
+it('a forgotten clause with quotes and backslashes is gone from every provider request after a same-turn steer, raw and JSON-escaped', async () => {
+  const name = 'forget-request-steer-escapes';
+  const topic = 'MEM-Q-20261005-STEER';
+  const fact = `${topic} preference: synthetic cobalt envelope`;
+  const tricky = `${topic} note: say "hi" at C:\\temp\\x and a\\"b`;
+  const instruction = `Forget only ${topic}.`;
+  const escaped = JSON.stringify(tricky).slice(1, -1);
+  await admittedTurn(name, 401, `${fact}. ${KEEP}.`, ops({ add: [add(fact), add(KEEP)] }));
+  seen.selectedText = fact; seen.selectedTexts = [tricky, instruction];
+  let rounds = 0;
+  await admittedTurn(name, 402, `${instruction} ${tricky}. ${KEEP}.`, ops({ forget_topic: topic }), send => {
+    seen.onReply = async () => {
+      if (++rounds !== 1) return [];
+      seen.writer = ops();
+      const response = await send(new Request('https://telegram-owner/enqueue', {
+        method: 'POST', headers: { 'x-waldo-inbox-secret': 'hermetic-test-webhook-secret', 'x-waldo-telegram-subject': '42', 'x-waldo-do-name': name },
+        body: JSON.stringify({ update_id: 403, message: { message_id: 403, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, text: 'Keep helping with the current request.' } }),
+      }));
+      expect(response.status).toBe(200);
+      return [{ type: 'function_call', call_id: 'fixture-forget-steer-esc', name: 'get_context', arguments: '{}' }];
+    };
+  });
+  expect(rounds).toBeGreaterThan(1);
+  const after = request();
+  expect(after).toContain(KEEP);
+  for (const needle of [tricky, escaped, 'C:\\\\temp', 'C:\\temp\\x']) expect(after).not.toContain(needle);
+  await runInDurableObject(stub(name), async (_instance, state) => {
+    const stored = JSON.stringify(await durableConversationStore(state.storage).load());
+    for (const needle of [tricky, escaped, topic]) expect(stored).not.toContain(needle);
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
+  });
+});
