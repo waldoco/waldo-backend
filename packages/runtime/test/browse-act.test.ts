@@ -82,6 +82,14 @@ describe('browse_act', () => {
       { selector: '#b', description: 'Delete account', method: 'click' },
       { selector: '#b', description: 'Log in', method: 'click' },
       { selector: '#b', description: 'Continue', method: 'submit' },
+      { selector: '#q', description: 'Press Enter in the search box', method: 'press' },
+      { selector: '#q', description: 'Choose an option', method: 'selectOption' },
+      { selector: '#b', description: 'Do the thing', method: 'weirdUnknown' },
+      { selector: '#b', description: 'Do the thing' },
+      { selector: '#b', description: 'Sign in', method: 'click' },
+      { selector: '#b', description: 'Add to cart', method: 'click' },
+      { selector: '#b', description: 'Subscribe to the newsletter', method: 'click' },
+      { selector: '#b', description: 'Donate now', method: 'click' },
     ]) {
       const record = vi.fn();
       const { calls, fetcher } = stagehand({ actions: [blocked] });
@@ -94,6 +102,16 @@ describe('browse_act', () => {
       expect(calls.filter((c) => c.op === 'act')).toHaveLength(0);
       expect(record).not.toHaveBeenCalled();
     }
+  });
+
+  it('ordinary reading steps still run: click next page, open the transcript, type in a field, scroll', async () => {
+    const record = vi.fn();
+    const { calls, fetcher } = stagehand({ actions: [{ selector: '#n', description: 'Click Next page', method: 'click' }, { selector: '#t', description: 'Click Show transcript', method: 'click' }, { selector: '#q', description: 'Type the city', method: 'fill', arguments: ['Pune'] }, null] });
+    const result = await browseActHandler('k', 'p', undefined, record, undefined, fetcher).handle(args, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.actions_taken).toHaveLength(3);
+    expect(calls.filter((c) => c.op === 'act')).toHaveLength(3);
   });
 
   it('stops honestly when observe finds nothing on the first step', async () => {

@@ -88,6 +88,8 @@ export function evaluateDeclaredEgress(
   // "-host" entries are a blocklist (host and subdomains), same env var, so no new deploy wiring.
   // They deny for every tool, win over the open sentinel and over a listed host, and never allow.
   const blocked = (allowlist ?? []).filter((entry) => entry.startsWith('-')).map((entry) => hostFromBareHost(entry.slice(1)));
+  // A blocklist entry that does not parse must not be silently dropped: the operator meant to deny something, so fail closed.
+  if (blocked.some((host) => host === null)) return { ok: false, reason: 'allowlist_unavailable' };
   const blockedHosts = blocked.filter((host): host is string => host !== null);
   const allowedHosts = parseAllowlist(allowlist?.filter((entry) => entry !== OPEN_PUBLIC && !entry.startsWith('-')));
 

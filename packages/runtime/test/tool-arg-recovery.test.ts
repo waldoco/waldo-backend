@@ -40,7 +40,7 @@ describe('Tool-arg typed recovery', () => {
 
   it('an egress denial tells the model the address cannot be opened, without the host policy detail', () => {
     const message = new HookHaltError('egress_allowlist_check', 'egress destination denied', 'forbidden').clientMessage;
-    expect(message).toContain('cannot be opened from here');
+    expect(message).toBe('That address cannot be opened. Try another source.');
     expect(message).not.toBe('hook halted');
   });
 });
