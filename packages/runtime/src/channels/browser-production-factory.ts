@@ -1,5 +1,5 @@
 import type { BrowserWorker } from '@cloudflare/playwright';
-import type { BrowserOwnerConfiguration } from './browser-owner-host';
+import type { BrowserOwnerConfiguration, BrowserOwnerGrantRequest } from './browser-owner-host';
 import { hex, signedRpc, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { ownerPresenceBinding, type PresenceBinding } from '../identity/owner-message-admission';
 import { browserOwnerAuthority } from './browser-owner-authority';
@@ -53,28 +53,35 @@ const bindingReader = (options: Options, doName: string, subject: string) => {
   };
 };
 
-export async function browserProductionConfiguration(options: Options): Promise<BrowserOwnerConfiguration | undefined> {
+export type BrowserProductionConfiguration = BrowserOwnerConfiguration & Readonly<{ lastFailure: Error | undefined }>;
+export async function browserProductionConfiguration(options: Options): Promise<BrowserProductionConfiguration | undefined> {
   if (!options.policy) return undefined;
   try {
     const { env, storage } = options, policy = Object.freeze({ ...options.policy }), now = options.now ?? Date.now;
     if (!env.BROWSER || !policy.doName || policy.doName.length > 200) throw Error('browser configuration unavailable');
     const authority = browserOwnerAuthority(storage, now), authorization = authority.read();
     if (!authorization || authorization.binding.do_name !== policy.doName || authorization.manifest.origin !== policy.fixtureOrigin
-      || authorization.manifestDigest !== await fixtureDigest(authorization.manifest)) throw Error('browser configuration unavailable');
+      || authorization.manifestDigest !== await fixtureDigest(authorization.manifest)) throw new Error('browser configuration unavailable', { cause: authority.lastFailure });
     const lookup = bindingReader(options, policy.doName, authorization.binding.subject);
     const binding = await lookup();
     if (JSON.stringify(binding) !== JSON.stringify(ownerPresenceBinding(authorization.binding))) throw Error('browser configuration unavailable');
     const driver = publicFixtureBrowser({ binding: env.BROWSER, manifest: authorization.manifest, fetcher: options.fetcher });
     return Object.freeze({
       enabled: policy.enabled === true, binding, manifestDigest: authorization.manifestDigest, lookup,
-      grant: async request => {
+      // Internal diagnostic only; never serialize causes into a tool/client result.
+      get lastFailure() { return authority.lastFailure; },
+      grant: async (request: BrowserOwnerGrantRequest) => {
         if (policy.enabled !== true) return null;
-        try { return authority.grant(request, await lookup()); } catch { return null; }
+        try { return authority.grant(request, await lookup()); }
+        catch (cause) { authority.recordFailure('directory', cause); return null; }
       },
       driver: Object.freeze({ ...driver, start: async (lifetimeMs: number) => {
         if (policy.enabled !== true || !authority.reserveAllocation(authorization, await lookup(), lifetimeMs)) throw Error('browser task allocation denied');
         return driver.start(lifetimeMs);
       } }),
     });
-  } catch { throw Error('browser configuration unavailable'); }
+  } catch (cause) {
+    console.warn(JSON.stringify({ event: 'browser_configuration_failure' }));
+    throw new Error('browser configuration unavailable', { cause });
+  }
 }

@@ -46,7 +46,17 @@ const sameBinding = (a: PresenceBinding, b: PresenceBinding) => Object.keys(a).e
 // handler. This adapter deliberately cannot create, refresh or widen that decision.
 // Counters are reserved synchronously before provider I/O and never refunded on error.
 export function browserOwnerAuthority(storage: Storage, now: () => number = Date.now) {
-  const read = () => { try { return parse(storage.kv.get(BROWSER_AUTHORIZATION_KEY)); } catch { return undefined; } };
+  let lastFailure: Error | undefined;
+  // Denial is noncritical to ordinary owner messaging. Keep the cause for internal
+  // inspection, but log only fixed categories: records/evidence may be private.
+  const recordFailure = (category: 'read' | 'grant' | 'allocation' | 'directory', cause: unknown) => {
+    lastFailure = new Error(`browser authority ${category} failed`, { cause });
+    console.warn(JSON.stringify({ event: 'browser_authority_failure', category }));
+  };
+  const read = () => {
+    try { const value = storage.kv.get(BROWSER_AUTHORIZATION_KEY); return value === undefined ? undefined : parse(value); }
+    catch (cause) { recordFailure('read', cause); return undefined; }
+  };
   const captured = read();
   const decision = (row: BrowserOwnerAuthorization) => JSON.stringify({ ...row, usage: null });
   const current = (expected: BrowserOwnerAuthorization, binding: PresenceBinding) => {
@@ -56,7 +66,7 @@ export function browserOwnerAuthority(storage: Storage, now: () => number = Date
       && sameBinding(row.binding, binding) ? row : undefined;
   };
   return {
-    read,
+    read, recordFailure, get lastFailure() { return lastFailure; },
     grant(request: BrowserOwnerGrantRequest, binding: PresenceBinding) {
       try { return storage.transactionSync(() => {
         if (!captured) return null;
@@ -74,7 +84,7 @@ export function browserOwnerAuthority(storage: Storage, now: () => number = Date
         const used = { ...row.usage }; if (used.admissions >= row.budget.maxAdmissions) return null;
         used.admissions++; storage.kv.put(BROWSER_AUTHORIZATION_KEY, { ...row, usage: used });
         return { ...request, ref: `${row.ref}:${used.admissions}`, expiresAt: row.expiresAt };
-      }); } catch { return null; }
+      }); } catch (cause) { recordFailure('grant', cause); return null; }
     },
     reserveAllocation(expected: BrowserOwnerAuthorization, binding: PresenceBinding, lifetimeMs: number) {
       try { return storage.transactionSync(() => {
@@ -85,7 +95,7 @@ export function browserOwnerAuthority(storage: Storage, now: () => number = Date
         const reserve = lifetimeMs * 2;
         if (used.allocations >= row.budget.maxAllocations || used.reservedBrowserMs + reserve > row.budget.maxBrowserMs) return false;
         used.allocations++; used.reservedBrowserMs += reserve; storage.kv.put(BROWSER_AUTHORIZATION_KEY, { ...row, usage: used }); return true;
-      }); } catch { return false; }
+      }); } catch (cause) { recordFailure('allocation', cause); return false; }
     },
   };
 }

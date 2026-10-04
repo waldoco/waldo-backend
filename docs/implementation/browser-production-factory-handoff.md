@@ -14,6 +14,8 @@ The durable authority adapter cannot install, refresh, widen or synthesize conse
 
 Final submit still requires the checkpoint's exact stored proposal and atomically claimed approval desk row. Empty `act` evidence permits the existing service preflight; physical fill/submit checks carry action/state digests and submit approval evidence. Authority references are not effect receipts.
 
+Denied exceptional paths log fixed failure categories and retain their cause chain in internal `lastFailure` diagnostics or the configuration error. Never serialize those causes into client/tool responses; they may contain private transport/storage diagnostics. Missing authority and normal policy denials remain ordinary absence/denial, not exceptional failures.
+
 ## Exact missing signed read contract (proposal only)
 
 No available RPC returns the full PresenceBinding. Existing route_presence returns only do_name, subject and timezone; the workspace mapping supplies physical custody but not presence/revision. Do not fabricate missing fields or widen that route's public projection. Add this read-only RPC through the release writer, using existing router signing and owner mapping machinery:

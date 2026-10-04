@@ -25,6 +25,19 @@ it('keeps the deployed default disabled without identity, storage or provider I/
   expect(fetcher).not.toHaveBeenCalled();
 });
 
+it('retains internal failure causes while logging only a fixed category', async () => {
+  const f = await fixture(), cause = Error('private storage diagnostic');
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  try {
+    f.storage.kv.get = () => { throw cause; };
+    const authority = browserOwnerAuthority(f.storage, f.now);
+    expect(authority.grant(f.request, f.binding)).toBeNull();
+    expect(authority.lastFailure?.cause).toBe(cause);
+    expect(warning).toHaveBeenCalledWith('{"event":"browser_authority_failure","category":"read"}');
+    expect(JSON.stringify(warning.mock.calls)).not.toContain(cause.message);
+  } finally { warning.mockRestore(); }
+});
+
 it('requires a matching recorded decision and consumes durable admission across reconstruction', async () => {
   const f = await fixture();
   const authority = browserOwnerAuthority(f.storage, f.now);
