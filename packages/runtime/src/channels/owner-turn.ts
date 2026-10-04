@@ -814,7 +814,7 @@ export const createOwnerResponder = (
           raw = JSON.stringify({ ...JSON.parse(raw), forget_topic: null });
         }
         else {
-          if (!forgetWhy) forgetWhy = selection === null ? `selector_unavailable(${supplied.sources.length})` : fresh === null ? `no_fresh_snapshot(${supplied.sources.length})` : fresh.incomplete ? `fresh_incomplete(${supplied.sources.length})` : `selection_rejected(${supplied.sources.length} sources)`;
+          if (!forgetWhy) forgetWhy = selection === null ? `selector_unavailable(${supplied.sources.length})` : fresh === null || fresh.incomplete ? `fresh_incomplete(${supplied.sources.length})` : `selection_rejected(${supplied.sources.length} sources)`;
           const ops = JSON.parse(raw);
           raw = JSON.stringify({ ...ops, forget_topic: null });
           memoryReceipts.push('Requested forgetting is incomplete. Retained recall is temporarily limited; current requests and ordinary tools remain available. Do not claim that every associated fact was erased.');
