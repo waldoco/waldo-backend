@@ -1,4 +1,4 @@
-// Red-only probe for the existing wa_seq read/turn/put race. No production fix in this slice.
+// Regression for the wa_seq read/turn/put race (fixed: allocation + turns + persist are one serial unit).
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
@@ -14,7 +14,7 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-it.fails('allocates distinct update_ids for overlapping different wamids (known wa_seq race)', async () => {
+it('allocates distinct update_ids for overlapping different wamids (known wa_seq race)', async () => {
   const name = 'whatsapp-owner-do-sequence-race';
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const firstSend = deferred();
@@ -61,8 +61,7 @@ it.fails('allocates distinct update_ids for overlapping different wamids (known 
       expect(replies.map(reply => reply.status)).toEqual([200, 200]);
       expect(turns).toHaveBeenCalledTimes(2);
       const ids = turns.mock.calls.map(([update]) => update.update_id);
-      // Current code yields [BASE+1, BASE+1]. After a fix, this expected-failure
-      // test must unexpectedly pass, prompting its promotion to a normal regression.
+      // Before the fix this yielded [BASE+1, BASE+1].
       expect(ids, 'different wamids must receive distinct update_ids').toEqual([WA_UPDATE_BASE + 1, WA_UPDATE_BASE + 2]);
       expect(sent).toHaveLength(2);
       expect(await state.storage.get('wa_seq')).toBe(2);

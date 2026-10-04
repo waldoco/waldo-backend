@@ -558,9 +558,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       this.runtimes = {};
     }
     const value = JSON.parse(body) as { messages?: { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[] };
-    const { updates, seq } = whatsappIngressUpdates(claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now()), subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0);
-    for (const update of updates) await this.serial(() => this.turn(update, 'whatsapp'));
-    await this.ctx.storage.put('wa_seq', seq);
+    const claimed = claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now());
+    // Sequence allocation, the turns and the persisted counter are one serial unit, so an overlapping
+    // request cannot read the same wa_seq and hand a different message the same update_id.
+    await this.serial(async () => {
+      const { updates, seq } = whatsappIngressUpdates(claimed, subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0);
+      for (const update of updates) await this.turn(update, 'whatsapp');
+      await this.ctx.storage.put('wa_seq', seq);
+    });
     return new Response('ok');
   }
 
