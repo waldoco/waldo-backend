@@ -277,3 +277,27 @@ it('a concurrent restriction wins CAS while an invalid-decision recovery is susp
   await expect(recovery).rejects.toThrow('Task source scope changed');
   expect((await concurrent.current()).sources).toEqual([]);
 }));
+
+it('the owner\'s own chat reads connected mail and calendar by default; an explicit narrowing is never undone', () => run('task-custody-defaults', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, undefined, ['mail', 'calendar']);
+  sql.exec(`UPDATE owner_task_source_scope SET sources_json = '["workspace","web"]', ready = 1 WHERE owner_key = 'owner-one'`);
+  const retained = (await cap.classify(decision('retain'))).snapshot;
+  expect(retained.sources).toEqual(expect.arrayContaining(['workspace', 'web', 'mail', 'calendar']));
+  expect(taskSourceAllowed(retained, { name: 'search_communication', requires_connector: true })).toBe(true);
+  const narrowed = (await cap.classify(decision('restrict'))).snapshot;
+  expect(narrowed.sources).toEqual([]);
+  const after = (await cap.classify(decision('retain'))).snapshot;
+  expect(after.sources, 'a later retain must not bring mail back after the owner narrowed the task').toEqual([]);
+}));
+
+it('without host defaults a retained task never gains mail or calendar', () => run('task-custody-no-defaults', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {});
+  sql.exec(`UPDATE owner_task_source_scope SET sources_json = '["workspace","web"]', ready = 1 WHERE owner_key = 'owner-one'`);
+  expect((await cap.classify(decision('retain'))).snapshot.sources).toEqual(['workspace', 'web']);
+}));
+
+it('owner default read sources: public web always, Google families only once Google is connected', async () => {
+  const { ownerReadSources } = await import('../src/channels/task-source-scope');
+  expect(ownerReadSources([])).toEqual(['web']);
+  expect(ownerReadSources([{ id: 'g' }])).toEqual(expect.arrayContaining(['web', 'mail', 'calendar', 'contacts', 'tasks', 'drive']));
+});
