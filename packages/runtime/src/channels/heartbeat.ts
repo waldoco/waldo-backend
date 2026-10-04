@@ -83,6 +83,12 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
         occurrenceAt: firedAt, dueAt: firedAt, recurrence: null,
       });
     }
+    // Volume low: no unrequested nudges. Quiet-hours card release above and owner-set reminders
+    // (C3 policy, not this tick) are unchanged.
+    if (deps.loops.proactivity().volume === 'low') {
+      deps.scheduler.markHeartbeatDecision(runId, heldCards.length > 0 ? 'acted' : 'quiet');
+      return;
+    }
     const localNow = localIso(firedAt, deps.timezone).slice(0, 16);
     // The cooldown filter lives in SQL BEFORE the LIMIT: paging the 20 earliest-due loops and
     // filtering in JS would starve a 21st notifiable loop forever while the front page sits in
@@ -122,7 +128,7 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
 
 export const heartbeatEligible = (record: FinalRecord, sql: Sql, loops: LoopBook, timezone: string, now: number): boolean => {
   if (!record.heartbeat) return true;
-  if (isQuiet(loops.proactivity(), now, timezone)) return false;
+  if (isQuiet(loops.proactivity(), now, timezone) || loops.proactivity().volume === 'low') return false;
   const localNow = localIso(now, timezone).slice(0, 16);
   return record.heartbeat.loops.length > 0 && record.heartbeat.loops.every(loop => sql.exec(
     `SELECT 1 FROM loops l WHERE l.id = ? AND l.status = 'open' AND l.due = ? AND l.due <= ?
