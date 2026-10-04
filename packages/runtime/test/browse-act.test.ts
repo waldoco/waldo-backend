@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { browseActHandler, executeBrowserSubmit } from '../src/tools/live/browser';
 
-const ctx = {} as never;
+const ctx = { egressAllowlist: ['*'] } as never;
 const args = { url: 'https://example.com', task: 'find the pricing section', max_actions: 3 };
 
-type Op = 'start' | 'navigate' | 'observe' | 'act' | 'extract' | 'end';
+type Op = 'start' | 'navigate' | 'observe' | 'act' | 'extract' | 'debug' | 'end';
 const opOf = (url: string): Op =>
-  url.includes('/start') ? 'start' : url.includes('/navigate') ? 'navigate' : url.includes('/observe') ? 'observe' : url.includes('/act') ? 'act' : url.includes('/extract') ? 'extract' : 'end';
+  url.includes('/debug') ? 'debug' : url.includes('/start') ? 'start' : url.includes('/navigate') ? 'navigate' : url.includes('/observe') ? 'observe' : url.includes('/act') ? 'act' : url.includes('/extract') ? 'extract' : 'end';
 
 type Action = { selector: string; description: string; method?: string; arguments?: string[] };
 const stagehand = (opts: {
@@ -35,6 +35,8 @@ const stagehand = (opts: {
         return new Response(JSON.stringify({ success: true, data: { result: null, actionId: 'a2' } }));
       case 'extract':
         return new Response(JSON.stringify(opts.extraction ?? { success: true, data: { result: { summary: 'Pricing shown' }, actionId: 'a3' } }));
+      case 'debug':
+        return new Response(JSON.stringify({ pages: [{ id: 'p1', url: 'https://example.com/', title: 't' }] }));
       case 'end':
         return new Response(JSON.stringify({ success: true }));
     }

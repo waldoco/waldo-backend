@@ -4,10 +4,13 @@ import {
 } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { BrowserSubmitProposal } from '../../channels/approvals';
+import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, evaluateDeclaredEgress } from '../../hooks/egress-policy';
 
 // Stagehand v3 hosted HTTP API (openapi v3.1.0, browserbase/stagehand packages/server-v3).
 // Plain fetch - no SDK, no Node host. Keys stay server-side; session ids never reach model text.
 const BASE = 'https://api.stagehand.browserbase.com';
+// Browserbase GET /v1/sessions/{id}/debug lists the session's open pages (docs.browserbase.com/reference/api/session-live-urls).
+const BROWSERBASE_BASE = 'https://api.browserbase.com';
 const MODEL = `${PROVIDER_OF[WALDO_CHAT_MODEL]}/${WALDO_CHAT_MODEL}`;
 
 
@@ -19,6 +22,43 @@ const isEmptyExtraction = (value: unknown): boolean =>
   value === null || value === undefined || (typeof value === 'string' && value.trim() === '') ||
   (Array.isArray(value) && value.every(isEmptyExtraction)) ||
   (typeof value === 'object' && !Array.isArray(value) && Object.values(value as object).every(isEmptyExtraction));
+
+// Stagehand navigate returns { success, data: { result } } (docs.stagehand.dev navigate openapi). HTTP 200 with
+// success !== true is a navigation failure; an unreadable body is not evidence of a loaded page either.
+const navigationSucceeded = async (response: Response): Promise<boolean> => {
+  try {
+    return ((await response.json()) as { success?: unknown }).success === true;
+  } catch {
+    return false;
+  }
+};
+
+type PageCheck = Readonly<{ ok: true }> | Readonly<{ ok: false; code: 'transient' | 'rejected'; error: string }>;
+
+// After a step the page may have redirected. GET /debug exposes pages[].url with no active-tab flag, so every
+// open page is re-run through the egress policy. This detects a completed redirect, not a prevented request.
+const recheckPages = async (
+  fetcher: typeof fetch, apiKey: string, session: string, ctx: ToolDispatcherContext | undefined,
+): Promise<PageCheck> => {
+  await ctx?.assertTaskSourceCurrent?.();
+  const unverified: PageCheck = { ok: false, code: 'transient', error: 'The page address could not be verified after the step, so its content was not read.' };
+  // Only the Browserbase key goes to Browserbase: the model key and project id stay on Stagehand calls.
+  const response = await fetcher(`${BROWSERBASE_BASE}/v1/sessions/${session}/debug`, { method: 'GET', headers: { 'x-bb-api-key': apiKey } });
+  if (!response.ok) return unverified;
+  const pages = ((await response.json()) as { pages?: unknown }).pages;
+  // An empty list or any entry without a string url cannot be verified, so it is never read.
+  if (!Array.isArray(pages) || pages.length === 0) return unverified;
+  const allowlist = ctx?.egressAllowlist;
+  for (const page of pages) {
+    const url = (page as { url?: unknown } | null)?.url;
+    if (typeof url !== 'string') return unverified;
+    const scheme = (() => { try { return new URL(url).protocol; } catch { return null; } })();
+    if (scheme !== 'http:' && scheme !== 'https:') return unverified;
+    const verdict = evaluateDeclaredEgress({ url }, EGRESS_TARGET_PATHS.browse_act ?? [], allowlist, { openPublic: allowlist?.includes(OPEN_PUBLIC) === true });
+    if (!verdict.ok) return { ok: false, code: 'rejected', error: 'The page moved to an address Waldo may not open, so its content was not read.' };
+  }
+  return { ok: true };
+};
 
 export const browsePageHandler = (
   apiKey: string | undefined,
@@ -50,6 +90,7 @@ export const browsePageHandler = (
 
       const navigated = await call(`/v1/sessions/${session}/navigate`, { url });
       if (!navigated.ok) return { ok: false, code: 'transient', error: `The page did not load (HTTP ${navigated.status})`, source_taint: 'external' };
+      if (!(await navigationSucceeded(navigated))) return { ok: false, code: 'transient', error: 'The page did not load (the browser reported the navigation failed).', source_taint: 'external' };
 
       const model = modelApiKey ? { modelName: MODEL, apiKey: modelApiKey } : MODEL;
       const extracted = await call(`/v1/sessions/${session}/extract`, { instruction, options: { model, timeout: 30000 } });
@@ -140,6 +181,7 @@ export const browseActHandler = (
 
       const navigated = await call(`/v1/sessions/${session}/navigate`, { url });
       if (!navigated.ok) return { ok: false, code: 'transient', error: `The page did not load (HTTP ${navigated.status})`, source_taint: 'external' };
+      if (!(await navigationSucceeded(navigated))) return { ok: false, code: 'transient', error: 'The page did not load (the browser reported the navigation failed).', source_taint: 'external' };
 
       let stopped: BrowseActResult['stopped'] = 'cap_reached';
       let blocked: string | undefined;
@@ -170,6 +212,8 @@ export const browseActHandler = (
         if (!actBody.success) { stopped = 'no_action_found'; break; }
         taken.push(action.description);
         record('browser_action', `Browse step ${step + 1}: ${action.description}`, { url, selector: action.selector, method: action.method ?? null });
+        const moved = await recheckPages(fetcher, apiKey, session, ctx);
+        if (!moved.ok) return { ok: false, code: moved.code, error: moved.error, source_taint: 'external' };
       }
 
       const extracted = await call(`/v1/sessions/${session}/extract`, { instruction: 'Summarise what this page now shows, relative to the task.', options: { model, timeout: 30000 } });
