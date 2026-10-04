@@ -1606,11 +1606,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           scope.admit();
         };
         await assertSkillOwnerCurrent();
-        const admission = this.browserTrial ? await (async () => {
+        const trial = this.browserTrial;
+        const admission = trial ? await (async () => {
           try { return await ownerMessageAdmission({
           lookup: browserOwnerBindingReader({ env: this.env, storage, actualDoId: this.ctx.id.toString() }, doName!, subject!), scope,
           locator: { environment: this.env.WALDO_ENVIRONMENT ?? '', namespace: this.env.WALDO_OWNER_DO_NAMESPACE ?? '', doName: doName!, doId: this.ctx.id.toString() },
-          actualDoId: this.ctx.id.toString(), expectedDoId: name => this.env.TELEGRAM_OWNER_DO!.idFromName(name).toString(), allowedDoNames: [this.browserTrial.policy.doName],
+          actualDoId: this.ctx.id.toString(), expectedDoId: name => this.env.TELEGRAM_OWNER_DO!.idFromName(name).toString(), allowedDoNames: [trial.policy.doName],
           provider: 'telegram', subject: subject!, text: turn.text!, occurrenceKey: occurrence!.id, occurredAt: occurrence!.admittedAt, now: Date.now,
         }); } catch {
             await assertSkillOwnerCurrent();
