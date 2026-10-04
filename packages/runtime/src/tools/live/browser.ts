@@ -38,17 +38,22 @@ type PageCheck = Readonly<{ ok: true }> | Readonly<{ ok: false; code: 'transient
 // After a step the page may have redirected. GET /debug exposes pages[].url with no active-tab flag, so every
 // open page is re-run through the egress policy. This detects a completed redirect, not a prevented request.
 const recheckPages = async (
-  fetcher: typeof fetch, headers: Record<string, string>, session: string, ctx: ToolDispatcherContext | undefined,
+  fetcher: typeof fetch, apiKey: string, session: string, ctx: ToolDispatcherContext | undefined,
 ): Promise<PageCheck> => {
   await ctx?.assertTaskSourceCurrent?.();
   const unverified: PageCheck = { ok: false, code: 'transient', error: 'The page address could not be verified after the step, so its content was not read.' };
-  const response = await fetcher(`${BROWSERBASE_BASE}/v1/sessions/${session}/debug`, { method: 'GET', headers });
+  // Only the Browserbase key goes to Browserbase: the model key and project id stay on Stagehand calls.
+  const response = await fetcher(`${BROWSERBASE_BASE}/v1/sessions/${session}/debug`, { method: 'GET', headers: { 'x-bb-api-key': apiKey } });
   if (!response.ok) return unverified;
   const pages = ((await response.json()) as { pages?: unknown }).pages;
-  if (!Array.isArray(pages)) return unverified;
+  // An empty list or any entry without a string url cannot be verified, so it is never read.
+  if (!Array.isArray(pages) || pages.length === 0) return unverified;
   const allowlist = ctx?.egressAllowlist;
   for (const page of pages) {
     const url = (page as { url?: unknown } | null)?.url;
+    if (typeof url !== 'string') return unverified;
+    const scheme = (() => { try { return new URL(url).protocol; } catch { return null; } })();
+    if (scheme !== 'http:' && scheme !== 'https:') return unverified;
     const verdict = evaluateDeclaredEgress({ url }, EGRESS_TARGET_PATHS.browse_act ?? [], allowlist, { openPublic: allowlist?.includes(OPEN_PUBLIC) === true });
     if (!verdict.ok) return { ok: false, code: 'rejected', error: 'The page moved to an address Waldo may not open, so its content was not read.' };
   }
@@ -207,7 +212,7 @@ export const browseActHandler = (
         if (!actBody.success) { stopped = 'no_action_found'; break; }
         taken.push(action.description);
         record('browser_action', `Browse step ${step + 1}: ${action.description}`, { url, selector: action.selector, method: action.method ?? null });
-        const moved = await recheckPages(fetcher, headers, session, ctx);
+        const moved = await recheckPages(fetcher, apiKey, session, ctx);
         if (!moved.ok) return { ok: false, code: moved.code, error: moved.error, source_taint: 'external' };
       }
 

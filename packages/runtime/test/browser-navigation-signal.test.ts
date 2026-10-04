@@ -10,6 +10,7 @@ const json = (body: unknown, status = 200) => new Response(typeof body === 'stri
 type Script = { navigate?: Response; debug?: Response };
 const stagehand = (script: Script = {}) => {
   const ops: string[] = [];
+  const debugHeaders: Record<string, string>[] = [];
   let observed = 0;
   const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -18,6 +19,7 @@ const stagehand = (script: Script = {}) => {
     if (op === 'debug') {
       expect(new URL(url).origin).toBe('https://api.browserbase.com');
       expect(init?.method).toBe('GET');
+      debugHeaders.push({ ...(init?.headers as Record<string, string>) });
       return script.debug ?? json({ pages: [{ id: 'p', url: 'https://example.com/pricing', title: 't' }] });
     }
     switch (op) {
@@ -29,7 +31,7 @@ const stagehand = (script: Script = {}) => {
       default: return json({ success: true });
     }
   }) as typeof fetch;
-  return { ops, fetcher };
+  return { ops, fetcher, debugHeaders };
 };
 
 describe('browse_page navigation failure signal', () => {
@@ -107,5 +109,27 @@ describe('browse_act navigation and post-step page recheck', () => {
     const { fetcher } = stagehand({ debug: json({ pages: [{ id: 'p', url: 'http://10.0.0.1/', title: 't' }] }) });
     await browseActHandler('k', 'p', undefined, (kind) => recorded.push(kind), undefined, fetcher).handle(actArgs, open);
     expect(recorded).toEqual(['browser_action']);
+  });
+  it('the Browserbase debug call carries only the Browserbase key, never the model key or project id', async () => {
+    const { fetcher, debugHeaders } = stagehand();
+    await browseActHandler('bb-key', 'proj', 'model-key', undefined, undefined, fetcher).handle(actArgs, open);
+    expect(debugHeaders.length).toBeGreaterThan(0);
+    for (const headers of debugHeaders) expect(headers).toEqual({ 'x-bb-api-key': 'bb-key' });
+  });
+
+  it.each([
+    ['an entry without a url', [{ id: 'x' }]],
+    ['a null entry', [null]],
+    ['an empty page list', []],
+    ['a blank page', [{ id: 'p', url: 'about:blank' }]],
+    ['a non-string url', [{ id: 'p', url: 42 }]],
+  ])('%s is unverified, never read', async (_name, pages) => {
+    const { ops, fetcher } = stagehand({ debug: json({ pages }) });
+    const result = await browseActHandler('k', 'p', undefined, undefined, undefined, fetcher).handle(actArgs, open);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('transient');
+    expect(result.error).toContain('could not be verified');
+    expect(ops).not.toContain('extract');
   });
 });
