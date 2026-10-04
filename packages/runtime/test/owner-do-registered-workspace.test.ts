@@ -56,9 +56,20 @@ async function proof(work: (h: {
   mapping: { owner_id: string; environment: string; namespace: string; do_name: string; do_id: string; state_version: number; mapping_version: number };
   absent(): void; unlinked(): void; pauseMapping(afterReservation?: boolean): ReturnType<typeof deferred>; pausePut(): ReturnType<typeof deferred>;
   onPut(fn: () => void): void; dispatches: MockInstance<typeof dispatcher.dispatchTool>;
-}) => Promise<void>) {
+}) => Promise<void>, numericWorkspaceIdsAfter?: number) {
   const name = `registered-workspace-${++sequence}`;
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    const nativeUuid = crypto.randomUUID.bind(crypto);
+    let workspaceIds = 0;
+    // Inject at the production workspace host's newId boundary, not run ids/canaries.
+    // Other production calls keep real UUIDs and all workspace I/O remains real.
+    const uuid = numericWorkspaceIdsAfter === undefined ? undefined : vi.spyOn(crypto, 'randomUUID').mockImplementation(() => {
+      if (!new Error().stack?.includes('workspace-host.ts')) return nativeUuid();
+      const n = ++workspaceIds;
+      return n <= numericWorkspaceIdsAfter
+        ? `aaaaaaaa-aaaa-4aaa-8aaa-${String(n).padStart(12, 'a')}`
+        : `aaaaaaaa-aaaa-4aaa-4111-${String(n).padStart(12, '1')}`;
+    });
     const mapping = { owner_id: OWNER, environment: 'fixture', namespace: 'fixture-owner-namespace', do_name: name, do_id: state.id.toString(), state_version: 0, mapping_version: 1 };
     const bytes = new Map<string, Uint8Array>(); const puts: string[] = []; const gets: string[] = []; const rpc: string[] = []; const unexpected: string[] = []; const pauses: ReturnType<typeof deferred>[] = [];
     let pauseAfterReservation = false; let missing = false; let mappingPause: ReturnType<typeof deferred> | undefined; let putPause: ReturnType<typeof deferred> | undefined; let afterPut: (() => void) | undefined;
@@ -125,7 +136,7 @@ async function proof(work: (h: {
     try { await work({ state, name, bytes, puts, gets, rpc, enqueue, send, alarm: () => instance.alarm(), request: request => instance.fetch(request), restart: () => { instance = new TelegramOwnerDO(state, fixtureEnv); }, manifest, mapping,
       absent: () => { missing = true; }, unlinked: () => { state.storage.kv.put('telegram_unlinked', true); },
       pauseMapping: (afterReservation = false) => { pauseAfterReservation = afterReservation; mappingPause = deferred(); pauses.push(mappingPause); return mappingPause; }, pausePut: () => { putPause = deferred(); pauses.push(putPause); return putPause; }, onPut: fn => { afterPut = fn; }, dispatches });
-    } finally { for (const pause of pauses) pause.release(); await state.storage.deleteAlarm(); localFetch.mockRestore(); dispatches.mockRestore(); }
+    } finally { for (const pause of pauses) pause.release(); await state.storage.deleteAlarm(); localFetch.mockRestore(); dispatches.mockRestore(); uuid?.mockRestore(); }
     expect(unexpected).toEqual([]);
   });
 }
@@ -323,7 +334,7 @@ it('scheduled reminder cannot write through the registered workspace closure wit
   });
 });
 
-it.each(['pdf', 'docx'] as const)('default owner ingress renders an actual %s file, downloads exact authenticated bytes and retains its digest after restart', async format => {
+it.each([['pdf', undefined], ['docx', undefined], ['docx', 2]] as const)('default owner ingress renders an actual %s file, downloads exact authenticated bytes and retains its digest after restart', async (format, numericIdsAfter) => {
   await proof(async h => {
     await h.state.storage.put('origin', 'https://local.invalid');
     model.reply = request => {
@@ -425,10 +436,10 @@ it.each(['pdf', 'docx'] as const)('default owner ingress renders an actual %s fi
     await h.send('Check my exported document after restart.');
     expect(allOutputs().savedDoc).toMatchObject({ok:true,data:{files:[{file_id:rendered.data.file_id,revision:1,sha256:rendered.data.sha256}]}});
     expect(h.manifest()).toEqual(manifest); expect(h.puts).toHaveLength(2);
-  });
+  }, numericIdsAfter);
 });
 
-it('default MD and TXT writes return authenticated downloads with exact text MIME, filename and bytes',async()=>{
+it.each([undefined, 0])('default MD and TXT writes return authenticated downloads with exact text MIME, filename and bytes (numeric UUIDs after %s)',async numericIdsAfter=>{
  await proof(async h=>{
   await h.state.storage.put('origin','https://local.invalid');
   model.reply=request=>{
@@ -448,7 +459,7 @@ it('default MD and TXT writes return authenticated downloads with exact text MIM
    expect(await download.text()).toBe(text);
   }
   expect(h.puts).toHaveLength(2);
- });
+ }, numericIdsAfter);
 });
 
 it('external list then initial creation preserves exact private contact bytes through revision, guarded read and authenticated download', async () => {

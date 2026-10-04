@@ -1,3 +1,4 @@
+import { validId } from '@waldo/workspace';
 import {
   DERIVED_SCORE_PATTERNS,
   derivedHealthDestinationViewSchema,
@@ -737,6 +738,28 @@ function ownerReadable(destination: SanitiseDestination, taint: SourceTaint, kin
   return taint === null && OWNER_READABLE_DESTINATIONS.has(destination);
 }
 
+const WORKSPACE_ID_KEYS: ReadonlySet<string> = new Set(['file_id', 'blob_id', 'operation_id', 'source_file_id']);
+const WORKSPACE_URL_KEYS: ReadonlySet<string> = new Set(['url', 'download_url']);
+
+// Exactly what workspace-delivery.ts emits: https origin, the file path, id (uuid) then a numeric revision.
+function isWorkspaceFileUrl(text: string): boolean {
+  let parsed: URL;
+  try { parsed = new URL(text); } catch { return false; }
+  if (parsed.protocol !== 'https:' || parsed.username !== '' || parsed.password !== '' || parsed.hash !== '') return false;
+  if (parsed.pathname !== '/console/workspace/file') return false;
+  const id = parsed.searchParams.get('id');
+  const revision = parsed.searchParams.get('revision');
+  if (id === null || revision === null || !validId(id) || !/^[0-9]{1,9}$/.test(revision)) return false;
+  return text === `${parsed.origin}/console/workspace/file?id=${id}&revision=${revision}`;
+}
+
+// Everything outside the uuid slot gets the same redaction as free text; any change means it carried PII.
+function urlOutsideIdIsClean(text: string, destination: SanitiseDestination, taint: SourceTaint): boolean {
+  const id = new URL(text).searchParams.get('id') ?? '';
+  const template = text.replace(id, 'ID');
+  return redactPiiText(template, undefined, destination, taint, new Map()) === template;
+}
+
 function redactPiiText(
   text: string,
   key: string | undefined,
@@ -744,6 +767,15 @@ function redactPiiText(
   taint: SourceTaint,
   counts: Map<RedactionKind, number>,
 ): string {
+  // Model/owner-bound workspace references keep their exact bytes for later calls, only under an
+  // allowlisted key and in the exact shape the producer emits; a URL must also be clean outside
+  // its uuid slot. Taint is not checked (the provider pass taints a whole batch). Known residual:
+  // content under an allowlisted id key that is a valid uuid with a card-looking tail survives.
+  // Everything else (free text, other keys, other URL shapes) is still redacted below.
+  if (key !== undefined && MODEL_AND_OWNER_DESTINATIONS.has(destination)) {
+    if (WORKSPACE_ID_KEYS.has(key) && validId(text)) return text;
+    if (WORKSPACE_URL_KEYS.has(key) && isWorkspaceFileUrl(text) && urlOutsideIdIsClean(text, destination, taint)) return text;
+  }
   let output = redactEncodedPii(text, destination, taint, counts);
   output = replaceAndCount(
     output,
@@ -810,11 +842,26 @@ function redactPii(
   payload: JsonValue,
   destination: SanitiseDestination,
   taint: SourceTaint,
+  canaryTokens: SanitiseInput['canary_tokens'],
 ): { invalid: boolean; payload: JsonValue; redactions: Redaction[] } {
   const counts = new Map<RedactionKind, number>();
-  const transformed = transformJsonStrings(payload, (text, key) =>
-    redactPiiText(text, key, destination, taint, counts),
-  );
+  const transformed = transformJsonStrings(payload, (text, key) => {
+    // Provider tool turns encode their structured arguments/results as JSON strings.
+    // Preserve the same field semantics there instead of treating the receipt as prose.
+    if (MODEL_AND_OWNER_DESTINATIONS.has(destination) && (key === 'output' || key === 'arguments')) {
+      let parsed: JsonValue | undefined;
+      try { parsed = JSON.parse(text); } catch { /* Plain output keeps free-text redaction. */ }
+      if (parsed !== null && typeof parsed === 'object'
+          && prepareInput({ payload: parsed, destination, source_taint: taint, canary_tokens: canaryTokens })) {
+        const structured = transformJsonStrings(parsed, (value, field) => redactPiiText(value, field, destination, taint, counts));
+        if (!structured.invalid) {
+          const rewritten = JSON.stringify(structured.payload);
+          return rewritten === JSON.stringify(parsed) ? text : rewritten;
+        }
+      }
+    }
+    return redactPiiText(text, key, destination, taint, counts);
+  });
   return {
     ...transformed,
     redactions: REDACTION_ORDER.flatMap((kind) => {
@@ -1004,7 +1051,7 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   if (health.matched) return deny('health_value', 'health_value_leak');
 
   // The offload store persists, so it never gets the model/owner readable seam: redact as memory_block.
-  const pii = redactPii(input.payload, 'memory_block', input.source_taint);
+  const pii = redactPii(input.payload, 'memory_block', input.source_taint, input.canary_tokens);
   if (pii.invalid) return deny('size_cap', 'invalid_payload');
 
   const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
@@ -1061,7 +1108,7 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
   if (health.invalid) return deny('size_cap', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
 
-  const pii = redactPii(input.payload, input.destination, input.source_taint);
+  const pii = redactPii(input.payload, input.destination, input.source_taint, input.canary_tokens);
   if (pii.invalid) return deny('size_cap', 'invalid_payload');
 
   const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
