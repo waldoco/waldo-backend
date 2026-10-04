@@ -2,10 +2,10 @@ import { expect, it, vi } from 'vitest';
 import { deviceConsoleAction, renderDevices } from '../src/devices/console-devices';
 import type { DeviceBridgeDO } from '../src/devices/device-bridge-do';
 const device = { device_id: 'device_fixture', label: '<script>hostile</script>', capabilities: 'machine_state_query,notify_local', created_at: 'fixture', last_seen_at: null, online: false };
-const directory = () => ({ issuePairingCode: vi.fn(), revokeDevice: vi.fn(), listDevices: vi.fn(async () => [device]), deviceForAuth: vi.fn(async () => ({ owner_id: 'owner_fixture', pubkey: 'public-fixture', capabilities: ['machine_state_query', 'notify_local'] })) });
+const directory = () => ({ issuePairingCode: vi.fn(), revokeDevice: vi.fn(), listDevices: vi.fn(async () => [device]), deviceForAuth: vi.fn(async () => ({ owner_id: 'owner_fixture', pubkey: 'public-fixture', capabilities: ['machine_state_query' as const, 'notify_local' as const] })) });
 const form = (action = 'device.notify') => {
   const value = new FormData();
-  for (const [key, field] of Object.entries({ action, csrf: 'csrf_fixture', id: device.device_id, request_id: 'request_fixture', notification_id: 'notification_fixture', title: '  Waldo update  ', body: '  Your Mac is connected.\n  ', severity: 'info', query_kind: 'session_status' })) value.set(key, field);
+  for (const [key, field] of Object.entries({ action, csrf: 'csrf_fixture', id: device.device_id, request_id: 'request_fixture', notification_id: 'notification_fixture', title: 'Waldo status', body: 'Your Mac is connected.', severity: 'info', query_kind: 'session_status' })) value.set(key, field);
   return value;
 };
 const namespace = (enqueueCommand: ReturnType<typeof vi.fn>) => ({ idFromName: vi.fn(() => 'device-do-fixture'), get: vi.fn(() => ({ enqueueCommand })) }) as unknown as DurableObjectNamespace<DeviceBridgeDO>;
@@ -16,11 +16,11 @@ it('renders explicit owner command forms with stable request identities and hone
   expect(html).toContain('acked'); expect(html).not.toContain('<script>hostile</script>');
   expect(html).not.toContain('done');
 });
-it('preserves exact explicit owner notification text and stable request IDs', async () => {
+it('preserves exact explicit owner-selected neutral notification text and stable request IDs', async () => {
   const enqueue = vi.fn(async () => ({ accepted: true, command_id: 'command_fixture', state: 'queued', duplicate: false }));
   const response = await deviceConsoleAction(form(), 'csrf_fixture', 'owner_do_fixture', directory(), namespace(enqueue));
   expect(response.status).toBe(303);
-  expect(enqueue).toHaveBeenCalledExactlyOnceWith({ owner_id: 'owner_fixture', device_id: 'device_fixture', request_id: 'request_fixture', class: 'notify_local', payload: { notification_id: 'notification_fixture', title: '  Waldo update  ', body: '  Your Mac is connected.\n  ', severity: 'info' } });
+  expect(enqueue).toHaveBeenCalledExactlyOnceWith({ owner_id: 'owner_fixture', device_id: 'device_fixture', request_id: 'request_fixture', class: 'notify_local', payload: { notification_id: 'notification_fixture', title: 'Waldo status', body: 'Your Mac is connected.', severity: 'info' } });
 });
 it('uses the owner-bound device principal for a closed query kind', async () => {
   const enqueue = vi.fn(async () => ({ accepted: true, command_id: 'command_fixture', state: 'queued', duplicate: false }));
