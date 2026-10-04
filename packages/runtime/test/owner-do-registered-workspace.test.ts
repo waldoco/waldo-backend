@@ -477,8 +477,9 @@ it('external list then initial creation preserves exact private contact bytes th
     expect(h.puts).toHaveLength(2);
     for (const name of ['initialRead', 'revisedRead']) {
       expect(result[name]).toMatchObject({ ok: true, source_taint: 'external' });
-      expect(result[name]!.data.text).toContain('[REDACTED_EMAIL]');
-      expect(result[name]!.data.text).not.toContain('demo@example.test');
+      // Owner direction 2026-10-04: model-bound reads keep the owner's own contact details readable.
+      expect(result[name]!.data.text).toContain('demo@example.test');
+      expect(result[name]!.data.text).not.toContain('[REDACTED_EMAIL]');
     }
     expect(result.revisedRead!.data.text).toContain('Demo at 14:00');
     expect(h.dispatches.mock.calls.find(([c]) => c.id === 'reviseContact')?.[1].toolArgSourceTaint).toBe('external');

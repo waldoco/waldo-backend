@@ -75,12 +75,12 @@ it('total escaped inline budget includes large metadata and marks extra cuts tru
  if(result.ok){const data=result.data as {text:string;returnedBytes:number};expect(data.returnedBytes).toBe(new TextEncoder().encode(data.text).byteLength);expect(data.text).not.toMatch(/[\uD800-\uDBFF]$/);}
 });
 
-it('post-Scribe dense email redaction stays inline and reports visible byte count',async()=>{
+it('dense email text stays inline, readable, and reports visible byte count',async()=>{
  const text='a@b.co '.repeat(1100);const account={connection_id:'selected',email:null};
  const content={file:{...file,mimeType:'text/plain'},text,version:'17',contentMimeType:'text/plain' as const,truncated:false,returnedBytes:new TextEncoder().encode(text).byteLength,observedAt:'2026-10-03T10:00:00Z'};
  const h=readDriveHandler({client:async()=>({account,driveReadFileContent:async()=>content}) as unknown as GoogleClient},true,true);
  const offload=inMemoryToolOutputStore();const put=vi.spyOn(offload,'put');
  const result=await dispatchTool({id:'dense-email',name:'read_drive',args:{action:'content',file_id:file.id,connection_id:'selected',expected_modified_time:file.modifiedTime}},{authenticatedUserId:'owner',trigger:'user_message',session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:1}),hasApproval:()=>false,sourceTaint:null,toolArgSourceTaint:null,sanitise},{handlers:[h],offload});
  expect(result.ok).toBe(true);expect(put).not.toHaveBeenCalled();expect(JSON.stringify(result).length).toBeLessThan(15_000);
- if(result.ok){const data=result.data as {text:string;returnedBytes:number;truncated:boolean};expect(data.text).not.toContain('a@b.co');expect(data.returnedBytes).toBe(new TextEncoder().encode(data.text).byteLength);expect(data.truncated).toBe(true);}
+ if(result.ok){const data=result.data as {text:string;returnedBytes:number;truncated:boolean};expect(data.text).toContain('a@b.co');expect(data.returnedBytes).toBe(new TextEncoder().encode(data.text).byteLength);expect(data.truncated).toBe(false);}
 });
