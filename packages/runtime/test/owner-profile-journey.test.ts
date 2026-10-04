@@ -24,7 +24,25 @@ it('every owner-stated fact reaches <owner_profile>, not just the first eight', 
 
 it('an inferred claim never enters <owner_profile>', async () => {
   await withStore('owner-profile-inferred', (store) => {
-    applyClaimOps(store, ops([{ kind: 'pattern', text: 'Seems to prefer mornings', source: 'inferred', evidence: 'pattern across turns', touches_forgotten: false }]), AT, 'owner agreed', undefined, { owner: 'hello' });
+    applyClaimOps(store, ops([{ kind: 'fact', text: 'Seems to prefer mornings', source: 'inferred', evidence: 'pattern across turns', touches_forgotten: false }]), AT, 'owner, tg-9', undefined, { owner: 'hello' });
+    // The write path must have kept it as an inferred claim (not owner-grounded), so the source guard is what excludes it.
+    const stored = store.claims().find(claim => claim.text === 'Seems to prefer mornings');
+    expect(stored?.source).toBe('inferred');
     expect(profile(turnMemoryPrompt(store, 'when do I like meetings'))).not.toContain('prefer mornings');
+  });
+});
+
+it('with a room limit the newest owner facts stay, the rest are counted, and nothing is dropped without a note', async () => {
+  await withStore('owner-profile-room', (store) => {
+    for (let i = 0; i < 30; i++) {
+      const said = `about me, Fact ${i}: synthetic detail ${i}`;
+      applyClaimOps(store, ops([{ kind: 'fact', text: `Fact ${i}: synthetic detail ${i}`, source: 'stated', evidence: `owner, tg-${i}: "${said}"`, touches_forgotten: false }]), AT, `owner, tg-${i}`, undefined, { owner: said });
+    }
+    const prompt = turnMemoryPrompt(store, 'unrelated', 1_200);
+    expect(prompt.length).toBeLessThanOrEqual(1_200);
+    expect(profile(prompt)).toContain('Fact 29: synthetic detail 29');
+    expect(profile(prompt)).not.toContain('Fact 0: synthetic detail 0');
+    expect(profile(prompt)).toMatch(/\d+ older owner facts are not shown here/);
+    expect(profile(turnMemoryPrompt(store, 'unrelated'))).toContain('Fact 0: synthetic detail 0');
   });
 });

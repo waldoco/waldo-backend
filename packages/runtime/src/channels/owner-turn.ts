@@ -8,7 +8,7 @@ import type { createOwnerMessageContextAdapter } from './owner-message-context-a
 import type { OwnerTurnEnvelope } from './owner-turn-envelope';
 import { ownerContextHandler } from '../tools/live/owner-context';
 import {
-  EXTERNAL_ORIGIN_TOOLS, literalJsonTextRedactor, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
+  EXTERNAL_ORIGIN_TOOLS, literalJsonTextRedactor, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
@@ -591,8 +591,9 @@ export const createOwnerResponder = (
           if (control.revision() !== contextSteering) throw new ClosedRunError();
           const skillMetadata = skills && (!binding || request.tools.includes('skills_list')) ? skills.metadata() : '';
           const canonicalSystem = [canonicalPrompt, OWNER_TASK_SOURCE_PRECEDENCE, sourceNotice, recallNotice, turnNotice, ...(memoryReceipts.length ? [`Memory this turn: ${memoryReceipts.join(' ')}`] : []), skillMetadata, taskContext].filter(Boolean).join('\n\n');
+          mainBase = () => [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), sourceNotice, recallNotice, turnNotice, memoryReceipts.join(' '), ordersSection, skillMetadata, taskContext, skillPrompt].filter(Boolean).join('\n\n');
           return complete(trace, 'reply',
-          binding ? withOwnerSkillProcedures(canonicalSystem, skillPrompt) : withOwnerSkillProcedures([messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), sourceNotice, ...(recallNotice ? [recallNotice] : []), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory && sourceFamilyAvailable('local') ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])].join('\n\n'), skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined)),
+          binding ? withOwnerSkillProcedures(canonicalSystem, skillPrompt) : withOwnerSkillProcedures([messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), sourceNotice, ...(recallNotice ? [recallNotice] : []), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory && sourceFamilyAvailable('local') ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText, systemRoom(mainBase()))] : []), ...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])].join('\n\n'), skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined)),
           entries,
           undefined,
           pending,
@@ -617,6 +618,9 @@ export const createOwnerResponder = (
   // Set by converse() for the duration of one submit: delegate_task rides owner chat turns
   // only, never reminder/scheduled machine turns that flow through the same closure.
   let ownerTurnActive = false;
+  // Room left in the system prompt for owner memory: the sanitiser drops a system prompt over its limit whole.
+  const systemRoom = (others: string) => SANITISE_DESTINATION_POLICIES.system_prompt.max_chars - others.length - 2_048;
+  let mainBase: () => string = () => '';
   let turnToolEvents: LoopEventLike[] = [];
   const parseToolArgs = (raw: unknown, tool: string): unknown => {
     if (typeof raw !== 'string') return raw;
@@ -872,8 +876,11 @@ export const createOwnerResponder = (
           if (!current || !toolNames || toolNames.length) throw new Error('transient decision requires currentness and no tools');
           const source = promptMemory();
           const eligible = (claim: import('../memory/claims').Claim) => claim.origin === 'owner' && claim.kind !== 'health';
-          const context = source ? turnMemoryPrompt({ ...source, claims: status => source.claims(status).filter(eligible), recall: (query, limit) => source.recall(query, limit).filter(eligible) }, said) : '';
-          const bounded = new TextEncoder().encode(context).byteLength <= 12_000 ? context : 'Owner context omitted because it exceeded the bounded decision budget.';
+          const decisionBase = [messagingSystemPrompt([]), ownerClockLine(clock)].join('\n\n');
+          const context = source ? turnMemoryPrompt({ ...source, claims: status => source.claims(status).filter(eligible), recall: (query, limit) => source.recall(query, limit).filter(eligible) }, said, systemRoom(decisionBase)) : '';
+          // No byte cliff: dropping ALL owner context past a size made a decision with more known about the owner worse than
+          // one with less. The profile is short owner sentences; the owner-direction is full context.
+          const bounded = context;
           return await time('background_decision', () => ask(id, 'background_decision', [messagingSystemPrompt([]), ownerClockLine(clock), bounded].filter(Boolean).join('\n\n'), said, decision));
         }
         return await converse(id, conversationRef, said, time, false, surface, toolNames);
