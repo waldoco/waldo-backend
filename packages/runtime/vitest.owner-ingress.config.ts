@@ -7,6 +7,8 @@ export default defineConfig({
   plugins: [cloudflareTest({
     miniflare: { bindings: {
       WALDO_ENV: 'test', RUN_LOOP_PROVIDER_MODE: 'fake',
+      // The verified owner email follows the text-capture switch (trace-privacy-owner-email.test.ts); this config models the staging vars in wrangler.jsonc (WALDO_ENVIRONMENT staging, capture true); the wrangler default is production, capture off.
+      WALDO_ENVIRONMENT: 'staging', LANGFUSE_CAPTURE_TEXT: 'true',
       RUN_LOOP_LOCAL_INGRESS_TOKEN: 'test-run-loop-local-token-000000000000',
       RESPONSIBILITY_INGRESS_HMAC_SECRET: 'test-responsibility-ingress-hmac-secret-000000000000',
       TELEGRAM_BOT_TOKEN: 'hermetic-test-bot-token',

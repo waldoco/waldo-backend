@@ -45,8 +45,8 @@ describe('otlpTurnExporter', () => {
     const first = capture(); const second = capture();
     const identityA = { owner_id: '10000000-0000-0000-0000-00000000000a', owner_email: 'a@test.invalid' };
     const identityB = { owner_id: '10000000-0000-0000-0000-00000000000b', owner_email: 'b@test.invalid' };
-    const logA = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: { authorization: 'fixture-auth' } }, context, first.send);
-    const logB = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, userId: 'telegram:2', sessionId: 'telegram-dm:2' }, second.send);
+    const logA = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: { authorization: 'fixture-auth' } }, { ...context, captureText: true }, first.send);
+    const logB = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, captureText: true, userId: 'telegram:2', sessionId: 'telegram-dm:2' }, second.send);
     await Promise.all([
       logA({ trace: 'tg-101', hop: 'llm_reply', ms: 1, ok: true, ...identityA }),
       logB({ trace: 'tg-102', hop: 'llm_reply', ms: 1, ok: true, ...identityB }),
@@ -71,6 +71,16 @@ describe('otlpTurnExporter', () => {
     }
     expect(JSON.stringify(first.calls)).not.toContain(identityB.owner_email);
     expect(JSON.stringify(second.calls)).not.toContain(identityA.owner_email);
+  });
+
+  it('keeps owner_id but withholds the verified email when text capture is off', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send);
+    await log({ trace: 'tg-103', hop: 'turn', ms: 1, ok: true, owner_id: '10000000-0000-0000-0000-00000000000c', owner_email: 'c@test.invalid', owner_identity: 'verified' });
+    expect(attrs(spans(0)[0]!)).toMatchObject({
+      'langfuse.trace.metadata.owner_id': '10000000-0000-0000-0000-00000000000c', 'langfuse.trace.metadata.owner_email': 'unknown',
+    });
+    expect(JSON.stringify(spans(0))).not.toContain('c@test.invalid');
   });
 
   it('marks missing canonical identity unknown instead of deriving email from turn input', async () => {
