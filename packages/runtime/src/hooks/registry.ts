@@ -95,7 +95,7 @@ import {
   writeTaskArgsSchema,
   archiveThreadArgsSchema,
 } from '@waldo/contracts';
-import { EGRESS_TARGET_PATHS, evaluateDeclaredEgress } from './egress-policy';
+import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, OPEN_PUBLIC_TOOLS, evaluateDeclaredEgress } from './egress-policy';
 
 export type HookRegistry<Ctx> = readonly HookHandler<Ctx>[];
 
@@ -453,6 +453,7 @@ export const egressAllowlistHook: HookHandler<HookRuntimeContext> = {
       payload.args,
       EGRESS_TARGET_PATHS[tool.data] ?? [],
       ctx.egressAllowlist,
+      { openPublic: OPEN_PUBLIC_TOOLS.includes(tool.data) && ctx.egressAllowlist?.includes(OPEN_PUBLIC) === true },
     ).ok
       ? ok()
       : halt('egress destination denied', 'forbidden');

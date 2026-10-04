@@ -18,6 +18,11 @@ export type EgressPolicyResult =
 
 type DeclaredValues = { readonly ok: true; readonly values: unknown[] } | { readonly ok: false };
 
+// Allowlist entry meaning "any public host" for read-only page browsing (browse_page) only. It never
+// opens browse_act, execute_code or any other tool, and the private/loopback/metadata blocks still apply.
+export const OPEN_PUBLIC = '*';
+export const OPEN_PUBLIC_TOOLS: readonly ToolName[] = ['browse_page'];
+
 export const EGRESS_TARGET_PATHS: Readonly<
   Partial<Record<ToolName, readonly DeclaredEgressPath[]>>
 > = Object.freeze({
@@ -77,8 +82,13 @@ export function evaluateDeclaredEgress(
   args: unknown,
   paths: readonly DeclaredEgressPath[],
   allowlist: readonly string[] | undefined,
+  options: Readonly<{ openPublic?: boolean }> = {},
 ): EgressPolicyResult {
-  const allowedHosts = parseAllowlist(allowlist);
+  // "-host" entries are a blocklist (host and subdomains), same env var, so no new deploy wiring.
+  // They deny for every tool, win over the open sentinel and over a listed host, and never allow.
+  const blocked = (allowlist ?? []).filter((entry) => entry.startsWith('-')).map((entry) => hostFromBareHost(entry.slice(1)));
+  const blockedHosts = blocked.filter((host): host is string => host !== null);
+  const allowedHosts = parseAllowlist(allowlist?.filter((entry) => entry !== OPEN_PUBLIC && !entry.startsWith('-')));
 
   for (const path of paths) {
     const declaredValues = valuesAtPath(args, path.path);
@@ -87,8 +97,11 @@ export function evaluateDeclaredEgress(
     for (const value of declaredValues.values) {
       const host = path.kind === 'url' ? hostFromUrl(value) : hostFromBareHost(value);
       if (host === null) return { ok: false, reason: 'malformed_target' };
-      if (isBlockedHost(host)) return { ok: false, reason: 'blocked_host' };
+      if (isBlockedHost(host) || blockedHosts.some((entry) => matchesAllowedHost(host, entry))) return { ok: false, reason: 'blocked_host' };
 
+      // Open public web: any host that passed the blocked-host checks above. Only the caller decides
+      // which tool gets this; the allowlist sentinel alone never opens a tool.
+      if (options.openPublic === true) continue;
       if (allowedHosts === null) return { ok: false, reason: 'allowlist_unavailable' };
       if (!allowedHosts.some((allowed) => matchesAllowedHost(host, allowed))) {
         return { ok: false, reason: 'host_not_allowlisted' };
@@ -178,15 +191,24 @@ function isTrimmedString(value: unknown): value is string {
 }
 
 function normaliseHost(host: string): string | null {
-  const normalised = host.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  const normalised = host.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   return normalised.length > 0 ? normalised : null;
+}
+
+// Names that only resolve inside a private network and are recognisable without DNS: a dotless
+// hostname (not an IPv6 literal) and the reserved internal suffixes.
+const INTERNAL_SUFFIXES = ['.local', '.internal', '.svc', '.localdomain'] as const;
+function isInternalNetworkName(host: string): boolean {
+  if (host.includes(':')) return false;
+  return !host.includes('.') || INTERNAL_SUFFIXES.some((suffix) => host.endsWith(suffix));
 }
 
 function isBlockedHost(host: string): boolean {
   if (
     host === 'localhost' ||
     host.endsWith('.localhost') ||
-    host === 'metadata.google.internal'
+    host === 'metadata.google.internal' ||
+    isInternalNetworkName(host)
   ) {
     return true;
   }
