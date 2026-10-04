@@ -221,7 +221,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     });
     this.browserTasks = makeBrowserHost(browserConfiguration);
     this.browserReady = browserConfiguration ? Promise.resolve() : browserProductionConfiguration({ env, storage: ctx.storage,
-      actualDoId: ctx.id.toString(), policy: browserTrial?.policy }).then(config => { this.browserTasks = makeBrowserHost(config); })
+      actualDoId: ctx.id.toString(), policy: browserTrial?.policy, loadSdk: browserTrial?.loadSdk }).then(config => { this.browserTasks = makeBrowserHost(config); })
       .catch(() => { console.warn(JSON.stringify({ event: 'browser_host_disabled' })); });
   }
   private runtimes: Partial<Record<ChannelKind, OwnerRuntime>> = {};
@@ -653,7 +653,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (result.ok && request.method === 'POST') {
         await this.browserReady;
         try {
-          const config = await browserProductionConfiguration({ env: this.env, storage: this.ctx.storage, actualDoId: this.ctx.id.toString(), policy: this.browserTrial?.policy });
+          const config = await browserProductionConfiguration({ env: this.env, storage: this.ctx.storage, actualDoId: this.ctx.id.toString(), policy: this.browserTrial?.policy, loadSdk: this.browserTrial?.loadSdk });
           // Reconstruct through the same constructor-owned host plumbing.
           if (config) this.browserTasks = this.makeBrowserHost(config);
         } catch { console.warn(JSON.stringify({ event: 'browser_host_disabled' })); }

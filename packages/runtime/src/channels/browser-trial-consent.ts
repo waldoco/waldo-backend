@@ -3,13 +3,13 @@ import type { PresenceBinding } from '../identity/owner-message-admission';
 import { ownerPresenceBinding } from '../identity/owner-message-admission';
 import { BROWSER_AUTHORIZATION_KEY, parseBrowserOwnerAuthorization, type BrowserOwnerAuthorization } from './browser-owner-authority';
 import type { BrowserTrialPolicy } from './browser-production-factory';
-import { fixtureDigest, type FixtureManifest } from './public-fixture-browser';
+import { fixtureDigest, type FixtureManifest, type CloudflareBrowserSdkLoader } from './public-fixture-browser';
 
 export const BROWSER_TRIAL_PATH = '/console/browser/trial';
 export const BROWSER_TRIAL_PENDING_KEY = 'browser_owner_trial_confirmation_v1';
 export const BROWSER_TRIAL_REVOCATION_KEY = 'browser_owner_trial_revocation_v1';
 const PENDING_KEY = BROWSER_TRIAL_PENDING_KEY;
-export type BrowserTrialPreparation = Readonly<{ policy: BrowserTrialPolicy; manifest: FixtureManifest }>;
+export type BrowserTrialPreparation = Readonly<{ policy: BrowserTrialPolicy; manifest: FixtureManifest; loadSdk?: CloudflareBrowserSdkLoader }>;
 type Storage = Pick<DurableObjectStorage, 'kv' | 'transactionSync'>;
 type Pending = Readonly<{ nonce: string; authorization: BrowserOwnerAuthorization; expiresAt: number }>;
 const reply = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', ...(status === 429 ? { 'retry-after': '30' } : {}) } });
