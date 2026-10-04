@@ -573,8 +573,9 @@ export class HookHaltError extends Error {
     super(`hook ${hook} halted: ${reason}`);
     this.name = 'HookHaltError';
     // invalid_args carries model-authored arg details the model needs to recover; every other
-    // halt (acl, sanitise, egress, ...) stays opaque so security reasons never reach the model.
-    this.clientMessage = code === 'invalid_args' ? reason : 'hook halted';
+    // halt (acl, sanitise, ...) stays opaque so security reasons never reach the model. An egress denial
+    // only says the address cannot be opened, so the model can pick another source instead of stalling.
+    this.clientMessage = code === 'invalid_args' ? reason : hook === 'egress_allowlist_check' ? 'That address cannot be opened from here (it is blocked or not on the allowed list). Try another source.' : 'hook halted';
     this.onErrorPayload = {
       event: 'OnError',
       error: this.clientMessage,

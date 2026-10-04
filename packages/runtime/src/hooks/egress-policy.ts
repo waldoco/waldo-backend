@@ -18,10 +18,11 @@ export type EgressPolicyResult =
 
 type DeclaredValues = { readonly ok: true; readonly values: unknown[] } | { readonly ok: false };
 
-// Allowlist entry meaning "any public host" for read-only page browsing (browse_page) only. It never
-// opens browse_act, execute_code or any other tool, and the private/loopback/metadata blocks still apply.
+// Allowlist entry meaning "any public host" for page browsing (browse_page, and browse_act so a page's own
+// transcript or captions can be opened). It never opens execute_code or any other tool, and the
+// private/loopback/metadata blocks still apply. browse_act's submit, pay and send steps keep their own approval gates.
 export const OPEN_PUBLIC = '*';
-export const OPEN_PUBLIC_TOOLS: readonly ToolName[] = ['browse_page'];
+export const OPEN_PUBLIC_TOOLS: readonly ToolName[] = ['browse_page', 'browse_act'];
 
 export const EGRESS_TARGET_PATHS: Readonly<
   Partial<Record<ToolName, readonly DeclaredEgressPath[]>>
