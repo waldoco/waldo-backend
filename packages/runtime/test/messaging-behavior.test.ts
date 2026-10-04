@@ -90,4 +90,8 @@ describe('ownerClockLine', () => {
     const line = ownerClockLine({ timezone: 'Not/AZone', now: () => new Date('2026-09-27T11:42:00Z') });
     expect(line).toContain('(UTC)');
   });
+  it('defines done for a research ask and dates a search', () => {
+    expect(MESSAGING_BEHAVIOR).toContain('is done when you have looked at real candidates');
+    expect(MESSAGING_BEHAVIOR).toContain('check the page shows them before you read prices');
+  });
 });
