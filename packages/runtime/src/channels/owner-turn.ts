@@ -602,7 +602,7 @@ export const createOwnerResponder = (
         },
         onTool: (event) => {
           // Typed receipt input for the owner reply's last line (receiptLine reads no wording).
-          turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments) }, ok: event.ok, ...(event.code ? { code: event.code } : {}) });
+          turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, ...(event.code ? { code: event.code } : {}) });
           privateRunScope?.admit();
           if (forgottenTexts.size) offloadStore?.clear();
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: forgetJsonText(event.call.arguments), output: forgetJsonText(event.output, 'tool_result') } });
@@ -618,7 +618,10 @@ export const createOwnerResponder = (
   // only, never reminder/scheduled machine turns that flow through the same closure.
   let ownerTurnActive = false;
   let turnToolEvents: LoopEventLike[] = [];
-  const parseToolArgs = (raw: unknown): unknown => { if (typeof raw !== 'string') return raw; try { return JSON.parse(raw); } catch { return undefined; } };
+  const parseToolArgs = (raw: unknown, tool: string): unknown => {
+    if (typeof raw !== 'string') return raw;
+    try { return JSON.parse(raw); } catch (error) { log({ trace: traceId, hop: 'receipt_args_parse', ms: 0, ok: false, error: `${tool}: ${String(error).slice(0, 120)}` }); return undefined; }
+  };
   let backgroundToolNames: readonly string[] | undefined;
   // The reply this turn just sent, so chooseReaction reacts to the exchange (gist of what the
   // owner saw) instead of the owner's message alone - the 😢-on-stress class (2026-09-27 sweep).
