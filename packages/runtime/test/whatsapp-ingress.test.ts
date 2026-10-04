@@ -1,3 +1,4 @@
+import { claimNewWhatsAppMessages, WAMID_RETENTION_MS } from '../src/channels/whatsapp-api';
 import { describe, expect, it, vi } from 'vitest';
 import { WA_UPDATE_BASE, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from '../src/channels/whatsapp-api';
 import { gatedCaller } from '../src/channels/telegram-api';
@@ -181,5 +182,25 @@ describe('whatsapp voice notes (W4)', () => {
     const download = createWhatsAppMediaDownloader('wabearer-t0ken', graph as unknown as typeof fetch);
     await expect(download('media-9')).rejects.toThrow('no usable url');
     expect(graph).toHaveBeenCalledTimes(1);
+  });
+
+  describe('replayed wamids', () => {
+    const fakeKv = () => { const map = new Map<string, unknown>(); return { map, kv: { get: <T>(k: string) => map.get(k) as T | undefined, put: (k: string, v: unknown) => { map.set(k, v); }, delete: (k: string) => map.delete(k), list: <T>({ prefix }: { prefix: string }) => [...map].filter(([k]) => k.startsWith(prefix)) as [string, T][] } }; };
+    it('a redelivered wamid is dropped, a new one passes, and an id-less message cannot be deduped', () => {
+      const { kv } = fakeKv();
+      expect(claimNewWhatsAppMessages(kv, [{ id: 'wamid.A' }, { id: 'wamid.B' }, {}], 1000)).toHaveLength(3);
+      expect(claimNewWhatsAppMessages(kv, [{ id: 'wamid.A' }, { id: 'wamid.C' }], 2000)).toEqual([{ id: 'wamid.C' }]);
+    });
+    it('the same wamid twice in one payload runs once', () => {
+      const { kv } = fakeKv();
+      expect(claimNewWhatsAppMessages(kv, [{ id: 'wamid.A' }, { id: 'wamid.A' }], 1000)).toEqual([{ id: 'wamid.A' }]);
+    });
+    it('records expire after Meta\'s 7 day retry window and are swept', () => {
+      const { kv, map } = fakeKv();
+      claimNewWhatsAppMessages(kv, [{ id: 'wamid.A' }], 1000);
+      expect(claimNewWhatsAppMessages(kv, [{ id: 'wamid.A' }], 1000 + WAMID_RETENTION_MS - 1)).toEqual([]);
+      expect(claimNewWhatsAppMessages(kv, [{ id: 'wamid.A' }], 1000 + WAMID_RETENTION_MS)).toEqual([{ id: 'wamid.A' }]);
+      expect(map.size).toBe(1);
+    });
   });
 });

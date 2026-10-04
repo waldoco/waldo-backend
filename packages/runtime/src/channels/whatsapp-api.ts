@@ -129,3 +129,23 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
   }
   return { updates, seq };
 };
+
+// Meta redelivers a webhook until it gets a 200, for up to 7 days
+// (https://developers.facebook.com/docs/whatsapp/cloud-api/guides/set-up-webhooks/ , "Webhook delivery failure").
+// A message id (wamid) is therefore remembered for 7 days from first sight. First sight is never earlier
+// than Meta's first attempt, so a retry cannot outlive the record. A message is marked as it is accepted
+// (at-most-once): a replayed turn could repeat effects, a lost one is visible to the owner and can be resent.
+export const WAMID_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+type WamidKv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void; delete(key: string): unknown; list<T>(options: { prefix: string }): Iterable<[string, T]> }>;
+export const claimNewWhatsAppMessages = <M extends Readonly<{ id?: string }>>(kv: WamidKv, messages: readonly M[], now: number): M[] => {
+  for (const [key, seen] of [...kv.list<number>({ prefix: 'wamid:' })]) if (now - seen >= WAMID_RETENTION_MS) kv.delete(key);
+  const fresh: M[] = [];
+  for (const message of messages) {
+    if (typeof message.id !== 'string' || message.id === '') { fresh.push(message); continue; }
+    const key = `wamid:${message.id}`;
+    if (kv.get<number>(key) !== undefined) continue;
+    kv.put(key, now);
+    fresh.push(message);
+  }
+  return fresh;
+};

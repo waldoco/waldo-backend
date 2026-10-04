@@ -119,4 +119,17 @@ describe('handleWhatsAppWebhook', () => {
     expect(String((graph.mock.calls[0] as unknown as [string, RequestInit])[1].body)).not.toContain('wabearer-t0ken');
     expect((graph.mock.calls[0] as unknown as [string, RequestInit])[1].headers).toMatchObject({ authorization: 'Bearer wabearer-t0ken' });
   });
+
+  it('a stranger sending a bare code, or a status-only callback, wakes nothing and redeems nothing', async () => {
+    const { fetch, ns } = namespace();
+    vi.stubGlobal('fetch', vi.fn());
+    const redeem = vi.fn(async () => null);
+    const directory: OwnerDirectory = { byPresence: async () => null, redeem };
+    const env: WhatsAppWebhookEnv = { TELEGRAM_OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_ACCESS_TOKEN: 't', WHATSAPP_PHONE_NUMBER_ID: 'pn1' };
+    await run(await post('x', payload([{ from: '15550004444', text: 'GOOD12' }])), env, directory);
+    await run(await post('x', payload([], true)), env, directory);
+    expect(redeem).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
 });

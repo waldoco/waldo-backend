@@ -89,7 +89,7 @@ import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
-import { createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
+import { claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
@@ -558,7 +558,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       this.runtimes = {};
     }
     const value = JSON.parse(body) as { messages?: { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[] };
-    const { updates, seq } = whatsappIngressUpdates(value.messages ?? [], subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0);
+    const { updates, seq } = whatsappIngressUpdates(claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now()), subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0);
     for (const update of updates) await this.serial(() => this.turn(update, 'whatsapp'));
     await this.ctx.storage.put('wa_seq', seq);
     return new Response('ok');
