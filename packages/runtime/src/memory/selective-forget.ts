@@ -49,7 +49,8 @@ export const selectedForgetTexts = (topic: string, snapshot: ForgetSnapshot, raw
     const span = entry as { ref?: unknown; text?: unknown };
     if (typeof span.ref !== 'string' || typeof span.text !== 'string' || span.text.length < 12 || span.text.length > 4096 || /[^\x20-\x7e]/.test(span.text)) return null;
     if (!refs.get(span.ref)?.includes(span.text) || !span.text.toLowerCase().includes(topic.toLowerCase())) return null;
-    if (span.text.trim().toLowerCase() === topic.trim().toLowerCase()) return null;
+    // A span must be a clause around the topic, not the topic with punctuation: removing every topic occurrence must leave a letter or digit.
+    if (!/[a-z0-9]/.test(span.text.toLowerCase().split(topic.toLowerCase()).join(' '))) return null;
     texts.push(span.text);
   }
   // Relevant rows with no selected fact remain unproved, rather than destroying

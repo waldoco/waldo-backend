@@ -863,7 +863,8 @@ export const createOwnerResponder = (
         await admitTaskSource(turn.text);
         const media = turn.attachment || turn.mediaNote ? { attachment: turn.attachment, note: turn.mediaNote } : undefined;
         pending = ownerTurnAttachments(turn);
-        turnWriting = (memory !== undefined || !!binding?.forgetting && hasForgetIntent(turn.text ?? '')) && memoryWrites && !probeGuard?.suppressMemory;
+        // A canonical ordinary turn still gives a stored incomplete forget its one retry; intent in this text is not required.
+        turnWriting = (memory !== undefined || !!binding?.forgetting && (hasForgetIntent(turn.text ?? '') || binding.forgetting.store.incompleteTopics().length > 0)) && memoryWrites && !probeGuard?.suppressMemory;
         recordedHeard = 0;
         memoryReceipts.length = 0;
         clearForgotten();
