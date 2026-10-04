@@ -837,12 +837,11 @@ describe('Scribe sanitiser', () => {
         email: 'alice@example.com',
         contact: ['+1 (415) 555-0123', '[REDACTED_CREDIT_CARD]'],
         ip: '192.168.1.20',
-        attendee: '[REDACTED_ATTENDEE_NAME]',
+        attendee: 'Alice Example',
         address: '123 Market Street',
       },
       source_taint: 'external',
       redactions: [
-        { kind: 'attendee_name', count: 1 },
         { kind: 'credit_card', count: 1 },
       ],
     });
@@ -987,7 +986,7 @@ describe('Scribe sanitiser', () => {
       source_taint: null,
       redactions: [{ kind: 'credit_card', count: 1 }],
     });
-    expect(inspect({ attendee: 'Alice Example' })).toEqual({
+    expect(inspect({ attendee: 'Alice Example' }, 'send_message')).toEqual({
       ok: true,
       payload: { attendee: '[REDACTED_ATTENDEE_NAME]' },
       source_taint: null,
@@ -1038,8 +1037,15 @@ describe('Scribe sanitiser', () => {
     }
   });
 
+  it('attendee names stay readable to the model and owner reply; persistence and outbound still redact them', () => {
+    for (const destination of ['internal_context', 'owner_reply'] as const) {
+      expect(inspectExternal({ attendees: ['Alice Example', 'Bob Example'] }, destination)).toMatchObject({ ok: true, payload: { attendees: ['Alice Example', 'Bob Example'] }, redactions: [] });
+    }
+    expect(inspectExternal({ attendee: 'Alice Example' }, 'send_message')).toMatchObject({ ok: true, payload: { attendee: '[REDACTED_ATTENDEE_NAME]' } });
+  });
+
   it('propagates attendee-key context through arrays', () => {
-    expect(inspect({ attendees: ['Alice Example', 'Bob Example'] })).toEqual({
+    expect(inspect({ attendees: ['Alice Example', 'Bob Example'] }, 'send_message')).toEqual({
       ok: true,
       payload: {
         attendees: ['[REDACTED_ATTENDEE_NAME]', '[REDACTED_ATTENDEE_NAME]'],

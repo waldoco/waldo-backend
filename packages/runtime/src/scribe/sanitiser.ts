@@ -715,7 +715,8 @@ function redactEncodedPii(
 // into replies. External-tainted payloads and every persistence/egress destination (memory_block,
 // draft_document, skill_body, audit_log, r2_summary, outbox, sandbox_stdout) keep full redaction.
 // Two kinds never skip, whatever the taint: credit_card (no owner flow needs a full PAN in
-// context) and attendee_name (third-party PII, not the owner's own).
+// context) and, outside model/owner destinations, attendee_name (third-party PII). Attendee names
+// stay readable to the model and the owner reply (product direction relayed by main 2026-10-04): calendar answers need them.
 const OWNER_READABLE_DESTINATIONS: ReadonlySet<SanitiseDestination> = new Set([
   'system_prompt',
   'internal_context',
@@ -761,7 +762,7 @@ function redactPiiText(
     output = replaceAndCount(output, ADDRESS_PATTERN, '[REDACTED_ADDRESS]', 'address', counts);
   }
 
-  if (key !== undefined && ATTENDEE_KEY.test(key) && PERSON_NAME.test(output)) {
+  if (key !== undefined && !MODEL_AND_OWNER_DESTINATIONS.has(destination) && ATTENDEE_KEY.test(key) && PERSON_NAME.test(output)) {
     increment(counts, 'attendee_name');
     return '[REDACTED_ATTENDEE_NAME]';
   }
