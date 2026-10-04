@@ -142,3 +142,24 @@ describe('open public mode: repeated trailing dots cannot hide an internal name'
     expect(evaluateDeclaredEgress({ allow_hosts: [host] }, HOST_PATHS, ['*'], open).ok).toBe(false);
   });
 });
+
+describe('blocklist entries ("-host") alongside the open sentinel', () => {
+  const open = { openPublic: true } as const;
+  const check = (target: string, list: readonly string[]) => evaluateDeclaredEgress({ callbacks: [{ target }] }, NESTED_URL_PATHS, list, open);
+  it('denies a blocked host and its subdomains, allows other public hosts', () => {
+    const list = ['*', '-evil.example', '-Tracker.test'];
+    expect(check('https://evil.example/a', list).ok).toBe(false);
+    expect(check('https://sub.evil.example/a?x=1', list).ok).toBe(false);
+    expect(check('https://tracker.test./', list).ok).toBe(false);
+    expect(check('https://notevil.example/a', list)).toEqual({ ok: true });
+    expect(check('https://news.example.org/', list)).toEqual({ ok: true });
+  });
+  it('no blocklist entries leaves open mode unchanged; hard blocks still win', () => {
+    expect(check('https://news.example.org/', ['*'])).toEqual({ ok: true });
+    expect(check('http://127.0.0.1/', ['*', '-evil.example']).ok).toBe(false);
+  });
+  it('a blocklist entry never acts as an allowlist entry and does not break the listed-host path', () => {
+    expect(evaluateDeclaredEgress({ callbacks: [{ target: 'https://fcc.gov/' }] }, NESTED_URL_PATHS, ['fcc.gov', '-evil.example'])).toEqual({ ok: true });
+    expect(evaluateDeclaredEgress({ callbacks: [{ target: 'https://evil.example/' }] }, NESTED_URL_PATHS, ['evil.example', '-evil.example']).ok).toBe(false);
+  });
+});
