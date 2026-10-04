@@ -893,4 +893,10 @@ it('a forgotten clause with quotes and backslashes is gone from every provider r
     for (const needle of [tricky, escaped, topic]) expect(stored).not.toContain(needle);
     expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
   });
+  // The next ordinary turn through the registered DO: its provider input must not carry the clause either.
+  seen.onReply = undefined; seen.writer = ops();
+  await admittedTurn(name, 404, 'What unrelated preference remains?', ops());
+  const next = request();
+  expect(next).toContain(KEEP);
+  for (const needle of [tricky, escaped, 'C:\\\\temp', 'C:\\temp\\x', topic]) expect(next).not.toContain(needle);
 });
