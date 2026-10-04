@@ -286,3 +286,12 @@ it('a failing retry keeps the block and cannot be steered by the next turn text'
     expect(system()).toContain('Recall is temporarily limited');
   });
 });
+
+it('ADVERSARIAL selector must not certify punctuation-padded bare instruction marker', async () => {
+  const topic = 'REVIEW-757-MARKER'; const fact = `${topic} likes cobalt paper`;
+  await session('adversarial-marker', async (turn, store) => {
+    seen.writerOps.push(ops({forget_topic:topic}));
+    await turn('review-marker-request', `Forget only ${topic}. Keep tea.`, JSON.stringify({spans:[{ref:'episodes:1:text',text:fact},{ref:'request:review-marker-request',text:`${topic}.`}],reviewed_refs:['episodes:1:text','request:review-marker-request'],complete:true}));
+    expect(store.incompleteTopics()).toEqual([topic]);
+  }, undefined, undefined, sql=>episodeIndex(sql).add('review-source','owner',fact,1));
+});
