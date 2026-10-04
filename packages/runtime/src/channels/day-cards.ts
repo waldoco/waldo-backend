@@ -1,3 +1,5 @@
+import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_CHAT_MODEL, type ModelName } from '@waldo/contracts';
+import { turnMemoryPrompt, type ClaimStore } from '../memory/claims';
 import { DAY_CARDS, dayCardPrompt, SKIP_CARD, type CardId, type DayCard } from '../prompt/day-cards';
 import { calendarPromptProjection, type CalendarItem, type GoogleClient } from '../connectors/google';
 import type { Scheduler } from '../scheduler/multiplexer';
@@ -149,3 +151,20 @@ export const composeDayCard = async (
 };
 
 export const isSkip = (text: string): boolean => text.trim() === SKIP_CARD;
+
+// planDay sends this as one user message; the sanitiser budgets its JSON wire form.
+export const composeDayPlanInput = (input: string, memory?: ClaimStore, model: ModelName = WALDO_CHAT_MODEL): string => {
+  const limit = deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
+  const wireSize = (content: string) => JSON.stringify([{ role: 'user', content }]).length;
+  if (wireSize(input) > limit) throw new Error('day plan input exceeds provider context budget');
+  if (!memory) return input;
+  let room = limit - wireSize(`\n\n${input}`);
+  while (room >= 0) {
+    const content = `${turnMemoryPrompt(memory, input, room)}\n\n${input}`;
+    const excess = wireSize(content) - limit;
+    if (excess <= 0) return content;
+    // Escaping costs depend on the kept claims; tighten by the measured excess, not a count cap.
+    room -= excess;
+  }
+  throw new Error('day plan input leaves no room for memory omission reporting');
+};
