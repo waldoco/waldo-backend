@@ -27,7 +27,8 @@ describe('messagingSystemPrompt', () => {
   });
 
   it('claims of saving need a memory receipt, and readback of personal facts comes from memory only', () => {
-    expect(MESSAGING_BEHAVIOR).toContain('only when the memory line for this turn reports a stored or corrected claim');
+    expect(MESSAGING_BEHAVIOR).toContain('only when the memory line reports a stored or corrected claim');
+    expect(MESSAGING_BEHAVIOR).toContain('say only the count');
     expect(MESSAGING_BEHAVIOR).toContain('Never write "Noted" as if it were stored');
     expect(MESSAGING_BEHAVIOR).not.toContain("you can say it's noted");
     expect(MESSAGING_BEHAVIOR).toContain('may be partly stored');
