@@ -27,7 +27,8 @@ import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { CLINICAL_REDIRECT, OWNER_TASK_SOURCE_PRECEDENCE, messagingSystemPrompt, ownerClockLine, withOwnerSkillProcedures, OWNER_SKILL_SAFEGUARDS } from '../prompt/messaging-behavior';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
-import { FORGOTTEN, applyClaimOps, type ClaimOutcome, applyPromotion, CLAIM_OPS_SCHEMA, exchangeInput, MEMORY_INSTRUCTION, memoryPrompt, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
+import { composeDayPlanInput } from './day-cards';
+import { FORGOTTEN, applyClaimOps, type ClaimOutcome, applyPromotion, CLAIM_OPS_SCHEMA, exchangeInput, MEMORY_INSTRUCTION, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
 import { restoreConversation, type ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
 import type { TurnLogEntry, TurnTimer } from './owner-turn-types';
@@ -463,7 +464,7 @@ export const createOwnerResponder = (
             await sourceScope.assertSame(admittedSource);
           }
           const retainedRead = ['read_owner_context', 'read_memory', 'search_episodes', 'read_tool_output'].includes(handler.name);
-          if (retainedRead && forgettingState?.incompleteTopics().length) return { ok: false, code: 'transient', error: 'Recall is temporarily limited while requested forgetting coverage is incomplete.', source_taint: null };
+          if (retainedRead && forgettingState?.incompleteTopics().length) return { ok: false, code: 'transient', error: 'Recall is temporarily limited while requested forgetting coverage is incomplete.', source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
           if (backgroundToolNames !== undefined && handler.name === 'open_loop' && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
             return { ok: false, code: 'invalid_args', error: 'Background mail follow-up requires an observed source_ref.', source_taint: null };
           }
@@ -475,7 +476,7 @@ export const createOwnerResponder = (
           const result = await handler.handle(args, sourceContext); await assertCurrent();
           await sourceContext.assertTaskSourceCurrent?.();
           if (interactiveSource && requireTaskScope && sourceRead && admittedSource) await sourceScope!.assertSame(admittedSource);
-          if (retainedRead && forgettingState?.incompleteTopics().length) return { ok: false, code: 'transient', error: 'Recall is temporarily limited while requested forgetting coverage is incomplete.', source_taint: null };
+          if (retainedRead && forgettingState?.incompleteTopics().length) return { ok: false, code: 'transient', error: 'Recall is temporarily limited while requested forgetting coverage is incomplete.', source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
           return result;
         } };
       });
@@ -939,7 +940,7 @@ export const createOwnerResponder = (
       });
     },
     control,
-    planDay: (trace, input) => memoryOperation(() => ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, memory ? `${memoryPrompt(memory)}\n\n${input}` : input, { name: 'day_plan', schema: DAY_PLAN_SCHEMA })),
+    planDay: (trace, input) => memoryOperation(() => ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, composeDayPlanInput(input, memory), { name: 'day_plan', schema: DAY_PLAN_SCHEMA })),
     chooseReaction: async (turn) => {
       if (turn.runScope && privateRunScope !== turn.runScope) {
         return createOwnerResponder(openaiApiKey, undefined, undefined, log, clock, [], model, false, undefined, undefined, gateway, undefined, probeGuard, undefined, undefined, memoryModel, egressAllowlist, undefined, reactionChoices, turn.runScope).chooseReaction(turn);

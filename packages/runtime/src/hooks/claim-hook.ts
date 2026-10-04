@@ -12,6 +12,8 @@ export type LoopEventLike = Readonly<{
   // Only a tool result that itself says its receipt is unavailable is unresolved.
   receiptStatus?: 'unavailable';
   code?: string;
+  // The effect was done by a child task; the parent receipts it like its own so the reply can claim only receipted effects.
+  delegated?: true;
 }>;
 
 // The ref a tool's receipt carries, taken from typed args only. A tool not listed has no ref.
@@ -34,7 +36,7 @@ export const receiptsFromLoopEvents = (events: readonly LoopEventLike[]): readon
   if (!name || !effect) return [];
   const state: ReceiptState = event.ok ? 'accepted' : event.receiptStatus === 'unavailable' ? 'unresolved' : 'failed';
   const ref = refOf(name, event.call.args);
-  return [{ seq: event.seq, tool: name, effect, ok: event.ok, state, ...(ref !== undefined ? { ref } : {}) }];
+  return [{ seq: event.seq, tool: name, effect, ok: event.ok, state, ...(event.delegated ? { delegated: true } : {}), ...(ref !== undefined ? { ref } : {}) }];
 });
 
 // No fallback: a failure here throws to the caller, who owns what a failed advisory check means.
