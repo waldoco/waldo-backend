@@ -1,6 +1,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { approveTaskSourceProposal, createTaskSourceScope, TASK_SOURCE_FAMILIES, taskSourceAllowed } from '../src/channels/task-source-scope';
+import { approveTaskSourceProposal, createTaskSourceScope, TASK_SOURCE_FAMILIES, taskSourceAllowed, taskSourceRequired } from '../src/channels/task-source-scope';
 import { taskSourceClient } from '../src/tools/task-source-io';
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
@@ -490,4 +490,15 @@ it('browse_act is public-web reading: any ready task that allows web allows it, 
   expect(taskSourceAllowed(webOnly, { name: 'browse_act', mutates_state: true })).toBe(true);
   await cap.classify(decision('restrict', []));
   expect(taskSourceAllowed(await cap.current(), { name: 'browse_act', mutates_state: true })).toBe(false);
+}));
+
+it('the owner\'s own reminder and standing-order lists need no retained-memory source: they read what the owner set, as the pasted-only scope already allows', () => run('task-own-lists', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-lists', scope, async () => {}, undefined, []);
+  const web = (await cap.classify(decision('restrict', ['web']))).snapshot;
+  expect(web.ready).toBe(true);
+  for (const name of ['list_reminders', 'list_standing_orders'] as const) {
+    expect(taskSourceRequired({ name }), `${name} is not a source read`).toBe(false);
+    expect(taskSourceAllowed(web, { name }), `${name} on a task without local`).toBe(true);
+  }
+  expect(taskSourceAllowed(web, { name: 'read_memory' }), 'retained memory still needs local').toBe(false);
 }));
