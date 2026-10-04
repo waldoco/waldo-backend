@@ -10,7 +10,7 @@ Rule (AGENTS.md, Full Context and Capability by Default): keep only real-harm gu
 | Task-source cards for Google families | src/channels/task-source-scope.ts | Owner gets asked before the agent reads his own mail | Drop (S1). browse_page/web_search already moved to the no-card family (#707) |
 | browse_act list-bound egress | src/hooks/egress-policy.ts, WALDO_EGRESS_ALLOWLIST | The agent cannot act on a page outside a short host list | Open it like browse_page; keep the private/loopback/metadata blocks (why: a fetch must not reach internal infrastructure) and approval-bound submits (why: irreversible actions need approval) |
 | pasted_only SourceScopeStore / guardExternalReads | src/tools/source-scope.ts | Not enforced live (no production callers), so no cost today | Delete or leave unwired; do not wire it |
-| Env flags MAIL_SOURCE_FOLLOWUPS, CALENDAR_GROUNDED_PREP default off | wrangler vars, telegram-owner-do.ts | Proactive help is off for everyone | On by default, per-owner opt-out (#709, S2a). Production config is the owner's call |
+| Env flags MAIL_SOURCE_FOLLOWUPS, CALENDAR_GROUNDED_PREP default off | wrangler vars, telegram-owner-do.ts | DONE in #714 for staging (flags are kill switches; production wrangler unchanged) | Proactive help is off for everyone | On by default, per-owner opt-out (#709, S2a). Production config is the owner's call |
 | Tool-round cap 25 | src/channels/owner-turn.ts:81 MAX_TOOL_ROUNDS | A research task (search then several pages) can run out | CHECK against the eval before changing |
 | Tool-arg taint tightening when a reply is quoted | owner-turn.ts toolArgSourceTaint 'external' | Quoting a message may restrict tool use | CHECK what it blocks before deciding |
 
