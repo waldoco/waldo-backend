@@ -82,9 +82,11 @@ export const artifactExports = (sql: Sql, book: ArtifactBook, bodies: ArtifactBo
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 
-export const exportArtifactHandler = (exporter: ReturnType<typeof artifactExports>) => ({
+// `link` turns a stored export id into the owner-authenticated download URL (the console route, behind the owner session). Without it the
+// receipt says saved internally, as before.
+export const exportArtifactHandler = (exporter: ReturnType<typeof artifactExports>, link?: (exportId: string) => Promise<string | null>) => ({
   name: 'export_artifact',
-  description: "Render a saved artifact to a file (format 'pdf', Latin text only) and store it. expected_revision must match the revision you last saw. A failure comes back as an error with the real reason, never as a receipt; success reports status 'exported', size and sha256, and a repeat export of the same revision returns the stored receipt (deduped: true); delivery is 'saved_internal' with no URL until an owner-authenticated link exists, so say it is saved internally only. Never invent a link.",
+  description: "Render a saved artifact to a file (format 'pdf', Latin text only) and store it. expected_revision must match the revision you last saw. A failure comes back as an error with the real reason, never as a receipt; success reports status 'exported', size and sha256, and a repeat export of the same revision returns the stored receipt (deduped: true); delivery is 'owner_link' with a URL only when the receipt carries one (the owner opens it signed in); otherwise it is 'saved_internal' with no URL, so say it is saved internally only. Never invent a link.",
   schema: exportArtifactArgsSchema,
   trigger_allowlist: allowlist('export_artifact'),
   autonomy_gated: false,
@@ -92,7 +94,12 @@ export const exportArtifactHandler = (exporter: ReturnType<typeof artifactExport
   handle: async (args: ExportArtifactArgs, ctx?: ToolDispatcherContext) => {
     const r = await exporter.exportPdf(args, ctx?.assertTaskSourceCurrent);
     // Discriminated: only status 'exported' is ok:true. Every failure is ok:false with its real reason.
-    if (r.ok) return { ok: true, data: { status: 'exported', artifact_id: args.artifact_id, bytes: r.bytes, mime_type: r.mime_type, sha256: r.sha256, deduped: r.deduped, delivery: { status: 'saved_internal', url: null, audience: 'unverified' } }, source_taint: null };
+    if (r.ok) {
+      let url: string | null = null;
+      try { url = link ? await link(r.id) : null; } catch { url = null; }
+      return { ok: true, data: { status: 'exported', artifact_id: args.artifact_id, bytes: r.bytes, mime_type: r.mime_type, sha256: r.sha256, deduped: r.deduped,
+        delivery: url ? { status: 'owner_link', url, audience: 'owner_authenticated' } : { status: 'saved_internal', url: null, audience: 'unverified' } }, source_taint: null };
+    }
     if (r.code === 'not_found') return { ok: false, code: 'not_found', error: 'No artifact with that id.' };
     if (r.code === 'conflict') return { ok: false, code: 'rejected', error: `Revision mismatch: the artifact is at revision ${r.current_revision}. Read it again and retry with expected_revision ${r.current_revision}.` };
     const why: Record<string, string> = {

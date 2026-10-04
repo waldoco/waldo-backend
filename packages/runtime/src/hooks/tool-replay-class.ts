@@ -32,7 +32,7 @@ export const TOOL_REPLAY_CLASS: Readonly<Record<ToolName, ToolReplayRow>> = {
   send_email: { replay: 'reconcilable_write', basis: 'proposal only; a replay of the same turn+args reuses the proposal through dedupe_key, and the desk reconciles an ambiguous send through the Message-ID it sets', evidence: { file: 'tools/live/google.ts', needle: 'dedupe_key' } },
   propose_calendar_change: unknown('proposal desk dedupe not inspected'),
   draft_email: { replay: 'non_replayable_uncertain', basis: 'proxy intent id from user+turn+toolCall: a replay returns the stored result or intent_pending; an uncertain dispatch stays pending and there is no remote draft lookup', evidence: { file: 'connectors/proxy-intent.ts', needle: 'intent_pending' } },
-  create_artifact: unknown(NOT_INSPECTED), revise_artifact: unknown(NOT_INSPECTED), export_artifact: unknown(NO_HANDLER + '; export path is dormant'),
+  create_artifact: unknown(NOT_INSPECTED), revise_artifact: unknown(NOT_INSPECTED), export_artifact: unknown(NOT_INSPECTED),
   browse_act: unknown('real browser actions on a public page; page effects cannot be reconciled'),
   workspace_write: { replay: 'provider_idempotent', basis: 'operation_id derived from user+turn+toolCall plus expected_revision; collapse is at the workspace store, not a remote provider', evidence: { file: 'tools/live/workspace.ts', needle: 'operation_id' } },
   workspace_render: unknown('not inspected'),

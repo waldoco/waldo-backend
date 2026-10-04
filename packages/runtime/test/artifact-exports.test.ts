@@ -121,3 +121,15 @@ it('export source fencing prevents body reads and withholds publication after a 
   expect(read).toHaveBeenCalledTimes(1);
   expect(put).not.toHaveBeenCalled();
 });
+
+describe('export_artifact delivery link', () => {
+  it('returns the owner-authenticated link only when a link builder yields one; a failing builder degrades to saved internally', async () => {
+    const { meta, ex } = await setup('# Hi\n\n- a');
+    const linked = exportArtifactHandler(ex, async id => `https://staging.invalid/console/exports/${encodeURIComponent(id)}`);
+    expect(await linked.handle(args(meta.id))).toMatchObject({ ok: true, data: { status: 'exported', delivery: { status: 'owner_link', url: 'https://staging.invalid/console/exports/exp%3Ae1', audience: 'owner_authenticated' } } });
+    const failing = exportArtifactHandler(ex, async () => { throw new Error('origin unavailable'); });
+    expect(await failing.handle(args(meta.id))).toMatchObject({ ok: true, data: { delivery: { status: 'saved_internal', url: null } } });
+    const none = exportArtifactHandler(ex, async () => null);
+    expect(await none.handle(args(meta.id))).toMatchObject({ ok: true, data: { delivery: { status: 'saved_internal', url: null } } });
+  });
+});
