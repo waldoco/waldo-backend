@@ -519,3 +519,5 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] Plain fallback requires a definite entity-format rejection and the same current frozen attempt, owner eligibility and expiry; concurrent cancellation/forget must prevent fallback and stale payload restoration. Network uncertainty never authorizes a retry.
 
 - [ ] A generated final's frozen plain fallback crosses the same secret-URL persistence and egress boundary as its rich copy. Redact before HTML escaping and at both enqueue lanes; synthetic provider OAuth URLs must disappear from both copies and fallback transport. Literal escaped backslashes remain data.
+
+- Start the built default Worker under its deployed compatibility date and flags: default-off browser code must not import an SDK requiring unsupported Node modules. A configured Cloudflare trial supplies its SDK loader through trusted host preparation; adding runtime compatibility or browser bindings remains a separate reviewed activation.

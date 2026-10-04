@@ -1,7 +1,7 @@
 import type { BrowserWorker } from '@cloudflare/playwright';
 import type { BrowserOwnerConfiguration, BrowserOwnerGrantRequest } from './browser-owner-host';
 import { browserBoundedJson } from './browser-bounded-body';
-import type { BrowserSourceGuard } from './public-fixture-browser';
+import type { BrowserSourceGuard, CloudflareBrowserSdkLoader } from './public-fixture-browser';
 import { hex, signedRpc, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { ownerPresenceBinding, type PresenceBinding } from '../identity/owner-message-admission';
 import { browserOwnerAuthority } from './browser-owner-authority';
@@ -16,7 +16,7 @@ export type BrowserTrialPolicy = Readonly<{ enabled: boolean; doName: string; fi
 
 type Options = Readonly<{
   env: BrowserProductionEnv; storage: DurableObjectStorage; actualDoId: string;
-  policy?: BrowserTrialPolicy; fetcher?: typeof fetch; now?: () => number;
+  policy?: BrowserTrialPolicy; loadSdk?: CloudflareBrowserSdkLoader; fetcher?: typeof fetch; now?: () => number;
 }>;
 
 // Signed read RPC; remains unavailable until its migration is installed.
@@ -50,14 +50,14 @@ export async function browserProductionConfiguration(options: Options): Promise<
   if (!options.policy) return undefined;
   try {
     const { env, storage } = options, policy = Object.freeze({ ...options.policy }), now = options.now ?? Date.now;
-    if (!env.BROWSER || !policy.doName || policy.doName.length > 200) throw Error('browser configuration unavailable');
+    if (!options.loadSdk || !env.BROWSER || !policy.doName || policy.doName.length > 200) throw Error('browser configuration unavailable');
     const authority = browserOwnerAuthority(storage, now), authorization = authority.read();
     if (!authorization || authorization.binding.do_name !== policy.doName || authorization.manifest.origin !== policy.fixtureOrigin
       || authorization.manifestDigest !== await fixtureDigest(authorization.manifest)) throw new Error('browser configuration unavailable', { cause: authority.lastFailure });
     const lookup = browserOwnerBindingReader(options, policy.doName, authorization.binding.subject);
     const binding = await lookup();
     if (JSON.stringify(binding) !== JSON.stringify(ownerPresenceBinding(authorization.binding))) throw Error('browser configuration unavailable');
-    const driver = publicFixtureBrowser({ binding: env.BROWSER, manifest: authorization.manifest, fetcher: options.fetcher });
+    const driver = publicFixtureBrowser({ binding: env.BROWSER, manifest: authorization.manifest, loadSdk: options.loadSdk, fetcher: options.fetcher });
     return Object.freeze({
       enabled: policy.enabled === true, binding, manifestDigest: authorization.manifestDigest, lookup,
       // Internal diagnostic only; never serialize causes into a tool/client result.

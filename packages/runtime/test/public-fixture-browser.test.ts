@@ -166,7 +166,7 @@ it.each(['start', 'navigate', 'inspect', 'fill', 'submit'])('fences %s after SDK
 });
 it('denies receipt HTTP reads when the captured source is withdrawn', async () => {
   let reads = 0;
-  const driver = candidate.publicFixtureBrowser({ binding: {} as never, manifest, fetcher: (async () => { reads++; return new Response('', { status: 404 }); }) as typeof fetch });
+  const driver = candidate.publicFixtureBrowser({ binding: {} as never, manifest, loadSdk: async () => { throw Error('SDK must not load for receipt reads'); }, fetcher: (async () => { reads++; return new Response('', { status: 404 }); }) as typeof fetch });
   await expect(driver.verify(`sha256:${'a'.repeat(64)}`, async () => { throw Error('source withdrawn'); })).rejects.toThrow('unavailable'); expect(reads).toBe(0);
 });
 it('does not extract DOM after scope changes during provider connection and disconnects the known browser', async () => {

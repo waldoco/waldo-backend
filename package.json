@@ -17,7 +17,7 @@
     "verify:workers": "pnpm --filter @waldo/runtime test",
     "verify:property": "pnpm --filter @waldo/runtime test:property",
     "verify:mutation": "pnpm --filter @waldo/runtime test:mutation",
-    "verify:guards": "node --test scripts/tests/verify-workflow-gate.test.mjs scripts/staging-migration-preflight.test.mjs scripts/staging-migration-apply.test.mjs scripts/staging-migration-route.test.mjs && node scripts/guards/run-all.mjs",
+    "verify:guards": "node --test scripts/tests/runtime-bundle-startup.test.mjs scripts/tests/verify-workflow-gate.test.mjs scripts/staging-migration-preflight.test.mjs scripts/staging-migration-apply.test.mjs scripts/staging-migration-route.test.mjs && node scripts/guards/run-all.mjs",
     "verify": "node scripts/guards/guard-package-manager.mjs && pnpm install --frozen-lockfile && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:workers && pnpm verify:supabase:session-revocation && pnpm verify:guards && pnpm --filter @waldo/runtime test:scenarios && pnpm --filter @waldo/runtime test:owner-ingress"
   },
   "devDependencies": {
