@@ -295,3 +295,16 @@ it('ADVERSARIAL selector must not certify punctuation-padded bare instruction ma
     expect(store.incompleteTopics()).toEqual([topic]);
   }, undefined, undefined, sql=>episodeIndex(sql).add('review-source','owner',fact,1));
 });
+
+it('an incomplete forget names the gate that held in the memory hop, with counts and no topic or source text', async () => {
+  const topic = 'WHY-757-TOPIC'; const fact = `${topic} likes cobalt paper`;
+  await session('forget-why-code', async (turn, store) => {
+    seen.writerOps.push(ops({ forget_topic: topic }));
+    // complete:false is the model saying it cannot vouch for coverage.
+    await turn('tg-why', `Forget only ${topic}. Keep tea.`, JSON.stringify({ spans: [], reviewed_refs: [], complete: false }));
+    expect(store.incompleteTopics()).toEqual([topic]);
+    const hop = seen.logs.filter(entry => (entry as { hop: string }).hop === 'memory').at(-1) as { detail: string };
+    expect(hop.detail).toMatch(/forget_incomplete selection_rejected\(\d+ sources\)/);
+    expect(hop.detail).not.toContain(topic);
+  }, undefined, undefined, sql => episodeIndex(sql).add('why-src', 'owner', fact, 1));
+});
