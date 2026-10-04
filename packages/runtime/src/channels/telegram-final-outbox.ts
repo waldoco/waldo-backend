@@ -1,6 +1,8 @@
 import { literalTextRedactor } from '@waldo/contracts';
 import type { RunEffectScope } from './run-effect-scope';
 import { TelegramRejection, sendTelegramFinal, type TelegramFinalPayload } from './telegram-api';
+import { redactSecretUrls } from './egress-guard';
+import { telegramRichReply } from './rich-format';
 
 export const FINAL_OUTBOX_KEY = 'telegram_final_outbox_v1';
 export const FINAL_OUTBOX_DUE_KEY = 'telegram_final_outbox_due_v1';
@@ -24,6 +26,14 @@ export type FinalRecord = {
 };
 type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
 const digest = async (payload: unknown) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(payload))))].map(x => x.toString(16).padStart(2, '0')).join('');
+const guardedPayload = (payload: FinalPayload): FinalPayload => {
+  const fallback = payload.fallback_text === undefined ? undefined : redactSecretUrls(payload.fallback_text);
+  // Redact before HTML escaping too: encoded ampersands must not conceal URL
+  // state/code keys. Only generated finals carry the original presentation copy.
+  if (fallback?.count && payload.parse_mode === 'HTML') return { ...payload, ...telegramRichReply(fallback.text) };
+  return { ...payload, text: redactSecretUrls(payload.text).text,
+    ...(fallback === undefined ? {} : { fallback_text: fallback.text }) };
+};
 
 export class TelegramFinalOutbox {
   constructor(private readonly kv: Kv, private readonly now: () => number = Date.now, private readonly persist?: (rows: FinalRecord[], due: number | null) => Promise<void>) {}
@@ -43,6 +53,7 @@ export class TelegramFinalOutbox {
     await this.save(rows);
   }
   async enqueue(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>): Promise<void> {
+    input = { ...input, payload: guardedPayload(input.payload) };
     const hash = await digest(input);
     let rows = this.records();
     await this.maintain(); rows = this.records();
@@ -64,6 +75,7 @@ export class TelegramFinalOutbox {
   // in the same synchronous transaction as these outbox writes, then rearms the shared alarm.
   async enqueueFenced(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>,
     commit: (work: () => void) => void): Promise<void> {
+    input = { ...input, payload: guardedPayload(input.payload) };
     const hash = await digest(input);
     commit(() => {
       let rows = this.records();

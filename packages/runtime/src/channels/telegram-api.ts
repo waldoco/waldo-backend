@@ -1,4 +1,5 @@
 import type { TelegramOwnerApi } from './telegram-listener';
+import { redactSecretUrls } from './egress-guard';
 
 // Every Bot API call is bounded: a hung response (the API applied the change but the
 // connection never completed) must reject, or a single wedged egress stalls the whole turn.
@@ -23,7 +24,7 @@ export const sendTelegramFinal = async (send: TelegramOwnerApi['sendMessage'], p
     if (!(error instanceof TelegramRejection) || error.errorCode !== 400 || payload.parse_mode !== 'HTML'
       || fallback_text === undefined || !error.message.includes("can't parse entities")) throw error;
     if (!(await allowed())) return undefined;
-    return send({ chat_id: payload.chat_id, text: fallback_text });
+    return send({ chat_id: payload.chat_id, text: redactSecretUrls(fallback_text).text });
   }
 };
 

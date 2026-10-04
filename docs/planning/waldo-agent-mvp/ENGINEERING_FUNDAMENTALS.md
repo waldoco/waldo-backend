@@ -480,3 +480,5 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 
 - [ ] Render generated Telegram finals at the channel boundary only: preserve artifact/tool bytes and opaque code, escape HTML and exact receipt URLs, and avoid unsupported nested code entities.
 - [ ] Plain fallback requires a definite entity-format rejection and the same current frozen attempt, owner eligibility and expiry; concurrent cancellation/forget must prevent fallback and stale payload restoration. Network uncertainty never authorizes a retry.
+
+- [ ] A generated final's frozen plain fallback crosses the same secret-URL persistence and egress boundary as its rich copy. Redact before HTML escaping and at both enqueue lanes; synthetic provider OAuth URLs must disappear from both copies and fallback transport. Literal escaped backslashes remain data.

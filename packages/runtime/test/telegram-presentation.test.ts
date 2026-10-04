@@ -18,7 +18,8 @@ it('supports mixed bold/code file descriptions and bold/code link labels without
 });
 
 it('preserves escaped user-authored literal markup in the generated presentation', () => {
-  expect(telegramRichReply('Literal \\`ticks\\` and \\[x](https://example.test)').text).toBe('Literal `ticks` and [x](https://example.test)');
+  const text = 'Literal \\`ticks\\` and \\[x](https://example.test)';
+  expect(telegramRichReply(text).text).toBe(text);
 });
 
 it('falls back to the exact guarded final after a definite entity rejection', async () => {
@@ -179,4 +180,39 @@ it.each(['ack', 'unknown'])('preserves a different record forgotten during fallb
   const other = f.outbox.records().find(row => row.id === 'mail:2')!;
   expect(other.payload.fallback_text).not.toContain('private');
   expect(other).toMatchObject({ status: 'blocked', reason: 'owner_forget' });
+});
+
+it.each(['enqueue', 'enqueueFenced'])('scrubs provider OAuth URLs from both frozen presentation copies through %s', async method => {
+  const f = await fixture();
+  const url = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=synthetic&state=fixture-only';
+  const input = { ...f.input, id: `oauth:${method}`, payload: { chat_id: 7, ...telegramRichReply(`**Connect** [open](${url})`) } };
+  if (method === 'enqueue') await f.outbox.enqueue(input);
+  else await f.outbox.enqueueFenced(input, work => work());
+  const row = f.outbox.records().find(row => row.id === input.id)!;
+  expect(JSON.stringify(row.payload)).not.toContain('accounts.google.com');
+  expect(row.payload.fallback_text).toContain('[link removed]');
+  const send = vi.fn().mockRejectedValueOnce(rejection()).mockResolvedValue({ message_id: 3, chat: { id: 7 } });
+  await sendTelegramFinal(send, row.payload);
+  expect(JSON.stringify(send.mock.calls)).not.toContain('accounts.google.com');
+});
+
+it('redacts secret URL keys before escaping ampersands into Telegram HTML', async () => {
+  const f = await fixture(); const url = 'https://provider.example/authorize?client=synthetic&state=fixture-only';
+  await f.outbox.enqueue({ ...f.input, id: 'oauth:encoded', payload: { chat_id: 7, ...telegramRichReply(`**Connect** [open](${url})`) } });
+  expect(JSON.stringify(f.outbox.records().find(row => row.id === 'oauth:encoded')!.payload)).not.toContain('provider.example');
+});
+
+it.each(['&lt;', '&amp;'])('forgets an exact literal entity needle in the raw fallback: %s', async needle => {
+  const f = await fixture(); const rows = f.outbox.records();
+  rows[0]!.payload = { chat_id: 7, ...telegramRichReply(`**Read** ${needle}`) };
+  rows[0]!.mailFollowup = { loopId: 'l', due: 'd', sourceRef: 's', timezone: 'UTC', messageId: 'm' };
+  f.kv.put('telegram_final_outbox_v1', rows);
+  expect(redactMailFollowupEntries(f.kv, [needle], '[forgotten]').remaining).toBe(0);
+  expect(f.outbox.records()[0]!.payload.fallback_text).not.toContain(needle);
+});
+
+it('does not retry a non-400 provider error even if its description mentions entity parsing', async () => {
+  const error = new TelegramRejection(429, "can't parse entities", 30), send = vi.fn().mockRejectedValue(error);
+  await expect(sendTelegramFinal(send, { chat_id: 7, ...telegramRichReply('**Read**') })).rejects.toBe(error);
+  expect(send).toHaveBeenCalledTimes(1);
 });

@@ -24,7 +24,7 @@ const parseTelegram=(text:string, label=false):string|null=>{
  let out='',i=0;
  while(i<text.length){
   if(text[i]==='\\'&&text[i+1]&&/[\\`*\[\]()]/.test(text[i+1]!)){
-   out+=escapeRich(text[i+1]!);i+=2;continue;
+   out+=escapeRich(text.slice(i,i+2));i+=2;continue;
   }
   if(text.startsWith('```',i)){
    if(label)return null;
