@@ -13,7 +13,8 @@ export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDu
   const outboxDue = (await storage.get<number | null>('telegram_final_outbox_due_v1')) ?? null;
   const inboxDue = (await storage.get<number | null>('telegram_owner_inbox_due_v1')) ?? null;
   const linkDue = (await storage.get<number | null>('telegram_link_due_v1')) ?? null;
-  const bounds = [scheduleDue, outboxDue, inboxDue, linkDue].filter((v): v is number => v !== null);
+  const browserDue = (await storage.get<number | null>('browser_owner_task_due_v1')) ?? null;
+  const bounds = [scheduleDue, outboxDue, inboxDue, linkDue, browserDue].filter((v): v is number => v !== null);
   if (!bounds.length) { await storage.deleteAlarm(); return; }
   await armAlarm(storage, Math.max(Math.min(...bounds), now + retryDelayMs));
 }

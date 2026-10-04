@@ -22,6 +22,8 @@ export type TelegramWebhookEnv = Readonly<{
   ARTIFACTS?: R2Bucket;
   RESPONSIBILITY_RATE_LIMITER?: RateLimit;
   BROWSERBASE_API_KEY?: string;
+  // Type-only optional capability. No deployment binding is added here.
+  BROWSER?: import('@cloudflare/playwright').BrowserWorker;
   BROWSERBASE_PROJECT_ID?: string;
   ELEVENLABS_API_KEY?: string;
   WALDO_STT_PROVIDER?: string;

@@ -2,7 +2,7 @@ import { acceptTrustedInvocation, type TrustedInvocationEnvelope } from '@waldo/
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { ResolvedInvocationInput } from '../context-composer/types';
 
-type PresenceBinding = Readonly<{
+export type PresenceBinding = Readonly<{
   owner_id: string; do_name: string; state_version: number; admission_revision: string;
   presence_id: string; provider: 'telegram'; subject: string;
 }>;
@@ -41,7 +41,7 @@ const freezeEnvelope = (value: TrustedInvocationEnvelope): TrustedInvocationEnve
   return value;
 };
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-const binding = (value: unknown): PresenceBinding => {
+export const ownerPresenceBinding = (value: unknown): PresenceBinding => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new OwnerAdmissionError('rejected');
   const r = value as Record<string, unknown>;
   if (Object.getPrototypeOf(r) !== Object.prototype || Object.getOwnPropertySymbols(r).length
@@ -73,7 +73,7 @@ export async function ownerMessageAdmission(options: Options): Promise<OwnerMess
     try { value = await lookup(provider, subject); }
     catch { scope.admit(); throw new OwnerAdmissionError('unavailable'); }
     scope.admit();
-    const result = binding(value);
+    const result = ownerPresenceBinding(value);
     if (result.do_name !== locator.doName || result.provider !== provider || result.subject !== subject
       || expectedDoId(locator.doName) !== actualDoId) throw new OwnerAdmissionError('rejected');
     return result;
