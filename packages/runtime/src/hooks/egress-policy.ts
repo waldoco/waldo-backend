@@ -191,11 +191,20 @@ function normaliseHost(host: string): string | null {
   return normalised.length > 0 ? normalised : null;
 }
 
+// Names that only resolve inside a private network and are recognisable without DNS: a dotless
+// hostname (not an IPv6 literal) and the reserved internal suffixes.
+const INTERNAL_SUFFIXES = ['.local', '.internal', '.svc', '.localdomain'] as const;
+function isInternalNetworkName(host: string): boolean {
+  if (host.includes(':')) return false;
+  return !host.includes('.') || INTERNAL_SUFFIXES.some((suffix) => host.endsWith(suffix));
+}
+
 function isBlockedHost(host: string): boolean {
   if (
     host === 'localhost' ||
     host.endsWith('.localhost') ||
-    host === 'metadata.google.internal'
+    host === 'metadata.google.internal' ||
+    isInternalNetworkName(host)
   ) {
     return true;
   }

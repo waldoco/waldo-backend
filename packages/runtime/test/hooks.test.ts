@@ -896,7 +896,17 @@ describe('hook registry', () => {
       await expect(run('browse_act', { url: 'https://news.example.org/', task: 'x' }, ['*'])).rejects.toMatchObject({ code: 'forbidden' });
       await expect(run('execute_code', { allow_hosts: ['news.example.org'] }, ['*'])).rejects.toMatchObject({ code: 'forbidden' });
     });
-    it('without "*" the list still decides', async () => {
+    it('browse_act with a list plus "*" allows the listed host and still denies others', async () => {
+    await expect(run('browse_act', { url: 'https://en.wikipedia.org/wiki/X', task: 'x' }, ['en.wikipedia.org', '*'])).resolves.toMatchObject({ tool: 'browse_act' });
+    await expect(run('browse_act', { url: 'https://news.example.org/', task: 'x' }, ['en.wikipedia.org', '*'])).rejects.toMatchObject({ code: 'forbidden' });
+  });
+  it('blocks internal-network names that need no DNS to recognise: dotless hosts and .local/.internal/.svc/.localdomain', async () => {
+    for (const url of ['http://intranet/', 'http://printer.local/', 'http://db.internal/', 'http://api.default.svc/', 'http://host.localdomain/', 'http://router/admin']) {
+      await expect(run('browse_page', { url, instruction: 'x' }, ['*'])).rejects.toMatchObject({ code: 'forbidden' });
+    }
+    await expect(run('browse_page', { url: 'https://example.org/', instruction: 'x' }, ['*'])).resolves.toMatchObject({ tool: 'browse_page' });
+  });
+  it('without "*" the list still decides', async () => {
       await expect(run('browse_page', { url: 'https://news.example.org/', instruction: 'x' }, ['en.wikipedia.org'])).rejects.toMatchObject({ code: 'forbidden' });
     });
   });
