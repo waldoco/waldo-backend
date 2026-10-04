@@ -114,6 +114,7 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   // workspace files hold owner uploads and agent text that can quote provider content; names and bodies are data.
   'workspace_list',
   'workspace_read',
+  'workspace_search',
   // search_episodes: stored history can hold Waldo replies and machine rows that quoted email or
   // web text, so hits and recovered turns are data, never instructions or owner authority.
   'search_episodes',

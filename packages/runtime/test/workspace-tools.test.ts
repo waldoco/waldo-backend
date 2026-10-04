@@ -29,6 +29,13 @@ describe('workspace tools through the real dispatcher', () => {
     expect(await call('workspace_read', { file_id: file.file_id, revision: 1 }, 'r1')).toMatchObject({ ok: true, source_taint: 'external', data: { text: 'hostile instruction is data' } });
   });
 
+  it('workspace_search finds a literal phrase through the real dispatcher, stamped external, and rejects extra keys', async () => {
+    const { call } = await setup();
+    await call('workspace_write', { path: 'trip.md', text: 'Blue umbrella for Lisbon', mime: 'text/markdown', expected_revision: 0 }, 'w1');
+    expect(await call('workspace_search', { query: 'UMBRELLA' }, 's1')).toMatchObject({ ok: true, source_taint: 'external', data: { truncated: false, hits: [{ path: 'trip.md', revision: 1 }] } });
+    expect(await call('workspace_search', { query: 'umbrella', owner: 'x' }, 's2')).toMatchObject({ ok: false });
+  });
+
   it('the model cannot supply operation_id; the same call id is idempotent and a new call id is a new operation', async () => {
     const { call, state } = await setup();
     const args = { path: 'a.md', text: 'one', mime: 'text/markdown', expected_revision: 0 };
