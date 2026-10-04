@@ -89,7 +89,7 @@ import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
-import { claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
+import { WA_UPDATE_BASE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
@@ -563,8 +563,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     // request cannot read the same wa_seq and hand a different message the same update_id.
     await this.serial(async () => {
       const { updates, seq } = whatsappIngressUpdates(claimed, subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0);
-      for (const update of updates) await this.turn(update, 'whatsapp');
+      // The counter is persisted before each turn, so a turn that throws can never lead the next message to reuse
+      // its update_id. Every claimed message still gets its turn; the first failure is rethrown afterwards.
+      let failure: { error: unknown } | null = null;
+      for (const update of updates) {
+        await this.ctx.storage.put('wa_seq', Number(update.update_id) - WA_UPDATE_BASE);
+        try { await this.turn(update, 'whatsapp'); } catch (error) { failure ??= { error }; }
+      }
       await this.ctx.storage.put('wa_seq', seq);
+      if (failure) throw failure.error;
     });
     return new Response('ok');
   }
