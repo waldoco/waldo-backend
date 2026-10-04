@@ -1,5 +1,7 @@
 import { delegateTaskArgsSchema, type DelegateTaskArgs, type LLMToolTurn, type ToolHandler, type ToolName } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
+import { TOOL_CLAIM_EFFECT } from '../hooks/claim-verify-effects';
+import type { LoopEventLike } from '../hooks/claim-hook';
 import { runToolLoop, type LoopExit, type ToolLoopEvent, type ToolLoopStep } from './tool-loop';
 
 // Subagent orchestration v1 (spec waldo-subagent-orchestration-spec-2026-09-26). Flat by
@@ -24,6 +26,21 @@ export const CHILD_TOOL_NAMES: readonly ToolName[] = [
   'search_episodes',
   'web_search',
 ];
+
+// Effects a child task performs belong in the parent's typed receipts: the reply may claim only
+// receipted effects. Today the child set is read-only, so none exist. A child tool with a
+// claimable effect is refused unless the parent supplies onReceipt, so an effect can never run unreceipted.
+export const assertChildEffectsReceivable = (names: readonly string[], parentReceives: boolean): void => {
+  const effectTools = names.filter((name) => TOOL_CLAIM_EFFECT[name as ToolName] != null);
+  if (effectTools.length > 0 && !parentReceives) throw new Error(`Child task holds effect tool(s) ${effectTools.join(', ')} but the parent has no receipt path`);
+};
+
+// The parent-receipt form of one child tool event: null for a tool with no claimable effect.
+export const childReceiptEvent = (event: ToolLoopEvent, seq: number): LoopEventLike | null => {
+  if (TOOL_CLAIM_EFFECT[event.call.name as ToolName] == null) return null;
+  const args: unknown = (() => { try { return JSON.parse(event.call.arguments); } catch { return undefined; } })();
+  return { seq, call: { name: event.call.name, args }, ok: event.ok, ...(event.code ? { code: event.code } : {}), delegated: true };
+};
 
 export const SUBAGENT_SYSTEM_PROMPT = [
   'You are a subagent of Waldo, spawned for one bounded subtask. Complete the task with the read-only tools you have, then answer with a compact report of what you found or did.',
@@ -58,6 +75,8 @@ export type ChildLoopInput = Readonly<{
   budget: { remaining: number };
   // Trace/ledger sink shared with the parent turn; child hops are tagged subagent_tool_*.
   onTool: (event: ToolLoopEvent) => void;
+  // Parent receipt sink for child effect calls (seq is 0; the parent assigns its own numbering).
+  onReceipt?: (event: LoopEventLike) => void;
 }>;
 
 // The child spawner (spec section 4): a nested tool loop on the read-only subset with its own
@@ -65,6 +84,7 @@ export type ChildLoopInput = Readonly<{
 // child rounds, not only at handback. Steering text is appended to the child task; a stop ends
 // the child immediately with a truthful stopped note.
 export const runChildLoop = async (task: string, input: ChildLoopInput): Promise<Readonly<{ exit: ChildExit; text: string }>> => {
+  assertChildEffectsReceivable(input.handlers.map((handler) => handler.name).filter((name) => (CHILD_TOOL_NAMES as readonly string[]).includes(name)), input.onReceipt !== undefined);
   let exit: LoopExit = 'completed';
   let stopped = false;
   const text = await runToolLoop({
@@ -82,7 +102,11 @@ export const runChildLoop = async (task: string, input: ChildLoopInput): Promise
       const content = added ? `${task}\n\nOwner mid-task steering: ${added}` : task;
       return input.complete(content, tools, turns);
     },
-    onTool: input.onTool,
+    onTool: (event) => {
+      input.onTool(event);
+      const receipt = childReceiptEvent(event, 0);
+      if (receipt) input.onReceipt?.(receipt);
+    },
   });
   return { exit: stopped ? 'stopped' : exit, text };
 };
