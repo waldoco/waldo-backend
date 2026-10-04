@@ -27,7 +27,7 @@ it('runs owner console pair -> signed redeem/connect/heartbeat -> revoke through
     if (path === 'console_session_touch' || path === 'device_bridge_throttle') response = true;
     else if (path === 'issue_device_pairing_code') { digest = String(args.p_code_hash); response = true; }
     else if (path === 'redeem_device_pairing') { response = args.p_code_hash === digest && !consumed ? [{ device_id: 'dev_fixture', owner_id: owner }] : []; if ((response as unknown[]).length) { consumed = true; exists = true; } }
-    else if (path === 'device_for_auth') response = exists ? [{ owner_id: owner, pubkey: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg', capabilities: 'machine_state_query' }] : [];
+    else if (path === 'device_for_auth') response = exists && args.p_device_id === 'dev_fixture' ? [{ owner_id: owner, pubkey: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg', capabilities: 'machine_state_query' }] : [];
     else if (path === 'device_touch') { if (exists) touched++; response = exists; }
     else if (path === 'list_devices') response = exists ? [{ device_id: 'dev_fixture', label: '<script>bad</script>', capabilities: 'machine_state_query', created_at: 'fixture', last_seen_at: null }] : [];
     else if (path === 'revoke_device') { response = args.p_do_name === owner && args.p_device_id === 'dev_fixture' && exists; if (response) exists = false; }
@@ -61,16 +61,53 @@ it('runs owner console pair -> signed redeem/connect/heartbeat -> revoke through
   expect((await redeemRequest()).status).toBe(401);
   const path = '/devices/connect?contract_version=0.2.3&declared_capabilities=machine_state_query';
   const connect = async (target = path) => call(new Request(`https://bridge.test${target}`, { headers: { ...await headers('GET', target), 'x-waldo-device-id': 'dev_fixture', upgrade: 'websocket' } }));
-  expect((await connect(`${path}&extra=1`)).status).toBe(401);
+  const rejects = [
+    `${path}&extra=1`,
+    '/devices/connect?declared_capabilities=machine_state_query&contract_version=0.2.3',
+    '/devices/connect?contract_version=0.2.3&declared_capabilities=machine_state_query%2Cnotify_local',
+    '/devices/connect?contract_version=0.2.3&declared_capabilities=notify_local',
+    '/devices/connect?contract_version=0.2.2&declared_capabilities=machine_state_query',
+  ];
+  for (const target of rejects) { const response = await connect(target); expect(response.status).toBe(401); expect(await response.text()).toBe('{"error":"invalid_request"}'); }
+  for (const extra of [{ 'x-waldo-device-id': 'unknown_device' }, { 'x-waldo-timestamp': '1' }, { 'x-waldo-signature': 'A'.repeat(86) }]) {
+    const response = await call(new Request(`https://bridge.test${path}`, { headers: { ...await headers('GET', path), 'x-waldo-device-id': 'dev_fixture', upgrade: 'websocket', ...extra } }));
+    expect(response.status).toBe(401); expect(await response.text()).toBe('{"error":"invalid_request"}');
+  }
+  const replayHeaders = { ...await headers('GET', path), 'x-waldo-device-id': 'dev_fixture', upgrade: 'websocket' };
+  const replayResponse = await call(new Request(`https://bridge.test${path}`, { headers: replayHeaders }));
+  expect(replayResponse.status).toBe(101); replayResponse.webSocket!.accept();
+  expect((await call(new Request(`https://bridge.test${path}`, { headers: replayHeaders }))).status).toBe(401);
+  const replaced = new Promise<number>((resolve) => replayResponse.webSocket!.addEventListener('close', (event) => resolve(event.code)));
   const connected = await connect(); expect(connected.status).toBe(101);
-  const socket = connected.webSocket!; socket.accept();
+  const socket = connected.webSocket!; socket.accept(); expect(await replaced).toBe(1008);
   const frame = { contract_version: '0.2.3', type: 'heartbeat', message_id: '01ARZ3NDEKTSV4RRFFQ69G5FAZ', device_id: 'dev_fixture', owner_id: owner, timestamp: Math.floor(Date.now()/1000), nonce: base64url(crypto.getRandomValues(new Uint8Array(16))), payload: { declared_capabilities: ['machine_state_query'], outbox_depth: 0 } };
   const signature = await sign(frameSignatureBase(frame.timestamp, frame.type, frame.message_id, frame.nonce, await sha256Hex(new TextEncoder().encode(canonicalJson(frame)))));
   socket.send(canonicalJson({ ...frame, signature }));
   await vi.waitFor(() => expect(touched).toBe(1));
   const page = await call(new Request('https://bridge.test/console/devices', { headers: { cookie } }));
   const html = await page.text(); expect(html).toContain('Online'); expect(html).not.toContain('<script>bad</script>');
-  const closed = new Promise<number>((resolve) => socket.addEventListener('close', (event) => resolve(event.code)));
+  const originalClosed = new Promise<number>((resolve) => socket.addEventListener('close', (event) => resolve(event.code)));
+  const invalidFrames: (string | ArrayBuffer)[] = [
+    new Uint8Array([1,2,3]).buffer,
+    'x'.repeat(8193),
+    ` ${canonicalJson({ ...frame, signature })}`,
+    canonicalJson({ ...frame, signature, extra: 1 }),
+    canonicalJson({ ...frame, signature, owner_id: 'another_owner' }),
+    canonicalJson({ ...frame, signature, device_id: 'another_device' }),
+    canonicalJson({ ...frame, signature: 'A'.repeat(86), nonce: base64url(crypto.getRandomValues(new Uint8Array(16))) }),
+    canonicalJson({ ...frame, signature }),
+    canonicalJson({ ...frame, signature, type: 'receipt' }),
+    canonicalJson({ ...frame, signature, contract_version: '0.2.2' }),
+  ];
+  for (const invalid of invalidFrames) {
+    const response = await connect(); expect(response.status).toBe(101); const peer = response.webSocket!; peer.accept();
+    let received = 0; peer.addEventListener('message', () => received++);
+    const closed = new Promise<number>((resolve) => peer.addEventListener('close', (event) => resolve(event.code)));
+    peer.send(invalid); expect(await closed).toBe(1008); expect(received).toBe(0); expect(touched).toBe(1);
+  }
+  expect(await originalClosed).toBe(1008);
+  const finalResponse = await connect(); const finalSocket = finalResponse.webSocket!; finalSocket.accept();
+  const closed = new Promise<number>((resolve) => finalSocket.addEventListener('close', (event) => resolve(event.code)));
   expect((await action('device.revoke')).status).toBe(303); expect(await closed).toBe(1008);
   expect((await connect()).status).toBe(401);
 });
