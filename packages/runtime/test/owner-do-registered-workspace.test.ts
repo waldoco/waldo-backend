@@ -602,5 +602,6 @@ it.each(['uncertain', 'not json'] as const)('a classifier miss (%s) keeps worksp
     const result = allOutputs();
     expect(result.list!.ok, 'reads work on a miss').toBe(true);
     expect(result.edit!.ok, 'an existing-file edit is not admitted on a miss').toBe(false);
+    // Known, pre-existing: creating a NEW file (expected_revision 0) is not scope-gated on any path, so a miss does not block it either.
   });
 });
