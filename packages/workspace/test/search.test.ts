@@ -55,8 +55,28 @@ describe('workspace search (literal, current revisions, own workspace only)', ()
     const { h } = await make();
     for (const bad of [{ query: '' }, { query: 'x'.repeat(201) }, { query: 'a', limit: 0 }, { query: 'a', limit: 21 }, { query: 'a', ownerId: 'x' }, {}]) expect(await h.search(bad)).toMatchObject({ ok: false, code: 'invalid' });
   });
-  it('stops at the scan byte budget and says so instead of scanning forever', async () => {
-    const { h, put } = await make(); await put('big.md', 'x'.repeat(200_000));
-    const r = await h.search({ query: 'needle' }) as any; expect(r.ok).toBe(true); expect(typeof r.data.truncated).toBe('boolean');
+  it('enforces the scan byte budget: a file past the budget is skipped, truncated is true, later small files still scan', async () => {
+    const { h, store } = await make(); let op = 900000;
+    const bytes = (n: number, tail: string) => new TextEncoder().encode('x'.repeat(n - tail.length) + tail);
+    const put = (path: string, b: Uint8Array) => store.write({ path, bytes: b, mime: 'text/markdown', expected_revision: 0, provenance: 'agent_generated', operation_id: id(op++) });
+    await put('a.md', bytes(3_000_000, 'needle in a')); await put('b.md', bytes(3_000_000, 'needle in b')); await put('c.md', new TextEncoder().encode('needle in c'));
+    const r = await h.search({ query: 'needle' }) as any;
+    expect(r.data.hits.map((x: any) => x.path)).toEqual(['a.md', 'c.md']);
+    expect(r.data.truncated).toBe(true);
+  });
+  it('a single file larger than the whole budget is skipped without ending the scan', async () => {
+    const { h, store } = await make(); let op = 800000;
+    await store.write({ path: 'huge.md', bytes: new TextEncoder().encode('x'.repeat(4_500_000) + 'needle'), mime: 'text/markdown', expected_revision: 0, provenance: 'agent_generated', operation_id: id(op++) });
+    await store.write({ path: 'small.md', bytes: new TextEncoder().encode('needle'), mime: 'text/markdown', expected_revision: 0, provenance: 'agent_generated', operation_id: id(op++) });
+    const r = await h.search({ query: 'needle' }) as any; expect(r.data.hits.map((x: any) => x.path)).toEqual(['small.md']); expect(r.data.truncated).toBe(true);
+  });
+  it('hits are files: a second match in the same file is not a second hit', async () => {
+    const { h, put } = await make(); await put('a.md', 'needle and another needle');
+    expect((await h.search({ query: 'needle' }) as any).data.hits).toHaveLength(1);
+  });
+  it('a snippet never splits a surrogate pair', async () => {
+    const { h, put } = await make(); await put('e.md', '😀'.repeat(200) + 'needle' + '😀'.repeat(200));
+    const snippet = (await h.search({ query: 'needle' }) as any).data.hits[0].snippet as string;
+    expect(snippet).toContain('needle'); expect(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(snippet)).toBe(false);
   });
 });

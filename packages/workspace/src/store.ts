@@ -116,6 +116,9 @@ export const workspaceStore = async (host: WorkspaceHost) => {
       });
     },
     // Literal, case-insensitive substring search over the CURRENT revision of ready text files. Read-only.
+    // One hit per file (the first match). Case folding skips characters whose lowercase changes length, so
+    // those characters match only themselves. A file that would push the scan past the byte budget is skipped
+    // and the result says truncated; later smaller files are still scanned.
     async search(query: string, prefix = '', limit = 10) {
       await admit('read');
       if (typeof query !== 'string' || query.length < 1 || query.length > 200 || !Number.isInteger(limit) || limit < 1 || limit > 20 || typeof prefix !== 'string' || new TextEncoder().encode(prefix).length > 240) fail('invalid');
@@ -125,7 +128,7 @@ export const workspaceStore = async (host: WorkspaceHost) => {
       const hits: { file_id: string; path: string; revision: number; offset: number; snippet: string }[] = [];
       let scanned = 0; let truncated = false;
       for (const { meta, body } of candidates) {
-        if (scanned + body.byte_size > LIMITS.searchBytes) { truncated = true; break; }
+        if (scanned + body.byte_size > LIMITS.searchBytes) { truncated = true; continue; }
         scanned += body.byte_size;
         const bytes = await verifyBody(body);
         let text: string; try { text = utf8.decode(bytes); } catch { continue; }
@@ -134,6 +137,8 @@ export const workspaceStore = async (host: WorkspaceHost) => {
         if (hits.length >= limit) { truncated = true; break; }
         let start = Math.max(0, at - 60); let stop = Math.min(text.length, at + needle.length + 60);
         while (new TextEncoder().encode(text.slice(start, stop)).length > LIMITS.searchSnippetBytes && stop - start > 1) { if (at - start > stop - at - needle.length && start < at) start++; else stop--; }
+        if (start < stop && (text.charCodeAt(start) & 0xfc00) === 0xdc00) start++;
+        if (stop > start && (text.charCodeAt(stop - 1) & 0xfc00) === 0xd800) stop--;
         hits.push({ file_id: meta.file_id, path: meta.path, revision: meta.revision, offset: new TextEncoder().encode(text.slice(0, at)).length, snippet: text.slice(start, stop) });
       }
       transact(state => { for (const h of hits) if (!state.files.some(f => f.file_id === h.file_id && f.state === 'ready')) fail('not_found'); });
