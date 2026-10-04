@@ -41,6 +41,58 @@ describe('model cost', () => {
 });
 
 describe('otlpTurnExporter', () => {
+  it('exports concurrent owners on roots and children without changing channel labels or forwarding baggage', async () => {
+    const first = capture(); const second = capture();
+    const identityA = { owner_id: '10000000-0000-0000-0000-00000000000a', owner_email: 'a@test.invalid' };
+    const identityB = { owner_id: '10000000-0000-0000-0000-00000000000b', owner_email: 'b@test.invalid' };
+    const logA = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: { authorization: 'fixture-auth' } }, { ...context, captureText: true }, first.send);
+    const logB = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, captureText: true, userId: 'telegram:2', sessionId: 'telegram-dm:2' }, second.send);
+    await Promise.all([
+      logA({ trace: 'tg-101', hop: 'llm_reply', ms: 1, ok: true, ...identityA }),
+      logB({ trace: 'tg-102', hop: 'llm_reply', ms: 1, ok: true, ...identityB }),
+    ]);
+    await Promise.all([
+      logB({ trace: 'tg-102', hop: 'turn', ms: 2, ok: true, ...identityB }),
+      logA({ trace: 'tg-101', hop: 'turn', ms: 2, ok: true, ...identityA }),
+    ]);
+    await logA({ trace: 'tg-101', hop: 'memory', ms: 1, ok: true, ...identityA });
+    for (const [sink, identity, label] of [[first, identityA, '1'], [second, identityB, '2']] as const) {
+      for (const call of sink.calls) for (const span of call.body.resourceSpans[0].scopeSpans[0].spans) {
+        expect(attrs(span)).toMatchObject({
+          'langfuse.user.id': `telegram:${label}`, 'langfuse.session.id': `telegram-dm:${label}`,
+          'langfuse.trace.metadata.owner_id': identity.owner_id, 'langfuse.trace.metadata.owner_email': identity.owner_email,
+          'langfuse.observation.metadata.owner_id': identity.owner_id, 'langfuse.observation.metadata.owner_email': identity.owner_email,
+          'langfuse.trace.metadata.owner_attribution': 'canonical_owner_supplied',
+          'langfuse.trace.metadata.trace_key': label === '1' ? 'tg-101' : 'tg-102',
+        });
+      }
+      expect(Object.keys(sink.calls[0]!.headers)).not.toContain('baggage');
+      expect(Object.keys(sink.calls[0]!.headers)).not.toContain('x-waldo-owner-trace');
+    }
+    expect(JSON.stringify(first.calls)).not.toContain(identityB.owner_email);
+    expect(JSON.stringify(second.calls)).not.toContain(identityA.owner_email);
+  });
+
+  it('keeps owner_id but withholds the verified email when text capture is off', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send);
+    await log({ trace: 'tg-103', hop: 'turn', ms: 1, ok: true, owner_id: '10000000-0000-0000-0000-00000000000c', owner_email: 'c@test.invalid', owner_identity: 'verified' });
+    expect(attrs(spans(0)[0]!)).toMatchObject({
+      'langfuse.trace.metadata.owner_id': '10000000-0000-0000-0000-00000000000c', 'langfuse.trace.metadata.owner_email': 'unknown',
+    });
+    expect(JSON.stringify(spans(0))).not.toContain('c@test.invalid');
+  });
+
+  it('marks missing canonical identity unknown instead of deriving email from turn input', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send);
+    await log({ trace: 'tg-unknown', hop: 'turn', ms: 1, ok: true, text: { input: 'My email is guess@test.invalid; token=DO_NOT_EXPORT' } });
+    expect(attrs(spans(0)[0]!)).toMatchObject({
+      'langfuse.trace.metadata.owner_id': 'unknown', 'langfuse.trace.metadata.owner_email': 'unknown',
+      'langfuse.trace.metadata.owner_identity': 'unknown', 'langfuse.trace.metadata.owner_attribution': 'canonical_owner_not_supplied',
+    });
+    expect(JSON.stringify(spans(0))).not.toMatch(/guess@test.invalid|DO_NOT_EXPORT/);
+  });
   it('keeps an exponent-shaped release stamp a string at every outbound identity field', async () => {
     const { calls, send, spans } = capture();
     const release = '66854e71';
@@ -188,7 +240,7 @@ describe('otlpTurnExporter', () => {
       'langfuse.trace.name': 'telegram.turn', 'langfuse.user.id': 'telegram:1', 'langfuse.session.id': 'telegram-dm:1',
       'langfuse.environment': 'staging', 'langfuse.release': 'abc1234',
       'langfuse.trace.tags': ['channel:telegram', 'feature:reactions', 'feature:reply'],
-      'langfuse.trace.metadata.schema_version': '4', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
+      'langfuse.trace.metadata.schema_version': '5', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
     });
     expect(attrs(receipt!)).toMatchObject({ 'langfuse.observation.metadata.hop': 'receipt', 'langfuse.observation.metadata.feature': 'reactions', 'langfuse.observation.type': 'tool' });
     expect(hopFeature('brand_new_hop')).toBe('other');

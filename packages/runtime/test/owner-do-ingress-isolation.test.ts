@@ -17,7 +17,7 @@ vi.mock('../src/channels/telegram-owner-do', async load => {
   const { OpenAIResponsesAdapter } = await import('../src/llm/openai');
   return { ...original, TelegramOwnerDO: class extends original.TelegramOwnerDO {
     constructor(state: DurableObjectState, bindings: typeof env) {
-      const subject = [81101, 81102].find(value => bindings.TELEGRAM_OWNER_DO!.idFromName(`hermetic-owner-${value}`).toString() === state.id.toString());
+      const subject = [81101, 81102, 81103, 81104].find(value => bindings.TELEGRAM_OWNER_DO!.idFromName(`hermetic-owner-${value}`).toString() === state.id.toString());
       const host = subject === undefined ? undefined : admittedOwnerHost(`hermetic-owner-${subject}`, String(subject),
         new OpenAIResponsesAdapter({ apiKey: bindings.OPENAI_API_KEY }), ['get_communication', 'propose_calendar_change']);
       super(state, bindings, { mode: 'canonical', host });
@@ -80,8 +80,10 @@ vi.mock('openai', () => ({
 
 const { handleTelegramWebhook } = await import('../src/channels/telegram-webhook');
 let sequence = 0;
-const route = (subject: number): OwnerRoute => ({ doName: `hermetic-owner-${subject}`, subject: String(subject), timezone: 'Asia/Kolkata' });
-const directory: OwnerDirectory = { byPresence: async (provider, subject) => provider === 'telegram' && ['81101', '81102'].includes(subject) ? route(Number(subject)) : null, redeem: async () => null };
+const traceIdentities = new Map<number, NonNullable<OwnerRoute['traceIdentity']>>();
+const route = (subject: number): OwnerRoute => ({ doName: `hermetic-owner-${subject}`, subject: String(subject), timezone: 'Asia/Kolkata',
+  ...(traceIdentities.has(subject) ? { traceIdentity: traceIdentities.get(subject) } : {}) });
+const directory: OwnerDirectory = { byPresence: async (provider, subject) => provider === 'telegram' && ['81101', '81102', '81103', '81104'].includes(subject) ? route(Number(subject)) : null, redeem: async () => null };
 const send = async (subject: number, text: string, updateId: number, replyTo?: Record<string, unknown>) => {
   const pending: Promise<unknown>[] = [];
   const response = await handleTelegramWebhook(new Request('https://fixture.invalid/telegram/webhook', {
@@ -112,6 +114,7 @@ const doStub = (subject: number) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNE
 
 describe('actual owner interruption recovery', () => {
   afterEach(async () => {
+    traceIdentities.clear();
     for (const subject of [81101, 81102]) await runInDurableObject(doStub(subject), async (_instance, state) => {
       const rows = state.storage.kv.get<import('../src/channels/telegram-owner-inbox').InboxRecord[]>('telegram_owner_inbox_v1') ?? [];
       const finals = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
@@ -120,7 +123,12 @@ describe('actual owner interruption recovery', () => {
       await state.storage.deleteAlarm();
     });
   });
-it('actual owner eviction after a claimed write produces one durable uncertainty status without replay', async () => {
+// The DO runs in Asia/Kolkata here, and a day-card planner model call appeared once the real clock passed IST midnight.
+// Pin Date for the whole test (setup, both alarms) at several instants, including both sides of the IST day boundary.
+it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:59.999Z', '2026-10-04T18:30:00.001Z'])('actual owner eviction after a claimed write produces one durable uncertainty status without replay (clock %s)', async (pinned) => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date(pinned));
+  try {
   const subject = 81101; const updateId = 995001; const stub = doStub(subject);
   const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
   const { persistInboxWake, armAlarm } = await import('../src/scheduler/alarm-slot');
@@ -133,6 +141,11 @@ it('actual owner eviction after a claimed write produces one durable uncertainty
     const runtime = instance as unknown as { setup(): { ready: Promise<void> }; serial(work: () => Promise<void>): Promise<void> };
     await runtime.setup().ready;
     await runtime.serial(async () => undefined);
+    // With the clock pinned, mark that day's cards as already sent so the alarm has no day plan to make.
+    // Without this the planner model call returns once the pinned instant is past IST midnight (observed at 18:30:00.001Z).
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+    const { DAY_CARDS } = await import('../src/prompt/day-cards');
+    for (const card of DAY_CARDS) state.storage.sql.exec('INSERT OR REPLACE INTO day_plan (day, card, time, reason, sent) VALUES (?, ?, ?, ?, 1)', today, card.id, '12:00', 'test fixture');
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
     await inbox.admit({ bot: 'hermetic-test-bot-token', subject: String(subject), doName: route(subject).doName }, updateId, 'PRIVATE_INTERRUPTED_REQUEST');
     await inbox.claim(`hermetic-test-bot-token:telegram:${updateId}`, 'interrupted-attempt', 'interrupted-run', Date.now() + 150_000);
@@ -169,6 +182,7 @@ it('actual owner eviction after a claimed write produces one durable uncertainty
     expect(await new TelegramOwnerInbox(state.storage, persistInboxWake).claim(`hermetic-test-bot-token:telegram:${updateId}`, 'retry', 'retry-run', Date.now() + 150_000)).toBeNull();
     await state.storage.deleteAlarm();
   });
+  } finally { vi.useRealTimers(); }
 });
 
 it('actual recovery retains its notice wake after outbox capacity failure and queues only once', async () => {
@@ -926,4 +940,29 @@ it('legacy erased never-consumed steering gets one truthful not-processed notice
   expect(notices).toHaveLength(1);expect(notices[0]!.payload.text).toContain('not processed');expect(notices[0]!.payload.text).not.toContain('was used');
   expect(await inbox.claim(child.id,'retry','replacement',Date.now()+10000)).toBeNull();expect((await inbox.records()).find(row=>row.id===child.id)?.outcomeNoticeQueued).toBe(true);await state.storage.deleteAlarm();
  });
+});
+
+it('real webhook/inbox/turn path emits each verified owner email in Worker logs and refreshes a cached runtime', async () => {
+  const a = { owner_id: '10000000-0000-0000-0000-00000000000a', owner_email: 'trace-a@test.invalid' };
+  const b = { owner_id: '10000000-0000-0000-0000-00000000000b', owner_email: 'trace-b@test.invalid' };
+  traceIdentities.set(81103, a); traceIdentities.set(81104, b);
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  try {
+    await Promise.all([send(81103, 'Synthetic hello', 994901), send(81104, 'Synthetic hello', 994902)]);
+    traceIdentities.set(81103, { ...a, owner_email: 'trace-new@test.invalid' });
+    await send(81103, 'Synthetic hello again', 994903);
+    const rows = log.mock.calls.flatMap(([line]) => {
+      try { return [JSON.parse(String(line))]; } catch { return []; }
+    });
+    for (const [id, identity] of [[994901, a], [994902, b], [994903, { ...a, owner_email: 'trace-new@test.invalid' }]] as const) {
+      const hops = rows.filter(row => row.trace === `tg-${id}`);
+      expect(hops.some(row => row.hop === 'turn')).toBe(true);
+      expect(hops.length).toBeGreaterThan(1);
+      for (const hop of hops) expect(hop).toMatchObject({ ...identity, owner_identity: 'verified' });
+      expect(JSON.stringify(hops)).not.toMatch(/hermetic-test-(bot-token|webhook-secret|model-key)|hermetic-google-secret/);
+    }
+  } finally {
+    log.mockRestore();
+    for (const subject of [81103, 81104]) await runInDurableObject(doStub(subject), async (_instance, state) => { await state.storage.deleteAlarm(); });
+  }
 });

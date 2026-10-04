@@ -19,11 +19,12 @@ import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
-import { persistInboxWake, persistTransportWake, rearmSharedAlarm } from '../scheduler/alarm-slot';
+import { WHATSAPP_PENDING_DUE_KEY, armWhatsappPendingWake, persistInboxWake, persistTransportWake, rearmSharedAlarm } from '../scheduler/alarm-slot';
 import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace } from './owner-turn-envelope';
+import { enrichOwnerTrace, identityForStorage, readOwnerTraceHeader } from '../observability/owner-trace-identity';
 import { adminRead, adminAction } from './dashboard-admin';
 import { pinProxyIntentRoute } from '../connectors/proxy-intent-route';
 import { ProxyIntentError, type ProxyIntent } from '../connectors/proxy-intent';
@@ -89,7 +90,7 @@ import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
-import { createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
+import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
@@ -176,6 +177,9 @@ export const resolveOwnerTelegramId = (
 };
 
 type ChannelKind = 'telegram' | 'whatsapp';
+const WHATSAPP_PENDING_PREFIX = 'wa_pending:';
+// How often an unfinished WhatsApp payload is looked at again. A cadence, not a limit on how long a turn may run.
+const WHATSAPP_PENDING_CHECK_MS = 60_000;
 
 export type TelegramOwnerPrivateHost = Readonly<{
   environment: string;
@@ -334,7 +338,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const target = this.activeInbox;
     const control = target?.runId && text && (text === '/stop' || !text.startsWith('/')) ? { kind: text === '/stop' ? 'stop' as const : 'steer' as const, targetRun: target.runId } : undefined;
     try {
-      const admitted = await this.inbox.admit({ bot, subject, doName }, raw.update_id!, body, control);
+      const traceIdentity = identityForStorage(readOwnerTraceHeader(request.headers), resolveCaptureText(this.env));
+      const admitted = await this.inbox.admit({ bot, subject, doName, ...(traceIdentity ? { traceIdentity } : {}) }, raw.update_id!, body, control);
       if (admitted === 'conflict' || admitted === 'capacity') return new Response(admitted, { status: admitted === 'conflict' ? 409 : 503 });
       // Binding follows authenticated admission, and never replaces a different binding.
       this.ctx.storage.kv.put('do_name', doName); this.ctx.storage.kv.put('telegram_subject', subject);
@@ -511,6 +516,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       console.log(JSON.stringify({ trace: `connect:${ticket_hash.slice(0, 8)}`, hop: 'connect_begin', ok: begin !== null }));
       return Response.json({ url: begin?.url ?? null });
     }
+    if (new URL(request.url).pathname === '/whatsapp-admit' && request.method === 'POST') return this.whatsappAdmit(request, body);
     const origin = request.headers.get('x-waldo-origin');
     const prevOrigin = origin ? await this.ctx.storage.get<string>('origin') : undefined;
     if (origin) await this.ctx.storage.put('origin', origin);
@@ -558,10 +564,103 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       this.runtimes = {};
     }
     const value = JSON.parse(body) as { messages?: { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[] };
-    const { updates, seq } = whatsappIngressUpdates(value.messages ?? [], subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0);
-    for (const update of updates) await this.serial(() => this.turn(update, 'whatsapp'));
-    await this.ctx.storage.put('wa_seq', seq);
+    const claimed = claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now());
+    await this.runWhatsappClaimed(null, claimed, subject);
     return new Response('ok');
+  }
+
+  private async runWhatsappClaimed(pendingKey: string | null, claimed: readonly { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[], subject: string): Promise<void> {
+    // Sequence allocation, the turns and the persisted counter are one serial unit, so an overlapping
+    // request cannot read the same wa_seq and hand a different message the same update_id.
+    await this.serial(async () => {
+      const { updates, seq } = whatsappIngressUpdates(claimed, subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0);
+      // The counter is persisted before each turn, so a turn that throws can never lead the next message to reuse
+      // its update_id. Every claimed message still gets its turn; the first failure is rethrown afterwards.
+      let failure: { error: unknown } | null = null;
+      let started = 0;
+      for (const update of updates) {
+        try { await this.ctx.storage.put('wa_seq', Number(update.update_id) - WA_UPDATE_BASE); }
+        catch (error) {
+          // The turn never started. Release this payload's claims so a redelivery is processed, and tell the owner.
+          if (started === 0) for (const message of claimed) if (typeof message.id === 'string' && message.id !== '') this.ctx.storage.kv.delete(`wamid:${message.id}`);
+          failure ??= { error }; break;
+        }
+        started += 1;
+        try { await this.turn(update, 'whatsapp'); } catch (error) { failure ??= { error }; }
+      }
+      try { await this.ctx.storage.put('wa_seq', seq); } catch (error) { failure ??= { error }; }
+      if (failure) {
+        // A failed or unstarted turn used to leave only a Worker console line. The owner gets one fixed notice (no message
+        // text, no error text). If no turn started it is safe to resend; if one started it may have had effects, so the notice says
+        // to check first. A turn that already started is never replayed. The turn's own listener already answers model failures.
+        // Consume the pending record before the send so a cold instance recovering during this request cannot send a second notice.
+        if (pendingKey) { this.liveWhatsapp.delete(pendingKey); this.ctx.storage.kv.delete(pendingKey); }
+        try {
+          const { api, owner } = this.setup('whatsapp');
+          await api.sendMessage({ chat_id: owner, text: started === 0 ? WHATSAPP_UNSTARTED_NOTICE : WHATSAPP_PARTIAL_NOTICE });
+        } catch { console.error('whatsapp failure notice unavailable'); }
+        throw failure.error;
+      }
+    });
+  }
+
+  // Durable admission (#745): the webhook acks Meta only after this returns. In one synchronous storage step it claims the
+  // payload's wamids and writes a pending record (ids only, never message text); the turns then run after the ack. A record that
+  // is still pending after the DO restarted means the turns were cut off: recoverWhatsappPending tells the owner once and never
+  // replays. Admission order is promised, not sender chronology (Meta does not order redeliveries).
+  private readonly liveWhatsapp = new Set<string>();
+  private readonly whatsappInflight = new Set<Promise<void>>();
+  private async whatsappAdmit(request: Request, body: string): Promise<Response> {
+    const subject = request.headers.get('x-waldo-whatsapp-subject') ?? '';
+    if (!/^\d{6,15}$/.test(subject)) return new Response('forbidden', { status: 403 });
+    const { kv } = this.ctx.storage;
+    const bound = kv.get<string>('whatsapp_subject');
+    if (bound !== undefined && bound !== subject) return new Response('forbidden', { status: 403 });
+    let value: { messages?: { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[] };
+    try { value = JSON.parse(body); } catch { return new Response('bad request', { status: 400 }); }
+    if (bound === undefined) { kv.put('whatsapp_subject', subject); this.runtimes = {}; }
+    // The same origin and timezone persistence the other owner paths do after the identity checks: a WhatsApp-only owner's
+    // links and clock come from here. No network work (the Telegram webhook re-registration stays on the Telegram path).
+    const origin = request.headers.get('x-waldo-origin'); if (origin) kv.put('origin', origin);
+    this.bindIdentity(request.headers);
+    const pendingKey = `${WHATSAPP_PENDING_PREFIX}${crypto.randomUUID()}`;
+    // The wake is armed before the record exists: a spurious alarm finds nothing, a missing one would strand a record.
+    await armWhatsappPendingWake(this.ctx.storage, Date.now() + WHATSAPP_PENDING_CHECK_MS);
+    let claimed: NonNullable<typeof value.messages> = [];
+    this.ctx.storage.transactionSync(() => {
+      claimed = claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now());
+      if (!claimed.length) return;
+      kv.put(pendingKey, { subject, admittedAt: Date.now(), ids: claimed.flatMap(m => typeof m.id === 'string' && m.id !== '' ? [m.id] : []) });
+      kv.put(WHATSAPP_PENDING_DUE_KEY, Date.now() + WHATSAPP_PENDING_CHECK_MS);
+    });
+    if (!claimed.length) return new Response('ok');
+    this.liveWhatsapp.add(pendingKey);
+    const work = this.runWhatsappClaimed(pendingKey, claimed, subject).catch(() => undefined).finally(() => {
+      // A caught failure has already told the owner (#751); the record ends with the run so recovery never double-notifies.
+      this.liveWhatsapp.delete(pendingKey); kv.delete(pendingKey); this.refreshWhatsappDue();
+      this.whatsappInflight.delete(work);
+    });
+    this.whatsappInflight.add(work);
+    this.ctx.waitUntil(work);
+    return new Response('ok');
+  }
+  private refreshWhatsappDue(): void {
+    const any = [...this.ctx.storage.kv.list({ prefix: WHATSAPP_PENDING_PREFIX })].length > 0;
+    if (any) this.ctx.storage.kv.put(WHATSAPP_PENDING_DUE_KEY, Date.now() + WHATSAPP_PENDING_CHECK_MS); else this.ctx.storage.kv.delete(WHATSAPP_PENDING_DUE_KEY);
+  }
+  // A pending record this instance is not running belongs to a DO that was evicted mid-run. We cannot tell whether a turn
+  // had effects, so the owner gets the same "may have only partly handled" notice and the payload is never replayed. The
+  // record is removed before the send: at most one notice attempt, no loop. Runs before the Telegram-linkage guard so a
+  // WhatsApp-only owner is covered, and uses the WhatsApp api directly, never the shared final outbox.
+  private async recoverWhatsappPending(): Promise<void> {
+    const { kv } = this.ctx.storage;
+    const dead = [...kv.list<{ subject: string }>({ prefix: WHATSAPP_PENDING_PREFIX })].filter(([key]) => !this.liveWhatsapp.has(key));
+    for (const [key, record] of dead) {
+      kv.delete(key);
+      if (kv.get<string>('whatsapp_subject') !== record.subject) continue;
+      try { const { api, owner } = this.setup('whatsapp'); await api.sendMessage({ chat_id: owner, text: WHATSAPP_PARTIAL_NOTICE }); } catch { console.error('whatsapp recovery notice unavailable'); }
+    }
+    this.refreshWhatsappDue();
   }
 
   // A8: a verified external event the ingress routed here. The record is a background run
@@ -889,6 +988,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   override async alarm(): Promise<void> {
     await this.browserReady;
+    await this.recoverWhatsappPending();
     const mode=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);
     if(mode){await this.serial(()=>this.drainLink(mode));return;}
     await this.serial(async () => {
@@ -1176,15 +1276,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (url) { const urls = turnReceiptUrls.get(entry.trace) ?? new Set<string>(); urls.add(url); turnReceiptUrls.set(entry.trace, urls); }
         } catch { /* malformed output grants no receipt */ }
       }
-      // Owner attribution lands on every surface: the DO trace table, the wrangler tail, and Langfuse.
+      // The historical owner label reaches the DO trace table; canonical ID/email also reach Worker logs and OTLP.
       // The gate runs once here so free-form detail/error text reaches none of the sinks while
       // the capture switch is off; whitelisted hops keep their count/enum detail either way.
-      const enriched: TurnLogEntry = gateTraceEntry({ ...entry, owner: entry.owner ?? identity.get<string>('do_name') ?? 'unresolved' }, captureText);
+      const enriched: TurnLogEntry = gateTraceEntry(enrichOwnerTrace(entry,
+        channel === 'telegram' ? identity.get<InboxRecord[]>(OWNER_INBOX_KEY) ?? [] : [],
+        identity.get<string>('do_name') ?? '', String(owner)), captureText);
       traces.record(enriched, deps.now());
       console.log(JSON.stringify({ ...enriched, text: undefined }));
       if (exportTurn) this.ctx.waitUntil(exportTurn(enriched).catch((error: unknown) => {
         const note = String(error);
-        const failed: TurnLogEntry = gateTraceEntry({ trace: enriched.trace, hop: 'otlp_export', ms: 0, ok: false, error: note, code: 'export_failed', owner: enriched.owner }, captureText);
+        const failed: TurnLogEntry = gateTraceEntry({ trace: enriched.trace, hop: 'otlp_export', ms: 0, ok: false, error: note, code: 'export_failed', owner: enriched.owner,
+          owner_id: enriched.owner_id, owner_email: enriched.owner_email, owner_identity: enriched.owner_identity }, captureText);
         console.log(JSON.stringify({ ...failed, text: undefined }));
         traces.record(failed, deps.now());
       }));

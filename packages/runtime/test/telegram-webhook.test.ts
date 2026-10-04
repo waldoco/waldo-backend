@@ -21,6 +21,18 @@ const run = async (request: Request, env: TelegramWebhookEnv, directory?: OwnerD
 afterEach(() => vi.unstubAllGlobals());
 
 describe('handleTelegramWebhook', () => {
+  it('forwards only directory identity to the authenticated inbox, never a caller header or baggage', async () => {
+    const n = namespace();
+    const verified = { owner_id: '10000000-0000-0000-0000-00000000000a', owner_email: 'verified@test.invalid' };
+    const directory: OwnerDirectory = { byPresence: async () => ({ doName: 'do-a', subject: '42', timezone: null, traceIdentity: verified }), redeem: async () => null };
+    const request = post('secret');
+    request.headers.set('x-waldo-owner-trace', JSON.stringify({ owner_email: 'from-chat@test.invalid' }));
+    await run(request, { TELEGRAM_WEBHOOK_SECRET: 'secret', TELEGRAM_BOT_TOKEN: 'token', TELEGRAM_OWNER_DO: n.ns }, directory);
+    const [, init] = n.fetch.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(JSON.parse(decodeURIComponent(headers.get('x-waldo-owner-trace')!))).toEqual(verified);
+    expect(headers.has('baggage')).toBe(false);
+  });
   it('waits for authenticated owner inbox admission before answering', async () => {
     const { fetch, idFromName, ns } = namespace();
     const env: TelegramWebhookEnv = { TELEGRAM_OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret', WALDO_OWNER_TELEGRAM_ID: '42', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata' };

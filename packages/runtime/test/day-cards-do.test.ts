@@ -1,8 +1,11 @@
+import { sanitise } from '../src/scribe/sanitiser';
+import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_CHAT_MODEL } from '@waldo/contracts';
+import { claimStore } from '../src/memory/claims';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { GoogleClient } from '../src/connectors/google';
-import { applyDayPlan, armDayCards, cardFor, cardWindow, composeDayCard, dayPlanBook, isSkip, parseDayPlan } from '../src/channels/day-cards';
+import { applyDayPlan, armDayCards, cardFor, cardWindow, composeDayCard, composeDayPlanInput, dayPlanBook, isSkip, parseDayPlan } from '../src/channels/day-cards';
 import { DAY_CARDS, dayPlanInput } from '../src/prompt/day-cards';
 import { ensureSchema } from '../src/tracer/schema';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -94,5 +97,77 @@ describe('scheduled day cards', () => {
       expect(book.pending('2026-09-23').map((card) => card.id)).toEqual(['card:midday', 'card:close']);
       for (const card of DAY_CARDS) await scheduler.cancel(card.id);
     });
+  });
+});
+
+
+describe('day-plan memory budget', () => {
+  const limit = deriveContextBudgetChars(WALDO_CHAT_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
+  const wireSize = (content: string) => JSON.stringify([{ role: 'user', content }]).length;
+  const input = dayPlanInput({ localNow: '2026-10-04T08:00', calendar: 'No events.', cards: DAY_CARDS, proactivity: 'Quiet hours 23:00-07:00' });
+  const withMemory = (name: string, work: (store: ReturnType<typeof claimStore>) => void) =>
+    runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), (_i, state) => work(claimStore(state.storage.sql)));
+  const add = (store: ReturnType<typeof claimStore>, text: string, evidence = text) =>
+    store.add({ kind: 'routine', text, source: 'stated', evidence, origin: 'owner', source_ref: 'owner, synthetic-day-plan' }, '2026-10-04T00:00:00Z');
+
+  it('keeps 220 facts within the provider wire budget and counts omitted facts exactly', async () => {
+    await withMemory('day-plan-220', (store) => {
+      for (let i = 0; i < 220; i++) add(store, `Routine ${i}: ${'synthetic detail '.repeat(20)}`);
+      const content = composeDayPlanInput(input, store);
+      expect(wireSize(content)).toBeLessThanOrEqual(limit);
+      expect(sanitise({ payload: [{ role: 'user', content }], destination: 'internal_context', source_taint: null, canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'], max_chars_override: limit }).ok).toBe(true);
+      expect(content.endsWith(input)).toBe(true);
+      expect(content).toContain('Routine 219:');
+      const shown = content.split('\n').filter(line => line.startsWith('- [owner-grounded]')).length;
+      expect(content).toContain(`(${220 - shown} older owner facts are not shown here;`);
+      expect(content).not.toContain('Routine 0:');
+    });
+  });
+
+  it('includes JSON escaping and message framing in the available room', async () => {
+    await withMemory('day-plan-escaping', (store) => {
+      for (let i = 0; i < 220; i++) add(store, `Quoted ${i}: ${'"\\\n'.repeat(80)}`);
+      const content = composeDayPlanInput(input, store);
+      expect(wireSize(content)).toBeLessThanOrEqual(limit);
+      expect(content).toContain('older owner facts are not shown here');
+      expect(content.endsWith(input)).toBe(true);
+    });
+  });
+
+  it('skips oversized recalled evidence, retains a later fitting match and reports it', async () => {
+    await withMemory('day-plan-recall-room', (store) => {
+      add(store, 'Quiet hours small routine', 'short evidence');
+      add(store, 'Quiet hours huge routine', 'x'.repeat(limit * 2));
+      const content = composeDayPlanInput(input, store);
+      expect(wireSize(content)).toBeLessThanOrEqual(limit);
+      expect(content).toContain('Quiet hours small routine | evidence');
+      expect(content).not.toContain('x'.repeat(100));
+      expect(content).toContain('(1 matching claims are too long to show here;');
+    });
+  });
+
+  it('does not impose a fact-count cap when all facts fit', async () => {
+    await withMemory('day-plan-no-count-cap', (store) => {
+      for (let i = 0; i < 250; i++) add(store, `Routine ${i}`);
+      const content = composeDayPlanInput(input, store);
+      for (let i = 0; i < 250; i++) expect(content).toContain(`- [owner-grounded] Routine ${i}\n`);
+      expect(content).not.toContain('older owner facts are not shown here');
+      expect(wireSize(content)).toBeLessThanOrEqual(limit);
+    });
+  });
+
+  it('fails explicitly when required input fits but leaves no room for omission reporting', async () => {
+    await withMemory('day-plan-no-memory-room', (store) => {
+      add(store, 'Short routine');
+      const exactInput = 'x'.repeat(limit - wireSize(''));
+      expect(wireSize(exactInput)).toBe(limit);
+      expect(composeDayPlanInput(exactInput)).toBe(exactInput);
+      expect(() => composeDayPlanInput(exactInput, store)).toThrow('day plan input leaves no room for memory omission reporting');
+    });
+  });
+
+  it('preserves small inputs without memory, and rejects oversized required input explicitly', () => {
+    expect(composeDayPlanInput(input)).toBe(input);
+    expect(() => composeDayPlanInput('x'.repeat(limit))).toThrow('day plan input exceeds provider context budget');
   });
 });

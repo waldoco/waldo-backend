@@ -271,3 +271,20 @@ it('default responder still answers ordinary owner text when the configured brow
     expect(JSON.stringify(h.state.storage.kv.get('telegram_final_outbox_v1'))).toContain('Ordinary messaging remains available.');
   }, 'legacy_factory_failed');
 });
+it('a web-only task can reach the browser approval card, and a task with no browsing source still cannot', async () => {
+  await browserProof(async h => {
+    const { browserTaskSourceCustody } = await import('../src/channels/browser-task-source');
+    await h.send('Inspect the public fixture.');
+    const ownerKey = h.state.storage.sql.exec<{ owner_key: string }>('SELECT owner_key FROM owner_task_source_scope').one().owner_key;
+    const payload = { url: 'https://fixture.example/form', action: { selector: '#submit', method: 'click', description: 'synthetic' }, binding: { value: 'synthetic' }, steps: [], continuation: { version: 1 as const, taskRef: 'synthetic-task', proposalId: 'synthetic-proposal', scopeDigest: `sha256:${'a'.repeat(64)}` } };
+    const set = (sources: string[]) => h.state.storage.sql.exec('UPDATE owner_task_source_scope SET sources_json = ?, revision = revision + 1, ready = 1', JSON.stringify(sources));
+    set(['web']);
+    const custody = browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv);
+    expect(() => custody.capture(payload, ownerKey)).not.toThrow();
+    const guard = custody.guard(payload); await guard();
+    h.state.storage.sql.exec('UPDATE owner_task_source_scope SET revision = revision + 1');
+    await expect(guard()).rejects.toThrow('changed');
+    set(['local']);
+    expect(() => custody.capture(payload, ownerKey)).toThrow('browser task source unavailable');
+  });
+});

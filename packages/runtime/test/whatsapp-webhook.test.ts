@@ -68,7 +68,7 @@ describe('handleWhatsAppWebhook', () => {
     const body = payload([{ from: '15550001111' }], true);
     expect((await run(await post('x', body), env, directory)).status).toBe(200);
     expect(idFromName).toHaveBeenCalledWith('do-a');
-    expect(fetch).toHaveBeenCalledWith('https://telegram-owner/whatsapp-turn', {
+    expect(fetch).toHaveBeenCalledWith('https://telegram-owner/whatsapp-admit', {
       method: 'POST', body: expect.any(String),
       headers: { 'x-waldo-origin': 'https://w.test', 'x-waldo-whatsapp-subject': '15550001111', 'x-waldo-timezone': 'Asia/Kolkata' },
     });
@@ -118,5 +118,18 @@ describe('handleWhatsAppWebhook', () => {
     // the bearer token stays in the authorization header, never in the body
     expect(String((graph.mock.calls[0] as unknown as [string, RequestInit])[1].body)).not.toContain('wabearer-t0ken');
     expect((graph.mock.calls[0] as unknown as [string, RequestInit])[1].headers).toMatchObject({ authorization: 'Bearer wabearer-t0ken' });
+  });
+
+  it('a stranger sending a bare code, or a status-only callback, wakes nothing and redeems nothing', async () => {
+    const { fetch, ns } = namespace();
+    vi.stubGlobal('fetch', vi.fn());
+    const redeem = vi.fn(async () => null);
+    const directory: OwnerDirectory = { byPresence: async () => null, redeem };
+    const env: WhatsAppWebhookEnv = { TELEGRAM_OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_ACCESS_TOKEN: 't', WHATSAPP_PHONE_NUMBER_ID: 'pn1' };
+    await run(await post('x', payload([{ from: '15550004444', text: 'GOOD12' }])), env, directory);
+    await run(await post('x', payload([], true)), env, directory);
+    expect(redeem).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });

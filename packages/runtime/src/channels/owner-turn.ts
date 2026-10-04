@@ -27,7 +27,8 @@ import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { CLINICAL_REDIRECT, OWNER_TASK_SOURCE_PRECEDENCE, messagingSystemPrompt, ownerClockLine, withOwnerSkillProcedures, OWNER_SKILL_SAFEGUARDS } from '../prompt/messaging-behavior';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
-import { FORGOTTEN, applyClaimOps, type ClaimOutcome, applyPromotion, CLAIM_OPS_SCHEMA, exchangeInput, MEMORY_INSTRUCTION, memoryPrompt, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
+import { composeDayPlanInput } from './day-cards';
+import { FORGOTTEN, applyClaimOps, type ClaimOutcome, applyPromotion, CLAIM_OPS_SCHEMA, exchangeInput, MEMORY_INSTRUCTION, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
 import { restoreConversation, type ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
 import type { TurnLogEntry, TurnTimer } from './owner-turn-types';
@@ -325,7 +326,11 @@ export const createOwnerResponder = (
       await assertCurrent(); await sourceScope.propose(admitted.proposal); await assertCurrent();
     }
   };
-  const sourceFamilyAvailable = (family: TaskSourceFamily) => !interactiveSource || !requireTaskScope || !!sourceSnapshot?.ready && sourceSnapshot.sources.includes(family) && control.revision() === sourceSteeringRevision;
+  // A default read family is available for context exactly as taskSourceAllowed admits it for tools: the host defaults
+  // hold while the owner has not narrowed the task, ready or not. A classifier miss must not withhold earlier turns, memory
+  // or standing orders that the same snapshot's tools can still read.
+  const sourceFamilyAvailable = (family: TaskSourceFamily) => !interactiveSource || !requireTaskScope
+    || !!sourceSnapshot && control.revision() === sourceSteeringRevision && (sourceSnapshot.ready && sourceSnapshot.sources.includes(family) || sourceSnapshot.defaults?.includes(family) === true);
   const control = turnControl();
   let classifiedHeard = 0;
   const tree = new ConversationTree();
@@ -958,7 +963,7 @@ export const createOwnerResponder = (
       });
     },
     control,
-    planDay: (trace, input) => memoryOperation(() => ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, memory ? `${memoryPrompt(memory)}\n\n${input}` : input, { name: 'day_plan', schema: DAY_PLAN_SCHEMA })),
+    planDay: (trace, input) => memoryOperation(() => ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, composeDayPlanInput(input, memory), { name: 'day_plan', schema: DAY_PLAN_SCHEMA })),
     chooseReaction: async (turn) => {
       if (turn.runScope && privateRunScope !== turn.runScope) {
         return createOwnerResponder(openaiApiKey, undefined, undefined, log, clock, [], model, false, undefined, undefined, gateway, undefined, probeGuard, undefined, undefined, memoryModel, egressAllowlist, undefined, reactionChoices, turn.runScope).chooseReaction(turn);
