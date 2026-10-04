@@ -166,7 +166,11 @@ const taskSourceFamily = (handler: Readonly<{ name: ToolName }>, args?: unknown)
   if (handler.name === 'workspace_write' && args && typeof args === 'object' && ('edits' in args || 'expected_revision' in args && typeof args.expected_revision === 'number' && args.expected_revision > 0)) return 'workspace';
   return TOOL_SOURCE[handler.name];
 };
-export const taskSourceRequired = (handler: Readonly<{ name: ToolName; requires_connector?: true; mutates_state?: true; autonomy_gated?: boolean }>, args?: unknown): boolean => !!taskSourceFamily(handler, args) || !!handler.requires_connector || !(handler.mutates_state || handler.autonomy_gated || ['delegate_task', 'skills_list', 'skills_load', 'skills_install', 'skills_disable'].includes(handler.name));
+// The owner's own reminder and standing-order lists read what the owner set, not retained memory or a connected source. The pasted-only
+// scope (tools/source-scope.ts) already classes them 'allow'; a task scope that needed 'local' refused them whenever the per-turn classifier
+// left local out (F14b: listing reminders refused while create and cancel worked).
+const OWNER_OWN_LISTS = ['list_reminders', 'list_standing_orders'];
+export const taskSourceRequired = (handler: Readonly<{ name: ToolName; requires_connector?: true; mutates_state?: true; autonomy_gated?: boolean }>, args?: unknown): boolean => !!taskSourceFamily(handler, args) || !!handler.requires_connector || !(handler.mutates_state || handler.autonomy_gated || ['delegate_task', 'skills_list', 'skills_load', 'skills_install', 'skills_disable', ...OWNER_OWN_LISTS].includes(handler.name));
 export const taskSourceAllowed = (snapshot: TaskSourceSnapshot, handler: Readonly<{ name: ToolName; requires_connector?: true; mutates_state?: true; autonomy_gated?: boolean }>, args?: unknown): boolean => {
   const family = taskSourceFamily(handler, args);
   // Unknown connector routes cannot escape through an omitted family declaration.
@@ -174,7 +178,7 @@ export const taskSourceAllowed = (snapshot: TaskSourceSnapshot, handler: Readonl
   const unreadyDefault = (name: TaskSourceFamily) => !handler.mutates_state && !handler.autonomy_gated && snapshot.defaults?.includes(name) === true;
   if (family) return (snapshot.ready && snapshot.sources.includes(family)) || unreadyDefault(family);
   if (handler.requires_connector) return snapshot.ready && snapshot.sources.length === TASK_SOURCE_FAMILIES.length;
-  if (handler.mutates_state || handler.autonomy_gated || ['delegate_task', 'skills_list', 'skills_load', 'skills_install', 'skills_disable'].includes(handler.name)) return true;
+  if (handler.mutates_state || handler.autonomy_gated || ['delegate_task', 'skills_list', 'skills_load', 'skills_install', 'skills_disable', ...OWNER_OWN_LISTS].includes(handler.name)) return true;
   return (snapshot.ready && snapshot.sources.includes('local')) || unreadyDefault('local');
 };
 export const taskSourcePrompt = (snapshot: TaskSourceSnapshot): string => !snapshot.ready
