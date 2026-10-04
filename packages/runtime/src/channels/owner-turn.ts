@@ -591,9 +591,17 @@ export const createOwnerResponder = (
           if (control.revision() !== contextSteering) throw new ClosedRunError();
           const skillMetadata = skills && (!binding || request.tools.includes('skills_list')) ? skills.metadata() : '';
           const canonicalSystem = [canonicalPrompt, OWNER_TASK_SOURCE_PRECEDENCE, sourceNotice, recallNotice, turnNotice, ...(memoryReceipts.length ? [`Memory this turn: ${memoryReceipts.join(' ')}`] : []), skillMetadata, taskContext].filter(Boolean).join('\n\n');
-          mainBase = () => [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), sourceNotice, recallNotice, turnNotice, memoryReceipts.join(' '), ordersSection, skillMetadata, taskContext, skillPrompt].filter(Boolean).join('\n\n');
+          // Owner memory gets the room left in the FINAL system prompt (after the skill wrapper), because the sanitiser drops an oversize one whole.
+          const unboundSystem = (): string => {
+            const wrapped = skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined);
+            const before = [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), sourceNotice, ...(recallNotice ? [recallNotice] : []), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : [])];
+            const after = [...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
+            const room = systemRoom(withOwnerSkillProcedures([...before, ...after].join('\n\n'), wrapped));
+            const memoryPart = memory && sourceFamilyAvailable('local') ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText, room)] : [];
+            return withOwnerSkillProcedures([...before, ...memoryPart, ...after].join('\n\n'), wrapped);
+          };
           return complete(trace, 'reply',
-          binding ? withOwnerSkillProcedures(canonicalSystem, skillPrompt) : withOwnerSkillProcedures([messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), sourceNotice, ...(recallNotice ? [recallNotice] : []), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory && sourceFamilyAvailable('local') ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText, systemRoom(mainBase()))] : []), ...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])].join('\n\n'), skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined)),
+          binding ? withOwnerSkillProcedures(canonicalSystem, skillPrompt) : unboundSystem(),
           entries,
           undefined,
           pending,
@@ -620,7 +628,6 @@ export const createOwnerResponder = (
   let ownerTurnActive = false;
   // Room left in the system prompt for owner memory: the sanitiser drops a system prompt over its limit whole.
   const systemRoom = (others: string) => SANITISE_DESTINATION_POLICIES.system_prompt.max_chars - others.length - 2_048;
-  let mainBase: () => string = () => '';
   let turnToolEvents: LoopEventLike[] = [];
   const parseToolArgs = (raw: unknown, tool: string): unknown => {
     if (typeof raw !== 'string') return raw;
