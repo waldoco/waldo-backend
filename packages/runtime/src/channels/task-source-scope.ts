@@ -43,7 +43,7 @@ const createTable = (sql: SqlStorage) => sql.exec(`CREATE TABLE IF NOT EXISTS ow
 const initialise = (sql: SqlStorage) => { createTable(sql); withNarrowedColumn(sql); };
 // narrowed = the owner explicitly chose or narrowed this task's sources; host defaults never override that.
 const withNarrowedColumn = (sql: SqlStorage) => { if (!sql.exec<{ name: string }>('PRAGMA table_info(owner_task_source_scope)').toArray().some(column => column.name === 'narrowed')) { sql.exec('ALTER TABLE owner_task_source_scope ADD COLUMN narrowed INTEGER NOT NULL DEFAULT 0');
-  // Legacy rows: only the exact baseline (workspace+web, the state the classifier starts from) and the unrestricted full set take the defaults; any other stored scope, ready or not, was a restriction and stays narrowed.
+  // Legacy rows: [workspace,web] is treated as the classifier baseline by owner ruling (4:57-4:58 PM, relayed by main), not provable as baseline: it may have been an owner choice, and widening it pre-deploy is intended. That row and the unrestricted full set take the defaults; any other stored scope, ready or not, was a restriction and stays narrowed.
   sql.exec(`UPDATE owner_task_source_scope SET narrowed = 1 WHERE sources_json NOT IN ('["workspace","web"]', ?)`, JSON.stringify(TASK_SOURCE_FAMILIES)); } };
 // Read-only families the owner's own chat uses by default: his own memory (local) and workspace, the public web, and the Google families once Google is connected.
 // Sends, calendar writes, spending and other effects keep their own approval desks.
