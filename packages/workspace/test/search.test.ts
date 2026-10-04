@@ -75,7 +75,7 @@ describe('workspace search (literal, current revisions, own workspace only)', ()
     expect((await h.search({ query: 'needle' }) as any).data.hits).toHaveLength(1);
   });
   it('a snippet never splits a surrogate pair', async () => {
-    const { h, put } = await make(); await put('e.md', '😀'.repeat(200) + '.needle' + '😀'.repeat(200));
+    const { h, put } = await make(); await put('e.md', '😀'.repeat(200) + '.needle' + 'y'.repeat(200));
     const snippet = (await h.search({ query: 'needle' }) as any).data.hits[0].snippet as string;
     expect(snippet).toContain('needle'); expect(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(snippet)).toBe(false);
   });
