@@ -443,7 +443,7 @@ it('default MD and TXT writes return authenticated downloads with exact text MIM
   for(const [name,mime,filename,text] of [['markdownFile','text/markdown','notes.md','# Notes\nSaved markdown.'],['textFile','text/plain','notes.txt','Saved plain text.']] as const){
    const r=allOutputs()[name]!;expect(r.ok).toBe(true);expect(r.data.delivery.status).toBe('owner_link');
    const download=await h.request(new Request(r.data.delivery.url,{headers:{cookie:`${CONSOLE_COOKIE}=${session}`}}));
-   expect(download.status).toBe(200);expect(download.headers.get('content-type')).toBe(mime);
+   expect(download.status,`download ${name} -> ${download.status} ${await download.clone().text()}`).toBe(200);expect(download.headers.get('content-type')).toBe(mime);
    expect(download.headers.get('content-disposition')).toBe(`attachment; filename="file"; filename*=UTF-8''${filename}`);
    expect(await download.text()).toBe(text);
   }
