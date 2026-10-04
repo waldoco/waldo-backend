@@ -10,6 +10,19 @@ const sent = (fetcher: ReturnType<typeof vi.fn>, index = 0) => {
 };
 
 describe('ownerDirectory', () => {
+  it('carries only verified route identity and refreshes email on each inbound lookup', async () => {
+    const ownerId = '10000000-0000-0000-0000-00000000000a';
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(json([{ do_name: 'do-a', subject: '42', timezone: null, owner_id: ownerId, owner_email: 'one@test.invalid', admission_revision: '1', refresh_token: 'NEVER_EXPORT' }]))
+      .mockResolvedValueOnce(json([{ do_name: 'do-a', subject: '42', timezone: null, owner_id: ownerId, owner_email: 'changed@test.invalid', admission_revision: '1' }]));
+    const directory = ownerDirectory(env, fetcher as unknown as typeof fetch, now);
+    const first = await directory.byPresence('telegram', '42');
+    const second = await directory.byPresence('telegram', '42');
+    expect(first).toMatchObject({ traceIdentity: { owner_id: ownerId, owner_email: 'one@test.invalid' } });
+    expect(second).toMatchObject({ traceIdentity: { owner_id: ownerId, owner_email: 'changed@test.invalid' } });
+    expect(JSON.stringify(first)).not.toContain('NEVER_EXPORT');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
   it('falls back to the one deploy-configured owner when Supabase is not configured', async () => {
     const directory = ownerDirectory({ WALDO_OWNER_TELEGRAM_ID: '42', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata' });
     expect(await directory.byPresence('telegram', '42')).toEqual({ doName: '42', subject: '42', timezone: 'Asia/Kolkata' });

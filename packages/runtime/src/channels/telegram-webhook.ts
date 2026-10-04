@@ -1,5 +1,6 @@
 import { ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import {parseCodedSetup} from './telegram-link-command';
+import { OWNER_TRACE_HEADER } from '../observability/owner-trace-identity';
 import {linkCodeHash} from '../identity/owner-directory';
 
 export type TelegramWebhookEnv = Readonly<{
@@ -114,6 +115,7 @@ export const handleTelegramWebhook = async (
     const headers: Record<string, string> = { 'x-waldo-origin': origin, 'x-waldo-telegram-subject': route.subject,
       'x-waldo-do-name': route.doName, 'x-waldo-inbox-secret': secret };
     if (route.timezone) headers['x-waldo-timezone'] = route.timezone;
+    if (route.traceIdentity) headers[OWNER_TRACE_HEADER] = encodeURIComponent(JSON.stringify(route.traceIdentity));
     try {
       const admission = await owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/enqueue', { method: 'POST', body, headers, signal: AbortSignal.timeout(10_000) });
       return new Response(admission.ok ? 'ok' : 'admission unavailable', { status: admission.ok ? 200 : admission.status === 409 ? 409 : 503 });
