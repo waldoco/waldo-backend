@@ -41,6 +41,14 @@ Judgment belongs to the model. Do not add regex or other fixed rules for anythin
 - Safety lands with the behavior it guards, in the same PR, not as a separate gate PR before a baseline exists.
 - Do not ask the owner small questions that a default plus an opt-out answers. Ask only for production, secrets, spend and irreversible actions.
 
+## Full Context and Capability by Default
+
+- The agent gets full context (mail, calendar, files, pages) and full capability by default. A guard that makes the agent less useful needs a harm it prevents.
+- Keep only guards against real harm: cross-owner leakage, credentials and secrets, irreversible actions without a receipt or approval, and hard medical safety lines. Every kept guard carries a one-line plain-words reason next to it in code or docs.
+- Do not redact, minimize, truncate or deny context just because it is sensitive-looking, when the destination is the model or the owner. Persistence and egress destinations are different and keep their rules.
+- No scope-limit gates, source cards or opt-in flags on normal reads. Features ship on by default with a per-owner opt-out.
+- Existing guards that cost answer quality are tracked in docs/planning/waldo-agent-mvp/GUARD_SWEEP_2026-10-04.md; each is dropped or justified, not left by default.
+
 ## Rejected Even When Well-Built
 
 - Speculative infrastructure with no concrete consumer in the same PR. A linked issue is not a consumer.
