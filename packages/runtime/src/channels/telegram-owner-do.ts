@@ -265,7 +265,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         ownerSubject: child.subject, doName: child.doName, bot: child.bot,
       }, work => this.commitRecoveryNotice(child, current => {
         // An in-process failure may already have frozen a notice for this same attempt.
-        const known = ordinary ? this.setup().finalOutbox.records().find(row => row.id === noticeId) : undefined;
+        const known = this.setup().finalOutbox.records().find(row => row.id === noticeId);
         if (known && (known.ownerSubject !== child.subject || known.doName !== child.doName || known.bot !== child.bot
           || known.trace !== ownerTurnTrace('telegram', child.updateId) || known.payload.chat_id !== Number(child.subject))) {
           current.outcomeNoticeBlocked = 'notice_identity'; return;

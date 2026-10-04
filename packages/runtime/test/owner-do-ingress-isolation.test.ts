@@ -239,15 +239,16 @@ it('actual failed run keeps a retry wake when its once-only status cannot be enq
   });
 });
 
-it('a mismatched persisted failure ID cannot acknowledge an interrupted owners status', async () => {
+for (const steering of [false, true]) it(`a mismatched persisted ${steering ? 'steering' : 'ordinary'} failure ID is terminally blocked`, async () => {
   await runInDurableObject(doStub(81102), async (instance, state) => {
     const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
     const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
-    await inbox.admit({ bot: 'hermetic-test-bot-token', subject: '81102', doName: route(81102).doName }, 995007, 'PRIVATE_DEDUP_REQUEST');
+    await inbox.admit({ bot: 'hermetic-test-bot-token', subject: '81102', doName: route(81102).doName }, 995007, 'PRIVATE_DEDUP_REQUEST', steering ? { kind: 'steer', targetRun: 'closed-fixture-run' } : undefined);
     await inbox.claim('hermetic-test-bot-token:telegram:995007', 'dedup-attempt', 'dedup-run', Date.now() - 1);
+    if (steering) await inbox.transition('hermetic-test-bot-token:telegram:995007', 'dedup-attempt', 'consumed');
     await inbox.recover(new Set());
-    state.storage.kv.put('telegram_final_outbox_v1', [{ id: 'failure:hermetic-test-bot-token:telegram:995007:dedup-attempt', trace: 'tg-995007', payload: { chat_id: 81101, text: 'Foreign fixture notice.' }, ownerSubject: '81101', doName: route(81101).doName, bot: 'foreign-bot', digest: 'fixture', status: 'blocked', settled: true, dueAt: 0, createdAt: Date.now(), attempts: 0 }]);
+    state.storage.kv.put('telegram_final_outbox_v1', [{ id: `${steering ? 'steer-failure' : 'failure'}:hermetic-test-bot-token:telegram:995007:dedup-attempt`, trace: 'tg-995007', payload: { chat_id: 81101, text: 'Foreign fixture notice.' }, ownerSubject: '81101', doName: route(81101).doName, bot: 'foreign-bot', digest: 'fixture', status: 'blocked', settled: true, dueAt: 0, createdAt: Date.now(), attempts: 0 }]);
     await instance.alarm();
     expect((await inbox.records()).find(row => row.updateId === 995007)?.outcomeNoticeQueued).not.toBe(true);
     expect((await inbox.records()).find(row => row.updateId === 995007)).toMatchObject({ state: 'quarantined', outcomeNoticeBlocked: 'notice_identity' });
