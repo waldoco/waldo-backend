@@ -3,7 +3,7 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
-import { WHATSAPP_FAILURE_NOTICE } from '../src/channels/whatsapp-api';
+import { WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE } from '../src/channels/whatsapp-api';
 
 vi.mock('openai', () => ({ default: class {
   responses = { create: async () => ({ id: 'fixture', output_text: '{}', output: [], usage: { input_tokens: 1, output_tokens: 1 } }) };
@@ -23,6 +23,10 @@ const harness = async (name: string, work: (instance: TelegramOwnerDO, state: Du
     try { await work(instance, state, turn as never, sent); } finally { await state.storage.deleteAlarm(); turn.mockRestore(); graph.mockRestore(); }
   });
 };
+const postMany = (instance: TelegramOwnerDO, ids: string[]) => instance.fetch(new Request('https://telegram-owner/whatsapp-turn', {
+  method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
+  body: JSON.stringify({ messages: ids.map(id => ({ from: '15550001111', id, type: 'text', text: { body: 'PRIVATE_WA_TEXT' } })) }),
+}));
 const post = (instance: TelegramOwnerDO, id: string) => instance.fetch(new Request('https://telegram-owner/whatsapp-turn', {
   method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
   body: JSON.stringify({ messages: [{ from: '15550001111', id, type: 'text', text: { body: 'PRIVATE_WA_TEXT' } }] }),
@@ -42,7 +46,7 @@ it('a wa_seq write fault before the turn releases the claim, tells the owner, an
     put.mockRestore();
     expect(turn).not.toHaveBeenCalled();
     expect(state.storage.kv.get('wamid:wamid.fault.A')).toBeUndefined();
-    expect(sent.filter(body => body.includes(WHATSAPP_FAILURE_NOTICE))).toHaveLength(1);
+    expect(sent.filter(body => body.includes(WHATSAPP_UNSTARTED_NOTICE))).toHaveLength(1);
     expect(sent.join('')).not.toContain('PRIVATE_WA_TEXT');
     expect((await post(instance, 'wamid.fault.A')).status).toBe(200);
     expect(turn).toHaveBeenCalledTimes(1);
@@ -53,9 +57,27 @@ it('a turn that throws tells the owner once and the same wamid is still not repl
   await harness('whatsapp-turn-throw-notice', async (instance, state, turn, sent) => {
     turn.mockImplementationOnce(async () => { throw new Error('turn failed'); });
     await post(instance, 'wamid.throw.N').catch(() => undefined);
-    expect(sent.filter(body => body.includes(WHATSAPP_FAILURE_NOTICE))).toHaveLength(1);
+    expect(sent.filter(body => body.includes(WHATSAPP_PARTIAL_NOTICE))).toHaveLength(1);
     expect(state.storage.kv.get('wamid:wamid.throw.N')).toBeDefined();
     await post(instance, 'wamid.throw.N');
     expect(turn).toHaveBeenCalledTimes(1);
+  });
+});
+
+it('a fault between two messages in one payload says the first may be partly handled, not "send it again"', async () => {
+  await harness('whatsapp-mid-batch-fault', async (instance, state, turn, sent) => {
+    const store = state.storage as unknown as { put(key: string, value: unknown): Promise<void> };
+    const original = store.put.bind(state.storage);
+    let faulted = false;
+    const put = vi.spyOn(store, 'put').mockImplementation(async (key, value) => {
+      if (key === 'wa_seq' && value === 2 && !faulted) { faulted = true; throw new Error('storage fault'); }
+      return original(key, value);
+    });
+    await postMany(instance, ['wamid.mid.A', 'wamid.mid.B']).catch(() => undefined);
+    put.mockRestore();
+    expect(turn).toHaveBeenCalledTimes(1);
+    expect(sent.filter(body => body.includes(WHATSAPP_PARTIAL_NOTICE))).toHaveLength(1);
+    expect(sent.filter(body => body.includes(WHATSAPP_UNSTARTED_NOTICE))).toHaveLength(0);
+    expect(state.storage.kv.get('wamid:wamid.mid.A')).toBeDefined();
   });
 });
