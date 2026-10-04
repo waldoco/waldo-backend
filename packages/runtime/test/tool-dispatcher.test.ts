@@ -379,6 +379,18 @@ describe('ToolDispatcher', () => {
     expect(received?.content).toBe('email alice@example.com');
   });
 
+  it('a non-external tool failure carrying source_taint null keeps its own error instead of invalid_handler_result', async () => {
+    const handler: ToolHandler<GetCrsArgs, { summary: string }, ToolDispatcherContext> = {
+      name: 'get_crs', description: 'Return a summary.', schema: getCrsArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('get_crs'), autonomy_gated: false,
+      async handle() { return { ok: false, code: 'rejected', error: 'This source is outside the current owner task.', source_taint: null } as never; },
+    };
+    const result = await dispatchTool({ id: 'call-null-taint-failure', name: 'get_crs', args: {} }, dispatcherContext('brief'), { handlers: [handler] });
+    expect(result).toMatchObject({ ok: false });
+    expect(result).not.toMatchObject({ reason: 'invalid_handler_result' });
+    expect(JSON.stringify(result)).toContain('outside the current owner task');
+  });
+
   it('rejects missing or wrong result taint and preserves valid external taint', async () => {
     for (const source_taint of [undefined, 'external'] as const) {
       const invalidHandler: ToolHandler<
