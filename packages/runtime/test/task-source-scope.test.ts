@@ -453,3 +453,14 @@ it('after a pending card, a later malformed or uncertain miss still gets no defa
   const miss = (await open.classify(decision('uncertain'))).snapshot;
   expect(taskSourceAllowed(miss, { name: 'search_communication', requires_connector: true, autonomy_gated: true })).toBe(false);
 }));
+
+it('a default-read admission taken before a card is published cannot run after the card exists (same revision)', () => run('task-pending-assertsame', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, { inputRef: 'r1', text: 'read my mail' }, ['web', 'mail']);
+  const proposed = await cap.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'read my mail' }), 'r1', 'read my mail');
+  expect(proposed.proposal).toBeDefined();
+  const latest = await cap.current();
+  // The admission another turn took between the revision bump and the card write: same revision, defaults on.
+  const admittedBeforeCard = { ...latest, defaults: ['web', 'mail'] as const };
+  await expect(cap.assertSame(admittedBeforeCard)).rejects.toThrow('Task source scope changed');
+  await expect(cap.assertSame(latest)).resolves.toBeUndefined();
+}));
