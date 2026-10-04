@@ -85,3 +85,12 @@ it('never selects a legacy console DO when directory lookup fails', async () => 
   expect(result.status).toBe(503);
   expect(get).not.toHaveBeenCalled();
 });
+
+it('routes a private export download through the same owner gate; signed out never reaches a body', async () => {
+ vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([{ do_name: 'owner-export', subject: '5458446350', timezone: null }]))));
+ const request = new Request('https://waldo.invalid/console/exports/exp%3Aabc', { headers: { cookie: 'waldo_console=ticket' } });
+ const result = await worker.fetch(request, { ...baseEnv, ...supabaseEnv } as unknown as Cloudflare.Env);
+ expect(await result.text()).toBe('do:owner-export');
+ const signedOut = await worker.fetch(new Request(request.url), { ...baseEnv, ...supabaseEnv } as unknown as Cloudflare.Env);
+ expect(signedOut.status).toBe(303); expect(signedOut.headers.get('location')).toBe('/console/signin');
+});

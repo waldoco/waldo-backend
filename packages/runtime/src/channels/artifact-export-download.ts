@@ -81,3 +81,11 @@ export const artifactExportDownload = async (request: Request, deps: ArtifactExp
     },
   });
 };
+
+// The owner-authenticated download URL for a stored export. Same origin rules as artifactDelivery: https, a bare origin, no credentials.
+export const exportDownloadUrl = (base: string | null, exportId: string): string | null => {
+  if (!base || !EXPORT_ID.test(exportId)) return null;
+  let url: URL; try { url = new URL(base); } catch { return null; }
+  if (url.protocol !== 'https:' || url.origin !== base || url.username || url.password) return null;
+  return `${base}${ARTIFACT_EXPORT_PATH}/${encodeURIComponent(exportId)}`;
+};

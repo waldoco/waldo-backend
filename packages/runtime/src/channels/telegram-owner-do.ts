@@ -77,6 +77,8 @@ import { healthContextBook } from './health-context';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
 import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
 import { artifactDelivery, artifactPage, artifactReadAdmission, ARTIFACT_PATH } from './artifact-delivery';
+import { artifactExports, exportArtifactHandler, r2ArtifactBinaries } from './artifact-exports';
+import { ARTIFACT_EXPORT_PATH, artifactExportDownload, exportDownloadUrl } from './artifact-export-download';
 import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
 import { runBook } from './background-runs';
 import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, sha256Hex, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
@@ -758,6 +760,16 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         } catch { console.warn(JSON.stringify({ event: 'browser_host_disabled' })); }
       }
       return result;
+    }
+    if (url.pathname.startsWith(`${ARTIFACT_EXPORT_PATH}/`)) {
+      // Behind the console owner session like the artifact page: this DO's own store and bucket prefix only.
+      if (!this.env.ARTIFACTS) return new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+      const scope = this.ctx.id.toString();
+      const bodies = r2ArtifactBodies(this.env.ARTIFACTS, scope);
+      const book = artifactBook(this.ctx.storage.sql, bodies, { timezone: 'UTC', now: () => new Date() }, () => crypto.randomUUID());
+      const binaries = r2ArtifactBinaries(this.env.ARTIFACTS, scope);
+      const exportsStore = artifactExports(this.ctx.storage.sql, book, bodies, binaries, { timezone: 'UTC', now: () => new Date() }, () => crypto.randomUUID());
+      return (await artifactExportDownload(request, { exports: exportsStore, binaries, limiter: this.env.RESPONSIBILITY_RATE_LIMITER, ownerScope: scope })) ?? new Response('not found', { status: 404 });
     }
     if (url.pathname.startsWith(`${ARTIFACT_PATH}/`)) {
       const denied = await artifactReadAdmission(this.env.RESPONSIBILITY_RATE_LIMITER, this.ctx.id.toString());
@@ -1590,7 +1602,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const orders = standingOrderBook(storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
     // A5: working-artifact store. Bodies ride R2 when the binding exists; a deploy missing it
     // degrades to per-DO-memory bodies (artifacts become session-scoped, turns never crash).
-    const artifacts = artifactBook(storage.sql, this.env.ARTIFACTS ? r2ArtifactBodies(this.env.ARTIFACTS, this.ctx.id.toString()) : inMemoryArtifactBodies(), clock, () => deps.newRunId().slice(0, 8));
+    const artifactBodies = this.env.ARTIFACTS ? r2ArtifactBodies(this.env.ARTIFACTS, this.ctx.id.toString()) : inMemoryArtifactBodies();
+    const artifacts = artifactBook(storage.sql, artifactBodies, clock, () => deps.newRunId().slice(0, 8));
+    // PDF export is registered only where files are durable (R2 bound) and the owner-session download route can serve them.
+    const exportTool = this.env.ARTIFACTS ? [exportArtifactHandler(
+      artifactExports(storage.sql, artifacts, artifactBodies, r2ArtifactBinaries(this.env.ARTIFACTS, this.ctx.id.toString()), clock, () => deps.newRunId().slice(0, 8)),
+      async id => exportDownloadUrl(await storage.get<string>('origin') ?? null, id))] : [];
     const runs = runBook(storage.sql, clock, () => deps.newRunId().slice(0, 8));
     // A9: recent meal/workout logs join the proactive context; the read degrades to empty
     // when the store is unlinked so beats and the /ledger command never break on it.
@@ -1649,7 +1666,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }, { origin: async () => await storage.get<string>('origin') ?? null, durable: Boolean(this.env.ARTIFACTS) });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), ...standingOrderHandlers(orders), ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
         // with the artifact text (kinds + sender only; the code itself touches no store).
