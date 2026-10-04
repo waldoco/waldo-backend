@@ -6,6 +6,7 @@ import { base64url, frameSignatureBase, httpSignatureBase, sha256Hex } from '../
 import { routerSignature } from '../src/identity/owner-directory';
 import { consoleAccess } from '../src/channels/console';
 import type { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
+import type { DeviceBridgeDO } from '../src/devices/device-bridge-do';
 
 afterEach(() => vi.unstubAllGlobals());
 it('runs owner console pair -> signed redeem/connect/heartbeat -> revoke through the real Worker', async () => {
@@ -87,7 +88,10 @@ it('runs owner console pair -> signed redeem/connect/heartbeat -> revoke through
   const page = await call(new Request('https://bridge.test/console/devices', { headers: { cookie } }));
   const html = await page.text(); expect(html).toContain('Online'); expect(html).not.toContain('<script>bad</script>');
   const originalClosed = new Promise<number>((resolve) => socket.addEventListener('close', (event) => resolve(event.code)));
+  const conflictingFrame = { ...frame, nonce: base64url(crypto.getRandomValues(new Uint8Array(16))), payload: { ...frame.payload, outbox_depth: 1 } };
+  const conflictSignature = await sign(frameSignatureBase(conflictingFrame.timestamp, conflictingFrame.type, conflictingFrame.message_id, conflictingFrame.nonce, await sha256Hex(new TextEncoder().encode(canonicalJson(conflictingFrame)))));
   const invalidFrames: (string | ArrayBuffer)[] = [
+    canonicalJson({ ...conflictingFrame, signature: conflictSignature }),
     new Uint8Array([1,2,3]).buffer,
     'x'.repeat(8193),
     ` ${canonicalJson({ ...frame, signature })}`,
@@ -108,6 +112,20 @@ it('runs owner console pair -> signed redeem/connect/heartbeat -> revoke through
   expect(await originalClosed).toBe(1008);
   const finalResponse = await connect(); const finalSocket = finalResponse.webSocket!; finalSocket.accept();
   const closed = new Promise<number>((resolve) => finalSocket.addEventListener('close', (event) => resolve(event.code)));
+  const racingRequest = new Request(`https://bridge.test${path}`, { headers: { ...await headers('GET', path), 'x-waldo-device-id': 'dev_fixture', upgrade: 'websocket' } });
+  const deviceStub = env.DEVICE_BRIDGE_DO!.get(env.DEVICE_BRIDGE_DO!.idFromName('dev_fixture')) as DurableObjectStub<DeviceBridgeDO>;
+  await runInDurableObject(deviceStub, async (instance) => {
+    const internal = instance as unknown as { rearm(): Promise<void> };
+    const original = internal.rearm.bind(instance); let held = false, release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const alarm = vi.spyOn(internal, 'rearm').mockImplementationOnce(async () => { held = true; await gate; }).mockImplementation(original);
+    try {
+      const connecting = instance.fetch(racingRequest);
+      await vi.waitFor(() => expect(held).toBe(true));
+      await instance.revoke(); release();
+      expect((await connecting).status).toBe(401);
+    } finally { release(); alarm.mockRestore(); }
+  });
   expect((await action('device.revoke')).status).toBe(303); expect(await closed).toBe(1008);
   expect((await connect()).status).toBe(401);
 });
