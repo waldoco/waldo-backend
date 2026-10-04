@@ -130,6 +130,8 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
       const restricted = await commit(previous, previous.sources.filter(x => decision.sources.includes(x)), true, previous.sources.length === TASK_SOURCE_FAMILIES.length ? inputRef ?? null : previous.startRef, false, true);
       return { snapshot: restricted, outcome: 'restricted' };
     }
+      // A new/change that asks for nothing beyond the default reads has nothing for the owner to approve while the task is unready and not narrowed: no card, it stays unready with the defaults on.
+      if (['new', 'change'].includes(decision.decision) && !addsRetainedSource && !previous.ready && !isNarrowed()) return { snapshot: await commit(previous, previous.sources, false), outcome: 'uncertain' };
       if (decision.decision === 'uncertain') return { snapshot: await commit(previous, previous.sources, false), outcome: 'uncertain' };
       const snapshot = await commit(previous, previous.sources, false);
       const proposal: TaskSourceProposal = { ownerKey, taskId: snapshot.taskId, revision: snapshot.revision, nonce: crypto.randomUUID(), action: decision.decision, sources: decision.decision === 'close' ? [] : decision.sources, expiresAt: Date.now() + 30 * 60_000 };

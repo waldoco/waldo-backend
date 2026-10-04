@@ -481,3 +481,13 @@ it('real interleaving: a second turn admits with defaults while classify is susp
   expect(result.proposal).toBeDefined();
   await expect(second.assertSame(admitted)).rejects.toThrow('Task source scope changed');
 }));
+
+it.each(['new', 'change'] as const)('a %s decision that adds nothing beyond the default reads never publishes a card, even when its evidence is not an exact quote', decisionKind => run(`task-no-card-default-only-${decisionKind}`, async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, { inputRef: 'r1', text: 'remember that I like jasmine tea' }, ['local', 'workspace', 'web']);
+  const result = await cap.classify(JSON.stringify({ decision: decisionKind, sources: ['local'], evidence: 'owner asks to save a tea preference' }), 'r1', 'remember that I like jasmine tea');
+  expect(result.proposal).toBeUndefined();
+  expect(sql.exec<{ pending_json: string | null }>('SELECT pending_json FROM owner_task_source_scope').one().pending_json).toBeNull();
+  const after = await cap.current();
+  expect(taskSourceAllowed(after, { name: 'read_owner_context' })).toBe(true);
+  expect(taskSourceAllowed(after, { name: 'web_search' })).toBe(true);
+}));
