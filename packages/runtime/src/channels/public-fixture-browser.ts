@@ -7,6 +7,7 @@ export type FixtureManifest = Readonly<{
   fields: readonly string[]; formSelector: string; submitSelector: string; resultSelector: string;
 }>;
 type Sdk = Pick<typeof import('@cloudflare/playwright'), 'acquire' | 'connect' | 'endpointURLString' | 'sessions'>;
+export type CloudflareBrowserSdkLoader = () => Promise<Sdk>;
 export type BrowserSourceGuard = () => Promise<void>;
 const admitted: BrowserSourceGuard = async () => {};
 export type FixtureState = Readonly<{ url: string; values: Record<string, string>; target: string; method: string; disabled: boolean }>;
@@ -50,7 +51,7 @@ function nativeForm(form: any, args: { manifest: FixtureManifest; expected?: str
   }
   return state;
 }
-export function publicFixtureBrowser(options: Readonly<{ binding: BrowserWorker; manifest: FixtureManifest; loadSdk?: () => Promise<Sdk>; fetcher?: typeof fetch }>) {
+export function publicFixtureBrowser(options: Readonly<{ binding: BrowserWorker; manifest: FixtureManifest; loadSdk: CloudflareBrowserSdkLoader; fetcher?: typeof fetch }>) {
   const m = Object.freeze({ ...options.manifest, fields: [...options.manifest.fields] });
   const origin = new URL(m.origin);
   if (origin.protocol !== 'https:' || origin.origin !== m.origin || origin.username || origin.password || !m.fields.length || m.fields.length > 24 || new Set(m.fields).size !== m.fields.length || m.fields.some(x => !/^[a-z][a-z0-9_]{0,79}$/.test(x) || ['constructor', 'prototype', '__proto__'].includes(x)) || [m.formSelector, m.submitSelector, m.resultSelector].some(x => !/^#[a-z][a-z0-9_-]{0,79}$/.test(x)) || !/^[a-z][a-z0-9-]{0,79}$/.test(m.runId)) throw Error('browser fixture manifest rejected');
@@ -71,7 +72,7 @@ export function publicFixtureBrowser(options: Readonly<{ binding: BrowserWorker;
     if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) || Object.keys(receipt).sort().join(',') !== 'bindingDigest,downloadDigest,observedAt,opaqueId,provenance,runId,state,version' || receipt.version !== 1 || receipt.provenance !== 'synthetic_only' || receipt.runId !== m.runId || receipt.state !== 'acknowledged_fixture' || typeof receipt.opaqueId !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(receipt.opaqueId) || typeof receipt.bindingDigest !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.bindingDigest) || typeof receipt.observedAt !== 'string' || !Number.isFinite(Date.parse(receipt.observedAt))) throw Error('fixture receipt invalid');
     return receipt;
   };
-  const loadSdk = options.loadSdk ?? (() => import('@cloudflare/playwright'));
+  const loadSdk = options.loadSdk;
   const sessionId = (id: string) => { if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id)) throw Error('browser fixture session rejected'); return id; };
   // Public connect(URL) parses the retained ID from its path. The pinned SDK's
   // connectOverCDP wrapper can allocate instead, so never use it here.

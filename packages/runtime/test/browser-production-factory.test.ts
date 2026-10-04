@@ -61,7 +61,7 @@ it('builds the concrete driver from a signed canonical binding and rejects the l
   const calls: { url: string; body: Record<string, unknown> }[] = [];
   let response: unknown = f.binding;
   const fetcher: typeof fetch = async (url, init) => { calls.push({ url: String(url), body: JSON.parse(String(init?.body)) }); return Response.json(response); };
-  const options = { env, storage: f.storage, actualDoId: 'physical', now: f.now, fetcher, policy: { enabled: true, doName: f.binding.do_name, fixtureOrigin: f.manifest.origin } };
+  const options = { env, storage: f.storage, actualDoId: 'physical', now: f.now, fetcher, loadSdk: async () => { throw Error('SDK must not load during preparation'); }, policy: { enabled: true, doName: f.binding.do_name, fixtureOrigin: f.manifest.origin } };
   const config = await browserProductionConfiguration(options);
   expect(config).toMatchObject({ enabled: true, binding: f.binding, manifestDigest: f.authorization.manifestDigest });
   expect(config!.driver).toMatchObject({ runId: f.manifest.runId, pageUrl: f.request.page, provider: 'cloudflare_playwright' });
@@ -98,7 +98,7 @@ it('retains a failed allocation reservation and does not attempt a second provid
   const provider = vi.fn(() => { throw Error('provider must not run'); });
   const env = { WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'namespace', SUPABASE_PROJECT_URL: 'https://database.example', SUPABASE_PUBLISHABLE_KEY: 'public-test-key', WALDO_ROUTER_HMAC_SECRET: 'test-secret', TELEGRAM_OWNER_DO: { idFromName: () => ({ toString: () => 'physical' }) } as unknown as DurableObjectNamespace, BROWSER: { fetch: provider } as unknown as import('@cloudflare/playwright').BrowserWorker };
   const fetcher: typeof fetch = async url => String(url).includes('/rpc/') ? Response.json(f.binding) : new Response('fixture unavailable', { status: 503 });
-  const options = { env, storage: f.storage, actualDoId: 'physical', now: f.now, fetcher, policy: { enabled: true, doName: f.binding.do_name, fixtureOrigin: f.manifest.origin } };
+  const options = { env, storage: f.storage, actualDoId: 'physical', now: f.now, fetcher, loadSdk: async () => { throw Error('SDK must not load during preparation'); }, policy: { enabled: true, doName: f.binding.do_name, fixtureOrigin: f.manifest.origin } };
   await expect((await browserProductionConfiguration(options))!.driver.start(60000)).rejects.toThrow('session unavailable');
   expect(browserOwnerAuthority(f.storage, f.now).read()!.usage.allocations).toBe(1);
   await expect((await browserProductionConfiguration(options))!.driver.start(60000)).rejects.toThrow('allocation denied');
@@ -131,4 +131,29 @@ it('uses a smaller recorded ceiling and rejects incomplete action evidence', asy
   expect(authority.grant({ ...f.request, operation: 'act', evidence: { actionDigest: `sha256:${'a'.repeat(64)}` } }, f.binding)).toBeNull();
   expect(authority.grant(f.request, f.binding)).not.toBeNull();
   expect(authority.grant(f.request, f.binding)).toBeNull();
+});
+
+it('rejects a configured trial without an explicit SDK loader before authority reads or provider IO', async () => {
+  const f = await fixture();
+  const get = vi.spyOn(f.storage.kv, 'get');
+  const fetcher = vi.fn();
+  await expect(browserProductionConfiguration({ env: { BROWSER: {} as never }, storage: f.storage, actualDoId: 'physical',
+    policy: { enabled: true, doName: f.binding.do_name, fixtureOrigin: f.manifest.origin }, fetcher })).rejects.toThrow('browser configuration unavailable');
+  expect(get).not.toHaveBeenCalled(); expect(fetcher).not.toHaveBeenCalled();
+});
+
+it('uses the explicit SDK loader only for an authorized provider allocation', async () => {
+  const f = await fixture(); f.rows.set('do_name', f.binding.do_name); f.rows.set('telegram_subject', f.binding.subject);
+  const browser = {} as import('@cloudflare/playwright').BrowserWorker;
+  const acquire = vi.fn(async () => ({ sessionId: 'retained-session' }));
+  const loadSdk = vi.fn(async () => ({ acquire }) as never);
+  const env = { WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'namespace', SUPABASE_PROJECT_URL: 'https://database.example', SUPABASE_PUBLISHABLE_KEY: 'public-test-key', WALDO_ROUTER_HMAC_SECRET: 'test-secret', TELEGRAM_OWNER_DO: { idFromName: () => ({ toString: () => 'physical' }) } as unknown as DurableObjectNamespace, BROWSER: browser };
+  const fetcher: typeof fetch = async url => String(url).includes('/rpc/') ? Response.json(f.binding) : new Response(null, { status: 404 });
+  const config = await browserProductionConfiguration({ env, storage: f.storage, actualDoId: 'physical', now: f.now, fetcher, loadSdk,
+    policy: { enabled: true, doName: f.binding.do_name, fixtureOrigin: f.manifest.origin } });
+  expect(loadSdk).not.toHaveBeenCalled();
+  expect(await config!.driver.start(10000)).toBe('retained-session');
+  expect(loadSdk).toHaveBeenCalledTimes(1); expect(acquire).toHaveBeenCalledWith(browser, expect.any(Object));
+  expect(browserOwnerAuthority(f.storage, f.now).read()!.usage.allocations).toBe(1);
+  await expect(config!.driver.start(10000)).rejects.toThrow('allocation denied'); expect(loadSdk).toHaveBeenCalledTimes(1);
 });
