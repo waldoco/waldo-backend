@@ -416,6 +416,10 @@ it('a classifier miss (uncertain or malformed) never turns the default read sour
     expect(taskSourceAllowed(snapshot, { name: 'search_communication', requires_connector: true })).toBe(true);
     expect(taskSourceAllowed(snapshot, { name: 'workspace_read' }), 'workspace is not in this default list').toBe(false);
   }
+  const unreadyDefaults = createTaskSourceScope(sql, 'owner-two', scope, async () => {}, undefined, ['workspace', 'web']);
+  const miss = (await unreadyDefaults.classify(decision('uncertain'))).snapshot;
+  expect(taskSourceAllowed(miss, { name: 'workspace_list' }), 'reads work on a miss').toBe(true);
+  expect(taskSourceAllowed(miss, { name: 'workspace_write', mutates_state: true }, { expected_revision: 1, edits: [] }), 'existing-file edit is not admitted on a miss').toBe(false);
   await cap.classify(decision('restrict'));
   const narrowed = (await cap.classify(decision('uncertain'))).snapshot;
   expect(taskSourceAllowed(narrowed, { name: 'web_search' }), 'explicit narrowing wins over defaults').toBe(false);

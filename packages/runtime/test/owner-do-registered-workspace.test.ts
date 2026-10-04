@@ -583,3 +583,24 @@ it.each(['valid', 'duplicate-known-family'] as const)('ordinary owner workspace 
     expect(after).toEqual({ ...prior, ready: 1 });
   });
 });
+
+it.each(['uncertain', 'not json'] as const)('a classifier miss (%s) keeps workspace reads on the default admission but rejects an existing-file edit', async kind => {
+  await proof(async h => {
+    model.sourceDecision = JSON.stringify({ decision: 'retain', sources: [], evidence: null });
+    model.reply = request => outputs(request).make ? 'Created.' : [call('workspace_write', { ...writeArgs, path: 'N01R/miss.txt' }, 'make')];
+    await h.send('Create N01R/miss.txt please.');
+    expect(allOutputs().make!.ok).toBe(true);
+    const file = h.manifest()!.files[0]!;
+    h.restart();
+    model.sourceDecision = kind === 'uncertain' ? JSON.stringify({ decision: 'uncertain', sources: [] }) : 'not json';
+    model.reply = request => {
+      const done = outputs(request);
+      if (!done.list) return [call('workspace_list', { prefix: 'N01R', limit: 50 }, 'list'), call('workspace_write', { path: 'N01R/miss.txt', edits: [{ before: 'Exact', after: 'Edited' }], mime: 'text/plain', expected_revision: file.revision }, 'edit')];
+      return 'done';
+    };
+    await h.send('List my N01R files and change the first letter.');
+    const result = allOutputs();
+    expect(result.list!.ok, 'reads work on a miss').toBe(true);
+    expect(result.edit!.ok, 'an existing-file edit is not admitted on a miss').toBe(false);
+  });
+});
