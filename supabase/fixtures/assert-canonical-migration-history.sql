@@ -41,7 +41,8 @@ declare
     '20260930134308',
     '20261002120000',
     '20261002170021',
-    '20261004030000'
+    '20261004030000',
+    '20261004190110'
   ];
 begin
   select array_agg(version::text order by version::text)
