@@ -281,7 +281,9 @@ it('a web-only task can reach the browser approval card, and a task with no brow
     set(['web']);
     const custody = browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv);
     expect(() => custody.capture(payload, ownerKey)).not.toThrow();
-    await custody.guard(payload)();
+    const guard = custody.guard(payload); await guard();
+    h.state.storage.sql.exec('UPDATE owner_task_source_scope SET revision = revision + 1');
+    await expect(guard()).rejects.toThrow('changed');
     set(['local']);
     expect(() => custody.capture(payload, ownerKey)).toThrow('browser task source unavailable');
   });
