@@ -1580,3 +1580,30 @@ describe('sanitiseVerifyOnly (assembled provider prompt final pass)', () => {
     });
   });
 });
+
+
+describe('structured tool identifier integrity', () => {
+  const id = 'aaaaaaaa-aaaa-4aaa-4111-111111111114';
+  const url = `https://local.invalid/console/workspace/file?id=${id}&revision=1`;
+  it.each(['internal_context', 'owner_reply'] as const)('preserves validated identifier fields at %s without preserving card free text', destination => {
+    const result = inspectExternal({ file_id: id, id, source_file_id: id, delivery: { url }, download_url: url, body: 'card 4111 1111 1111 1114', nested: [{ file_id: id }] }, destination);
+    expect(result).toMatchObject({ ok: true, payload: { file_id: id, id, source_file_id: id, delivery: { url }, download_url: url, body: 'card [REDACTED_CREDIT_CARD]', nested: [{ file_id: id }] } });
+  });
+  it('preserves structured references in serialized provider tool turns and still redacts their body', () => {
+    const receipt = { file_id: id, delivery: { url }, body: 'card 4111 1111 1111 1114' };
+    const result = inspectExternal([{ call: { arguments: JSON.stringify({ file_id: id }) }, output: JSON.stringify(receipt) }]);
+    expect(result).toMatchObject({ ok: true, payload: [{ call: { arguments: JSON.stringify({ file_id: id }) }, output: JSON.stringify({ ...receipt, body: 'card [REDACTED_CREDIT_CARD]' }) }] });
+  });
+  it('does not recurse into an encoded object beyond the existing payload depth guard', () => {
+    const output = '['.repeat(150) + '"4111 1111 1111 1114"' + ']'.repeat(150);
+    expect(inspectExternal([{ output }])).toMatchObject({ ok: false, check: 'size_cap', reason: 'invalid_payload' });
+  });
+  it('does not exempt a field name without a valid identifier value', () => {
+    expect(inspectExternal({ id: '4111 1111 1111 1114', file_id: '4111 1111 1111 1114', url: '4111 1111 1111 1114' })).toMatchObject({ ok: true, payload: { id: '[REDACTED_CREDIT_CARD]', file_id: '[REDACTED_CREDIT_CARD]', url: '[REDACTED_CREDIT_CARD]' } });
+  });
+  it('keeps persistence redaction and deny-level checks on identifier fields', () => {
+    expect(inspectExternal({ file_id: id }, 'memory_block')).toMatchObject({ ok: true, payload: { file_id: 'aaaaaaaa-aaaa-4aaa-[REDACTED_CREDIT_CARD]' } });
+    expect(inspectExternal({ url: 'https://local.invalid/?token=1111111111111111' })).toMatchObject({ ok: false, check: 'canary_token' });
+    expect(inspectExternal({ file_id: 'sk-proj-abcdefghijklmnopqrstuvwx' })).toMatchObject({ ok: false, check: 'canary_token' });
+  });
+});
