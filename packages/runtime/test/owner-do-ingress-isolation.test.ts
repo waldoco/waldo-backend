@@ -705,7 +705,7 @@ it('an ordinary claimed turn recovered after restart gets exactly one uncertain-
     const recovered = (await inbox.records()).find(r => r.id === row.id)!;
     expect(recovered.state).toBe('quarantined'); expect(recovered.reason).toBe('recovered_uncertain'); expect(recovered.body).toBe('');
     const internal = instance as unknown as { setup(): { finalOutbox: import('../src/channels/telegram-final-outbox').TelegramFinalOutbox }; notifyUncertainSteering(): Promise<void> };
-    const notices = () => internal.setup().finalOutbox.records().filter(r => r.payload.chat_id === subject && /not sure|uncertain|restart/i.test(r.payload.text));
+    const notices = () => internal.setup().finalOutbox.records().filter(r => r.id.includes(row.id));
     await internal.notifyUncertainSteering(); await internal.notifyUncertainSteering();
     expect(notices()).toHaveLength(1);
     // never replayed: the row stays quarantined and unclaimable
