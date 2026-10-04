@@ -879,7 +879,7 @@ describe('hook registry', () => {
     });
   });
 
-  describe('open public browsing mode (egress sentinel "*", browse_page only)', () => {
+  describe('open public browsing mode (egress sentinel "*", browse_page and browse_act)', () => {
     const run = (tool: string, args: unknown, egressAllowlist: readonly string[] | undefined) => runHooks(
       'PreToolUse', { event: 'PreToolUse', tool, args } as never, runtimeCtx({ egressAllowlist }), { registry: [egressAllowlistHook] },
     );
@@ -892,13 +892,19 @@ describe('hook registry', () => {
         await expect(run('browse_page', { url, instruction: 'x' }, ['*'])).rejects.toMatchObject({ hook: 'egress_allowlist_check', code: 'forbidden' });
       }
     });
-    it('"*" does not open browse_act or execute_code', async () => {
-      await expect(run('browse_act', { url: 'https://news.example.org/', task: 'x' }, ['*'])).rejects.toMatchObject({ code: 'forbidden' });
+    it('"*" opens browse_act to public hosts, keeps the hard blocks, and still does not open execute_code', async () => {
+      await expect(run('browse_act', { url: 'https://news.example.org/', task: 'x' }, ['*'])).resolves.toMatchObject({ tool: 'browse_act' });
+      for (const url of ['http://169.254.169.254/latest', 'http://127.0.0.1/', 'http://localhost/']) {
+        await expect(run('browse_act', { url, task: 'x' }, ['*'])).rejects.toMatchObject({ hook: 'egress_allowlist_check', code: 'forbidden' });
+      }
+      await expect(run('browse_act', { url: 'https://news.example.org/', task: 'x' }, undefined)).rejects.toMatchObject({ code: 'forbidden' });
+      await expect(run('browse_act', { url: 'https://evil.example/', task: 'x' }, ['*', '-evil.example'])).rejects.toMatchObject({ code: 'forbidden' });
+      await expect(run('browse_act', { url: 'https://news.example.org/', task: 'x' }, ['en.wikipedia.org'])).rejects.toMatchObject({ code: 'forbidden' });
       await expect(run('execute_code', { allow_hosts: ['news.example.org'] }, ['*'])).rejects.toMatchObject({ code: 'forbidden' });
     });
-    it('browse_act with a list plus "*" allows the listed host and still denies others', async () => {
+    it('browse_act with a list plus "*" allows the listed host and any other public host', async () => {
     await expect(run('browse_act', { url: 'https://en.wikipedia.org/wiki/X', task: 'x' }, ['en.wikipedia.org', '*'])).resolves.toMatchObject({ tool: 'browse_act' });
-    await expect(run('browse_act', { url: 'https://news.example.org/', task: 'x' }, ['en.wikipedia.org', '*'])).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(run('browse_act', { url: 'https://news.example.org/', task: 'x' }, ['en.wikipedia.org', '*'])).resolves.toMatchObject({ tool: 'browse_act' });
   });
   it('blocks internal-network names that need no DNS to recognise: dotless hosts and .local/.internal/.svc/.localdomain', async () => {
     for (const url of ['http://intranet/', 'http://printer.local/', 'http://db.internal/', 'http://api.default.svc/', 'http://host.localdomain/', 'http://router/admin']) {
