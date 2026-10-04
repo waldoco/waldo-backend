@@ -60,3 +60,15 @@ it('active and promoted owner facts are ordered newest-first together', async ()
     expect(block.indexOf('Order 1')).toBeLessThan(block.indexOf('Order 0'));
   });
 });
+
+it('one oversized recalled claim does not hide a smaller one that fits; the omission count is exact', async () => {
+  await withStore('recall-skip-oversized', (store) => {
+    store.add({ kind: 'fact', text: 'zebra note small', source: 'stated', evidence: 'owner, tg-1: "short"', origin: 'owner', source_ref: 'owner, tg-1' }, AT);
+    store.add({ kind: 'fact', text: 'zebra note huge', source: 'stated', evidence: `owner, tg-2: "${'x'.repeat(50_000)}"`, origin: 'owner', source_ref: 'owner, tg-2' }, AT);
+    const prompt = turnMemoryPrompt(store, 'zebra note', 4_000);
+    expect(prompt.slice(prompt.indexOf('<relevant_claims>')), 'the small claim that fits is shown').toContain('zebra note small');
+    expect(prompt).not.toContain('x'.repeat(100));
+    expect(prompt).toContain('(1 matching claims are too long to show here');
+    expect(prompt.length).toBeLessThanOrEqual(4_000);
+  });
+});

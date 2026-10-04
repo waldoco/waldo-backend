@@ -691,7 +691,7 @@ export const turnMemoryPrompt = (store: ClaimStore, question: string, maxChars =
   let room = Math.max(0, maxChars - fixed - 360);
   const keptHits: string[] = [];
   for (const line of hitLines) {
-    if (room - line.length - 1 < 0) break;
+    if (room - line.length - 1 < 0) continue;
     keptHits.push(line); room -= line.length + 1;
   }
   const hitsOmitted = hitLines.length - keptHits.length;
