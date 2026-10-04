@@ -406,3 +406,38 @@ it('a fresh owner with Google connected gets the read defaults on first retain, 
   expect(taskSourceAllowed(snapshot, { name: 'search_communication', requires_connector: true })).toBe(true);
   expect(narrowedFlag(sql)).toBe(0);
 }));
+
+it('a classifier miss (uncertain or malformed) never turns the default read sources off, but never widens past them', () => run('task-custody-uncertain-defaults', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, undefined, ['web', 'mail']);
+  for (const raw of [decision('uncertain'), 'not json']) {
+    const snapshot = (await cap.classify(raw)).snapshot;
+    expect(snapshot.ready).toBe(false);
+    expect(taskSourceAllowed(snapshot, { name: 'web_search' }), 'public web stays on').toBe(true);
+    expect(taskSourceAllowed(snapshot, { name: 'search_communication', requires_connector: true })).toBe(true);
+    expect(taskSourceAllowed(snapshot, { name: 'workspace_read' }), 'workspace is not in this default list').toBe(false);
+  }
+  const unreadyDefaults = createTaskSourceScope(sql, 'owner-two', scope, async () => {}, undefined, ['workspace', 'web']);
+  const miss = (await unreadyDefaults.classify(decision('uncertain'))).snapshot;
+  expect(taskSourceAllowed(miss, { name: 'workspace_list' }), 'reads work on a miss').toBe(true);
+  expect(taskSourceAllowed(miss, { name: 'workspace_write', mutates_state: true }, { expected_revision: 1, edits: [] }), 'existing-file edit is not admitted on a miss').toBe(false);
+  await cap.classify(decision('restrict'));
+  const narrowed = (await cap.classify(decision('uncertain'))).snapshot;
+  expect(taskSourceAllowed(narrowed, { name: 'web_search' }), 'explicit narrowing wins over defaults').toBe(false);
+}));
+
+it('assertSame lets an unready default-read admission through, and still rejects when the task or readiness changed', () => run('task-assertsame-unready', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, undefined, ['web', 'mail']);
+  const unready = (await cap.classify(decision('uncertain'))).snapshot;
+  expect(unready.ready).toBe(false);
+  await expect(cap.assertSame(unready)).resolves.toBeUndefined();
+  await cap.classify(decision('retain'));
+  await expect(cap.assertSame(unready), 'readiness changed since admission').rejects.toThrow('Task source scope changed');
+}));
+
+it('a pending owner confirmation turns the unready defaults off: nothing is read around the card', () => run('task-pending-no-defaults', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, { inputRef: 'r1', text: 'read my mail' }, ['web', 'mail']);
+  const proposed = (await cap.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'read my mail' }), 'r1', 'read my mail')).snapshot;
+  expect(sql.exec<{ pending_json: string | null }>('SELECT pending_json FROM owner_task_source_scope').one().pending_json).not.toBeNull();
+  expect(taskSourceAllowed(proposed, { name: 'web_search' })).toBe(false);
+  expect(taskSourceAllowed(proposed, { name: 'search_communication', requires_connector: true })).toBe(false);
+}));
