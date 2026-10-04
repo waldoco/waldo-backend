@@ -2,6 +2,7 @@ import {describe,it,expect,vi} from 'vitest';
 import {env} from 'cloudflare:workers';
 import {runInDurableObject} from 'cloudflare:test';
 import {consoleAccess,type ConsoleView} from '../src/channels/console';
+import {loopBook} from '../src/channels/loops';
 import {handleConsole} from '../src/channels/console-signin';
 import type {ConsoleAuth} from '../src/identity/console-auth';
 import {CONTROLS_PATH} from '../src/channels/dashboard-controls';
@@ -15,6 +16,22 @@ type Read={csrf:string;revision:string;data:Record<string,unknown>};
 const controls=async(stub:DurableObjectStub,token:string,view:string):Promise<Read>=>{const response=await stub.fetch(root+CONTROLS_PATH+'?view='+view,{headers:apiHeaders(token)});expect(response.status).toBe(200);return response.json();};
 const postAction=(stub:DurableObjectStub,token:string,read:Read,fields:Record<string,string>)=>stub.fetch(root+CONTROL_ACTION_PATH,{method:'POST',headers:{...apiHeaders(token),'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf:read.csrf,revision:read.revision,...fields})});
 describe('dashboard control owner route and real executors',()=>{
+ it('persists source opt-in only for the authenticated owner and defaults other owners off',async()=>{
+  const a=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('source-settings-A'));
+  const b=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('source-settings-B'));
+  const token=await seed(a),other=await seed(b);
+  const before=await controls(a,token,'day');
+  expect(before.data.proactivity).toMatchObject({source_proactivity:false});
+  const fields={view:'day',action:'proactivity.set',quiet_start:'',quiet_end:'',volume:'normal',source_proactivity:'true',request_id:'source-opt-in-01'};
+  expect((await postAction(b,token,before,fields)).status).toBe(401);
+  expect((await postAction(a,token,before,fields)).status).toBe(200);
+  const after=await controls(a,token,'day');
+  expect(after.data.proactivity).toMatchObject({source_proactivity:true});
+  expect((await controls(b,other,'day')).data.proactivity).toMatchObject({source_proactivity:false});
+  await runInDurableObject(a,(_instance,state)=>expect(loopBook(state.storage.sql,{newId:()=>'',now:Date.now}).proactivity().source_proactivity).toBe(true));
+  expect((await postAction(a,token,after,{...fields,source_proactivity:'false',request_id:'source-opt-out-01'})).status).toBe(200);
+  expect((await controls(a,token,'day')).data.proactivity).toMatchObject({source_proactivity:false});
+ });
  it('keeps unsigned and cross-owner sessions out of reads and writes',async()=>{
   const a=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('control-owner-a')),b=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('control-owner-b'));
   const token=await runInDurableObject(a,(_i,state)=>consoleAccess(state.storage).grant());

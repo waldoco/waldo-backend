@@ -107,13 +107,13 @@ export const telegramLinked = (identity: Readonly<{ get: <T>(key: string) => T |
 export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction | null => {
   const action = CONSOLE_ACTIONS.find((name) => name === form.get('action'));
   if (!action || form.get('csrf') !== csrf) return null;
-  const value = action === 'proactivity.set' ? ['quiet_start', 'quiet_end', 'volume'].map((key) => String(form.get(key) ?? '').trim()).join('|') : String(form.get('value') ?? '').trim();
+  const value = action === 'proactivity.set' ? ['quiet_start', 'quiet_end', 'volume', 'source_proactivity'].map((key) => String(form.get(key) ?? '').trim()).join('|') : String(form.get('value') ?? '').trim();
   return { action, id: String(form.get('id') ?? ''), value };
 };
 
 export const NOTICES: Readonly<Record<string, string>> = {
   'spot.dismiss': 'Spot dismissed. Waldo will stop using it.',
-  'proactivity.set': 'Saved. Waldo will reach out on your new settings.',
+  'proactivity.set': 'Settings saved. Source follow-ups require your opt-in and availability.',
   'invite.create': 'Invite saved. Send the code to the intended person yourself; Waldo did not email anyone.',
   'invite.member': 'Invite saved. Send the code yourself; Waldo did not email anyone.',
   'invite.revoke': 'Invite revoked.',
@@ -342,7 +342,7 @@ const VOLUMES: readonly (readonly [string, string])[] = [['low', 'Low: only the 
 
 const timezone = (view: ConsoleView) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="timezone.set"><label>Time zone <input name="value" id="tz" value="${esc(view.timezone)}" autocomplete="off"></label><button class="btn quiet" type="button" onclick="document.getElementById('tz').value=Intl.DateTimeFormat().resolvedOptions().timeZone">Use this device</button><button class="btn quiet">Save</button></form><div class="sub">Waldo plans your day and fires reminders in this time zone. Change it when you travel.</div>`;
 
-const proactivity = (view: ConsoleView) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="proactivity.set"><label>Quiet from <input type="time" name="quiet_start" value="${esc(view.proactivity.quiet_start ?? '')}"></label><label>until <input type="time" name="quiet_end" value="${esc(view.proactivity.quiet_end ?? '')}"></label><select name="volume">${VOLUMES.map(([value, label]) => `<option value="${value}"${view.proactivity.volume === value ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select><button class="btn quiet">Save</button></form><div class="sub">During quiet hours Waldo holds cards, updates and event briefs. Reminders you set still fire. Leave both times empty for no quiet hours.</div>`;
+const proactivity = (view: ConsoleView) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="proactivity.set"><label>Quiet from <input type="time" name="quiet_start" value="${esc(view.proactivity.quiet_start ?? '')}"></label><label>until <input type="time" name="quiet_end" value="${esc(view.proactivity.quiet_end ?? '')}"></label><select name="volume">${VOLUMES.map(([value, label]) => `<option value="${value}"${view.proactivity.volume === value ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select><label><input type="checkbox" name="source_proactivity" value="true"${view.proactivity.source_proactivity === true ? ' checked' : ''}>Mail follow-ups and meeting prep</label><button class="btn quiet">Save</button></form><div class="sub">Source follow-ups are off by default and require availability. During quiet hours Waldo holds cards, updates and event briefs. Reminders you set still fire. Leave both times empty for no quiet hours.</div>`;
 
 const size = (bytes: number | null) => bytes === null ? '' : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 const KIND_LABEL: Readonly<Record<string, string>> = { photo: 'Photo', document: 'Document', voice: 'Voice note', audio: 'Audio' };

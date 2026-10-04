@@ -2,11 +2,14 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
+import { Scheduler } from '../src/scheduler/multiplexer';
+import { productionDeps } from '../src/seams/deps';
+import { reminderBook } from '../src/channels/reminders';
 import { loopBook } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { claimStore } from '../src/memory/claims';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
-const fixture = vi.hoisted(() => ({ mail: false, loopId: '', sent: [] as string[], prompts: [] as string[] }));
+const fixture = vi.hoisted(() => ({ mail: false, loopId: '', sent: [] as string[], prompts: [] as string[], mutate: null as (() => void) | null }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: () => ({ changedEvents: async () => [], newMail: async () => fixture.mail ? [{ id: 'mail-message-1', thread_id: 'mail-thread-1', from: 'Pat <pat@example.test>', subject: 'Review by 10 today', snippet: 'Please review the deck by 10 UTC', at: '2026-10-03T07:00:00Z' }] : [], events: async () => [] }) };
@@ -20,22 +23,23 @@ vi.mock('../src/channels/telegram-turn', async load => {
   const gateway: LLMGatewayAdapter = { async complete(request) {
     const content = request.request.messages.at(-1)?.content ?? '';
     fixture.prompts.push(content);
+    if (content.startsWith('[Update check') && fixture.mutate) { const change = fixture.mutate; fixture.mutate = null; change(); }
     const writer = request.request.response_format !== undefined;
     const firstRound = !request.request.tool_turns?.length;
-    const calls = !writer && firstRound && content.includes('[Update check') ? [{ call_id: 'open-source', name: 'open_loop', arguments: JSON.stringify({ title: 'Check deck review', due: '2026-10-03T10:00', source_ref: 'mail:mail-thread-1' }) }]
+    const calls = !writer && firstRound && content.startsWith('[Update check') ? [{ call_id: 'open-source', name: 'open_loop', arguments: JSON.stringify({ title: 'Check deck review', due: '2026-10-03T10:00', source_ref: 'mail:mail-thread-1' }) }]
       : !writer && firstRound && content === 'done' ? [{ call_id: 'close-source', name: 'close_loop', arguments: JSON.stringify({ id: fixture.loopId, outcome: 'done' }) }] : [];
-    const text = request.request.response_format?.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : calls.length ? '' : writer ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : content.includes('[Mail follow-up check') ? 'Have you handled the deck review? Pat requested it by 10 UTC.' : 'SKIP';
+    const text = request.request.response_format?.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : calls.length ? '' : writer ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : content.startsWith('[Reminder due now') ? 'Call mom.' : content.startsWith('[Mail follow-up check') ? 'Have you handled the deck review? Pat requested it by 10 UTC.' : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, ...(calls.length ? { tool_calls: calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
 const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
-it.each(['normal', 'forget-coverage'])('actual default owner mail followup: %s', async mode => {
+it.each(['normal', 'forget-coverage', 'missing-setting', 'owner-B-disabled', 'global-off', 'disable-during-model'])('actual default owner mail followup: %s', async mode => {
   await runInDurableObject(env.TRACER_DO.get(env.TRACER_DO.idFromName(`mail-follow-up-owner-${mode}`)), async (_instance, state) => {
     const originalNow = Date.now;
     let now = Date.parse('2026-10-03T06:59:00Z');
     Date.now = () => now;
-    fixture.mail = false; fixture.loopId = ''; fixture.sent = []; fixture.prompts = [];
+    fixture.mail = false; fixture.loopId = ''; fixture.sent = []; fixture.prompts = []; fixture.mutate = null;
     const config = { ...env, MAIL_SOURCE_FOLLOWUPS: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
     let owner = new TelegramOwnerDO(state, config);
     state.storage.kv.put('do_name', 'synthetic-mail-owner'); state.storage.kv.put('telegram_subject', '7');
@@ -49,13 +53,21 @@ it.each(['normal', 'forget-coverage'])('actual default owner mail followup: %s',
     try {
       await incoming('/fire fetch');
       const loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'test-only' });
-      loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'normal' });
+      loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'normal', ...(mode === 'missing-setting' ? {} : { source_proactivity: mode !== 'owner-B-disabled' }) });
+      if (mode === 'global-off') config.MAIL_SOURCE_FOLLOWUPS = '0';
       fixture.mail = true; now += 61_000;
       await incoming('/fire fetch');
       expect(loops.list()).toEqual([]);
       fixture.mail = false; now = Date.parse('2026-10-03T09:00:00Z');
       dayPlanBook(state.storage.sql).sent('2026-10-03', 'card:brief');
+      if (mode === 'disable-during-model') fixture.mutate = () => loops.setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', source_proactivity: false });
       await incoming('/fire fetch');
+      if (['missing-setting', 'owner-B-disabled', 'global-off', 'disable-during-model'].includes(mode)) {
+        expect(loops.list()).toEqual([]);
+        expect((state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? []).filter(r => r.mailFollowup)).toEqual([]);
+        expect(fixture.sent.filter(text => text.startsWith('Have you handled'))).toEqual([]);
+        return;
+      }
       const open = loops.list()[0]!; fixture.loopId = open.id;
       expect(open.source_ref).toBe('mail:mail-thread-1');
       expect(fixture.prompts.some(text => text.includes('[source_ref mail:mail-thread-1]'))).toBe(true);
@@ -63,11 +75,16 @@ it.each(['normal', 'forget-coverage'])('actual default owner mail followup: %s',
       await incoming('/fire fetch');
       const queued = state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!.filter(r => r.mailFollowup);
       expect(queued).toHaveLength(1); expect(queued[0]?.status).toBe('pending');
-      loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'low' });
-      now += 1000; await owner.alarm();
+      loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'normal', source_proactivity: false });
+      owner = new TelegramOwnerDO(state, config);
+      now += 1000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm();
+      expect(fixture.sent.filter(text => text.startsWith('Have you handled'))).toHaveLength(0);
+      expect(state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!.find(r => r.mailFollowup)).toMatchObject({ status: 'pending', attempts: 0 });
+      loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'low', source_proactivity: true });
+      now += 1000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm();
       expect(fixture.sent.filter(text => text.startsWith('Have you handled'))).toHaveLength(0);
       expect(state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!.find(r => r.mailFollowup)?.status).toBe('pending');
-      loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'normal' });
+      loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'normal', source_proactivity: true });
       config.MAIL_SOURCE_FOLLOWUPS = '0';
       owner = new TelegramOwnerDO(state, config);
       now += 600_000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm();
@@ -99,6 +116,30 @@ it.each(['normal', 'forget-coverage'])('actual default owner mail followup: %s',
       expect(loops.closed()[0]?.status).toBe('done');
       now += 600_000; await incoming('/fire fetch');
       expect(fixture.sent.filter(text => text.startsWith('Have you handled'))).toHaveLength(1);
+    } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
+  });
+});
+
+it.each(['missing-setting', 'owner-off-low-quiet'])('explicit owner reminder still delivers with source gates off: %s', async mode => {
+  await runInDurableObject(env.TRACER_DO.get(env.TRACER_DO.idFromName(`explicit-reminder-${mode}`)), async (_instance, state) => {
+    const originalNow = Date.now;
+    let now = Date.parse('2026-10-03T09:00:00Z'); Date.now = () => now;
+    fixture.mail = false; fixture.sent = []; fixture.prompts = []; fixture.mutate = null;
+    const owner = new TelegramOwnerDO(state, { ...env, MAIL_SOURCE_FOLLOWUPS: '0', CALENDAR_GROUNDED_PREP: '0', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture' });
+    state.storage.kv.put('do_name', `explicit-reminder-${mode}`); state.storage.kv.put('telegram_subject', '7');
+    try {
+      await owner.alarm();
+      state.storage.sql.exec('DELETE FROM schedule');
+      const loops = loopBook(state.storage.sql, { now: Date.now, newId: () => 'fixture' });
+      if (mode === 'owner-off-low-quiet') loops.setProactivity({ quiet_start: '08:00', quiet_end: '12:00', volume: 'low', source_proactivity: false });
+      const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+      const reminders = reminderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date(now) }, () => 'explicit');
+      await reminders.set({ note: 'call mom', at: '2026-10-03T09:01', repeat: 'none' });
+      now += 60000; state.storage.kv.put('owner_alarm_last_v1', 1); await owner.alarm();
+      expect(state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)?.find(r => r.reminder)).toMatchObject({ status: 'pending', payload: { text: 'Call mom.' } });
+      now += 1000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm();
+      expect(fixture.sent.filter(text => text === 'Call mom.')).toHaveLength(1);
+      expect(state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)?.find(r => r.reminder)?.status).toBe('delivered');
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
 });

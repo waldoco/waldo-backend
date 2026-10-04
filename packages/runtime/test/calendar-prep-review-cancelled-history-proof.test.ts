@@ -46,6 +46,7 @@ it('review proof: cancelled prep is still retained as Waldo conversation and nig
     fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: '2026-10-03T10:30:00+05:30', end: '2026-10-03T11:00:00+05:30', all_day: false, description: 'Bring the onboarding mocks.', etag: 'r1' };
     fixture.mutate = () => { fixture.event = { ...fixture.event!, status: 'cancelled' }; };
     const config = { ...env, CALENDAR_GROUNDED_PREP: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
+    loopBook(state.storage.sql, { newId: () => 'fixture', now: Date.now }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', source_proactivity: true });
     const owner = new TelegramOwnerDO(state, config);
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
@@ -75,6 +76,7 @@ it('review proof: changed source retry does not reuse cached stale decision', as
     fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: '2026-10-03T10:30:00+05:30', end: '2026-10-03T11:00:00+05:30', all_day: false, description: 'Bring the onboarding mocks.', etag: 'r1' };
     fixture.mutate = () => { fixture.event = { ...fixture.event!, etag: 'r2', description: 'Bring revised diagrams; onboarding mocks are obsolete.' }; };
     const config = { ...env, CALENDAR_GROUNDED_PREP: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
+    loopBook(state.storage.sql, { newId: () => 'fixture', now: Date.now }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', source_proactivity: true });
     const owner = new TelegramOwnerDO(state, config);
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
@@ -105,6 +107,7 @@ it('review proof: literal forget removes source identifiers from every retained 
     fixture.event = { id: 'secretmeeting123', title: 'Design review', status: 'confirmed', start: '2026-10-03T10:30:00+05:30', end: '2026-10-03T11:00:00+05:30', all_day: false, description: 'Bring the onboarding mocks.', etag: 'r1' };
     fixture.mutate = null;
     const config = { ...env, CALENDAR_GROUNDED_PREP: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
+    loopBook(state.storage.sql, { newId: () => 'fixture', now: Date.now }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', source_proactivity: true });
     const owner = new TelegramOwnerDO(state, config);
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');

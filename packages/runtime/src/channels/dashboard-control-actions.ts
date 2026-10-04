@@ -29,7 +29,7 @@ function eligible(action:ConsoleAction,view:ConsoleView):boolean {
 // the current read revision and existing executor eligibility remain independent gates.
 // A durable uncertain receipt prevents a duplicate request from re-running an effect.
 export async function controlAction(form:FormData,deps:ControlActionDeps):Promise<Response>{
- const fields=['csrf','action','id','value','quiet_start','quiet_end','volume','view','revision','request_id'];
+ const fields=['csrf','action','id','value','quiet_start','quiet_end','volume','source_proactivity','view','revision','request_id'];
  if([...form.keys()].some(k=>!fields.includes(k)||form.getAll(k).length!==1)||[...form.values()].some(v=>typeof v!=='string'||v.length>4096))return reply({error:'invalid_action'},400);
  const action=parseConsoleAction(form,deps.csrf),view=String(form.get('view')??''),requestId=String(form.get('request_id')??'');
  if(!action||!allowed[view]?.includes(action.action))return reply({error:'invalid_action'},403);

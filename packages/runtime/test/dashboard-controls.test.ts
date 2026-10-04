@@ -22,7 +22,7 @@ describe('narrow controls read projection', () => {
     expect(result.data.cards[2]).toMatchObject({ time: null, sent: false, pin: '22:15' });
     expect(JSON.stringify(result)).not.toContain('private-extension');
     expect(JSON.stringify(result)).not.toContain('blood-panel');
-    expect(result.data.proactivity).toEqual({ quiet_start: '23:00', quiet_end: '07:30', volume: 'normal' });
+    expect(result.data.proactivity).toEqual({ quiet_start: '23:00', quiet_end: '07:30', volume: 'normal', source_proactivity: false });
   });
 
   it('keeps granted accounts distinct from reconnect state without refresh errors or secrets', () => {

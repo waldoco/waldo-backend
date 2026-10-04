@@ -36,8 +36,23 @@ describe('proactivity', () => {
       book.setProactivity({ quiet_start: '23:00', quiet_end: '07:30', volume: 'low' });
       expect(proactivityLine(book.proactivity())).toBe('Proactivity: volume low; quiet hours 23:00-07:30');
       book.setProactivity({ quiet_start: '23:00', quiet_end: null, volume: 'high' });
-      expect(book.proactivity()).toEqual({ quiet_start: null, quiet_end: null, volume: 'high' });
+      expect(book.proactivity()).toEqual({ quiet_start: null, quiet_end: null, volume: 'high', source_proactivity: false });
     });
+  });
+
+  it('defaults source opt-in off, isolates owners and preserves it on quiet/volume edits', async () => {
+    await withSql(sql => {
+      const book = loopBook(sql, { newId: () => 'x', now: () => 0 });
+      expect(book.proactivity().source_proactivity).toBe(false);
+      book.setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', source_proactivity: true });
+      book.setProactivity({ quiet_start: null, quiet_end: null, volume: 'low' });
+      expect(loopBook(sql, { newId: () => 'y', now: () => 0 }).proactivity().source_proactivity).toBe(true);
+      book.setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', source_proactivity: false });
+      expect(book.proactivity().source_proactivity).toBe(false);
+      sql.exec("UPDATE proactivity SET settings = ? WHERE id = 1", JSON.stringify({ volume: 'normal', source_proactivity: 'true' }));
+      expect(book.proactivity().source_proactivity).toBe(false);
+    });
+    await withSql(sql => expect(loopBook(sql, { newId: () => 'x', now: () => 0 }).proactivity().source_proactivity).toBe(false));
   });
 
   it('knows quiet hours across midnight in the owner timezone', () => {
