@@ -5,7 +5,7 @@ type Witness = Readonly<{ taskRef: string; proposalId: string; scopeDigest: stri
 // Only authenticated dispatcher code captures this witness. Approval execution
 // reads current durable scope, rather than retaining a completed turn's closure.
 export function browserTaskSourceCustody(sql: SqlStorage, kv: Pick<DurableObjectStorage['kv'], 'get' | 'put'>) {
-  const matches = (expected: TaskSourceSnapshot, current: TaskSourceSnapshot) => current.ready && current.sources.includes('browser')
+  const matches = (expected: TaskSourceSnapshot, current: TaskSourceSnapshot) => current.ready && (current.sources.includes('browser') || current.sources.includes('web'))
     && current.taskId === expected.taskId && current.revision === expected.revision;
   return {
     capture(payload: BrowserSubmitProposal, ownerKey: string) {
