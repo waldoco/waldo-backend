@@ -1,3 +1,4 @@
+import { validId } from '@waldo/workspace';
 import {
   DERIVED_SCORE_PATTERNS,
   derivedHealthDestinationViewSchema,
@@ -744,6 +745,15 @@ function redactPiiText(
   taint: SourceTaint,
   counts: Map<RedactionKind, number>,
 ): string {
+  // Model/owner-bound structured references must keep their exact bytes for later
+  // calls. Validate the value as well as the field name; free text and persistence
+  // still redact card numbers. Canary, secret and injection checks scan all fields.
+  if (key !== undefined && MODEL_AND_OWNER_DESTINATIONS.has(destination)) {
+    if ((key === 'id' || key.endsWith('_id')) && validId(text)) return text;
+    if (key === 'url' || key.endsWith('_url')) {
+      try { new URL(text); return text; } catch { /* Not a URL: redact it as text. */ }
+    }
+  }
   let output = redactEncodedPii(text, destination, taint, counts);
   output = replaceAndCount(
     output,
@@ -810,11 +820,26 @@ function redactPii(
   payload: JsonValue,
   destination: SanitiseDestination,
   taint: SourceTaint,
+  canaryTokens: SanitiseInput['canary_tokens'],
 ): { invalid: boolean; payload: JsonValue; redactions: Redaction[] } {
   const counts = new Map<RedactionKind, number>();
-  const transformed = transformJsonStrings(payload, (text, key) =>
-    redactPiiText(text, key, destination, taint, counts),
-  );
+  const transformed = transformJsonStrings(payload, (text, key) => {
+    // Provider tool turns encode their structured arguments/results as JSON strings.
+    // Preserve the same field semantics there instead of treating the receipt as prose.
+    if (MODEL_AND_OWNER_DESTINATIONS.has(destination) && (key === 'output' || key === 'arguments')) {
+      let parsed: JsonValue | undefined;
+      try { parsed = JSON.parse(text); } catch { /* Plain output keeps free-text redaction. */ }
+      if (parsed !== null && typeof parsed === 'object'
+          && prepareInput({ payload: parsed, destination, source_taint: taint, canary_tokens: canaryTokens })) {
+        const structured = transformJsonStrings(parsed, (value, field) => redactPiiText(value, field, destination, taint, counts));
+        if (!structured.invalid) {
+          const rewritten = JSON.stringify(structured.payload);
+          return rewritten === JSON.stringify(parsed) ? text : rewritten;
+        }
+      }
+    }
+    return redactPiiText(text, key, destination, taint, counts);
+  });
   return {
     ...transformed,
     redactions: REDACTION_ORDER.flatMap((kind) => {
@@ -1004,7 +1029,7 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   if (health.matched) return deny('health_value', 'health_value_leak');
 
   // The offload store persists, so it never gets the model/owner readable seam: redact as memory_block.
-  const pii = redactPii(input.payload, 'memory_block', input.source_taint);
+  const pii = redactPii(input.payload, 'memory_block', input.source_taint, input.canary_tokens);
   if (pii.invalid) return deny('size_cap', 'invalid_payload');
 
   const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
@@ -1061,7 +1086,7 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
   if (health.invalid) return deny('size_cap', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
 
-  const pii = redactPii(input.payload, input.destination, input.source_taint);
+  const pii = redactPii(input.payload, input.destination, input.source_taint, input.canary_tokens);
   if (pii.invalid) return deny('size_cap', 'invalid_payload');
 
   const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
