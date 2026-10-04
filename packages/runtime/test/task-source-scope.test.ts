@@ -307,9 +307,9 @@ const owned = (sql: SqlStorage, scope: RunEffectScope, text = 'plan my trip', re
 const ready = (sql: SqlStorage, sources: readonly string[]) => sql.exec('UPDATE owner_task_source_scope SET sources_json = ?, ready = 1 WHERE owner_key = ?', JSON.stringify(sources), 'owner-one');
 const narrowedFlag = (sql: SqlStorage) => sql.exec<{ narrowed: number }>('SELECT narrowed FROM owner_task_source_scope').one().narrowed;
 
-it('a new task starts with the default read sources and needs no card for them; later retains keep them', () => run('task-defaults-new', async (sql, scope) => {
+it('a new task that lists the default read sources needs no card for them and is not narrowed; later retains keep them', () => run('task-defaults-new', async (sql, scope) => {
   const cap = owned(sql, scope);
-  const out = await cap.classify(JSON.stringify({ decision: 'new', sources: ['workspace', 'web', 'mail'], evidence: 'plan my trip' }), 'r1', 'plan my trip');
+  const out = await cap.classify(JSON.stringify({ decision: 'new', sources: ['workspace', 'web', 'mail', 'calendar'], evidence: 'plan my trip' }), 'r1', 'plan my trip');
   expect(out.proposal, 'a default family needs no confirmation card').toBeUndefined();
   expect(out.snapshot.sources).toEqual(expect.arrayContaining(['workspace', 'web', 'mail', 'calendar']));
   expect(narrowedFlag(sql)).toBe(0);

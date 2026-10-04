@@ -108,10 +108,10 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
         // Semantic planning within existing authority, never a connector grant/ACL mutation.
         // CAS clears obsolete cards; the new task boundary prevents prior-task referent reuse.
         const closing = decision.decision === 'close';
-        // A new task starts with the defaults; an explicit 'change' list that leaves one out is the owner narrowing.
-        const listed = closing ? [] : decision.decision === 'new' ? families([...new Set([...decision.sources, ...defaultSources])]) : decision.sources;
+        // The owner's explicit list is exact; leaving a default out is the owner narrowing. A closed task has no narrowing.
+        const listed = closing ? [] : decision.sources;
         const transitioned = await commit(previous, listed, !closing,
-          decision.decision === 'change' ? previous.startRef : inputRef!, decision.decision !== 'change', decision.decision === 'change' && narrows(listed));
+          decision.decision === 'change' ? previous.startRef : inputRef!, decision.decision !== 'change', !closing && narrows(listed));
         return { snapshot: transitioned, outcome: 'owner_transition' };
       }
       // Repeating a confirmed machine-family request cannot grant anything new.
