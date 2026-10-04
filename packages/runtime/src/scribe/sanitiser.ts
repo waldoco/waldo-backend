@@ -725,8 +725,15 @@ const OWNER_READABLE_DESTINATIONS: ReadonlySet<SanitiseDestination> = new Set([
 ]);
 const OWNER_SKIPPABLE_KINDS: ReadonlySet<RedactionKind> = new Set(['email', 'phone', 'address']);
 
+// Owner direction 2026-10-04: the model and the owner's own reply see the owner's connected data
+// (mail, calendar, files) unredacted whatever its taint. Why this is safe: these destinations stay
+// inside this owner's own context; persistence and outbound destinations keep full redaction.
+const MODEL_AND_OWNER_DESTINATIONS: ReadonlySet<SanitiseDestination> = new Set(['system_prompt', 'internal_context', 'owner_reply']);
+
 function ownerReadable(destination: SanitiseDestination, taint: SourceTaint, kind: RedactionKind): boolean {
-  return taint === null && OWNER_READABLE_DESTINATIONS.has(destination) && OWNER_SKIPPABLE_KINDS.has(kind);
+  if (!OWNER_SKIPPABLE_KINDS.has(kind)) return false;
+  if (MODEL_AND_OWNER_DESTINATIONS.has(destination)) return true;
+  return taint === null && OWNER_READABLE_DESTINATIONS.has(destination);
 }
 
 function redactPiiText(

@@ -834,18 +834,15 @@ describe('Scribe sanitiser', () => {
     ).toEqual({
       ok: true,
       payload: {
-        email: '[REDACTED_EMAIL]',
-        contact: ['[REDACTED_PHONE]', '[REDACTED_CREDIT_CARD]'],
-        ip: '[REDACTED_ADDRESS]',
+        email: 'alice@example.com',
+        contact: ['+1 (415) 555-0123', '[REDACTED_CREDIT_CARD]'],
+        ip: '192.168.1.20',
         attendee: '[REDACTED_ATTENDEE_NAME]',
-        address: '[REDACTED_ADDRESS]',
+        address: '123 Market Street',
       },
       source_taint: 'external',
       redactions: [
-        { kind: 'email', count: 1 },
-        { kind: 'phone', count: 1 },
         { kind: 'attendee_name', count: 1 },
-        { kind: 'address', count: 2 },
         { kind: 'credit_card', count: 1 },
       ],
     });
@@ -948,14 +945,14 @@ describe('Scribe sanitiser', () => {
   });
 
   it('redacts PII in object keys and rejects a redaction-key collision', () => {
-    expect(inspectExternal({ 'alice@example.com': 'owner' })).toEqual({
+    expect(inspectExternal({ 'alice@example.com': 'owner' }, 'send_message')).toEqual({
       ok: true,
       payload: { '[REDACTED_EMAIL]': 'owner' },
       source_taint: 'external',
       redactions: [{ kind: 'email', count: 1 }],
     });
     expect(
-      inspectExternal({ 'alice@example.com': 'owner', '[REDACTED_EMAIL]': 'existing' }),
+      inspectExternal({ 'alice@example.com': 'owner', '[REDACTED_EMAIL]': 'existing' }, 'send_message'),
     ).toEqual({ ok: false, check: 'size_cap', reason: 'invalid_payload' });
   });
 
@@ -1018,6 +1015,27 @@ describe('Scribe sanitiser', () => {
       source_taint: null,
       redactions: [{ kind: 'phone', count: 1 }],
     });
+  });
+
+  // Owner direction 2026-10-04 (relayed by main 12:59): redaction of the owner's own mail/calendar/file
+  // contact details to the model was a pain. Why the rest stays: card numbers must not reach logs or
+  // other owners; persistence/egress destinations can leak data outside this owner's context.
+  it('external-tainted owner data stays readable to the model and the owner reply: email, phone, address', () => {
+    const text = 'From alice@example.com, call +1 (415) 555-0123, at 123 Market Street, host 192.168.1.20';
+    expect(inspectExternal(text, 'system_prompt')).toMatchObject({ ok: true, payload: text, redactions: [] });
+    for (const destination of ['internal_context', 'owner_reply'] as const) {
+      expect(inspectExternal({ body: text }, destination)).toMatchObject({ ok: true, payload: { body: text }, source_taint: 'external', redactions: [] });
+    }
+    expect(inspectExternal({ address: '123 Market Street', note: 'mail alice@example.com' })).toMatchObject({ ok: true, payload: { address: '123 Market Street', note: 'mail alice@example.com' } });
+  });
+  it('external-tainted data still loses card numbers at model-bound destinations', () => {
+    expect(inspectExternal({ body: 'card 4111 1111 1111 1111 for alice@example.com' })).toMatchObject({ ok: true, payload: { body: 'card [REDACTED_CREDIT_CARD] for alice@example.com' } });
+  });
+  it('external-tainted data keeps full redaction at persistence and outbound destinations', () => {
+    for (const destination of ['memory_block', 'draft_document', 'send_message', 'draft_email'] as const) {
+      const out = inspectExternal('mail alice@example.com', destination);
+      expect(out).toMatchObject({ ok: true, payload: 'mail [REDACTED_EMAIL]' });
+    }
   });
 
   it('propagates attendee-key context through arrays', () => {

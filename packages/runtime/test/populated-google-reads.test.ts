@@ -253,12 +253,12 @@ describe('Fix targets', () => {
 
   it('ADVERSARIAL: a secret near a read boundary is redacted before storage; no chunk ever serves it raw', async () => {
     // Pad so the address lands within a few chars of the 4000-char head/read boundary.
-    const secret = 'victim@example.com';
+    const secret = '4111 1111 1111 1111';
     const events = [
       {
         ...populatedEvents[0]!,
         id: 'evt-boundary',
-        description: `${'x'.repeat(3_800)}${secret}${'y'.repeat(20_000)}`,
+        description: `${'x'.repeat(3_800)} ${secret} ${'y'.repeat(20_000)}`,
       },
     ];
     const [calendar] = googleHandlers(googleWith(events, []), desk, clock);
@@ -297,7 +297,7 @@ describe('Fix targets', () => {
     }
     expect(dispatched).toBeGreaterThan(0);
     expect(combined).not.toContain(secret);
-    expect(combined).toContain('[REDACTED_EMAIL]');
+    expect(combined).toContain('[REDACTED_CREDIT_CARD]');
     expect(data.head).not.toContain(secret);
   });
 
