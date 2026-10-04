@@ -28,6 +28,32 @@ describe('open loops', () => {
   });
 });
 
+describe('proactive follow-ups opt-in (per owner)', () => {
+  it('is off by default, set only when the owner says so, kept when later calls omit it, and shown in the ledger line', async () => {
+    await withSql(async (sql) => {
+      const book = loopBook(sql, { newId: () => 'x', now: () => at('2026-09-24T04:00:00Z') });
+      expect(book.proactivity().followups).not.toBe(true);
+      expect(proactivityLine(book.proactivity())).not.toContain('follow-ups');
+      book.setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: true });
+      expect(book.proactivity().followups).toBe(true);
+      expect(proactivityLine(book.proactivity())).toBe('Proactivity: volume normal; no quiet hours; follow-ups on');
+      book.setProactivity({ quiet_start: '23:00', quiet_end: '07:00', volume: 'low' });
+      expect(book.proactivity().followups).toBe(true);
+      book.setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false });
+      expect(book.proactivity().followups).toBe(false);
+    });
+  });
+  it('the set_proactivity tool accepts the field and rejects a non-boolean', async () => {
+    await withSql(async (sql) => {
+      const book = loopBook(sql, { newId: () => 'x', now: () => at('2026-09-24T04:00:00Z') });
+      const tool = loopHandlers(book).find((h) => h.name === 'set_proactivity')!;
+      await run(tool, { quiet_start: null, quiet_end: null, volume: 'normal', followups: true });
+      expect(book.proactivity().followups).toBe(true);
+      expect(() => tool.schema.parse({ quiet_start: null, quiet_end: null, volume: 'normal', followups: 'yes' })).toThrow();
+    });
+  });
+});
+
 describe('proactivity', () => {
   it('defaults to normal with no quiet hours and stores owner settings', async () => {
     await withSql((sql) => {
