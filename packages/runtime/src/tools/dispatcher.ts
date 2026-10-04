@@ -990,7 +990,7 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
   if (
     !hasOnlyKeys(
       value,
-      expectsExternal ? ['ok', 'error', 'code', 'source_taint', 'connect'] : ['ok', 'error', 'code', 'connect'],
+      expectsExternal || value.source_taint === null ? ['ok', 'error', 'code', 'source_taint', 'connect'] : ['ok', 'error', 'code', 'connect'],
     )
   ) {
     return null;
