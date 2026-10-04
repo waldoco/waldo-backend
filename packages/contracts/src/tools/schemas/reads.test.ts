@@ -20,6 +20,7 @@ import {
   searchEpisodesArgsSchema,
   taskStatusFilterSchema,
   browsePageArgsSchema,
+  browseActArgsSchema,
   webSearchArgsSchema,
   webSearchResultSchema,
 } from './reads';
@@ -377,4 +378,9 @@ describe('readDriveArgsSchema page_token', () => {
     expect(readDriveArgsSchema.safeParse({ action: 'recent', page_token: 'a'.repeat(2048) }).success).toBe(true);
     expect(readDriveArgsSchema.safeParse({ action: 'recent', page_token: 'a'.repeat(2049) }).success).toBe(false);
   });
+});
+
+it('browser native commands are strict and cannot smuggle owner, session or submit authorization', () => {
+  expect(browseActArgsSchema.safeParse({ url: 'https://fixture.example/form', task: 'Fill observed field', command: { operation: 'fill', field_ref: 'value', value: 'synthetic' } }).success).toBe(true);
+  for (const command of [{ operation: 'submit', approval_ref: 'guessed' }, { operation: 'fill', field_ref: 'value', value: '', session_id: 'foreign' }, { operation: 'inspect', owner_id: 'foreign' }]) expect(browseActArgsSchema.safeParse({ url: 'https://fixture.example/form', task: 'native', command }).success).toBe(false);
 });

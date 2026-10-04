@@ -40,7 +40,7 @@ const parseDecision = (raw: string): Decision => {
 const initialise = (sql: SqlStorage) => sql.exec(`CREATE TABLE IF NOT EXISTS owner_task_source_scope (
   owner_key TEXT PRIMARY KEY, task_id TEXT NOT NULL, revision INTEGER NOT NULL,
   sources_json TEXT NOT NULL, ready INTEGER NOT NULL, pending_json TEXT, start_ref TEXT)`);
-const read = (sql: SqlStorage, ownerKey: string): TaskSourceSnapshot => {
+export const readTaskSourceSnapshot = (sql: SqlStorage, ownerKey: string): TaskSourceSnapshot => {
   const row = sql.exec<Row>('SELECT * FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).toArray()[0];
   if (!row || !row.task_id || !Number.isSafeInteger(row.revision) || row.revision < 1 || ![0, 1].includes(row.ready)) throw new Error('Task source custody unavailable');
   return { taskId: row.task_id, revision: row.revision, sources: families(JSON.parse(row.sources_json)), ready: row.ready === 1, startRef: row.start_ref };
@@ -53,7 +53,7 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
   const instruction = ownerInput && Object.freeze({ ...ownerInput, quotedRanges: ownerInput.quotedRanges?.map(range => Object.freeze({ ...range })) });
   initialise(sql);
   scope.commit(() => sql.exec('INSERT OR IGNORE INTO owner_task_source_scope VALUES (?, ?, 1, ?, 0, NULL, NULL)', ownerKey, crypto.randomUUID(), JSON.stringify(TASK_SOURCE_FAMILIES)));
-  const current = async () => { scope.admit(); await assertOwnerCurrent(); scope.admit(); return read(sql, ownerKey); };
+  const current = async () => { scope.admit(); await assertOwnerCurrent(); scope.admit(); return readTaskSourceSnapshot(sql, ownerKey); };
   const assertSame = async (expected: TaskSourceSnapshot) => {
     const latest = await current();
     if (latest.taskId !== expected.taskId || latest.revision !== expected.revision || !latest.ready) throw new Error('Task source scope changed');

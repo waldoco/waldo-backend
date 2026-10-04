@@ -1,6 +1,6 @@
 import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
-import type { ProposeCalendarChangeArgs } from '@waldo/contracts';
+import type { BrowserTaskContinuation, ProposeCalendarChangeArgs } from '@waldo/contracts';
 import { GoogleError, sha256Hex, type GoogleClient } from '../connectors/google';
 import type { BrowserSubmitOutcome } from '../tools/live/browser';
 import type { TurnLogEntry } from './telegram-listener';
@@ -29,6 +29,7 @@ export type BrowserSubmitProposal = Readonly<{
   action: Readonly<{ selector: string; description: string; method?: string; arguments?: string[] }>;
   binding: Readonly<Record<string, string>>;
   steps: readonly string[];
+  continuation?: BrowserTaskContinuation;
 }>;
 const BROWSER_SUBMIT_TTL_MS = 30 * 60_000;
 
@@ -80,7 +81,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   timezone: string;
   reviewUrl?: () => Promise<string | null>;
   log(entry: TurnLogEntry): void;
-  browserSubmit?: (proposal: BrowserSubmitProposal) => Promise<BrowserSubmitOutcome>;
+  browserSubmit?: (proposal: BrowserSubmitProposal, approvalRef?: string) => Promise<BrowserSubmitOutcome>;
+  browserReceiptVerified?: (proposal: BrowserSubmitProposal, receipt: Extract<BrowserSubmitOutcome, { status: 'verified_with_receipt' }>['receipt']) => Promise<boolean>;
   sendMessage?: (proposal: MessageSendProposal) => Promise<void>;
   // Returns a bounded owner-facing outcome line (the result is external content).
   mcpCall?: (proposal: McpCallProposal, intent: ProxyIntent) => Promise<string>;
@@ -204,27 +206,29 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             const claimed = sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed;
             if (claimed !== 1) return { toast: 'Already handled.', message: 'Already handled.' };
             let outcome: BrowserSubmitOutcome;
-            try { outcome = await deps.browserSubmit(bp); }
+            try { outcome = await deps.browserSubmit(bp, id); }
             catch { outcome = { status: 'uncertain', message: 'The browser outcome is unknown. Check the result before retrying.' }; }
             if (!outcome || typeof outcome !== 'object' || typeof outcome.message !== 'string' || !outcome.message.trim()) {
               outcome = { status: 'uncertain', message: 'The browser outcome is unknown. Check the result before retrying.' };
             }
+            let receiptVerified = false;
             switch (outcome?.status) {
               case 'rejected':
                 setStatus(id, 'rejected'); out = { toast: 'Not done', message: outcome.message }; break;
               case 'acknowledged_unverified':
                 setStatus(id, 'unverified'); out = { toast: 'Result not verified', message: outcome.message }; break;
               case 'verified_with_receipt':
-                // No authoritative receipt validator/storage exists here yet. A typed
-                // callback alone cannot prove completion, regardless of receipt bytes.
-                setStatus(id, 'unverified');
-                out = { toast: 'Receipt not checked', message: 'The result receipt could not be checked, so completion is not verified.' }; break;
+                // Only a host validator backed by the exact stored proposal/receipt
+                // can promote completion. Missing/failed validation stays unverified.
+                try { receiptVerified = await deps.browserReceiptVerified?.(bp, outcome.receipt) === true; } catch { /* retain unverified */ }
+                setStatus(id, receiptVerified ? 'done' : 'unverified');
+                out = receiptVerified ? { toast: 'Verified', message: outcome.message } : { toast: 'Receipt not checked', message: 'The result receipt could not be checked, so completion is not verified.' }; break;
               default:
                 setStatus(id, 'uncertain');
                 out = { toast: 'Outcome unknown', message: 'The browser outcome is unknown. Check the result before retrying.' }; break;
             }
-            deps.log({ trace, hop: 'browser_outcome', ms: deps.now() - started, ok: outcome?.status === 'acknowledged_unverified',
-              code: outcome?.status === 'rejected' ? 'rejected' : outcome?.status === 'acknowledged_unverified' ? 'unverified' : outcome?.status === 'verified_with_receipt' ? 'receipt_unchecked' : 'uncertain' });
+            deps.log({ trace, hop: 'browser_outcome', ms: deps.now() - started, ok: outcome?.status === 'acknowledged_unverified' || receiptVerified,
+              code: outcome?.status === 'rejected' ? 'rejected' : outcome?.status === 'acknowledged_unverified' ? 'unverified' : outcome?.status === 'verified_with_receipt' ? receiptVerified ? 'receipt_verified' : 'receipt_unchecked' : 'uncertain' });
           }
         } else {
           out = { toast: "Can't be undone", message: 'A browser submit cannot be undone from here. Nothing was reversed.' };

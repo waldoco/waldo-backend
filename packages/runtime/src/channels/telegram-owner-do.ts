@@ -62,6 +62,12 @@ import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview 
 import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
 import { changeLines, collectChanges, reviewMailFollowup, updateBook, type UpdateBook } from './update-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
+import { browserOwnerHost, BROWSER_TASK_KEY, type BrowserOwnerConfiguration } from './browser-owner-host';
+import { browserProductionConfiguration, browserOwnerBindingReader } from './browser-production-factory';
+import { browserTrialConsent, BROWSER_TRIAL_PATH, BROWSER_TRIAL_PENDING_KEY, BROWSER_TRIAL_REVOCATION_KEY, type BrowserTrialPreparation } from './browser-trial-consent';
+import { browserOwnerAuthority } from './browser-owner-authority';
+import { browserTaskSourceCustody } from './browser-task-source';
+import { browserTaskHandler, browserTaskApprovalBridge } from '../tools/live/browser-task';
 import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../tools/live/browser';
 import { webSearchHandler } from '../tools/live/web-search';
 import { healthLogBook, healthLogHandlers, healthSection } from './health-log';
@@ -189,11 +195,33 @@ export type TelegramOwnerPreparation = Readonly<{ mode: 'canonical'; host?: Tele
 export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly canonicalPreparation: boolean;
   private readonly ownerHost: TelegramOwnerPrivateHost | undefined;
-  constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, preparation?: TelegramOwnerPreparation) {
+  private browserTasks: ReturnType<typeof browserOwnerHost>;
+  private readonly makeBrowserHost: (config?: BrowserOwnerConfiguration) => ReturnType<typeof browserOwnerHost>;
+  private readonly browserReady: Promise<void>;
+  private readonly browserTrial: BrowserTrialPreparation | undefined;
+  constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, preparation?: TelegramOwnerPreparation, browserConfiguration?: BrowserOwnerConfiguration, browserTrial?: BrowserTrialPreparation) {
     super(ctx, env);
     if (preparation !== undefined && (!preparation || preparation.mode !== 'canonical')) throw new Error('invalid owner preparation mode');
     this.canonicalPreparation = preparation !== undefined;
     this.ownerHost = preparation?.host;
+    this.browserTrial = browserTrial;
+    const makeBrowserHost = this.makeBrowserHost = (config?: BrowserOwnerConfiguration) => browserOwnerHost({ storage: ctx.storage, config, now: Date.now, newId: () => crypto.randomUUID(),
+      physical: () => { const doName = ctx.storage.kv.get<string>('do_name'); return { doName, subject: ctx.storage.kv.get<string>('telegram_subject'), matches: Boolean(doName && env.TELEGRAM_OWNER_DO && env.TELEGRAM_OWNER_DO.idFromName(doName).toString() === ctx.id.toString() && ctx.storage.kv.get<boolean>('telegram_unlinked') !== true) }; },
+      approved: (approval, proposal) => {
+        try {
+          const row = ctx.storage.sql.exec<{ payload_json: string; decided_at: number }>("SELECT payload_json, decided_at FROM ledger WHERE id = ? AND kind = 'browser_submit' AND status = 'uncertain'", approval).toArray()[0];
+          const payload = row ? JSON.parse(row.payload_json) : null;
+          const checkpoint = ctx.storage.kv.get<{ taskId: string; proposal: { id: string; url: string; actionRef: string; scopeDigest: string; binding: Record<string, string> } | null }>(BROWSER_TASK_KEY);
+          const prepared = checkpoint?.proposal;
+          const facts = (value: Record<string, string>) => JSON.stringify(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+          return Boolean(row && row.decided_at <= Date.now() && Date.now() - row.decided_at < 600000 && payload?.continuation?.proposalId === proposal && payload?.continuation?.taskRef === checkpoint?.taskId && prepared?.id === proposal && payload.url === prepared.url && payload.action?.selector === prepared.actionRef && payload.action?.method === 'click' && (payload.action?.arguments?.length ?? 0) === 0 && payload.continuation?.scopeDigest === prepared.scopeDigest && facts(payload.binding) === facts(prepared.binding));
+        } catch { return false; }
+      },
+    });
+    this.browserTasks = makeBrowserHost(browserConfiguration);
+    this.browserReady = browserConfiguration ? Promise.resolve() : browserProductionConfiguration({ env, storage: ctx.storage,
+      actualDoId: ctx.id.toString(), policy: browserTrial?.policy }).then(config => { this.browserTasks = makeBrowserHost(config); })
+      .catch(() => { console.warn(JSON.stringify({ event: 'browser_host_disabled' })); });
   }
   private runtimes: Partial<Record<ChannelKind, OwnerRuntime>> = {};
   private queue: Promise<unknown> = Promise.resolve();
@@ -309,6 +337,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (admitted === 'conflict' || admitted === 'capacity') return new Response(admitted, { status: admitted === 'conflict' ? 409 : 503 });
       // Binding follows authenticated admission, and never replaces a different binding.
       this.ctx.storage.kv.put('do_name', doName); this.ctx.storage.kv.put('telegram_subject', subject);
+      if (text === '/stop') {
+        if (this.browserTrial) {
+          this.ctx.storage.kv.delete(BROWSER_TRIAL_PENDING_KEY);
+          this.ctx.storage.kv.put(BROWSER_TRIAL_REVOCATION_KEY, crypto.randomUUID());
+          const authorization = browserOwnerAuthority(this.ctx.storage).read();
+          if (authorization) this.ctx.storage.kv.put('browser_owner_task_revoked_v1', authorization.manifest.runId);
+        }
+        await this.browserTasks.revoke(); this.ctx.waitUntil(this.browserReady.then(() => this.browserTasks.stop()));
+      }
       const origin = request.headers.get('x-waldo-origin'); if (origin) this.ctx.storage.kv.put('origin', origin);
       const timezone = request.headers.get('x-waldo-timezone'); if (timezone) this.ctx.storage.kv.put('timezone', timezone);
       if (admitted === 'admitted' && control && this.activeInbox?.runId === control.targetRun) {
@@ -605,6 +642,23 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     const session = await access.session(sessionCookie(request));
     if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401, headers: overviewRoute ? DASHBOARD_OVERVIEW_HEADERS : undefined });
+    if (url.pathname === BROWSER_TRIAL_PATH) {
+      const doName = this.ctx.storage.kv.get<string>('do_name') ?? '', subject = this.ctx.storage.kv.get<string>('telegram_subject') ?? '';
+      const result = await browserTrialConsent(request, { storage: this.ctx.storage, csrf: session.csrf, trial: this.browserTrial, limiter: this.env.RESPONSIBILITY_RATE_LIMITER, ownerScope: this.ctx.id.toString(),
+        doName, subject, lookup: browserOwnerBindingReader({ env: this.env, storage: this.ctx.storage, actualDoId: this.ctx.id.toString() }, doName, subject),
+        now: Date.now, newId: () => crypto.randomUUID() });
+      // Consent is a new decision. The factory rereads its private record and
+      // canonical binding; existing expired decisions cannot be refreshed here.
+      if (result.ok && request.method === 'POST') {
+        await this.browserReady;
+        try {
+          const config = await browserProductionConfiguration({ env: this.env, storage: this.ctx.storage, actualDoId: this.ctx.id.toString(), policy: this.browserTrial?.policy });
+          // Reconstruct through the same constructor-owned host plumbing.
+          if (config) this.browserTasks = this.makeBrowserHost(config);
+        } catch { console.warn(JSON.stringify({ event: 'browser_host_disabled' })); }
+      }
+      return result;
+    }
     if (url.pathname.startsWith(`${ARTIFACT_PATH}/`)) {
       const denied = await artifactReadAdmission(this.env.RESPONSIBILITY_RATE_LIMITER, this.ctx.id.toString());
       if (denied) return denied;
@@ -833,6 +887,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   override async alarm(): Promise<void> {
+    await this.browserReady;
     const mode=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);
     if(mode){await this.serial(()=>this.drainLink(mode));return;}
     await this.serial(async () => {
@@ -844,6 +899,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!doName || !subject || !/^\d+$/.test(subject) || !Number.isSafeInteger(Number(subject)) || Number(subject) <= 0
           || this.ctx.storage.kv.get<boolean>('telegram_unlinked') === true
           || !this.env.TELEGRAM_OWNER_DO || this.env.TELEGRAM_OWNER_DO.idFromName(doName).toString() !== this.ctx.id.toString()) {
+          if ((this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity) <= Date.now()) this.ctx.waitUntil(this.browserTasks.maintain());
           await rearmSharedAlarm(this.ctx.storage, null, Date.now(), 30_000);
           return;
         }
@@ -862,12 +918,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       try { await this.notifyUncertainRecovery(); } catch { console.error('uncertainty notice deferred to host recovery'); }
       const dueInbox = (await this.inbox.records()).some(r => r.state === 'admitted');
       const dueTransport = finals.some(r => r.status === 'attempting' || (r.status === 'pending' && r.dueAt <= Date.now()) || (r.status !== 'pending' && !r.settled));
-      const readyKinds = [dueInbox, dueTransport, scheduler.hasDue()];
+      const browserDue = this.ctx.storage.kv.get<number>('browser_owner_task_due_v1');
+      const readyKinds = [dueInbox, dueTransport, scheduler.hasDue(), browserDue !== undefined && browserDue !== null && browserDue <= Date.now()];
       const last = this.ctx.storage.kv.get<number>('owner_alarm_last_v1') ?? 2;
       let selected = -1;
-      for (let n = 1; n <= 3; n++) { const candidate = (last + n) % 3; if (readyKinds[candidate]) { selected = candidate; break; } }
+      for (let n = 1; n <= 4; n++) { const candidate = (last + n) % 4; if (readyKinds[candidate]) { selected = candidate; break; } }
       if (selected < 0) { await scheduler.rearm(); return; }
       this.ctx.storage.kv.put('owner_alarm_last_v1', selected);
+      if (selected === 3) { this.ctx.waitUntil(this.browserTasks.maintain()); await scheduler.rearm(); return; }
       if (selected === 0) { try { await this.drainInbox(); } finally { await scheduler.rearm(); } return; }
       if (selected === 1) {
         try { await finalOutbox.drain({
@@ -919,6 +977,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (update.message?.from?.id !== owner || update.message.chat?.id !== owner || !text) return false;
     const trace = `tg-${update.update_id}`;
     if (text === '/stop') {
+      this.ctx.waitUntil(this.browserTasks.stop());
       const stopping = control.stop();
       log({ trace, hop: 'stop', ms: 0, ok: true, detail: stopping ? 'stopping the running turn' : 'nothing running' });
       void call('sendMessage', { chat_id: owner, text: stopping ? 'Stopping.' : 'Nothing is running right now.' }).catch(() => undefined);
@@ -1376,6 +1435,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       return `telegram:${this.ctx.id.toString()}:${boundOwner}`;
     };
+    const browserSources = browserTaskSourceCustody(storage.sql, storage.kv);
+    const browserApproval = browserTaskApprovalBridge({ ownerId: () => this.browserTasks.principal, host: async payload => {
+      await this.browserReady; const source = browserSources.guard(payload); await source();
+      return this.browserTasks.resolve(this.browserTasks.principal, source);
+    } });
     const desk = approvalDesk(storage.sql, {
       call: routedCall, owner, google: (intent,feature) => google.client(feature??'calendar',intent), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
       timezone: clock.timezone, log,
@@ -1393,7 +1457,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const origin = await storage.get<string>('origin');
         return origin && /^https:\/\/[^/?#]+$/.test(origin) ? `${origin}${CONSOLE_PATH}/waiting` : null;
       },
-      browserSubmit: (proposal) => executeBrowserSubmit(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, proposal),
+      browserSubmit: (proposal, approval) => proposal.continuation ? browserApproval.submit(proposal, approval) : executeBrowserSubmit(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, proposal),
+      browserReceiptVerified: browserApproval.receiptVerified,
       // Approved sends go out this Waldo's own channel chat, verbatim, through the same routed
       // call the cards use. A proposal naming another channel fails honestly instead of
       // rerouting silently.
@@ -1465,7 +1530,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
     };
     const updates = updateBook(storage.sql);
-    const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, plans, clock.timezone, Date.now()), armHeartbeat(scheduler, Date.now())])
+    const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, plans, clock.timezone, Date.now()), armHeartbeat(scheduler, Date.now()), this.browserReady])
       .then(async ([, , , seeded]) => {
         const scrubbed = await scrubConversationHistory(storage);
         if (scrubbed > 0) log({ trace: 'history:scrub', hop: 'egress_scrub', ms: 0, ok: true, detail: `${scrubbed} entries` });
@@ -1488,7 +1553,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` });
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerHost?.gateway, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
+      }), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browserTaskHandler({ legacy: browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
+        if (!context.assertTaskSourceCurrent) throw Error('browser task source unavailable');
+        await context.assertTaskSourceCurrent();
+        const ownerKey = await currentTaskOwnerKey(); await context.assertTaskSourceCurrent();
+        browserSources.capture(payload, ownerKey);
+        const id = await desk.proposeBrowserSubmit(payload); await context.assertTaskSourceCurrent(); return id;
+      }, stopAdmission: async () => { await this.browserTasks.revoke(); } }), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerHost?.gateway, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
       () => standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
@@ -1535,14 +1606,29 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           scope.admit();
         };
         await assertSkillOwnerCurrent();
-        const capability = createScopedCuratedSkillCapability(storage.sql, { owner: contextOwnerId, custodyKey: `telegram:${owner}`, turnId: turn.traceId,
+        const trial = this.browserTrial;
+        const admission = trial ? await (async () => {
+          try { return await ownerMessageAdmission({
+          lookup: browserOwnerBindingReader({ env: this.env, storage, actualDoId: this.ctx.id.toString() }, doName!, subject!), scope,
+          locator: { environment: this.env.WALDO_ENVIRONMENT ?? '', namespace: this.env.WALDO_OWNER_DO_NAMESPACE ?? '', doName: doName!, doId: this.ctx.id.toString() },
+          actualDoId: this.ctx.id.toString(), expectedDoId: name => this.env.TELEGRAM_OWNER_DO!.idFromName(name).toString(), allowedDoNames: [trial.policy.doName],
+          provider: 'telegram', subject: subject!, text: turn.text!, occurrenceKey: occurrence!.id, occurredAt: occurrence!.admittedAt, now: Date.now,
+        }); } catch {
+            await assertSkillOwnerCurrent();
+            // Browser identity failure preserves the existing messaging path.
+            // Its fixture principal cannot resolve the canonical browser host.
+            console.warn(JSON.stringify({ event: 'browser_owner_admission_unavailable' }));
+            return undefined;
+          }
+        })() : undefined;
+        const capability = createScopedCuratedSkillCapability(storage.sql, { owner: admission?.invocation.verified_authority.principal_ref ?? contextOwnerId, custodyKey: `telegram:${owner}`, turnId: turn.traceId,
           trigger: 'user_message', ownerText: turn.text, assertCurrent: assertSkillOwnerCurrent }, scope);
         const taskOwnerKey = await currentTaskOwnerKey();
         const sourceScope = createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
           await assertSkillOwnerCurrent();
           if (await currentTaskOwnerKey() !== taskOwnerKey) throw new ClosedRunError();
         }, { inputRef: turn.traceId, text: turn.text, quotedRanges: turn.sourceQuoteRanges });
-        return Object.freeze({ ...capability, sourceScope: { ...sourceScope, propose: async proposal => {
+        return Object.freeze({ ...capability, ...(admission ? { admission } : {}), sourceScope: { ...sourceScope, propose: async proposal => {
           await assertSkillOwnerCurrent(); await desk.proposeTaskSources(proposal); await assertSkillOwnerCurrent();
         } }, taskContext: async (assertSourceCurrent?: () => Promise<void>) => {
           await assertSkillOwnerCurrent();

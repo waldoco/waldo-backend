@@ -178,7 +178,7 @@ export const createOwnerResponder = (
   }
   let backgroundCurrent: (() => Promise<void>) | undefined;
   let transientDecision = false;
-  const assertCurrent = async () => { privateRunScope?.admit(); await binding?.adapter.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
+  const assertCurrent = async () => { privateRunScope?.admit(); await binding?.adapter.assertCurrent(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
   const ownerId = invocation.verified_authority.principal_ref;
   const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;
@@ -201,7 +201,7 @@ export const createOwnerResponder = (
   const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
   const offloadStore = offload ? inMemoryToolOutputStore() : undefined;
   const safety = {
-    authenticatedUserId: ownerId, trigger: 'user_message' as const, canaryTokens: CANARIES,
+    authenticatedUserId: skills?.admission?.invocation.verified_authority.principal_ref ?? ownerId, trigger: 'user_message' as const, canaryTokens: CANARIES,
     sourceTaint: null, toolArgSourceTaint: null, egressAllowlist,
     hasApproval: ownerToolApproval,
     sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
@@ -805,6 +805,7 @@ export const createOwnerResponder = (
       privateRunScope?.admit();
       await assertCurrent();
       if (binding && (await binding.admission.readInput()).text !== turn.text) throw new Error('owner input mismatch');
+      if (skills?.admission && (await skills.admission.readInput()).text !== turn.text) throw new Error('owner input mismatch');
       await restored();
       const id = turn.traceId;
       traceId = id;

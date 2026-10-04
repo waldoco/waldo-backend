@@ -17,21 +17,9 @@ export function cloudflarePrivateLauncher(
   launch: CloudflareLauncher,
   allowedDomains: readonly string[],
 ): () => Promise<PrivateBrowser<BrowserContext>> {
-  if (
-    !allowedDomains.length ||
-    allowedDomains.length > 50 ||
-    allowedDomains.some(
-      (host) => !/^([a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/.test(host),
-    )
-  )
-    throw Error("browser_policy_invalid");
-  const domains = [...allowedDomains];
+  const launchOptions = cloudflareBrowserGuardOptions(allowedDomains);
   return async () => {
-    const browser = await launch(binding, {
-      recording: false,
-      keep_alive: 10_000,
-      guardrails: { allowedDomains: domains },
-    });
+    const browser = await launch(binding, launchOptions);
     return {
       newContext: async ({ storageState }) => {
         const context = await browser.newContext({
@@ -52,4 +40,17 @@ export function cloudflarePrivateLauncher(
       close: () => browser.close(),
     };
   };
+}
+
+export function cloudflareBrowserGuardOptions(allowedDomains: readonly string[], keepAliveMs = 10000): WorkersLaunchOptions {
+  if (
+    !allowedDomains.length ||
+    allowedDomains.length > 50 ||
+    allowedDomains.some(
+      (host) => !/^([a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/.test(host),
+    )
+  )
+    throw Error("browser_policy_invalid");
+  if (!Number.isSafeInteger(keepAliveMs) || keepAliveMs < 10000 || keepAliveMs > 600000) throw Error("browser_policy_invalid");
+  return { recording: false, keep_alive: keepAliveMs, guardrails: { allowedDomains: [...allowedDomains] } };
 }
