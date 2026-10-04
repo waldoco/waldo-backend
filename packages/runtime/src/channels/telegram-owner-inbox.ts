@@ -8,11 +8,20 @@ export type InboxRecord = InboxBinding & {
   id: string; digest: string; sequence: number; updateId: number; body: string;
   admittedAt: number; state: 'admitted' | 'claimed' | 'awaiting_delivery' | 'consumed' | 'completed' | 'quarantined';
   attempt?: string; runId?: string; deadline?: number; reason?: string; closedAt?: number; outcomeNoticeQueued?: boolean;
+  outcomeNoticeBlocked?: 'owner_binding' | 'notice_identity' | 'invalid_record';
   control?: { kind: 'stop' | 'steer'; targetRun: string };
+};
+export const needsRecoveryNotice = (row: InboxRecord): boolean => row.state === 'quarantined' && !row.outcomeNoticeQueued && !row.outcomeNoticeBlocked
+  && (row.control?.kind === 'steer' && ['not_consumed', 'consumed_target_outcome_uncertain', 'recovered_uncertain'].includes(row.reason ?? '')
+    || row.control === undefined && ['recovered_uncertain', 'execution_closed', 'owner_stopped'].includes(row.reason ?? ''));
+export const ownerInboxDue = (rows: InboxRecord[], now: number): number | null => {
+  const due = rows.flatMap(row => row.state === 'admitted' ? [now + 250] : row.state === 'claimed' || row.state === 'consumed'
+    ? [row.deadline ?? now + 250] : needsRecoveryNotice(row) ? [now + 250] : row.state === 'completed' ? [row.admittedAt + RETENTION_MS] : []);
+  return due.length ? Math.min(...due) : null;
 };
 const ordinaryAdmission = (row: InboxRecord): void => {
   row.state = 'admitted';
-  delete row.control; delete row.attempt; delete row.runId; delete row.deadline; delete row.reason; delete row.closedAt; delete row.outcomeNoticeQueued;
+  delete row.control; delete row.attempt; delete row.runId; delete row.deadline; delete row.reason; delete row.closedAt; delete row.outcomeNoticeQueued; delete row.outcomeNoticeBlocked;
 };
 export type Admission = 'admitted' | 'duplicate' | 'conflict' | 'capacity';
 type Storage = Pick<DurableObjectStorage, 'transaction' | 'get'>;
@@ -20,8 +29,7 @@ export class TelegramOwnerInbox {
   constructor(private readonly storage: Storage, private readonly persist: (txn: DurableObjectTransaction, rows: InboxRecord[], due: number | null) => Promise<void>, private readonly now: () => number = Date.now) {}
   async records(): Promise<InboxRecord[]> { return (await this.storage.get<InboxRecord[]>(OWNER_INBOX_KEY)) ?? []; }
   private due(rows: InboxRecord[]): number | null {
-    const due = rows.flatMap(r => r.state === 'admitted' ? [this.now() + 250] : r.state === 'claimed' || r.state === 'consumed' ? [r.deadline ?? this.now() + 250] : r.state === 'quarantined' && r.control?.kind === 'steer' && !r.outcomeNoticeQueued && ['not_consumed', 'consumed_target_outcome_uncertain', 'recovered_uncertain'].includes(r.reason ?? '') ? [this.now() + 250] : r.state === 'completed' ? [r.admittedAt + RETENTION_MS] : []);
-    return due.length ? Math.min(...due) : null;
+    return ownerInboxDue(rows, this.now());
   }
   async admit(binding: InboxBinding, updateId: number, body: string, control?: InboxRecord['control']): Promise<Admission> {
     const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body)))].map(x => x.toString(16).padStart(2, '0')).join('');

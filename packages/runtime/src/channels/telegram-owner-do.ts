@@ -17,7 +17,7 @@ import {drainLinkReceipt} from './telegram-link-controller';
 import {ownerDirectory} from '../identity/owner-directory';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { receiptUrl } from '../conversation/artifact-link-guard';
-import { TelegramOwnerInbox, OWNER_INBOX_KEY, type InboxRecord } from './telegram-owner-inbox';
+import { TelegramOwnerInbox, OWNER_INBOX_KEY, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
 import { persistInboxWake, persistTransportWake, rearmSharedAlarm } from '../scheduler/alarm-slot';
 import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
@@ -213,33 +213,65 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       row.closedAt = Date.now(); row.body = ''; row.reason = reason;
       if (row.state === 'claimed') row.state = awaitingDelivery ? 'awaiting_delivery' : 'quarantined';
       this.ctx.storage.kv.put('telegram_owner_inbox_v1', rows);
-      const due = rows.flatMap(r => r.state === 'admitted' ? [Date.now() + 250] : r.state === 'claimed' || r.state === 'consumed' ? [r.deadline ?? Date.now() + 250] : r.state === 'completed' ? [r.admittedAt + 25 * 3600000] : []);
-      this.ctx.storage.kv.put('telegram_owner_inbox_due_v1', due.length ? Math.min(...due) : null);
+      this.ctx.storage.kv.put('telegram_owner_inbox_due_v1', ownerInboxDue(rows, Date.now()));
     });
   }
 
-  private async notifyUncertainSteering(): Promise<void> {
+  private commitRecoveryNotice(snapshot: InboxRecord, work: (current: InboxRecord) => void): void {
+    this.ctx.storage.transactionSync(() => {
+      const rows = this.ctx.storage.kv.get<InboxRecord[]>('telegram_owner_inbox_v1') ?? [];
+      const current = rows.find(row => row.id === snapshot.id);
+      if (!current || current.state !== snapshot.state || current.attempt !== snapshot.attempt || current.runId !== snapshot.runId
+        || current.digest !== snapshot.digest || current.subject !== snapshot.subject || current.doName !== snapshot.doName || current.bot !== snapshot.bot
+        || current.control?.kind !== snapshot.control?.kind || current.control?.targetRun !== snapshot.control?.targetRun
+        || current.reason !== snapshot.reason || !Object.is(current.admittedAt, snapshot.admittedAt) || current.outcomeNoticeQueued || current.outcomeNoticeBlocked) return;
+      if (!current.attempt || !current.runId || !Number.isSafeInteger(current.admittedAt) || current.admittedAt < 0 || current.admittedAt > 8640000000000000
+        || !Number.isSafeInteger(Number(current.subject)) || Number(current.subject) <= 0) current.outcomeNoticeBlocked = 'invalid_record';
+      else if (this.ctx.storage.kv.get<string>('telegram_subject') !== current.subject
+        || this.ctx.storage.kv.get<string>('do_name') !== current.doName || this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] !== current.bot
+        || this.ctx.storage.kv.get<boolean>('telegram_unlinked') || !this.env.TELEGRAM_OWNER_DO
+        || this.env.TELEGRAM_OWNER_DO.idFromName(current.doName).toString() !== this.ctx.id.toString()) current.outcomeNoticeBlocked = 'owner_binding';
+      else work(current);
+      if (current.outcomeNoticeBlocked) { current.state = 'quarantined'; current.body = ''; }
+      this.ctx.storage.kv.put('telegram_owner_inbox_v1', rows);
+      this.ctx.storage.kv.put('telegram_owner_inbox_due_v1', ownerInboxDue(rows, Date.now()));
+    });
+  }
+
+  private async notifyUncertainRecovery(): Promise<void> {
     for (const child of await this.inbox.records()) {
-      if (child.outcomeNoticeQueued || child.control?.kind !== 'steer' || !child.attempt) continue;
-      const parent = (await this.inbox.records()).find(row => row.runId === child.control!.targetRun);
-      if (child.state === 'consumed' ? parent?.closedAt === undefined
-        : child.state !== 'quarantined' || !['not_consumed', 'consumed_target_outcome_uncertain', 'recovered_uncertain'].includes(child.reason ?? '')) continue;
-      await this.setup().finalOutbox.enqueueFenced({ id: `steer-failure:${child.id}:${child.attempt}`, trace: ownerTurnTrace('telegram', child.updateId),
-        payload: { chat_id: Number(child.subject), text: child.reason === 'not_consumed'
+      if (child.outcomeNoticeQueued || child.outcomeNoticeBlocked) continue;
+      const ordinary = child.control === undefined;
+      if (ordinary ? !needsRecoveryNotice(child) : child.control?.kind !== 'steer') continue;
+      const parent = ordinary ? undefined : (await this.inbox.records()).find(row => row.runId === child.control!.targetRun);
+      if (!ordinary && (child.state === 'consumed' ? parent?.closedAt === undefined
+        : child.state !== 'quarantined' || !['not_consumed', 'consumed_target_outcome_uncertain', 'recovered_uncertain'].includes(child.reason ?? ''))) continue;
+      let eligible = false;
+      this.commitRecoveryNotice(child, () => { eligible = true; });
+      if (!eligible) continue;
+      const zone = this.setup().timezone;
+      const noticeZone = validZone(zone) ? zone : 'UTC';
+      const requestTime = `${localIso(child.admittedAt, noticeZone).slice(0, 16).replace('T', ' ')} ${noticeZone}`;
+      const noticeId = `${ordinary ? 'failure' : 'steer-failure'}:${child.id}:${child.attempt}`;
+      const noticeText = ordinary
+          ? child.reason === 'owner_stopped' ? 'Stopped. In-flight changes may still finish.'
+            : child.reason === 'execution_closed' ? 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.'
+            : 'Your request was interrupted, and its outcome is uncertain. Some changes may have completed. Please check the result before retrying.'
+          : child.reason === 'not_consumed'
           ? 'Your added message was not processed. Please send it again if you still want me to act on it.'
-          : 'Your added message was used by a run whose outcome is uncertain. In-flight changes may still finish. Please check before retrying changes.' },
+          : 'Your added message was used by a run whose outcome is uncertain. In-flight changes may still finish. Please check before retrying changes.';
+      await this.setup().finalOutbox.enqueueFenced({ id: noticeId, trace: ownerTurnTrace('telegram', child.updateId),
+        payload: { chat_id: Number(child.subject), text: noticeText + (ordinary ? `\n\nRequest received: ${requestTime}.` : '') },
         ownerSubject: child.subject, doName: child.doName, bot: child.bot,
-      }, work => this.ctx.storage.transactionSync(() => {
-        const rows = this.ctx.storage.kv.get<InboxRecord[]>('telegram_owner_inbox_v1') ?? [];
-        const current = rows.find(r => r.id === child.id);
-        if (!current || current.state !== child.state || current.attempt !== child.attempt || current.runId !== child.runId
-          || current.digest !== child.digest || current.subject !== child.subject || current.doName !== child.doName || current.bot !== child.bot
-          || current.control?.kind !== 'steer' || current.control.targetRun !== child.control!.targetRun || current.reason !== child.reason
-          || this.ctx.storage.kv.get<string>('telegram_subject') !== child.subject
-          || this.ctx.storage.kv.get<string>('do_name') !== child.doName || this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] !== child.bot || this.ctx.storage.kv.get<boolean>('telegram_unlinked')) return;
-        work();
+      }, work => this.commitRecoveryNotice(child, current => {
+        // An in-process failure may already have frozen a notice for this same attempt.
+        const known = this.setup().finalOutbox.records().find(row => row.id === noticeId);
+        if (known && (known.ownerSubject !== child.subject || known.doName !== child.doName || known.bot !== child.bot
+          || known.trace !== ownerTurnTrace('telegram', child.updateId) || known.payload.chat_id !== Number(child.subject))) {
+          current.outcomeNoticeBlocked = 'notice_identity'; return;
+        }
+        if (!known) work();
         current.state = 'quarantined'; current.body = ''; current.reason = child.reason ?? 'consumed_target_outcome_uncertain'; current.outcomeNoticeQueued = true;
-        this.ctx.storage.kv.put('telegram_owner_inbox_v1', rows);
       }));
     }
   }
@@ -363,20 +395,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         catch { console.error('durable run closure failed'); await new Promise(resolve => setTimeout(resolve, 1000)); }
       }
       abort.abort();
-      const closed = (this.ctx.storage.kv.get<InboxRecord[]>('telegram_owner_inbox_v1') ?? []).find(r => r.id === claimed.id);
       try {
-      if (closed?.state === 'quarantined') {
-        const expiresAt = (closed.closedAt ?? Date.now()) + 5 * 60000;
-        await this.setup().finalOutbox.enqueueFenced({ id: `failure:${claimed.id}:${attempt}`, trace: ownerTurnTrace('telegram', claimed.updateId),
-          payload: { chat_id: Number(claimed.subject), text: closed.reason === 'owner_stopped' ? 'Stopped. In-flight changes may still finish.' : 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.' },
-          ownerSubject: claimed.subject, doName: claimed.doName, bot: claimed.bot, expiresAt,
-        }, work => this.ctx.storage.transactionSync(() => {
-          const current = (this.ctx.storage.kv.get<InboxRecord[]>('telegram_owner_inbox_v1') ?? []).find(r => r.id === claimed.id);
-          if (!current || current.runId !== runId || current.attempt !== attempt || current.closedAt === undefined || Date.now() >= expiresAt
-            || this.ctx.storage.kv.get<string>('telegram_subject') !== claimed.subject || this.ctx.storage.kv.get<string>('do_name') !== claimed.doName || this.ctx.storage.kv.get<boolean>('telegram_unlinked')) return;
-          work();
-        }));
-      }
+        await this.notifyUncertainRecovery();
       } catch { console.error('fixed failure notice unavailable'); } finally {
       if (this.activeScope === scope) { this.activeScope = undefined; this.activeOwnerContext = undefined; this.activeAbort = undefined; }
       try {
@@ -385,7 +405,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         else if (child.state !== 'consumed' || child.control.kind !== 'steer') await this.inbox.transition(child.id, child.attempt, 'quarantined', child.state === 'consumed' ? 'consumed_target_outcome_uncertain' : 'not_consumed');
         this.liveAttempts.delete(child.attempt);
       }
-      await this.notifyUncertainSteering();
+      await this.notifyUncertainRecovery();
       } catch { console.error('child quarantine deferred to host recovery'); } finally {
         if (this.activeInbox?.runId === runId) this.activeInbox = null;
         // Serial owner execution is over; retained child claims are recovered as uncertain.
@@ -839,7 +859,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await this.inbox.transition(final.inbox.id, final.inbox.attempt, 'awaiting_delivery');
       }
       await this.inbox.recover(protectedAttempts);
-      try { await this.notifyUncertainSteering(); } catch { console.error('child uncertainty notice deferred to host recovery'); }
+      try { await this.notifyUncertainRecovery(); } catch { console.error('uncertainty notice deferred to host recovery'); }
       const dueInbox = (await this.inbox.records()).some(r => r.state === 'admitted');
       const dueTransport = finals.some(r => r.status === 'attempting' || (r.status === 'pending' && r.dueAt <= Date.now()) || (r.status !== 'pending' && !r.settled));
       const readyKinds = [dueInbox, dueTransport, scheduler.hasDue()];
