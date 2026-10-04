@@ -15,6 +15,11 @@ const MODEL = `${PROVIDER_OF[WALDO_CHAT_MODEL]}/${WALDO_CHAT_MODEL}`;
 // Return the known operation and HTTP status only; never relay provider diagnostics.
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 
+const isEmptyExtraction = (value: unknown): boolean =>
+  value === null || value === undefined || (typeof value === 'string' && value.trim() === '') ||
+  (Array.isArray(value) && value.every(isEmptyExtraction)) ||
+  (typeof value === 'object' && !Array.isArray(value) && Object.values(value as object).every(isEmptyExtraction));
+
 export const browsePageHandler = (
   apiKey: string | undefined,
   projectId: string | undefined,
@@ -52,7 +57,10 @@ export const browsePageHandler = (
       if (!extracted.ok) return { ok: false, code: 'transient', error: `Extraction failed (HTTP ${extracted.status})`, source_taint: 'external' };
       const extractBody = (await extracted.json()) as { success?: boolean; data?: { result?: unknown } };
       if (!extractBody.success) return { ok: false, code: 'transient', error: 'Extraction was rejected by the browser service.', source_taint: 'external' };
-      return { ok: true, data: { url, data: extractBody.data?.result ?? null }, source_taint: 'external' };
+      const result = extractBody.data?.result ?? null;
+      // An empty extraction is a failed read, not an answer: say so, so the model tries another source instead of reporting a blank as a finding.
+      if (isEmptyExtraction(result)) return { ok: false, code: 'not_found', error: 'The page loaded but returned nothing readable (blocked, empty or needs a login). Try another source or page.', source_taint: 'external' };
+      return { ok: true, data: { url, data: result }, source_taint: 'external' };
     } catch {
       return { ok: false, code: 'transient', error: 'The browser request failed. No provider diagnostic was returned.', source_taint: 'external' };
     } finally {

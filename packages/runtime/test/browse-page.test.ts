@@ -158,5 +158,24 @@ describe('browse_page', () => {
     expect(result.error).toContain('HTTP 400');
     expect(result.error).not.toContain('bad key');
   });
+
+  it.each([[null], [''], [{}], [{ price: null, title: '  ' }], [[]]])('an empty extraction (%j) is a not_found failure, not ok:true', async (result) => {
+    const { fetcher } = stagehand({ extract: new Response(JSON.stringify({ success: true, data: { result, actionId: 'a2' } })) });
+    const out = await browsePageHandler('bb-key', 'bb-proj', 'model-key', fetcher).handle(args, ctx);
+    expect(out.ok).toBe(false);
+    if (!out.ok) { expect(out.code).toBe('not_found'); expect(out.error).toMatch(/another source/); }
+  });
+
+  it.each([[0], [false], ['none'], [{ found: false }]])('a real but falsy answer (%j) stays ok', async (result) => {
+    const { fetcher } = stagehand({ extract: new Response(JSON.stringify({ success: true, data: { result, actionId: 'a2' } })) });
+    const out = await browsePageHandler('bb-key', 'bb-proj', 'model-key', fetcher).handle(args, ctx);
+    expect(out.ok).toBe(true);
+  });
+
+  it('a partly filled extraction is still ok', async () => {
+    const { fetcher } = stagehand({ extract: new Response(JSON.stringify({ success: true, data: { result: { price: null, title: 'Bose QC' }, actionId: 'a2' } })) });
+    const out = await browsePageHandler('bb-key', 'bb-proj', 'model-key', fetcher).handle(args, ctx);
+    expect(out.ok).toBe(true);
+  });
 });
 
