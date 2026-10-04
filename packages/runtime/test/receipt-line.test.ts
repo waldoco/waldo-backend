@@ -10,6 +10,8 @@ describe('receiptLine', () => {
   it('is null when the turn made no effect call (reads and lookups say nothing)', () => {
     expect(receiptLine([ev(1, 'workspace_read', true), ev(2, 'web_search', true)])).toBeNull();
     expect(receiptLine([])).toBeNull();
+    expect(receiptLine([ev(1, 'skills_load', true), ev(2, 'browse_act', false)])).toBeNull();
+    expect(receiptLine([ev(1, 'browse_act', false), ev(2, 'workspace_write', true, {}, { path: 'a.md' })])).toBe('Receipts: workspace file written a.md (accepted)');
   });
   it('states an accepted effect with its ref', () => {
     expect(receiptLine([ev(1, 'workspace_write', true, {}, { path: 'notes.md' })])).toBe('Receipts: workspace file written notes.md (accepted)');
