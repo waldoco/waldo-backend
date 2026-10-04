@@ -33,9 +33,26 @@ Judgment belongs to the model. Do not add regex or other fixed rules for anythin
 - **Snapshots at the final boundary only.** `toMatchSnapshot` is allowed only on the final assembled prompt - the user-visible surface where unintended drift is a real regression (`prompt-builder.test.ts` is the current example). Intermediate assembly steps use behavior contracts (`toContain`, ordering, never-contains rules), which stay stable under wording changes. Do not add snapshots to intermediate outputs; mechanical snapshot churn trains reviewers to blind-accept diffs.
 - **Verify every claim.** PR bodies name the verification layer per claim (local suite, typecheck, CI, live probe) with exact heads. No "should work" language.
 
+## Build Unit: One End-to-End Slice
+
+- One PR is one user-visible outcome, built from trigger to receipt: contract, runtime, serving-path call site and tests together. If a call site sits in a single-writer file, the owner of that file builds the whole slice or the PR waits for it; do not merge the unwired half.
+- Acceptance is a trace, not a green suite: name the staging or console trace (or the exact reason none is possible yet) that shows the outcome working, and label each claim SOURCE, CI, STAGING or LIVE.
+- Do not add review ceremony to small pure code. One independent review on the exact head, then merge; extra agents and checklists only where the Security Review Triggers below apply.
+- Safety lands with the behavior it guards, in the same PR, not as a separate gate PR before a baseline exists.
+- Do not ask the owner small questions that a default plus an opt-out answers. Ask only for production, secrets, spend and irreversible actions.
+
+## Full Context and Capability by Default
+
+- The agent gets full context (mail, calendar, files, pages) and full capability by default. A guard that makes the agent less useful needs a harm it prevents.
+- Keep only guards against real harm: cross-owner leakage, credentials and secrets, irreversible actions without a receipt or approval, and hard medical safety lines. Every kept guard carries a one-line plain-words reason next to it in code or docs.
+- Do not redact, minimize, truncate or deny context just because it is sensitive-looking, when the destination is the model or the owner. Persistence and egress destinations are different and keep their rules.
+- No scope-limit gates, source cards or opt-in flags on normal reads. Features ship on by default with a per-owner opt-out.
+- Existing guards that cost answer quality are tracked in docs/planning/waldo-agent-mvp/GUARD_SWEEP_2026-10-04.md; each is dropped or justified, not left by default.
+
 ## Rejected Even When Well-Built
 
-- Speculative infrastructure with no concrete consumer in the same PR or a linked issue.
+- Speculative infrastructure with no concrete consumer in the same PR. A linked issue is not a consumer.
+- Contract-only, schema-only or helper-only PRs whose caller lands in a later PR. Split by user-visible outcome, never by layer.
 - Snapshot/change-detector tests on intermediate assembly outputs (see PR Discipline).
 - Environment variables for non-secret config (config belongs in code or the roster).
 - Regex or fixed rules making judgment calls (see "Judgment belongs to the model" above).
@@ -57,7 +74,7 @@ Judgment belongs to the model. Do not add regex or other fixed rules for anythin
 - **`qa-breaker`** — Adversarial QA. Defaults to NEEDS WORK. Tries to break every feature.
 - **`e2e-pipeline-tester`** — Full wearable → CRS → Claude → Channel Adapter pipeline.
 
-## Dev-QA Loop (use for EVERY feature)
+## Dev-QA Loop (use for features that change the serving path or touch a Security Review Trigger; small pure code needs tests and one review only)
 
 ```
 1. /waldo-isa-run-contract or /current-ideal-gap → define done
