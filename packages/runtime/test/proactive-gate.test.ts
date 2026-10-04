@@ -11,7 +11,10 @@ describe('proactiveGate', () => {
   });
   it('the deployment flag off beats an owner who enabled it', () => {
     expect(proactiveGate({ ...base, flag: '0' })).toEqual({ open: false, reason: 'flag_off' });
-    expect(proactiveGate({ ...base, flag: undefined })).toEqual({ open: false, reason: 'flag_off' });
+  });
+  it('the flag is a kill switch only: unset or any other value leaves the gate to the owner setting (on by default)', () => {
+    expect(proactiveGate({ ...base, flag: undefined })).toEqual({ open: true });
+    expect(proactiveGate({ ...base, flag: '1' })).toEqual({ open: true });
   });
   it('an owner who has not enabled it stays closed even with the flag on (owner B unaffected by owner A)', () => {
     expect(proactiveGate({ ...base, ownerEnabled: false })).toEqual({ open: false, reason: 'owner_off' });

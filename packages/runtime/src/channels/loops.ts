@@ -8,7 +8,7 @@ import { localIso } from './reminders';
 
 type Sql = Pick<SqlStorage, 'exec'>;
 export type Loop = Readonly<{ id: string; title: string; due: string | null; status: string; created_at: number; closed_at: number | null; source_ref?: string | null; source_detail?: string | null; thread_id?: string | null; source_message_id?: string | null }>;
-export type Proactivity = Readonly<{ quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high' }>;
+export type Proactivity = Readonly<{ quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high'; followups?: boolean }>;
 
 const DEFAULT_PROACTIVITY: Proactivity = { quiet_start: null, quiet_end: null, volume: 'normal' };
 
@@ -82,7 +82,10 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
       return row ? { ...DEFAULT_PROACTIVITY, ...(JSON.parse(row.settings) as Partial<Proactivity>) } : DEFAULT_PROACTIVITY;
     },
     setProactivity(settings: SetProactivityArgs): Proactivity {
-      const next: Proactivity = settings.quiet_start && settings.quiet_end ? settings : { ...settings, quiet_start: null, quiet_end: null };
+      const quiet: Proactivity = settings.quiet_start && settings.quiet_end ? settings : { ...settings, quiet_start: null, quiet_end: null };
+      const followups = settings.followups ?? this.proactivity().followups;
+      const { followups: _omit, ...rest } = quiet;
+      const next: Proactivity = followups === undefined ? rest : { ...rest, followups };
       sql.exec('INSERT INTO proactivity (id, settings) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET settings = excluded.settings', JSON.stringify(next));
       return next;
     },
@@ -99,7 +102,7 @@ export const isQuiet = (settings: Proactivity, now: number, timezone: string): b
 };
 
 export const proactivityLine = (settings: Proactivity): string =>
-  `Proactivity: volume ${settings.volume}; ${settings.quiet_start ? `quiet hours ${settings.quiet_start}-${settings.quiet_end}` : 'no quiet hours'}`;
+  `Proactivity: volume ${settings.volume}; ${settings.quiet_start ? `quiet hours ${settings.quiet_start}-${settings.quiet_end}` : 'no quiet hours'}${settings.followups === false ? '; follow-ups off' : ''}`;
 
 export const loopsSection = (book: LoopBook, timezone: string): string => {
   const open = book.list();
@@ -137,7 +140,7 @@ export const loopHandlers = (book: LoopBook) => [
   } satisfies ToolHandler<CloseLoopArgs, { id: string; closed: boolean }, ToolDispatcherContext>,
   {
     name: 'set_proactivity',
-    description: "Change how much Waldo reaches out on its own: quiet hours and volume. Only when the owner asks. Send all three fields; keep the current value for anything they did not mention (it is in the ledger).",
+    description: "Change how much Waldo reaches out on its own: quiet hours and volume. Only when the owner asks. Send quiet hours and volume; keep the current value for anything they did not mention (it is in the ledger). Set followups false or true only when the owner asks to turn mail and calendar follow-ups off or back on; they are on by default.",
     schema: setProactivityArgsSchema,
     trigger_allowlist: allowlist('set_proactivity'),
     autonomy_gated: false,

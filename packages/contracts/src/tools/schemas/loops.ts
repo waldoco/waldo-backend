@@ -19,5 +19,6 @@ export const setProactivityArgsSchema = z.strictObject({
   quiet_start: z.string().regex(/^\d{2}:\d{2}$/).nullable().describe('Local HH:MM when quiet hours start, or null for none.'),
   quiet_end: z.string().regex(/^\d{2}:\d{2}$/).nullable().describe('Local HH:MM when quiet hours end, or null for none.'),
   volume: z.enum(['low', 'normal', 'high']).describe('low: only the main day cards. normal: plus updates that change the day. high: plus smaller useful updates.'),
+  followups: z.boolean().optional().describe('Source-grounded follow-ups from mail and calendar (deadlines, prep); on by default. Set false only when the owner asks to turn them off, true to turn them back on; omit to keep the current value.'),
 });
 export type SetProactivityArgs = z.infer<typeof setProactivityArgsSchema>;
