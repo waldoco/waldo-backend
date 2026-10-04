@@ -120,7 +120,12 @@ describe('actual owner interruption recovery', () => {
       await state.storage.deleteAlarm();
     });
   });
-it('actual owner eviction after a claimed write produces one durable uncertainty status without replay', async () => {
+// The DO runs in Asia/Kolkata here, and a day-card planner model call appeared once the real clock passed IST midnight.
+// Pin Date for the whole test (setup, both alarms) at several instants, including both sides of the IST day boundary.
+it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:59.999Z', '2026-10-04T18:30:00.001Z'])('actual owner eviction after a claimed write produces one durable uncertainty status without replay (clock %s)', async (pinned) => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date(pinned));
+  try {
   const subject = 81101; const updateId = 995001; const stub = doStub(subject);
   const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
   const { persistInboxWake, armAlarm } = await import('../src/scheduler/alarm-slot');
@@ -133,8 +138,8 @@ it('actual owner eviction after a claimed write produces one durable uncertainty
     const runtime = instance as unknown as { setup(): { ready: Promise<void> }; serial(work: () => Promise<void>): Promise<void> };
     await runtime.setup().ready;
     await runtime.serial(async () => undefined);
-    // Today's cards are already planned and sent, so the alarm cannot make a day-plan model call
-    // that depends on the wall clock (it did after IST midnight). This test is about the interrupted request only.
+    // With the clock pinned, mark that day's cards as already sent so the alarm has no day plan to make.
+    // Without this the planner model call returns once the pinned instant is past IST midnight (observed at 18:30:00.001Z).
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
     const { DAY_CARDS } = await import('../src/prompt/day-cards');
     for (const card of DAY_CARDS) state.storage.sql.exec('INSERT OR REPLACE INTO day_plan (day, card, time, reason, sent) VALUES (?, ?, ?, ?, 1)', today, card.id, '12:00', 'test fixture');
@@ -174,6 +179,7 @@ it('actual owner eviction after a claimed write produces one durable uncertainty
     expect(await new TelegramOwnerInbox(state.storage, persistInboxWake).claim(`hermetic-test-bot-token:telegram:${updateId}`, 'retry', 'retry-run', Date.now() + 150_000)).toBeNull();
     await state.storage.deleteAlarm();
   });
+  } finally { vi.useRealTimers(); }
 });
 
 it('actual recovery retains its notice wake after outbox capacity failure and queues only once', async () => {
