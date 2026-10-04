@@ -42,7 +42,7 @@ export const childReceiptEvent = (event: ToolLoopEvent, seq: number): LoopEventL
   try { args = JSON.parse(event.call.arguments); } catch (error) {
     // Match the parent receipt parser: malformed args keep a failed call diagnosable,
     // but cannot supply a file ref. Never recover one from partial JSON.
-    console.warn(JSON.stringify({ hop: 'receipt_args_parse', ms: 0, ok: false, error: `${event.call.name}: ${String(error).slice(0, 120)}` }));
+    console.warn(JSON.stringify({ hop: 'receipt_args_parse', ms: 0, ok: false, error: `${event.call.name}: ${error instanceof Error ? error.name : 'ParseError'} len=${event.call.arguments.length}` }));
   }
   return { seq, call: { name: event.call.name, args }, ok: event.ok, ...(event.code ? { code: event.code } : {}), delegated: true };
 };

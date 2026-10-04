@@ -445,12 +445,25 @@ describe('runChildLoop delegated effect receipts', () => {
           expect(warn).toHaveBeenCalledTimes(1);
           expect(JSON.parse(warn.mock.calls[0]![0] as string)).toEqual({
             hop: 'receipt_args_parse', ms: 0, ok: false,
-            error: expect.stringContaining('workspace_write: SyntaxError:'),
+            error: expect.stringMatching(/^workspace_write: SyntaxError len=\d+$/),
           });
           const diagnostic = JSON.parse(warn.mock.calls[0]![0] as string) as { error: string };
           expect(diagnostic.error.length).toBeLessThanOrEqual('workspace_write: '.length + 120);
         } else expect(warn).not.toHaveBeenCalled();
       } finally { warn.mockRestore(); }
     });
+  });
+
+  it('the parse diagnostic never carries any of the argument text', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      for (const secret of ['secret-token xyz', 'hunter2 pw', `{"file_id": "secret-token-in-json" `]) {
+        childReceiptEvent({ call: { name: 'workspace_write', arguments: secret }, ok: false } as never, 0);
+      }
+      expect(warn).toHaveBeenCalledTimes(3);
+      const logged = warn.mock.calls.map(call => String(call[0])).join('\n');
+      for (const leak of ['secret-token', 'hunter2', 'xyz', 'secret-token-in-json']) expect(logged).not.toContain(leak);
+      expect(logged).toContain('len=16');
+    } finally { warn.mockRestore(); }
   });
 });
