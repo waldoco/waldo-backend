@@ -10,7 +10,7 @@ export const TOOL_CLAIM_EFFECT: Readonly<Record<ToolName, string | null>> = {
   read_document: null, list_artifacts: null, read_artifact: null, read_mcp_tool: null, read_drive: null,
   search_connector: null, propose_schedule: null, search_tools: null, list_reminders: null,
   read_tool_output: null, connect_service: null, browse_page: null, list_health_logs: null, list_standing_orders: null,
-  workspace_list: null, workspace_read: null, skills_list: null,
+  workspace_list: null, workspace_read: null, workspace_search: null, skills_list: null,
   // Loading selects ephemeral catalog metadata; it does not certify instruction admission.
   skills_install: 'skill_enabled', skills_disable: 'skill_disabled', skills_load: 'skill_selected',
   // Verified against the handler in this tree (mutates_state: true, and the result says what happened).
