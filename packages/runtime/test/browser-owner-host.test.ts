@@ -169,6 +169,19 @@ it('never physically submits when the exact desk approval is denied', async () =
   expect(f.rows.get('browser_owner_task_v1')).toMatchObject({ phase: 'closed', receipt: null });
 });
 
+it('never requests an approval-bearing grant when the exact desk approval is denied', async () => {
+  const f = fixture(), requests: BrowserOwnerGrantRequest[] = []; let submits = 0;
+  const grant = f.options.config.grant;
+  f.options.config.grant = async request => { requests.push(request); return grant(request); };
+  f.driver.submit = async (_id, _state, before) => { await before(); submits++; };
+  const task = (await browserOwnerHost(f.options).resolve(f.principal))!;
+  await task.read(f.principal); const proposal = await task.propose(f.principal);
+  const result = await task.submit(f.principal, proposal.id, 'unapproved-desk-row');
+  expect(submits).toBe(0); expect(result).toMatchObject({ status: 'rejected' });
+  expect(requests.length).toBeGreaterThan(0);
+  expect(requests.filter(request => request.evidence.approvalRef !== undefined)).toHaveLength(0);
+});
+
 it.each(['grant', 'lookup', 'storage', 'source', 'physical-source'])('fences approval withdrawal during the final %s wait', async wait => {
   const f = fixture(); let approved = true, clicks = 0, afterGrant = false, afterBefore = false;
   f.options.approved = () => approved;
