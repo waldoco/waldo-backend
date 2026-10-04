@@ -93,5 +93,8 @@ describe('ownerClockLine', () => {
   it('defines done for a research ask and dates a search', () => {
     expect(MESSAGING_BEHAVIOR).toContain('is done when you have looked at real candidates');
     expect(MESSAGING_BEHAVIOR).toContain('check the page shows them before you read prices');
+    expect(MESSAGING_BEHAVIOR).toContain('Do not reply with only a link or a question before you have read candidates');
+    expect(MESSAGING_BEHAVIOR).toContain('If you could not read any candidates, say what you could not read');
+    expect(MESSAGING_BEHAVIOR).toContain('Keep the search for each fare or room separate');
   });
 });
