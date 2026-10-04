@@ -389,3 +389,20 @@ it('after an explicit narrowing, a change that adds a default back needs the own
   const fresh = await cap.classify(JSON.stringify({ decision: 'new', sources: ['web', 'mail'], evidence: 'plan' }), 'r1', 'plan my trip');
   expect(fresh.proposal, 'a new task listing a default needs no card').toBeUndefined();
 }));
+
+it('a closed run cannot run the narrowed migration (no ALTER or backfill before the fence)', () => run('task-migrate-closed', async (sql, scope) => {
+  legacyTable(sql, '["workspace"]');
+  const closed: RunEffectScope = { ...scope, admit() { throw new Error('run is closed or expired'); }, commit() { throw new Error('run is closed or expired'); } };
+  expect(() => createTaskSourceScope(sql, 'owner-one', closed, async () => {})).toThrow('closed');
+  expect(sql.exec<{ name: string }>('PRAGMA table_info(owner_task_source_scope)').toArray().some(column => column.name === 'narrowed')).toBe(false);
+  expect(() => approveTaskSourceProposal(sql, 'owner-one', { ownerKey: 'owner-one', taskId: 't1', revision: 1, expiresAt: Date.now() + 1000 } as never, Date.now(), closed)).toThrow('closed');
+  expect(sql.exec<{ name: string }>('PRAGMA table_info(owner_task_source_scope)').toArray().some(column => column.name === 'narrowed')).toBe(false);
+}));
+
+it('a fresh owner with Google connected gets the read defaults on first retain, including local (memory writes)', () => run('task-fresh-connected', async (sql, scope) => {
+  const snapshot = (await owned(sql, scope, ['local', 'workspace', 'web', 'mail', 'calendar', 'contacts', 'tasks', 'drive']).classify(decision('retain'))).snapshot;
+  expect(snapshot.ready).toBe(true);
+  expect(snapshot.sources).toEqual(expect.arrayContaining(['local', 'workspace', 'web', 'mail', 'calendar']));
+  expect(taskSourceAllowed(snapshot, { name: 'search_communication', requires_connector: true })).toBe(true);
+  expect(narrowedFlag(sql)).toBe(0);
+}));
