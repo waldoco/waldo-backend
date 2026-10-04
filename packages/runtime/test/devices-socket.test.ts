@@ -7,6 +7,7 @@ it('persists replay admission, refuses duplicate nonces, and maintains a revoke 
   await runInDurableObject(stub, async (instance) => {
     expect(instance.admitNonce('AAECAwQFBgcICQoLDA0ODw', Math.floor(Date.now() / 1000))).toBe(true);
     expect(instance.admitNonce('AAECAwQFBgcICQoLDA0ODw', Math.floor(Date.now() / 1000))).toBe(false);
+    expect(instance.admitNonce('BAECAwQFBgcICQoLDA0ODw', Math.floor(Date.now() / 1000) - 301)).toBe(false);
     expect(await instance.status()).toEqual({ online: false, last_heartbeat_at: null });
     await instance.revoke();
     const rejected = await instance.fetch(new Request('https://bridge.test/devices/connect'));

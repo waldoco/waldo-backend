@@ -43,7 +43,7 @@ it('runs owner console pair -> signed redeem/connect/heartbeat -> revoke through
   });
   const cookie = `waldo_console=${session}; waldo_owner=${owner}.session_fixture.${await routerSignature(secret, 0, `cookie.${owner}.session_fixture`)}`;
   const call = (request: Request) => worker.fetch(request, env, {} as ExecutionContext);
-  const action = (name: string, token = csrf) => { const form = new FormData(); form.set('action', name); form.set('csrf', token); form.set('id', 'dev_fixture'); return call(new Request('https://bridge.test/console/action', { method: 'POST', body: form, headers: { cookie } })); };
+  const action = (name: string, token = csrf) => { const form = new FormData(); form.set('action', name); form.set('csrf', token); form.set('id', 'dev_fixture'); return call(new Request('https://bridge.test/console/action', { method: 'POST', body: form, headers: { cookie }, redirect: 'manual' })); };
   expect((await action('device.pair', 'wrong')).status).toBe(403);
   const issued = await action('device.pair'); expect(issued.status).toBe(200); expect(issued.headers.get('cache-control')).toBe('no-store');
   const code = (await issued.text()).split('\n')[0]!; expect(code).toHaveLength(43);
