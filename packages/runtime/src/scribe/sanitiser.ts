@@ -738,6 +738,21 @@ function ownerReadable(destination: SanitiseDestination, taint: SourceTaint, kin
   return taint === null && OWNER_READABLE_DESTINATIONS.has(destination);
 }
 
+const WORKSPACE_ID_KEYS: ReadonlySet<string> = new Set(['file_id', 'blob_id', 'operation_id', 'source_file_id']);
+const WORKSPACE_URL_KEYS: ReadonlySet<string> = new Set(['url', 'download_url']);
+
+// Exactly what workspace-delivery.ts emits: https origin, the file path, id (uuid) then a numeric revision.
+function isWorkspaceFileUrl(text: string): boolean {
+  let parsed: URL;
+  try { parsed = new URL(text); } catch { return false; }
+  if (parsed.protocol !== 'https:' || parsed.username !== '' || parsed.password !== '' || parsed.hash !== '') return false;
+  if (parsed.pathname !== '/console/workspace/file') return false;
+  const id = parsed.searchParams.get('id');
+  const revision = parsed.searchParams.get('revision');
+  if (id === null || revision === null || !validId(id) || !/^[0-9]{1,9}$/.test(revision)) return false;
+  return text === `${parsed.origin}/console/workspace/file?id=${id}&revision=${revision}` && !/[0-9]{13}/.test(parsed.host);
+}
+
 function redactPiiText(
   text: string,
   key: string | undefined,
@@ -745,14 +760,12 @@ function redactPiiText(
   taint: SourceTaint,
   counts: Map<RedactionKind, number>,
 ): string {
-  // Model/owner-bound structured references must keep their exact bytes for later
-  // calls. Validate the value as well as the field name; free text and persistence
-  // still redact card numbers. Canary, secret and injection checks scan all fields.
+  // Model/owner-bound workspace references keep their exact bytes for later calls, but only
+  // for untainted results, an allowlisted key and the exact shape the producer emits. Everything
+  // else (free text, other keys, other URL shapes, tainted content) is still redacted below.
   if (key !== undefined && MODEL_AND_OWNER_DESTINATIONS.has(destination)) {
-    if ((key === 'id' || key.endsWith('_id')) && validId(text)) return text;
-    if (key === 'url' || key.endsWith('_url')) {
-      try { new URL(text); return text; } catch { /* Not a URL: redact it as text. */ }
-    }
+    if (WORKSPACE_ID_KEYS.has(key) && validId(text)) return text;
+    if (WORKSPACE_URL_KEYS.has(key) && isWorkspaceFileUrl(text)) return text;
   }
   let output = redactEncodedPii(text, destination, taint, counts);
   output = replaceAndCount(

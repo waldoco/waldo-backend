@@ -1582,28 +1582,60 @@ describe('sanitiseVerifyOnly (assembled provider prompt final pass)', () => {
 });
 
 
+function inspectTrusted(payload: SanitiseInput['payload'], destination: SanitiseDestination = 'internal_context') {
+  return sanitise({ payload, destination, canary_tokens: [...CANARIES], source_taint: null });
+}
+
 describe('structured tool identifier integrity', () => {
   const id = 'aaaaaaaa-aaaa-4aaa-4111-111111111114';
   const url = `https://local.invalid/console/workspace/file?id=${id}&revision=1`;
   it.each(['internal_context', 'owner_reply'] as const)('preserves validated identifier fields at %s without preserving card free text', destination => {
-    const result = inspectExternal({ file_id: id, id, source_file_id: id, delivery: { url }, download_url: url, body: 'card 4111 1111 1111 1114', nested: [{ file_id: id }] }, destination);
-    expect(result).toMatchObject({ ok: true, payload: { file_id: id, id, source_file_id: id, delivery: { url }, download_url: url, body: 'card [REDACTED_CREDIT_CARD]', nested: [{ file_id: id }] } });
+    const result = inspectTrusted({ file_id: id, source_file_id: id, delivery: { url }, download_url: url, body: 'card 4111 1111 1111 1114', nested: [{ file_id: id }] }, destination);
+    expect(result).toMatchObject({ ok: true, payload: { file_id: id, source_file_id: id, delivery: { url }, download_url: url, body: 'card [REDACTED_CREDIT_CARD]', nested: [{ file_id: id }] } });
   });
   it('preserves structured references in serialized provider tool turns and still redacts their body', () => {
     const receipt = { file_id: id, delivery: { url }, body: 'card 4111 1111 1111 1114' };
-    const result = inspectExternal([{ call: { arguments: JSON.stringify({ file_id: id }) }, output: JSON.stringify(receipt) }]);
+    const result = inspectTrusted([{ call: { arguments: JSON.stringify({ file_id: id }) }, output: JSON.stringify(receipt) }]);
     expect(result).toMatchObject({ ok: true, payload: [{ call: { arguments: JSON.stringify({ file_id: id }) }, output: JSON.stringify({ ...receipt, body: 'card [REDACTED_CREDIT_CARD]' }) }] });
   });
   it('does not recurse into an encoded object beyond the existing payload depth guard', () => {
     const output = '['.repeat(150) + '"4111 1111 1111 1114"' + ']'.repeat(150);
-    expect(inspectExternal([{ output }])).toMatchObject({ ok: false, check: 'size_cap', reason: 'invalid_payload' });
+    expect(inspectTrusted([{ output }])).toMatchObject({ ok: false, check: 'size_cap', reason: 'invalid_payload' });
   });
   it('does not exempt a field name without a valid identifier value', () => {
-    expect(inspectExternal({ id: '4111 1111 1111 1114', file_id: '4111 1111 1111 1114', url: '4111 1111 1111 1114' })).toMatchObject({ ok: true, payload: { id: '[REDACTED_CREDIT_CARD]', file_id: '[REDACTED_CREDIT_CARD]', url: '[REDACTED_CREDIT_CARD]' } });
+    expect(inspectTrusted({ id: '4111 1111 1111 1114', file_id: '4111 1111 1111 1114', url: '4111 1111 1111 1114' })).toMatchObject({ ok: true, payload: { id: '[REDACTED_CREDIT_CARD]', file_id: '[REDACTED_CREDIT_CARD]', url: '[REDACTED_CREDIT_CARD]' } });
   });
   it('keeps persistence redaction and deny-level checks on identifier fields', () => {
-    expect(inspectExternal({ file_id: id }, 'memory_block')).toMatchObject({ ok: true, payload: { file_id: 'aaaaaaaa-aaaa-4aaa-[REDACTED_CREDIT_CARD]' } });
-    expect(inspectExternal({ url: 'https://local.invalid/?token=1111111111111111' })).toMatchObject({ ok: false, check: 'canary_token' });
-    expect(inspectExternal({ file_id: 'sk-proj-abcdefghijklmnopqrstuvwx' })).toMatchObject({ ok: false, check: 'canary_token' });
+    expect(inspectTrusted({ file_id: id }, 'memory_block')).toMatchObject({ ok: true, payload: { file_id: 'aaaaaaaa-aaaa-4aaa-[REDACTED_CREDIT_CARD]' } });
+    expect(inspectTrusted({ url: 'https://local.invalid/?token=1111111111111111' })).toMatchObject({ ok: false, check: 'canary_token' });
+    expect(inspectTrusted({ file_id: 'sk-proj-abcdefghijklmnopqrstuvwx' })).toMatchObject({ ok: false, check: 'canary_token' });
+  });
+  it.each([
+    'x:4111 1111 1111 1114',
+    'https://a.example/?c=4111111111111111',
+    'javascript:alert("4111 1111 1111 1114")',
+    'data:text/plain,4111 1111 1111 1114',
+    `${url}&c=4111111111111111`,
+    `https://local.invalid/console/workspace/file?id=${id}&revision=1&q=NDExMTExMTExMTExMTExMQ==`,
+    'https://local.invalid/other?id=aaaaaaaa-aaaa-4aaa-4111-111111111114&revision=1',
+  ])('only the exact producer URL shape is preserved: %s', value => {
+    const result = inspectTrusted({ url: value, download_url: value });
+    expect(result).toMatchObject({ ok: true });
+    expect(JSON.stringify(result)).not.toContain('4111 1111 1111 1114');
+    expect(JSON.stringify(result)).not.toContain('4111111111111111');
+    expect(JSON.stringify(result)).not.toContain('NDExMTExMTExMTExMTExMQ');
+  });
+  it('tainted content still redacts everything outside the allowlisted key + exact shape', () => {
+    const result = inspectExternal({ file_id: id, url: 'https://a.example/?c=4111111111111111', note_id: id, body: 'card 4111 1111 1111 1114' });
+    expect(JSON.stringify(result)).not.toContain('4111111111111111');
+    expect(JSON.stringify(result)).not.toContain('4111 1111 1111 1114');
+    expect(JSON.stringify(result)).not.toContain(`"note_id":"${id}"`);
+  });
+  it('does not preserve identifiers under non-allowlisted keys, or serialized receipts with other shapes', () => {
+    const result = inspectTrusted({ id, user_id: id, thing_id: id });
+    expect(JSON.stringify(result)).not.toContain(id);
+    const tainted = inspectExternal([{ output: JSON.stringify({ note_id: id, url: 'https://a.example/?c=4111111111111111' }) }]);
+    expect(JSON.stringify(tainted)).not.toContain(id);
+    expect(JSON.stringify(tainted)).not.toContain('4111111111111111');
   });
 });
