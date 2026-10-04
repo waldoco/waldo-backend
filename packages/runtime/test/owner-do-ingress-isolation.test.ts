@@ -689,3 +689,26 @@ it('legacy erased never-consumed steering gets one truthful not-processed notice
   expect(await inbox.claim(child.id,'retry','replacement',Date.now()+10000)).toBeNull();expect((await inbox.records()).find(row=>row.id===child.id)?.outcomeNoticeQueued).toBe(true);await state.storage.deleteAlarm();
  });
 });
+
+// RED on 30b6902e: an ordinary owner turn that was claimed when the DO restarted is quarantined as
+// recovered_uncertain (never replayed, correct) but the owner is never told. Only steer children get a notice.
+it('an ordinary claimed turn recovered after restart gets exactly one uncertain-outcome notice, and is not replayed', async () => {
+  const subject = 81102;
+  await runInDurableObject(doStub(subject), async (instance, state) => {
+    const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox'); const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake); const binding = { bot: 'hermetic-test-bot-token', subject: String(subject), doName: route(subject).doName };
+    await state.storage.put({ telegram_subject: String(subject), do_name: binding.doName });
+    await inbox.admit(binding, 994801, 'ordinary fixture turn');
+    const row = (await inbox.records()).find(r => r.updateId === 994801)!;
+    await inbox.claim(row.id, 'dead-attempt', 'dead-run', Date.now() - 10 * 60000);
+    await inbox.recover(new Set());
+    const recovered = (await inbox.records()).find(r => r.id === row.id)!;
+    expect(recovered.state).toBe('quarantined'); expect(recovered.reason).toBe('recovered_uncertain'); expect(recovered.body).toBe('');
+    const internal = instance as unknown as { setup(): { finalOutbox: import('../src/channels/telegram-final-outbox').TelegramFinalOutbox }; notifyUncertainSteering(): Promise<void> };
+    const notices = () => internal.setup().finalOutbox.records().filter(r => r.payload.chat_id === subject && /not sure|uncertain|restart/i.test(r.payload.text));
+    await internal.notifyUncertainSteering(); await internal.notifyUncertainSteering();
+    expect(notices()).toHaveLength(1);
+    // never replayed: the row stays quarantined and unclaimable
+    expect(await inbox.claim(row.id, 'retry', 'replacement', Date.now() + 10000)).toBeNull();
+  });
+});
