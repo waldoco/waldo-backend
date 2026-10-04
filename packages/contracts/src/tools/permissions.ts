@@ -81,6 +81,7 @@ export const toolNameSchema = z.enum([
   // workspace 50-52 (files slice): owner-private file store, owner-initiated (user_message) only; list/read stamped external.
   'workspace_list',
   'workspace_read',
+  'workspace_search',
   'workspace_write',
   'workspace_render',
   'skills_list',
@@ -244,6 +245,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'cancel_standing_order',
     'workspace_list',
     'workspace_read',
+    'workspace_search',
     'workspace_write',
     'workspace_render',
     'skills_list',

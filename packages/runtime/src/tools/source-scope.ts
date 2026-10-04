@@ -29,7 +29,7 @@ export const SOURCE_SCOPE_CLASS: Readonly<Record<ToolName, 'deny' | 'allow'>> = 
   open_loop: 'allow', close_loop: 'allow', set_proactivity: 'allow', read_tool_output: 'deny', connect_service: 'allow',
   browse_page: 'deny', browse_act: 'deny', delegate_task: 'allow', log_meal: 'allow', log_workout: 'allow', list_health_logs: 'deny',
   set_standing_order: 'allow', list_standing_orders: 'allow', cancel_standing_order: 'allow', workspace_list: 'deny',
-  workspace_read: 'deny', workspace_write: 'allow', workspace_render: 'allow', skills_list: 'allow', skills_install: 'allow',
+  workspace_read: 'deny', workspace_search: 'deny', workspace_write: 'allow', workspace_render: 'allow', skills_list: 'allow', skills_install: 'allow',
   skills_disable: 'allow', skills_load: 'allow',
 };
 export const EXTERNAL_READ_TOOLS = (Object.keys(SOURCE_SCOPE_CLASS) as ToolName[]).filter(name => SOURCE_SCOPE_CLASS[name] === 'deny');
