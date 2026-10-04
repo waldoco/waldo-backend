@@ -24,7 +24,7 @@ import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntri
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace } from './owner-turn-envelope';
-import { enrichOwnerTrace, readOwnerTraceHeader } from '../observability/owner-trace-identity';
+import { enrichOwnerTrace, identityForStorage, readOwnerTraceHeader } from '../observability/owner-trace-identity';
 import { adminRead, adminAction } from './dashboard-admin';
 import { pinProxyIntentRoute } from '../connectors/proxy-intent-route';
 import { ProxyIntentError, type ProxyIntent } from '../connectors/proxy-intent';
@@ -335,7 +335,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const target = this.activeInbox;
     const control = target?.runId && text && (text === '/stop' || !text.startsWith('/')) ? { kind: text === '/stop' ? 'stop' as const : 'steer' as const, targetRun: target.runId } : undefined;
     try {
-      const traceIdentity = readOwnerTraceHeader(request.headers);
+      const traceIdentity = identityForStorage(readOwnerTraceHeader(request.headers), resolveCaptureText(this.env));
       const admitted = await this.inbox.admit({ bot, subject, doName, ...(traceIdentity ? { traceIdentity } : {}) }, raw.update_id!, body, control);
       if (admitted === 'conflict' || admitted === 'capacity') return new Response(admitted, { status: admitted === 'conflict' ? 409 : 503 });
       // Binding follows authenticated admission, and never replaces a different binding.

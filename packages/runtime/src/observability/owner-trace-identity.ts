@@ -33,3 +33,7 @@ export const enrichOwnerTrace = (entry: TurnLogEntry, rows: readonly Occurrence[
   const row = match ? rows.find(row => row.updateId === Number(match[1]) && row.doName === doName && row.subject === subject) : undefined;
   return { ...entry, owner: doName || 'unresolved', ...ownerTraceFields(ownerTraceIdentity(row?.traceIdentity)) };
 };
+
+// What is persisted at rest follows the same capture switch as the sinks: owner_id stays, the email is dropped when capture is off.
+export const identityForStorage = (identity: OwnerTraceIdentity | undefined, captureText: boolean): OwnerTraceIdentity | undefined =>
+  identity && !captureText ? Object.freeze({ owner_id: identity.owner_id, owner_email: null }) : identity;
