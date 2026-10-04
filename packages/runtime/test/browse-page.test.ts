@@ -38,7 +38,7 @@ describe('browse_page', () => {
     expect(calls[2]!.path).toBe('/v1/sessions/sess-1/extract');
   });
 
-  it('RED: sends the model key as the x-model-api-key header on the session start (Stagehand spec), not only in the extract body', async () => {
+  it('sends the model key as the x-model-api-key header on the session start (Stagehand spec), not only in the extract body', async () => {
     const { calls, fetcher } = stagehand();
     const handler = browsePageHandler('bb-key', 'bb-proj', 'model-secret', fetcher);
     await handler.handle(args, ctx);
