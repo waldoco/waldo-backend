@@ -141,3 +141,28 @@ it('a restart while the fallback is in flight quarantines the frozen attempt wit
   expect(send).toHaveBeenCalledTimes(2);
   expect(f.outbox.records()[0]!.status).toBe('quarantined');
 });
+
+it.each(['ack', 'unknown'])('concurrent forget during plain fallback is not overwritten after %s', async outcome => {
+  const f = await fixture(); const rows = f.outbox.records();
+  rows[0]!.mailFollowup = { loopId: 'l', due: 'd', sourceRef: 's', timezone: 'UTC', messageId: 'm' };
+  f.kv.put('telegram_final_outbox_v1', rows);
+  const send = vi.fn().mockRejectedValueOnce(rejection()).mockImplementationOnce(async () => {
+    redactMailFollowupEntries(f.kv, ['private'], '[forgotten]');
+    if (outcome === 'unknown') throw new Error('network unknown');
+    return { message_id: 3, chat: { id: 7 } };
+  });
+  await f.outbox.drain({ allowed: async () => true, send, settled: async () => undefined });
+  expect(send).toHaveBeenCalledTimes(2);
+  expect(f.outbox.records()[0]!.payload.fallback_text).not.toContain('private');
+  expect(f.outbox.records()[0]).toMatchObject({ status: 'quarantined', reason: 'forget_during_uncertain_send' });
+});
+
+it('rechecks expiry after the asynchronous fallback owner gate', async () => {
+  const f = await fixture(); const rows = f.outbox.records(); rows[0]!.expiresAt = f.now() + 100;
+  f.kv.put('telegram_final_outbox_v1', rows);
+  const allowed = vi.fn().mockResolvedValueOnce(true).mockImplementationOnce(async () => { f.advance(); return true; });
+  const send = vi.fn().mockRejectedValue(rejection());
+  await f.outbox.drain({ allowed, send, settled: async () => undefined });
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(f.outbox.records()[0]!.status).toBe('blocked');
+});

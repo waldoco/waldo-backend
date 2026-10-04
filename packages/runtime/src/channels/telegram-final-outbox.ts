@@ -123,27 +123,28 @@ export class TelegramFinalOutbox {
     if (!allowed) { row.status = 'blocked'; row.reason = 'owner_binding'; await this.save(rows); await options.settled(row); row.settled = true; await this.save(rows); return; }
     row.status = 'attempting'; row.attempts += 1;
     await this.save(rows);
+    const currentAttempt = () => this.records().find(current => current.id === row.id
+      && current.status === 'attempting' && current.digest === row.digest && current.attempts === row.attempts
+      && JSON.stringify(current.payload) === JSON.stringify(row.payload));
     try {
       let fallbackInvalidated = false;
-      const currentAttempt = () => this.records().find(current => current.id === row.id
-        && current.status === 'attempting' && current.digest === row.digest && current.attempts === row.attempts
-        && JSON.stringify(current.payload) === JSON.stringify(row.payload));
       const result = await sendTelegramFinal(options.send, { ...row.payload }, async () => {
         const current = currentAttempt();
         if (!current) { fallbackInvalidated = true; return false; }
         const allowed = (current.expiresAt === undefined || this.now() < current.expiresAt) && await options.allowed(current);
         if (!currentAttempt()) { fallbackInvalidated = true; return false; }
-        return allowed;
+        return allowed && (current.expiresAt === undefined || this.now() < current.expiresAt);
       });
       // Concurrent cancellation/forget owns the persisted record. Never overwrite
       // its disposition or restore its scrubbed bytes from this captured send.
-      if (fallbackInvalidated) return;
+      if (fallbackInvalidated || !currentAttempt()) return;
       const ack = result as { message_id?: unknown; chat?: { id?: unknown } } | undefined;
       const messageId = ack?.message_id;
       if (!Number.isSafeInteger(messageId) || (messageId as number) <= 0 || ack?.chat?.id !== row.payload.chat_id) {
         row.status = result === undefined ? 'blocked' : 'quarantined'; row.reason = result === undefined ? 'egress_blocked' : 'invalid_ack';
       } else { row.status = 'delivered'; row.messageId = messageId as number; row.deliveredAt = this.now(); }
     } catch (error) {
+      if (!currentAttempt()) return;
       if (error instanceof TelegramRejection && error.retryable && !(typeof error.retryAfter === 'number' && error.retryAfter > 3600) && row.attempts < MAX_ATTEMPTS) {
         row.status = 'pending'; row.reason = 'provider_rejected';
         row.dueAt = this.now() + Math.max(30_000 * row.attempts, (typeof error.retryAfter === 'number' && Number.isFinite(error.retryAfter) && error.retryAfter >= 0 ? Math.min(3600, error.retryAfter) : 0) * 1_000);
