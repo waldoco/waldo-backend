@@ -166,7 +166,7 @@ describe('blocklist entries ("-host") alongside the open sentinel', () => {
 
 describe('a malformed blocklist entry fails closed', () => {
   const check = (list: readonly string[]) => evaluateDeclaredEgress({ callbacks: [{ target: 'https://news.example.org/' }] }, NESTED_URL_PATHS, list, { openPublic: true });
-  it.each(['-', '-http://bad host', '-evil.example/path', '-ev il.example'])('entry %s denies everything', entry => {
+  it.each(['-', '-*', '-http://bad host', '-evil.example/path', '-ev il.example'])('entry %s denies everything', entry => {
     expect(check(['*', entry]).ok).toBe(false);
   });
   it('a well-formed blocklist entry still lets other hosts through', () => {

@@ -90,6 +90,14 @@ describe('browse_act', () => {
       { selector: '#b', description: 'Add to cart', method: 'click' },
       { selector: '#b', description: 'Subscribe to the newsletter', method: 'click' },
       { selector: '#b', description: 'Donate now', method: 'click' },
+      { selector: '#b', description: 'Sign-in', method: 'click' },
+      { selector: '#b', description: 'Sign up for free', method: 'click' },
+      { selector: '#b', description: 'Log-in', method: 'click' },
+      { selector: '#b', description: 'Reserve a table', method: 'click' },
+      { selector: '#b', description: 'Enroll now', method: 'click' },
+      { selector: '#b', description: 'RSVP', method: 'click' },
+      { selector: '#b', description: 'Get started', method: 'click' },
+      { selector: '#b', description: 'Continue with Google', method: 'click' },
     ]) {
       const record = vi.fn();
       const { calls, fetcher } = stagehand({ actions: [blocked] });
@@ -106,7 +114,7 @@ describe('browse_act', () => {
 
   it('ordinary reading steps still run: click next page, open the transcript, type in a field, scroll', async () => {
     const record = vi.fn();
-    const { calls, fetcher } = stagehand({ actions: [{ selector: '#n', description: 'Click Next page', method: 'click' }, { selector: '#t', description: 'Click Show transcript', method: 'click' }, { selector: '#q', description: 'Type the city', method: 'fill', arguments: ['Pune'] }, null] });
+    const { calls, fetcher } = stagehand({ actions: [{ selector: '#n', description: 'Click Next page', method: 'click' }, { selector: '#t', description: 'Click Show transcript', method: 'click' }, { selector: '#s', description: 'Scroll to next section', method: 'nextChunk' }, null] });
     const result = await browseActHandler('k', 'p', undefined, record, undefined, fetcher).handle(args, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
