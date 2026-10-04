@@ -37,6 +37,7 @@ export const receiptsFromLoopEvents = (events: readonly LoopEventLike[]): readon
   return [{ seq: event.seq, tool: name, effect, ok: event.ok, state, ...(ref !== undefined ? { ref } : {}) }];
 });
 
-export const evaluateTurnClaims = (claims: readonly DoneClaim[], events: readonly LoopEventLike[]): readonly ClaimFinding[] => {
-  try { return checkClaimsAgainstReceipts(claims, receiptsFromLoopEvents(events)); } catch { return []; }
-};
+// No fallback: a failure here throws to the caller, who owns what a failed advisory check means.
+// Returning "no findings" on error would read as "all claims verified".
+export const evaluateTurnClaims = (claims: readonly DoneClaim[], events: readonly LoopEventLike[]): readonly ClaimFinding[] =>
+  checkClaimsAgainstReceipts(claims, receiptsFromLoopEvents(events));
