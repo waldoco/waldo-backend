@@ -26,6 +26,12 @@ describe('messagingSystemPrompt', () => {
     expect(MESSAGING_BEHAVIOR).toContain('never write notes as if you had heard it');
   });
 
+  it('claims of saving need a memory receipt, and readback of personal facts comes from memory only', () => {
+    expect(MESSAGING_BEHAVIOR).toContain('only when the memory line for this turn lists a stored or corrected claim');
+    expect(MESSAGING_BEHAVIOR).toContain('never write "Noted" as if it were stored');
+    expect(MESSAGING_BEHAVIOR).toContain('say nothing is stored about that; do not search the workspace');
+  });
+
   it('tells the model to pick search or browsing itself and never ask the owner for a link', () => {
     expect(MESSAGING_BEHAVIOR).toContain('Choose between web_search and browse_page yourself from what the request needs; never ask the owner for a link you can find.');
     expect(MESSAGING_BEHAVIOR).toContain('A stable fact needs only a search; a changing or exact fact (price, hours, policy, release) needs the page.');
