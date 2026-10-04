@@ -179,7 +179,7 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:59.999Z', '2026-10-04T18:
     expect(outbox.filter(item => item.method === 'sendMessage' && String(item.body.text).includes('outcome is uncertain'))).toHaveLength(1);
     expect(state.storage.kv.get<number>('interruption-fixture-effect-count')).toBe(1);
     // Same strict bound, but a failure names what called the model (a day plan, a reply, a memory pass) instead of only a count.
-    const describeCall = (body: unknown) => { const b = body as { text?: { format?: { name?: string } }; instructions?: string; input?: unknown }; return `${b.text?.format?.name ?? 'unnamed'}: ${(typeof b.instructions === 'string' ? b.instructions : JSON.stringify(b.input ?? '')).slice(0, 160)}`; };
+    const describeCall = (body: unknown) => { const b = body as { text?: { format?: { name?: string } }; instructions?: string; input?: unknown }; return `${b.text?.format?.name ?? 'unnamed'}: instr=${(typeof b.instructions === 'string' ? b.instructions : '').slice(0, 80)} | input=${JSON.stringify(b.input ?? '').slice(-260)}`; };
     expect(modelInputs.slice(callsBefore).map(describeCall)).toEqual([]);
     expect(await new TelegramOwnerInbox(state.storage, persistInboxWake).claim(`hermetic-test-bot-token:telegram:${updateId}`, 'retry', 'retry-run', Date.now() + 150_000)).toBeNull();
     await state.storage.deleteAlarm();
