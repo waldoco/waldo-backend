@@ -474,3 +474,11 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] Decoder acceptance must match the provider schema: canonicalize repeated known source families without accepting unknowns or malformed evidence.
 - [ ] Malformed or uncertain source classification cannot keep protected reads active for the current instruction; negative owner-narrowing control must observe zero incremental connector calls, alongside usable valid continuation.
 - [ ] Metadata-only decoder categories must identify syntax/shape/decision/source/evidence failures without logging private raw classifier text.
+
+
+| 2026-10-04 | A code-styled link label made an entire generated Telegram file readback literal; entity rejection had no plain fallback | Channel presentation | Representative readback RED→GREEN, literal/code/URL escaping, definite-rejection fallback and concurrent-forget/owner/ambiguity controls in telegram-presentation.test.ts | Exact N01T output and live Telegram acceptance remain unverified; unsupported Markdown nesting stays literal. |
+
+- [ ] Render generated Telegram finals at the channel boundary only: preserve artifact/tool bytes and opaque code, escape HTML and exact receipt URLs, and avoid unsupported nested code entities.
+- [ ] Plain fallback requires a definite entity-format rejection and the same current frozen attempt, owner eligibility and expiry; concurrent cancellation/forget must prevent fallback and stale payload restoration. Network uncertainty never authorizes a retry.
+
+- [ ] A generated final's frozen plain fallback crosses the same secret-URL persistence and egress boundary as its rich copy. Redact before HTML escaping and at both enqueue lanes; synthetic provider OAuth URLs must disappear from both copies and fallback transport. Literal escaped backslashes remain data.
