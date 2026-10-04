@@ -273,8 +273,16 @@ it('a failing retry keeps the block and cannot be steered by the next turn text'
   await session('forget-retry-fails', async (turn, store, responder) => {
     await turn('tg-forget-first2', `Forget only ${topic}.`, ops({ forget_topic: topic }));
     expect(store.incompleteTopics()).toEqual([topic]);
+    const before = seen.writerInputs.filter(input => input.includes('forget_source_spans')).length;
     seen.writerOps.push(ops({}), '{}');
     await responder.respond({ traceId: 'tg-next-ordinary2', conversationRef: 'owner', surface: 'telegram', text: 'Forget nothing, just say hi' }, (_n, w) => w());
+    const retries = seen.writerInputs.filter(input => input.includes('forget_source_spans')).slice(before);
+    // Exactly one retry call, built from the stored topic, not from this turn's text.
+    expect(retries).toHaveLength(1);
+    expect(retries[0]).toContain(topic);
+    expect(retries[0]).not.toContain('Forget nothing');
     expect(store.incompleteTopics()).toEqual([topic]);
+    // The blanket block still applies to the reply after the failed retry.
+    expect(system()).toContain('Recall is temporarily limited');
   });
 });
