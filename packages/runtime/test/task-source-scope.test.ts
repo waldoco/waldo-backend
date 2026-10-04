@@ -441,3 +441,15 @@ it('a pending owner confirmation turns the unready defaults off: nothing is read
   expect(taskSourceAllowed(proposed, { name: 'web_search' })).toBe(false);
   expect(taskSourceAllowed(proposed, { name: 'search_communication', requires_connector: true })).toBe(false);
 }));
+
+it('after a pending card, a later malformed or uncertain miss still gets no defaults while the card is pending; an autonomy-gated tool never rides a default', () => run('task-pending-then-miss', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, { inputRef: 'r1', text: 'read my mail' }, ['web', 'mail']);
+  await cap.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'read my mail' }), 'r1', 'read my mail');
+  expect(sql.exec<{ pending_json: string | null }>('SELECT pending_json FROM owner_task_source_scope').one().pending_json).not.toBeNull();
+  const after = await cap.current();
+  expect(after.defaults).toBeUndefined();
+  expect(taskSourceAllowed(after, { name: 'web_search' })).toBe(false);
+  const open = createTaskSourceScope(sql, 'owner-two', scope, async () => {}, undefined, ['web', 'mail']);
+  const miss = (await open.classify(decision('uncertain'))).snapshot;
+  expect(taskSourceAllowed(miss, { name: 'search_communication', requires_connector: true, autonomy_gated: true })).toBe(false);
+}));
