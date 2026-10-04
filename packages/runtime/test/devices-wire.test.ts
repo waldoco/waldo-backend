@@ -13,5 +13,6 @@ it('rejects widened or binding-free heartbeat shapes', () => {
   const frame = { type: 'heartbeat', contract_version: '0.2.3', message_id: '01ARZ3NDEKTSV4RRFFQ69G5FAZ', owner_id: 'owner_1', device_id: 'dev_1', timestamp: 1790200800, nonce: 'AAECAwQFBgcICQoLDA0ODw', signature: '1DzrSOApCr5iU_sTuJFozlndCY-A1EhY0XVtYGf07nP_OoW_Q8bI1a9OakAvlfJBBfBQb1NDevyyH4Q3tbWzDA', payload: { declared_capabilities: ['machine_state_query'], outbox_depth: 0 } };
   expect(heartbeatFrame(frame)).toEqual(frame);
   expect(heartbeatFrame({ ...frame, extra: 1 })).toBeNull();
+  expect(heartbeatFrame({ ...frame, message_id: 'Z1ARZ3NDEKTSV4RRFFQ69G5FAZ' })).toBeNull();
   expect(heartbeatFrame({ ...frame, payload: { ...frame.payload, outbox_depth: -1 } })).toBeNull();
 });

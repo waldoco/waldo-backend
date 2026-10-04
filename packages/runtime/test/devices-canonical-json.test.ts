@@ -12,5 +12,6 @@ describe('device canonical JSON', () => {
     expect(() => parseStrictJson(new Uint8Array([0xc0, 0xaf]))).toThrow();
     expect(() => parseStrictJson(new TextEncoder().encode('{ "b":2,"a":1}'), true)).toThrow();
     expect(parseStrictJson(new TextEncoder().encode('{"a":1,"b":2}'), true)).toEqual({ a: 1, b: 2 });
+    expect(() => parseStrictJson(new TextEncoder().encode('\ufeff{"a":1}'), true)).toThrow();
   });
 });
