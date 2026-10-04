@@ -133,6 +133,11 @@ it('actual owner eviction after a claimed write produces one durable uncertainty
     const runtime = instance as unknown as { setup(): { ready: Promise<void> }; serial(work: () => Promise<void>): Promise<void> };
     await runtime.setup().ready;
     await runtime.serial(async () => undefined);
+    // Today's cards are already planned and sent, so the alarm cannot make a day-plan model call
+    // that depends on the wall clock (it did after IST midnight). This test is about the interrupted request only.
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+    const { DAY_CARDS } = await import('../src/prompt/day-cards');
+    for (const card of DAY_CARDS) state.storage.sql.exec('INSERT OR REPLACE INTO day_plan (day, card, time, reason, sent) VALUES (?, ?, ?, ?, 1)', today, card.id, '12:00', 'test fixture');
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
     await inbox.admit({ bot: 'hermetic-test-bot-token', subject: String(subject), doName: route(subject).doName }, updateId, 'PRIVATE_INTERRUPTED_REQUEST');
     await inbox.claim(`hermetic-test-bot-token:telegram:${updateId}`, 'interrupted-attempt', 'interrupted-run', Date.now() + 150_000);
