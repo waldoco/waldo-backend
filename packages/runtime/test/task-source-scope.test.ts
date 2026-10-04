@@ -1,6 +1,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { approveTaskSourceProposal, createTaskSourceScope, TASK_SOURCE_FAMILIES, taskSourceAllowed } from '../src/channels/task-source-scope';
+import { approveTaskSourceProposal, createTaskSourceScope, TASK_SOURCE_FAMILIES, taskSourceAllowed, taskSourceRequired } from '../src/channels/task-source-scope';
 import { taskSourceClient } from '../src/tools/task-source-io';
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
@@ -490,4 +490,29 @@ it('browse_act is public-web reading: any ready task that allows web allows it, 
   expect(taskSourceAllowed(webOnly, { name: 'browse_act', mutates_state: true })).toBe(true);
   await cap.classify(decision('restrict', []));
   expect(taskSourceAllowed(await cap.current(), { name: 'browse_act', mutates_state: true })).toBe(false);
+}));
+
+it('the owner\'s own reminder and standing-order lists need no retained-memory source: they read what the owner set, as the pasted-only scope already allows', () => run('task-own-lists', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-lists', scope, async () => {}, undefined, []);
+  const web = (await cap.classify(decision('restrict', ['web']))).snapshot;
+  expect(web.ready).toBe(true);
+  for (const name of ['list_reminders', 'list_standing_orders'] as const) {
+    expect(taskSourceRequired({ name }), `${name} is not a source read`).toBe(false);
+    expect(taskSourceAllowed(web, { name }), `${name} on a task without local`).toBe(true);
+  }
+  expect(taskSourceAllowed(web, { name: 'read_memory' }), 'retained memory still needs local').toBe(false);
+}));
+
+it('the own lists stay usable on an unready task and while an owner confirmation card is pending; retained memory and sources do not', () => run('task-own-lists-pending', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-lists-two', scope, async () => {}, { inputRef: 'r1', text: 'read my mail' }, ['web', 'mail']);
+  const unready = (await cap.classify('not json')).snapshot;
+  expect(unready.ready).toBe(false);
+  const proposed = (await cap.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'read my mail' }), 'r1', 'read my mail')).snapshot;
+  expect(sql.exec<{ pending_json: string | null }>('SELECT pending_json FROM owner_task_source_scope').one().pending_json).not.toBeNull();
+  for (const snapshot of [unready, proposed]) {
+    expect(taskSourceAllowed(snapshot, { name: 'list_reminders' })).toBe(true);
+    expect(taskSourceAllowed(snapshot, { name: 'list_standing_orders' })).toBe(true);
+  }
+  expect(taskSourceAllowed(proposed, { name: 'read_memory' }), 'retained memory stays off behind the card').toBe(false);
+  expect(taskSourceAllowed(proposed, { name: 'web_search' }), 'sources stay off behind the card').toBe(false);
 }));
