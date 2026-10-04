@@ -33,7 +33,7 @@ it('actual DO stop closes before late completion and creates fixed host notice o
   (i as unknown as {activeAbort:AbortController}).activeAbort.abort();
   await running;seen.finish!({id:'late',output_text:'LATE_FORBIDDEN',output:[],usage:{input_tokens:1,output_tokens:1}});await new Promise(r=>setTimeout(r,25));
   const finals=s.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!;
-  expect(finals).toHaveLength(1);expect(finals[0]?.id).toContain('failure:');expect(finals[0]?.payload.text).toBe('Stopped. In-flight changes may still finish.');expect(JSON.stringify(finals)).not.toContain('LATE_FORBIDDEN');expect(s.storage.kv.get('conv-leaf')).toBeUndefined();
+  expect(finals).toHaveLength(1);expect(finals[0]?.id).toContain('failure:');expect(finals[0]?.payload.text).toContain('Stopped. In-flight changes may still finish.');expect(finals[0]?.payload.text).toContain('Request received:');expect(JSON.stringify(finals)).not.toContain('LATE_FORBIDDEN');expect(s.storage.kv.get('conv-leaf')).toBeUndefined();
  });seen.pause=false;
 });
 it('success wins a later stop race without a second failure notice',async()=>{
