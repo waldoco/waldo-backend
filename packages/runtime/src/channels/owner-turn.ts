@@ -27,7 +27,8 @@ import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { CLINICAL_REDIRECT, OWNER_TASK_SOURCE_PRECEDENCE, messagingSystemPrompt, ownerClockLine, withOwnerSkillProcedures, OWNER_SKILL_SAFEGUARDS } from '../prompt/messaging-behavior';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
-import { FORGOTTEN, applyClaimOps, type ClaimOutcome, applyPromotion, CLAIM_OPS_SCHEMA, exchangeInput, MEMORY_INSTRUCTION, memoryPrompt, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
+import { composeDayPlanInput } from './day-cards';
+import { FORGOTTEN, applyClaimOps, type ClaimOutcome, applyPromotion, CLAIM_OPS_SCHEMA, exchangeInput, MEMORY_INSTRUCTION, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
 import { restoreConversation, type ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
 import type { TurnLogEntry, TurnTimer } from './owner-turn-types';
@@ -939,7 +940,7 @@ export const createOwnerResponder = (
       });
     },
     control,
-    planDay: (trace, input) => memoryOperation(() => ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, memory ? `${memoryPrompt(memory)}\n\n${input}` : input, { name: 'day_plan', schema: DAY_PLAN_SCHEMA })),
+    planDay: (trace, input) => memoryOperation(() => ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, composeDayPlanInput(input, memory), { name: 'day_plan', schema: DAY_PLAN_SCHEMA })),
     chooseReaction: async (turn) => {
       if (turn.runScope && privateRunScope !== turn.runScope) {
         return createOwnerResponder(openaiApiKey, undefined, undefined, log, clock, [], model, false, undefined, undefined, gateway, undefined, probeGuard, undefined, undefined, memoryModel, egressAllowlist, undefined, reactionChoices, turn.runScope).chooseReaction(turn);
