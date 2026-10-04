@@ -56,3 +56,9 @@ describe('turn claim evaluation (advisory)', () => {
     expect(() => evaluateTurnClaims([{ seq: Number.NaN, effect: '' }], [{ seq: 1, call: undefined as never, ok: true }])).not.toThrow();
   });
 });
+
+describe('evaluateTurnClaims does not swallow failures', () => {
+  it('a malformed claims input throws instead of reporting no findings', () => {
+    expect(() => evaluateTurnClaims(null as never, [])).toThrow();
+  });
+});
