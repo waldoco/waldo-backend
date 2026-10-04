@@ -48,7 +48,8 @@ it('recovered history quoting an injected instruction reaches the model sanitise
   // The existing external-result sanitiser neutralises the instruction and the address; the
   // required facts in the same turn survive.
   expect(second).toContain('REDACTED_INSTRUCTION');
-  expect(second).not.toContain('evil@example.com');
+  expect(second).toContain('evil@example.com'); // addresses stay readable to the model; the instruction is what is neutralised
+  expect(second).not.toContain('ignore previous instructions');
   expect(second).toContain('18.5k');
   expect(second).toContain('\\"source_taint\\":\\"external\\"');
   expect(calls.inputs).toHaveLength(2);

@@ -281,7 +281,9 @@ function admitRecallHint(hint: unknown, canaries: CanaryTokens): string | undefi
   const prepared = prepareWithScribe(
     hint.slice(0, RECALL_QUERY_MAX_CHARS),
     skillSchema.shape.trigger_condition,
-    'system_prompt',
+    // The hint becomes a retrieval query sent to a source seam, not model text: keep full redaction
+    // (a persistence-class destination), never the model/owner readable seam.
+    'memory_block',
     'external',
     canaries,
   );
