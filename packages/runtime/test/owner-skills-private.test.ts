@@ -1,4 +1,6 @@
+import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
+import { claimStore } from "../src/memory/claims";
 import { acceptTrustedInvocation, skillRowSchema, WALDO_CHAT_MODEL } from "@waldo/contracts";
 import {
   localTrustedBriefScheduleInput,
@@ -357,4 +359,21 @@ it("clinical retry is host state even when a procedure contains exact redirect t
   } finally {
     captured.replies = [];
   }
+});
+
+it("an active skill plus a large owner profile keeps the final system prompt under the sanitiser limit", async () => {
+  captured.systems = [];
+  const big = { ...row, body_markdown: marker + " " + "procedure step. ".repeat(100) };
+  const skills: LocalSystemSkillBinding = { ...binding(), repository: { list: async (r) => ({ ...(await binding().repository.list(r)), rows: [big] }) } };
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName("skills-large-profile")), async (_i, state) => {
+    const memory = claimStore(state.storage.sql);
+    for (let i = 0; i < 220; i++) memory.add({ kind: "fact", text: `Owner fact ${i}: synthetic detail number ${i} that the owner stated about themselves`, source: "stated", evidence: `owner, tg-${i}: "x"`, origin: "owner", source_ref: `owner, tg-${i}` }, "2026-10-01T00:00:00.000Z");
+    const args: Parameters<typeof createOwnerResponder> = ["fixture"];
+    args[2] = memory; args[20] = skills;
+    await createOwnerResponder(...args).respond(turn("skills-large-profile"), time);
+  });
+  const system = captured.systems[0]!;
+  expect(system, "the skill procedure survives").toContain(marker);
+  expect(system, "the newest owner facts survive").toContain("Owner fact 219:");
+  expect(system.length, "final wrapped system prompt stays under 32,768 chars or the sanitiser drops it whole").toBeLessThanOrEqual(32_768);
 });

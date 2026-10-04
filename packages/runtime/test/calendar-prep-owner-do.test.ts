@@ -43,7 +43,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
 });
 const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
 
-it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-revoked', 'subject', 'new-bot', 'disabled', 'owner-opt-out', 'low-volume', 'wrong-ack', 'uncertain-restart', 'changed-during-model', 'revoked-during-model', 'no-op', 'forget', 'legacy-counters', 'daily-cap'])('default owner prep handles %s without stale delivery or invented completion', async mode => {
+it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-revoked', 'subject', 'new-bot', 'disabled', 'owner-opt-out', 'low-volume', 'wrong-ack', 'uncertain-restart', 'changed-during-model', 'revoked-during-model', 'no-op', 'forget', 'legacy-counters', 'daily-cap', 'large-profile'])('default owner prep handles %s without stale delivery or invented completion', async mode => {
   const name = `calendar-prep-${mode}`;
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const originalNow = Date.now;
@@ -70,7 +70,20 @@ it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-r
       }
       if (mode === 'changed-during-model') fixture.mutate = () => { fixture.event = { ...fixture.event!, etag: 'r2', description: 'Changed agenda' }; };
       if (mode === 'revoked-during-model') fixture.mutate = () => state.storage.kv.put('google:accounts', []);
+      if (mode === 'large-profile') {
+        const store = claimStore(state.storage.sql);
+        for (let i = 0; i < 220; i++) store.add({ kind: 'fact', text: `Owner fact ${i}: synthetic detail number ${i} that the owner stated about themselves`, source: 'stated', evidence: `owner, tg-${i}: "x"`, origin: 'owner', source_ref: `owner, tg-${i}` }, '2026-10-01T00:00:00.000Z');
+      }
       await incoming();
+      if (mode === 'large-profile') {
+        const decision = fixture.requests.filter(r => r.request.response_format?.name === 'calendar_prep');
+        expect(decision.length, 'prep decision ran').toBeGreaterThan(0);
+        const system = decision.map(r => String(r.request.system)).join('\n');
+        expect(system, 'the base system prompt must survive a large owner profile (the sanitiser drops an oversize system prompt whole)').toContain('You are Waldo');
+        expect(system, 'the newest owner facts reach the decision prompt').toContain('Owner fact 219:');
+        expect(system.length, 'system prompt stays under the sanitiser limit').toBeLessThanOrEqual(32_768);
+        return; // the rest of this table covers stale-delivery modes; this mode only proves the prompt
+      }
       if (['changed-during-model', 'revoked-during-model', 'no-op', 'legacy-counters'].includes(mode)) {
         expect(rows()).toEqual([]);
         if (mode === 'legacy-counters') {
