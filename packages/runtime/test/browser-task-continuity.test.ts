@@ -72,6 +72,41 @@ it('retains cleanup failure and allows the same owner to stop even after feature
   await task.cancel('owner-a'); expect(f.row().phase).toBe('closed');
 });
 
+it('preserves an authoritative receipt when physical cleanup remains unresolved', async () => {
+  const f = fixture(), task = browserTaskContinuity(f.options);
+  await task.open('owner-a'); const proposal = await task.propose('owner-a');
+  f.driver.verify = async bindingDigest => ({ id: 'verified-receipt', observed_at: '2026-10-03T12:00:00Z', source: 'controlled_fixture', binding_digest: bindingDigest });
+  f.driver.end = async () => { throw Error('synthetic close unavailable'); };
+  expect(await task.submit('owner-a', proposal.id, 'exact-approval')).toMatchObject({ status: 'verified_with_receipt', receipt: { id: 'verified-receipt' } });
+  expect(f.row()).toMatchObject({ phase: 'cleanup_pending', receipt: { id: 'verified-receipt' }, session: { state: 'ending' } });
+  expect(await task.reconcile('owner-a')).toMatchObject({ status: 'verified_with_receipt' });
+  expect(f.counts()).toMatchObject({ submits: 1, ends: 0 });
+});
+
+it('can reconcile an uncertain submit after inspection failure closes its session without replay', async () => {
+  const f = fixture(), task = browserTaskContinuity(f.options);
+  await task.open('owner-a'); const proposal = await task.propose('owner-a');
+  expect(await task.submit('owner-a', proposal.id, 'exact-approval')).toMatchObject({ status: 'uncertain' });
+  const { submissionAttempted: _marker, ...legacy } = f.row();
+  await f.options.store.save(legacy); // Checkpoints written before this repair.
+  f.driver.inspect = async () => { throw Error('synthetic inspection lost'); };
+  await expect(task.inspect('owner-a')).rejects.toThrow();
+  expect(f.row()).toMatchObject({ phase: 'closed', receipt: null });
+  expect(await task.submit('owner-a', proposal.id, 'exact-approval')).toMatchObject({ status: 'uncertain' });
+  f.driver.verify = async bindingDigest => ({ id: 'later-receipt', observed_at: '2026-10-03T12:00:00Z', source: 'controlled_fixture', binding_digest: bindingDigest });
+  expect(await browserTaskContinuity(f.options).reconcile('owner-a')).toMatchObject({ status: 'verified_with_receipt', receipt: { id: 'later-receipt' } });
+  expect(await task.submit('owner-a', proposal.id, 'exact-approval')).toMatchObject({ status: 'verified_with_receipt' });
+  expect(f.counts()).toEqual({ starts: 1, submits: 1, ends: 1 });
+});
+
+it('never treats a cancelled unsubmitted proposal as a receipt-verification permit', async () => {
+  const f = fixture(), task = browserTaskContinuity(f.options); let reads = 0;
+  await task.open('owner-a'); await task.propose('owner-a'); await task.cancel('owner-a');
+  f.driver.verify = async () => { reads++; return null; };
+  expect(await task.reconcile('owner-a')).toMatchObject({ status: 'rejected' });
+  expect(reads).toBe(0); expect(f.counts().submits).toBe(0);
+});
+
 it('checks revocation immediately before click and never overwrites terminal cleanup with active state', async () => {
   const f = fixture(); const task = browserTaskContinuity(f.options);
   await task.open('owner-a', 10000); const proposal = await task.propose('owner-a');

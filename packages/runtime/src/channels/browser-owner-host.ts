@@ -71,16 +71,27 @@ export function browserOwnerHost(options: Readonly<{
       if (!Number.isSafeInteger(used) || used >= 32) return null;
       if (consume) await options.storage.put('browser_owner_task_admissions_v1', used + 1);
       await source?.();
+      // Withdrawal can run independently of the task mutex during any await.
+      if (evidence.approvalRef && (!evidence.proposalId || !options.approved(evidence.approvalRef, evidence.proposalId))) return null;
       return grant.ref;
     };
-  const make = (source?: BrowserSourceGuard) => config && binding ? browserTaskContinuity({
+  const make = (source?: BrowserSourceGuard) => {
+    if (!config || !binding) return null;
+    let submitApproval: Readonly<{ approvalRef: string; proposalId: string }> | undefined;
+    // This synchronous check follows the driver's last asynchronous source wait,
+    // immediately before DOM submission. It does not authorize receipt readback.
+    const assertSubmitApproval = () => {
+      if (!submitApproval || !options.approved(submitApproval.approvalRef, submitApproval.proposalId)) throw Error('browser approval unavailable');
+    };
+    const submitSource = async () => { await source?.(); assertSubmitApproval(); };
+    return browserTaskContinuity({
     enabled: config.enabled, ownerId: principal, taskId: config.driver.runId, manifestDigest: config.manifestDigest,
     driver: { ...config.driver,
       start: async lifetime => { await source?.(); return config.driver.start(lifetime, source); },
       navigate: async id => { await source?.(); const value = await config.driver.navigate(id, source); await source?.(); return value; },
       inspect: async id => { await source?.(); const value = await config.driver.inspect(id, source); await source?.(); return value; },
       fill: async (id, field, value, digest, before) => { await source?.(); return config.driver.fill(id, field, value, digest, async () => { await before(); await source?.(); }, source); },
-      submit: async (id, digest, before) => { await source?.(); return config.driver.submit(id, digest, async () => { await before(); await source?.(); }, source); },
+      submit: async (id, digest, before) => { await submitSource(); return config.driver.submit(id, digest, async () => { await before(); await submitSource(); }, submitSource, assertSubmitApproval); },
       verify: async digest => { await source?.(); const value = await config.driver.verify(digest, source); await source?.(); return value; },
       end: async id => {
       const previous = await options.storage.get<CleanupState>(BROWSER_TASK_CLEANUP_KEY);
@@ -102,8 +113,13 @@ export function browserOwnerHost(options: Readonly<{
       }
     } }, now: options.now, newId: options.newId,
     store: { exclusive, load: async () => (await options.storage.get(BROWSER_TASK_KEY)) ?? null, save },
-    admit: (operation, evidence) => admit(operation, evidence, true, source),
-  }) : null;
+    admit: async (operation, evidence) => {
+      const ref = await admit(operation, evidence, true, source);
+      if (ref && evidence?.approvalRef && evidence.proposalId) submitApproval = Object.freeze({ approvalRef: evidence.approvalRef, proposalId: evidence.proposalId });
+      return ref;
+    },
+  });
+  };
   let maintenance: Promise<void> | undefined;
   return {
     principal,

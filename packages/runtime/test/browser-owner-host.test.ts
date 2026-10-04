@@ -120,5 +120,83 @@ it('withholds paused inspection after source narrowing, prevents fill, and still
   const coordinator = browserOwnerHost(f.options), task = (await coordinator.resolve(f.principal, async () => { if (!allowed) throw Error('supplied only'); }))!;
   await task.read(f.principal); narrow = true;
   await expect(task.fill(f.principal, 'value', 'new')).rejects.toThrow('supplied only');
-  expect(fills).toBe(0); await coordinator.stop(); expect(ends).toBe(1);
+  expect(fills).toBe(0); expect(ends).toBe(1);
+  expect(f.rows.get('browser_owner_task_v1')).toMatchObject({ phase: 'closed', receipt: null });
+  await coordinator.stop(); expect(ends).toBe(1);
+});
+
+it('immediately attempts cleanup when an in-flight inspection fails and retains failed closure honestly', async () => {
+  for (const failedClose of [false, true]) {
+    const f = fixture(); let ends = 0;
+    f.driver.end = async () => { ends++; if (failedClose) throw Error('synthetic close unavailable'); };
+    const task = (await browserOwnerHost(f.options).resolve(f.principal))!;
+    await task.read(f.principal);
+    f.driver.inspect = async () => { throw Error('synthetic inspection unavailable'); };
+    // Reconstruct because a host captures its configured driver.
+    await expect((await browserOwnerHost(f.options).resolve(f.principal))!.inspect(f.principal)).rejects.toThrow();
+    expect(ends).toBe(1);
+    expect(f.rows.get('browser_owner_task_v1')).toMatchObject({ phase: failedClose ? 'cleanup_pending' : 'closed', receipt: null,
+      session: { providerSessionId: 'private-provider-id', state: failedClose ? 'ending' : 'ended' } });
+    if (failedClose) expect(f.rows.get('browser_owner_task_due_v1')).toBe(30100);
+  }
+});
+
+it.each(['provider', 'source'])('cleans up an in-flight fill %s failure without publishing a receipt', async failure => {
+  const f = fixture(); let allowed = true, ends = 0;
+  f.driver.end = async () => { ends++; throw Error('synthetic close unavailable'); };
+  f.driver.fill = async (_id, _field, _value, _state, before, source?: () => Promise<void>) => {
+    await before();
+    if (failure === 'provider') throw Error('synthetic fill response lost');
+    allowed = false; await source?.();
+  };
+  const task = (await browserOwnerHost(f.options).resolve(f.principal, async () => { if (!allowed) throw Error('source withdrawn'); }))!;
+  await task.read(f.principal);
+  await expect(task.fill(f.principal, 'value', 'synthetic next')).rejects.toThrow();
+  expect(ends).toBe(1);
+  expect(f.rows.get('browser_owner_task_v1')).toMatchObject({ phase: 'cleanup_pending', steps: 1, receipt: null,
+    session: { providerSessionId: 'private-provider-id', state: 'ending' } });
+});
+
+it('never physically submits when the exact desk approval is denied', async () => {
+  const f = fixture(); let clicks = 0, approvalChecks = 0;
+  f.options.approved = () => { approvalChecks++; return false; };
+  f.driver.submit = async (_id, _state, before) => { await before(); clicks++; };
+  const task = (await browserOwnerHost(f.options).resolve(f.principal))!;
+  await task.read(f.principal); const proposal = await task.propose(f.principal);
+  const result = await task.submit(f.principal, proposal.id, 'unapproved-desk-row');
+  expect(clicks).toBe(0); expect(approvalChecks).toBeGreaterThan(0);
+  expect(result).toMatchObject({ status: 'rejected' });
+  expect(f.rows.get('browser_owner_task_v1')).toMatchObject({ phase: 'closed', receipt: null });
+});
+
+it.each(['grant', 'lookup', 'storage', 'source', 'physical-source'])('fences approval withdrawal during the final %s wait', async wait => {
+  const f = fixture(); let approved = true, clicks = 0, afterGrant = false, afterBefore = false;
+  f.options.approved = () => approved;
+  const submitting = () => (f.rows.get('browser_owner_task_v1') as { phase?: string } | undefined)?.phase === 'submitting';
+  const grant = f.options.config.grant;
+  f.options.config.grant = async request => {
+    const value = await grant(request);
+    if (request.evidence.approvalRef && submitting()) { afterGrant = true; if (wait === 'grant') approved = false; }
+    return value;
+  };
+  const lookup = f.options.config.lookup;
+  f.options.config.lookup = async () => { const value = await lookup(); if (wait === 'lookup' && afterGrant) approved = false; return value; };
+  const put = f.options.storage.put.bind(f.options.storage);
+  f.options.storage.put = (async (key: string | Record<string, unknown>, value?: unknown) => {
+    if (typeof key === 'string') await put(key, value); else await put(key);
+    if (wait === 'storage' && key === 'browser_owner_task_admissions_v1' && afterGrant) approved = false;
+  }) as typeof f.options.storage.put;
+  const source = async () => {
+    if (wait === 'source' && afterGrant || wait === 'physical-source' && afterBefore) approved = false;
+  };
+  f.driver.submit = async (_id, _state, before, guardedSource?: () => Promise<void>) => {
+    await before(); afterBefore = true;
+    await guardedSource?.(); // The real driver also awaits source after beforeAction.
+    clicks++;
+  };
+  const task = (await browserOwnerHost(f.options).resolve(f.principal, source))!;
+  await task.read(f.principal); const proposal = await task.propose(f.principal);
+  expect(await task.submit(f.principal, proposal.id, 'approved-desk-row')).toMatchObject({ status: 'uncertain' });
+  expect(clicks).toBe(0); expect(approved).toBe(false);
+  expect(f.rows.get('browser_owner_task_v1')).toMatchObject({ receipt: null });
 });

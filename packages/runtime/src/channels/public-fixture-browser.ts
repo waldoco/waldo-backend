@@ -134,7 +134,7 @@ export function publicFixtureBrowser(options: Readonly<{ binding: BrowserWorker;
         if ((await sdk.sessions(options.binding)).some(row => row.sessionId === id)) throw Error('fixture still active');
       } catch { throw Error('browser fixture cleanup unavailable'); }
     },
-    async submit(id: string, expectedDigest: string, beforeAction: () => Promise<void>, source: BrowserSourceGuard = admitted) {
+    async submit(id: string, expectedDigest: string, beforeAction: () => Promise<void>, source: BrowserSourceGuard = admitted, assertApproval?: () => void) {
       return pageWork(id, source, async page => {
         await source();
         const state = await page.locator(m.formSelector).evaluate(nativeForm, { manifest: m });
@@ -143,6 +143,7 @@ export function publicFixtureBrowser(options: Readonly<{ binding: BrowserWorker;
         if (await fixtureDigest(state) !== expectedDigest) throw Error('fixture state changed');
         await beforeAction();
         await source();
+        assertApproval?.();
         await page.locator(m.formSelector).evaluate(nativeForm, { manifest: m, expected: JSON.stringify(state), action: { kind: 'submit' as const } });
       });
     },

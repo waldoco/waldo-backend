@@ -16,7 +16,7 @@ export type BrowserTaskDriver = Readonly<{
   start(lifetimeMs: number, source?: BrowserSourceGuard): Promise<string>; navigate(id: string, source?: BrowserSourceGuard): Promise<unknown>;
   inspect(id: string, source?: BrowserSourceGuard): Promise<FixtureObservation>;
   fill(id: string, field: string, value: string, stateDigest: string, before: () => Promise<void>, source?: BrowserSourceGuard): Promise<unknown>;
-  submit(id: string, stateDigest: string, before: () => Promise<void>, source?: BrowserSourceGuard): Promise<unknown>;
+  submit(id: string, stateDigest: string, before: () => Promise<void>, source?: BrowserSourceGuard, assertApproval?: () => void): Promise<unknown>;
   verify(bindingDigest: string, source?: BrowserSourceGuard): Promise<Readonly<{ id: string; observed_at: string; source: BrowserTaskReceipt['source']; binding_digest: string }> | null>;
   end(id: string): Promise<void>;
 }>;
@@ -38,8 +38,14 @@ export function browserTaskContinuity(options: Readonly<{
     return record;
   };
   const end = async (record: BrowserTaskCheckpoint) => {
-    if (record.phase === 'closed' && record.session.state === 'ended') return { stopped: 'cancelled' as const, actions_fenced: true as const };
-    const pending = { ...record, phase: 'cleanup_pending' as const, session: { ...record.session, state: 'ending' as const, updatedAt: options.now() } };
+    if (record.session.state === 'ended') {
+      if (record.phase !== 'closed') await save({ ...record, phase: 'closed' });
+      return { stopped: 'cancelled' as const, actions_fenced: true as const };
+    }
+    // Old submitting/unknown checkpoints lack the optional marker. Preserve their
+    // uncertainty during cleanup; closure certifies session end, not effect outcome.
+    const pending = { ...record, submissionAttempted: record.submissionAttempted === true || ['submitting', 'unknown'].includes(record.phase),
+      phase: 'cleanup_pending' as const, session: { ...record.session, state: 'ending' as const, updatedAt: options.now() } };
     await save(pending);
     if (record.session.providerSessionId === 'pending') { await save({ ...pending, session: { ...pending.session, state: 'lost' } }); return { stopped: 'cleanup_pending' as const, actions_fenced: true as const }; }
     try { await options.driver.end(record.session.providerSessionId); } catch { return { stopped: 'cleanup_pending' as const, actions_fenced: true as const }; }
@@ -51,6 +57,16 @@ export function browserTaskContinuity(options: Readonly<{
     if (options.enabled && record.session.expiresAt > options.now()) { try { ref = await options.admit(operation, evidence); } catch { /* unavailable authority denies */ } }
     if (!options.enabled || record.session.expiresAt <= options.now() || !ref || typeof ref !== 'string' || ref.length > 200) { await end(record); throw Error('browser task expired or revoked'); }
     return ref;
+  };
+  const cleanupOnFailure = async <T>(work: () => Promise<T>): Promise<T> => {
+    try { return await work(); }
+    catch (cause) {
+      // Admission may already have fenced/closed the task. Reload instead of
+      // restoring a stale active record or repeating a failed cleanup attempt.
+      const latest = await get();
+      if (latest.phase !== 'cleanup_pending') await end(latest);
+      throw cause;
+    }
   };
   const issue = async <T>(record: BrowserTaskCheckpoint, operation: BrowserCommand['operation'], body: object, work: () => Promise<T>): Promise<T> => {
     const boundary = new BrowserSessionBoundary({ now: options.now, authorizeManifest: digest => digest === options.manifestDigest, executor: {
@@ -65,7 +81,7 @@ export function browserTaskContinuity(options: Readonly<{
   const observation = async (record: BrowserTaskCheckpoint) => {
     await grant(record, 'extract');
     if (!['active', 'approval_pending', 'submitting', 'unknown'].includes(record.phase)) throw Error('browser task unavailable');
-    const snapshot = await issue(record, 'extract', { instruction: 'Read configured synthetic form state', schemaDigest: options.manifestDigest }, () => options.driver.inspect(record.session.providerSessionId));
+    const snapshot = await cleanupOnFailure(() => issue(record, 'extract', { instruction: 'Read configured synthetic form state', schemaDigest: options.manifestDigest }, () => options.driver.inspect(record.session.providerSessionId)));
     if (snapshot.url !== options.driver.pageUrl) { await end(record); throw Error('browser task target changed'); }
     return snapshot;
   };
@@ -74,7 +90,7 @@ export function browserTaskContinuity(options: Readonly<{
   const readback = async (record: BrowserTaskCheckpoint): Promise<BrowserSubmitOutcome> => {
     if (record.proposal && record.proposal.scopeDigest !== await scopeDigest(record)) return { status: 'rejected', message: 'The browser session changed. Observe and approve a new task.' };
     const prior = known(record); if (prior) return prior;
-    if (!record.proposal || !['submitting', 'unknown'].includes(record.phase)) return { status: 'rejected', message: 'No submitted fixture task is available for verification.' };
+    if (!record.proposal || !['submitting', 'unknown'].includes(record.phase) && !(record.submissionAttempted && ['closed', 'cleanup_pending'].includes(record.phase))) return { status: 'rejected', message: 'No submitted fixture task is available for verification.' };
     let permit: string | null = null;
     try { permit = await options.admit('extract', { proposalId: record.proposal.id, bindingDigest: record.proposal.bindingDigest }); } catch { /* read authorization unavailable */ }
     if (!permit) return uncertain();
@@ -82,7 +98,7 @@ export function browserTaskContinuity(options: Readonly<{
     try { result = await options.driver.verify(record.proposal.bindingDigest); } catch { /* verification failure never retries submit */ }
     const receipt = result ? browserTaskReceiptSchema.safeParse({ ...result, action_digest: record.proposal.actionDigest }) : null;
     if (!receipt?.success || receipt.data.binding_digest !== record.proposal.bindingDigest) {
-      await save({ ...record, phase: 'unknown' }); return uncertain();
+      await save({ ...record, phase: ['closed', 'cleanup_pending'].includes(record.phase) ? record.phase : 'unknown' }); return uncertain();
     }
     const verified = browserTaskCheckpointSchema.parse({ ...record, phase: 'verified', receipt: receipt.data });
     await save(verified); await end(verified); return known(verified)!;
@@ -111,7 +127,11 @@ export function browserTaskContinuity(options: Readonly<{
           await save(active); await grant(active, 'navigate');
           await issue(active, 'navigate', { url: options.driver.pageUrl }, () => options.driver.navigate(id));
           return await observation(active);
-        } catch { await end(active); throw Error('browser task could not open'); }
+        } catch (cause) {
+          const latest = await get();
+          if (!['closed', 'cleanup_pending'].includes(latest.phase)) await end(active);
+          throw new Error('browser task could not open', { cause });
+        }
       });
     },
     async inspect(authenticatedOwner: string) {
@@ -127,7 +147,7 @@ export function browserTaskContinuity(options: Readonly<{
         const snapshot = await observation(record), actionDigest = await fixtureDigest({ field, value });
         const currentGrant = await grant(record, 'act', { actionDigest, stateDigest: snapshot.stateDigest });
         const counted = { ...record, phase: 'active' as const, proposal: null, steps: record.steps + 1 }; await save(counted);
-        await issue(counted, 'act', { actionRef: field, actionDigest, approvalRef: currentGrant }, () => options.driver.fill(record.session.providerSessionId, field, value, snapshot.stateDigest, async () => { await grant(counted, 'act', { actionDigest, stateDigest: snapshot.stateDigest }); }));
+        await cleanupOnFailure(() => issue(counted, 'act', { actionRef: field, actionDigest, approvalRef: currentGrant }, () => options.driver.fill(record.session.providerSessionId, field, value, snapshot.stateDigest, async () => { await grant(counted, 'act', { actionDigest, stateDigest: snapshot.stateDigest }); })));
         return observation(counted);
       });
     },
@@ -143,7 +163,7 @@ export function browserTaskContinuity(options: Readonly<{
         if (!proposal || proposal.id !== proposalId || !approvalRef) return { status: 'rejected', message: 'The browser approval is unavailable.' };
         if (proposal.scopeDigest !== await scopeDigest(record)) return { status: 'rejected', message: 'The browser session changed. Observe and approve a new task.' };
         const prior = known(record); if (prior) return prior;
-        if (['submitting', 'unknown'].includes(record.phase)) return uncertain();
+        if (['submitting', 'unknown'].includes(record.phase) || record.submissionAttempted) return uncertain();
         if (record.phase !== 'approval_pending' || record.steps >= 5) return { status: 'rejected', message: 'The browser task is no longer available for submit.' };
         if (proposal.scopeDigest !== await scopeDigest(record)) return { status: 'rejected', message: 'The browser session changed. Observe and approve a new task.' };
         const actionDigest = await fixtureDigest({ url: proposal.url, actionRef: proposal.actionRef, method: 'click' });
@@ -158,7 +178,7 @@ export function browserTaskContinuity(options: Readonly<{
         const evidence = { proposalId, approvalRef, actionDigest, bindingDigest: proposal.bindingDigest, stateDigest: proposal.stateDigest };
         let approvedGrant: string;
         try { approvedGrant = await grant(record, 'act', evidence); } catch { return { status: 'rejected', message: 'The browser approval expired or was revoked.' }; }
-        const intent = { ...record, phase: 'submitting' as const, steps: record.steps + 1 };
+        const intent = { ...record, submissionAttempted: true, phase: 'submitting' as const, steps: record.steps + 1 };
         await save(intent); // Before physical click, even if the next response is lost.
         try { await issue(intent, 'act', { actionRef: proposal.actionRef, actionDigest, approvalRef: approvedGrant }, () => options.driver.submit(record.session.providerSessionId, proposal.stateDigest, async () => { await grant(intent, 'act', evidence); })); } catch { /* in doubt, never repeat act */ }
         const latest = await get();

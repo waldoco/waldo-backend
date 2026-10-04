@@ -89,7 +89,7 @@ export const browserTaskProposalSchema = z.strictObject({ id: z.string().min(1).
 export type BrowserTaskProposal = z.infer<typeof browserTaskProposalSchema>;
 export const browserTaskReceiptSchema = z.strictObject({ id: z.string().min(1).max(100), observed_at: iso8601Schema, source: z.enum(['controlled_fixture', 'provider']), action_digest: digestSchema, binding_digest: digestSchema });
 export type BrowserTaskReceipt = z.infer<typeof browserTaskReceiptSchema>;
-export const browserTaskCheckpointSchema = z.strictObject({ taskId: z.string().min(1).max(200), origin: publicUrlSchema, manifestDigest: digestSchema, session: browserSessionSchema, phase: z.enum(['active', 'approval_pending', 'submitting', 'unknown', 'verified', 'closed', 'cleanup_pending']), steps: z.int().min(0).max(5), proposal: browserTaskProposalSchema.nullable(), receipt: browserTaskReceiptSchema.nullable() });
+export const browserTaskCheckpointSchema = z.strictObject({ taskId: z.string().min(1).max(200), origin: publicUrlSchema, manifestDigest: digestSchema, session: browserSessionSchema, phase: z.enum(['active', 'approval_pending', 'submitting', 'unknown', 'verified', 'closed', 'cleanup_pending']), steps: z.int().min(0).max(5), proposal: browserTaskProposalSchema.nullable(), receipt: browserTaskReceiptSchema.nullable(), submissionAttempted: z.boolean().optional() });
 export type BrowserTaskCheckpoint = z.infer<typeof browserTaskCheckpointSchema>;
 
 export const browserTaskContinuationSchema = z.strictObject({ version: z.literal(1), taskRef: z.string().min(1).max(200), proposalId: z.string().min(1).max(200), scopeDigest: digestSchema });

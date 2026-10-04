@@ -65,6 +65,16 @@ it('checks the exact URL in the final native submit turn after async host approv
   expect(f.clicks()).toBe(0);
 });
 
+it('rechecks approval synchronously after the last source await before native submit', async () => {
+  const f = harness(); let approved = true, afterBefore = false;
+  const driver = candidate.publicFixtureBrowser({ binding: {} as never, manifest, loadSdk: async () => f.sdk as never });
+  const snapshot = await driver.inspect('retained-session');
+  await expect(driver.submit('retained-session', snapshot.stateDigest, async () => { afterBefore = true; },
+    async () => { if (afterBefore) queueMicrotask(() => { approved = false; }); },
+    () => { if (!approved) throw Error('approval withdrawn'); })).rejects.toThrow('browser fixture operation unavailable');
+  expect(approved).toBe(false); expect(f.clicks()).toBe(0);
+});
+
 it('terminates the retained browser even when unexpected pages violate inspection', async () => {
   const f = harness(); f.setPages(2);
   const driver = candidate.publicFixtureBrowser({ binding: {} as never, manifest, loadSdk: async () => f.sdk as never, fetcher: (async () => new Response('not issued', { status: 404 })) as typeof fetch });
