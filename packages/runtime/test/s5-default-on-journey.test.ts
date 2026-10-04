@@ -6,10 +6,10 @@ import { loopBook } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { claimStore } from '../src/memory/claims';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
-const fixture = vi.hoisted(() => ({ mail: false, loopId: '', sent: [] as string[], prompts: [] as string[] }));
+const fixture = vi.hoisted(() => ({ mail: false, loopId: '', event: false, sent: [] as string[], prompts: [] as string[] }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
-  return { ...original, googleClient: () => ({ changedEvents: async () => [], newMail: async () => fixture.mail ? [{ id: 'mail-message-1', thread_id: 'mail-thread-1', from: 'Pat <pat@example.test>', subject: 'Review by 10 today', snippet: 'Please review the deck by 10 UTC', at: '2026-10-03T07:00:00Z' }] : [], events: async () => [] }) };
+  return { ...original, googleClient: () => ({ changedEvents: async () => [], newMail: async () => fixture.mail ? [{ id: 'mail-message-1', thread_id: 'mail-thread-1', from: 'Pat <pat@example.test>', subject: 'Review by 10 today', snippet: 'Please review the deck by 10 UTC', at: '2026-10-03T07:00:00Z' }] : [], events: async () => fixture.event ? [{ id: 'due-event', title: 'Design review', start: '2026-10-03T09:30:00Z', end: '2026-10-03T10:00:00Z', all_day: false }] : [] }) };
 });
 vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
@@ -35,7 +35,7 @@ it.each(['flag-unset', 'owner-opt-out'])('S5 default-on mail followup through th
     const originalNow = Date.now;
     let now = Date.parse('2026-10-03T06:59:00Z');
     Date.now = () => now;
-    fixture.mail = false; fixture.loopId = ''; fixture.sent = []; fixture.prompts = [];
+    fixture.event = false; fixture.mail = false; fixture.loopId = ''; fixture.sent = []; fixture.prompts = [];
     const config = { ...env, MAIL_SOURCE_FOLLOWUPS: undefined, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
     let owner = new TelegramOwnerDO(state, config);
     state.storage.kv.put('do_name', 'synthetic-mail-owner'); state.storage.kv.put('telegram_subject', '7');
@@ -56,7 +56,15 @@ it.each(['flag-unset', 'owner-opt-out'])('S5 default-on mail followup through th
       fixture.mail = false; now = Date.parse('2026-10-03T09:00:00Z');
       dayPlanBook(state.storage.sql).sent('2026-10-03', 'card:brief');
       await incoming('/fire fetch');
-      if (mode === 'owner-opt-out') { expect(loops.list()).toEqual([]); return; }
+      if (mode === 'owner-opt-out') {
+        expect(loops.list()).toEqual([]);
+        // Opted out, Google connected, unseen event due, outside quiet hours: the legacy event brief must not run either.
+        fixture.event = true; fixture.sent = [];
+        await incoming('/fire briefs');
+        expect(state.storage.sql.exec('SELECT 1 FROM event_briefs').toArray(), 'opted-out owner must not be briefed').toEqual([]);
+        expect(fixture.sent.filter(text => text.includes('Design review'))).toEqual([]);
+        return;
+      }
       expect(loops.list(), 'default-on: a deadline mail must open a follow-up loop with MAIL_SOURCE_FOLLOWUPS unset').toHaveLength(1);
       const open = loops.list()[0]!; fixture.loopId = open.id;
       expect(open.source_ref).toBe('mail:mail-thread-1');

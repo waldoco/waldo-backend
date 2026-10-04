@@ -1885,6 +1885,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           await updateCheck(`update:${entry.occurrence_at}`);
           return;
         }
+        // An owner who opted out of follow-ups gets no event brief either (the legacy sweep is a proactive send).
+        if (loops.proactivity().followups === false) {
+          log({ trace, hop: 'brief_sweep', ms: 0, ok: true, detail: 'held: owner opted out of follow-ups' });
+          return void (await updateCheck(`update:${entry.occurrence_at}`));
+        }
         if (quiet()) {
           log({ trace, hop: 'brief_sweep', ms: 0, ok: true, detail: 'held: quiet hours' });
           return void (await updateCheck(`update:${entry.occurrence_at}`));
