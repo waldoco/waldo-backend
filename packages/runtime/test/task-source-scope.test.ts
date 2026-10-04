@@ -298,67 +298,83 @@ it('without host defaults a retained task never gains mail or calendar', () => r
 
 it('owner default read sources: public web always, Google families only once Google is connected', async () => {
   const { ownerReadSources } = await import('../src/channels/task-source-scope');
-  expect(ownerReadSources([])).toEqual(['web']);
-  expect(ownerReadSources([{ id: 'g' }])).toEqual(expect.arrayContaining(['web', 'mail', 'calendar', 'contacts', 'tasks', 'drive']));
+  expect(ownerReadSources([])).toEqual(['local', 'workspace', 'web']);
+  expect(ownerReadSources([{ id: 'g' }])).toEqual(expect.arrayContaining(['local', 'workspace', 'web', 'mail', 'calendar', 'contacts', 'tasks', 'drive']));
 });
 
 const DEFAULTS = ['mail', 'calendar'] as const;
-const owned = (sql: SqlStorage, scope: RunEffectScope, text = 'plan my trip', ref = 'r1') => createTaskSourceScope(sql, 'owner-one', scope, async () => {}, { inputRef: ref, text }, DEFAULTS);
-const ready = (sql: SqlStorage, sources: readonly string[]) => sql.exec('UPDATE owner_task_source_scope SET sources_json = ?, ready = 1 WHERE owner_key = ?', JSON.stringify(sources), 'owner-one');
+const owned = (sql: SqlStorage, scope: RunEffectScope, defaults: readonly string[] = DEFAULTS, text = 'plan my trip', ref = 'r1') => createTaskSourceScope(sql, 'owner-one', scope, async () => {}, { inputRef: ref, text }, defaults as never);
 const narrowedFlag = (sql: SqlStorage) => sql.exec<{ narrowed: number }>('SELECT narrowed FROM owner_task_source_scope').one().narrowed;
+const legacyTable = (sql: SqlStorage, sources: string, ready = 1) => {
+  sql.exec('CREATE TABLE owner_task_source_scope (owner_key TEXT PRIMARY KEY, task_id TEXT NOT NULL, revision INTEGER NOT NULL, sources_json TEXT NOT NULL, ready INTEGER NOT NULL, pending_json TEXT, start_ref TEXT)');
+  sql.exec(`INSERT INTO owner_task_source_scope VALUES ('owner-one', 't1', 1, ?, ?, NULL, NULL)`, sources, ready);
+};
 
-it('a new task that lists the default read sources needs no card for them and is not narrowed; later retains keep them', () => run('task-defaults-new', async (sql, scope) => {
+it('a classifier retain on an untouched task adds the defaults; later retains keep them; a default family in a list needs no card', () => run('task-defaults-retain', async (sql, scope) => {
   const cap = owned(sql, scope);
-  const out = await cap.classify(JSON.stringify({ decision: 'new', sources: ['workspace', 'web', 'mail', 'calendar'], evidence: 'plan my trip' }), 'r1', 'plan my trip');
-  expect(out.proposal, 'a default family needs no confirmation card').toBeUndefined();
-  expect(out.snapshot.sources).toEqual(expect.arrayContaining(['workspace', 'web', 'mail', 'calendar']));
+  const first = await cap.classify(decision('retain'));
+  expect(first.snapshot.sources).toEqual(expect.arrayContaining(['mail', 'calendar']));
   expect(narrowedFlag(sql)).toBe(0);
-  expect((await cap.classify(decision('retain'))).snapshot.sources).toEqual(expect.arrayContaining(['mail', 'calendar']));
+  const listed = await cap.classify(JSON.stringify({ decision: 'new', sources: ['workspace', 'mail', 'calendar'], evidence: 'plan my trip' }), 'r1', 'plan my trip');
+  expect(listed.proposal, 'a default family needs no confirmation card').toBeUndefined();
 }));
 
-it('an explicit change that leaves a default out is a narrowing that later retains keep', () => run('task-defaults-change', async (sql, scope) => {
-  const cap = owned(sql, scope);
-  await cap.classify(decision('retain'));
-  const out = await cap.classify(JSON.stringify({ decision: 'change', sources: ['workspace'], evidence: 'plan my trip' }), 'r1', 'plan my trip');
-  expect(out.snapshot.sources).toEqual(['workspace']);
-  expect(narrowedFlag(sql)).toBe(1);
-  expect((await cap.classify(decision('retain'))).snapshot.sources).toEqual(['workspace']);
+it('an explicit owner list is exact: restrict, new and change all stay as listed when the defaults later grow', () => run('task-defaults-explicit-exact', async (sql, scope) => {
+  for (const [name, raw] of [['restrict', decision('restrict', ['web'])], ['new', JSON.stringify({ decision: 'new', sources: ['web'], evidence: 'plan my trip' })], ['change', JSON.stringify({ decision: 'change', sources: ['web'], evidence: 'plan my trip' })]] as const) {
+    sql.exec('DROP TABLE IF EXISTS owner_task_source_scope');
+    const before = owned(sql, scope, ['web']);
+    await before.classify(decision('retain'));
+    await before.classify(raw, 'r1', 'plan my trip');
+    expect(narrowedFlag(sql), name).toBe(1);
+    const after = owned(sql, scope, ['web', 'mail', 'calendar']);
+    expect((await after.classify(decision('retain'))).snapshot.sources, `${name}: Google connected later must not widen an explicit list`).toEqual(['web']);
+  }
 }));
 
-it('close ends the narrowing with the task: the next task has the defaults again', () => run('task-defaults-close', async (sql, scope) => {
+it('close resets: the next default task has the defaults again', () => run('task-defaults-close', async (sql, scope) => {
   const cap = owned(sql, scope);
   await cap.classify(decision('restrict'));
   expect(narrowedFlag(sql)).toBe(1);
   await cap.classify(JSON.stringify({ decision: 'close', sources: [], evidence: 'plan my trip' }), 'r1', 'plan my trip');
-  expect(narrowedFlag(sql), 'a new task id resets the narrowing').toBe(0);
+  expect(narrowedFlag(sql)).toBe(0);
+  const next = await cap.classify(decision('new', ['workspace']));
+  expect(narrowedFlag(sql)).toBe(0);
 }));
 
-it('an approved card: change narrows (kept), new starts clean', () => run('task-defaults-card', async (sql, scope) => {
-  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, undefined, DEFAULTS);
+it('an approved change or new card is an explicit choice (exact, narrowed); an approved close resets', () => run('task-defaults-card', async (sql, scope) => {
+  const cap = owned(sql, scope);
   await cap.classify(decision('restrict'));
-  const { proposal } = await cap.classify(decision('change', ['drive']));
-  expect(proposal).toBeDefined();
-  expect(approveTaskSourceProposal(sql, 'owner-one', proposal!, Date.now(), scope)).toBe(true);
+  const change = await cap.classify(decision('change', ['drive']));
+  expect(approveTaskSourceProposal(sql, 'owner-one', change.proposal!, Date.now(), scope)).toBe(true);
   expect(narrowedFlag(sql)).toBe(1);
   expect((await cap.classify(decision('retain'))).snapshot.sources).toEqual(['drive']);
-  const next = await cap.classify(decision('new', ['drive']));
-  expect(approveTaskSourceProposal(sql, 'owner-one', next.proposal!, Date.now(), scope)).toBe(true);
+  const fresh = await cap.classify(decision('new', ['drive']));
+  expect(approveTaskSourceProposal(sql, 'owner-one', fresh.proposal!, Date.now(), scope)).toBe(true);
+  expect(narrowedFlag(sql)).toBe(1);
+  expect((await cap.classify(decision('retain'))).snapshot.sources, 'retain after an approved new').toEqual(['drive']);
+  const close = await cap.classify(decision('close'));
+  expect(approveTaskSourceProposal(sql, 'owner-one', close.proposal!, Date.now(), scope)).toBe(true);
   expect(narrowedFlag(sql)).toBe(0);
 }));
 
 it('a confirmed retry that narrows is kept as a narrowing', () => run('task-defaults-retry', async (sql, scope) => {
-  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, undefined, DEFAULTS);
-  ready(sql, ['workspace', 'web', 'mail', 'calendar']);
+  const cap = owned(sql, scope);
+  sql.exec(`UPDATE owner_task_source_scope SET sources_json = '["workspace","web","mail","calendar"]', ready = 1`);
   const out = await cap.classify(decision('change', ['workspace', 'web']));
   expect(out.outcome).toBe('confirmed_retry');
-  expect(out.snapshot.sources).toEqual(['workspace', 'web']);
+  expect(narrowedFlag(sql)).toBe(1);
   expect((await cap.classify(decision('retain'))).snapshot.sources).toEqual(['workspace', 'web']);
 }));
 
-it('a table created before the narrowed column is migrated in place', () => run('task-defaults-migrate', async (sql, scope) => {
-  sql.exec('CREATE TABLE owner_task_source_scope (owner_key TEXT PRIMARY KEY, task_id TEXT NOT NULL, revision INTEGER NOT NULL, sources_json TEXT NOT NULL, ready INTEGER NOT NULL, pending_json TEXT, start_ref TEXT)');
-  sql.exec(`INSERT INTO owner_task_source_scope VALUES ('owner-one', 't1', 1, '["workspace","web"]', 1, NULL, NULL)`);
-  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, undefined, DEFAULTS);
-  expect((await cap.classify(decision('retain'))).snapshot.sources).toEqual(expect.arrayContaining(['workspace', 'web', 'mail', 'calendar']));
-  expect(narrowedFlag(sql)).toBe(0);
+it('legacy rows: the baseline and the full set take the defaults, any other ready scope stays narrowed', () => run('task-defaults-migrate', async (sql, scope) => {
+  for (const [sources, ready, expectNarrowed] of [['["workspace","web"]', 1, 0], [JSON.stringify(TASK_SOURCE_FAMILIES), 1, 0], ['["workspace"]', 1, 1], ['[]', 1, 1], ['["workspace"]', 0, 0]] as const) {
+    sql.exec('DROP TABLE IF EXISTS owner_task_source_scope');
+    legacyTable(sql, sources, ready);
+    owned(sql, scope);
+    expect(narrowedFlag(sql), `${sources} ready=${ready}`).toBe(expectNarrowed);
+  }
+  sql.exec('DROP TABLE IF EXISTS owner_task_source_scope');
+  legacyTable(sql, '["workspace"]');
+  expect((await owned(sql, scope).classify(decision('retain'))).snapshot.sources, 'an existing restriction is not widened').toEqual(['workspace']);
 }));
+

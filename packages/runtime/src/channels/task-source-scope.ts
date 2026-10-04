@@ -42,10 +42,12 @@ const createTable = (sql: SqlStorage) => sql.exec(`CREATE TABLE IF NOT EXISTS ow
   sources_json TEXT NOT NULL, ready INTEGER NOT NULL, pending_json TEXT, start_ref TEXT)`);
 const initialise = (sql: SqlStorage) => { createTable(sql); withNarrowedColumn(sql); };
 // narrowed = the owner explicitly chose or narrowed this task's sources; host defaults never override that.
-const withNarrowedColumn = (sql: SqlStorage) => { if (!sql.exec<{ name: string }>('PRAGMA table_info(owner_task_source_scope)').toArray().some(column => column.name === 'narrowed')) sql.exec('ALTER TABLE owner_task_source_scope ADD COLUMN narrowed INTEGER NOT NULL DEFAULT 0'); };
-// Read-only families the owner's own chat uses by default: public web always, and the Google families once Google is connected.
+const withNarrowedColumn = (sql: SqlStorage) => { if (!sql.exec<{ name: string }>('PRAGMA table_info(owner_task_source_scope)').toArray().some(column => column.name === 'narrowed')) { sql.exec('ALTER TABLE owner_task_source_scope ADD COLUMN narrowed INTEGER NOT NULL DEFAULT 0');
+  // Legacy rows: only the exact baseline (workspace+web, the state the classifier starts from) and the unrestricted full set take the defaults; any other ready scope was a restriction and stays narrowed.
+  sql.exec(`UPDATE owner_task_source_scope SET narrowed = 1 WHERE ready = 1 AND sources_json NOT IN ('["workspace","web"]', ?)`, JSON.stringify(TASK_SOURCE_FAMILIES)); } };
+// Read-only families the owner's own chat uses by default: his own memory (local) and workspace, the public web, and the Google families once Google is connected.
 // Sends, calendar writes, spending and other effects keep their own approval desks.
-export const ownerReadSources = (googleAccounts: readonly unknown[]): readonly TaskSourceFamily[] => googleAccounts.length ? ['web', 'mail', 'calendar', 'contacts', 'tasks', 'drive'] : ['web'];
+export const ownerReadSources = (googleAccounts: readonly unknown[]): readonly TaskSourceFamily[] => googleAccounts.length ? ['local', 'workspace', 'web', 'mail', 'calendar', 'contacts', 'tasks', 'drive'] : ['local', 'workspace', 'web'];
 export const readTaskSourceSnapshot = (sql: SqlStorage, ownerKey: string): TaskSourceSnapshot => {
   const row = sql.exec<Row>('SELECT * FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).toArray()[0];
   if (!row || !row.task_id || !Number.isSafeInteger(row.revision) || row.revision < 1 || ![0, 1].includes(row.ready)) throw new Error('Task source custody unavailable');
@@ -67,8 +69,7 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
     const latest = await current();
     if (latest.taskId !== expected.taskId || latest.revision !== expected.revision || !latest.ready) throw new Error('Task source scope changed');
   };
-  // narrowed is written in the same statement as the sources: 1 only when the owner narrowed this task below the defaults; a new task starts at 0.
-  const narrows = (sources: readonly TaskSourceFamily[]) => defaultSources.some(source => !sources.includes(source));
+  // narrowed is written in the same statement as the sources. It records that the owner chose or narrowed this task's sources (restrict, an owner-evidenced new/change, an approved card): that explicit list is exact whatever the defaults are later. A closed task / new default task starts at 0.
   const commit = async (expected: TaskSourceSnapshot, sources: readonly TaskSourceFamily[], ready: boolean, startRef = expected.startRef, newTask = false, narrowed = isNarrowed()) => {
     await current();
     if (expected.revision >= Number.MAX_SAFE_INTEGER) throw new Error('Task source revision exhausted');
@@ -111,18 +112,18 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
         // The owner's explicit list is exact; leaving a default out is the owner narrowing. A closed task has no narrowing.
         const listed = closing ? [] : decision.sources;
         const transitioned = await commit(previous, listed, !closing,
-          decision.decision === 'change' ? previous.startRef : inputRef!, decision.decision !== 'change', !closing && narrows(listed));
+          decision.decision === 'change' ? previous.startRef : inputRef!, decision.decision !== 'change', !closing);
         return { snapshot: transitioned, outcome: 'owner_transition' };
       }
       // Repeating a confirmed machine-family request cannot grant anything new.
       // New-task acknowledgement is consumed once, when its host input boundary is pinned.
       if (previous.ready && decision.sources.every(source => previous.sources.includes(source))
         && (decision.decision === 'change' || decision.decision === 'new' && previous.startRef === null && !!inputRef)) {
-        return { snapshot: await commit(previous, previous.sources.filter(source => decision.sources.includes(source)), true, previous.startRef ?? inputRef ?? null, false, isNarrowed() || narrows(previous.sources.filter(source => decision.sources.includes(source)))), outcome: 'confirmed_retry' };
+        return { snapshot: await commit(previous, previous.sources.filter(source => decision.sources.includes(source)), true, previous.startRef ?? inputRef ?? null, false, isNarrowed() || previous.sources.some(source => !decision.sources.includes(source))), outcome: 'confirmed_retry' };
       }
       if (decision.decision === 'retain') return { snapshot: await commit(previous, previous.ready && !isNarrowed() ? families([...new Set([...previous.sources, ...defaultSources])]) : previous.sources, previous.ready || previous.sources.length > 0, previous.startRef ?? inputRef ?? null), outcome: 'retained' };
       if (decision.decision === 'restrict') {
-      const restricted = await commit(previous, previous.sources.filter(x => decision.sources.includes(x)), true, previous.sources.length === TASK_SOURCE_FAMILIES.length ? inputRef ?? null : previous.startRef, false, isNarrowed() || narrows(previous.sources.filter(x => decision.sources.includes(x))));
+      const restricted = await commit(previous, previous.sources.filter(x => decision.sources.includes(x)), true, previous.sources.length === TASK_SOURCE_FAMILIES.length ? inputRef ?? null : previous.startRef, false, true);
       return { snapshot: restricted, outcome: 'restricted' };
     }
       if (decision.decision === 'uncertain') return { snapshot: await commit(previous, previous.sources, false), outcome: 'uncertain' };
@@ -146,7 +147,7 @@ export const approveTaskSourceProposal = (sql: SqlStorage, ownerKey: string, sup
   const closing = supplied.action === 'close';
   // Legacy close cards carried the baseline families; closure must never restore them.
   const next = closing ? [] : families(supplied.sources);
-  scope.commit(() => sql.exec('UPDATE owner_task_source_scope SET task_id = ?, revision = revision + 1, sources_json = ?, ready = ?, start_ref = ?, narrowed = ?, pending_json = NULL WHERE owner_key = ? AND task_id = ? AND revision = ? AND pending_json = ?', supplied.action === 'change' ? row.task_id : crypto.randomUUID(), JSON.stringify(next), closing ? 0 : 1, supplied.action === 'change' ? row.start_ref : null, supplied.action === 'change' ? 1 : 0, ownerKey, supplied.taskId, supplied.revision, row.pending_json));
+  scope.commit(() => sql.exec('UPDATE owner_task_source_scope SET task_id = ?, revision = revision + 1, sources_json = ?, ready = ?, start_ref = ?, narrowed = ?, pending_json = NULL WHERE owner_key = ? AND task_id = ? AND revision = ? AND pending_json = ?', supplied.action === 'change' ? row.task_id : crypto.randomUUID(), JSON.stringify(next), closing ? 0 : 1, supplied.action === 'change' ? row.start_ref : null, closing ? 0 : 1, ownerKey, supplied.taskId, supplied.revision, row.pending_json));
   return sql.exec<{ changed: number }>('SELECT changes() AS changed').one().changed === 1;
 };
 
