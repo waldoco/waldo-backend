@@ -58,15 +58,19 @@ export function browserTaskContinuity(options: Readonly<{
     if (!options.enabled || record.session.expiresAt <= options.now() || !ref || typeof ref !== 'string' || ref.length > 200) { await end(record); throw Error('browser task expired or revoked'); }
     return ref;
   };
-  const cleanupOnFailure = async <T>(work: () => Promise<T>): Promise<T> => {
-    try { return await work(); }
-    catch (cause) {
+  const cleanupAfterFailure = async (cause: unknown, allocated?: BrowserTaskCheckpoint) => {
+    try {
       // Admission may already have fenced/closed the task. Reload instead of
       // restoring a stale active record or repeating a failed cleanup attempt.
       const latest = await get();
-      if (latest.phase !== 'cleanup_pending') await end(latest);
-      throw cause;
+      if (latest.phase !== 'cleanup_pending' && latest.session.state !== 'ended') await end(allocated ?? latest);
+    } catch (cleanupCause) {
+      throw new Error('browser task cleanup unavailable', { cause: new AggregateError([cause, cleanupCause], 'browser operation and cleanup failed') });
     }
+  };
+  const cleanupOnFailure = async <T>(work: () => Promise<T>): Promise<T> => {
+    try { return await work(); }
+    catch (cause) { await cleanupAfterFailure(cause); throw cause; }
   };
   const issue = async <T>(record: BrowserTaskCheckpoint, operation: BrowserCommand['operation'], body: object, work: () => Promise<T>): Promise<T> => {
     const boundary = new BrowserSessionBoundary({ now: options.now, authorizeManifest: digest => digest === options.manifestDigest, executor: {
@@ -128,8 +132,7 @@ export function browserTaskContinuity(options: Readonly<{
           await issue(active, 'navigate', { url: options.driver.pageUrl }, () => options.driver.navigate(id));
           return await observation(active);
         } catch (cause) {
-          const latest = await get();
-          if (!['closed', 'cleanup_pending'].includes(latest.phase)) await end(active);
+          await cleanupAfterFailure(cause, active);
           throw new Error('browser task could not open', { cause });
         }
       });

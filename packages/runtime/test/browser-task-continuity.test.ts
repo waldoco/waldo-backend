@@ -107,6 +107,18 @@ it('never treats a cancelled unsubmitted proposal as a receipt-verification perm
   expect(reads).toBe(0); expect(f.counts().submits).toBe(0);
 });
 
+it.each(['inspect', 'open'])('preserves both the %s failure and failed cleanup reload as internal causes', async operation => {
+  const f = fixture(), task = browserTaskContinuity(f.options);
+  const original = Error('synthetic operation failed'), cleanup = Error('synthetic storage reload failed');
+  if (operation === 'inspect') await task.open('owner-a');
+  const fail = async () => { f.options.store.load = async () => { throw cleanup; }; throw original; };
+  if (operation === 'inspect') f.driver.inspect = fail; else f.driver.start = fail;
+  const error = await (operation === 'inspect' ? task.inspect('owner-a') : task.open('owner-a')).catch(value => value);
+  expect(error).toBeInstanceOf(Error);
+  expect(error.cause).toBeInstanceOf(AggregateError);
+  expect(error.cause.errors).toEqual([original, cleanup]);
+});
+
 it('checks revocation immediately before click and never overwrites terminal cleanup with active state', async () => {
   const f = fixture(); const task = browserTaskContinuity(f.options);
   await task.open('owner-a', 10000); const proposal = await task.propose('owner-a');
