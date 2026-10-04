@@ -4,7 +4,7 @@ import { browseActHandler, executeBrowserSubmit } from '../src/tools/live/browse
 import { browserTaskHandler, browserTaskApprovalBridge } from '../src/tools/live/browser-task';
 import type { BrowserSubmitProposal } from '../src/channels/approvals';
 
-const context = { authenticatedUserId: 'owner-a' } as never;
+const context = { authenticatedUserId: 'owner-a', assertTaskSourceCurrent: async () => {} } as never;
 it('preserves free-text legacy calls and never falls back for a typed command without a host', async () => {
   let legacyCalls = 0;
   const legacy = { ...browseActHandler(undefined, undefined, undefined), handle: async () => { legacyCalls++; return { ok: true as const, data: { legacy: true }, source_taint: 'external' as const }; } };
@@ -61,4 +61,13 @@ it('requires independent stop admission and fences it before task cleanup', asyn
   expect(await browserTaskHandler(base).handle(args, context)).toMatchObject({ ok: false }); expect(events).toEqual([]);
   await browserTaskHandler({ ...base, stopAdmission: async () => { events.push('revoked'); } }).handle(args, context);
   expect(events).toEqual(['revoked','cleanup']);
+});
+
+it('withholds a typed observation and proposal after the captured task source is withdrawn', async () => {
+  let allowed = true, proposed = 0;
+  const host = { pageUrl: 'https://fixture.example/form', read: async () => { allowed = false; return { binding: { value: 'stale' } }; }, propose: async () => { allowed = false; return {}; } };
+  const ctx = { authenticatedUserId: 'owner-a', assertTaskSourceCurrent: async () => { if (!allowed) throw Error('narrowed to supplied only'); } } as never;
+  const handler = browserTaskHandler({ legacy: browseActHandler(undefined, undefined, undefined), host: async () => host as never, propose: async () => { proposed++; return 'stale'; } });
+  const args = browseActArgsSchema.parse({ url: host.pageUrl, task: 'inspect', command: { operation: 'inspect' } });
+  expect(await handler.handle(args, ctx)).toMatchObject({ ok: false }); expect(proposed).toBe(0);
 });

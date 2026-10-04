@@ -22,7 +22,7 @@ const object = (value: unknown, keys: readonly string[]): Record<string, unknown
     || Object.keys(value).sort().join(',') !== [...keys].sort().join(',')) throw Error('browser authority invalid');
   return value as Record<string, unknown>;
 };
-const parse = (value: unknown): BrowserOwnerAuthorization => {
+export const parseBrowserOwnerAuthorization = (value: unknown): BrowserOwnerAuthorization => {
   const r = object(value, ['version', 'ref', 'state', 'binding', 'manifest', 'manifestDigest', 'createdAt', 'expiresAt', 'operations', 'budget', 'usage']);
   const binding = ownerPresenceBinding(r.binding);
   const manifest = object(r.manifest, ['origin', 'pagePath', 'submitPath', 'receiptPrefix', 'runId', 'fields', 'formSelector', 'submitSelector', 'resultSelector']);
@@ -40,6 +40,7 @@ const parse = (value: unknown): BrowserOwnerAuthorization => {
     || usage.allocations === 1 && usage.reservedBrowserMs < 20000) throw Error('browser authority invalid');
   return { ...(r as unknown as BrowserOwnerAuthorization), binding };
 };
+const parse = parseBrowserOwnerAuthorization;
 const sameBinding = (a: PresenceBinding, b: PresenceBinding) => Object.keys(a).every(key => a[key as keyof PresenceBinding] === b[key as keyof PresenceBinding]);
 
 // Reads an authorization installed only by a future authenticated owner-confirmation

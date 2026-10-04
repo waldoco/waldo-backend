@@ -1,5 +1,7 @@
 import type { BrowserWorker } from '@cloudflare/playwright';
 import type { BrowserOwnerConfiguration, BrowserOwnerGrantRequest } from './browser-owner-host';
+import { browserBoundedJson } from './browser-bounded-body';
+import type { BrowserSourceGuard } from './public-fixture-browser';
 import { hex, signedRpc, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { ownerPresenceBinding, type PresenceBinding } from '../identity/owner-message-admission';
 import { browserOwnerAuthority } from './browser-owner-authority';
@@ -17,9 +19,9 @@ type Options = Readonly<{
   policy?: BrowserTrialPolicy; fetcher?: typeof fetch; now?: () => number;
 }>;
 
-// Proposed read RPC; fails closed until installed by the release writer.
+// Signed read RPC; remains unavailable until its migration is installed.
 // The existing route_presence projection cannot supply canonical authority.
-const bindingReader = (options: Options, doName: string, subject: string) => {
+export const browserOwnerBindingReader = (options: Options, doName: string, subject: string) => {
   const { env, storage, actualDoId } = options;
   const environment = env.WALDO_ENVIRONMENT, namespace = env.WALDO_OWNER_DO_NAMESPACE;
   const physical = () => environment === 'staging' && Boolean(namespace && /^[a-zA-Z0-9_-]{1,240}$/.test(namespace))
@@ -28,18 +30,8 @@ const bindingReader = (options: Options, doName: string, subject: string) => {
   const call = signedRpc(env, async (input, init) => {
     const response = await (options.fetcher ?? fetch)(input, init);
     if (!response.body) return response;
-    const reader = response.body.getReader(), chunks: Uint8Array[] = []; let size = 0;
-    try {
-      for (;;) {
-        const part = await reader.read(); if (part.done) break;
-        size += part.value.byteLength;
-        if (size > 4096) { void reader.cancel().catch(() => undefined); throw Error('browser configuration unavailable'); }
-        chunks.push(part.value);
-      }
-    } finally { reader.releaseLock(); }
-    const bytes = new Uint8Array(size); let offset = 0;
-    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-    return new Response(bytes, { status: response.status, headers: response.headers });
+    const value = await browserBoundedJson(response, 4096, 15000);
+    return Response.json(value, { status: response.status, headers: response.headers });
   }, options.now);
   return async (): Promise<PresenceBinding> => {
     if (!call || !physical() || !/^\d{1,32}$/.test(subject)) throw Error('browser configuration unavailable');
@@ -62,7 +54,7 @@ export async function browserProductionConfiguration(options: Options): Promise<
     const authority = browserOwnerAuthority(storage, now), authorization = authority.read();
     if (!authorization || authorization.binding.do_name !== policy.doName || authorization.manifest.origin !== policy.fixtureOrigin
       || authorization.manifestDigest !== await fixtureDigest(authorization.manifest)) throw new Error('browser configuration unavailable', { cause: authority.lastFailure });
-    const lookup = bindingReader(options, policy.doName, authorization.binding.subject);
+    const lookup = browserOwnerBindingReader(options, policy.doName, authorization.binding.subject);
     const binding = await lookup();
     if (JSON.stringify(binding) !== JSON.stringify(ownerPresenceBinding(authorization.binding))) throw Error('browser configuration unavailable');
     const driver = publicFixtureBrowser({ binding: env.BROWSER, manifest: authorization.manifest, fetcher: options.fetcher });
@@ -75,9 +67,11 @@ export async function browserProductionConfiguration(options: Options): Promise<
         try { return authority.grant(request, await lookup()); }
         catch (cause) { authority.recordFailure('directory', cause); return null; }
       },
-      driver: Object.freeze({ ...driver, start: async (lifetimeMs: number) => {
+      driver: Object.freeze({ ...driver, start: async (lifetimeMs: number, source?: BrowserSourceGuard) => {
+        await source?.();
         if (policy.enabled !== true || !authority.reserveAllocation(authorization, await lookup(), lifetimeMs)) throw Error('browser task allocation denied');
-        return driver.start(lifetimeMs);
+        await source?.();
+        return driver.start(lifetimeMs, source);
       } }),
     });
   } catch (cause) {

@@ -6,7 +6,11 @@ import type { OwnerMessageAdmission } from '../src/identity/owner-message-admiss
 import { TelegramOwnerDO, type TelegramOwnerPrivateHost } from '../src/channels/telegram-owner-do';
 import { BROWSER_TASK_KEY, type BrowserOwnerConfiguration } from '../src/channels/browser-owner-host';
 import { fixtureDigest } from '../src/channels/public-fixture-browser';
-vi.mock('openai', () => ({ default: class { responses = { create: async () => { throw new Error('browser proof denies unrelated model work'); } }; } }));
+const legacyModel = vi.hoisted(() => ({ enabled: false, calls: 0 }));
+vi.mock('openai', () => ({ default: class { responses = { create: async (input: { text?: { format?: { name?: string } } }) => {
+  if (!legacyModel.enabled) throw new Error('browser proof denies unrelated model work');
+  legacyModel.calls++; return { id: 'synthetic-default-reply', output: [], output_text: input.text?.format?.name === 'task_source_scope' ? JSON.stringify({ decision: 'retain', sources: [] }) : 'Ordinary messaging remains available.', usage: { input_tokens: 1, output_tokens: 1 } };
+} }; } }));
 vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
   return { ...original, createTelegramCaller: () => async (method: string) => method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: 1 } : true };
@@ -29,13 +33,14 @@ function sources(admission: OwnerMessageAdmission): ContextComposerDependencies 
 let sequence = 880000;
 async function browserProof(work: (h: {
   send(text: string): Promise<void>; reload(): void; foreign(): void; stale(): void;
-  reloadAbsent(): void; failCleanup(): void; alarm(): Promise<void>; replyOnly(): void; pauseCleanup(): (() => void) & { reached: Promise<void> }; state: DurableObjectState; requests: LLMRequest[]; starts(): number; ends(): number; inspections(): number;
-}) => Promise<void>, mode: 'enabled' | 'absent' | 'disabled' = 'enabled', ownerId = '10000000-0000-0000-0000-000000000001') {
+  reloadAbsent(): void; failCleanup(): void; alarm(): Promise<void>; replyOnly(): void; pauseCleanup(): (() => void) & { reached: Promise<void> }; state: DurableObjectState; requests: LLMRequest[]; pauseInspect(): (() => void) & { reached: Promise<void> }; pauseLookup(): (() => void) & { reached: Promise<void> }; starts(): number; ends(): number; inspections(): number;
+}) => Promise<void>, mode: 'enabled' | 'absent' | 'disabled' | 'factory_failed' | 'legacy_factory_failed' = 'enabled', ownerId = '10000000-0000-0000-0000-000000000001') {
   const subject = 81101, doName = `browser-do-proof-${++sequence}`;
   const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(doName));
   await runInDurableObject(stub, async (_instance, state) => {
     const noFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('browser proof denies network'));
     let starts = 0, ends = 0, inspections = 0, replyOnly = false, cleanupFails = false;
+    let inspectPause: { enter(): void; wait: Promise<void> } | undefined, lookupPause: { enter(): void; wait: Promise<void> } | undefined;
     let endPause: { enter(): void; wait: Promise<void> } | undefined;
     const requests: LLMRequest[] = [];
     const binding = { owner_id: ownerId, presence_id: '20000000-0000-0000-0000-000000000001', do_name: doName, provider: 'telegram' as const, subject: String(subject), admission_revision: '9007199254740993', state_version: 0 };
@@ -43,12 +48,12 @@ async function browserProof(work: (h: {
     const driver = {
       provider: 'cloudflare_playwright' as const, origin: 'https://fixture.example', pageUrl: 'https://fixture.example/form', runId: `browser-task-${sequence}`, submitRef: '#submit',
       start: async () => { starts++; return 'PRIVATE_SYNTHETIC_PROVIDER_SESSION'; }, navigate: async () => {},
-      inspect: async () => { inspections++; return { url: 'https://fixture.example/form', stateDigest: await fixtureDigest('synthetic'), binding: { value: 'synthetic' } }; },
+      inspect: async () => { inspections++; if (inspectPause) { const slot = inspectPause; inspectPause = undefined; slot.enter(); await slot.wait; } return { url: 'https://fixture.example/form', stateDigest: await fixtureDigest('synthetic'), binding: { value: 'synthetic' } }; },
       fill: async (_id: string, _field: string, _value: string, _state: string, before: () => Promise<void>) => { await before(); },
       submit: async (_id: string, _state: string, before: () => Promise<void>) => { await before(); }, verify: async () => null,
       end: async () => { ends++; if (cleanupFails) throw Error('synthetic cleanup unavailable'); if (endPause) { const slot = endPause; endPause = undefined; slot.enter(); await slot.wait; } },
     };
-    const config: BrowserOwnerConfiguration = { enabled: mode !== 'disabled', binding, manifestDigest: `sha256:${'a'.repeat(64)}`, driver, lookup: async () => ({ ...directory }), grant: async request => ({ ...request, ref: 'synthetic-current-grant', expiresAt: Date.now() + 60000 }) };
+    const config: BrowserOwnerConfiguration = { enabled: mode !== 'disabled', binding, manifestDigest: `sha256:${'a'.repeat(64)}`, driver, lookup: async () => { if (lookupPause) { const slot = lookupPause; lookupPause = undefined; slot.enter(); await slot.wait; } return { ...directory }; }, grant: async request => ({ ...request, ref: 'synthetic-current-grant', expiresAt: Date.now() + 60000 }) };
     const host: TelegramOwnerPrivateHost = {
       environment: 'staging', namespace: 'browser-proof-namespace', allowedDoNames: [doName], lookup: async () => ({ ...directory }), context: sources,
       access: async () => ({ grants: { status: 'available', tools: ['browse_act'] }, connectors: { status: 'unavailable' } }), connectorBacked: () => false,
@@ -56,11 +61,12 @@ async function browserProof(work: (h: {
         requests.push(structuredClone(request));
         const calls = !replyOnly && !request.response_format && !request.tool_turns?.length && request.tools?.some(t => t.name === 'browse_act')
           ? [{ call_id: `browser-inspect-${requests.length}`, name: 'browse_act', arguments: JSON.stringify({ url: driver.pageUrl, task: 'Inspect the synthetic public form', command: { operation: 'inspect' } }) }] : undefined;
-        return { ok: true, data: { text: calls ? '' : 'Synthetic browser reply.', ...(calls ? { tool_calls: calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, model: request.model, latency_ms: 1 } };
+        return { ok: true, data: { text: request.response_format ? JSON.stringify({ decision: 'retain', sources: [] }) : calls ? '' : 'Synthetic browser reply.', ...(calls ? { tool_calls: calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, model: request.model, latency_ms: 1 } };
       } },
     };
     const privateEnv = { ...env, WALDO_EGRESS_ALLOWLIST: 'fixture.example', TELEGRAM_BOT_TOKEN: '12345:fictional', TELEGRAM_WEBHOOK_SECRET: 'fictional-browser-inbox-secret', OPENAI_API_KEY: 'fictional-model-key' };
-    const construct = () => new TelegramOwnerDO(state, privateEnv, { mode: 'canonical', host }, mode === 'absent' ? undefined : config);
+    const construct = () => new TelegramOwnerDO(state, privateEnv, mode === 'legacy_factory_failed' ? undefined : { mode: 'canonical', host }, mode === 'absent' || mode === 'factory_failed' || mode === 'legacy_factory_failed' ? undefined : config, mode === 'factory_failed' || mode === 'legacy_factory_failed' ? { policy: { enabled: false, doName, fixtureOrigin: 'https://fixture.example' }, manifest: { origin: 'https://fixture.example', pagePath: '/form', submitPath: '/submit', receiptPrefix: '/receipts/', runId: 'trial-one', fields: ['value'], formSelector: '#form', submitSelector: '#submit', resultSelector: '#result' } } : undefined);
+    if (mode === 'legacy_factory_failed') { legacyModel.enabled = true; legacyModel.calls = 0; }
     let instance = construct();
     const send = async (text: string) => {
       const id = ++sequence;
@@ -74,8 +80,9 @@ async function browserProof(work: (h: {
       if (text === '/stop') return;
       throw Error('Synthetic browser turn did not close in five actual alarms');
     };
-    try { await work({ send, state, requests, reloadAbsent: () => { instance = new TelegramOwnerDO(state, privateEnv, { mode: 'canonical', host }); }, failCleanup: () => { cleanupFails = true; }, alarm: () => instance.alarm(), replyOnly: () => { replyOnly = true; }, pauseCleanup: () => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const wait = new Promise<void>(resolve => { resume = resolve; }); endPause = { enter, wait }; return Object.assign(resume, { reached }); }, starts: () => starts, ends: () => ends, inspections: () => inspections, reload: () => { instance = construct(); }, foreign: () => { directory = { ...directory, owner_id: '10000000-0000-0000-0000-000000000002' }; }, stale: () => { directory = { ...directory, admission_revision: '9007199254740995' }; } }); }
-    finally { await state.storage.deleteAlarm(); noFetch.mockRestore(); }
+    const pause = (kind: 'inspect' | 'lookup') => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const slot = { enter, wait: new Promise<void>(resolve => { resume = resolve; }) }; if (kind === 'inspect') inspectPause = slot; else lookupPause = slot; return Object.assign(resume, { reached }); };
+    try { await work({ pauseInspect: () => pause('inspect'), pauseLookup: () => pause('lookup'), send, state, requests, reloadAbsent: () => { instance = new TelegramOwnerDO(state, privateEnv, { mode: 'canonical', host }); }, failCleanup: () => { cleanupFails = true; }, alarm: () => instance.alarm(), replyOnly: () => { replyOnly = true; }, pauseCleanup: () => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const wait = new Promise<void>(resolve => { resume = resolve; }); endPause = { enter, wait }; return Object.assign(resume, { reached }); }, starts: () => starts, ends: () => ends, inspections: () => inspections, reload: () => { instance = construct(); }, foreign: () => { directory = { ...directory, owner_id: '10000000-0000-0000-0000-000000000002' }; }, stale: () => { directory = { ...directory, admission_revision: '9007199254740995' }; } }); }
+    finally { legacyModel.enabled = false; await state.storage.deleteAlarm(); noFetch.mockRestore(); }
   });
 }
 it('authenticated actual DO typed inspection persists one owner browser session across reconstruction without exposing provider identifiers', async () => {
@@ -91,7 +98,7 @@ it('authenticated actual DO typed inspection persists one owner browser session 
     expect(projected).toContain('field_refs');
   });
 });
-for (const mode of ['absent', 'disabled'] as const) it(`actual DO ${mode} browser configuration rejects typed calls without provider allocation`, async () => {
+for (const mode of ['absent', 'disabled', 'factory_failed'] as const) it(`actual DO ${mode} browser configuration rejects typed calls without provider allocation`, async () => {
   await browserProof(async h => {
     await h.send('Inspect the public fixture.');
     expect(h.starts()).toBe(0); expect(h.inspections()).toBe(0);
@@ -213,4 +220,53 @@ for (const recovery of ['missing_configuration', 'exhausted_cleanup'] as const) 
     expect(h.requests.length).toBeGreaterThan(before);
     expect(JSON.stringify(h.requests)).not.toContain('PRIVATE_SYNTHETIC_PROVIDER_SESSION');
   });
+});
+
+it('factory failure does not stop ordinary owner messaging', async () => {
+  await browserProof(async h => {
+    h.replyOnly(); await h.send('Hello, continue the owner conversation.');
+    expect(h.requests.length).toBeGreaterThan(0); expect(h.starts()).toBe(0);
+  }, 'factory_failed');
+});
+
+for (const seam of ['lookup', 'inspect'] as const) it(`actual DO fences browser work when task sources narrow during paused ${seam}`, async () => {
+  await browserProof(async h => {
+    const resume = seam === 'lookup' ? h.pauseLookup() : h.pauseInspect();
+    const pending = h.send('Inspect the public fixture.'); await resume.reached;
+    h.state.storage.sql.exec("UPDATE owner_task_source_scope SET sources_json = '[]', revision = revision + 1, ready = 1");
+    resume(); await pending;
+    expect(h.starts()).toBe(seam === 'lookup' ? 0 : 1);
+    expect(JSON.stringify(h.requests)).not.toContain('field_refs');
+    await h.send('/stop'); if (seam === 'inspect') expect(h.ends()).toBe(1);
+  });
+});
+it('browser approval custody survives reconstruction but denies narrowed or replaced durable task scope', async () => {
+  await browserProof(async h => {
+    const { browserTaskSourceCustody } = await import('../src/channels/browser-task-source');
+    await h.send('Inspect the public fixture.');
+    const ownerKey = h.state.storage.sql.exec<{ owner_key: string }>('SELECT owner_key FROM owner_task_source_scope').one().owner_key;
+    const payload = { url: 'https://fixture.example/form', action: { selector: '#submit', method: 'click', description: 'synthetic' }, binding: { value: 'synthetic' }, steps: [], continuation: { version: 1 as const, taskRef: 'synthetic-task', proposalId: 'synthetic-proposal', scopeDigest: `sha256:${'a'.repeat(64)}` } };
+    browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv).capture(payload, ownerKey);
+    const guard = browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv).guard(payload); await guard();
+    h.state.storage.sql.exec("UPDATE owner_task_source_scope SET sources_json = '[]', revision = revision + 1, ready = 1");
+    await expect(guard()).rejects.toThrow('changed');
+    const { browserTaskApprovalBridge } = await import('../src/tools/live/browser-task');
+    let submits = 0, receipts = 0;
+    const approval = browserTaskApprovalBridge({ ownerId: 'prn_10000000000000000000000000000001', host: async next => {
+      const current = browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv).guard(next); await current();
+      return { taskRef: 'synthetic-task', pageUrl: next.url, validateProposal: async () => true, submit: async () => { submits++; }, validateReceipt: async () => { receipts++; return true; } } as never;
+    } });
+    expect(await approval.submit(payload, 'authenticated-owner-approval')).toMatchObject({ status: 'rejected' });
+    expect(await approval.receiptVerified(payload, { id: 'r', observed_at: new Date().toISOString(), source: 'controlled_fixture', binding_digest: `sha256:${'a'.repeat(64)}`, action_digest: `sha256:${'b'.repeat(64)}` })).toBe(false);
+    expect(submits).toBe(0); expect(receipts).toBe(0);
+    expect(() => browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv).guard({ ...payload, continuation: { ...payload.continuation, proposalId: 'foreign' } })).toThrow();
+  });
+});
+
+it('default responder still answers ordinary owner text when the configured browser binding RPC is unavailable', async () => {
+  await browserProof(async h => {
+    await h.send('Hello, please answer using this message only.');
+    expect(legacyModel.calls).toBeGreaterThan(0); expect(h.starts()).toBe(0); expect(h.inspections()).toBe(0);
+    expect(JSON.stringify(h.state.storage.kv.get('telegram_final_outbox_v1'))).toContain('Ordinary messaging remains available.');
+  }, 'legacy_factory_failed');
 });

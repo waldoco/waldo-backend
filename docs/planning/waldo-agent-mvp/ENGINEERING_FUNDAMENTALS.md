@@ -505,3 +505,7 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 
 - [ ] Missing, malformed or already-closed browser checkpoints retire stale runnable wakes; malformed private metadata is preserved and quarantined, never treated as a fresh task.
 - [ ] Cleanup physical attempts persist before provider I/O and stop after three, including across reconstruction. Lost allocation IDs, unavailable or incompatible configured drivers and exhausted cleanup retain unresolved private evidence with no runnable browser retry wake; none claims provider closure.
+
+- Browser trial consent must return default404 before work; configured owner-keyed rate admission and declared/chunked body bounds precede directory/storage. Stop, expiry and rebinding during final lookup cannot install or resurrect consent; replay preserves usage.
+- Typed browser source withdrawal during lookup, SDK load/connect or DOM observation denies subsequent allocation/read/fill/submit/receipt and stale result publication; cleanup remains independent. Approval rechecks durable task revision without a completed turn closure.
+- An unavailable optional browser binding RPC must leave the existing ordinary default responder usable while its noncanonical principal remains unable to resolve the canonical browser host. Test the default preparation path, not only the injected canonical host.

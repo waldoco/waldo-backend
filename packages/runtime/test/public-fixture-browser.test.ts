@@ -12,7 +12,7 @@ const harness = (m = manifest, onSubmit?: () => void) => {
   const submit = Object.assign(new Element(), { tagName: 'BUTTON', type: 'submit', disabled: false, form: undefined as unknown, getAttribute: (name: string) => overrides.get(name) ?? null });
   const form = { elements: [input, submit], target: '', enctype: 'application/x-www-form-urlencoded', id: 'form', tagName: 'FORM', method: 'post', action: `${m.origin}${m.submitPath}`, ownerDocument: { defaultView: { HTMLElement: Element, HTMLInputElement: Input, location: { get href() { return currentUrl; } } } }, querySelectorAll: () => [input], querySelector: () => submit };
   submit.form = form;
-  const page = { url: () => currentUrl, setDefaultTimeout: () => {}, goto: async (url: string) => { currentUrl = url; }, locator: () => ({ evaluate: async (fn: (form: unknown, args: unknown) => unknown, args: unknown) => fn(form, args) }) };
+  const page = { url: () => currentUrl, setDefaultTimeout: () => {}, goto: async (url: string) => { calls.push({ method: 'navigate' }); currentUrl = url; }, locator: () => ({ evaluate: async (fn: (form: unknown, args: unknown) => unknown, args: unknown) => { calls.push({ method: 'evaluate' }); return fn(form, args); } }) };
   const context = { pages: () => Array(pages).fill(page), newPage: async () => page, route: async () => {}, unroute: async () => {} };
   const sdk = { acquire: async (_binding: unknown, options: unknown) => { calls.push({ method: 'acquire', value: options }); return { sessionId: 'retained-session' }; }, endpointURLString: (_binding: unknown, options: { sessionId: string }) => `http://fake.host/v1/devtools/browser/${options.sessionId}?browser_binding=BROWSER`, connect: async (url: URL) => { calls.push({ method: 'connect', value: String(url) }); return { contexts: () => [context], close: async () => { calls.push({ method: 'disconnect' }); }, newBrowserCDPSession: async () => ({ send: async (method: string) => { calls.push({ method }); closed = true; } }) }; }, sessions: async () => closed ? [] : [{ sessionId: 'retained-session' }] };
   return { calls, sdk, input, overrideSubmit: (name: string, value: string) => overrides.set(name, value), poisonClick: () => Object.defineProperty(submit, 'click', { get() { throw Error('page-owned click accessor'); } }), clicks: () => clicks, setUrl: (url: string) => { currentUrl = url; }, setPages: (count: number) => { pages = count; } };
@@ -23,7 +23,7 @@ it('acquires once with latched guards, then reconnects the exact dedicated ID th
   const id = await driver.start(10000);
   const observed = await driver.inspect(id);
   expect(observed).toMatchObject({ url: 'https://fixture.example/form', binding: { value: 'synthetic initial' } });
-  expect(f.calls).toEqual([{ method: 'acquire', value: { recording: false, keep_alive: 10000, guardrails: { allowedDomains: ['fixture.example'] } } }, { method: 'connect', value: 'http://fake.host/v1/devtools/browser/retained-session?browser_binding=BROWSER&persistent=true' }, { method: 'disconnect' }]);
+  expect(f.calls).toEqual([{ method: 'acquire', value: { recording: false, keep_alive: 10000, guardrails: { allowedDomains: ['fixture.example'] } } }, { method: 'connect', value: 'http://fake.host/v1/devtools/browser/retained-session?browser_binding=BROWSER&persistent=true' }, { method: 'evaluate' }, { method: 'disconnect' }]);
 });
 
 it('the actual pinned SDK does not acquire on retained-ID expiry or transport error', async () => {
@@ -143,4 +143,26 @@ it('runs the durable inspect/fill/approve/submit/readback slice through native D
     expect(JSON.stringify(proposal)).not.toContain('retained-session');
     expect(JSON.stringify(stored)).not.toContain(privateState.token);
   } finally { await host.close(); }
+});
+
+it.each(['start', 'navigate', 'inspect', 'fill', 'submit'])('fences %s after SDK load before any acquire/connect/DOM operation', async operation => {
+  const f = harness(); let allowed = true;
+  const source = async () => { if (!allowed) throw Error('source withdrawn'); };
+  const driver = candidate.publicFixtureBrowser({ binding: {} as never, manifest, loadSdk: async () => { allowed = false; return f.sdk as never; }, fetcher: (async () => new Response('', { status: 404 })) as typeof fetch });
+  const digest = await candidate.fixtureDigest('synthetic');
+  const action = operation === 'start' ? driver.start(10000, source) : operation === 'navigate' ? driver.navigate('retained-session', source) : operation === 'inspect' ? driver.inspect('retained-session', source) : operation === 'fill' ? driver.fill('retained-session', 'value', 'new', digest, async () => {}, source) : driver.submit('retained-session', digest, async () => {}, source);
+  await expect(action).rejects.toThrow('unavailable'); expect(f.calls).toEqual([]); expect(f.input.value).toBe('synthetic initial'); expect(f.clicks()).toBe(0);
+  await driver.end('retained-session'); expect(f.calls.some(call => call.method === 'Browser.close')).toBe(true);
+});
+it('denies receipt HTTP reads when the captured source is withdrawn', async () => {
+  let reads = 0;
+  const driver = candidate.publicFixtureBrowser({ binding: {} as never, manifest, fetcher: (async () => { reads++; return new Response('', { status: 404 }); }) as typeof fetch });
+  await expect(driver.verify(`sha256:${'a'.repeat(64)}`, async () => { throw Error('source withdrawn'); })).rejects.toThrow('unavailable'); expect(reads).toBe(0);
+});
+it('does not extract DOM after scope changes during provider connection and disconnects the known browser', async () => {
+  const f = harness(); let allowed = true; const connect = f.sdk.connect;
+  f.sdk.connect = async url => { const browser = await connect(url); allowed = false; return browser; };
+  const driver = candidate.publicFixtureBrowser({ binding: {} as never, manifest, loadSdk: async () => f.sdk as never });
+  await expect(driver.inspect('retained-session', async () => { if (!allowed) throw Error('source withdrawn'); })).rejects.toThrow('unavailable');
+  expect(f.calls.map(c => c.method)).toEqual(['connect', 'disconnect']);
 });

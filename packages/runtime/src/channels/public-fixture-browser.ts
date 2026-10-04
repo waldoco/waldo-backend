@@ -1,4 +1,5 @@
 import type { Browser, BrowserWorker, Page } from '@cloudflare/playwright';
+import { browserBoundedJson } from './browser-bounded-body';
 import { cloudflareBrowserGuardOptions } from './cloudflare-browser-adapter';
 
 export type FixtureManifest = Readonly<{
@@ -6,6 +7,8 @@ export type FixtureManifest = Readonly<{
   fields: readonly string[]; formSelector: string; submitSelector: string; resultSelector: string;
 }>;
 type Sdk = Pick<typeof import('@cloudflare/playwright'), 'acquire' | 'connect' | 'endpointURLString' | 'sessions'>;
+export type BrowserSourceGuard = () => Promise<void>;
+const admitted: BrowserSourceGuard = async () => {};
 export type FixtureState = Readonly<{ url: string; values: Record<string, string>; target: string; method: string; disabled: boolean }>;
 export type FixtureObservation = Readonly<{ url: string; stateDigest: string; binding: Readonly<Record<string, string>> }>;
 export const fixtureDigest = async (value: unknown) => `sha256:${[...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value))))].map(x => x.toString(16).padStart(2, '0')).join('')}`;
@@ -57,16 +60,14 @@ export function publicFixtureBrowser(options: Readonly<{ binding: BrowserWorker;
   }
   cloudflareBrowserGuardOptions([origin.hostname]);
   const fetcher = options.fetcher ?? fetch;
-  const receiptRead = async (): Promise<Record<string, unknown> | null> => {
+  const receiptRead = async (source: BrowserSourceGuard = admitted): Promise<Record<string, unknown> | null> => {
+    await source();
     const response = await fetcher(`${m.origin}${m.receiptPrefix}current`, { redirect: 'error', signal: AbortSignal.timeout(10000) });
+    await source();
     if (response.status === 404) return null;
     if (!response.ok || !response.body) throw Error('fixture receipt unavailable');
-    const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
-    try {
-      for (;;) { const next = await reader.read(); if (next.done) break; size += next.value.byteLength; if (size > 4096) { void reader.cancel().catch(() => undefined); throw Error('fixture receipt oversized'); } chunks.push(next.value); }
-    } finally { reader.releaseLock(); }
-    const bytes = new Uint8Array(size); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-    const receipt = JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes));
+    const receipt = await browserBoundedJson(response) as Record<string, unknown>;
+    await source();
     if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) || Object.keys(receipt).sort().join(',') !== 'bindingDigest,downloadDigest,observedAt,opaqueId,provenance,runId,state,version' || receipt.version !== 1 || receipt.provenance !== 'synthetic_only' || receipt.runId !== m.runId || receipt.state !== 'acknowledged_fixture' || typeof receipt.opaqueId !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(receipt.opaqueId) || typeof receipt.bindingDigest !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.bindingDigest) || typeof receipt.observedAt !== 'string' || !Number.isFinite(Date.parse(receipt.observedAt))) throw Error('fixture receipt invalid');
     return receipt;
   };
@@ -74,32 +75,39 @@ export function publicFixtureBrowser(options: Readonly<{ binding: BrowserWorker;
   const sessionId = (id: string) => { if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id)) throw Error('browser fixture session rejected'); return id; };
   // Public connect(URL) parses the retained ID from its path. The pinned SDK's
   // connectOverCDP wrapper can allocate instead, so never use it here.
-  const connection = async <T>(id: string, work: (browser: Browser) => Promise<T>): Promise<T> => {
+  const connection = async <T>(id: string, work: (browser: Browser) => Promise<T>, source: BrowserSourceGuard = admitted): Promise<T> => {
     sessionId(id); let browser: Browser | undefined;
     try {
       const sdk = await loadSdk();
       const endpoint = new URL(sdk.endpointURLString(options.binding, { sessionId: id }));
       endpoint.searchParams.set('persistent', 'true');
+      await source();
       browser = await sdk.connect(endpoint);
+      await source();
       return await work(browser);
     } catch { throw Error('browser fixture operation unavailable'); }
     finally { if (browser) { try { await browser.close(); } catch { throw Error('browser fixture disconnect unavailable'); } } }
   };
-  const pageWork = <T>(id: string, work: (page: Page) => Promise<T>) => connection(id, async browser => {
+  const pageWork = <T>(id: string, source: BrowserSourceGuard, work: (page: Page) => Promise<T>) => connection(id, async browser => {
     const contexts = browser.contexts();
     if (contexts.length !== 1) throw Error('fixture context changed');
     const context = contexts[0]!;
+    await source();
     await context.unroute('**/*');
+    await source();
     await context.route('**/*', async route => {
+      try { await source(); } catch { await route.abort('blockedbyclient'); return; }
       const url = new URL(route.request().url());
       if (url.origin === m.origin && !url.username && !url.password) await route.continue(); else await route.abort('blockedbyclient');
     });
+    await source();
     const pages = context.pages();
     if (pages.length > 1) throw Error('fixture page changed');
     const page = pages[0] ?? await context.newPage();
     page.setDefaultTimeout(10000);
+    await source();
     return work(page);
-  });
+  }, source);
   const exactUrl = (page: Page) => { const url = page.url(); if (url !== `${m.origin}${m.pagePath}`) throw Error('fixture URL changed'); return url; };
   return {
     provider: 'cloudflare_playwright' as const,
@@ -107,16 +115,16 @@ export function publicFixtureBrowser(options: Readonly<{ binding: BrowserWorker;
     runId: m.runId,
     submitRef: m.submitSelector,
     pageUrl: `${m.origin}${m.pagePath}`,
-    async start(lifetimeMs: number) {
-      try { if (await receiptRead() !== null) throw Error('fixture already used'); const sdk = await loadSdk(); const started = await sdk.acquire(options.binding, cloudflareBrowserGuardOptions([origin.hostname], lifetimeMs)); return sessionId(started.sessionId); }
+    async start(lifetimeMs: number, source: BrowserSourceGuard = admitted) {
+      try { if (await receiptRead(source) !== null) throw Error('fixture already used'); const sdk = await loadSdk(); await source(); const started = await sdk.acquire(options.binding, cloudflareBrowserGuardOptions([origin.hostname], lifetimeMs)); return sessionId(started.sessionId); }
       catch { throw Error('browser fixture session unavailable'); }
     },
-    async verify(expectedBindingDigest: string) {
+    async verify(expectedBindingDigest: string, source: BrowserSourceGuard = admitted) {
       if (!/^sha256:[0-9a-f]{64}$/.test(expectedBindingDigest)) throw Error('browser fixture digest rejected');
-      try { const receipt = await receiptRead(); return receipt && `sha256:${receipt.bindingDigest}` === expectedBindingDigest ? { id: receipt.opaqueId as string, observed_at: receipt.observedAt as string, source: 'controlled_fixture' as const, binding_digest: expectedBindingDigest } : null; }
+      try { const receipt = await receiptRead(source); return receipt && `sha256:${receipt.bindingDigest}` === expectedBindingDigest ? { id: receipt.opaqueId as string, observed_at: receipt.observedAt as string, source: 'controlled_fixture' as const, binding_digest: expectedBindingDigest } : null; }
       catch { throw Error('browser fixture receipt unavailable'); }
     },
-    async navigate(id: string) { return pageWork(id, async page => { await page.goto(`${m.origin}${m.pagePath}`, { timeout: 10000, waitUntil: 'domcontentloaded' }); exactUrl(page); }); },
+    async navigate(id: string, source: BrowserSourceGuard = admitted) { return pageWork(id, source, async page => { await source(); await page.goto(`${m.origin}${m.pagePath}`, { timeout: 10000, waitUntil: 'domcontentloaded' }); await source(); exactUrl(page); }); },
     async end(id: string) {
       sessionId(id);
       try {
@@ -126,31 +134,41 @@ export function publicFixtureBrowser(options: Readonly<{ binding: BrowserWorker;
         if ((await sdk.sessions(options.binding)).some(row => row.sessionId === id)) throw Error('fixture still active');
       } catch { throw Error('browser fixture cleanup unavailable'); }
     },
-    async submit(id: string, expectedDigest: string, beforeAction: () => Promise<void>) {
-      return pageWork(id, async page => {
+    async submit(id: string, expectedDigest: string, beforeAction: () => Promise<void>, source: BrowserSourceGuard = admitted) {
+      return pageWork(id, source, async page => {
+        await source();
         const state = await page.locator(m.formSelector).evaluate(nativeForm, { manifest: m });
+        await source();
         exactUrl(page);
         if (await fixtureDigest(state) !== expectedDigest) throw Error('fixture state changed');
         await beforeAction();
+        await source();
         await page.locator(m.formSelector).evaluate(nativeForm, { manifest: m, expected: JSON.stringify(state), action: { kind: 'submit' as const } });
       });
     },
-    async fill(id: string, field: string, value: string, expectedDigest: string, beforeAction: () => Promise<void>) {
+    async fill(id: string, field: string, value: string, expectedDigest: string, beforeAction: () => Promise<void>, source: BrowserSourceGuard = admitted) {
       if (!m.fields.includes(field) || !value || value.length > 1000) throw Error('browser fixture fill rejected');
-      return pageWork(id, async page => {
+      return pageWork(id, source, async page => {
+        await source();
         const state = await page.locator(m.formSelector).evaluate(nativeForm, { manifest: m });
+        await source();
         exactUrl(page);
         if (await fixtureDigest(state) !== expectedDigest) throw Error('fixture state changed');
         await beforeAction();
+        await source();
         await page.locator(m.formSelector).evaluate(nativeForm, { manifest: m, expected: JSON.stringify(state), action: { kind: 'fill' as const, field, value } });
       });
     },
-    async inspect(id: string): Promise<FixtureObservation> {
-      return pageWork(id, async page => {
+    async inspect(id: string, source: BrowserSourceGuard = admitted): Promise<FixtureObservation> {
+      return pageWork(id, source, async page => {
+        await source();
         const state = await page.locator(m.formSelector).evaluate(nativeForm, { manifest: m });
+        await source();
         const url = exactUrl(page);
         if (state.url !== url) throw Error('fixture URL changed');
-        return { url, stateDigest: await fixtureDigest(state), binding: state.values };
+        const stateDigest = await fixtureDigest(state);
+        await source();
+        return { url, stateDigest, binding: state.values };
       });
     },
   };

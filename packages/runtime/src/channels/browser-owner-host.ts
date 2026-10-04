@@ -1,5 +1,6 @@
 import { browserTaskCheckpointSchema, type BrowserTaskCheckpoint, type BrowserCommand } from '@waldo/contracts';
 import { ownerPresenceBinding, type PresenceBinding } from '../identity/owner-message-admission';
+import type { BrowserSourceGuard } from './public-fixture-browser';
 import { armAlarm } from '../scheduler/alarm-slot';
 import { browserTaskContinuity, type BrowserTaskDriver } from './browser-task-continuity';
 
@@ -54,8 +55,10 @@ export function browserOwnerHost(options: Readonly<{
       await armAlarm(options.storage, Math.max(options.now() + 250, existing === null ? due : Math.min(existing, due)));
     }
   };
-  const admit = async (operation: BrowserCommand['operation'], evidence: Evidence = {}, consume = true) => {
+  const admit = async (operation: BrowserCommand['operation'], evidence: Evidence = {}, consume = true, source?: BrowserSourceGuard) => {
+      await source?.();
       if (!config || !binding || !config.enabled || !await current() || await options.storage.get(REVOKED_KEY) === config.driver.runId) return null;
+      await source?.();
       if (evidence.approvalRef && (!evidence.proposalId || !options.approved(evidence.approvalRef, evidence.proposalId))) return null;
       const request: BrowserOwnerGrantRequest = { principal, tenant, doName: binding.do_name, presence: binding.presence_id, revision: binding.admission_revision, task: config.driver.runId, manifest: config.manifestDigest, page: config.driver.pageUrl, operation, evidence: Object.freeze({ ...evidence }) };
       Object.freeze(request);
@@ -63,14 +66,23 @@ export function browserOwnerHost(options: Readonly<{
       if (!grant || !grant.ref || grant.ref.length > 200 || !Number.isSafeInteger(grant.expiresAt) || grant.expiresAt <= options.now()
         || Object.keys(request).some(key => JSON.stringify(grant[key as keyof BrowserOwnerGrantRequest]) !== JSON.stringify(request[key as keyof BrowserOwnerGrantRequest]))
         || !await current() || await options.storage.get(REVOKED_KEY) === config.driver.runId) return null;
+      await source?.();
       const used = (await options.storage.get<number>('browser_owner_task_admissions_v1')) ?? 0;
       if (!Number.isSafeInteger(used) || used >= 32) return null;
       if (consume) await options.storage.put('browser_owner_task_admissions_v1', used + 1);
+      await source?.();
       return grant.ref;
     };
-  const make = () => config && binding ? browserTaskContinuity({
+  const make = (source?: BrowserSourceGuard) => config && binding ? browserTaskContinuity({
     enabled: config.enabled, ownerId: principal, taskId: config.driver.runId, manifestDigest: config.manifestDigest,
-    driver: { ...config.driver, end: async id => {
+    driver: { ...config.driver,
+      start: async lifetime => { await source?.(); return config.driver.start(lifetime, source); },
+      navigate: async id => { await source?.(); const value = await config.driver.navigate(id, source); await source?.(); return value; },
+      inspect: async id => { await source?.(); const value = await config.driver.inspect(id, source); await source?.(); return value; },
+      fill: async (id, field, value, digest, before) => { await source?.(); return config.driver.fill(id, field, value, digest, async () => { await before(); await source?.(); }, source); },
+      submit: async (id, digest, before) => { await source?.(); return config.driver.submit(id, digest, async () => { await before(); await source?.(); }, source); },
+      verify: async digest => { await source?.(); const value = await config.driver.verify(digest, source); await source?.(); return value; },
+      end: async id => {
       const previous = await options.storage.get<CleanupState>(BROWSER_TASK_CLEANUP_KEY);
       const valid = previous === undefined || previous.taskId === config.driver.runId && Number.isSafeInteger(previous.attempts) && previous.attempts >= 0;
       const attempts = valid ? previous?.attempts ?? 0 : MAX_CLEANUP_ATTEMPTS;
@@ -90,14 +102,16 @@ export function browserOwnerHost(options: Readonly<{
       }
     } }, now: options.now, newId: options.newId,
     store: { exclusive, load: async () => (await options.storage.get(BROWSER_TASK_KEY)) ?? null, save },
-    admit,
+    admit: (operation, evidence) => admit(operation, evidence, true, source),
   }) : null;
   let maintenance: Promise<void> | undefined;
   return {
     principal,
-    async resolve(authenticatedPrincipal: string) {
+    async resolve(authenticatedPrincipal: string, source?: BrowserSourceGuard) {
+      await source?.();
       if (authenticatedPrincipal !== principal || !await current()) return null;
-      return make();
+      await source?.();
+      return make(source);
     },
     // This fence is independent of the browser mutex and provider awaits.
     async revoke() {

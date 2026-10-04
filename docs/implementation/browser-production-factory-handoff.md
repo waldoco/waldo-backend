@@ -1,69 +1,33 @@
-# Disabled browser production factory
+# Disabled browser source integration
 
-Owner: isolated browser factory lane. Base: browser checkpoint 6789b8db.
-Integration target inspected: beta-mvp 9d703d459303002312079e1592a5461e21802711.
-The release lane owns TelegramOwnerDO, owner-turn, identity files, migrations and deployment configuration. None are edited here.
+Scope: integrate reviewed factory c7c05c662c84236e17e0e969c6ad56647b35230e with prerequisite continuity/owner-host commits into beta-mvp source. This is a default-off draft, not browser activation or staging readiness. No BROWSER binding, runtime flag, namespace, compatibility setting, remote mapping, grant or production change is included.
 
-## Implemented boundary
+## Current source
 
-`browserProductionConfiguration({ env, storage, actualDoId })` returns undefined immediately: no storage, directory or provider I/O. Its optional policy is trusted deployment code, never tool arguments or environment-variable activation. A configured disabled policy retains the concrete cleanup driver but refuses grants and allocation. Only staging and the exact policy DO/fixture origin are eligible.
+The deployed two-argument TelegramOwnerDO constructor omits the trusted trial policy. The factory returns undefined before storage, directory or provider I/O. Only a separately configured source-owned preparation can expose the authenticated `/console/browser/trial` API; no model/environment argument selects its owner, origin, manifest or budget.
 
-The configured factory reads a private, strict `BrowserOwnerAuthorization` at `browser_owner_authorization_v1`, checks its manifest digest, reads canonical owner binding through existing signedRpc, verifies the physical namespace-derived DO ID and stored subject before and after the await, and builds the existing publicFixtureBrowser driver. There is no alternate owner identity or legacy route fallback.
+Configured initialization participates in owner DO readiness. Browser factory or canonical binding failure disables browser work while preserving existing ordinary messaging. The optional default messaging path uses canonical ownerMessageAdmission only when available for the browser dispatcher principal. Its fallback fixture principal cannot resolve the canonical browser host. This bounded slice does not migrate the broad default context/history adapter.
 
-The durable authority adapter cannot install, refresh, widen or synthesize consent. Its future writer must be an authenticated owner-confirmation handler. Authorization and usage are one durable record; missing/malformed records or counters deny rather than reset. Reservations occur in synchronous transactions before provider I/O. Limits can be reduced but never exceed 32 admissions, one allocation, a 60-second authorization window, or 120,000 reserved browser milliseconds. Reservation counts the requested session window plus one idle-timeout window for failed close/unknown allocation. Failed allocation never refunds capacity. Existing independent stop key, expiry, state/revision changes and replacement decisions fence the captured authority. This is a per-owner trial budget, not a global billing or concurrency cap.
+`supabase/migrations/20261004030000_browser_owner_binding.sql` is a signed, staging/Telegram-only read of existing owner/presence/physical workspace mapping. It denies null signatures and mismatched six-part locators. It cannot provision a mapping. Installing source is separate from applying this migration remotely.
 
-Final submit still requires the checkpoint's exact stored proposal and atomically claimed approval desk row. Empty `act` evidence permits the existing service preflight; physical fill/submit checks carry action/state digests and submit approval evidence. Authority references are not effect receipts.
+The authenticated consent API uses the existing physical-owner rate limiter (missing/error503, denial429 with Retry-After30). POST accepts exactly CSRF and nonce as JSON, at most4096bytes with a whole-body10second deadline. Owner binding, expiry and stop generation are checked after waits before atomic installation. Replay cannot reset usage, refresh an existing decision or widen the trusted manifest/budget. `/stop` invalidates pending confirmation and fences the run before cleanup waits. No dashboard confirmation UI is included.
 
-Denied exceptional paths log fixed failure categories and retain their cause chain in internal `lastFailure` diagnostics or the configuration error. Never serialize those causes into client/tool responses; they may contain private transport/storage diagnostics. Missing authority and normal policy denials remain ordinary absence/denial, not exceptional failures.
+The authority record allows at most32 admission checks, one allocation and120000ms reserved browser time during one60second authorization. Counters are durable and not refunded on uncertainty. These counters are not a global provider/billing hard cap.
 
-## Exact missing signed read contract (proposal only)
+Typed browser commands require the captured N03 task/steering source guard. Each resolved host captures its own guard; directory/grant, SDK load/connect, navigation, DOM observation, fill/submit and receipt reads recheck it across awaits and before physical operations. Cleanup stays independent of source denial. Allocation returns a known provider ID before any later denial so continuity can persist it and clean it up; unknown allocation remains private uncertainty bounded by provider TTL.
 
-No available RPC returns the full PresenceBinding. Existing route_presence returns only do_name, subject and timezone; the workspace mapping supplies physical custody but not presence/revision. Do not fabricate missing fields or widen that route's public projection. Add this read-only RPC through the release writer, using existing router signing and owner mapping machinery:
+Browser proposal custody records only private task/owner key/revision references. Approval execution reads current durable task scope, rather than using a completed turn closure. A narrowed/replaced task or witness denies submit and receipt work. Exact manifest/state/facts and the existing independent approval ledger are still required. Unknown submit outcomes never authorize another click.
 
-```sql
-create function waldo.browser_owner_binding(
-  p_environment text, p_namespace text, p_do_name text, p_do_id text,
-  p_provider text, p_subject text, p_locator text, p_at bigint, p_sig text
-) returns jsonb
-language plpgsql stable security definer set search_path = '' as $$
-declare v_result jsonb;
-begin
-  if p_locator::jsonb is distinct from jsonb_build_array(
-    p_environment,p_namespace,p_do_name,p_do_id,p_provider,p_subject) then
-    raise exception 'browser locator mismatch' using errcode = '42501';
-  end if;
-  if not waldo.router_signed('browser.bind.' ||
-    encode(extensions.digest(p_locator,'sha256'),'hex'),p_at,p_sig) then
-    raise exception 'unsigned router call' using errcode = '42501';
-  end if;
-  if p_environment is distinct from 'staging' or p_provider is distinct from 'telegram' then return null; end if;
-  select jsonb_build_object('owner_id',o.id,'do_name',o.do_name,
-    'state_version',o.state_version,'admission_revision',o.admission_revision::text,
-    'presence_id',p.id,'provider',p.provider,'subject',p.subject)
-  into v_result
-  from waldo.owners o join waldo.presences p on p.owner_id=o.id
-  join waldo.workspace_owner_mappings m on m.owner_id=o.id and m.do_name=o.do_name
-  where o.do_name=p_do_name and o.state='active' and p.state='active'
-    and p.provider=p_provider and p.subject=p_subject
-    and m.environment=p_environment and m.namespace=p_namespace and m.do_id=p_do_id;
-  return v_result;
-end $$;
-revoke all on function waldo.browser_owner_binding(text,text,text,text,text,text,text,bigint,text) from public,anon,authenticated;
-grant execute on function waldo.browser_owner_binding(text,text,text,text,text,text,text,bigint,text) to anon;
-```
+The pinned SDK reconnects via public connect(endpointURLString(retainedID)); it never falls back to fresh allocation. Only the configured HTTPS synthetic origin, native bounded form and authoritative task receipt are supported. Authentication, cookies and private profiles are excluded from this fixture driver.
 
-This proposal does not provision a mapping, issue a grant or migrate anything. Missing prior workspace mapping remains unavailable. The factory tests verify exact request tuple/signature, strict response and legacy projection rejection. Before migration approval, SQL tests must cover invalid signature/tuple, foreign physical locator, suspended owner/presence, absent mapping and presence remove/re-add with a new admission revision. SQL proposal is not a deployed/tested database function.
+## Verification and limits
 
-## Release writer integration
+See the draft PR and execution evidence for exact source head and counts. Local tests include limiter/body/expiry/stop/rebinding races; source narrowing during actual owner-DO lookup/inspection; SDK-load/connect denial; source-denied cleanup; default messaging with unavailable browser RPC; fresh durable approval custody and replay; bounded idle cleanup across reconstruction. No local result establishes live provider behavior.
 
-Import the factory at the two-argument deployed constructor's host initialization, retain the default omitted policy, and await configured initialization inside DO readiness. Factory failure must disable only browser configuration, never block ordinary owner messaging. Instantiate the existing browserOwnerHost with the resulting configuration; preserve its physical checks, approval validation, handler composite, stop fence and alarm arbitration. The asynchronous factory requires readiness before handlers access that host. Do not replace its fresh lookup with cached constructor identity.
+SQL: isolated network-none Supabase PostgreSQL17 container applied40 migrations and passed427pgTAP assertions across23files, including16browser-binding assertions. The hashed SQL manifest and commands are recorded separately. This is not a full Supabase CLI upgrade/rollback wall or PostgreSQL15 check; required GitHub CI runs those repository gates.
 
-The current serving route still uses a Telegram numeric owner while browserOwnerHost expects the canonical `prn_<owner uuid>` principal. The writer must adopt the existing canonical ownerMessageAdmission path and pass its verified principal through dispatcher/approval boundaries, preserving N03 task scope. This patch does not modify those shared files or claim that serving integration is complete.
+## Later operational prerequisites
 
-A future authenticated confirmation handler writes the complete authorization record, including exact binding/manifest, owner decision ref, active state, creation/expiry, explicitly authorized operations/budget and zeroed usage with authorizationRef equal to ref. No such handler is exposed here. Final submit approval remains separate. Expired/revoked configured records remain available to construct cleanup, but cannot grant new work.
+Staging remains at9d703d45 while owner2 isolation holds. No merge, deploy, remote migration, new grant, BROWSER binding, nodejs_compat change or browser launch is authorized by this draft.
 
-## Remaining owner decision and proof
-
-After source integration and review: one owner, one fresh self-contained HTTPS fixture, one session, 60 seconds of authorization, at most 32 admission checks/five existing mutating steps, 120 seconds reserved for session plus idle fallback, with final submit through the existing desk. No login/cookies/private persistence, new credential, plan upgrade, account-wide enablement or paid overage is authorized by source preparation. The existing $10 billing alert is not a hard cap. Binding/nodejs_compat activation and a bounded live trial require the owner's action-time authorization.
-
-Live acceptance must show the actual serving owner turn, same-session reconnect across host reconstruction, fill, exact desk approval, one submit, authoritative fixture receipt, no replay and physical cleanup/zero active sessions. Local tests use synthetic directory/provider transport and do not establish live browser parity.
+A later explicitly authorized trial needs a reviewed runtime binding/SDK compatibility configuration, an existing physical owner mapping, applied signed read migration, one fresh trusted HTTPS fixture, fresh authenticated owner consent, provider quota and a hard billing/usage ceiling. A billing alert is not a hard cap. Live proof must show real serving owner admission, retained-session reconnect after reconstruction, fill, exact approval, one submit, authoritative receipt, no replay and physical termination/zero active sessions. Missing prerequisites fail closed.

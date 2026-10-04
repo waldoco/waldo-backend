@@ -3,7 +3,7 @@ import {
   type BrowserTaskCheckpoint, type BrowserTaskProposal, type BrowserTaskReceipt, type BrowserTaskContinuation, type BrowserCommand, type BrowserSession,
 } from '@waldo/contracts';
 import type { BrowserSubmitOutcome } from '../tools/live/browser';
-import { fixtureDigest, type FixtureObservation } from './public-fixture-browser';
+import { fixtureDigest, type FixtureObservation, type BrowserSourceGuard } from './public-fixture-browser';
 
 export type BrowserTaskStore = Readonly<{
   // A canonical owner/task mutex, never an SQLite transaction around external I/O.
@@ -13,11 +13,11 @@ export type BrowserTaskStore = Readonly<{
 }>;
 export type BrowserTaskDriver = Readonly<{
   provider: BrowserSession['provider']; origin: string; pageUrl: string; runId: string; submitRef: string;
-  start(lifetimeMs: number): Promise<string>; navigate(id: string): Promise<unknown>;
-  inspect(id: string): Promise<FixtureObservation>;
-  fill(id: string, field: string, value: string, stateDigest: string, before: () => Promise<void>): Promise<unknown>;
-  submit(id: string, stateDigest: string, before: () => Promise<void>): Promise<unknown>;
-  verify(bindingDigest: string): Promise<Readonly<{ id: string; observed_at: string; source: BrowserTaskReceipt['source']; binding_digest: string }> | null>;
+  start(lifetimeMs: number, source?: BrowserSourceGuard): Promise<string>; navigate(id: string, source?: BrowserSourceGuard): Promise<unknown>;
+  inspect(id: string, source?: BrowserSourceGuard): Promise<FixtureObservation>;
+  fill(id: string, field: string, value: string, stateDigest: string, before: () => Promise<void>, source?: BrowserSourceGuard): Promise<unknown>;
+  submit(id: string, stateDigest: string, before: () => Promise<void>, source?: BrowserSourceGuard): Promise<unknown>;
+  verify(bindingDigest: string, source?: BrowserSourceGuard): Promise<Readonly<{ id: string; observed_at: string; source: BrowserTaskReceipt['source']; binding_digest: string }> | null>;
   end(id: string): Promise<void>;
 }>;
 type Driver = BrowserTaskDriver;

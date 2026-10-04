@@ -105,3 +105,20 @@ it('retires cleanup when trusted configuration no longer identifies the stored s
   expect(f.rows.get('browser_owner_task_v1')).toEqual(original);
   expect(f.rows.get('browser_owner_task_cleanup_v1')).toMatchObject({ status: 'configuration_mismatch' });
 });
+
+it('denies a captured task after source narrowing during directory lookup, without allocating', async () => {
+  const f = fixture(); let allowed = true, narrow = false;
+  f.options.config.lookup = async () => { if (narrow) allowed = false; return { ...f.options.config.binding }; };
+  const source = async () => { if (!allowed) throw Error('supplied only'); };
+  const task = (await browserOwnerHost(f.options).resolve(f.principal, source))!; narrow = true;
+  await expect(task.read(f.principal)).rejects.toThrow('unavailable'); expect(f.starts()).toBe(0);
+});
+it('withholds paused inspection after source narrowing, prevents fill, and still cleans up', async () => {
+  const f = fixture(); let allowed = true, narrow = false, fills = 0, ends = 0;
+  const inspect = f.driver.inspect; f.driver.inspect = async () => { const value = await inspect(); if (narrow) allowed = false; return value; };
+  f.driver.fill = async () => { fills++; }; f.driver.end = async () => { ends++; };
+  const coordinator = browserOwnerHost(f.options), task = (await coordinator.resolve(f.principal, async () => { if (!allowed) throw Error('supplied only'); }))!;
+  await task.read(f.principal); narrow = true;
+  await expect(task.fill(f.principal, 'value', 'new')).rejects.toThrow('supplied only');
+  expect(fills).toBe(0); await coordinator.stop(); expect(ends).toBe(1);
+});
