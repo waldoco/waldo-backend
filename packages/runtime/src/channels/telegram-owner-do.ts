@@ -565,11 +565,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     const value = JSON.parse(body) as { messages?: { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[] };
     const claimed = claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now());
-    await this.runWhatsappClaimed(claimed, subject);
+    await this.runWhatsappClaimed(null, claimed, subject);
     return new Response('ok');
   }
 
-  private async runWhatsappClaimed(claimed: readonly { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[], subject: string): Promise<void> {
+  private async runWhatsappClaimed(pendingKey: string | null, claimed: readonly { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[], subject: string): Promise<void> {
     // Sequence allocation, the turns and the persisted counter are one serial unit, so an overlapping
     // request cannot read the same wa_seq and hand a different message the same update_id.
     await this.serial(async () => {
@@ -593,6 +593,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         // A failed or unstarted turn used to leave only a Worker console line. The owner gets one fixed notice (no message
         // text, no error text). If no turn started it is safe to resend; if one started it may have had effects, so the notice says
         // to check first. A turn that already started is never replayed. The turn's own listener already answers model failures.
+        // Consume the pending record before the send so a cold instance recovering during this request cannot send a second notice.
+        if (pendingKey) { this.liveWhatsapp.delete(pendingKey); this.ctx.storage.kv.delete(pendingKey); }
         try {
           const { api, owner } = this.setup('whatsapp');
           await api.sendMessage({ chat_id: owner, text: started === 0 ? WHATSAPP_UNSTARTED_NOTICE : WHATSAPP_PARTIAL_NOTICE });
@@ -633,7 +635,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     });
     if (!claimed.length) return new Response('ok');
     this.liveWhatsapp.add(pendingKey);
-    const work = this.runWhatsappClaimed(claimed, subject).catch(() => undefined).finally(() => {
+    const work = this.runWhatsappClaimed(pendingKey, claimed, subject).catch(() => undefined).finally(() => {
       // A caught failure has already told the owner (#751); the record ends with the run so recovery never double-notifies.
       this.liveWhatsapp.delete(pendingKey); kv.delete(pendingKey); this.refreshWhatsappDue();
       this.whatsappInflight.delete(work);

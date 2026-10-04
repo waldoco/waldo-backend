@@ -132,3 +132,54 @@ it('admission keeps the origin and timezone the webhook forwards, as the other o
     expect(state.storage.kv.get('timezone')).not.toBe('UTC');
   });
 });
+
+it('the failure notice consumes the pending record first: a cold instance recovering during the send sends nothing more', async () => {
+  await harness('wa-admit-notice-once', async ({ instance, state, turn, bodies }) => {
+    turn.mockImplementationOnce(async () => { throw new Error('turn failed'); });
+    let colder = 0;
+    const net = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      bodies.push(String(init?.body));
+      if (colder++ === 0) {
+        // The restart state while the first notice is in flight: no live runs, the record (if any) is all a new instance sees.
+        (instance as unknown as { liveWhatsapp: Set<string> }).liveWhatsapp.clear();
+        // The alarm queues behind the running turn, so drive its recovery step directly, as a cold instance would.
+        await (instance as unknown as { recoverWhatsappPending(): Promise<void> }).recoverWhatsappPending();
+      }
+      return Response.json({ messages: [{ id: 'wamid.out' }] });
+    });
+    expect((await admit(instance, ['wamid.once.A'])).status).toBe(200); await settle(instance);
+    net.mockRestore();
+    expect(bodies.filter(body => body.includes(WHATSAPP_PARTIAL_NOTICE))).toHaveLength(1);
+    expect(pending(state)).toHaveLength(0);
+  });
+});
+
+it('reviewer validation: transaction throw rolls back both claims and pending record', async () => {
+  await harness('review-wa-rollback', async ({ instance, state, turn }) => {
+    const original = state.storage.transactionSync.bind(state.storage);
+    const spy = vi.spyOn(state.storage, 'transactionSync').mockImplementation((callback: () => unknown) => original(() => {
+      callback(); throw new Error('review injected abort');
+    }) as never);
+    try { await expect(admit(instance, ['wamid.review.rollback'])).rejects.toThrow('review injected abort'); }
+    finally { spy.mockRestore(); }
+    expect(state.storage.kv.get('wamid:wamid.review.rollback')).toBeUndefined();
+    expect(pending(state)).toHaveLength(0);
+    expect(turn).not.toHaveBeenCalled();
+  });
+});
+
+it('reviewer repro: a cold instance restarting while the failure notice is in flight sends no second notice', async () => {
+  await harness('review-wa-failure-notice-restart', async ({ instance, state, turn, bodies }) => {
+    turn.mockImplementationOnce(async () => { throw new Error('turn failure'); });
+    let release!: (r: Response) => void;
+    const send = vi.spyOn(globalThis, 'fetch').mockImplementationOnce(() => new Promise<Response>(resolve => { release = resolve; }));
+    await admit(instance, ['wamid.review.notice']);
+    await vi.waitFor(() => expect(release).toBeDefined());
+    expect(pending(state)).toHaveLength(0);
+    const restarted = new TelegramOwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
+    await restarted.alarm();
+    expect(send).toHaveBeenCalledTimes(1);
+    release(Response.json({ messages: [{ id: 'wamid.out' }] })); await settle(instance);
+  });
+});
+
