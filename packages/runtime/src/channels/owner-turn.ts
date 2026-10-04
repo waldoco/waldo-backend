@@ -463,7 +463,7 @@ export const createOwnerResponder = (
             await sourceScope.assertSame(admittedSource);
           }
           const retainedRead = ['read_owner_context', 'read_memory', 'search_episodes', 'read_tool_output'].includes(handler.name);
-          if (retainedRead && forgettingState?.incompleteTopics().length) return { ok: false, code: 'transient', error: 'Recall is temporarily limited while requested forgetting coverage is incomplete.', source_taint: null };
+          if (retainedRead && forgettingState?.incompleteTopics().length) return { ok: false, code: 'transient', error: 'Recall is temporarily limited while requested forgetting coverage is incomplete.', source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
           if (backgroundToolNames !== undefined && handler.name === 'open_loop' && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
             return { ok: false, code: 'invalid_args', error: 'Background mail follow-up requires an observed source_ref.', source_taint: null };
           }
@@ -475,7 +475,7 @@ export const createOwnerResponder = (
           const result = await handler.handle(args, sourceContext); await assertCurrent();
           await sourceContext.assertTaskSourceCurrent?.();
           if (interactiveSource && requireTaskScope && sourceRead && admittedSource) await sourceScope!.assertSame(admittedSource);
-          if (retainedRead && forgettingState?.incompleteTopics().length) return { ok: false, code: 'transient', error: 'Recall is temporarily limited while requested forgetting coverage is incomplete.', source_taint: null };
+          if (retainedRead && forgettingState?.incompleteTopics().length) return { ok: false, code: 'transient', error: 'Recall is temporarily limited while requested forgetting coverage is incomplete.', source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
           return result;
         } };
       });
