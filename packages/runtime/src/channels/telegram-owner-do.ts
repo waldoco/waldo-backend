@@ -617,6 +617,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     let value: { messages?: { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[] };
     try { value = JSON.parse(body); } catch { return new Response('bad request', { status: 400 }); }
     if (bound === undefined) { kv.put('whatsapp_subject', subject); this.runtimes = {}; }
+    // The same origin and timezone persistence the other owner paths do after the identity checks: a WhatsApp-only owner's
+    // links and clock come from here. No network work (the Telegram webhook re-registration stays on the Telegram path).
+    const origin = request.headers.get('x-waldo-origin'); if (origin) kv.put('origin', origin);
+    this.bindIdentity(request.headers);
     const pendingKey = `${WHATSAPP_PENDING_PREFIX}${crypto.randomUUID()}`;
     // The wake is armed before the record exists: a spurious alarm finds nothing, a missing one would strand a record.
     await armWhatsappPendingWake(this.ctx.storage, Date.now() + WHATSAPP_PENDING_CHECK_MS);

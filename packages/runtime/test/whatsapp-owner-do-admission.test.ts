@@ -111,3 +111,24 @@ it('a turn that throws is still acked at admission, tells the owner once, and th
     expect(pending(state)).toHaveLength(0);
   });
 });
+
+it('admission keeps the origin and timezone the webhook forwards, as the other owner paths do', async () => {
+  await harness('wa-admit-origin-tz', async ({ instance, state }) => {
+    const response = await instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
+      method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT, 'x-waldo-origin': 'https://w.test', 'x-waldo-timezone': 'Asia/Kolkata' },
+      body: JSON.stringify({ messages: [{ from: SUBJECT, id: 'wamid.tz.A', type: 'text', text: { body: 'hi' } }] }),
+    }));
+    expect(response.status).toBe(200); await settle(instance);
+    expect(state.storage.kv.get('origin')).toBe('https://w.test');
+    expect(state.storage.kv.get('timezone')).toBe('Asia/Kolkata');
+  });
+  await harness('wa-admit-origin-tz-refused', async ({ instance, state }) => {
+    await admit(instance, ['wamid.tz.B']); await settle(instance);
+    await instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
+      method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550009999', 'x-waldo-origin': 'https://evil.test', 'x-waldo-timezone': 'UTC' },
+      body: JSON.stringify({ messages: [] }),
+    }));
+    expect(state.storage.kv.get('origin')).not.toBe('https://evil.test');
+    expect(state.storage.kv.get('timezone')).not.toBe('UTC');
+  });
+});
