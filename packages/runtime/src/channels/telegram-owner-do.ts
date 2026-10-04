@@ -98,7 +98,7 @@ import { selectTranscriber } from '../llm/transcriber';
 import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
 import { TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
-import { createTaskSourceScope, approveTaskSourceProposal } from './task-source-scope';
+import { createTaskSourceScope, approveTaskSourceProposal, ownerReadSources } from './task-source-scope';
 import type { TurnControl } from './turn-control';
 import { turnFailureCode } from './turn-failure-code';
 import type { TelegramWebhookEnv } from './telegram-webhook';
@@ -1585,7 +1585,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const sourceScope = createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
           await admission.assertCurrent();
           if (await currentTaskOwnerKey() !== taskOwnerKey) throw new ClosedRunError();
-        }, { inputRef: turn.traceId, text: turn.text, quotedRanges: turn.sourceQuoteRanges });
+        }, { inputRef: turn.traceId, text: turn.text, quotedRanges: turn.sourceQuoteRanges }, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? []));
         return { admission, adapter, store: ownerCanonicalHistory(storage, admission, adapter), skills,
           sourceScope: { ...sourceScope, propose: async proposal => { await admission.assertCurrent(); await desk.proposeTaskSources(proposal); await admission.assertCurrent(); } },
           forgetting: { principal_ref: admission.invocation.verified_authority.principal_ref, tenant_ref: admission.invocation.verified_authority.tenant_ref, store: memory } };
@@ -1628,7 +1628,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const sourceScope = createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
           await assertSkillOwnerCurrent();
           if (await currentTaskOwnerKey() !== taskOwnerKey) throw new ClosedRunError();
-        }, { inputRef: turn.traceId, text: turn.text, quotedRanges: turn.sourceQuoteRanges });
+        }, { inputRef: turn.traceId, text: turn.text, quotedRanges: turn.sourceQuoteRanges }, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? []));
         return Object.freeze({ ...capability, ...(admission ? { admission } : {}), sourceScope: { ...sourceScope, propose: async proposal => {
           await assertSkillOwnerCurrent(); await desk.proposeTaskSources(proposal); await assertSkillOwnerCurrent();
         } }, taskContext: async (assertSourceCurrent?: () => Promise<void>) => {
