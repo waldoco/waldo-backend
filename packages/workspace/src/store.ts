@@ -11,7 +11,7 @@ export type Metadata = { transaction<T>(work: (state: WorkspaceState) => T): T }
 export type Bodies = { put(body: BodyRevision, bytes: Uint8Array): Promise<void>; get(body: BodyRevision): Promise<Uint8Array | null>; remove(body: BodyRevision): Promise<void> };
 export type Admission = (binding: OwnerBinding, action: 'construct' | 'read' | 'write' | 'finalize' | 'export' | 'delete') => Promise<Readonly<{ status: 'ok' | 'unavailable' | 'rejected' }>>;
 export type WorkspaceHost = Readonly<{ binding: OwnerBinding; admit: Admission; metadata: Metadata; bodies: Bodies; now(): number; newId(): string }>;
-export const LIMITS = { fileBytes: 10 * 1024 * 1024, ownerBytes: 100 * 1024 * 1024, files: 500, retainedBodies: 500, operationReceipts: 500, textWriteBytes: 256 * 1024, textReadBytes: 8192, pageRows: 50, uploadMs: 60_000 } as const;
+export const LIMITS = { fileBytes: 10 * 1024 * 1024, ownerBytes: 100 * 1024 * 1024, files: 500, retainedBodies: 500, operationReceipts: 500, textWriteBytes: 256 * 1024, textReadBytes: 8192, searchBytes: 4 * 1024 * 1024, searchSnippetBytes: 240, pageRows: 50, uploadMs: 60_000 } as const;
 export class WorkspaceError extends Error { constructor(public readonly code: 'invalid' | 'unavailable' | 'rejected' | 'conflict' | 'pending' | 'not_found' | 'quota' | 'capacity') { super(`workspace_${code}`); } }
 const fail = (code: WorkspaceError['code']): never => { throw new WorkspaceError(code); };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -114,6 +114,30 @@ export const workspaceStore = async (host: WorkspaceHost) => {
         const page = rows.slice(index + 1, index + 1 + limit);
         return { files: page.map(copyMeta), count: page.length, next_cursor: index + 1 + limit < rows.length ? page.at(-1)!.file_id : null };
       });
+    },
+    // Literal, case-insensitive substring search over the CURRENT revision of ready text files. Read-only.
+    async search(query: string, prefix = '', limit = 10) {
+      await admit('read');
+      if (typeof query !== 'string' || query.length < 1 || query.length > 200 || !Number.isInteger(limit) || limit < 1 || limit > 20 || typeof prefix !== 'string' || new TextEncoder().encode(prefix).length > 240) fail('invalid');
+      const fold = (v: string) => [...v].map(ch => { const l = ch.toLowerCase(); return l.length === ch.length ? l : ch; }).join('');
+      const needle = fold(query);
+      const candidates = transact(state => state.files.filter(f => f.state === 'ready' && f.path.startsWith(prefix) && (f.mime === 'text/plain' || f.mime === 'text/markdown')).sort((a, b) => a.file_id.localeCompare(b.file_id)).flatMap(f => { const body = state.bodies.find(b => b.file_id === f.file_id && b.revision === f.revision); return body ? [{ meta: { ...f }, body: { ...body } }] : []; }));
+      const hits: { file_id: string; path: string; revision: number; offset: number; snippet: string }[] = [];
+      let scanned = 0; let truncated = false;
+      for (const { meta, body } of candidates) {
+        if (scanned + body.byte_size > LIMITS.searchBytes) { truncated = true; break; }
+        scanned += body.byte_size;
+        const bytes = await verifyBody(body);
+        let text: string; try { text = utf8.decode(bytes); } catch { continue; }
+        const folded = fold(text); const at = folded.indexOf(needle);
+        if (at < 0) continue;
+        if (hits.length >= limit) { truncated = true; break; }
+        let start = Math.max(0, at - 60); let stop = Math.min(text.length, at + needle.length + 60);
+        while (new TextEncoder().encode(text.slice(start, stop)).length > LIMITS.searchSnippetBytes && stop - start > 1) { if (at - start > stop - at - needle.length && start < at) start++; else stop--; }
+        hits.push({ file_id: meta.file_id, path: meta.path, revision: meta.revision, offset: new TextEncoder().encode(text.slice(0, at)).length, snippet: text.slice(start, stop) });
+      }
+      transact(state => { for (const h of hits) if (!state.files.some(f => f.file_id === h.file_id && f.state === 'ready')) fail('not_found'); });
+      return { hits, truncated };
     },
     async stat(fileId: string) {
       await admit('read');
