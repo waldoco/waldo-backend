@@ -52,10 +52,12 @@ describe('WhatsApp owner DO replay', () => {
       // Pass-through spy: the actual turn executes, including owner checks and wa_offset.
       const turns = vi.spyOn(instance as unknown as { turn(update: { update_id: number }, channel: string): Promise<void> }, 'turn');
       const routed = vi.fn(async (url: string, init: RequestInit) => {
-        expect(url).toBe('https://telegram-owner/whatsapp-turn');
+        expect(url).toBe('https://telegram-owner/whatsapp-admit');
         expect(new Headers(init.headers).get('x-waldo-whatsapp-subject')).toBe(SUBJECT);
         const response = await instance.fetch(new Request(url, init));
         expect(response.status).toBe(200);
+        // Admission acks first; the turns run after, so wait for them before the test inspects effects.
+        await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
         return response;
       });
       const directory: OwnerDirectory = {
