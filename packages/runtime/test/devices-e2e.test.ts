@@ -1,4 +1,4 @@
-import { env, evictDurableObject, runInDurableObject } from 'cloudflare:test';
+import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import worker from '../src/index';
 import { canonicalJson } from '../src/devices/canonical-json';
@@ -86,7 +86,6 @@ it('runs owner console pair -> signed redeem/connect/heartbeat -> revoke through
   socket.send(canonicalJson({ ...frame, signature }));
   await vi.waitFor(() => expect(touched).toBe(1));
   const deviceStub = env.DEVICE_BRIDGE_DO!.get(env.DEVICE_BRIDGE_DO!.idFromName('dev_fixture')) as DurableObjectStub<DeviceBridgeDO>;
-  await evictDurableObject(deviceStub);
   const page = await call(new Request('https://bridge.test/console/devices', { headers: { cookie } }));
   const html = await page.text(); expect(html).toContain('Online'); expect(html).not.toContain('<script>bad</script>');
   const originalClosed = new Promise<number>((resolve) => socket.addEventListener('close', (event) => resolve(event.code)));
