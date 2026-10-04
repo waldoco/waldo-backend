@@ -221,7 +221,10 @@ export const createOwnerResponder = (
   let forgetOverflow = false;
   let forgetUnsafe = false;
   let forgettingTurn = false;
-  const forgetText = (value: string) => literalTextRedactor([...forgottenTexts], FORGOTTEN)(value);
+  // Heard steering text reaches the provider JSON-escaped (turn-control quotes it), so a forgotten clause with quotes or backslashes
+  // must match in its escaped form too. Same marker; the escaped needle is the string body JSON.stringify would write.
+  const forgetNeedles = () => [...forgottenTexts].flatMap(text => { const escaped = JSON.stringify(text).slice(1, -1); return escaped === text ? [text] : [text, escaped]; });
+  const forgetText = (value: string) => literalTextRedactor(forgetNeedles(), FORGOTTEN)(value);
   const forgetJsonText = (value: string, mode: 'arguments' | 'tool_result' | 'data' = 'arguments') => literalJsonTextRedactor([...forgottenTexts], FORGOTTEN, mode)(value);
   const protocolKeys = new Set(['id', 'call_id', 'name', 'type', 'role', 'status']);
   const forgetPrior = (value: unknown): unknown => typeof value === 'string' ? forgetText(value)
@@ -445,7 +448,8 @@ export const createOwnerResponder = (
       const status = await record(`${traceId}-steer${recordedHeard}`, fresh, '');
       if (status !== 'saved') turnNotice = MEMORY_NOTICES[status];
     }
-    return added;
+    // Memory cleanup above may have just added forgotten text: the pre-rendered wrapper is redacted after it, not before.
+    return forgetText(added);
   };
   const path = new JoinedConversationPath(binding?.adapter.composer ?? adapters.contextComposer!, {
     complete: async (request) => {

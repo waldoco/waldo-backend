@@ -105,6 +105,47 @@ const admittedTurn = async (name: string, id: number, text: string, writer: stri
     await state.storage.deleteAlarm();
   });
 };
+for (const [variant, value] of [['plain', 'synthetic-blue-757'], ['quote', '"synthetic-blue-757"'], ['backslash', 'synthetic\\blue-757']] as const) {
+it(`adversarial ordinary quoted steer is absent after successful raw topic coverage: ${variant}`, async () => {
+  const name = `adversarial-757-escaped-${variant}`;
+  const topic = `MEM-B-STEER-ESCAPED-${variant}`;
+  const fact = `${topic} preference: old synthetic cobalt`;
+  const freshFact = `${topic} preference: ${value}`;
+  const instruction = `Forget only ${topic}.`;
+  await admittedTurn(name, 701, `${fact}. ${KEEP}.`, ops({add:[add(fact),add(KEEP)]}));
+  seen.selectedText = fact;
+  let rounds = 0;
+  await admittedTurn(name, 702, `${instruction} Keep tea.`, ops({forget_topic:topic}), send => {
+    seen.onReply = async () => {
+      if (++rounds !== 1) return [];
+      expect(request()).toContain('Recall is temporarily limited');
+      seen.selectedTexts = [instruction, freshFact];
+      seen.writer = ops();
+      const response = await send(new Request('https://telegram-owner/enqueue', {
+        method:'POST', headers:{'x-waldo-inbox-secret':'hermetic-test-webhook-secret','x-waldo-telegram-subject':'42','x-waldo-do-name':name},
+        body:JSON.stringify({update_id:703,message:{message_id:703,from:{id:42,is_bot:false},chat:{id:42,type:'private'},text:`${freshFact}. Keep tea.`}}),
+      }));
+      expect(response.status).toBe(200);
+      return [{type:'function_call',call_id:'escaped-steer-context',name:'get_context',arguments:'{}'}];
+    };
+  });
+  expect(rounds).toBeGreaterThan(1);
+  expect(seen.selectorInputs).toHaveLength(2);
+  expect(seen.selectorInputs[1]).toContain(JSON.stringify(freshFact).slice(1,-1));
+  await runInDurableObject(stub(name), async (_instance,state) => {
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
+    const retained = JSON.stringify(await durableConversationStore(state.storage).load());
+    console.log('ADVERSARIAL_RETAINED',variant,retained);
+    expect(retained).toContain('Keep tea');
+    expect(retained).not.toContain(topic);
+  });
+  const provider = seen.requests.at(-1) as { input: unknown };
+  console.log('ADVERSARIAL_PROVIDER_INPUT',variant,JSON.stringify(provider.input));
+  expect(request()).toContain('verified exact cleanup targets were removed');
+  expect(request()).toContain('Keep tea');
+  expect(JSON.stringify(provider.input)).not.toContain(topic);
+});
+}
 it('recovers incomplete topic forgetting on an ordinary turn after restart by redacting the exact retained forget instruction', async () => {
   const name = 'forget-request-recovery';
   const topic = 'MEM-B-20261004-CERULEAN';
