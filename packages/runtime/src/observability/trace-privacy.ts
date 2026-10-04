@@ -32,8 +32,17 @@ const HEALTH_READ = /^(?:present|absent|read_failed)$/;
 // `code` is what a failure leaves behind. Turn text is unaffected here; each sink already
 // handles it (the trace table never stores it, console JSON strips it, OTLP gates it on the
 // same switch).
+// The verified signup email is personal data: it follows the same switch as free-form text (off in production,
+// and wherever capture is off), while owner_id stays. The identity label then says the email is not emitted.
+const withholdEmail = (entry: TurnLogEntry): TurnLogEntry => entry.owner_email === undefined ? entry
+  : { ...entry, owner_email: 'unknown', owner_identity: entry.owner_identity === 'verified' ? 'email_unavailable' : entry.owner_identity };
+
 export const gateTraceEntry = (entry: TurnLogEntry, captureText: boolean): TurnLogEntry => {
   if (captureText) return entry;
+  return gateWithoutCapture(withholdEmail(entry));
+};
+
+const gateWithoutCapture = (entry: TurnLogEntry): TurnLogEntry => {
   if (entry.hop === 'constellation_evidence' || entry.hop === 'health_context') {
     const detail = entry.hop === 'constellation_evidence'
       ? (typeof entry.detail === 'string' && MEMORY_EVIDENCE.test(entry.detail) ? entry.detail : undefined)

@@ -1,6 +1,7 @@
 import { withRequestTimeout } from './request-timeout';
+import { ownerTraceIdentity, type OwnerTraceIdentity } from '../observability/owner-trace-identity';
 
-export type OwnerRoute = Readonly<{ doName: string; subject: string; timezone: string | null }>;
+export type OwnerRoute = Readonly<{ doName: string; subject: string; timezone: string | null; traceIdentity?: OwnerTraceIdentity }>;
 
 export type OwnerDirectoryEnv = Readonly<{
   SUPABASE_PROJECT_URL?: string;
@@ -21,7 +22,7 @@ export type OwnerDirectory = Readonly<{
   redeem(provider: PresenceProvider, subject: string, code: string): Promise<OwnerRoute | null>;
 }>;
 
-type RouteRow = { do_name: string; subject: string; timezone: string | null };
+type RouteRow = { do_name: string; subject: string; timezone: string | null; owner_id?: string; owner_email?: string | null };
 
 export const hex = (bytes: ArrayBuffer) => [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
@@ -70,7 +71,9 @@ export const ownerDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = f
   if (!call) return deployOwner(env);
   const byPresence = async (provider: PresenceLookupProvider, subject: string): Promise<OwnerRoute | null> => {
     const [row] = (await call('route_presence', `route.${provider}.${subject}`, { p_provider: provider, p_subject: subject })) as RouteRow[];
-    return row ? { doName: row.do_name, subject: row.subject, timezone: row.timezone } : null;
+    if (!row) return null;
+    const traceIdentity = ownerTraceIdentity(row);
+    return { doName: row.do_name, subject: row.subject, timezone: row.timezone, ...(traceIdentity ? { traceIdentity } : {}) };
   };
   return {
     byPresence,

@@ -1,9 +1,10 @@
+import type { OwnerTraceIdentity } from '../observability/owner-trace-identity';
 // An inbox record is admission evidence, not evidence that an effect completed.
 export const OWNER_INBOX_KEY = 'telegram_owner_inbox_v1';
 export const OWNER_INBOX_DUE_KEY = 'telegram_owner_inbox_due_v1';
 const RETENTION_MS = 25 * 60 * 60_000;
 const CAPACITY = 512;
-export type InboxBinding = { bot: string; subject: string; doName: string };
+export type InboxBinding = { bot: string; subject: string; doName: string; traceIdentity?: OwnerTraceIdentity };
 export type InboxRecord = InboxBinding & {
   id: string; digest: string; sequence: number; updateId: number; body: string;
   admittedAt: number; state: 'admitted' | 'claimed' | 'awaiting_delivery' | 'consumed' | 'completed' | 'quarantined';
