@@ -18,6 +18,11 @@ export type EgressPolicyResult =
 
 type DeclaredValues = { readonly ok: true; readonly values: unknown[] } | { readonly ok: false };
 
+// Allowlist entry meaning "any public host" for read-only page browsing (browse_page) only. It never
+// opens browse_act, execute_code or any other tool, and the private/loopback/metadata blocks still apply.
+export const OPEN_PUBLIC = '*';
+export const OPEN_PUBLIC_TOOLS: readonly ToolName[] = ['browse_page'];
+
 export const EGRESS_TARGET_PATHS: Readonly<
   Partial<Record<ToolName, readonly DeclaredEgressPath[]>>
 > = Object.freeze({
@@ -77,8 +82,9 @@ export function evaluateDeclaredEgress(
   args: unknown,
   paths: readonly DeclaredEgressPath[],
   allowlist: readonly string[] | undefined,
+  options: Readonly<{ openPublic?: boolean }> = {},
 ): EgressPolicyResult {
-  const allowedHosts = parseAllowlist(allowlist);
+  const allowedHosts = parseAllowlist(allowlist?.filter((entry) => entry !== OPEN_PUBLIC));
 
   for (const path of paths) {
     const declaredValues = valuesAtPath(args, path.path);
@@ -89,6 +95,9 @@ export function evaluateDeclaredEgress(
       if (host === null) return { ok: false, reason: 'malformed_target' };
       if (isBlockedHost(host)) return { ok: false, reason: 'blocked_host' };
 
+      // Open public web: any host that passed the blocked-host checks above. Only the caller decides
+      // which tool gets this; the allowlist sentinel alone never opens a tool.
+      if (options.openPublic === true) continue;
       if (allowedHosts === null) return { ok: false, reason: 'allowlist_unavailable' };
       if (!allowedHosts.some((allowed) => matchesAllowedHost(host, allowed))) {
         return { ok: false, reason: 'host_not_allowlisted' };
