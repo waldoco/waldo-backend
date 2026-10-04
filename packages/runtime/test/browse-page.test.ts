@@ -38,6 +38,22 @@ describe('browse_page', () => {
     expect(calls[2]!.path).toBe('/v1/sessions/sess-1/extract');
   });
 
+  it('RED: sends the model key as the x-model-api-key header on the session start (Stagehand spec), not only in the extract body', async () => {
+    const { calls, fetcher } = stagehand();
+    const handler = browsePageHandler('bb-key', 'bb-proj', 'model-secret', fetcher);
+    await handler.handle(args, ctx);
+    expect(calls[0]!.op).toBe('start');
+    expect(calls[0]!.headers['x-model-api-key']).toBe('model-secret');
+    expect(calls[2]!.headers['x-model-api-key']).toBe('model-secret');
+  });
+
+  it('sends no x-model-api-key header when no model key is configured', async () => {
+    const { calls, fetcher } = stagehand();
+    const handler = browsePageHandler('bb-key', 'bb-proj', undefined, fetcher);
+    await handler.handle(args, ctx);
+    expect(calls.every((c) => c.headers['x-model-api-key'] === undefined)).toBe(true);
+  });
+
   it('sends keys only in request headers - never in the returned data or errors', async () => {
     const { calls, fetcher } = stagehand();
     const handler = browsePageHandler('bb-secret', 'bb-proj', 'model-secret', fetcher);
