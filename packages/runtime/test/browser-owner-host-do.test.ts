@@ -5,6 +5,7 @@ import type { ContextComposerDependencies } from '../src/context-composer';
 import type { OwnerMessageAdmission } from '../src/identity/owner-message-admission';
 import { TelegramOwnerDO, type TelegramOwnerPrivateHost } from '../src/channels/telegram-owner-do';
 import { BROWSER_TASK_KEY, type BrowserOwnerConfiguration } from '../src/channels/browser-owner-host';
+import { armAlarm } from '../src/scheduler/alarm-slot';
 import { fixtureDigest } from '../src/channels/public-fixture-browser';
 const legacyModel = vi.hoisted(() => ({ enabled: false, calls: 0 }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: { text?: { format?: { name?: string } } }) => {
@@ -148,7 +149,7 @@ it('expired browser cleanup waiting on a provider cannot starve actual inbox or 
     await h.state.storage.put('browser_owner_task_due_v1', Date.now() - 1);
     h.state.storage.kv.put('owner_alarm_last_v1', 2);
     const earlier = Date.now() + 10000;
-    await h.state.storage.setAlarm(earlier);
+    await armAlarm(h.state.storage, earlier);
     const resume = h.pauseCleanup();
     try {
       // A prelude that awaited provider.end would never return this alarm.
