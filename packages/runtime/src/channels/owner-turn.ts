@@ -14,6 +14,8 @@ import {
 import type { ConversationModelMessage } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop, type LoopExit } from '../conversation/tool-loop';
+import { receiptLine } from '../hooks/receipt-line';
+import type { LoopEventLike } from '../hooks/claim-hook';
 import { delegateTaskHandler, runChildLoop, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../conversation/subagent';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
 import { readToolOutputHandler } from '../tools/read-tool-output';
@@ -599,6 +601,8 @@ export const createOwnerResponder = (
           );
         },
         onTool: (event) => {
+          // Typed receipt input for the owner reply's last line (receiptLine reads no wording).
+          turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, ...(event.code ? { code: event.code } : {}) });
           privateRunScope?.admit();
           if (forgottenTexts.size) offloadStore?.clear();
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: forgetJsonText(event.call.arguments), output: forgetJsonText(event.output, 'tool_result') } });
@@ -613,6 +617,11 @@ export const createOwnerResponder = (
   // Set by converse() for the duration of one submit: delegate_task rides owner chat turns
   // only, never reminder/scheduled machine turns that flow through the same closure.
   let ownerTurnActive = false;
+  let turnToolEvents: LoopEventLike[] = [];
+  const parseToolArgs = (raw: unknown, tool: string): unknown => {
+    if (typeof raw !== 'string') return raw;
+    try { return JSON.parse(raw); } catch (error) { log({ trace: traceId, hop: 'receipt_args_parse', ms: 0, ok: false, error: `${tool}: ${String(error).slice(0, 120)}` }); return undefined; }
+  };
   let backgroundToolNames: readonly string[] | undefined;
   // The reply this turn just sent, so chooseReaction reacts to the exchange (gist of what the
   // owner saw) instead of the owner's message alone - the 😢-on-stress class (2026-09-27 sweep).
@@ -669,6 +678,7 @@ export const createOwnerResponder = (
     if (forgetUnsafe) throw new Error('forget context sanitisation failed');
     traceId = id;
     ownerTurnActive = fromOwner;
+    turnToolEvents = [];
     control.begin(fromOwner);
     try {
       const publication = await time('joined_path', () => path.submit({
@@ -687,7 +697,10 @@ export const createOwnerResponder = (
       privateRunScope?.admit();
       await assertCurrent();
       parentId = publication.leafId;
-      const out = tree.get(publication.leafId)!.appPayload;
+      const reply = tree.get(publication.leafId)!.appPayload;
+      // S2b: effect tools this turn get a receipt line from typed tool results; read-only turns get none.
+      const receipts = fromOwner ? receiptLine(turnToolEvents) : null;
+      const out = receipts ? `${reply}\n\n${receipts}` : reply;
       lastReply = out;
       return out;
     } finally { clearForgotten(); }
