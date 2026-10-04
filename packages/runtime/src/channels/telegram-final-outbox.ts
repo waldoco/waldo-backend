@@ -1,12 +1,14 @@
 import { literalTextRedactor } from '@waldo/contracts';
 import type { RunEffectScope } from './run-effect-scope';
-import { TelegramRejection } from './telegram-api';
+import { TelegramRejection, sendTelegramFinal, type TelegramFinalPayload } from './telegram-api';
+import { redactSecretUrls } from './egress-guard';
+import { telegramRichReply } from './rich-format';
 
 export const FINAL_OUTBOX_KEY = 'telegram_final_outbox_v1';
 export const FINAL_OUTBOX_DUE_KEY = 'telegram_final_outbox_due_v1';
 const MAX_RECORDS = 256;
 const MAX_ATTEMPTS = 3;
-export type FinalPayload = Readonly<{ chat_id: number; text: string; parse_mode?: 'HTML' }>;
+export type FinalPayload = TelegramFinalPayload;
 export type HeartbeatReceipt = { id: string; occurrence: number; schedulerRunId: string; runId?: string; loops: { id: string; due: string }[] };
 export type MailFollowupReceipt = { loopId: string; due: string; sourceRef: string; timezone: string; messageId: string };
 export type CalendarPrepReceipt = { connectionId: string; calendarId: 'primary'; eventId: string; occurrence: string; start: string; revision: string | null; sourceDigest: string; timezone: string };
@@ -24,6 +26,14 @@ export type FinalRecord = {
 };
 type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
 const digest = async (payload: unknown) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(payload))))].map(x => x.toString(16).padStart(2, '0')).join('');
+const guardedPayload = (payload: FinalPayload): FinalPayload => {
+  const fallback = payload.fallback_text === undefined ? undefined : redactSecretUrls(payload.fallback_text);
+  // Redact before HTML escaping too: encoded ampersands must not conceal URL
+  // state/code keys. Only generated finals carry the original presentation copy.
+  if (fallback?.count && payload.parse_mode === 'HTML') return { ...payload, ...telegramRichReply(fallback.text) };
+  return { ...payload, text: redactSecretUrls(payload.text).text,
+    ...(fallback === undefined ? {} : { fallback_text: fallback.text }) };
+};
 
 export class TelegramFinalOutbox {
   constructor(private readonly kv: Kv, private readonly now: () => number = Date.now, private readonly persist?: (rows: FinalRecord[], due: number | null) => Promise<void>) {}
@@ -43,6 +53,7 @@ export class TelegramFinalOutbox {
     await this.save(rows);
   }
   async enqueue(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>): Promise<void> {
+    input = { ...input, payload: guardedPayload(input.payload) };
     const hash = await digest(input);
     let rows = this.records();
     await this.maintain(); rows = this.records();
@@ -64,6 +75,7 @@ export class TelegramFinalOutbox {
   // in the same synchronous transaction as these outbox writes, then rearms the shared alarm.
   async enqueueFenced(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>,
     commit: (work: () => void) => void): Promise<void> {
+    input = { ...input, payload: guardedPayload(input.payload) };
     const hash = await digest(input);
     commit(() => {
       let rows = this.records();
@@ -123,14 +135,38 @@ export class TelegramFinalOutbox {
     if (!allowed) { row.status = 'blocked'; row.reason = 'owner_binding'; await this.save(rows); await options.settled(row); row.settled = true; await this.save(rows); return; }
     row.status = 'attempting'; row.attempts += 1;
     await this.save(rows);
+    let persistedRow = JSON.stringify(row);
+    const saveCurrentRow = async (): Promise<boolean> => {
+      const latest = this.records();
+      const index = latest.findIndex(current => current.id === row.id);
+      if (index < 0 || JSON.stringify(latest[index]) !== persistedRow) return false;
+      latest[index] = row;
+      await this.save(latest);
+      persistedRow = JSON.stringify(row);
+      return true;
+    };
+    const currentAttempt = () => this.records().find(current => current.id === row.id
+      && current.status === 'attempting' && current.digest === row.digest && current.attempts === row.attempts
+      && JSON.stringify(current.payload) === JSON.stringify(row.payload));
     try {
-      const result = await options.send({ ...row.payload });
+      let fallbackInvalidated = false;
+      const result = await sendTelegramFinal(options.send, { ...row.payload }, async () => {
+        const current = currentAttempt();
+        if (!current) { fallbackInvalidated = true; return false; }
+        const allowed = (current.expiresAt === undefined || this.now() < current.expiresAt) && await options.allowed(current);
+        if (!currentAttempt()) { fallbackInvalidated = true; return false; }
+        return allowed && (current.expiresAt === undefined || this.now() < current.expiresAt);
+      });
+      // Concurrent cancellation/forget owns the persisted record. Never overwrite
+      // its disposition or restore its scrubbed bytes from this captured send.
+      if (fallbackInvalidated || !currentAttempt()) return;
       const ack = result as { message_id?: unknown; chat?: { id?: unknown } } | undefined;
       const messageId = ack?.message_id;
       if (!Number.isSafeInteger(messageId) || (messageId as number) <= 0 || ack?.chat?.id !== row.payload.chat_id) {
         row.status = result === undefined ? 'blocked' : 'quarantined'; row.reason = result === undefined ? 'egress_blocked' : 'invalid_ack';
       } else { row.status = 'delivered'; row.messageId = messageId as number; row.deliveredAt = this.now(); }
     } catch (error) {
+      if (!currentAttempt()) return;
       if (error instanceof TelegramRejection && error.retryable && !(typeof error.retryAfter === 'number' && error.retryAfter > 3600) && row.attempts < MAX_ATTEMPTS) {
         row.status = 'pending'; row.reason = 'provider_rejected';
         row.dueAt = this.now() + Math.max(30_000 * row.attempts, (typeof error.retryAfter === 'number' && Number.isFinite(error.retryAfter) && error.retryAfter >= 0 ? Math.min(3600, error.retryAfter) : 0) * 1_000);
@@ -138,9 +174,9 @@ export class TelegramFinalOutbox {
         row.status = 'quarantined'; row.reason = error instanceof TelegramRejection ? 'provider_rejected_terminal' : 'send_unknown';
       }
     }
-    await this.save(rows);
+    if (!(await saveCurrentRow())) return;
     await options.settled(row);
-    if (row.status !== 'pending') { row.settled = true; await this.save(rows); }
+    if (row.status !== 'pending') { row.settled = true; await saveCurrentRow(); }
   }
 }
 
@@ -155,10 +191,11 @@ const redactSourceFinalEntries = (kv: Kv, texts: readonly string[], marker: stri
   for (const row of rows) {
     if (!matches(row)) continue;
     const text = redact(row.payload.text);
+    const fallback = row.payload.fallback_text === undefined ? undefined : redact(row.payload.fallback_text);
     const metadata = row.calendarPrep ? Object.fromEntries(Object.entries(row.calendarPrep).map(([key, value]) => [key, typeof value === 'string' ? redact(value) : value])) as CalendarPrepReceipt : undefined;
     const metadataChanged = metadata !== undefined && JSON.stringify(metadata) !== JSON.stringify(row.calendarPrep);
-    if (text === row.payload.text && !metadataChanged) continue;
-    row.payload = { ...row.payload, text }; rewritten += 1;
+    if (text === row.payload.text && fallback === row.payload.fallback_text && !metadataChanged) continue;
+    row.payload = { ...row.payload, text, ...(fallback === undefined ? {} : { fallback_text: fallback }) }; rewritten += 1;
     if (metadataChanged) row.calendarPrep = metadata;
     if (row.status === 'pending' || (row.status === 'blocked' && row.reason === 'owner_binding' && row.attempts === 0)) { row.status = 'blocked'; row.reason = 'owner_forget'; row.settled = false; }
     else if (row.status === 'attempting') { row.status = 'quarantined'; row.reason = 'forget_during_uncertain_send'; row.settled = false; }
@@ -172,7 +209,7 @@ const redactSourceFinalEntries = (kv: Kv, texts: readonly string[], marker: stri
     };
     if (scope) scope.commit(write); else write();
   }
-  const remaining = new TelegramFinalOutbox(kv).records().filter(row => matches(row) && needles.some(needle => [row.payload.text, ...Object.values(row.calendarPrep ?? {}).filter((value): value is string => typeof value === 'string')].some(value => value.toLowerCase().includes(needle.toLowerCase())))).length;
+  const remaining = new TelegramFinalOutbox(kv).records().filter(row => matches(row) && needles.some(needle => [row.payload.text, row.payload.fallback_text ?? '', ...Object.values(row.calendarPrep ?? {}).filter((value): value is string => typeof value === 'string')].some(value => value.toLowerCase().includes(needle.toLowerCase())))).length;
   return { rewritten, remaining };
 };
 export const redactMailFollowupEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope) => redactSourceFinalEntries(kv, texts, marker, scope, row => !!row.mailFollowup);

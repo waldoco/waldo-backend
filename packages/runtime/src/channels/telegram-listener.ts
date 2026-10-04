@@ -1,4 +1,6 @@
 import {telegramRichReply} from './rich-format';
+import { sendTelegramFinal, type TelegramFinalPayload } from './telegram-api';
+import { redactSecretUrls } from './egress-guard';
 import { ownerTurnTrace } from './owner-turn-envelope';
 import { telegramReaction } from './reactions';
 import type { TelegramInboundTurn, TelegramPollingAdapter, TelegramUnsupportedTurn } from './telegram-polling';
@@ -28,7 +30,7 @@ export type TelegramOwnerListenerOptions = Readonly<{
   surface?: 'telegram' | 'whatsapp';
   api: TelegramOwnerApi;
   respond(turn: TelegramInboundTurn, time: TurnTimer): Promise<string>;
-  queueFinal?(turn: TelegramInboundTurn, payload: Readonly<{ chat_id: number; text: string; parse_mode?: 'HTML' }>, reaction: string): Promise<void>;
+  queueFinal?(turn: TelegramInboundTurn, payload: TelegramFinalPayload, reaction: string): Promise<void>;
   clearTurnReceipts?(trace: string): void;
   turnTimeoutMs?: number;
   reactionTimeoutMs?: number;
@@ -150,15 +152,16 @@ export class TelegramOwnerListener {
       clearTimeout(progressTimer);
       // The responder has already applied current-turn artifact receipt admission.
       // Rich formatting is confined to this final reply, never progress/events/errors.
-      const rich = telegramRichReply(text);
+      const guardedText = redactSecretUrls(text).text;
+      const rich = telegramRichReply(guardedText);
       if (this.options.queueFinal) {
         const chosen = telegramReaction(readyChoice);
         const finalReaction = chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌';
-        await time('outbox_enqueue', () => this.options.queueFinal!(turn, { chat_id, ...(rich.text === text ? { text } : rich) }, finalReaction));
+        await time('outbox_enqueue', () => this.options.queueFinal!(turn, { chat_id, ...(rich.text === guardedText ? { text: guardedText } : rich) }, finalReaction));
         this.options.log?.({ trace, hop: 'delivery_pending', ms: now() - started, ok: true });
         return 'queued';
       }
-      await time('send', () => api.sendMessage({ chat_id, ...(rich.text===text ? {text} : rich) }));
+      await time('send', () => sendTelegramFinal(payload => api.sendMessage(payload), { chat_id, ...(rich.text===guardedText ? {text: guardedText} : rich) }));
       const chosen = telegramReaction(await choice);
       await react('resolved', chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌');
       this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, text: { input: turn.text, output: text } });
