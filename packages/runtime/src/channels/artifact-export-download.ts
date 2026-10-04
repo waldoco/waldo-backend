@@ -1,4 +1,5 @@
-// Download helper for exported PDF snapshots. INERT: not routed, not registered, no DO hook.
+// Download helper for exported PDF snapshots. Served by the owner DO at /console/exports/<id> behind the console session (the helper itself
+// authenticates no one; the caller must have validated the session and scoped the store and bucket to that owner).
 //
 // This helper does NOT authenticate anyone. The caller must construct `exports` and `binaries`
 // for ONE owner, and only after the console host has validated that owner's session and selected

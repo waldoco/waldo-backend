@@ -33,6 +33,7 @@ const fakeSql = () => {
         return { toArray: () => [...rows.values()].sort((a, b) => b.updated_at - a.updated_at) };
       }
       if (query.startsWith('INSERT INTO artifact_exports')) { exportsRows.push(args as never); return { toArray: () => [] as Row[] }; }
+      if (query.startsWith('DELETE FROM artifact_exports')) { const at = exportsRows.findIndex((r) => (r as unknown[])[0] === args[0]); if (at >= 0) exportsRows.splice(at, 1); return { toArray: () => [] as Row[] }; }
       if (query.startsWith('SELECT * FROM artifact_exports')) return { toArray: () => exportsRows.filter((r) => (r as unknown[])[1] === args[0] && (args.length < 3 || ((r as unknown[])[2] === args[1] && (r as unknown[])[3] === args[2]))).map((a) => { const [id, source_artifact_id, source_revision, format, mime_type, byte_size, sha256, r2_key, created_at] = a as unknown[]; return { id, source_artifact_id, source_revision, format, mime_type, byte_size, sha256, r2_key, created_at }; }) as never };
       throw new Error(`unexpected query: ${query}`);
     },
@@ -93,6 +94,18 @@ describe('export_artifact', () => {
     const second = await handler.handle(args(meta.id)) as { data: { sha256: string; deduped: boolean } };
     expect(first.data.deduped).toBe(false);
     expect(second.data).toMatchObject({ sha256: first.data.sha256, deduped: true });
+    expect(ex.rows(meta.id)).toHaveLength(1);
+  });
+  it('a repeat export whose stored file is gone renders again and replaces the stale row', async () => {
+    const { meta, ex, bins, handler } = await setup('# Hi\n\ntext');
+    const first = await handler.handle(args(meta.id)) as { data: { deduped: boolean } };
+    const row = ex.rows(meta.id)[0]!;
+    // Lose the object, as a bucket lifecycle rule or manual delete would.
+    await bins.putBytes(row.r2_key, new Uint8Array(0));
+    (bins as { getBytes: typeof bins.getBytes }).getBytes = async () => null;
+    const second = await handler.handle(args(meta.id)) as { ok: boolean; data: { deduped: boolean } };
+    expect(first.data.deduped).toBe(false);
+    expect(second).toMatchObject({ ok: true, data: { deduped: false } });
     expect(ex.rows(meta.id)).toHaveLength(1);
   });
   it('owner-scoped R2 keys cannot read across owners', async () => {

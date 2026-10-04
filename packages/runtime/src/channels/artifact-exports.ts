@@ -58,7 +58,11 @@ export const artifactExports = (sql: Sql, book: ArtifactBook, bodies: ArtifactBo
       // writing another file. (PDF bytes embed a creation date, so sha256 differs per render and
       // cannot be the dedupe key; the revision is immutable, so id + revision identifies the content.)
       const prior = sql.exec<ExportRow>('SELECT * FROM artifact_exports WHERE source_artifact_id = ? AND source_revision = ? AND format = ?', meta.id, meta.revision, 'pdf').toArray()[0];
-      if (prior !== undefined) return { ok: true as const, id: prior.id, bytes: prior.byte_size, mime_type: prior.mime_type, sha256: prior.sha256, key: prior.r2_key, deduped: true };
+      // The stored receipt is only true while its file still exists. A missing object (bucket lifecycle, manual delete) drops the stale row
+      // and renders again, so a repeat export never hands back a link that 404s.
+      const stillStored = prior !== undefined && await binaries.getBytes(prior.r2_key, prior.byte_size) !== null;
+      if (prior !== undefined && !stillStored) sql.exec('DELETE FROM artifact_exports WHERE id = ?', prior.id);
+      if (prior !== undefined && stillStored) return { ok: true as const, id: prior.id, bytes: prior.byte_size, mime_type: prior.mime_type, sha256: prior.sha256, key: prior.r2_key, deduped: true };
       await assertSourceCurrent?.();
       const body = await bodies.get(meta.r2_key);
       await assertSourceCurrent?.();
