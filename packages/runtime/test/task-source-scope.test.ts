@@ -502,3 +502,17 @@ it('the owner\'s own reminder and standing-order lists need no retained-memory s
   }
   expect(taskSourceAllowed(web, { name: 'read_memory' }), 'retained memory still needs local').toBe(false);
 }));
+
+it('the own lists stay usable on an unready task and while an owner confirmation card is pending; retained memory and sources do not', () => run('task-own-lists-pending', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-lists-two', scope, async () => {}, { inputRef: 'r1', text: 'read my mail' }, ['web', 'mail']);
+  const unready = (await cap.classify('not json')).snapshot;
+  expect(unready.ready).toBe(false);
+  const proposed = (await cap.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'read my mail' }), 'r1', 'read my mail')).snapshot;
+  expect(sql.exec<{ pending_json: string | null }>('SELECT pending_json FROM owner_task_source_scope').one().pending_json).not.toBeNull();
+  for (const snapshot of [unready, proposed]) {
+    expect(taskSourceAllowed(snapshot, { name: 'list_reminders' })).toBe(true);
+    expect(taskSourceAllowed(snapshot, { name: 'list_standing_orders' })).toBe(true);
+  }
+  expect(taskSourceAllowed(proposed, { name: 'read_memory' }), 'retained memory stays off behind the card').toBe(false);
+  expect(taskSourceAllowed(proposed, { name: 'web_search' }), 'sources stay off behind the card').toBe(false);
+}));
