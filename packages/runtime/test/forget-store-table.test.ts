@@ -25,6 +25,10 @@ const TABLES: Record<string, Row> = {
   claim_recall_ready: exempt('claim ids'),
   owner_source_scope: exempt('an enum value (none or pasted_only) and a time; no owner text'),
   owner_task_source_scope: exempt('owner/task ids, revision, source-family enums, readiness, bounded nonce/expiry confirmation and host input reference; no owner instruction, fact or forgotten spans'),
+  // Per-device transport custody contains no owner-authored text or full heartbeat payloads.
+  nonces: exempt('per-device random replay nonces and expiry times; revoke removes the isolated device store'),
+  meta: exempt('per-device schema version, socket generation, heartbeat time and revoke fence'),
+  frames: exempt('per-device logical fingerprints, protocol type, identifiers and time; no full frame or answer text'),
   // Operational: counters, flags, hashes, leases, ids, times
   class_state: exempt('counts and times per push class'), daily_push_budget: exempt('counts per day'), event_cooldowns: exempt('event id and time'),
   exempt_telemetry: exempt('counts'), subkind_state: exempt('counts and times'), loop_kill_flags: exempt('flag keys'), loop_progress: exempt('counts'),
