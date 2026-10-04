@@ -212,6 +212,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Dedupe uses bot/channel/update identity plus content digest. Never use a high-water offset to exclude already admitted lower IDs or callbacks.
 - The narrow inbox route verifies private sender/chat and immutable owner host before binding or effects. Concurrent first binding is checked inside admission transaction.
 - Claim before effects. Resume only unclaimed work; retain uncertain tombstones and quarantine recovered claims. Final delivery must settle its matching run, never adjacent work.
+- Recovered ordinary claims and closed failures without a final retain a notice wake until one authenticated, fenced uncertainty status is committed. Test actual DO eviction after a write and after closure, committed-final reconciliation, enqueue failure, repeated recovery, owner rebinding and mismatched persisted notice IDs; never replay the quarantined request or treat an ambiguous status send as delivered.
 - Control notes target one current run. Persist consumption before model exposure; a consumed or stopped note never replays as an independent later turn. Three due classes each get service within three alarms.
 
 ### iMessage protocol scaffold

@@ -1,7 +1,7 @@
 // This integration test reaches the real webhook router, per-owner Durable Objects,
 // listener, and model responder. All external model and Telegram effects are intercepted.
 import { env } from 'cloudflare:workers';
-import { runInDurableObject } from 'cloudflare:test';
+import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OwnerDirectory, OwnerRoute } from '../src/identity/owner-directory';
 import type { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
@@ -109,6 +109,204 @@ const callback = async (subject: number, from: number, data: string, updateId: n
   return response;
 };
 const doStub = (subject: number) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(route(subject).doName)) as DurableObjectStub<TelegramOwnerDO>;
+
+describe('actual owner interruption recovery', () => {
+  afterEach(async () => {
+    for (const subject of [81101, 81102]) await runInDurableObject(doStub(subject), async (_instance, state) => {
+      const rows = state.storage.kv.get<import('../src/channels/telegram-owner-inbox').InboxRecord[]>('telegram_owner_inbox_v1') ?? [];
+      const finals = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
+      await state.storage.put({ telegram_owner_inbox_v1: rows.filter(row => row.updateId < 995001 || row.updateId > 995007),
+        telegram_final_outbox_v1: finals.filter(row => ![995001, 995002, 995003, 995004, 995005, 995006, 995007].some(id => row.trace === `tg-${id}`)) });
+      await state.storage.deleteAlarm();
+    });
+  });
+it('actual owner eviction after a claimed write produces one durable uncertainty status without replay', async () => {
+  const subject = 81101; const updateId = 995001; const stub = doStub(subject);
+  const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+  const { persistInboxWake, armAlarm } = await import('../src/scheduler/alarm-slot');
+  let callsBefore = modelInputs.length;
+  outbox.length = 0;
+  // Persist the crash cut after claim and one write, before a final is committed.
+  // Evict the registered DO itself: recovery must not depend on its in-memory attempt set.
+  await runInDurableObject(stub, async (instance, state) => {
+    await state.storage.put({ telegram_subject: String(subject), do_name: route(subject).doName });
+    const runtime = instance as unknown as { setup(): { ready: Promise<void> }; serial(work: () => Promise<void>): Promise<void> };
+    await runtime.setup().ready;
+    await runtime.serial(async () => undefined);
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit({ bot: 'hermetic-test-bot-token', subject: String(subject), doName: route(subject).doName }, updateId, 'PRIVATE_INTERRUPTED_REQUEST');
+    await inbox.claim(`hermetic-test-bot-token:telegram:${updateId}`, 'interrupted-attempt', 'interrupted-run', Date.now() + 150_000);
+    await state.storage.put('interruption-fixture-effect-count', 1);
+    callsBefore = modelInputs.length;
+    await armAlarm(state.storage, Date.now() + 3600000);
+  });
+  await evictDurableObject(stub);
+  await runInDurableObject(stub, async (instance, state) => {
+    await instance.alarm();
+    const rows = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
+    const notices = rows.filter(row => row.trace === `tg-${updateId}`);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.payload.text).toContain('outcome is uncertain');
+    expect(notices[0]!.payload.text).not.toContain('PRIVATE_INTERRUPTED_REQUEST');
+    expect(notices[0]!.expiresAt).toBeUndefined();
+    expect((await new TelegramOwnerInbox(state.storage, persistInboxWake).records()).find(row => row.updateId === updateId))
+      .toMatchObject({ state: 'quarantined', reason: 'recovered_uncertain', body: '', outcomeNoticeQueued: true });
+    await armAlarm(state.storage, Date.now() + 3600000);
+  });
+  await evictDurableObject(stub);
+  await runInDurableObject(stub, async (instance, state) => {
+    const rows = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
+    for (const row of rows) if (row.trace === `tg-${updateId}`) row.dueAt = 0;
+    state.storage.kv.put('telegram_final_outbox_v1', rows);
+    await instance.alarm(); await instance.alarm();
+    expect(outbox.filter(item => item.method === 'sendMessage' && String(item.body.text).includes('outcome is uncertain'))).toHaveLength(1);
+    expect(state.storage.kv.get<number>('interruption-fixture-effect-count')).toBe(1);
+    expect(modelInputs).toHaveLength(callsBefore);
+    expect(await new TelegramOwnerInbox(state.storage, persistInboxWake).claim(`hermetic-test-bot-token:telegram:${updateId}`, 'retry', 'retry-run', Date.now() + 150_000)).toBeNull();
+    await state.storage.deleteAlarm();
+  });
+});
+
+it('actual recovery retains its notice wake after outbox capacity failure and queues only once', async () => {
+  await runInDurableObject(doStub(81102), async (instance, state) => {
+    const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+    const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    const id = 'hermetic-test-bot-token:telegram:995002';
+    await inbox.admit({ bot: 'hermetic-test-bot-token', subject: '81102', doName: route(81102).doName }, 995002, 'PRIVATE_CAPACITY_REQUEST');
+    await inbox.claim(id, 'capacity-attempt', 'capacity-run', Date.now() - 1);
+    const runtime = instance as unknown as { setup(): { finalOutbox: import('../src/channels/telegram-final-outbox').TelegramFinalOutbox }; notifyUncertainRecovery(): Promise<void> };
+    const box = runtime.setup().finalOutbox; const enqueue = box.enqueueFenced;
+    box.enqueueFenced = async () => { throw new Error('final outbox capacity'); };
+    await instance.alarm();
+    expect((await inbox.records()).find(row => row.id === id)).toMatchObject({ state: 'quarantined', reason: 'recovered_uncertain', body: '' });
+    expect((await inbox.records()).find(row => row.id === id)?.outcomeNoticeQueued).not.toBe(true);
+    expect(state.storage.kv.get<number>('telegram_owner_inbox_due_v1')).toBeGreaterThan(Date.now() - 1000);
+    expect(await state.storage.getAlarm()).not.toBeNull();
+    box.enqueueFenced = enqueue;
+    await runtime.notifyUncertainRecovery(); await runtime.notifyUncertainRecovery();
+    expect(box.records().filter(row => row.trace === 'tg-995002')).toHaveLength(1);
+    expect((await inbox.records()).find(row => row.id === id)?.outcomeNoticeQueued).toBe(true);
+    expect(await inbox.claim(id, 'retry', 'retry-run', Date.now() + 1000)).toBeNull();
+    await state.storage.deleteAlarm();
+  });
+});
+
+it('actual eviction after failure closure but before notice enqueue recovers one status', async () => {
+  const stub = doStub(81102);
+  await runInDurableObject(stub, async (instance, state) => {
+    const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+    const { persistInboxWake, armAlarm } = await import('../src/scheduler/alarm-slot');
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit({ bot: 'hermetic-test-bot-token', subject: '81102', doName: route(81102).doName }, 995005, 'PRIVATE_CLOSED_REQUEST');
+    const row = (await inbox.claim('hermetic-test-bot-token:telegram:995005', 'closed-attempt', 'closed-run', Date.now() + 150_000))!;
+    (instance as unknown as { closeRunAtomic(record: import('../src/channels/telegram-owner-inbox').InboxRecord, reason: string): void }).closeRunAtomic(row, 'execution_closed');
+    await armAlarm(state.storage, Date.now() + 3600000);
+  });
+  await evictDurableObject(stub);
+  await runInDurableObject(stub, async (instance, state) => {
+    await instance.alarm();
+    const matching = (state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? []).filter(row => row.trace === 'tg-995005');
+    expect(matching).toHaveLength(1);
+    expect(matching[0]!.payload.text).toContain('did not finish');
+    expect(matching[0]!.expiresAt).toBeUndefined();
+    await state.storage.deleteAlarm();
+  });
+});
+
+it('actual failed run keeps a retry wake when its once-only status cannot be enqueued', async () => {
+  await runInDurableObject(doStub(81102), async (instance, state) => {
+    const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+    const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit({ bot: 'hermetic-test-bot-token', subject: '81102', doName: route(81102).doName }, 995006, JSON.stringify({ update_id: 995006, message: { message_id: 995006, from: { id: 81102, is_bot: false }, chat: { id: 81102, type: 'private' }, text: 'Fictional failed request.' } }));
+    const runtime = instance as unknown as { turn(...args: unknown[]): Promise<Response>; drainInbox(): Promise<void>; setup(): { finalOutbox: import('../src/channels/telegram-final-outbox').TelegramFinalOutbox } };
+    const box = runtime.setup().finalOutbox; const enqueue = box.enqueueFenced; const turn = runtime.turn;
+    runtime.turn = async () => { throw new Error('fixture interrupted turn'); };
+    box.enqueueFenced = async () => { throw new Error('final outbox capacity'); };
+    try { await runtime.drainInbox(); }
+    finally { runtime.turn = turn; box.enqueueFenced = enqueue; }
+    expect((await inbox.records()).find(row => row.updateId === 995006)).toMatchObject({ state: 'quarantined', reason: 'execution_closed', body: '' });
+    expect(state.storage.kv.get<number>('telegram_owner_inbox_due_v1')).toBeGreaterThan(Date.now() - 1000);
+    expect(await state.storage.getAlarm()).not.toBeNull();
+    await instance.alarm(); await instance.alarm();
+    expect(box.records().filter(row => row.trace === 'tg-995006')).toHaveLength(1);
+    await state.storage.deleteAlarm();
+  });
+});
+
+it('a mismatched persisted failure ID cannot acknowledge an interrupted owners status', async () => {
+  await runInDurableObject(doStub(81102), async (instance, state) => {
+    const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+    const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit({ bot: 'hermetic-test-bot-token', subject: '81102', doName: route(81102).doName }, 995007, 'PRIVATE_DEDUP_REQUEST');
+    await inbox.claim('hermetic-test-bot-token:telegram:995007', 'dedup-attempt', 'dedup-run', Date.now() - 1);
+    await inbox.recover(new Set());
+    state.storage.kv.put('telegram_final_outbox_v1', [{ id: 'failure:hermetic-test-bot-token:telegram:995007:dedup-attempt', trace: 'tg-995007', payload: { chat_id: 81101, text: 'Foreign fixture notice.' }, ownerSubject: '81101', doName: route(81101).doName, bot: 'foreign-bot', digest: 'fixture', status: 'blocked', settled: true, dueAt: 0, createdAt: Date.now(), attempts: 0 }]);
+    await instance.alarm();
+    expect((await inbox.records()).find(row => row.updateId === 995007)?.outcomeNoticeQueued).not.toBe(true);
+    expect(state.storage.kv.get<number>('telegram_owner_inbox_due_v1')).toBeGreaterThan(Date.now() - 1000);
+    await state.storage.deleteAlarm();
+  });
+});
+
+it('actual eviction with a committed final reconciles delivery without a competing interruption notice', async () => {
+  const stub = doStub(81101); const updateId = 995003;
+  outbox.length = 0;
+  await runInDurableObject(stub, async (instance, state) => {
+    const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+    const { persistInboxWake, armAlarm } = await import('../src/scheduler/alarm-slot');
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit({ bot: 'hermetic-test-bot-token', subject: '81101', doName: route(81101).doName }, updateId, JSON.stringify({ update_id: updateId, message: { message_id: updateId, from: { id: 81101, is_bot: false }, chat: { id: 81101, type: 'private' }, text: 'A fictional request with a committed answer.' } }));
+    await (instance as unknown as { drainInbox(): Promise<void> }).drainInbox();
+    expect((await inbox.records()).find(row => row.updateId === updateId)?.state).toBe('awaiting_delivery');
+    await armAlarm(state.storage, Date.now() + 3600000);
+  });
+  const callsBefore = modelInputs.length;
+  await evictDurableObject(stub);
+  await runInDurableObject(stub, async (instance, state) => {
+    const rows = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!;
+    for (const row of rows) row.dueAt = 0;
+    state.storage.kv.put('telegram_final_outbox_v1', rows);
+    await instance.alarm(); await instance.alarm();
+    const matching = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!.filter(row => row.trace === `tg-${updateId}`);
+    expect(matching).toHaveLength(1); expect(matching[0]!.status).toBe('delivered');
+    expect(matching[0]!.payload.text).not.toContain('outcome is uncertain');
+    expect(modelInputs).toHaveLength(callsBefore);
+    expect(outbox.filter(item => item.method === 'sendMessage')).toHaveLength(1);
+    await state.storage.deleteAlarm();
+  });
+});
+
+for (const fault of ['unlink', 'subject', 'name', 'bot', 'physical-owner'] as const) it(`actual interrupted-request notification rejects ${fault} binding without publication`, async () => {
+  await runInDurableObject(doStub(81102), async (instance, state) => {
+    const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+    const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    const binding = { bot: 'hermetic-test-bot-token', subject: '81102', doName: route(81102).doName };
+    await inbox.admit(binding, 995004, 'PRIVATE_BOUND_REQUEST');
+    await inbox.claim('hermetic-test-bot-token:telegram:995004', 'bound-attempt', 'bound-run', Date.now() - 1);
+    await inbox.recover(new Set());
+    if (fault === 'unlink') await state.storage.put('telegram_unlinked', true);
+    else if (fault === 'subject') await state.storage.put('telegram_subject', '81101');
+    else if (fault === 'name') await state.storage.put('do_name', route(81101).doName);
+    else {
+      const rows = await inbox.records(); const row = rows.find(row => row.updateId === 995004)!;
+      if (fault === 'bot') row.bot = 'foreign-bot';
+      else { row.doName = route(81101).doName; await state.storage.put('do_name', row.doName); }
+      await state.storage.put('telegram_owner_inbox_v1', rows);
+    }
+    await (instance as unknown as { notifyUncertainRecovery(): Promise<void> }).notifyUncertainRecovery();
+    const notices = (state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? []).filter(row => row.trace === 'tg-995004');
+    const records = await inbox.records(); const notified = records.find(row => row.updateId === 995004)?.outcomeNoticeQueued;
+    await state.storage.put({ telegram_unlinked: false, telegram_subject: binding.subject, do_name: binding.doName,
+      telegram_owner_inbox_v1: records.filter(row => row.updateId !== 995004) });
+    await state.storage.deleteAlarm();
+    expect(notices).toHaveLength(0); expect(notified).not.toBe(true);
+  });
+});
+});
 
 describe('real owner-DO ingress in a sealed test world', () => {
   beforeEach(() => {
@@ -664,12 +862,12 @@ it('late consumed-child recovery preserves a durable notice wake through outbox 
   await state.storage.put({telegram_subject:String(subject),do_name:binding.doName});
   await inbox.admit(binding,994701,'consumed fixture',{kind:'steer',targetRun:'old-parent'});const child=(await inbox.records()).find(row=>row.updateId===994701)!;
   await inbox.claim(child.id,'old-child-attempt','child-run',Date.now()-10*60000);await inbox.transition(child.id,'old-child-attempt','consumed');await inbox.recover(new Set());
-  const internal=instance as unknown as {setup():{finalOutbox:import('../src/channels/telegram-final-outbox').TelegramFinalOutbox};notifyUncertainSteering():Promise<void>};
+  const internal=instance as unknown as {setup():{finalOutbox:import('../src/channels/telegram-final-outbox').TelegramFinalOutbox};notifyUncertainRecovery():Promise<void>};
   const outbox=internal.setup().finalOutbox;const enqueue=outbox.enqueueFenced.bind(outbox);outbox.enqueueFenced=async()=>{throw new Error('fictional outbox capacity');};
-  await expect(internal.notifyUncertainSteering()).rejects.toThrow('outbox capacity');
+  await expect(internal.notifyUncertainRecovery()).rejects.toThrow('outbox capacity');
   const retained=(await inbox.records()).find(row=>row.id===child.id)!;expect(retained.state).toBe('quarantined');expect(retained.outcomeNoticeQueued).not.toBe(true);
   expect(state.storage.kv.get<number>('telegram_owner_inbox_due_v1')).toBeGreaterThan(Date.now()-1000);
-  outbox.enqueueFenced=enqueue;await internal.notifyUncertainSteering();await internal.notifyUncertainSteering();
+  outbox.enqueueFenced=enqueue;await internal.notifyUncertainRecovery();await internal.notifyUncertainRecovery();
   const notices=outbox.records().filter(row=>row.trace==='tg-994701');expect(notices).toHaveLength(1);expect(notices[0]!.expiresAt).toBeUndefined();
   expect((await inbox.records()).find(row=>row.id===child.id)).toMatchObject({state:'quarantined',body:'',outcomeNoticeQueued:true});
   expect(await inbox.claim(child.id,'retry','replacement-run',Date.now()+10000)).toBeNull();await state.storage.deleteAlarm();
@@ -683,32 +881,9 @@ it('legacy erased never-consumed steering gets one truthful not-processed notice
   const inbox=new TelegramOwnerInbox(state.storage,persistInboxWake);const binding={bot:'hermetic-test-bot-token',subject:String(subject),doName:route(subject).doName};
   await state.storage.put({telegram_subject:String(subject),do_name:binding.doName});await inbox.admit(binding,994801,'old erased message',{kind:'steer',targetRun:'old-run'});
   const child=(await inbox.records()).find(row=>row.updateId===994801)!;await inbox.claim(child.id,'old-attempt','old-control',Date.now()-10*60000);await inbox.transition(child.id,'old-attempt','quarantined','not_consumed');
-  const internal=instance as unknown as {notifyUncertainSteering():Promise<void>;setup():{finalOutbox:import('../src/channels/telegram-final-outbox').TelegramFinalOutbox}};
-  await internal.notifyUncertainSteering();await internal.notifyUncertainSteering();const notices=internal.setup().finalOutbox.records().filter(row=>row.trace==='tg-994801');
+  const internal=instance as unknown as {notifyUncertainRecovery():Promise<void>;setup():{finalOutbox:import('../src/channels/telegram-final-outbox').TelegramFinalOutbox}};
+  await internal.notifyUncertainRecovery();await internal.notifyUncertainRecovery();const notices=internal.setup().finalOutbox.records().filter(row=>row.trace==='tg-994801');
   expect(notices).toHaveLength(1);expect(notices[0]!.payload.text).toContain('not processed');expect(notices[0]!.payload.text).not.toContain('was used');
   expect(await inbox.claim(child.id,'retry','replacement',Date.now()+10000)).toBeNull();expect((await inbox.records()).find(row=>row.id===child.id)?.outcomeNoticeQueued).toBe(true);await state.storage.deleteAlarm();
  });
-});
-
-// RED on 30b6902e: an ordinary owner turn that was claimed when the DO restarted is quarantined as
-// recovered_uncertain (never replayed, correct) but the owner is never told. Only steer children get a notice.
-it('an ordinary claimed turn recovered after restart gets exactly one uncertain-outcome notice, and is not replayed', async () => {
-  const subject = 81102;
-  await runInDurableObject(doStub(subject), async (instance, state) => {
-    const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox'); const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
-    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake); const binding = { bot: 'hermetic-test-bot-token', subject: String(subject), doName: route(subject).doName };
-    await state.storage.put({ telegram_subject: String(subject), do_name: binding.doName });
-    await inbox.admit(binding, 994801, 'ordinary fixture turn');
-    const row = (await inbox.records()).find(r => r.updateId === 994801)!;
-    await inbox.claim(row.id, 'dead-attempt', 'dead-run', Date.now() - 10 * 60000);
-    await inbox.recover(new Set());
-    const recovered = (await inbox.records()).find(r => r.id === row.id)!;
-    expect(recovered.state).toBe('quarantined'); expect(recovered.reason).toBe('recovered_uncertain'); expect(recovered.body).toBe('');
-    const internal = instance as unknown as { setup(): { finalOutbox: import('../src/channels/telegram-final-outbox').TelegramFinalOutbox }; notifyUncertainSteering(): Promise<void> };
-    const notices = () => internal.setup().finalOutbox.records().filter(r => r.id.includes(row.id));
-    await internal.notifyUncertainSteering(); await internal.notifyUncertainSteering();
-    expect(notices()).toHaveLength(1);
-    // never replayed: the row stays quarantined and unclaimable
-    expect(await inbox.claim(row.id, 'retry', 'replacement', Date.now() + 10000)).toBeNull();
-  });
 });

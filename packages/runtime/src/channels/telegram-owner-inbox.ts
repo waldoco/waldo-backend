@@ -10,6 +10,9 @@ export type InboxRecord = InboxBinding & {
   attempt?: string; runId?: string; deadline?: number; reason?: string; closedAt?: number; outcomeNoticeQueued?: boolean;
   control?: { kind: 'stop' | 'steer'; targetRun: string };
 };
+export const needsRecoveryNotice = (row: InboxRecord): boolean => row.state === 'quarantined' && !row.outcomeNoticeQueued
+  && (row.control?.kind === 'steer' && ['not_consumed', 'consumed_target_outcome_uncertain', 'recovered_uncertain'].includes(row.reason ?? '')
+    || row.control === undefined && ['recovered_uncertain', 'execution_closed', 'owner_stopped'].includes(row.reason ?? ''));
 const ordinaryAdmission = (row: InboxRecord): void => {
   row.state = 'admitted';
   delete row.control; delete row.attempt; delete row.runId; delete row.deadline; delete row.reason; delete row.closedAt; delete row.outcomeNoticeQueued;
@@ -20,7 +23,7 @@ export class TelegramOwnerInbox {
   constructor(private readonly storage: Storage, private readonly persist: (txn: DurableObjectTransaction, rows: InboxRecord[], due: number | null) => Promise<void>, private readonly now: () => number = Date.now) {}
   async records(): Promise<InboxRecord[]> { return (await this.storage.get<InboxRecord[]>(OWNER_INBOX_KEY)) ?? []; }
   private due(rows: InboxRecord[]): number | null {
-    const due = rows.flatMap(r => r.state === 'admitted' ? [this.now() + 250] : r.state === 'claimed' || r.state === 'consumed' ? [r.deadline ?? this.now() + 250] : r.state === 'quarantined' && r.control?.kind === 'steer' && !r.outcomeNoticeQueued && ['not_consumed', 'consumed_target_outcome_uncertain', 'recovered_uncertain'].includes(r.reason ?? '') ? [this.now() + 250] : r.state === 'completed' ? [r.admittedAt + RETENTION_MS] : []);
+    const due = rows.flatMap(r => r.state === 'admitted' ? [this.now() + 250] : r.state === 'claimed' || r.state === 'consumed' ? [r.deadline ?? this.now() + 250] : needsRecoveryNotice(r) ? [this.now() + 250] : r.state === 'completed' ? [r.admittedAt + RETENTION_MS] : []);
     return due.length ? Math.min(...due) : null;
   }
   async admit(binding: InboxBinding, updateId: number, body: string, control?: InboxRecord['control']): Promise<Admission> {
