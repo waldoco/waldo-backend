@@ -34,3 +34,13 @@ it('strictly validates closed ack/result frame payloads and rejects wrong status
  expect(resultFrame({...ack,type:'result',payload:{status:'delivered',answer:{}}})).toBeNull();
 });
 function signed(type:string){return {contract_version:'0.2.3',type,message_id:'01ARZ3NDEKTSV4RRFFQ69G5FAX',device_id:'dev_commands_fixture',owner_id:'owner_fixture',timestamp:1000,nonce:'AAECAwQFBgcICQoLDA0ODw',signature:'A'.repeat(86)}}
+it('reconciles a possibly delivered expired command through the same bytes and volatile expired ack', async()=>setup(async store=>{
+ const queued=await store.enqueue({...input('query_unknown_delivery'),ttl_seconds:1},300000,['machine_state_query']); if(!queued.accepted)throw new Error('queue');
+ const first=store.pending(300000).find(row=>row.command_id===queued.command_id)!; const command=JSON.parse(first.wire);
+ store.markSent(command.command_id);
+ expect(store.pending(300002).find(row=>row.command_id===command.command_id)?.wire).toBe(first.wire);
+ expect(store.hasInFlight()).toBe(true);
+ store.acceptAck({...signed('ack'),command_id:command.command_id,revision:1,idempotency_key:command.idempotency_key,payload:{state:'expired',reason:'expired'}} as never);
+ expect(store.hasInFlight()).toBe(false);
+ expect(store.list().find(row=>row.command_id===command.command_id)?.state).toBe('expired');
+}));
