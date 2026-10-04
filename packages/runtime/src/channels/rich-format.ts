@@ -17,11 +17,15 @@ export const renderArtifactBody=(kind:ArtifactKind,body:string):string=>{
 };
 // Applied only to already guarded final text. Convert existing HTTP(S) Markdown
 // link tokens without changing their URL bytes. Raw model HTML remains text.
-// Deliberately small grammar: code is opaque; bold and links cannot overlap
-// code. Unsupported nesting/malformed delimiters leave the ENTIRE reply literal.
+// Code stays opaque. Telegram forbids code entities nested in links/bold, so a
+// code-styled link label uses literal escaped contents rather than a code entity.
+// Unsupported nesting/malformed delimiters leave the reply literal.
 const parseTelegram=(text:string, label=false):string|null=>{
  let out='',i=0;
  while(i<text.length){
+  if(text[i]==='\\'&&text[i+1]&&/[\\`*\[\]()]/.test(text[i+1]!)){
+   out+=escapeRich(text[i+1]!);i+=2;continue;
+  }
   if(text.startsWith('```',i)){
    if(label)return null;
    const end=text.indexOf('```',i+3);if(end<0)return null;
@@ -30,16 +34,21 @@ const parseTelegram=(text:string, label=false):string|null=>{
    out+=`<pre>${escapeRich(body)}</pre>`;i=end+3;continue;
   }
   if(text[i]==='`'){
-   if(label||text[i+1]==='`')return null;
+   if(text[i+1]==='`')return null;
    const end=text.indexOf('`',i+1);if(end<0||text.slice(i+1,end).includes('\n'))return null;
-   out+=`<code>${escapeRich(text.slice(i+1,end))}</code>`;i=end+1;continue;
+   const body=escapeRich(text.slice(i+1,end));
+   out+=label?body:`<code>${body}</code>`;i=end+1;continue;
   }
   if(text.startsWith('**',i)){
    if(text[i+2]==='*'||text[i-1]==='*')return null;
    const end=text.indexOf('**',i+2);if(end<0)return null;
    const body=text.slice(i+2,end);
-   if(!body||body.trim()!==body||/[`*\n]/.test(body)||body.includes('](')||text[end+2]==='*')return null;
-   out+=`<b>${escapeRich(body)}</b>`;i=end+2;continue;
+   if(!label&&/^`[^`\n]+`$/.test(body)){
+    out+=`<code>${escapeRich(body.slice(1,-1))}</code>`;i=end+2;continue;
+   }
+   if(!body||body.trim()!==body||/[*\n]/.test(body)||body.includes('](')||text[end+2]==='*')return null;
+   const contents=parseTelegram(body,true);if(contents===null)return null;
+   out+=`<b>${contents}</b>`;i=end+2;continue;
   }
   if(text[i]==='['&&!label){
    const close=text.indexOf('](',i+1);
@@ -57,4 +66,4 @@ const parseTelegram=(text:string, label=false):string|null=>{
  }
  return out;
 };
-export const telegramRichReply=(text:string):Readonly<{text:string;parse_mode:'HTML'}>=>({text:parseTelegram(text)??escapeRich(text),parse_mode:'HTML'});
+export const telegramRichReply=(text:string):Readonly<{text:string;parse_mode:'HTML';fallback_text:string}>=>({text:parseTelegram(text)??escapeRich(text),parse_mode:'HTML',fallback_text:text});
