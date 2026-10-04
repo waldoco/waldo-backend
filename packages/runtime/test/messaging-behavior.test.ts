@@ -23,6 +23,8 @@ describe('messagingSystemPrompt', () => {
   it('video and podcast links: open the on-page transcript, name the source, never write notes as if it was heard', () => {
     expect(MESSAGING_BEHAVIOR).toContain('open its on-page transcript or captions');
     expect(MESSAGING_BEHAVIOR).toContain('"from the transcript" or "from the title and description only"');
+    expect(MESSAGING_BEHAVIOR).toContain('Never ask the owner to paste a transcript until you have tried to open it yourself');
+    expect(MESSAGING_BEHAVIOR).toContain('is not a result. Look for the same fact on one other source');
     expect(MESSAGING_BEHAVIOR).toContain('never write notes as if you had heard it');
   });
 
