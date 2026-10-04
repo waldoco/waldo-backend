@@ -25,7 +25,22 @@ const bindingReader = (options: Options, doName: string, subject: string) => {
   const physical = () => environment === 'staging' && Boolean(namespace && /^[a-zA-Z0-9_-]{1,240}$/.test(namespace))
     && storage.kv.get('do_name') === doName && storage.kv.get('telegram_subject') === subject
     && storage.kv.get('telegram_unlinked') !== true && env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() === actualDoId;
-  const call = signedRpc(env, options.fetcher, options.now);
+  const call = signedRpc(env, async (input, init) => {
+    const response = await (options.fetcher ?? fetch)(input, init);
+    if (!response.body) return response;
+    const reader = response.body.getReader(), chunks: Uint8Array[] = []; let size = 0;
+    try {
+      for (;;) {
+        const part = await reader.read(); if (part.done) break;
+        size += part.value.byteLength;
+        if (size > 4096) { void reader.cancel().catch(() => undefined); throw Error('browser configuration unavailable'); }
+        chunks.push(part.value);
+      }
+    } finally { reader.releaseLock(); }
+    const bytes = new Uint8Array(size); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return new Response(bytes, { status: response.status, headers: response.headers });
+  }, options.now);
   return async (): Promise<PresenceBinding> => {
     if (!call || !physical() || !/^\d{1,32}$/.test(subject)) throw Error('browser configuration unavailable');
     const locator = JSON.stringify([environment, namespace, doName, actualDoId, 'telegram', subject]);
@@ -41,7 +56,7 @@ const bindingReader = (options: Options, doName: string, subject: string) => {
 export async function browserProductionConfiguration(options: Options): Promise<BrowserOwnerConfiguration | undefined> {
   if (!options.policy) return undefined;
   try {
-    const { env, storage, policy } = options, now = options.now ?? Date.now;
+    const { env, storage } = options, policy = Object.freeze({ ...options.policy }), now = options.now ?? Date.now;
     if (!env.BROWSER || !policy.doName || policy.doName.length > 200) throw Error('browser configuration unavailable');
     const authority = browserOwnerAuthority(storage, now), authorization = authority.read();
     if (!authorization || authorization.binding.do_name !== policy.doName || authorization.manifest.origin !== policy.fixtureOrigin
