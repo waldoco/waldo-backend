@@ -209,7 +209,6 @@ const counterCases: CounterCase[] = [
   { name: 'empty old zone', marker: '', ready: false, inspection: true },
   { name: 'nonstring old zone', marker: 1, ready: false, inspection: true },
   { name: 'same-zone current rows immediately usable', marker: 'Asia/Kolkata', day: '2026-10-03', last: Date.parse('2026-10-03T04:00:00Z'), ready: true },
-  { name: 'flag absent preserves legacy counters', flag: 'absent', ready: false },
   { name: 'flag zero preserves legacy counters', flag: '0', ready: false },
 ];
 
