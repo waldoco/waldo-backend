@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from 'cloudflare:test';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import type { DeviceBridgeDO } from '../src/devices/device-bridge-do';
 it('persists replay admission, refuses duplicate nonces, and maintains a revoke fence', async () => {
   const namespace = env.DEVICE_BRIDGE_DO!;
@@ -12,5 +12,19 @@ it('persists replay admission, refuses duplicate nonces, and maintains a revoke 
     await instance.revoke();
     const rejected = await instance.fetch(new Request('https://bridge.test/devices/connect'));
     expect(rejected.status).toBe(401);
+  });
+});
+it('arms nonce cleanup strictly after the retention boundary without a past alarm loop', async () => {
+  const namespace = env.DEVICE_BRIDGE_DO!;
+  const stub = namespace.get(namespace.idFromName('dev_alarm_fixture')) as DurableObjectStub<DeviceBridgeDO>;
+  await runInDurableObject(stub, async (instance, state) => {
+    const initial = Math.floor(Date.now() / 1000);
+    expect(instance.admitNonce('AAECAwQFBgcICQoLDA0ODw', initial)).toBe(true);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue((initial + 600) * 1000);
+    try {
+      await instance.alarm();
+      expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+      expect(state.storage.sql.exec('SELECT count(*) AS count FROM nonces').one().count).toBe(1);
+    } finally { clock.mockRestore(); }
   });
 });

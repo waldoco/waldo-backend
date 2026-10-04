@@ -1,4 +1,4 @@
-import { env, runInDurableObject } from 'cloudflare:test';
+import { env, evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import worker from '../src/index';
 import { canonicalJson } from '../src/devices/canonical-json';
@@ -85,6 +85,8 @@ it('runs owner console pair -> signed redeem/connect/heartbeat -> revoke through
   const signature = await sign(frameSignatureBase(frame.timestamp, frame.type, frame.message_id, frame.nonce, await sha256Hex(new TextEncoder().encode(canonicalJson(frame)))));
   socket.send(canonicalJson({ ...frame, signature }));
   await vi.waitFor(() => expect(touched).toBe(1));
+  const deviceStub = env.DEVICE_BRIDGE_DO!.get(env.DEVICE_BRIDGE_DO!.idFromName('dev_fixture')) as DurableObjectStub<DeviceBridgeDO>;
+  await evictDurableObject(deviceStub);
   const page = await call(new Request('https://bridge.test/console/devices', { headers: { cookie } }));
   const html = await page.text(); expect(html).toContain('Online'); expect(html).not.toContain('<script>bad</script>');
   const originalClosed = new Promise<number>((resolve) => socket.addEventListener('close', (event) => resolve(event.code)));
@@ -110,10 +112,17 @@ it('runs owner console pair -> signed redeem/connect/heartbeat -> revoke through
     peer.send(invalid); expect(await closed).toBe(1008); expect(received).toBe(0); expect(touched).toBe(1);
   }
   expect(await originalClosed).toBe(1008);
+  const backstop = await connect(); backstop.webSocket!.accept();
+  const backstopClosed = new Promise<number>((resolve) => backstop.webSocket!.addEventListener('close', (event) => resolve(event.code)));
+  const afterDelete = { ...frame, message_id: '01ARZ3NDEKTSV4RRFFQ69G5FAW', nonce: base64url(crypto.getRandomValues(new Uint8Array(16))) };
+  const afterDeleteSignature = await sign(frameSignatureBase(afterDelete.timestamp, afterDelete.type, afterDelete.message_id, afterDelete.nonce, await sha256Hex(new TextEncoder().encode(canonicalJson(afterDelete)))));
+  exists = false;
+  backstop.webSocket!.send(canonicalJson({ ...afterDelete, signature: afterDeleteSignature }));
+  expect(await backstopClosed).toBe(1008); expect(touched).toBe(1);
+  exists = true;
   const finalResponse = await connect(); const finalSocket = finalResponse.webSocket!; finalSocket.accept();
   const closed = new Promise<number>((resolve) => finalSocket.addEventListener('close', (event) => resolve(event.code)));
   const racingRequest = new Request(`https://bridge.test${path}`, { headers: { ...await headers('GET', path), 'x-waldo-device-id': 'dev_fixture', upgrade: 'websocket' } });
-  const deviceStub = env.DEVICE_BRIDGE_DO!.get(env.DEVICE_BRIDGE_DO!.idFromName('dev_fixture')) as DurableObjectStub<DeviceBridgeDO>;
   await runInDurableObject(deviceStub, async (instance) => {
     const internal = instance as unknown as { rearm(): Promise<void> };
     const original = internal.rearm.bind(instance); let held = false, release!: () => void;
