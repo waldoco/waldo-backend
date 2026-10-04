@@ -84,7 +84,11 @@ export function evaluateDeclaredEgress(
   allowlist: readonly string[] | undefined,
   options: Readonly<{ openPublic?: boolean }> = {},
 ): EgressPolicyResult {
-  const allowedHosts = parseAllowlist(allowlist?.filter((entry) => entry !== OPEN_PUBLIC));
+  // "-host" entries are a blocklist (host and subdomains), same env var, so no new deploy wiring.
+  // They deny for every tool, win over the open sentinel and over a listed host, and never allow.
+  const blocked = (allowlist ?? []).filter((entry) => entry.startsWith('-')).map((entry) => hostFromBareHost(entry.slice(1)));
+  const blockedHosts = blocked.filter((host): host is string => host !== null);
+  const allowedHosts = parseAllowlist(allowlist?.filter((entry) => entry !== OPEN_PUBLIC && !entry.startsWith('-')));
 
   for (const path of paths) {
     const declaredValues = valuesAtPath(args, path.path);
@@ -93,7 +97,7 @@ export function evaluateDeclaredEgress(
     for (const value of declaredValues.values) {
       const host = path.kind === 'url' ? hostFromUrl(value) : hostFromBareHost(value);
       if (host === null) return { ok: false, reason: 'malformed_target' };
-      if (isBlockedHost(host)) return { ok: false, reason: 'blocked_host' };
+      if (isBlockedHost(host) || blockedHosts.some((entry) => matchesAllowedHost(host, entry))) return { ok: false, reason: 'blocked_host' };
 
       // Open public web: any host that passed the blocked-host checks above. Only the caller decides
       // which tool gets this; the allowlist sentinel alone never opens a tool.
