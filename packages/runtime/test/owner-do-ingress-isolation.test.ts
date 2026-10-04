@@ -17,7 +17,7 @@ vi.mock('../src/channels/telegram-owner-do', async load => {
   const { OpenAIResponsesAdapter } = await import('../src/llm/openai');
   return { ...original, TelegramOwnerDO: class extends original.TelegramOwnerDO {
     constructor(state: DurableObjectState, bindings: typeof env) {
-      const subject = [81101, 81102].find(value => bindings.TELEGRAM_OWNER_DO!.idFromName(`hermetic-owner-${value}`).toString() === state.id.toString());
+      const subject = [81101, 81102, 81103, 81104].find(value => bindings.TELEGRAM_OWNER_DO!.idFromName(`hermetic-owner-${value}`).toString() === state.id.toString());
       const host = subject === undefined ? undefined : admittedOwnerHost(`hermetic-owner-${subject}`, String(subject),
         new OpenAIResponsesAdapter({ apiKey: bindings.OPENAI_API_KEY }), ['get_communication', 'propose_calendar_change']);
       super(state, bindings, { mode: 'canonical', host });
@@ -80,8 +80,10 @@ vi.mock('openai', () => ({
 
 const { handleTelegramWebhook } = await import('../src/channels/telegram-webhook');
 let sequence = 0;
-const route = (subject: number): OwnerRoute => ({ doName: `hermetic-owner-${subject}`, subject: String(subject), timezone: 'Asia/Kolkata' });
-const directory: OwnerDirectory = { byPresence: async (provider, subject) => provider === 'telegram' && ['81101', '81102'].includes(subject) ? route(Number(subject)) : null, redeem: async () => null };
+const traceIdentities = new Map<number, NonNullable<OwnerRoute['traceIdentity']>>();
+const route = (subject: number): OwnerRoute => ({ doName: `hermetic-owner-${subject}`, subject: String(subject), timezone: 'Asia/Kolkata',
+  ...(traceIdentities.has(subject) ? { traceIdentity: traceIdentities.get(subject) } : {}) });
+const directory: OwnerDirectory = { byPresence: async (provider, subject) => provider === 'telegram' && ['81101', '81102', '81103', '81104'].includes(subject) ? route(Number(subject)) : null, redeem: async () => null };
 const send = async (subject: number, text: string, updateId: number, replyTo?: Record<string, unknown>) => {
   const pending: Promise<unknown>[] = [];
   const response = await handleTelegramWebhook(new Request('https://fixture.invalid/telegram/webhook', {
@@ -112,6 +114,7 @@ const doStub = (subject: number) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNE
 
 describe('actual owner interruption recovery', () => {
   afterEach(async () => {
+    traceIdentities.clear();
     for (const subject of [81101, 81102]) await runInDurableObject(doStub(subject), async (_instance, state) => {
       const rows = state.storage.kv.get<import('../src/channels/telegram-owner-inbox').InboxRecord[]>('telegram_owner_inbox_v1') ?? [];
       const finals = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
@@ -937,4 +940,29 @@ it('legacy erased never-consumed steering gets one truthful not-processed notice
   expect(notices).toHaveLength(1);expect(notices[0]!.payload.text).toContain('not processed');expect(notices[0]!.payload.text).not.toContain('was used');
   expect(await inbox.claim(child.id,'retry','replacement',Date.now()+10000)).toBeNull();expect((await inbox.records()).find(row=>row.id===child.id)?.outcomeNoticeQueued).toBe(true);await state.storage.deleteAlarm();
  });
+});
+
+it('real webhook/inbox/turn path emits each verified owner email in Worker logs and refreshes a cached runtime', async () => {
+  const a = { owner_id: '10000000-0000-0000-0000-00000000000a', owner_email: 'trace-a@test.invalid' };
+  const b = { owner_id: '10000000-0000-0000-0000-00000000000b', owner_email: 'trace-b@test.invalid' };
+  traceIdentities.set(81103, a); traceIdentities.set(81104, b);
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  try {
+    await Promise.all([send(81103, 'Synthetic hello', 994901), send(81104, 'Synthetic hello', 994902)]);
+    traceIdentities.set(81103, { ...a, owner_email: 'trace-new@test.invalid' });
+    await send(81103, 'Synthetic hello again', 994903);
+    const rows = log.mock.calls.flatMap(([line]) => {
+      try { return [JSON.parse(String(line))]; } catch { return []; }
+    });
+    for (const [id, identity] of [[994901, a], [994902, b], [994903, { ...a, owner_email: 'trace-new@test.invalid' }]] as const) {
+      const hops = rows.filter(row => row.trace === `tg-${id}`);
+      expect(hops.some(row => row.hop === 'turn')).toBe(true);
+      expect(hops.length).toBeGreaterThan(1);
+      for (const hop of hops) expect(hop).toMatchObject({ ...identity, owner_identity: 'verified' });
+      expect(JSON.stringify(hops)).not.toMatch(/hermetic-test-(bot-token|webhook-secret|model-key)|hermetic-google-secret/);
+    }
+  } finally {
+    log.mockRestore();
+    for (const subject of [81103, 81104]) await runInDurableObject(doStub(subject), async (_instance, state) => { await state.storage.deleteAlarm(); });
+  }
 });

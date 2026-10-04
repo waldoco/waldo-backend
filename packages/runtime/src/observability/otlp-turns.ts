@@ -1,6 +1,7 @@
 import type { TurnLogEntry } from '../channels/telegram-listener';
 import { modelCost } from '../llm/pricing';
 import { gateTraceEntry, resolveCaptureText } from './trace-privacy';
+import { ownerTraceFields, ownerTraceIdentity } from './owner-trace-identity';
 
 export type OtlpConfig = Readonly<{ endpoint: string; headers: Readonly<Record<string, string>> }>;
 export type TraceContext = Readonly<{ environment: string; release: string; channel: string; userId: string; sessionId: string; captureText: boolean }>;
@@ -9,7 +10,7 @@ type Send = (url: string, init: RequestInit) => Promise<Response>;
 type Span = Readonly<{ entry: TurnLogEntry; endMs: number; arrival: number }>;
 
 // Bump when a name, tag or metadata key below changes meaning, so dashboards can filter by it.
-export const TRACE_SCHEMA_VERSION = '4';
+export const TRACE_SCHEMA_VERSION = '5';
 
 // Every hop has one feature area and a Langfuse observation type. New hops land in `other`
 // as plain spans until they are added here; model calls (`llm_*`) are always generations.
@@ -138,8 +139,11 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
       attr('langfuse.trace.name', rootName(rootHop)),
       attr('langfuse.trace.metadata.channel', context.channel),
       attr('langfuse.trace.metadata.trace_key', entry.trace),
-      // Existing host labels are channel identities, not authenticated owners.id UUIDs.
-      attr('langfuse.trace.metadata.owner_attribution', 'canonical_owner_not_supplied'),
+      // Keep channel labels compatible; canonical identity is separate metadata.
+      attr('langfuse.trace.metadata.owner_attribution', ownerTraceIdentity(entry) ? 'canonical_owner_supplied' : 'canonical_owner_not_supplied'),
+      ...Object.entries(ownerTraceFields(ownerTraceIdentity(entry))).flatMap(([key, value]) => [
+        attr(`langfuse.trace.metadata.${key}`, value), attr(`langfuse.observation.metadata.${key}`, value),
+      ]),
       attr('langfuse.observation.metadata.hop', entry.hop),
       attr('langfuse.observation.metadata.feature', hopFeature(entry.hop)),
       attr('langfuse.observation.metadata.trace_key', entry.trace),

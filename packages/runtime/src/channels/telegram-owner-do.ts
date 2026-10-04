@@ -24,6 +24,7 @@ import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntri
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace } from './owner-turn-envelope';
+import { enrichOwnerTrace, identityForStorage, readOwnerTraceHeader } from '../observability/owner-trace-identity';
 import { adminRead, adminAction } from './dashboard-admin';
 import { pinProxyIntentRoute } from '../connectors/proxy-intent-route';
 import { ProxyIntentError, type ProxyIntent } from '../connectors/proxy-intent';
@@ -334,7 +335,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const target = this.activeInbox;
     const control = target?.runId && text && (text === '/stop' || !text.startsWith('/')) ? { kind: text === '/stop' ? 'stop' as const : 'steer' as const, targetRun: target.runId } : undefined;
     try {
-      const admitted = await this.inbox.admit({ bot, subject, doName }, raw.update_id!, body, control);
+      const traceIdentity = identityForStorage(readOwnerTraceHeader(request.headers), resolveCaptureText(this.env));
+      const admitted = await this.inbox.admit({ bot, subject, doName, ...(traceIdentity ? { traceIdentity } : {}) }, raw.update_id!, body, control);
       if (admitted === 'conflict' || admitted === 'capacity') return new Response(admitted, { status: admitted === 'conflict' ? 409 : 503 });
       // Binding follows authenticated admission, and never replaces a different binding.
       this.ctx.storage.kv.put('do_name', doName); this.ctx.storage.kv.put('telegram_subject', subject);
@@ -1204,15 +1206,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (url) { const urls = turnReceiptUrls.get(entry.trace) ?? new Set<string>(); urls.add(url); turnReceiptUrls.set(entry.trace, urls); }
         } catch { /* malformed output grants no receipt */ }
       }
-      // Owner attribution lands on every surface: the DO trace table, the wrangler tail, and Langfuse.
+      // The historical owner label reaches the DO trace table; canonical ID/email also reach Worker logs and OTLP.
       // The gate runs once here so free-form detail/error text reaches none of the sinks while
       // the capture switch is off; whitelisted hops keep their count/enum detail either way.
-      const enriched: TurnLogEntry = gateTraceEntry({ ...entry, owner: entry.owner ?? identity.get<string>('do_name') ?? 'unresolved' }, captureText);
+      const enriched: TurnLogEntry = gateTraceEntry(enrichOwnerTrace(entry,
+        channel === 'telegram' ? identity.get<InboxRecord[]>(OWNER_INBOX_KEY) ?? [] : [],
+        identity.get<string>('do_name') ?? '', String(owner)), captureText);
       traces.record(enriched, deps.now());
       console.log(JSON.stringify({ ...enriched, text: undefined }));
       if (exportTurn) this.ctx.waitUntil(exportTurn(enriched).catch((error: unknown) => {
         const note = String(error);
-        const failed: TurnLogEntry = gateTraceEntry({ trace: enriched.trace, hop: 'otlp_export', ms: 0, ok: false, error: note, code: 'export_failed', owner: enriched.owner }, captureText);
+        const failed: TurnLogEntry = gateTraceEntry({ trace: enriched.trace, hop: 'otlp_export', ms: 0, ok: false, error: note, code: 'export_failed', owner: enriched.owner,
+          owner_id: enriched.owner_id, owner_email: enriched.owner_email, owner_identity: enriched.owner_identity }, captureText);
         console.log(JSON.stringify({ ...failed, text: undefined }));
         traces.record(failed, deps.now());
       }));

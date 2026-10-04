@@ -11,6 +11,17 @@ const fixture = () => {
   return { data, storage, persist, inbox, binding, fail: () => { fail = true; }, advance: () => { now += 26 * 3600000; } };
 };
 describe('supported-owner durable inbox', () => {
+  it('persists immutable identity per update across duplicates, email changes and recovery', async () => {
+    const f = fixture();
+    const first = { owner_id: '10000000-0000-0000-0000-00000000000a', owner_email: 'old@test.invalid' };
+    const changed = { ...first, owner_email: 'new@test.invalid' };
+    await f.inbox.admit({ ...f.binding, traceIdentity: first }, 1, 'first');
+    expect(await f.inbox.admit({ ...f.binding, traceIdentity: changed }, 1, 'first')).toBe('duplicate');
+    await f.inbox.admit({ ...f.binding, traceIdentity: changed }, 2, 'second');
+    await f.inbox.recover(new Set());
+    const recreated = new TelegramOwnerInbox(f.storage, f.persist);
+    expect((await recreated.records()).map(row => row.traceIdentity)).toEqual([first, changed]);
+  });
   it('admits high then low ID concurrently in admission order, dedupes callbacks without highwater', async () => {
     const f = fixture(); await Promise.all([f.inbox.admit(f.binding, 100, 'high'), f.inbox.admit(f.binding, 2, 'callback')]);
     expect((await f.inbox.records()).map(r => r.updateId)).toEqual([100, 2]);
