@@ -755,6 +755,8 @@ export const createOwnerResponder = (
       if (binding) { const candidate = JSON.parse(raw); raw = JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: candidate.forget_topic ?? null }); }
       stage = 'uncertain';
       let coveredTopic: string | undefined;
+      // Why a forget stayed incomplete, as a code and counts only (never topic or source text), so a staging trace can say which gate held.
+      let forgetWhy = '';
       // One bounded retry per record, from stored custody rather than this turn.
       const topic = ownerForgetTopic(raw, owner) ?? writerStore.incompleteTopics()[0] ?? null;
       if (topic) {
@@ -786,6 +788,7 @@ export const createOwnerResponder = (
         const supplied = await gather();
         await assertCurrent();
         let selection: string | null = null;
+        if (supplied.incomplete) forgetWhy = `sources_incomplete(${supplied.sources.length})`;
         if (!supplied.incomplete) {
           try {
             selection = supplied.sources.length === 0 && writerStore.topicCoverage(topic) === 2 ? '' : await ask(id, 'forget_source', SELECTIVE_FORGET_INSTRUCTION, JSON.stringify({ topic, sources: supplied.sources }), { name: 'forget_source_spans', schema: SELECTIVE_FORGET_SCHEMA }, undefined, undefined, undefined, memoryModel);
@@ -811,6 +814,7 @@ export const createOwnerResponder = (
           raw = JSON.stringify({ ...JSON.parse(raw), forget_topic: null });
         }
         else {
+          if (!forgetWhy) forgetWhy = selection === null ? `selector_unavailable(${supplied.sources.length})` : fresh === null || fresh.incomplete ? `fresh_incomplete(${supplied.sources.length})` : `selection_rejected(${supplied.sources.length} sources)`;
           const ops = JSON.parse(raw);
           raw = JSON.stringify({ ...ops, forget_topic: null });
           memoryReceipts.push('Requested forgetting is incomplete. Retained recall is temporarily limited; current requests and ordinary tools remain available. Do not claim that every associated fact was erased.');
@@ -827,7 +831,7 @@ export const createOwnerResponder = (
       const settled = conv?.settled ?? true;
       // The receipt is emitted only now, after redaction and settle, so it can state what is true.
       const interrupted = writerStore.sweepInterruptedSettles(new Date(started - 10 * 60 * 1000).toISOString());
-      log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}${conv.failed ? ' verification incomplete' : ''}` : ''}${interrupted ? ` interrupted${interrupted}` : ''}` });
+      log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}${conv.failed ? ' verification incomplete' : ''}` : ''}${interrupted ? ` interrupted${interrupted}` : ''}${forgetWhy ? `; forget_incomplete ${forgetWhy}` : ''}` });
       // Emitted last, after redaction, settle and logging: an error above returns 'uncertain' with no receipt.
       const o = outcome as ClaimOutcome | undefined;
       if (!conv?.failed && o !== undefined && (coveredTopic || o.written || o.held || o.downgraded || o.corrected || o.confirmed || o.dismissed || o.forgetClaimsAttempted || o.forgetNodes || o.forgetAllowed)) memoryReceipts.push(memoryReceipt(o, !settled ? Math.max(conv?.remaining ?? 0, 1) : 0, conv?.rewritten ?? 0, coveredTopic || purgeTopics.length || writerStore.pendingTopics().length ? settled && (coveredTopic || purgeTopics.length) ? 'settled' : 'pending' : undefined));
