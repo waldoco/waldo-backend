@@ -80,21 +80,34 @@ export const handleWhatsAppWebhook = async (
   const payload = JSON.parse(body) as WaBody;
   const owners = env.TELEGRAM_OWNER_DO;
   const origin = url.origin;
-  waitUntil((async () => {
-    for (const { sender, value } of bySender(payload)) {
-      const route = await directory.byPresence('whatsapp', sender);
-      if (route) {
-        const headers: Record<string, string> = { 'x-waldo-origin': origin, 'x-waldo-whatsapp-subject': route.subject };
-        if (route.timezone) headers['x-waldo-timezone'] = route.timezone;
-        await owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/whatsapp-turn', { method: 'POST', body: JSON.stringify(value), headers });
-        continue;
-      }
-      const code = linkCode(payload, sender);
-      if (!code || !env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) continue;
-      const linked = await directory.redeem('whatsapp', sender, code).catch(() => null);
-      const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN, env.WHATSAPP_PHONE_NUMBER_ID);
-      await sendWhatsAppText(call, sender, linked ? 'Linked. This chat now talks to your Waldo.' : 'That code did not work. Get a new one from your console.');
+  // Admission before the ack: a payload is acknowledged only after each owner's Durable Object has durably admitted it.
+  // A failed or refused admission answers 503, so Meta redelivers (its non-200 retry); the DO dedupes by wamid, so a
+  // redelivery of a payload that did land is not run twice. Link-code redemption stays deferred: it is not a message turn.
+  let unavailable = false;
+  const deferred: Promise<unknown>[] = [];
+  for (const { sender, value } of bySender(payload)) {
+    let route;
+    try { route = await directory.byPresence('whatsapp', sender); } catch (error) {
+      console.log(JSON.stringify({ hop: 'whatsapp_route', ok: false, error: String(error) })); unavailable = true; continue;
     }
-  })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_route', ok: false, error: String(error) }))));
+    if (route) {
+      const headers: Record<string, string> = { 'x-waldo-origin': origin, 'x-waldo-whatsapp-subject': route.subject };
+      if (route.timezone) headers['x-waldo-timezone'] = route.timezone;
+      try {
+        const admitted = await owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/whatsapp-admit', { method: 'POST', body: JSON.stringify(value), headers });
+        if (!admitted.ok) { console.log(JSON.stringify({ hop: 'whatsapp_admit', ok: false, status: admitted.status })); unavailable = true; }
+      } catch (error) { console.log(JSON.stringify({ hop: 'whatsapp_admit', ok: false, error: String(error) })); unavailable = true; }
+      continue;
+    }
+    const code = linkCode(payload, sender);
+    if (!code || !env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) continue;
+    deferred.push((async () => {
+      const linked = await directory.redeem('whatsapp', sender, code).catch(() => null);
+      const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN!, env.WHATSAPP_PHONE_NUMBER_ID!);
+      await sendWhatsAppText(call, sender, linked ? 'Linked. This chat now talks to your Waldo.' : 'That code did not work. Get a new one from your console.');
+    })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_route', ok: false, error: String(error) }))));
+  }
+  if (deferred.length) waitUntil(Promise.all(deferred));
+  if (unavailable) return new Response('unavailable', { status: 503 });
   return new Response('ok');
 };

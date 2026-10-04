@@ -68,7 +68,7 @@ describe('handleWhatsAppWebhook', () => {
     const body = payload([{ from: '15550001111' }], true);
     expect((await run(await post('x', body), env, directory)).status).toBe(200);
     expect(idFromName).toHaveBeenCalledWith('do-a');
-    expect(fetch).toHaveBeenCalledWith('https://telegram-owner/whatsapp-turn', {
+    expect(fetch).toHaveBeenCalledWith('https://telegram-owner/whatsapp-admit', {
       method: 'POST', body: expect.any(String),
       headers: { 'x-waldo-origin': 'https://w.test', 'x-waldo-whatsapp-subject': '15550001111', 'x-waldo-timezone': 'Asia/Kolkata' },
     });

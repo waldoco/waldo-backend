@@ -7,6 +7,14 @@ export async function armAlarm(storage: Pick<DurableObjectStorage, 'setAlarm'>, 
   await storage.setAlarm(scheduledTimeMs);
 }
 
+export const WHATSAPP_PENDING_DUE_KEY = 'whatsapp_pending_due_v1';
+
+// Wake for a WhatsApp payload admitted but not finished. Keeps an earlier alarm; never touches the Telegram due keys.
+export async function armWhatsappPendingWake(storage: DurableObjectStorage, due: number): Promise<void> {
+  const existing = await storage.getAlarm();
+  await armAlarm(storage, existing === null ? due : Math.min(existing, due));
+}
+
 // One arbiter for schedule and Telegram transport. Every scheduler rearm includes
 // persisted transport due time, including an empty schedule (formerly deleteAlarm).
 export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs = 250): Promise<void> {
@@ -14,7 +22,8 @@ export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDu
   const inboxDue = (await storage.get<number | null>('telegram_owner_inbox_due_v1')) ?? null;
   const linkDue = (await storage.get<number | null>('telegram_link_due_v1')) ?? null;
   const browserDue = (await storage.get<number | null>('browser_owner_task_due_v1')) ?? null;
-  const bounds = [scheduleDue, outboxDue, inboxDue, linkDue, browserDue].filter((v): v is number => v !== null);
+  const whatsappDue = (await storage.get<number | null>(WHATSAPP_PENDING_DUE_KEY)) ?? null;
+  const bounds = [scheduleDue, outboxDue, inboxDue, linkDue, browserDue, whatsappDue].filter((v): v is number => v !== null);
   if (!bounds.length) { await storage.deleteAlarm(); return; }
   await armAlarm(storage, Math.max(Math.min(...bounds), now + retryDelayMs));
 }
