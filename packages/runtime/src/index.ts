@@ -1,3 +1,7 @@
+import { handleDeviceRedeem } from './devices/redeem-route';
+import { handleDeviceConnect } from './devices/connect-route';
+import { genericReject } from './devices/generic-reject';
+import type { DeviceBridgeDO } from './devices/device-bridge-do';
 import { DurableObject } from 'cloudflare:workers';
 import {
   canonicalizeResponsibilityCaptureTrustedEnvelopeForDigest,
@@ -40,6 +44,7 @@ import {
 // rejects constants or arrays exported from the Worker entry, so helpers are imported from their
 // own modules, never re-exported here (pinned by test/worker-entry-exports.test.ts).
 export { RunLoopDO } from './run-loop/do';
+export { DeviceBridgeDO } from './devices/device-bridge-do';
 export { TelegramOwnerDO } from './channels/telegram-owner-do';
 export { TracerDO } from './tracer/tracer-do';
 import type { RunLoopDO } from './run-loop/do';
@@ -67,6 +72,7 @@ declare global {
       RUN_LOOP_LOCAL_INGRESS_TOKEN?: string;
       TRACER_DO: DurableObjectNamespace<TracerDO>;
       TELEGRAM_OWNER_DO?: DurableObjectNamespace;
+      DEVICE_BRIDGE_DO?: DurableObjectNamespace<DeviceBridgeDO>;
       TELEGRAM_BOT_TOKEN?: string;
       TELEGRAM_WEBHOOK_SECRET?: string;
       GOOGLE_CLIENT_ID?: string;
@@ -127,6 +133,9 @@ const forwardTicketConsole = async (request: Request, env: Env): Promise<Respons
 
 export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+    const devicePath = new URL(request.url).pathname;
+    if (devicePath === '/devices/redeem') return request.method === 'POST' ? handleDeviceRedeem(request, env) : genericReject();
+    if (devicePath === '/devices/connect') return request.method === 'GET' ? handleDeviceConnect(request, env) : genericReject();
     if (new URL(request.url).pathname === '/healthz') {
       return Response.json({ ok: true, release: env.WALDO_RELEASE ?? null });
     }

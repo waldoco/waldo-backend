@@ -24,7 +24,8 @@
       { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
       { "name": "RUN_LOOP_DO", "class_name": "RunLoopDO" },
       { "name": "TRACER_DO", "class_name": "TracerDO" },
-      { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" }
+      { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" },
+      { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" }
     ]
   },
   // A5 artifact bodies (metadata lives in the owner DO; DO namespaces are per-worker, so
@@ -56,7 +57,8 @@
         { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
         { "name": "RUN_LOOP_DO", "class_name": "RunLoopDO" },
         { "name": "TRACER_DO", "class_name": "TracerDO" },
-        { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" }
+        { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" },
+      { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" }
       ]
     },
     "ratelimits": [
@@ -81,7 +83,8 @@
           { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
           { "name": "RUN_LOOP_DO", "class_name": "RunLoopDO" },
           { "name": "TRACER_DO", "class_name": "TracerDO" },
-          { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" }
+          { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" },
+      { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" }
         ]
       },
       "r2_buckets": [
@@ -98,7 +101,8 @@
         { "tag": "v1", "new_sqlite_classes": ["RuntimeProbeDO"] },
         { "tag": "v2", "new_sqlite_classes": ["TracerDO"] },
         { "tag": "v3", "new_sqlite_classes": ["RunLoopDO"] },
-        { "tag": "v4", "new_sqlite_classes": ["TelegramOwnerDO"] }
+        { "tag": "v4", "new_sqlite_classes": ["TelegramOwnerDO"] },
+    { "tag": "v5", "new_sqlite_classes": ["DeviceBridgeDO"] }
       ],
       "ai": { "binding": "AI" },
       "vectorize": [
@@ -110,6 +114,7 @@
     { "tag": "v1", "new_sqlite_classes": ["RuntimeProbeDO"] },
     { "tag": "v2", "new_sqlite_classes": ["TracerDO"] },
     { "tag": "v3", "new_sqlite_classes": ["RunLoopDO"] },
-    { "tag": "v4", "new_sqlite_classes": ["TelegramOwnerDO"] }
+    { "tag": "v4", "new_sqlite_classes": ["TelegramOwnerDO"] },
+    { "tag": "v5", "new_sqlite_classes": ["DeviceBridgeDO"] }
   ]
 }

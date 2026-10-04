@@ -5,6 +5,7 @@ import {linkCodeHash} from '../identity/owner-directory';
 
 export type TelegramWebhookEnv = Readonly<{
   TELEGRAM_OWNER_DO?: DurableObjectNamespace;
+  DEVICE_BRIDGE_DO?: DurableObjectNamespace<import('../devices/device-bridge-do').DeviceBridgeDO>;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
   WALDO_OWNER_TELEGRAM_ID?: string;
