@@ -1,6 +1,6 @@
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { TASK_SOURCE_INSTRUCTION, TASK_SOURCE_SCHEMA, taskSourceAllowed, taskSourceRequired, taskSourcePrompt, type OwnerTaskSourceScope, type TaskSourceSnapshot, type TaskSourceFamily } from './task-source-scope';
-import { forgetSnapshot, selectedForgetTexts, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, type ForgetSource } from '../memory/selective-forget';
+import { asciiLiteralIncludes, forgetSnapshot, selectedForgetTexts, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, type ForgetSource } from '../memory/selective-forget';
 import { ownerForgetTopic, hasForgetIntent } from '../memory/claims';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
@@ -214,6 +214,9 @@ export const createOwnerResponder = (
   // Exact forgotten payload is transient, owner-local and bounded. It lasts only
   // until captured provider messages and unsaved outputs have been scrubbed.
   const forgottenTexts = new Set<string>();
+  // Main and steered owner inputs are still unsaved until conversation publish.
+  // All of their retention projections participate in the same coverage proof.
+  const pendingRequests = new Map<string, string>();
   let forgetOverflow = false;
   let forgetUnsafe = false;
   let forgettingTurn = false;
@@ -714,7 +717,7 @@ export const createOwnerResponder = (
       const out = receipts ? `${reply}\n\n${receipts}` : reply;
       lastReply = out;
       return out;
-    } finally { clearForgotten(); }
+    } finally { clearForgotten(); pendingRequests.clear(); }
   };
   // 'failed': the writer never produced ops, nothing changed. 'uncertain': ops were being applied
   // or cleaned up when an error hit, so some of the write may have landed.
@@ -730,6 +733,7 @@ export const createOwnerResponder = (
     const writerStore = memory ?? binding?.forgetting?.store;
     if (!writerStore) return 'saved';
     if (binding) { await assertCurrent(); owner = (await binding.admission.readInput()).text; await assertCurrent(); shared = ''; }
+    pendingRequests.set(id, [owner, shared].filter(Boolean).join('\n'));
     forgettingTurn ||= hasForgetIntent(owner);
     privateRunScope?.admit();
     const started = Date.now();
@@ -742,9 +746,11 @@ export const createOwnerResponder = (
       if (binding) { const candidate = JSON.parse(raw); raw = JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: candidate.forget_topic ?? null }); }
       stage = 'uncertain';
       let coveredTopic: string | undefined;
-      const topic = ownerForgetTopic(raw, owner);
+      // One bounded retry per record, from stored custody rather than this turn.
+      const topic = ownerForgetTopic(raw, owner) ?? writerStore.incompleteTopics()[0] ?? null;
       if (topic) {
         const at = new Date().toISOString();
+        const requestSources = () => [...pendingRequests].map(([ref, text]) => ({ ref: `request:${ref}`, text: forgetText(text) }));
         try { writerStore.beginTopicCoverage(topic, at); }
         catch (error) {
           if (error instanceof ClosedRunError) throw error;
@@ -762,6 +768,9 @@ export const createOwnerResponder = (
           }
           const ledger = await cleanupLedger?.forgetSources(topic);
           rows.push(...ledger?.sources ?? []);
+          // This request will be retained after the reply. Cover its instruction
+          // and any fact clauses now, so clean history cannot be recontaminated.
+          rows.push(...requestSources());
           const snapshot = forgetSnapshot(topic, rows);
           return { ...snapshot, incomplete: snapshot.incomplete || local.incomplete || !!ledger?.incomplete || !!conversation?.incomplete || !!standingOrders?.().toLowerCase().includes(topic.toLowerCase()) };
         };
@@ -776,9 +785,17 @@ export const createOwnerResponder = (
         await assertCurrent();
         if (selection !== null) await gather();
         await assertCurrent();
-        const fresh = selection === null ? null : currentForgetSources(topic);
+        const retainedFresh = selection === null ? null : currentForgetSources(topic);
+        const requestFresh = retainedFresh === null ? null : forgetSnapshot(topic, [...retainedFresh.sources, ...requestSources()]);
+        const fresh = requestFresh === null ? null : { ...requestFresh, incomplete: requestFresh.incomplete || retainedFresh!.incomplete };
         const emptyRecovery = writerStore.topicCoverage(topic) === 2 && !supplied.incomplete && supplied.sources.length === 0 && fresh !== null && !fresh.incomplete && fresh.sources.length === 0;
-        const texts = emptyRecovery ? [] : selection === null || fresh === null ? null : selectedForgetTexts(topic, supplied, selection, fresh);
+        let texts = emptyRecovery ? [] : selection === null || fresh === null ? null : selectedForgetTexts(topic, supplied, selection, fresh);
+        // The unsaved request is absent from durable readback. Prove its exact
+        // retention projection is clean too; a single span cannot cover a mixed row.
+        if (texts !== null) {
+          const redact = literalTextRedactor(texts, FORGOTTEN);
+          if (requestSources().some(source => asciiLiteralIncludes(redact(source.text), topic))) texts = null;
+        }
         if (texts !== null) {
           if (texts.length) writerStore.authoriseTopicCoverage(topic, texts, at);
           coveredTopic = topic;
@@ -804,7 +821,7 @@ export const createOwnerResponder = (
       log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}${conv.failed ? ' verification incomplete' : ''}` : ''}${interrupted ? ` interrupted${interrupted}` : ''}` });
       // Emitted last, after redaction, settle and logging: an error above returns 'uncertain' with no receipt.
       const o = outcome as ClaimOutcome | undefined;
-      if (!conv?.failed && o !== undefined && (o.written || o.held || o.downgraded || o.corrected || o.confirmed || o.dismissed || o.forgetClaimsAttempted || o.forgetNodes || o.forgetAllowed)) memoryReceipts.push(memoryReceipt(o, !settled ? Math.max(conv?.remaining ?? 0, 1) : 0, conv?.rewritten ?? 0, coveredTopic || purgeTopics.length || writerStore.pendingTopics().length ? settled && (coveredTopic || purgeTopics.length) ? 'settled' : 'pending' : undefined));
+      if (!conv?.failed && o !== undefined && (coveredTopic || o.written || o.held || o.downgraded || o.corrected || o.confirmed || o.dismissed || o.forgetClaimsAttempted || o.forgetNodes || o.forgetAllowed)) memoryReceipts.push(memoryReceipt(o, !settled ? Math.max(conv?.remaining ?? 0, 1) : 0, conv?.rewritten ?? 0, coveredTopic || purgeTopics.length || writerStore.pendingTopics().length ? settled && (coveredTopic || purgeTopics.length) ? 'settled' : 'pending' : undefined));
       return conv?.failed ? 'uncertain' : 'saved';
     } catch (error) {
       log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: 'memory operation failed', code: 'provider_error', detail: stage });
@@ -845,6 +862,7 @@ export const createOwnerResponder = (
         recordedHeard = 0;
         memoryReceipts.length = 0;
         clearForgotten();
+        pendingRequests.clear();
         // Record before reply: the owner's words are written first, so the reply sees corrections
         // and never acknowledges a save that did not happen. A failed write goes to the reply
         // through the system prompt, not the owner's text, so history stays the owner's words.
@@ -863,6 +881,7 @@ export const createOwnerResponder = (
         memoryReceipts.length = 0;
         turnReplyContext = '';
         clearForgotten();
+        pendingRequests.clear();
       }
     },
     async remind(id, conversationRef, note, time, surface) {

@@ -42,7 +42,7 @@ it('selects topic-bearing source clauses before cleanup and tells the later repl
   };
   await session('selective-source-provider', async (turn, store, responder) => {
     seen.writerOps.push(ops({ forget_topic: topic }));
-    await turn('tg-forget-source', `Forget only ${topic}. Keep unrelated preferences.`, JSON.stringify({ spans: [{ ref: 'episodes:1:text', text: fact }], reviewed_refs: ['episodes:1:text'], complete: true }));
+    await turn('tg-forget-source', `Forget only ${topic}. Keep unrelated preferences.`, JSON.stringify({ spans: [{ ref: 'episodes:1:text', text: fact }, { ref: 'request:tg-forget-source', text: `Forget only ${topic}.` }], reviewed_refs: ['episodes:1:text', 'request:tg-forget-source'], complete: true }));
     expect(store.incompleteTopics()).toEqual([]);
     expect(store.pendingTopics()).toEqual([]);
     expect(store.forgetSources(topic).sources).toEqual([]);

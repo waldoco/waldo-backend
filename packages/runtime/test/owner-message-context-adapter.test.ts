@@ -60,7 +60,8 @@ it('explicit owner retry retires previously selected empty coverage but never un
         const store = ownerCanonicalHistory(state.storage, s.admission, adapter);
         const gateway: LLMGatewayAdapter = { complete: async request => {
             const phase = request.request.response_format?.name;
-            const text = phase === 'claim_ops' ? JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: topic }) : 'pong';
+            const supplied = phase === 'forget_source_spans' ? JSON.parse(request.request.messages[0]!.content) as { sources: { ref: string; text: string }[] } : null;
+            const text = phase === 'claim_ops' ? JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: topic }) : supplied ? JSON.stringify({ spans: supplied.sources.map(row => ({ ref: row.ref, text: `Retry: forget only ${topic}` })), reviewed_refs: supplied.sources.map(row => row.ref), complete: true }) : 'pong';
             return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, output_items: [], latency_ms: 0 } };
         } };
         const args: Parameters<typeof createOwnerResponder> = ['fixture', store, memory];
@@ -152,7 +153,7 @@ it('canonical owner request reaches the source selector and verified cleanup wit
             const phase = request.request.response_format?.name ?? 'reply';
             captured.push({ phase, request: JSON.stringify(request.request) });
             const supplied = phase === 'forget_source_spans' ? JSON.parse(request.request.messages[0]!.content) as { sources: { ref: string; text: string }[] } : null;
-            const text = phase === 'claim_ops' ? JSON.stringify({ corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: topic, add: [{ kind: 'preference', text: 'Unauthorized new legacy claim', source: 'stated', evidence: 'invented', touches_forgotten: false }] }) : supplied ? JSON.stringify({ spans: supplied.sources.map(row => ({ ref: row.ref, text: fact })), reviewed_refs: supplied.sources.map(row => row.ref), complete: true }) : 'pong';
+            const text = phase === 'claim_ops' ? JSON.stringify({ corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: topic, add: [{ kind: 'preference', text: 'Unauthorized new legacy claim', source: 'stated', evidence: 'invented', touches_forgotten: false }] }) : supplied ? JSON.stringify({ spans: supplied.sources.flatMap(row => [fact, `Forget only ${topic}.`].filter(text => row.text.includes(text)).map(text => ({ ref: row.ref, text }))), reviewed_refs: supplied.sources.map(row => row.ref), complete: true }) : 'pong';
             return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, output_items: [], latency_ms: 0 } };
         } };
         const store = ownerCanonicalHistory(state.storage, s.admission, adapter);

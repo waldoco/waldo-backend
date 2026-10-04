@@ -67,7 +67,8 @@ async function proof(work: (h: {
         if (forgetting && (writer || selector)) {
           const supplied = selector ? JSON.parse(request.messages[0]!.content) as { sources: { ref: string; text: string }[] } : null;
           if (selector) forgetting.duringSelection?.();
-          const text = supplied ? JSON.stringify({ spans: supplied.sources.filter(row => row.text.includes(forgetting!.fact)).map(row => ({ ref: row.ref, text: forgetting!.fact })), reviewed_refs: supplied.sources.map(row => row.ref), complete: forgetting.complete })
+          const clauses = [forgetting.fact, `Forget only ${forgetting.topic}.`];
+          const text = supplied ? JSON.stringify({ spans: supplied.sources.flatMap(row => clauses.filter(clause => row.text.includes(clause)).map(text => ({ ref: row.ref, text }))), reviewed_refs: supplied.sources.map(row => row.ref), complete: forgetting.complete })
             : JSON.stringify({ add: [{ kind: 'preference', text: 'Unauthorized new legacy claim', source: 'stated', evidence: 'invented', touches_forgotten: false }], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: forgetting.topic });
           return { ok: true, data: { text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, model: request.model, latency_ms: 1 } };
         }
