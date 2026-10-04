@@ -26,6 +26,16 @@ describe('messagingSystemPrompt', () => {
     expect(MESSAGING_BEHAVIOR).toContain('never write notes as if you had heard it');
   });
 
+  it('claims of saving need a memory receipt, and readback of personal facts comes from memory only', () => {
+    expect(MESSAGING_BEHAVIOR).toContain('only when the memory line reports a stored or corrected claim');
+    expect(MESSAGING_BEHAVIOR).toContain('say only the count');
+    expect(MESSAGING_BEHAVIOR).toContain('Never write "Noted" as if it were stored');
+    expect(MESSAGING_BEHAVIOR).not.toContain("you can say it's noted");
+    expect(MESSAGING_BEHAVIOR).toContain('may be partly stored');
+    expect(MESSAGING_BEHAVIOR).toContain('not in the memory you can see now');
+    expect(MESSAGING_BEHAVIOR).toContain('do not claim nothing is stored');
+  });
+
   it('tells the model to pick search or browsing itself and never ask the owner for a link', () => {
     expect(MESSAGING_BEHAVIOR).toContain('Choose between web_search and browse_page yourself from what the request needs; never ask the owner for a link you can find.');
     expect(MESSAGING_BEHAVIOR).toContain('A stable fact needs only a search; a changing or exact fact (price, hours, policy, release) needs the page.');
@@ -55,7 +65,7 @@ describe('messagingSystemPrompt', () => {
   });
 
   it('pins the memory-write rule and the proactive never-list (archive adopt #4; ordering aligned to the post-reply settle, owner-ratified 2026-09-27)', () => {
-    expect(MESSAGING_BEHAVIOR).toContain('memory records it automatically right after the exchange');
+    expect(MESSAGING_BEHAVIOR).toContain('memory tries to record it with provenance before your reply');
     expect(MESSAGING_BEHAVIOR).toContain('Never send generic check-ins');
     expect(MESSAGING_BEHAVIOR).toContain('congratulations on normal metrics');
     expect(MESSAGING_BEHAVIOR).toContain('new information or a decision');
