@@ -102,8 +102,8 @@ it('workspace revision arguments are checked without silently rewriting owner-su
  expect(revised).toMatchObject({ok:true,data:{revision:2}});
  const file=state().files[0]!;expect((await store.read(file.file_id,2,0,8000)).text).toBe('To: changed@example.test\nDemo at noon');
  const read=await call('workspace_read',{file_id:file.file_id,revision:2},'owner-read');
- // External reads still redact ordinary recipient fields before returning through dispatcher.
- expect(read).toMatchObject({ok:true,source_taint:'external',data:{text:'To: [REDACTED_EMAIL]\nDemo at noon'}});
+ // Model-bound reads keep the owner's own recipient fields readable (owner direction 2026-10-04).
+ expect(read).toMatchObject({ok:true,source_taint:'external',data:{text:'To: changed@example.test\nDemo at noon'}});
  expect(state().files[0]!.revision).toBe(2);
 });
 
@@ -131,8 +131,8 @@ it.each([null, 'external'] as const)('full private writes preserve contact bytes
   expect((await store.read(file.file_id, 2, 0, 8000)).text).toBe(replacement);
   const read = await call('workspace_read', { file_id: file.file_id, revision: 2 }, 'guarded-read', ctx);
   expect(read).toMatchObject({ ok: true, source_taint: 'external' });
-  expect(JSON.stringify(read)).toContain('[REDACTED_EMAIL]');
-  expect(JSON.stringify(read)).not.toContain('changed@example.test');
+  expect(JSON.stringify(read)).toContain('changed@example.test');
+  expect(JSON.stringify(read)).not.toContain('[REDACTED_EMAIL]');
   expect(state().operations).toHaveLength(2);
 });
 
