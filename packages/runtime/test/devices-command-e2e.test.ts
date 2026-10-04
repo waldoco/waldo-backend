@@ -51,11 +51,11 @@ it('round-trips owner commands, reconciles old results before new work, and re-r
   const redeem = canonicalJson({ code, device_pubkey: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg', label: 'Fictional Mac', declared_capabilities: ['machine_state_query', 'notify_local'], contract_version: '0.2.3' });
   expect((await call(new Request('https://bridge.test/devices/redeem', { method: 'POST', body: redeem, headers: await headers('POST', '/devices/redeem', redeem) }))).status).toBe(200);
   const path = '/devices/connect?contract_version=0.2.3&declared_capabilities=machine_state_query,notify_local';
-  let socket: WebSocket;
+  let socket!: WebSocket;
   type Frame = Record<string, unknown> & { payload: Record<string, unknown> };
   const received: Frame[] = [];
   const connect = async () => { const response = await call(new Request(`https://bridge.test${path}`, { headers: { ...await headers('GET', path), 'x-waldo-device-id': device, upgrade: 'websocket' } })); expect(response.status).toBe(101); socket = response.webSocket!; socket.accept(); socket.addEventListener('message', (event) => { received.push(JSON.parse(String(event.data)) as Frame); }); };
-  const send = async (logical: Record<string, unknown>) => { const timestamp = Math.floor(Date.now()/1000), nonce = base64url(crypto.getRandomValues(new Uint8Array(16))); const frame = { ...logical, timestamp, nonce }; socket.send(canonicalJson({ ...frame, signature: await sign(frameSignatureBase(timestamp, String(frame.type), String(frame.message_id), nonce, await sha256Hex(new TextEncoder().encode(canonicalJson(frame))))) })); };
+  const send = async (logical: Record<string, unknown>) => { const timestamp = Math.floor(Date.now()/1000), nonce = base64url(crypto.getRandomValues(new Uint8Array(16))); const frame = { ...logical, timestamp, nonce }; socket.send(canonicalJson({ ...frame, signature: await sign(frameSignatureBase(timestamp, String(logical.type), String(logical.message_id), nonce, await sha256Hex(new TextEncoder().encode(canonicalJson(frame))))) })); };
   const heartbeat = (depth: number) => send({ contract_version: '0.2.3', type: 'heartbeat', message_id: newMessageId(Math.floor(Date.now()/1000)), device_id: device, owner_id: owner, payload: { declared_capabilities: ['machine_state_query', 'notify_local'], outbox_depth: depth } });
   const reference = (command: Frame, type: string, payload: Record<string, unknown>) => ({ contract_version: '0.2.3', type, message_id: newMessageId(Math.floor(Date.now()/1000)), device_id: device, owner_id: owner, command_id: command.command_id, revision: 1, idempotency_key: command.idempotency_key, payload });
   const query = (id: string) => action('device.query', { request_id: id, query_kind: 'session_status' });
