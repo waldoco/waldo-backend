@@ -102,7 +102,7 @@ export const isQuiet = (settings: Proactivity, now: number, timezone: string): b
 };
 
 export const proactivityLine = (settings: Proactivity): string =>
-  `Proactivity: volume ${settings.volume}; ${settings.quiet_start ? `quiet hours ${settings.quiet_start}-${settings.quiet_end}` : 'no quiet hours'}${settings.followups === true ? '; follow-ups on' : ''}`;
+  `Proactivity: volume ${settings.volume}; ${settings.quiet_start ? `quiet hours ${settings.quiet_start}-${settings.quiet_end}` : 'no quiet hours'}${settings.followups === false ? '; follow-ups off' : ''}`;
 
 export const loopsSection = (book: LoopBook, timezone: string): string => {
   const open = book.list();
@@ -140,7 +140,7 @@ export const loopHandlers = (book: LoopBook) => [
   } satisfies ToolHandler<CloseLoopArgs, { id: string; closed: boolean }, ToolDispatcherContext>,
   {
     name: 'set_proactivity',
-    description: "Change how much Waldo reaches out on its own: quiet hours and volume. Only when the owner asks. Send quiet hours and volume; keep the current value for anything they did not mention (it is in the ledger). Set followups true or false only when the owner asks to turn mail and calendar follow-ups on or off; they are off until asked.",
+    description: "Change how much Waldo reaches out on its own: quiet hours and volume. Only when the owner asks. Send quiet hours and volume; keep the current value for anything they did not mention (it is in the ledger). Set followups false or true only when the owner asks to turn mail and calendar follow-ups off or back on; they are on by default.",
     schema: setProactivityArgsSchema,
     trigger_allowlist: allowlist('set_proactivity'),
     autonomy_gated: false,
