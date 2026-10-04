@@ -323,7 +323,11 @@ export const createOwnerResponder = (
       await assertCurrent(); await sourceScope.propose(admitted.proposal); await assertCurrent();
     }
   };
-  const sourceFamilyAvailable = (family: TaskSourceFamily) => !interactiveSource || !requireTaskScope || !!sourceSnapshot?.ready && sourceSnapshot.sources.includes(family) && control.revision() === sourceSteeringRevision;
+  // A default read family is available for context exactly as taskSourceAllowed admits it for tools: the host defaults
+  // hold while the owner has not narrowed the task, ready or not. A classifier miss must not withhold earlier turns, memory
+  // or standing orders that the same snapshot's tools can still read.
+  const sourceFamilyAvailable = (family: TaskSourceFamily) => !interactiveSource || !requireTaskScope
+    || !!sourceSnapshot && control.revision() === sourceSteeringRevision && (sourceSnapshot.ready && sourceSnapshot.sources.includes(family) || sourceSnapshot.defaults?.includes(family) === true);
   const control = turnControl();
   let classifiedHeard = 0;
   const tree = new ConversationTree();
