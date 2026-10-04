@@ -87,9 +87,13 @@ type BrowserAction = Readonly<{ selector: string; description: string; method?: 
 // The deterministic irreversible line (owner law: hard safety lines only, judgment stays with
 // the model). Anything that looks like it commits something off-page stops the run cold;
 // approval-bound submits are B-tool-3, not a guess here.
-const IRREVERSIBLE = /\b(submit|pay|payment|purchase|checkout|order|book|buy|send|post|publish|delete|remove|transfer|confirm|sign up|register|log ?in)\b/i;
+const IRREVERSIBLE = /\b(submit|pay|payment|purchase|checkout|order|book|buy|send|post|publish|delete|remove|transfer|confirm|sign up|register|log[- ]?in|sign[- ]?(in|up)|signup|add to (cart|bag|basket)|subscribe|donate|authori[sz]e|reserve|enroll|rsvp|get started|continue with)\b/i;
+// Default-deny on the method: only these in-page, non-committing methods run. press (Enter submits a form), selectOption,
+// check, drag, upload and any method we do not recognise stop the run like an irreversible step. Not 'continue' or 'next':
+// those are ordinary reading steps (pagination), and a wrong stop there costs the research.
+const SAFE_METHODS = new Set(['click', 'scroll', 'scrollTo', 'nextChunk', 'prevChunk', 'hover', 'fill', 'type', 'focus']);
 const isIrreversible = (action: BrowserAction): boolean =>
-  action.method === 'submit' || IRREVERSIBLE.test(action.description) || (action.method !== undefined && IRREVERSIBLE.test(action.method));
+  action.method === 'submit' || !SAFE_METHODS.has(action.method ?? '') || IRREVERSIBLE.test(action.description) || IRREVERSIBLE.test(action.method ?? '');
 
 export type BrowseActResult = Readonly<{
   url: string;
@@ -109,7 +113,7 @@ export const browseActHandler = (
   fetcher: typeof fetch = fetch,
 ): ToolHandler<BrowseActArgs, BrowseActResult, ToolDispatcherContext> => ({
   name: 'browse_act',
-  description: 'Open a public web page in a real browser and take a few small in-page actions (click, type, scroll) toward a task, then report what the page shows. Capped steps. It will never submit, pay, send, book, delete or log in - it stops and reports instead.',
+  description: 'Open a public web page in a real browser and take a few small in-page actions (click, type, scroll) toward a task, then report what the page shows. Capped steps. It stops before a step that looks like it would submit, pay, send, book, delete, sign in or otherwise commit something, and reports instead. That check is a safety net, not a guarantee: do not use this tool for those actions.',
   schema: browseActArgsSchema,
   trigger_allowlist: allowlist('browse_act'),
   autonomy_gated: false,
