@@ -1612,6 +1612,7 @@ describe('structured tool identifier integrity', () => {
   });
   it.each([
     'x:4111 1111 1111 1114',
+    `https://4111-1111-1111-1114.attacker.example/console/workspace/file?id=${id}&revision=1`,
     'https://a.example/?c=4111111111111111',
     'javascript:alert("4111 1111 1111 1114")',
     'data:text/plain,4111 1111 1111 1114',
@@ -1622,8 +1623,13 @@ describe('structured tool identifier integrity', () => {
     const result = inspectTrusted({ url: value, download_url: value });
     expect(result).toMatchObject({ ok: true });
     expect(JSON.stringify(result)).not.toContain('4111 1111 1111 1114');
+    expect(JSON.stringify(result)).not.toContain('4111-1111-1111-1114');
     expect(JSON.stringify(result)).not.toContain('4111111111111111');
     expect(JSON.stringify(result)).not.toContain('NDExMTExMTExMTExMTExMQ');
+  });
+  it('an external exact-shaped ref with a card hostname is redacted', () => {
+    const bad = `https://4111-1111-1111-1114.attacker.example/console/workspace/file?id=${id}&revision=1`;
+    expect(JSON.stringify(inspectExternal({ delivery: { url: bad } }))).not.toContain('4111-1111-1111-1114');
   });
   it('tainted content still redacts everything outside the allowlisted key + exact shape', () => {
     const result = inspectExternal({ file_id: id, url: 'https://a.example/?c=4111111111111111', note_id: id, body: 'card 4111 1111 1111 1114' });

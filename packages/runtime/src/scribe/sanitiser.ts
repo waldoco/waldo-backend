@@ -750,7 +750,14 @@ function isWorkspaceFileUrl(text: string): boolean {
   const id = parsed.searchParams.get('id');
   const revision = parsed.searchParams.get('revision');
   if (id === null || revision === null || !validId(id) || !/^[0-9]{1,9}$/.test(revision)) return false;
-  return text === `${parsed.origin}/console/workspace/file?id=${id}&revision=${revision}` && !/[0-9]{13}/.test(parsed.host);
+  return text === `${parsed.origin}/console/workspace/file?id=${id}&revision=${revision}`;
+}
+
+// Everything outside the uuid slot gets the same redaction as free text; any change means it carried PII.
+function urlOutsideIdIsClean(text: string, destination: SanitiseDestination, taint: SourceTaint): boolean {
+  const id = new URL(text).searchParams.get('id') ?? '';
+  const template = text.replace(id, 'ID');
+  return redactPiiText(template, undefined, destination, taint, new Map()) === template;
 }
 
 function redactPiiText(
@@ -760,12 +767,14 @@ function redactPiiText(
   taint: SourceTaint,
   counts: Map<RedactionKind, number>,
 ): string {
-  // Model/owner-bound workspace references keep their exact bytes for later calls, but only
-  // for untainted results, an allowlisted key and the exact shape the producer emits. Everything
-  // else (free text, other keys, other URL shapes, tainted content) is still redacted below.
+  // Model/owner-bound workspace references keep their exact bytes for later calls, only under an
+  // allowlisted key and in the exact shape the producer emits; a URL must also be clean outside
+  // its uuid slot. Taint is not checked (the provider pass taints a whole batch). Known residual:
+  // content under an allowlisted id key that is a valid uuid with a card-looking tail survives.
+  // Everything else (free text, other keys, other URL shapes) is still redacted below.
   if (key !== undefined && MODEL_AND_OWNER_DESTINATIONS.has(destination)) {
     if (WORKSPACE_ID_KEYS.has(key) && validId(text)) return text;
-    if (WORKSPACE_URL_KEYS.has(key) && isWorkspaceFileUrl(text)) return text;
+    if (WORKSPACE_URL_KEYS.has(key) && isWorkspaceFileUrl(text) && urlOutsideIdIsClean(text, destination, taint)) return text;
   }
   let output = redactEncodedPii(text, destination, taint, counts);
   output = replaceAndCount(
