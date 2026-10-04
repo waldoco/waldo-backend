@@ -481,3 +481,13 @@ it('real interleaving: a second turn admits with defaults while classify is susp
   expect(result.proposal).toBeDefined();
   await expect(second.assertSame(admitted)).rejects.toThrow('Task source scope changed');
 }));
+
+it('browse_act is public-web reading: any ready task that allows web allows it, and an owner narrowing away from web still blocks it', () => run('task-browse-act-web-family', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, undefined, ['local', 'workspace', 'web']);
+  await cap.classify(decision('restrict', ['web']));
+  const webOnly = await cap.current();
+  expect(webOnly.sources).toEqual(['web']);
+  expect(taskSourceAllowed(webOnly, { name: 'browse_act', mutates_state: true })).toBe(true);
+  await cap.classify(decision('restrict', []));
+  expect(taskSourceAllowed(await cap.current(), { name: 'browse_act', mutates_state: true })).toBe(false);
+}));
