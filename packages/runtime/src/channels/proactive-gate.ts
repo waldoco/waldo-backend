@@ -9,6 +9,10 @@ export type ProactiveGateInput = Readonly<{
 }>;
 export type ProactiveGate = Readonly<{ open: true } | { open: false; reason: 'flag_off' | 'owner_off' | 'no_google' | 'volume_low' | 'quiet_hours' }>;
 
+// Flag + owner setting only (no quiet/volume): the single definition of "is this kind on" used by every call site.
+// Flag is a kill switch ("0" = off); the owner setting is opt-out (off only when followups === false).
+export const proactiveEnabled = (flag: string | undefined, proactivity: Proactivity): boolean => flag !== '0' && proactivity.followups !== false;
+
 export const proactiveGate = (input: ProactiveGateInput): ProactiveGate => {
   // Owner-set reminders are explicit requests, not proactive work: never gated here.
   if (input.kind === 'reminder') return { open: true };

@@ -1,0 +1,80 @@
+import { env } from 'cloudflare:workers';
+import { runInDurableObject } from 'cloudflare:test';
+import { expect, it, vi } from 'vitest';
+import type { LLMGatewayAdapter } from '../src/llm/provider';
+import { loopBook } from '../src/channels/loops';
+import { dayPlanBook } from '../src/channels/day-cards';
+import { claimStore } from '../src/memory/claims';
+import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
+const fixture = vi.hoisted(() => ({ mail: false, loopId: '', event: false, sent: [] as string[], prompts: [] as string[] }));
+vi.mock('../src/connectors/google', async load => {
+  const original = await load<typeof import('../src/connectors/google')>();
+  return { ...original, googleClient: () => ({ changedEvents: async () => [], newMail: async () => fixture.mail ? [{ id: 'mail-message-1', thread_id: 'mail-thread-1', from: 'Pat <pat@example.test>', subject: 'Review by 10 today', snippet: 'Please review the deck by 10 UTC', at: '2026-10-03T07:00:00Z' }] : [], events: async () => fixture.event ? [{ id: 'due-event', title: 'Design review', start: '2026-10-03T09:30:00Z', end: '2026-10-03T10:00:00Z', all_day: false }] : [] }) };
+});
+vi.mock('../src/channels/telegram-api', async load => {
+  const original = await load<typeof import('../src/channels/telegram-api')>();
+  return { ...original, createTelegramCaller: () => async (method: string, payload: { chat_id?: number; text?: string }) => { if (method === 'sendMessage') { fixture.sent.push(payload.text ?? ''); return { message_id: fixture.sent.length, chat: { id: payload.chat_id } }; } return true; } };
+});
+vi.mock('../src/channels/telegram-turn', async load => {
+  const original = await load<typeof import('../src/channels/telegram-turn')>();
+  const gateway: LLMGatewayAdapter = { async complete(request) {
+    const content = request.request.messages.at(-1)?.content ?? '';
+    fixture.prompts.push(content);
+    const writer = request.request.response_format !== undefined;
+    const firstRound = !request.request.tool_turns?.length;
+    const calls = !writer && firstRound && content.includes('[Update check') ? [{ call_id: 'open-source', name: 'open_loop', arguments: JSON.stringify({ title: 'Check deck review', due: '2026-10-03T10:00', source_ref: 'mail:mail-thread-1' }) }]
+      : !writer && firstRound && content === 'done' ? [{ call_id: 'close-source', name: 'close_loop', arguments: JSON.stringify({ id: fixture.loopId, outcome: 'done' }) }] : [];
+    const text = request.request.response_format?.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : calls.length ? '' : writer ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : content.includes('[Mail follow-up check') ? 'Have you handled the deck review? Pat requested it by 10 UTC.' : 'SKIP';
+    return { ok: true, data: { model: request.request.model, text, ...(calls.length ? { tool_calls: calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+  } };
+  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+});
+const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+it.each(['flag-unset', 'owner-opt-out'])('S5 default-on mail followup through the owner DO: %s', async mode => {
+  await runInDurableObject(env.TRACER_DO.get(env.TRACER_DO.idFromName(`s5-default-on-${mode}`)), async (_instance, state) => {
+    const originalNow = Date.now;
+    let now = Date.parse('2026-10-03T06:59:00Z');
+    Date.now = () => now;
+    fixture.event = false; fixture.mail = false; fixture.loopId = ''; fixture.sent = []; fixture.prompts = [];
+    const config = { ...env, MAIL_SOURCE_FOLLOWUPS: undefined, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
+    let owner = new TelegramOwnerDO(state, config);
+    state.storage.kv.put('do_name', 'synthetic-mail-owner'); state.storage.kv.put('telegram_subject', '7');
+    await state.storage.put('origin', 'https://fixture.invalid');
+    await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.compose'] }]);
+    let update = 100;
+    const incoming = async (text: string) => {
+      const response = await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: update++, message: { message_id: update, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text } }) }));
+      expect(response.status).toBe(200);
+    };
+    try {
+      await incoming('/fire fetch');
+      const loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'test-only' });
+      loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'normal', ...(mode === 'owner-opt-out' ? { followups: false } : {}) });
+      fixture.mail = true; now += 61_000;
+      await incoming('/fire fetch');
+      expect(loops.list()).toEqual([]);
+      fixture.mail = false; now = Date.parse('2026-10-03T09:00:00Z');
+      dayPlanBook(state.storage.sql).sent('2026-10-03', 'card:brief');
+      await incoming('/fire fetch');
+      if (mode === 'owner-opt-out') {
+        expect(loops.list()).toEqual([]);
+        // Opted out, Google connected, unseen event due, outside quiet hours: the legacy event brief must not run either.
+        fixture.event = true; fixture.sent = [];
+        await incoming('/fire briefs');
+        expect(state.storage.sql.exec('SELECT 1 FROM event_briefs').toArray(), 'opted-out owner must not be briefed').toEqual([]);
+        expect(fixture.sent.filter(text => text.includes('Design review'))).toEqual([]);
+        return;
+      }
+      expect(loops.list(), 'default-on: a deadline mail must open a follow-up loop with MAIL_SOURCE_FOLLOWUPS unset').toHaveLength(1);
+      const open = loops.list()[0]!; fixture.loopId = open.id;
+      expect(open.source_ref).toBe('mail:mail-thread-1');
+      expect(fixture.prompts.some(text => text.includes('[source_ref mail:mail-thread-1]'))).toBe(true);
+      now += 300_000;
+      await incoming('/fire fetch');
+      const queued = state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!.filter(r => r.mailFollowup);
+      expect(queued).toHaveLength(1); expect(queued[0]?.status).toBe('pending');
+      now += 600_000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm();
+      expect(fixture.sent.filter(text => text.startsWith('Have you handled'))).toHaveLength(1);
+    } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
+  });
+});

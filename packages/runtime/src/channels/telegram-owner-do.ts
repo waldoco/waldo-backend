@@ -40,6 +40,7 @@ import { armHeartbeat, heartbeatTick, heartbeatEligible, settleHeartbeat } from 
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
+import { proactiveEnabled } from './proactive-gate';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
 import { CONSOLE_INVITES_PATH, renderMemberInvites } from './console-invites';
 import { newInviteCode, inviteLink } from '../identity/invite-code';
@@ -940,7 +941,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             // Frozen source-derived outputs cannot replay retained facts while coverage is unproved.
             // Keep bytes and transport state intact; current owner replies use a separate lane.
             if ((r.mailFollowup || r.calendarPrep) && !retainedRecallAvailable()) return Math.min(Date.now() + 10 * 60_000, r.expiresAt ?? r.createdAt + 86400000);
-            return (r.mailFollowup || r.calendarPrep) && ((r.mailFollowup && this.env.MAIL_SOURCE_FOLLOWUPS !== '1') || (r.calendarPrep && this.env.CALENDAR_GROUNDED_PREP !== '1') || loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume === 'low' || isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) ? Date.now() + 10 * 60_000 : null;
+            return (r.mailFollowup || r.calendarPrep) && ((r.mailFollowup && !proactiveEnabled(this.env.MAIL_SOURCE_FOLLOWUPS, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) || (r.calendarPrep && !proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) || loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume === 'low' || isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) ? Date.now() + 10 * 60_000 : null;
           },
           send: payload => call('sendMessage', payload), settled: settleFinal,
         }); } finally { await scheduler.rearm(); }
@@ -1908,7 +1909,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const calendarPrepCurrent = async (receipt: CalendarPrepReceipt): Promise<boolean> => {
       try {
-        if (this.env.CALENDAR_GROUNDED_PREP !== '1' || receipt.calendarId !== 'primary' || Date.now() >= Date.parse(receipt.start)) return false;
+        if (!proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity()) || receipt.calendarId !== 'primary' || Date.now() >= Date.parse(receipt.start)) return false;
         await calendarOwnerCurrent(receipt.connectionId, receipt.timezone);
         const client = await google.client('calendar');
         if (!client || client.account?.connection_id !== receipt.connectionId) return false;
@@ -1917,14 +1918,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const digest = await calendarPrepDigest(event);
         await calendarOwnerCurrent(receipt.connectionId, receipt.timezone);
         return event.status !== 'cancelled' && digest === receipt.sourceDigest && Date.now() < Date.parse(receipt.start)
-          && !quiet() && loops.proactivity().volume !== 'low' && this.env.CALENDAR_GROUNDED_PREP === '1';
+          && !quiet() && loops.proactivity().volume !== 'low' && proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity());
       } catch { return false; }
     };
     const briefs = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
       try {
-        if (this.env.CALENDAR_GROUNDED_PREP === '1') {
+        if (proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) {
           if (channel !== 'telegram' || loops.proactivity().volume === 'low') return;
           const counterHold = calendarCounterHold();
           if (counterHold) {
@@ -1937,7 +1938,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (!connectionId) return;
           const current = async () => {
             await calendarOwnerCurrent(connectionId, timezone);
-            if (this.env.CALENDAR_GROUNDED_PREP !== '1' || loops.proactivity().volume === 'low') throw new Error('calendar prep disabled');
+            if (!proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity()) || loops.proactivity().volume === 'low') throw new Error('calendar prep disabled');
           };
           const queued = await briefBook.groundedSweep({ client, now: Date.now(), timezone, current,
             known: id => finalOutbox.records().some(record => record.id === id),
@@ -1951,7 +1952,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
                 ownerSubject: String(owner), doName, bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: Date.parse(calendarPrep.start), calendarPrep,
               }, work => storage.transactionSync(() => {
                 if (clock.timezone !== timezone || identity.get<string>('do_name') !== doName || identity.get<string>('telegram_subject') !== String(owner)
-                  || identity.get<boolean>('telegram_unlinked') || calendarCounterHold() !== null || this.env.CALENDAR_GROUNDED_PREP !== '1'
+                  || identity.get<boolean>('telegram_unlinked') || calendarCounterHold() !== null || !proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())
                   || loops.proactivity().volume === 'low' || Date.now() >= Date.parse(calendarPrep.start)) throw new Error('calendar prep admission changed');
                 const now = Date.now();
                 const candidate = { event_id: cooldownKey, push_class: 'pre_activity_spot' as const, trigger: 'pre_activity_spot' as const, expires_at: Date.parse(calendarPrep.start) };
@@ -1969,6 +1970,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           log({ trace, hop: 'brief_sweep', ms: Date.now() - started, ok: true, detail: `${queued} prep intents queued; delivery unconfirmed` });
           await updateCheck(`update:${entry.occurrence_at}`);
           return;
+        }
+        // An owner who opted out of follow-ups gets no event brief either (the legacy sweep is a proactive send).
+        if (loops.proactivity().followups === false) {
+          log({ trace, hop: 'brief_sweep', ms: 0, ok: true, detail: 'held: owner opted out of follow-ups' });
+          return void (await updateCheck(`update:${entry.occurrence_at}`));
         }
         if (quiet()) {
           log({ trace, hop: 'brief_sweep', ms: 0, ok: true, detail: 'held: quiet hours' });
@@ -1992,7 +1998,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const started = Date.now();
       try {
         const now = Date.now();
-        const sourceFollowups = this.env.MAIL_SOURCE_FOLLOWUPS === '1';
+        const sourceFollowups = proactiveEnabled(this.env.MAIL_SOURCE_FOLLOWUPS, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity());
         const changes = await collectChanges(updates, client, now, sourceFollowups);
         const day = localIso(now, clock.timezone).slice(0, 10);
         let id = changes.length ? updates.record(day, now, changes, null) : null;
