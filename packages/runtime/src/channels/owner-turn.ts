@@ -742,7 +742,8 @@ export const createOwnerResponder = (
       if (binding) { const candidate = JSON.parse(raw); raw = JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: candidate.forget_topic ?? null }); }
       stage = 'uncertain';
       let coveredTopic: string | undefined;
-      const topic = ownerForgetTopic(raw, owner);
+      // An incomplete earlier forget is retried here from its stored topic, never from this turn's text or any model output.
+      const topic = ownerForgetTopic(raw, owner) ?? writerStore.incompleteTopics()[0] ?? null;
       if (topic) {
         const at = new Date().toISOString();
         try { writerStore.beginTopicCoverage(topic, at); }
