@@ -59,12 +59,14 @@ export const readTaskSourceSnapshot = (sql: SqlStorage, ownerKey: string): TaskS
 export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: RunEffectScope, assertOwnerCurrent: () => Promise<void>, ownerInput?: OwnerTaskInstruction, defaultSources: readonly TaskSourceFamily[] = []) => {
   // Read-only families the owner's own chat may use by default (the host sets them when the owner connected them).
   // They apply on a retained task until the owner explicitly chooses or narrows sources; they never override that.
+  // A pending owner confirmation card means the owner is deciding: nothing is read around it, defaults included.
+  const hasPending = () => sql.exec<{ pending_json: string | null }>('SELECT pending_json FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).one().pending_json !== null;
   const isNarrowed = () => sql.exec<{ narrowed: number }>('SELECT narrowed FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).one().narrowed === 1;
   // Private host supplies admitted bytes and occurrence; the classifier cannot construct this witness.
   const instruction = ownerInput && Object.freeze({ ...ownerInput, quotedRanges: ownerInput.quotedRanges?.map(range => Object.freeze({ ...range })) });
   scope.commit(() => initialise(sql));
   scope.commit(() => sql.exec('INSERT OR IGNORE INTO owner_task_source_scope (owner_key, task_id, revision, sources_json, ready, pending_json, start_ref) VALUES (?, ?, 1, ?, 0, NULL, NULL)', ownerKey, crypto.randomUUID(), JSON.stringify(TASK_SOURCE_FAMILIES)));
-  const current = async () => { scope.admit(); await assertOwnerCurrent(); scope.admit(); const snapshot = readTaskSourceSnapshot(sql, ownerKey); return defaultSources.length && !isNarrowed() ? { ...snapshot, defaults: defaultSources } : snapshot; };
+  const current = async () => { scope.admit(); await assertOwnerCurrent(); scope.admit(); const snapshot = readTaskSourceSnapshot(sql, ownerKey); return defaultSources.length && !isNarrowed() && !hasPending() ? { ...snapshot, defaults: defaultSources } : snapshot; };
   const assertSame = async (expected: TaskSourceSnapshot) => {
     const latest = await current();
     if (latest.taskId !== expected.taskId || latest.revision !== expected.revision || latest.ready !== expected.ready) throw new Error('Task source scope changed');
@@ -131,7 +133,9 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
       const proposal: TaskSourceProposal = { ownerKey, taskId: snapshot.taskId, revision: snapshot.revision, nonce: crypto.randomUUID(), action: decision.decision, sources: decision.decision === 'close' ? [] : decision.sources, expiresAt: Date.now() + 30 * 60_000 };
       await current();
       scope.commit(() => sql.exec('UPDATE owner_task_source_scope SET pending_json = ? WHERE owner_key = ? AND task_id = ? AND revision = ?', JSON.stringify(proposal), ownerKey, snapshot.taskId, snapshot.revision));
-      return { snapshot, proposal, outcome: 'owner_confirmation' };
+      // The card is now pending: this turn's snapshot must not carry defaults either.
+      const { defaults: _defaults, ...waiting } = snapshot;
+      return { snapshot: waiting, proposal, outcome: 'owner_confirmation' };
     },
   };
 };

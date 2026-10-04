@@ -433,3 +433,11 @@ it('assertSame lets an unready default-read admission through, and still rejects
   await cap.classify(decision('retain'));
   await expect(cap.assertSame(unready), 'readiness changed since admission').rejects.toThrow('Task source scope changed');
 }));
+
+it('a pending owner confirmation turns the unready defaults off: nothing is read around the card', () => run('task-pending-no-defaults', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, { inputRef: 'r1', text: 'read my mail' }, ['web', 'mail']);
+  const proposed = (await cap.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'read my mail' }), 'r1', 'read my mail')).snapshot;
+  expect(sql.exec<{ pending_json: string | null }>('SELECT pending_json FROM owner_task_source_scope').one().pending_json).not.toBeNull();
+  expect(taskSourceAllowed(proposed, { name: 'web_search' })).toBe(false);
+  expect(taskSourceAllowed(proposed, { name: 'search_communication', requires_connector: true })).toBe(false);
+}));
