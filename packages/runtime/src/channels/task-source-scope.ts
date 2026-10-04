@@ -67,7 +67,7 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
   const current = async () => { scope.admit(); await assertOwnerCurrent(); scope.admit(); const snapshot = readTaskSourceSnapshot(sql, ownerKey); return defaultSources.length && !isNarrowed() ? { ...snapshot, defaults: defaultSources } : snapshot; };
   const assertSame = async (expected: TaskSourceSnapshot) => {
     const latest = await current();
-    if (latest.taskId !== expected.taskId || latest.revision !== expected.revision || !latest.ready) throw new Error('Task source scope changed');
+    if (latest.taskId !== expected.taskId || latest.revision !== expected.revision || latest.ready !== expected.ready) throw new Error('Task source scope changed');
   };
   // narrowed is written in the same statement as the sources. It records that the owner chose or narrowed this task's sources (restrict, an owner-evidenced new/change, an approved card): that explicit list is exact whatever the defaults are later. A closed task / new default task starts at 0.
   const commit = async (expected: TaskSourceSnapshot, sources: readonly TaskSourceFamily[], ready: boolean, startRef = expected.startRef, newTask = false, narrowed = isNarrowed()) => {

@@ -420,3 +420,12 @@ it('a classifier miss (uncertain or malformed) never turns the default read sour
   const narrowed = (await cap.classify(decision('uncertain'))).snapshot;
   expect(taskSourceAllowed(narrowed, { name: 'web_search' }), 'explicit narrowing wins over defaults').toBe(false);
 }));
+
+it('assertSame lets an unready default-read admission through, and still rejects when the task or readiness changed', () => run('task-assertsame-unready', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, undefined, ['web', 'mail']);
+  const unready = (await cap.classify(decision('uncertain'))).snapshot;
+  expect(unready.ready).toBe(false);
+  await expect(cap.assertSame(unready)).resolves.toBeUndefined();
+  await cap.classify(decision('retain'));
+  await expect(cap.assertSame(unready), 'readiness changed since admission').rejects.toThrow('Task source scope changed');
+}));
