@@ -367,7 +367,7 @@ it('a confirmed retry that narrows is kept as a narrowing', () => run('task-defa
 }));
 
 it('legacy rows: the baseline and the full set take the defaults, any other ready scope stays narrowed', () => run('task-defaults-migrate', async (sql, scope) => {
-  for (const [sources, ready, expectNarrowed] of [['["workspace","web"]', 1, 0], [JSON.stringify(TASK_SOURCE_FAMILIES), 1, 0], ['["workspace"]', 1, 1], ['[]', 1, 1], ['["workspace"]', 0, 0]] as const) {
+  for (const [sources, ready, expectNarrowed] of [['["workspace","web"]', 1, 0], [JSON.stringify(TASK_SOURCE_FAMILIES), 1, 0], ['["workspace"]', 1, 1], ['[]', 1, 1], ['["workspace"]', 0, 1]] as const) {
     sql.exec('DROP TABLE IF EXISTS owner_task_source_scope');
     legacyTable(sql, sources, ready);
     owned(sql, scope);
@@ -378,3 +378,14 @@ it('legacy rows: the baseline and the full set take the defaults, any other read
   expect((await owned(sql, scope).classify(decision('retain'))).snapshot.sources, 'an existing restriction is not widened').toEqual(['workspace']);
 }));
 
+
+it('after an explicit narrowing, a change that adds a default back needs the owner card (a new task does not)', () => run('task-defaults-narrowed-card', async (sql, scope) => {
+  const cap = owned(sql, scope);
+  await cap.classify(decision('retain'));
+  await cap.classify(decision('restrict', ['web']));
+  expect(narrowedFlag(sql)).toBe(1);
+  const change = await cap.classify(JSON.stringify({ decision: 'change', sources: ['web', 'mail'], evidence: 'plan' }), 'r1', 'plan my trip');
+  expect(change.proposal, 'adding mail back to a narrowed task needs the card').toBeDefined();
+  const fresh = await cap.classify(JSON.stringify({ decision: 'new', sources: ['web', 'mail'], evidence: 'plan' }), 'r1', 'plan my trip');
+  expect(fresh.proposal, 'a new task listing a default needs no card').toBeUndefined();
+}));
