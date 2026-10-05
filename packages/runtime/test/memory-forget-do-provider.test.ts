@@ -2222,16 +2222,17 @@ it('REPRO: /heldrows pages past prefix decoys instead of reporting held with not
   });
 });
 
-it.each(['split', 'nul'] as const)('REPRO: a >40-char topic %s inside a retained card does not leave fragments or an unprovable hold', async kind => {
+it.each(['split', 'nul', 'split20', 'nul20', 'split39'] as const)('REPRO: a topic %s inside a retained card does not leave fragments or an unprovable hold', async kind => {
   const label = `forget-update-cards-frag-${kind}`;
   await admittedTurn(label, 153410, 'My unrelated standup is at 09:10 UTC.', ops());
   await runInDurableObject(stub(label), (_instance, state) => {
     const sql = state.storage.sql;
     const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
     sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
-    const changes = kind === 'split'
-      ? [{ detail: topic.slice(0, 46) }, { detail: topic.slice(46) }]
-      : [{ detail: `${topic.slice(0, 41)}\u0000${topic.slice(41)}` }];
+    const at = { split: 46, nul: 41, split20: 20, nul20: 20, split39: 39 }[kind];
+    const changes = kind.startsWith('split')
+      ? [{ detail: topic.slice(0, at) }, { detail: topic.slice(at) }]
+      : [{ detail: `${topic.slice(0, at)}\u0000${topic.slice(at)}` }];
     sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify(changes));
     sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify([{ detail: 'Standup moved to 09:30 UTC.' }]));
     const store = claimStore(sql);
@@ -2239,8 +2240,34 @@ it.each(['split', 'nul'] as const)('REPRO: a >40-char topic %s inside a retained
     const rows = sql.exec<{ changes: string }>('SELECT changes FROM update_cards ORDER BY id').toArray().map(r => r.changes);
     expect(rows[0]).not.toContain('ZEBRA');
     expect(rows[0]).not.toContain('COBALT');
-    expect(rows[1]).toContain('Standup moved');
+    expect(rows[1]).not.toContain('Standup');
+    expect(sql.exec<{ n: number }>('SELECT count(*) AS n FROM update_cards').one().n).toBe(2);
     expect(store.forgetSources(topic, true).incomplete).toBe(false);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('REPRO: after a real DO eviction the retried topic purge blanks cards and is idempotent', async () => {
+  const label = 'forget-update-cards-evict';
+  await admittedTurn(label, 153420, 'My unrelated standup is at 09:10 UTC.', ops());
+  const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    sql.exec('INSERT INTO update_cards (at, day, changes, pushed) VALUES (?,?,?,1)', 1, 'd', JSON.stringify([{ detail: topic.slice(0, 20) }, { detail: topic.slice(20) }]));
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    for (let round = 0; round < 2; round++) {
+      const store = claimStore(sql);
+      store.purge([], new Date().toISOString(), [topic]);
+      const row = sql.exec<{ changes: string; pushed: number }>('SELECT changes, pushed FROM update_cards').one();
+      expect(row.changes).not.toContain('COBALT');
+      expect(row.pushed).toBe(1);
+      expect(store.forgetSources(topic, true).incomplete).toBe(false);
+    }
     state.storage.deleteAlarm();
   });
 });

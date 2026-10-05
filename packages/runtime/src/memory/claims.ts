@@ -455,13 +455,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
               ? ci(row.changes)
               : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
             const changed = parsed === undefined ? redactedChanges !== row.changes : redactedChanges !== JSON.stringify(parsed);
-            // A row that still carries the topic's prefilter prefix after redaction (a topic split across values, or broken by a NUL)
-            // cannot be proven clean, and its fragments may spell the topic. These are derived projections, so the whole row's text is blanked.
-            const prefix = text.slice(0, LIKE_PREFILTER_MAX).toLowerCase();
-            const stillTied = topics.length > 0 && prefix.length > 0 && [redactedChanges, redactedText ?? ''].some(value => value.toLowerCase().includes(prefix));
-            if (stillTied) {
+            // update_cards rows record no source, and a topic can be split or NUL-broken anywhere inside a card, so no per-row test proves a card clean.
+            // A topic purge therefore blanks the text of every card (derived projections: rows and send state stay; the next collection rebuilds them).
+            if (topics.length > 0) {
               const blanked = parsed === undefined ? JSON.stringify(FORGOTTEN) : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? FORGOTTEN : value);
-              sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', blanked, row.text === null ? null : FORGOTTEN, row.id);
+              if (blanked !== row.changes || (row.text !== null && row.text !== FORGOTTEN)) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', blanked, row.text === null ? null : FORGOTTEN, row.id);
               continue;
             }
             if (changed || redactedText !== row.text) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', changed ? redactedChanges : row.changes, redactedText, row.id);
