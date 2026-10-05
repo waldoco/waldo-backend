@@ -67,6 +67,12 @@ const sender = (update: SenderUpdate): string | null => {
 
 // The webhook resolves which owner a Telegram sender belongs to and wakes only that owner's Durable Object.
 // A sender with no owner can only redeem a one-time link code issued from the console.
+// One status word per inbound update, no ids or text: lets an operator tell routed from dropped without reading a tenant's DO.
+const outcome = (status: string, response: Response): Response => {
+  console.log(JSON.stringify({ hop: 'telegram_webhook', ok: response.status < 400, status, http: response.status }));
+  return response;
+};
+
 export const handleTelegramWebhook = async (
   request: Request,
   env: TelegramWebhookEnv,
@@ -78,25 +84,25 @@ export const handleTelegramWebhook = async (
     return new Response('not found', { status: 404 });
   }
   if (!sameSecret(request.headers.get('x-telegram-bot-api-secret-token') ?? '', secret)) {
-    return new Response('forbidden', { status: 403 });
+    return outcome('bad_secret', new Response('forbidden', { status: 403 }));
   }
   const body = await request.text();
   let update: SenderUpdate;
-  try { update = JSON.parse(body) as SenderUpdate; } catch { return new Response('bad request', { status: 400 }); }
-  if (!update || typeof update !== 'object') return new Response('ok');
+  try { update = JSON.parse(body) as SenderUpdate; } catch { return outcome('bad_json', new Response('bad request', { status: 400 })); }
+  if (!update || typeof update !== 'object') return outcome('ignored_shape', new Response('ok'));
   const subject = sender(update);
-  if (!subject) return new Response('ok');
+  if (!subject) return outcome('no_sender', new Response('ok'));
   const owners = env.TELEGRAM_OWNER_DO;
   const origin = new URL(request.url).origin;
   const coded = parseCodedSetup(update);
   if (coded) {
     const bot = env.TELEGRAM_BOT_TOKEN?.split(':')[0];
-    if (!bot || !/^\d+$/.test(bot) || !env.RESPONSIBILITY_RATE_LIMITER) return new Response('admission unavailable', { status: 503 });
+    if (!bot || !/^\d+$/.test(bot) || !env.RESPONSIBILITY_RATE_LIMITER) return outcome('setup_unavailable', new Response('admission unavailable', { status: 503 }));
     try {
       // Edge guard necessarily precedes durable duplicate lookup/DO allocation.
       const senderOk = (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `telegram-link-sender:${bot}:${coded.subject}` })).success;
       const botOk = (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `telegram-link-bot:${bot}` })).success;
-      if (!senderOk || !botOk) return new Response('too many requests', { status: 429 });
+      if (!senderOk || !botOk) return outcome('setup_rate_limited', new Response('too many requests', { status: 429 }));
       const name = `telegram-link:${bot}:${coded.subject}`;
       const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(body)))].map(x=>x.toString(16).padStart(2,'0')).join(''); // exact full-update digest
       const hash = await linkCodeHash(coded.code);
@@ -105,12 +111,12 @@ export const handleTelegramWebhook = async (
         headers: { 'x-waldo-inbox-secret': secret },
         body: JSON.stringify({ bot, subject: coded.subject, name, id: coded.updateId, digest, hash }),
       });
-      return new Response(admission.ok ? 'ok' : 'admission unavailable', { status: admission.ok ? 200 : admission.status === 409 ? 409 : 503 });
-    } catch { return new Response('admission unavailable', { status: 503 }); }
+      return outcome(admission.ok ? 'setup_admitted' : 'setup_refused', new Response(admission.ok ? 'ok' : 'admission unavailable', { status: admission.ok ? 200 : admission.status === 409 ? 409 : 503 }));
+    } catch { return outcome('setup_unavailable', new Response('admission unavailable', { status: 503 })); }
   }
   let route;
   try { route = await directory.byPresence('telegram', subject); }
-  catch { return new Response('route unavailable', { status: 503 }); }
+  catch { return outcome('route_lookup_failed', new Response('route unavailable', { status: 503 })); }
   if (route) {
     const headers: Record<string, string> = { 'x-waldo-origin': origin, 'x-waldo-telegram-subject': route.subject,
       'x-waldo-do-name': route.doName, 'x-waldo-inbox-secret': secret };
@@ -118,9 +124,9 @@ export const handleTelegramWebhook = async (
     if (route.traceIdentity) headers[OWNER_TRACE_HEADER] = encodeURIComponent(JSON.stringify(route.traceIdentity));
     try {
       const admission = await owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/enqueue', { method: 'POST', body, headers, signal: AbortSignal.timeout(10_000) });
-      return new Response(admission.ok ? 'ok' : 'admission unavailable', { status: admission.ok ? 200 : admission.status === 409 ? 409 : 503 });
-    } catch { return new Response('admission unavailable', { status: 503 }); }
+      return outcome(admission.ok ? 'routed' : `owner_refused_${admission.status}`, new Response(admission.ok ? 'ok' : 'admission unavailable', { status: admission.ok ? 200 : admission.status === 409 ? 409 : 503 }));
+    } catch { return outcome('owner_unreachable', new Response('admission unavailable', { status: 503 })); }
   }
   // Unknown non-coded/unsupported setup is ignored, never model input.
-  return new Response('ok');
+  return outcome('no_route', new Response('ok'));
 };

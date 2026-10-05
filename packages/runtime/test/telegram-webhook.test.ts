@@ -109,3 +109,20 @@ it('returns deliberate errors for malformed payload and failed directory', async
   expect(n.fetch).not.toHaveBeenCalled();
 });
 it('limiter error fails closed without routing-object allocation',async()=>{const{idFromName,ns}=namespace();const env:TelegramWebhookEnv={TELEGRAM_OWNER_DO:ns,TELEGRAM_WEBHOOK_SECRET:'s3cret',TELEGRAM_BOT_TOKEN:'7:token',RESPONSIBILITY_RATE_LIMITER:{limit:async()=>{throw Error('limiter fault')}}as unknown as RateLimit};expect((await run(post('s3cret',message(7,'/link ABCDEFGH23')),env)).status).toBe(503);expect(idFromName).not.toHaveBeenCalled()});
+
+describe('status log', () => {
+  const logs = () => { const spy = vi.spyOn(console, 'log').mockImplementation(() => {}); return { spy, lines: () => spy.mock.calls.map(c => String(c[0])).filter(l => l.includes('telegram_webhook')) }; };
+  const dir = (route: unknown): OwnerDirectory => ({ byPresence: async () => route as never, redeem: async () => null as never } as unknown as OwnerDirectory);
+  const env = (n: ReturnType<typeof namespace>): TelegramWebhookEnv => ({ TELEGRAM_WEBHOOK_SECRET: 's', TELEGRAM_BOT_TOKEN: 'token', TELEGRAM_OWNER_DO: n.ns });
+  it('names routed, no_route and owner refusal with a status word only', async () => {
+    for (const [route, refuse, word, http] of [[{ doName: 'do-a', subject: '42', timezone: null }, false, 'routed', 200], [null, false, 'no_route', 200], [{ doName: 'do-a', subject: '42', timezone: null }, true, 'owner_refused_403', 503]] as const) {
+      const n = namespace(); if (refuse) n.fetch.mockResolvedValue(new Response('no', { status: 403 }));
+      const l = logs();
+      await run(post('s', message(42, 'secret words')), env(n), dir(route));
+      const [line] = l.lines();
+      expect(JSON.parse(line)).toEqual({ hop: 'telegram_webhook', ok: http < 400, status: word, http });
+      expect(line).not.toContain('secret words'); expect(line).not.toContain('42');
+      l.spy.mockRestore();
+    }
+  });
+});
