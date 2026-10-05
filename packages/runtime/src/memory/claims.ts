@@ -112,6 +112,29 @@ export const projectionPredicate = (columns: readonly string[]) => columns.map(c
 // update_cards: one card is tied to a topic when the topic appears whole in its raw text, in any decoded JSON key or value, or across its pieces in order
 // (a topic split between values or between a key and its value, with or without NULs). The hold and the purge exit share this one function.
 // A piece order interleaved with unrelated text is not provable and is not detected (tracked in #794).
+// True when any object in already-valid JSON text repeats a key. Reads the text with the JSON string grammar, no pattern matching.
+const hasDuplicateKeys = (json: string): boolean => {
+  const stack: Array<Set<string> | null> = [];
+  let expectKey = false;
+  for (let i = 0; i < json.length; i++) {
+    const ch = json[i]!;
+    if (ch === '"') {
+      let end = i + 1;
+      while (json[end] !== '"') end += json[end] === '\\' ? 2 : 1;
+      const top = stack[stack.length - 1];
+      if (expectKey && top) {
+        const key = JSON.parse(json.slice(i, end + 1)) as string;
+        if (top.has(key)) return true;
+        top.add(key); expectKey = false;
+      }
+      i = end;
+    } else if (ch === '{') { stack.push(new Set()); expectKey = true; }
+    else if (ch === '[') { stack.push(null); expectKey = false; }
+    else if (ch === '}' || ch === ']') { stack.pop(); expectKey = false; }
+    else if (ch === ',') expectKey = stack[stack.length - 1] instanceof Set;
+  }
+  return false;
+};
 const CARD_JOIN_KEYS = ['source', 'kind', 'source_ref', 'source_message_id'];
 export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string): boolean => {
   if (changes !== null && changes !== undefined && typeof changes !== 'string') return true;
@@ -129,6 +152,8 @@ export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string)
   if (typeof changes !== 'string') return false;
   let parsed: unknown;
   try { parsed = JSON.parse(changes); } catch (error) { return !(error instanceof SyntaxError) || exact(changes); }
+  // Duplicate keys in one object hide bytes from the decoded view (parse keeps only the last): the card stays held and the purge rewrites it.
+  if (hasDuplicateKeys(changes)) return true;
   // A card that parses is judged on its decoded keys and values: the serialized text escapes quotes and backslashes, which would make an unrelated card look unprovable.
   // In-order pieces: the values alone (keys between them would break a split topic) and keys plus values (a key/value split).
   const all: string[] = []; const values: string[] = [];
@@ -145,6 +170,8 @@ export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string)
   }
   return all.some(decoded) || [all, values].some(list => decoded(list.join('')) || decoded(list.join(' ')));
 };
+// Measured: about 1.1s at 200 leaves and 7.9s at 400 for the run search; 64 keeps it to tens of milliseconds.
+const CARD_LOCALISE_MAX_LEAVES = 64;
 const CARD_SCHEMA_KEYS = ['source', 'kind', 'detail', 'source_ref', 'source_message_id'];
 // Blanks only the leaves of a parsed card that carry the topic's pieces: the smallest in-order run of leaves (values alone, else keys plus values) whose concatenation holds the topic.
 // A card the pieces test cannot localise (raw or unreadable match) is blanked leaf by leaf entirely. Join keys and their values are never touched.
@@ -166,7 +193,7 @@ export const blankCardPieces = (parsed: unknown, topic: string): unknown => {
   const holds = (list: Leaf[], from: number, to: number, separator: string) => exact(list.slice(from, to + 1).map(leaf => leaf.text).join(separator));
   // Same piece lists and join modes as cardCarriesTopic. For each start take the shortest run holding the topic, and skip a run whose tail alone still holds it (a later start finds that one),
   // so unrelated leaves before, between or after the copies are never marked. Marks accumulate over every list and join mode, because separate copies may need different ones.
-  for (const list of [leaves.filter(leaf => !leaf.key), leaves]) {
+  for (const list of leaves.length > CARD_LOCALISE_MAX_LEAVES ? [] : [leaves.filter(leaf => !leaf.key), leaves]) {
     for (const separator of ['', ' ']) {
       for (let from = 0; from < list.length; from++) {
         for (let to = from; to < list.length; to++) {
@@ -177,15 +204,28 @@ export const blankCardPieces = (parsed: unknown, topic: string): unknown => {
       }
     }
   }
+  // Cost is cubic in leaf count (about 1s at 200 leaves). Past this many leaves the card is blanked leaf by leaf instead of localised, which settles the hold at linear cost.
+  // A card held only by the prefix floor has no localisable run: redact just the leaves whose own text carries the prefix, and everything only if none does.
+  if (marked.size === 0 && leaves.length <= CARD_LOCALISE_MAX_LEAVES) {
+    const prefix = topic.slice(0, LIKE_PREFILTER_MAX).toLowerCase();
+    for (const leaf of leaves) if (prefix && leaf.text.replace(/\u0000/g, '').toLowerCase().includes(prefix)) marked.add(`${leaf.path}|${leaf.key}`);
+  }
   const all = marked.size === 0;
   const rebuild = (node: unknown, path: string, key: boolean): unknown => {
     if (typeof node === 'string') return all || marked.has(`${path}|${key}`) ? FORGOTTEN : node;
     if (Array.isArray(node)) return node.map((child, index) => rebuild(child, `${path}/${index}`, false));
-    if (node !== null && typeof node === 'object') return Object.fromEntries(Object.entries(node).map(([name, child]) => {
-      if (CARD_JOIN_KEYS.includes(name)) return [name, child];
-      const keyBlanked = (all || marked.has(`${path}/${JSON.stringify(name)}#key|true`)) && !CARD_SCHEMA_KEYS.includes(name);
-      return [keyBlanked ? FORGOTTEN : name, rebuild(child, `${path}/${JSON.stringify(name)}`, false)];
-    }));
+    if (node !== null && typeof node === 'object') {
+      // A renamed key must not land on another key of the same object (an unrelated key may already be named like the placeholder), or one value would overwrite the other.
+      const names = new Set(Object.keys(node));
+      let next = 1;
+      return Object.fromEntries(Object.entries(node).map(([name, child]) => {
+        if (CARD_JOIN_KEYS.includes(name)) return [name, child];
+        const keyBlanked = (all || marked.has(`${path}/${JSON.stringify(name)}#key|true`)) && !CARD_SCHEMA_KEYS.includes(name);
+        let renamed = name;
+        if (keyBlanked) { do { renamed = `${FORGOTTEN} ${next++}`; } while (names.has(renamed)); names.add(renamed); }
+        return [renamed, rebuild(child, `${path}/${JSON.stringify(name)}`, false)];
+      }));
+    }
     return node;
   };
   return rebuild(parsed, '', false);
@@ -535,7 +575,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             const redactedChanges = parsed === undefined
               ? ci(row.changes)
               : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
-            const changed = parsed === undefined ? redactedChanges !== row.changes : redactedChanges !== JSON.stringify(parsed);
+            // Compared with the stored bytes, so a card the decoded view cannot see all of (duplicate keys) is rewritten canonical.
+            const changed = redactedChanges !== row.changes;
             // A card that still carries the topic after redaction (split across values or keys, or broken by a NUL) cannot be proven clean by the per-value pass.
             // update_cards rows record no source and siblings of a matching fragment may be unrelated, so only the leaves that carry the topic's pieces are blanked
             // (values, and keys renamed unless they are schema keys). Join keys, other leaves, the summary text when clean and the send state stay. Same predicate as the hold.

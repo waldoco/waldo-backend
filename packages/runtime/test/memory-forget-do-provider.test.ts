@@ -2625,3 +2625,25 @@ it.each(['changes-vs-summary','across-cards','inline-unrelated'] as const)('CUST
   if(kind==='inline-unrelated') expect(joined).toContain(MAIL_U);
  });
 });
+
+// #804 review: collision-safe rename, duplicate keys, and a bounded cost for large cards.
+it.each(['rename-collision','duplicate-key','big-card'] as const)('CUSTODY2 %s', async kind => {
+ const label=`custody2-${kind}`; await admittedTurn(label,190950,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql; const updates=updateBook(sql); const store=claimStore(sql);
+  const a=MAIL_T.slice(0,46), b=MAIL_T.slice(46);
+  let t0=0, t1=0;
+  if(kind==='rename-collision') updates.record('d',1,[{[a]:'one',['[forgotten]']:'two',other:'three'},{[b]:'four'}] as any,'S');
+  if(kind==='duplicate-key'){ updates.record('d',1,[mailM(0,a)],'S'); sql.exec('UPDATE update_cards SET changes = ?', `[{"source":"mail","kind":"new","source_ref":"mail:r0","source_message_id":"m0","detail":"${b}","detail":"clean"}]`); }
+  if(kind==='big-card') updates.record('d',1,[mailM(0,a),...Array.from({length:400},(_,i)=>mailM(i+1,`filler ${i}`))],'S');
+  const before=store.forgetSources(MAIL_T,true).incomplete;
+  t0=Date.now(); store.purge([],new Date().toISOString(),[MAIL_T]); t1=Date.now();
+  const rows=sql.exec<{changes:string}>('SELECT changes FROM update_cards ORDER BY id').toArray();
+  const after=store.forgetSources(MAIL_T,true).incomplete;
+  state.storage.deleteAlarm();
+  expect(before).toBe(true); expect(after).toBe(false);
+  if(kind==='rename-collision'){ const first=JSON.parse(rows[0]!.changes)[0]; expect(Object.keys(first)).toHaveLength(3); expect(rows[0]!.changes).toContain('"three"'); }
+  if(kind==='duplicate-key') expect(rows[0]!.changes).not.toContain(b);
+  if(kind==='big-card') expect(t1-t0).toBeLessThan(2000);
+ });
+});
