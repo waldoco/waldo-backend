@@ -2468,6 +2468,7 @@ it('DUPKEY an unrelated duplicate-key card keeps the exact bytes SQLite reads (f
     sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
     const detailDup = '[{"source":"mail","kind":"new","source_ref":"mail:invoice","detail":"invoice2719","detail":"lunch agenda"}]';
     const refDup = '[{"source":"mail","kind":"new","source_ref":"mail:invoice","source_ref":"mail:lunch","detail":"Invoice question"}]';
+    const collide = `[{"detail":"the secret code word","detail":" that I told you about earlier today is ZEBRA-COBALT","detail\\u00001":"clean"}]`;
     const hidden = `[{"source":"mail","kind":"new","source_ref":"mail:h","detail":"${topic}","detail":"x"}]`;
     for (const changes of [detailDup, refDup, hidden]) sql.exec('INSERT INTO update_cards (at, day, changes, text, pushed) VALUES (?,?,?,?,1)', 1, 'd', changes, null);
     const store = claimStore(sql);
@@ -2478,6 +2479,9 @@ it('DUPKEY an unrelated duplicate-key card keeps the exact bytes SQLite reads (f
     expect(sql.exec<{ v: string }>("SELECT json_extract(changes, '$[0].detail') AS v FROM update_cards WHERE id = 1").one().v).toBe('invoice2719');
     expect(rows[2]).not.toContain('COBALT');
     expect(store.forgetSources(topic, true).incomplete).toBe(false);
+    // A renamed duplicate must not collide with a real key: this card keeps the topic split over duplicates and is held, not judged clean.
+    sql.exec('INSERT INTO update_cards (at, day, changes, text, pushed) VALUES (?,?,?,?,1)', 1, 'd', collide, null);
+    expect(store.forgetSources(topic, true).incomplete).toBe(true);
     state.storage.deleteAlarm();
   });
 });

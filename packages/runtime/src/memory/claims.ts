@@ -205,7 +205,11 @@ export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string)
   let parsed: unknown;
   try { parsed = JSON.parse(changes); } catch (error) { return !(error instanceof SyntaxError) || exact(changes); }
   // Duplicate keys hide bytes from the decoded view (parse keeps only the last), so a card with them is judged with every duplicate kept.
-  if (hasDuplicateKeys(changes)) { try { parsed = JSON.parse(uniqueKeys(changes)); } catch { return true; } }
+  if (hasDuplicateKeys(changes)) {
+    // The renamed keys contain a NUL, so they can only collide with a real key that also contains one: such a card is held outright.
+    if (/\u0000|\\u0000/i.test(changes)) return true;
+    try { parsed = JSON.parse(uniqueKeys(changes)); } catch { return true; }
+  }
   // A card that parses is judged on its decoded keys and values: the serialized text escapes quotes and backslashes, which would make an unrelated card look unprovable.
   // In-order pieces: the values alone (keys between them would break a split topic) and keys plus values (a key/value split).
   const all: string[] = []; const values: string[] = [];
