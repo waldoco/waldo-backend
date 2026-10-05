@@ -15,7 +15,7 @@ it.each(['native','bearer'])('%s local refresh reports only invalid grants to he
   const client=googleClient(app,{refresh_token:'pinned-refresh'},fetcher,health);
   const call=()=>lane==='native'?client.events('2026-10-01T00:00:00Z','2026-10-02T00:00:00Z',1,false):googleAccessToken(app,{refresh_token:'pinned-refresh'},fetcher,health);
   await expect(call()).rejects.toMatchObject({name:'GoogleTokenError',kind:c.kind,status:c.expected});
-  expect(health.mock.calls).toEqual(c.kind==='auth'?[['google token auth failure']]:[]);
+  expect(health.mock.calls).toEqual(c.kind==='auth'?[['google token failed: invalid_grant']]:[]);
   failing=false;await call();expect(health.mock.calls.at(-1)).toEqual(['']);expect(credentials).toEqual(['pinned-refresh','pinned-refresh']);
  }
 });

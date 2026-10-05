@@ -153,7 +153,7 @@ const isObject = (value: unknown): value is Record<string, unknown> => value !==
 export type GoogleTokenFailure = 'auth' | 'transient' | 'configuration' | 'protocol';
 export class GoogleTokenError extends GoogleError {
   constructor(readonly kind: GoogleTokenFailure, readonly providerStatus?: number) {
-    super(kind === 'auth' ? 401 : kind === 'transient' && providerStatus && (providerStatus === 429 || providerStatus >= 500) ? providerStatus : 502, `google token ${kind} failure`);
+    super(kind === 'auth' ? 401 : kind === 'transient' && providerStatus && (providerStatus === 429 || providerStatus >= 500) ? providerStatus : 502, kind === 'auth' ? 'google token failed: invalid_grant' : `google token ${kind} failure`);
     this.name = 'GoogleTokenError';
   }
 }
