@@ -35,7 +35,7 @@ Judgment belongs to the model. Do not add regex or other fixed rules for anythin
 
 ## Build Unit: One End-to-End Slice
 
-- Use the [engineering execution playbook](docs/planning/waldo-agent-mvp/ENGINEERING_EXECUTION_PLAYBOOK.md) for the why-build/value decision, bounded mature-implementation research before custom logic, team coordination and complete journey proof. It adds no new authority and does not remove required checks.
+- Use the [engineering execution playbook](docs/planning/waldo-agent-mvp/ENGINEERING_EXECUTION_PLAYBOOK.md) for the why-build/value decision, proportionate research and reuse when a solution is uncertain or a new mechanism is proposed, team coordination and complete journey proof. It adds no new authority and does not remove required checks.
 - One PR is one user-visible outcome, built from trigger to receipt: contract, runtime, serving-path call site and tests together. If a call site sits in a single-writer file, the owner of that file builds the whole slice or the PR waits for it; do not merge the unwired half.
 - Acceptance is a trace, not a green suite: name the staging or console trace (or the exact reason none is possible yet) that shows the outcome working, and label each claim SOURCE, CI, STAGING or LIVE.
 - Do not add review ceremony to small pure code. One independent review on the exact head, then merge; extra agents and checklists only where the Security Review Triggers below apply.
