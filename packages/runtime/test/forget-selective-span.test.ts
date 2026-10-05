@@ -1,8 +1,8 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { episodeIndex } from '../src/channels/episodes';
-import { claimStore, turnMemoryPrompt } from '../src/memory/claims';
-import { forgetSnapshot, selectedForgetTexts, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA } from '../src/memory/selective-forget';
+import { textFingerprint, claimStore, turnMemoryPrompt } from '../src/memory/claims';
+import { forgetSnapshot, forgetSourceBatch, selectedForgetTexts, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA } from '../src/memory/selective-forget';
 import { conversationForgetSources } from '../src/channels/conversation-store';
 
 // Real owner-local SQL and retrieval. This is a desired-behaviour regression,
@@ -170,4 +170,105 @@ it('canonicalises pending topic custody and never makes a failed barrier write l
     expect(store.pendingTopics()).toEqual([]);
     expect(episodeIndex(state.storage.sql).get('1')!.text).toBe(text);
   });
+});
+
+for (const count of [32,33,64]) {
+  it(`admits and authorises exact coverage for ${count} distinct source clauses`, async()=>{
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`forget-boundary-${count}`)),(_instance,state)=>{
+      const topic='CAP'; const at='2026-10-05T00:00:00Z';
+      const rows=Array.from({length:count},(_,i)=>({ref:`episodes:${i+1}:text`,text:`CAP note ${String(i).padStart(3,'0')}`}));
+      const snapshot=forgetSnapshot(topic,rows);
+      expect(snapshot.incomplete).toBe(false); expect(snapshot.sources).toHaveLength(count);
+      const raw=JSON.stringify({spans:rows,reviewed_refs:rows.map(row=>row.ref),complete:true});
+      const selected=selectedForgetTexts(topic,snapshot,raw,snapshot);
+      expect(selected).toHaveLength(count);
+      const store=claimStore(state.storage.sql); store.beginTopicCoverage(topic,at);
+      expect(()=>store.authoriseTopicCoverage(topic,selected!,at)).not.toThrow();
+      expect(store.pendingTopics()).toHaveLength(count);
+      expect(SELECTIVE_FORGET_SCHEMA.properties.spans.maxItems).toBe(64);
+      expect(SELECTIVE_FORGET_SCHEMA.properties.reviewed_refs.maxItems).toBe(64);
+      expect(selectedForgetTexts(topic,snapshot,JSON.stringify({spans:rows.slice(1),reviewed_refs:rows.map(row=>row.ref),complete:true}),snapshot)).toBeNull();
+    });
+  });
+}
+it('does not authorise an over-limit source set or selected text set', async()=>{
+  const rows=Array.from({length:65},(_,i)=>({ref:String(i),text:`CAP note ${String(i).padStart(3,'0')}`}));
+  const snapshot=forgetSnapshot('CAP',rows);
+  expect(snapshot).toMatchObject({incomplete:true}); expect(snapshot.sources).toHaveLength(64);
+  expect(selectedForgetTexts('CAP',snapshot,JSON.stringify({spans:rows,reviewed_refs:rows.map(row=>row.ref),complete:true}),snapshot)).toBeNull();
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-boundary-over')),(_instance,state)=>{
+    const store=claimStore(state.storage.sql); const at='2026-10-05T00:00:00Z'; store.beginTopicCoverage('CAP',at);
+    expect(()=>store.authoriseTopicCoverage('CAP',rows.map(row=>row.text),at)).toThrow('selected topic scope');
+    expect(store.incompleteTopics()).toEqual(['CAP']); expect(store.pendingTopics()).toEqual([]);
+  });
+});
+
+it('keeps ordinary page exhaustion separate from unreadable inventory and never skips an oversized first row',()=>{
+  const rows=Array.from({length:65},(_,i)=>({ref:String(i),text:`BAT note ${String(i).padStart(3,'0')}`}));
+  const page=forgetSourceBatch('BAT',rows);
+  expect(page).toMatchObject({more:true,incomplete:false});expect(page.sources).toHaveLength(64);
+  const tooLarge={ref:'large',text:`BAT ${'x'.repeat(9000)}`};
+  expect(forgetSourceBatch('BAT',[tooLarge,...rows])).toEqual({sources:[],more:true,incomplete:true});
+  expect(forgetSourceBatch('BAT',[rows[0]!,{...rows[0]!,text:'BAT changed note'}]).incomplete).toBe(true);
+});
+it('partial batch authorization settles only literals and retains original topic custody',async()=>{
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-partial-custody')),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);const topic='BAT';const fact='BAT synthetic note';const at='2026-10-05T00:00:00Z';
+    episodeIndex(state.storage.sql).add('partial','owner',fact,1);memory.beginTopicCoverage(topic,at);
+    memory.authoriseTopicCoverage(topic,[fact],at,false);
+    expect(memory.topicCoverage(topic)).toBe(1);expect(memory.pendingTopics()).toEqual([fact]);
+    expect(memory.purge([],at,[fact]).ready).toBe(true);memory.settle([],[fact]);
+    expect(memory.pendingTopics()).toEqual([]);expect(memory.incompleteTopics()).toEqual([topic]);
+    expect(memory.forgetSources(topic)).toEqual({sources:[],incomplete:false});
+    memory.verifyEmptyTopicCoverage(topic,at);memory.settle([],[],topic);
+    expect(memory.incompleteTopics()).toEqual([]);
+  });
+});
+
+it('empty inventory recovery after interrupted admission preserves the forget barrier',async()=>{
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-empty-crash')),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);const topic='BAT';const at='2026-10-05T00:00:00Z';
+    memory.beginTopicCoverage(topic,at);
+    expect(memory.barriers()).toEqual([]);
+    memory.verifyEmptyTopicCoverage(topic,at);memory.settle([],[],topic);
+    expect(memory.incompleteTopics()).toEqual([]);
+    expect(memory.barriers().some(row=>row.topic_hash===textFingerprint(topic))).toBe(true);
+  });
+});
+
+it('a failed empty recovery barrier leaves original custody incomplete',async()=>{
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-empty-barrier-failure')),(_instance,state)=>{
+    const at='2026-10-05T00:00:00Z';const topic='BAT';let failing=false;
+    const sql={exec:(...args:Parameters<SqlStorage['exec']>)=>{
+      if(failing && args[0].includes('INTO forget_barriers'))throw new Error('synthetic barrier failure');
+      return state.storage.sql.exec(...args);
+    }} as Pick<SqlStorage,'exec'>;
+    const memory=claimStore(sql);memory.beginTopicCoverage(topic,at);failing=true;
+    expect(()=>memory.verifyEmptyTopicCoverage(topic,at)).toThrow('synthetic barrier failure');
+    expect(memory.topicCoverage(topic)).toBe(1);expect(memory.barriers()).toEqual([]);
+  });
+});
+
+it('deduplicates identical source receipts but holds conflicting receipts even beyond the selected page',()=>{
+  const row={ref:'same',text:'BAT synthetic note'};
+  expect(forgetSourceBatch('BAT',[row,row])).toEqual({sources:[row],incomplete:false,more:false});
+  const rows=Array.from({length:64},(_,i)=>({ref:`r${i}`,text:`BAT note ${String(i).padStart(3,'0')}`}));
+  expect(forgetSourceBatch('BAT',[...rows,...rows])).toMatchObject({more:false,incomplete:false});
+  expect(forgetSourceBatch('BAT',[...rows,{ref:'other',text:'BAT next note'},{...rows[0]!,text:'BAT changed note'}])).toMatchObject({more:true,incomplete:true});
+});
+
+it('one ref carrying a matching and a non-matching text is a conflict even when the non-matching row comes first', () => {
+  const topic = 'CONFLICT-769';
+  expect(forgetSourceBatch(topic, [{ ref: 'episodes:1:text', text: 'unrelated text' }, { ref: 'episodes:1:text', text: `${topic} private` }]).incomplete).toBe(true);
+  expect(forgetSourceBatch(topic, [{ ref: 'episodes:1:text', text: `${topic} private` }, { ref: 'episodes:1:text', text: 'unrelated text' }]).incomplete).toBe(true);
+  expect(forgetSourceBatch(topic, [{ ref: 'episodes:1:text', text: `${topic} private` }, { ref: 'episodes:1:text', text: `${topic} private` }]).incomplete).toBe(false);
+});
+
+it('a ref conflict is found across a batch boundary in either order, and identical duplicates stay valid', () => {
+  const topic = 'BOUNDARY-769';
+  const rows = Array.from({ length: 70 }, (_, i) => ({ ref: `episodes:${i}:text`, text: `${topic} row ${i}` }));
+  expect(forgetSourceBatch(topic, rows).more).toBe(true);
+  expect(forgetSourceBatch(topic, [...rows, { ref: 'episodes:3:text', text: 'a different text' }]).incomplete).toBe(true);
+  expect(forgetSourceBatch(topic, [{ ref: 'episodes:3:text', text: 'a different text' }, ...rows]).incomplete).toBe(true);
+  expect(forgetSourceBatch(topic, [...rows, rows[3]!, rows[69]!]).incomplete).toBe(false);
 });

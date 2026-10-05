@@ -1,6 +1,7 @@
 type Sql = Pick<SqlStorage, 'exec'>;
-import type { ForgetSource } from './selective-forget';
-import { asciiLiteralIncludes } from './selective-forget';
+import { carriesTopic, hidesTopic } from './forget-guard';
+import type { ForgetSource, ForgetBatch, ForgetHeldBy } from './selective-forget';
+import { asciiLiteralIncludes, MAX_FORGET_SOURCES } from './selective-forget';
 
 export const CLAIM_KINDS = ['fact', 'preference', 'routine', 'goal', 'followup', 'health', 'event', 'pattern', 'observation'] as const;
 export const CLAIM_SOURCES = ['stated', 'confirmed', 'inferred'] as const;
@@ -49,6 +50,29 @@ export const cleanAliases = (raw: readonly string[] | undefined): string | null 
 
 // Case-insensitive literal replace: the forgotten text may appear with different casing in
 // other stores, and SQLite replace() alone would leave those variants behind.
+// Owner-DO free-text stores: in the selector inventory, redacted with the same case-insensitive literal as every other store, and read back.
+// trace_log.note and runtime_trace.detail_json are diagnostic logs whose hop names would match short topics, so they stay tracked as gaps in forget-store-table.
+const LITERAL_REDACTED_STORES = [
+  ['thread_topic_index', ['topic']], ['memory_blocks', ['content', 'decision_log']], ['memory_inbox', ['claim', 'content']], ['patrol_log', ['summary']],
+  ['goals', ['description', 'baseline', 'target', 'progress']],
+] as const;
+// Decoded string leaves (and keys) of a JSON value. null: the text is not JSON, so the raw check applies. 'unreadable': it parsed or should have, but the decoder failed on resources (depth, size), so it can never be proven clean. The walk is iterative, so nesting depth cannot throw.
+const jsonLeaves = (value: string): string[] | null | 'unreadable' => {
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); } catch (error) { return error instanceof SyntaxError ? null : 'unreadable'; }
+  if (parsed === null || (typeof parsed !== 'object' && typeof parsed !== 'string')) return [];
+  try {
+    const out: string[] = [];
+    const stack: unknown[] = [parsed];
+    while (stack.length) {
+      const node = stack.pop();
+      if (typeof node === 'string') out.push(node);
+      else if (Array.isArray(node)) for (const child of node) stack.push(child);
+      else if (node !== null && typeof node === 'object') for (const [key, child] of Object.entries(node)) { out.push(key); stack.push(child); }
+    }
+    return out;
+  } catch { return 'unreadable'; }
+};
 const ciRedact = (value: string, needle: string, marker: string): string =>
   needle ? value.replace(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), marker) : value;
 
@@ -340,7 +364,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const hasRevisions = tableExists(sql, 'core_file_revisions');
       const hasCards = tableExists(sql, 'update_cards');
       const hasPlan = tableExists(sql, 'day_plan');
-      const hasSourceLoops = tableExists(sql, 'loops') && tableExists(sql, 'loop_mail_sources');
+      // Every loop title is owner or source text, mail-sourced or not, so redaction and readback cover all of them.
+      const hasSourceLoops = tableExists(sql, 'loops');
       const receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } = { deleted: {}, redacted: {}, terminalised: {} };
       const tally = (kind: keyof typeof receipt, store: string) => { receipt[kind][store] = (receipt[kind][store] ?? 0) + 1; };
       const hasRunCandidates = tableExists(sql, 'run_candidates');
@@ -403,14 +428,49 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             if (changed || redactedText !== row.text) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', changed ? redactedChanges : row.changes, redactedText, row.id);
           }
         });
-        if (hasSourceLoops) attempt('mail_source_loops', () => {
-          for (const row of sql.exec<{ id: string; title: string; status: string }>('SELECT l.id, l.title, l.status FROM loops l JOIN loop_mail_sources s ON s.loop_id = l.id').toArray()) {
+        for (const [table, columns] of LITERAL_REDACTED_STORES) attempt(table, () => {
+          if (!tableExists(sql, table)) return;
+          for (const column of columns) {
+            if (!sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) continue;
+            for (const row of sql.exec<{ rowid: number; value: string | null }>(`SELECT rowid, ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL`).toArray()) {
+              if (typeof row.value !== 'string') continue;
+              // JSON-valued columns are redacted on decoded string leaves and re-serialised only when the row is already canonical; a span that crosses a JSON boundary, or a row that would not round-trip, stays unredacted and the readback keeps the forget incomplete.
+              let next = row.value;
+              let parsed: unknown; let isJson = true;
+              try { parsed = JSON.parse(row.value); } catch (error) { if (error instanceof SyntaxError) isJson = false; else continue; }
+              if (!isJson) next = ci(row.value);
+              else if (parsed !== null && (typeof parsed === 'object' || typeof parsed === 'string')) {
+                // Fail closed: rewrite only a row that is already canonical compact JSON (numbers, escapes and whitespace round-trip) and only when a string leaf changed. Any other row, or one the encoder cannot handle, keeps its text, the readback still sees the topic, and the forget stays incomplete.
+                try {
+                  const normal = JSON.stringify(parsed);
+                  const redacted = JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
+                  if (normal === row.value && redacted !== normal) next = redacted;
+                } catch { continue; }
+              }
+              if (next !== row.value) { sql.exec(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`, next, row.rowid); tally('redacted', table); }
+            }
+          }
+        });
+        if (tableExists(sql, 'reminder_notes')) attempt('reminder_notes', () => {
+          for (const row of sql.exec<{ id: string; note: string }>('SELECT id, note FROM reminder_notes').toArray()) {
+            const note = ci(row.note);
+            if (note !== row.note) { sql.exec('UPDATE reminder_notes SET note = ? WHERE id = ?', note, row.id); tally('redacted', 'reminder_notes'); }
+          }
+        });
+        if (tableExists(sql, 'background_runs')) attempt('background_runs', () => {
+          for (const row of sql.exec<{ id: string; summary: string }>('SELECT id, summary FROM background_runs').toArray()) {
+            const summary = ci(row.summary);
+            if (summary !== row.summary) { sql.exec('UPDATE background_runs SET summary = ? WHERE id = ?', summary, row.id); tally('redacted', 'background_runs'); }
+          }
+        });
+        if (hasSourceLoops) attempt('loops', () => {
+          for (const row of sql.exec<{ id: string; title: string; status: string }>('SELECT l.id, l.title, l.status FROM loops l').toArray()) {
             const title = ci(row.title);
             if (title !== row.title) {
               sql.exec("UPDATE loops SET title = ?, status = CASE WHEN status = 'open' THEN 'dropped' ELSE status END, closed_at = CASE WHEN status = 'open' THEN ? ELSE closed_at END WHERE id = ?", title, Date.parse(at), row.id);
-              if (row.status === 'open' && tableExists(sql, 'observed_mail')) sql.exec('UPDATE observed_mail SET attached = 0 WHERE source_ref IN (SELECT source_ref FROM loop_mail_sources WHERE loop_id = ?)', row.id);
-              tally('redacted', 'mail_source_loops');
-              if (row.status === 'open') tally('terminalised', 'mail_source_loops');
+              if (row.status === 'open' && tableExists(sql, 'observed_mail') && tableExists(sql, 'loop_mail_sources')) sql.exec('UPDATE observed_mail SET attached = 0 WHERE source_ref IN (SELECT source_ref FROM loop_mail_sources WHERE loop_id = ?)', row.id);
+              tally('redacted', 'loops');
+              if (row.status === 'open') tally('terminalised', 'loops');
             }
           }
         });
@@ -500,7 +560,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         const like = likePrefilter(text);
         // The LIKE above is only a prefilter; exactness is the case-insensitive full-text
         // substring check here, matching what the redaction loops rewrote.
-        const exact = (value: string) => value.toLowerCase().includes(text.toLowerCase());
+        const exact = (value: string) => carriesTopic(value, text) || hidesTopic(value, text);
         const add = (store: string, n: number) => { if (n > 0) remaining[store] = (remaining[store] ?? 0) + n; };
         // Same honesty contract as the redaction loops: a store that errors lands in failed,
         // the claim stays 'purging', and the console reports incomplete - no worker crash.
@@ -520,7 +580,16 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           // unverifiable: it lands in failed and the source stays purging.
           if (rows.some((row) => parsedJson(row.changes) === undefined)) throw new Error('update_cards changes unparseable');
         });
-        if (hasSourceLoops) attempt('mail_source_loops', () => add('mail_source_loops', sql.exec<{ title: string }>('SELECT l.title FROM loops l JOIN loop_mail_sources s ON s.loop_id = l.id').toArray().filter(row => exact(row.title)).length));
+        for (const [table, columns] of LITERAL_REDACTED_STORES) attempt(table, () => {
+          if (!tableExists(sql, table)) return;
+          for (const column of columns) {
+            if (!sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) continue;
+            add(table, sql.exec<{ value: string | null }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL`).toArray().filter(row => typeof row.value === 'string' && (exact(row.value) || ((leaves) => leaves === 'unreadable' || (leaves !== null && leaves.some(exact)))(jsonLeaves(row.value)))).length);
+          }
+        });
+        if (tableExists(sql, 'reminder_notes')) attempt('reminder_notes', () => add('reminder_notes', sql.exec<{ note: string }>('SELECT note FROM reminder_notes').toArray().filter(row => exact(row.note)).length));
+        if (tableExists(sql, 'background_runs')) attempt('background_runs', () => add('background_runs', sql.exec<{ summary: string }>('SELECT summary FROM background_runs').toArray().filter(row => exact(row.summary)).length));
+        if (hasSourceLoops) attempt('loops', () => add('loops', sql.exec<{ title: string }>('SELECT l.title FROM loops l').toArray().filter(row => exact(row.title)).length));
         if (hasPlan) attempt('day_plan', () => add('day_plan', sql.exec<{ reason: string }>(`SELECT reason FROM day_plan WHERE reason LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.reason)).length));
         const jsonHits = (raw: string) => { const parsed = parsedJson(raw); return (parsed === undefined ? [raw] : stringsOf(parsed)).some(exact); };
         if (hasRunCandidates) attempt('run_candidates', () => add('run_candidates', sql.exec<{ candidate_json: string }>(`SELECT candidate_json FROM run_candidates WHERE candidate_json LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => jsonHits(row.candidate_json)).length));
@@ -550,15 +619,35 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const row = sql.exec<{ topic: string; coverage_incomplete: number }>('SELECT topic, coverage_incomplete FROM topic_purge_pending WHERE fingerprint = ?', textFingerprint(topic.trim())).toArray()[0];
       return row?.topic === topic.trim() ? row.coverage_incomplete : null;
     },
-    forgetSources(topic: string): { sources: ForgetSource[]; incomplete: boolean } {
+    forgetSources(topic: string, batch = false): { sources: ForgetSource[]; incomplete: boolean; held?: string[]; heldBy?: ForgetHeldBy[]; otherIncomplete?: boolean; more?: boolean } {
       const sources: ForgetSource[] = [];
       let incomplete = false;
+      const held: string[] = [];
+      // Rows LIKE cannot be trusted on: any hiding escape, or a NUL with the topic in the full string. Held, never settled.
+      const heldBy: ForgetHeldBy[] = [];
+      const guard = (table: string, columns: readonly string[], projection = false) => {
+        if (held.includes(table) || !tableExists(sql, table)) return;
+        for (const column of columns) {
+          if (!sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) continue;
+          const rows = sql.exec<{ value: string }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL AND (instr(${column}, char(92)) > 0 OR instr(CAST(${column} AS BLOB), x'00') > 0)`).toArray();
+          const escaped = rows.filter(row => typeof row.value === 'string' && hidesTopic(row.value, topic)).length;
+          const nul = rows.filter(row => typeof row.value === 'string' && !hidesTopic(row.value, topic) && row.value.includes('\0') && carriesTopic(row.value, topic)).length;
+          if (escaped || nul) {
+            incomplete = true; held.push(table);
+            // Names and counts only; never row text or ids.
+            heldBy.push({ table, rule: projection ? 'projection' : escaped ? 'guard_escape' : 'nul', rows: escaped + nul });
+            return;
+          }
+        }
+      };
+      let more = false;
       const like = likePrefilter(topic);
       const collect = (table: string, id: string, columns: readonly string[]) => {
         if (!tableExists(sql, table)) return;
-        const rows = sql.exec<Record<string, string | number | null>>(`SELECT ${id} AS source_id, ${columns.join(', ')} FROM ${table} WHERE ${columns.map(column => `${column} LIKE ? ESCAPE '\\'`).join(' OR ')} LIMIT 65`, ...columns.map(() => like)).toArray();
-        if (rows.length > 64) incomplete = true;
-        for (const row of rows.slice(0, 64)) for (const column of columns) {
+        guard(table, columns);
+        const rows = sql.exec<Record<string, string | number | null>>(`SELECT ${id} AS source_id, ${columns.join(', ')} FROM ${table} WHERE ${columns.map(column => `${column} LIKE ? ESCAPE '\\'`).join(' OR ')} ORDER BY ${id} LIMIT ?`, ...columns.map(() => like), MAX_FORGET_SOURCES + 1).toArray();
+        if (rows.length > MAX_FORGET_SOURCES) { if (batch) more = true; else incomplete = true; }
+        for (const row of rows.slice(0, MAX_FORGET_SOURCES)) for (const column of columns) {
           const text = row[column];
           if (typeof text === 'string' && asciiLiteralIncludes(text, topic)) sources.push({ ref: `${table}:${row.source_id}:${column}`, text });
         }
@@ -566,20 +655,52 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       collect('episodes', 'rowid', ['text']);
       collect('claims', 'id', ['text', 'evidence', 'source_ref']);
       collect('constellation_nodes', 'id', ['label', 'summary']);
+      // Owner-made loop titles and background run summaries carry owner and source text; the selector must see them or an empty inventory settles a forget while they survive.
+      collect('loops', 'id', ['title']);
+      collect('background_runs', 'id', ['summary']);
+      collect('reminder_notes', 'id', ['note']);
+      // The selector sees these stores. Every row that carries the topic needs a selected span (existing design: a row with the topic and no span rejects the whole selection), and selected spans are redacted and read back.
+      for (const [table, columns] of LITERAL_REDACTED_STORES) {
+        const available = tableExists(sql, table) ? columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) : [];
+        if (available.length) collect(table, 'rowid', available);
+      }
+      // A JSON-valued row whose decoded leaf carries the topic but whose raw text does not (the topic hidden behind \u escapes) cannot be offered to the span selector, so it is unprovable: keep the forget incomplete.
+      for (const [table, columns] of LITERAL_REDACTED_STORES) {
+        if (!tableExists(sql, table)) continue;
+        for (const column of columns) {
+          if (!sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) continue;
+          // Held, never treated as clean: a decoded leaf carries the topic, or our own decoder failed on it. Our decoder (not SQLite json_valid, which rejects nesting over 1,000) is what proves a row clean.
+          const decodedOnly = sql.exec<{ value: string }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL AND ${column} != '' AND ${column} NOT LIKE ? ESCAPE '\\'`, like).toArray()
+            .some(row => {
+              const leaves = jsonLeaves(row.value);
+              if (leaves === null) return false;
+              return leaves === 'unreadable' || leaves.some(leaf => leaf.toLowerCase().includes(topic.toLowerCase()));
+            });
+          if (decodedOnly) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'decoded_leaf_or_unreadable', rows: 1 }); }
+        }
+      }
+      const incompleteBeforeHeld = incomplete;
       // These existing cleanup projections are outside the bounded selector's
       // source contract. Preserve their originals if they still carry the topic.
       for (const [table, columns] of [
         ['claims', ['aliases']], ['memory_backups', ['payload']], ['spots', ['text', 'evidence']],
         ['core_file_revisions', ['content']], ['update_cards', ['changes', 'text']],
-        ['day_plan', ['reason']], ['loops', ['title']],
+        ['day_plan', ['reason']], ['standing_orders', ['scope', 'escalation']],
         ['run_candidates', ['candidate_json']], ['outbox', ['payload']],
         ['held_candidates', ['candidate_json']], ['schedule', ['payload_json']],
       ] as const) {
         if (!tableExists(sql, table)) continue;
         const available = columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length);
-        if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${available.map(column => `(${column} LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE (type = 'text' AND value LIKE ? ESCAPE '\\') OR key LIKE ? ESCAPE '\\'))`).join(' OR ')} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) incomplete = true;
+        if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${available.map(column => `(${column} LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE (type = 'text' AND value LIKE ? ESCAPE '\\') OR key LIKE ? ESCAPE '\\'))`).join(' OR ')} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'projection', rows: 1 }); }
+        if (available.length && !held.includes(table)) {
+          guard(table, available, true);
+        }
       }
-      return { sources, incomplete };
+      return { sources, incomplete, ...(held.length ? { held, heldBy, otherIncomplete: incompleteBeforeHeld || held.some(table => table !== 'standing_orders') } : {}), ...(batch ? { more } : {}) };
+    },
+    forgetSourceBatch(topic: string): ForgetBatch {
+      const page = this.forgetSources(topic, true);
+      return { sources: page.sources, incomplete: page.incomplete, ...(page.held ? { held: page.held, heldBy: page.heldBy, otherIncomplete: page.otherIncomplete } : {}), more: !!page.more };
     },
     beginTopicCoverage(topic: string, at: string): void {
       topic = topic.trim();
@@ -592,9 +713,9 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       if (aggregate.length > 128 || new TextEncoder().encode(JSON.stringify(aggregate)).byteLength > 65536) throw new Error('pending topic budget exceeded');
       sql.exec('INSERT INTO topic_purge_pending (fingerprint, topic, created_at, coverage_incomplete) VALUES (?, ?, ?, 1) ON CONFLICT(fingerprint) DO UPDATE SET coverage_incomplete = CASE WHEN topic_purge_pending.coverage_incomplete = 2 THEN 2 ELSE 1 END', fingerprint, topic, at);
     },
-    authoriseTopicCoverage(topic: string, selected: readonly string[], at: string): void {
+    authoriseTopicCoverage(topic: string, selected: readonly string[], at: string, complete = true): void {
       topic = topic.trim();
-      if (!selected.length || selected.length > 32 || /[^\x20-\x7e]/.test(topic) || selected.some(text => text.length < 12 || text.length > 4096 || /[^\x20-\x7e]/.test(text) || !asciiLiteralIncludes(text, topic) || text.trim().toLowerCase() === topic.toLowerCase())) throw new Error('selected topic scope');
+      if (!selected.length || selected.length > MAX_FORGET_SOURCES || /[^\x20-\x7e]/.test(topic) || selected.some(text => text.length < 12 || text.length > 4096 || /[^\x20-\x7e]/.test(text) || !asciiLiteralIncludes(text, topic) || text.trim().toLowerCase() === topic.toLowerCase())) throw new Error('selected topic scope');
       const texts = [...new Set([...this.pendingTopics(), ...selected])];
       const existing = sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending').toArray().map(row => row.topic);
       const aggregate = [...new Set([...existing, ...texts])];
@@ -612,11 +733,17 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // The owner topic stays incomplete until independently verified settlement.
       for (const text of [topic, ...selected]) this.barrier(text, at);
       // One atomic SQL statement couples selected-clause custody to the proof
-      // state. 1 means unproved; 2 means selected coverage awaiting readback.
-      const batch = [...rows.map(row => ({ ...row, coverage: 0 })), { fingerprint: textFingerprint(topic), topic, coverage: 2 }];
+      // state. Partial batches retain 1; only full coverage uses 2, awaiting readback.
+      const batch = [...rows.map(row => ({ ...row, coverage: 0 })), { fingerprint: textFingerprint(topic), topic, coverage: complete ? 2 : 1 }];
       sql.exec(`INSERT INTO topic_purge_pending (fingerprint, topic, created_at, coverage_incomplete)
         SELECT json_extract(value, '$.fingerprint'), json_extract(value, '$.topic'), ?, json_extract(value, '$.coverage') FROM json_each(?) WHERE 1
         ON CONFLICT(fingerprint) DO UPDATE SET coverage_incomplete = excluded.coverage_incomplete`, at, JSON.stringify(batch));
+    },
+    verifyEmptyTopicCoverage(topic: string, at: string): void {
+      // Caller proves complete current inventory, including unsaved requests,
+      // before this transition; settlement still requires independent readback.
+      this.barrier(topic, at);
+      sql.exec('UPDATE topic_purge_pending SET coverage_incomplete = 2 WHERE fingerprint = ? AND topic = ? AND coverage_incomplete != 0', textFingerprint(topic.trim()), topic.trim());
     },
     settle(ids: readonly number[], topics: readonly string[] = [], coveredTopic?: string): void {
       for (const topic of topics) sql.exec('DELETE FROM topic_purge_pending WHERE fingerprint = ? AND coverage_incomplete = 0', textFingerprint(topic.trim()));

@@ -80,3 +80,15 @@ describe('owner harness', () => {
     });
   });
 });
+
+it('parses /heldrows with an optional table', () => {
+  expect(parseHarnessCommand('/heldrows update_cards')).toEqual({ kind: 'heldrows', table: 'update_cards', from: null });
+  expect(parseHarnessCommand('/heldrows')).toEqual({ kind: 'heldrows', table: null, from: null });
+});
+
+it('parses the /heldrows continue rowid as given and rejects a garbage one', () => {
+  expect(parseHarnessCommand('/heldrows day_plan 250')).toEqual({ kind: 'heldrows', table: 'day_plan', from: 250 });
+  expect(parseHarnessCommand('/heldrows day_plan -5')).toEqual({ kind: 'heldrows', table: 'day_plan', from: -5 });
+  expect(parseHarnessCommand('/heldrows day_plan abc')).toEqual({ kind: 'heldrows', table: 'day_plan', from: 'invalid' });
+  expect(parseHarnessCommand('/heldrows day_plan 99999999999999999999')).toEqual({ kind: 'heldrows', table: 'day_plan', from: 'invalid' });
+});

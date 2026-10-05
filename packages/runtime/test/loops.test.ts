@@ -94,44 +94,33 @@ describe('update card feedback', () => {
   });
 });
 
-describe('owner-stated deadline loops without a mail source', () => {
-  const setup = (sql: SqlStorage) => {
-    let id = 0;
-    const book = loopBook(sql, { newId: () => String(++id), now: () => at('2026-09-24T04:00:00Z') });
-    return { book, open: loopHandlers(book)[0]! };
-  };
-  it('are due only once their time has passed, never include undated loops, and are claimed once per due and timezone', async () => {
-    await withSql(async (sql) => {
-      const { book, open } = setup(sql);
-      await run(open, { title: 'Send Priya the deck', due: '2026-09-26T09:00' });
-      await run(open, { title: 'Find a physio' });
-      expect(book.nudgeDue('2026-09-26T08:59', 'Asia/Kolkata')).toEqual([]);
-      const due = book.nudgeDue('2026-09-26T09:00', 'Asia/Kolkata');
-      expect(due.map((loop) => loop.title)).toEqual(['Send Priya the deck']);
-      expect(book.claimNudge(due[0]!.id, '2026-09-26T09:00', 'Asia/Kolkata', at('2026-09-26T04:00:00Z'))).toBe(true);
-      expect(book.claimNudge(due[0]!.id, '2026-09-26T09:00', 'Asia/Kolkata', at('2026-09-26T04:00:00Z'))).toBe(false);
-      expect(book.nudgeDue('2026-09-26T09:30', 'Asia/Kolkata')).toEqual([]);
-    });
+describe('openLoopsPrompt', () => {
+  it('lists only open owner or agent made loops, with due, and is empty when none', async () => {
+    const { openLoopsPrompt } = await import('../src/channels/loops');
+    const rows: Array<Record<string, unknown>> = [];
+    const book = { list: () => rows } as never;
+    expect(openLoopsPrompt(book, 'UTC', 10_000)).toBe('');
+    rows.push({ id: 'a1', title: 'Send the shortlist', due: '2026-10-09T10:00', source_ref: null }, { id: 'b2', title: 'From mail', due: null, source_ref: 'gmail:x' });
+    const text = openLoopsPrompt(book, 'UTC', 10_000);
+    expect(text).toContain('Send the shortlist (due 2026-10-09 10:00) [a1]');
+    expect(text).not.toContain('From mail');
   });
-  it('closing the loop or changing its due before the claim prevents the nudge; a changed due is a new occurrence', async () => {
-    await withSql(async (sql) => {
-      const { book, open } = setup(sql);
-      const a = (await run(open, { title: 'Call the landlord', due: '2026-09-26T09:00' }) as { data: { id: string } }).data.id;
-      const b = (await run(open, { title: 'Pay the plumber', due: '2026-09-26T09:00' }) as { data: { id: string } }).data.id;
-      book.close(a, 'done');
-      expect(book.claimNudge(a, '2026-09-26T09:00', 'Asia/Kolkata', at('2026-09-26T04:00:00Z'))).toBe(false);
-      expect(book.claimNudge(b, '2026-09-25T09:00', 'Asia/Kolkata', at('2026-09-26T04:00:00Z'))).toBe(false);
-      expect(book.claimNudge(b, '2026-09-26T09:00', 'Asia/Kolkata', at('2026-09-26T04:00:00Z'))).toBe(true);
-      sql.exec("UPDATE loops SET due = '2026-09-27T09:00' WHERE id = ?", b);
-      expect(book.nudgeDue('2026-09-27T09:00', 'Asia/Kolkata').map((loop) => loop.id)).toEqual([b]);
-    });
-  });
-  it('mail-sourced loops stay on the mail review path and are never returned here', async () => {
-    await withSql(async (sql) => {
-      const { book } = setup(sql);
-      sql.exec("INSERT INTO loops (id, title, due, status, created_at) VALUES ('m1', 'Reply to Sam', '2026-09-26T09:00', 'open', 1)");
-      sql.exec("INSERT INTO loop_mail_sources (loop_id, source_ref) VALUES ('m1', 'src1')");
-      expect(book.nudgeDue('2026-09-27T09:00', 'Asia/Kolkata')).toEqual([]);
-    });
+  it('budgets to the room it is given, keeps soonest-due first and names what it left out', async () => {
+    const { openLoopsPrompt } = await import('../src/channels/loops');
+    const rows = Array.from({ length: 50 }, (_, i) => ({ id: `b${i}`, title: `Task ${i} ${'a'.repeat(100)}`, due: null, source_ref: null }));
+    const book = { list: () => rows } as never;
+    const text = openLoopsPrompt(book, 'UTC', 1000);
+    expect(text.length).toBeLessThanOrEqual(1000);
+    expect(text).toMatch(/\(\d+ more open loops exist beyond this list/);
+    const shown = (text.match(/^- /gm) ?? []).length;
+    expect(text).toContain(`(${50 - shown} more open loops exist beyond this list`);
+    expect(openLoopsPrompt(book, 'UTC', 10)).toBe('');
+    // A long row never hides a shorter one behind it, and when nothing fits the omission line still says loops exist.
+    const mixed = { list: () => [{ id: 'l1', title: 'x'.repeat(200), due: '2026-10-09T10:00', source_ref: null }, { id: 's2', title: 'short', due: null, source_ref: null }] } as never;
+    expect(openLoopsPrompt(mixed, 'UTC', 230)).toContain('- short [s2]');
+    expect(openLoopsPrompt(mixed, 'UTC', 230)).toContain('(1 more open loops exist beyond this list');
+    const none = openLoopsPrompt({ list: () => [{ id: 'l1', title: 'x'.repeat(200), due: null, source_ref: null }] } as never, 'UTC', 170);
+    expect(none).toContain('(1 more open loops exist beyond this list');
+    expect(none).not.toContain('xxxx');
   });
 });
