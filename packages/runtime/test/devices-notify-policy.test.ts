@@ -15,7 +15,7 @@ it('atomically enforces strict rolling notification caps and counts stable retri
   expect(store.list(100)).toHaveLength(20); store.cancelQueued(); expect(store.pending(1300)).toHaveLength(0);
  });
 });
-it.each([['info'], { value:'info' }, null, 1, true])('rejects nonstring notification severities %#',async severity=>{
+it.each([['info'], { value:'info' }, null, 1, true].map(value => [value]))('rejects nonstring notification severities %#',async severity=>{
  const stub=env.DEVICE_BRIDGE_DO!.get(env.DEVICE_BRIDGE_DO!.idFromName('dev_notify_shape_fixture')) as DurableObjectStub<DeviceBridgeDO>;
  await runInDurableObject(stub,async(_instance,state)=>{
   const store=new DeviceCommandStore(state.storage);
