@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from 'cloudflare:test';
-import { expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { claimStore } from '../src/memory/claims';
 import { hidesTopic } from '../src/memory/forget-guard';
 import { conversationForgetSources } from '../src/channels/conversation-store';
@@ -57,4 +57,47 @@ it('conversation JSON-shaped payload with an escaped topic still holds, includin
   expect(await convHold('review-conv-json', '{"t":"DLD-\\u0032026 secret"}', 'DLD-2026 secret')).toBe(true);
   expect(await convHold('review-conv-json5', '{t:"DLD-\\u0032026 secret"}', 'DLD-2026 secret')).toBe(true);
   expect(await convHold('review-conv-array', '["DLD-\\u0032026 secret"]', 'DLD-2026 secret')).toBe(true);
+});
+
+describe('hidesTopic unicode escapes', () => {
+  it('holds exactly when the decoded string carries the topic, by the same fold as carriesTopic', async () => {
+    const { hidesTopic, carriesTopic } = await import('../src/memory/forget-guard');
+    const cases: Array<[string, string]> = [
+      ['x \\u0057 y', 'code word'], ['x \\u0077 y', 'code word'], ['\u03b1\\u03a3', '\u03b1\u03c2'], ['I\\u0307', 'i\u0307'],
+      ['\\u212a', 'k'], ['a \\u0000 b', 'a\u0000b'], ['\\u0063ode \\u2013 note', 'code'], ['moved \\u2013 see agenda', 'code word'],
+      ['e\\u0301', 'e'], ['a\\u00a0b', 'a b'], ['\\uff43ode', 'code'], ['stra\\u00dfe', 'strasse'], ['\\ufb01le', 'file'], ['x \\u0057 y plus \\u2013', 'code word'],
+    ];
+    for (const [value, topic] of cases) {
+      const decoded = value.replace(/\\u([0-9a-fA-F]{4})/g, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+      expect(hidesTopic(value, topic), `${value} / ${topic}`).toBe(carriesTopic(decoded, topic));
+    }
+  });
+  it('pins the sigma and dotted-I fail-open found in review, and keeps malformed escapes held', async () => {
+    const { hidesTopic } = await import('../src/memory/forget-guard');
+    expect(hidesTopic('\u03b1\\u03a3', '\u03b1\u03c2')).toBe(true);
+    expect(hidesTopic('moved \\u2013 see agenda', 'code word')).toBe(false);
+    expect(hidesTopic('moved \\u20 see agenda', 'code word')).toBe(true);
+    expect(hidesTopic('C:\\Users', 'code word')).toBe(true);
+    expect(hidesTopic('x \\U0057 y', 'code word')).toBe(true);
+  });
+});
+
+describe('hidesTopic decodes simple escapes too (review round 2)', () => {
+  it('matches a real JSON parse where a skipped tab or newline changes final-sigma context', async () => {
+    const { hidesTopic, carriesTopic } = await import('../src/memory/forget-guard');
+    for (const [json, topic] of [['"\\t\\u03a3"', '\u03c3'], ['"\\n\\u03a3"', '\u03c3'], ['"\\"\\u03a3"', '\u03c3'], ['"\\t\\u0130"', 'i\u0307'], ['"\\t\\u03a3"', '\u03c2']] as const) {
+      const inner = json.slice(1, -1);
+      expect(hidesTopic(inner, topic), `${inner} / ${topic}`).toBe(carriesTopic(JSON.parse(json) as string, topic) && !carriesTopic(inner, topic) || (inner.includes('\\u') && carriesTopic(JSON.parse(json) as string, topic)));
+    }
+    expect(hidesTopic('\\t\\u03a3', '\u03c3')).toBe(true);
+    expect(hidesTopic('\\n\\u03a3', '\u03c3')).toBe(true);
+  });
+  it('pins double-encoded escapes: the guard reads one level, like the consumers', async () => {
+    const { hidesTopic } = await import('../src/memory/forget-guard');
+    expect(hidesTopic('\\\\u0041', 'a')).toBe(false);
+  });
+  it('a benign escape with no effect on the topic still passes', async () => {
+    const { hidesTopic } = await import('../src/memory/forget-guard');
+    expect(hidesTopic('line one\\nline two', 'code word')).toBe(false);
+  });
 });
