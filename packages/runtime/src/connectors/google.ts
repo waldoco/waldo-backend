@@ -453,7 +453,7 @@ const calendarSourceUrl = (value: string | undefined): string | undefined => {
     const url = new URL(value);
     return url.protocol === 'https:' && !url.username && !url.password && !url.port
       && ['calendar.google.com', 'www.google.com'].includes(url.hostname) && url.pathname.startsWith('/calendar/')
-      && value.length <= 2048 ? url.href : undefined;
+      && value.length <= 2048 && url.href.length <= 2048 ? url.href : undefined;
   } catch { return undefined; }
 };
 const toItem = (event: GoogleEvent): CalendarItem => ({
