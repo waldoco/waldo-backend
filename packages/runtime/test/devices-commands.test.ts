@@ -57,7 +57,7 @@ it('receipts a first durable result after volatile expired ack and TTL plus repl
  const queued=await store.enqueue({...input('query_after_expired_ack'),ttl_seconds:1},400000,['machine_state_query']); if(!queued.accepted)throw new Error('queue');
  const command=JSON.parse(store.pending(400000).find(row=>row.command_id===queued.command_id)!.wire);
  store.markSent(command.command_id,'generation_fixture');
- const reference={...signed('result'),command_id:command.command_id,revision:1,idempotency_key:command.idempotency_key};
+ const reference={...signed('result'),message_id:'01ARZ3NDEKTSV4RRFFQ69G5FA0',command_id:command.command_id,revision:1,idempotency_key:command.idempotency_key};
  store.acceptAck({...reference,type:'ack',payload:{state:'expired',reason:'expired'}} as never);
  const result={...reference,payload:{status:'answered',answer:{query_id:'query_after_expired_ack',query_kind:'session_status',state:'unknown'}}};
  const first=store.acceptResult(result as never,'late-fingerprint',400302);
