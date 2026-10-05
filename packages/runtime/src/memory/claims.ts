@@ -55,6 +55,20 @@ const LITERAL_REDACTED_STORES = [
   ['thread_topic_index', ['topic']], ['memory_blocks', ['content', 'decision_log']], ['memory_inbox', ['claim', 'content']], ['patrol_log', ['summary']],
   ['goals', ['description', 'baseline', 'target', 'progress']],
 ] as const;
+// Decoded string leaves of a JSON value (objects, arrays or a top-level string); [] when the text is not JSON. A topic can hide behind \u escapes that a raw LIKE never sees.
+const jsonLeaves = (value: string): string[] => {
+  try {
+    const out: string[] = [];
+    const walk = (node: unknown): void => {
+      if (typeof node === 'string') out.push(node);
+      else if (Array.isArray(node)) node.forEach(walk);
+      else if (node !== null && typeof node === 'object') for (const [key, child] of Object.entries(node)) { out.push(key); walk(child); }
+    };
+    const parsed: unknown = JSON.parse(value);
+    if (parsed !== null && (typeof parsed === 'object' || typeof parsed === 'string')) walk(parsed);
+    return out;
+  } catch { return []; }
+};
 const ciRedact = (value: string, needle: string, marker: string): string =>
   needle ? value.replace(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), marker) : value;
 
@@ -416,15 +430,15 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             if (!sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) continue;
             for (const row of sql.exec<{ rowid: number; value: string | null }>(`SELECT rowid, ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL`).toArray()) {
               if (typeof row.value !== 'string') continue;
-              // JSON-valued columns are redacted on string leaves and re-serialised, so a span can never break the structure; a span that crosses a JSON boundary matches no leaf, stays unredacted, and the readback keeps the forget incomplete.
+              // JSON-valued columns are redacted on decoded string leaves and re-serialised only when the row is already canonical; a span that crosses a JSON boundary, or a row that would not round-trip, stays unredacted and the readback keeps the forget incomplete.
               let next = row.value;
               try {
                 const parsed: unknown = JSON.parse(row.value);
                 if (parsed !== null && (typeof parsed === 'object' || typeof parsed === 'string')) {
-                  // Rewrite only when a string leaf changed, so rows without the topic keep their exact original text (no whitespace, big-number or escape normalisation).
+                  // Fail closed: rewrite only a row that is already in canonical compact form (so numbers, escapes and whitespace round-trip exactly) and only when a string leaf changed. Any other row keeps its text, the readback still sees the topic, and the forget stays incomplete.
                   const normal = JSON.stringify(parsed);
                   const redacted = JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
-                  if (redacted !== normal) next = redacted;
+                  if (normal === row.value && redacted !== normal) next = redacted;
                 }
               } catch { next = ci(row.value); }
               if (next !== row.value) { sql.exec(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`, next, row.rowid); tally('redacted', table); }
@@ -564,7 +578,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           if (!tableExists(sql, table)) return;
           for (const column of columns) {
             if (!sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) continue;
-            add(table, sql.exec<{ value: string | null }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL`).toArray().filter(row => typeof row.value === 'string' && exact(row.value)).length);
+            add(table, sql.exec<{ value: string | null }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL`).toArray().filter(row => typeof row.value === 'string' && (exact(row.value) || jsonLeaves(row.value).some(exact))).length);
           }
         });
         if (tableExists(sql, 'reminder_notes')) attempt('reminder_notes', () => add('reminder_notes', sql.exec<{ note: string }>('SELECT note FROM reminder_notes').toArray().filter(row => exact(row.note)).length));
@@ -625,6 +639,16 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       for (const [table, columns] of LITERAL_REDACTED_STORES) {
         const available = tableExists(sql, table) ? columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) : [];
         if (available.length) collect(table, 'rowid', available);
+      }
+      // A JSON-valued row whose decoded leaf carries the topic but whose raw text does not (the topic hidden behind \u escapes) cannot be offered to the span selector, so it is unprovable: keep the forget incomplete.
+      for (const [table, columns] of LITERAL_REDACTED_STORES) {
+        if (!tableExists(sql, table)) continue;
+        for (const column of columns) {
+          if (!sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) continue;
+          const decodedOnly = sql.exec<{ value: string }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL AND ${column} NOT LIKE ? ESCAPE '\\' AND json_valid(${column})`, like).toArray()
+            .some(row => jsonLeaves(row.value).some(leaf => leaf.toLowerCase().includes(topic.toLowerCase())));
+          if (decodedOnly) { incomplete = true; held.push(table); }
+        }
       }
       const incompleteBeforeHeld = incomplete;
       // These existing cleanup projections are outside the bounded selector's

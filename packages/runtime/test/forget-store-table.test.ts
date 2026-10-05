@@ -4,8 +4,9 @@ import { describe, expect, it } from 'vitest';
 //  PURGED    purge() clears the owner's text from it, and `proof` names the test file that seeds a marker and checks it (the guard only checks that file mentions the table name: a substring tripwire against renames and deleted tests, not proof that it seeds one).
 //  EXEMPT    holds no owner-authored text (ids, hashes, counters, flags, timestamps, codes); `why` says what it holds.
 //  KNOWN_GAP may hold owner text and a literal forget does not reach it, or it has not been inspected. No claim is made about it.
-//            Unclear goes here. Whether a forget should reach things the owner made on purpose (reminder notes, standing
-//            orders, artifacts, workspace files) is an open owner decision, deferred.
+//            Unclear goes here. Whether a forget should reach things the owner made on purpose (artifacts, workspace files,
+//            standing orders, which stay preserved and are named in the owner message) is an open owner decision, deferred.
+//            Loops, background run summaries, reminder notes, goals, memory blocks and inbox, patrol log and the thread topic index now have literal redaction with readback (proof: memory-forget-do-provider.test.ts).
 // A table found in src with no row here fails, so the next store is decided deliberately. Layer: SOURCE (reads source text).
 type Row = { kind: 'PURGED'; proof: string } | { kind: 'EXEMPT'; why: string } | { kind: 'KNOWN_GAP'; note: string };
 const purged = (proof: string): Row => ({ kind: 'PURGED', proof });
@@ -42,7 +43,7 @@ const TABLES: Record<string, Row> = {
   // Text the owner made or the runtime stored, not reached by a literal forget
   loop_governor_runs: gap('has a reason TEXT column; its writer was not traced'),
   artifacts: gap('name in the table, body in R2; owner-made'), owner_files: gap('file name and caption; owner-made'),
-  standing_orders: gap('trigger and escalation text; owner-made instructions stay preserved and a topic present keeps a forget incomplete (named in the owner message)'), loops: purged('memory-forget-do-provider.test.ts'), background_runs: gap('summary text'),
+  standing_orders: gap('trigger and escalation text; owner-made instructions stay preserved and a topic present keeps a forget incomplete (named in the owner message)'), loops: purged('memory-forget-do-provider.test.ts'), background_runs: purged('memory-forget-do-provider.test.ts'),
   ledger: gap('summary and payload JSON'), event_admissions: gap('delivery body'), trace_log: gap('note column; trace sinks not verified'), journal: gap('run journal; only a partial reference in purge, not shown covered'),
   claim_recall: gap('FTS index kept in step with claims by triggers (content=claims); no test checks the index for a marker after a purge'),
   constellation_edges: gap('ids plus a relation label; node removal drops its edges per purge comments, no test checks edges'),
