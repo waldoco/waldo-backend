@@ -2221,3 +2221,26 @@ it('REPRO: /heldrows pages past prefix decoys instead of reporting held with not
     expect(text.includes('PARTIAL') || text.includes('#301')).toBe(true);
   });
 });
+
+it.each(['split', 'nul'] as const)('REPRO: a >40-char topic %s inside a retained card does not leave fragments or an unprovable hold', async kind => {
+  const label = `forget-update-cards-frag-${kind}`;
+  await admittedTurn(label, 153410, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    const changes = kind === 'split'
+      ? [{ detail: topic.slice(0, 46) }, { detail: topic.slice(46) }]
+      : [{ detail: `${topic.slice(0, 41)}\u0000${topic.slice(41)}` }];
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify(changes));
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify([{ detail: 'Standup moved to 09:30 UTC.' }]));
+    const store = claimStore(sql);
+    store.purge([], new Date().toISOString(), [topic]);
+    const rows = sql.exec<{ changes: string }>('SELECT changes FROM update_cards ORDER BY id').toArray().map(r => r.changes);
+    expect(rows[0]).not.toContain('ZEBRA');
+    expect(rows[0]).not.toContain('COBALT');
+    expect(rows[1]).toContain('Standup moved');
+    expect(store.forgetSources(topic, true).incomplete).toBe(false);
+    state.storage.deleteAlarm();
+  });
+});
