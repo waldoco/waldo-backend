@@ -191,11 +191,12 @@ export const blankCardPieces = (parsed: unknown, topic: string): unknown => {
   const holds = (list: Leaf[], from: number, to: number, separator: string) => exact(list.slice(from, to + 1).map(leaf => leaf.text).join(separator));
   // Same piece lists and join modes as cardCarriesTopic. For each start take the shortest run holding the topic, and skip a run whose tail alone still holds it (a later start finds that one),
   // so unrelated leaves before, between or after the copies are never marked. Marks accumulate over every list and join mode, because separate copies may need different ones.
-  // A leaf that is empty once NULs are stripped adds nothing to any run, so it is left out of the search (it would otherwise let a run extend without bound).
-  const searchable = leaves.filter(leaf => leaf.text.replace(/\u0000/g, '').length > 0);
+  // A leaf that is empty once NULs are stripped adds nothing when leaves are joined with '' (and would let a run extend without bound there), so that mode skips it.
+  // Joined with ' ' each leaf, empty or not, adds a separator, which the run bound counts, so that mode keeps every leaf.
   const topicLength = topic.toLowerCase().length;
-  for (const list of [searchable.filter(leaf => !leaf.key), searchable]) {
-    for (const separator of ['', ' ']) {
+  for (const separator of ['', ' ']) {
+    const base = separator === '' ? leaves.filter(leaf => leaf.text.replace(/\u0000/g, '').length > 0) : leaves;
+    for (const list of [base.filter(leaf => !leaf.key), base]) {
       for (let from = 0; from < list.length; from++) {
         // Leaves strictly between the first and last of a run that holds the topic lie wholly inside it, so their total length cannot exceed the topic's: stop extending past that.
         // This keeps the search near linear instead of cubic (it was about 1s at 200 leaves).

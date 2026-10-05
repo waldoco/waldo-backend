@@ -2745,3 +2745,14 @@ it.each([
 ])('ADV804BYTES %s',async original=>{
  const label='adv804-bytes-'+original.length;await admittedTurn(label,199016,'Standup at 09:10 UTC.',ops());await runInDurableObject(stub(label),(_instance,state)=>{const sql=state.storage.sql;updateBook(sql).record('d',1,[],'S');sql.exec('UPDATE update_cards SET changes = ?',original);const store=claimStore(sql);store.purge([],new Date().toISOString(),[MAIL_T]);state.storage.deleteAlarm();expect(sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes).toBe(original);});
 });
+
+it.each(['', '\0'])('ROUND4 empty separator collateral %j',async gap=>{
+ const label='round4-space-'+gap.length; await admittedTurn(label,199030,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=>{
+ const sql=state.storage.sql; const topic='Alpha  Beta'; const items=['Unrelated invoice','Alpha',gap,'Beta','Unrelated footer'];
+ updateBook(sql).record('d',1,[],'S');sql.exec('UPDATE update_cards SET changes = ?',JSON.stringify(items));const store=claimStore(sql);
+ expect(store.forgetSources(topic,true).incomplete).toBe(true);store.purge([],new Date().toISOString(),[topic]);
+ const after=JSON.parse(sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes);console.log('ROUND4-SPACE',JSON.stringify({gap,after}));
+ state.storage.deleteAlarm();expect(store.forgetSources(topic,true).incomplete).toBe(false);expect(after[0]).toBe(items[0]);expect(after[4]).toBe(items[4]);
+ });
+});
