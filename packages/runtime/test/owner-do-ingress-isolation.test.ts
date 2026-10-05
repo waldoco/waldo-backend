@@ -123,11 +123,12 @@ describe('actual owner interruption recovery', () => {
       await state.storage.deleteAlarm();
     });
   });
-// The DO runs in Asia/Kolkata here, and a day-card planner model call appeared once the real clock passed IST midnight.
-// Pin Date for the whole test (setup, both alarms) at several instants, including both sides of the IST day boundary.
-it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:59.999Z', '2026-10-04T18:30:00.001Z'])('actual owner eviction after a claimed write produces one durable uncertainty status without replay (clock %s)', async (pinned) => {
-  vi.useFakeTimers({ toFake: ['Date'] });
-  vi.setSystemTime(new Date(pinned));
+// Keep one real local day across the shared actor while covering divergent and aligned UTC/IST dates.
+it.each(['00:00:00.001', '12:00:00.000', '23:59:59.999'])('actual owner eviction after a claimed write produces one durable uncertainty status without replay (clock %s)', async (time) => {
+  const { localIso } = await import('../src/channels/reminders');
+  const today = localIso(Date.now(), 'Asia/Kolkata').slice(0, 10);
+  const pinned = Date.parse(`${today}T${time}+05:30`);
+  const date = vi.spyOn(Date, 'now').mockReturnValue(pinned);
   try {
   const subject = 81101; const updateId = 995001; const stub = doStub(subject);
   const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
@@ -137,22 +138,22 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:59.999Z', '2026-10-04T18:
   // Persist the crash cut after claim and one write, before a final is committed.
   // Evict the registered DO itself: recovery must not depend on its in-memory attempt set.
   await runInDurableObject(stub, async (instance, state) => {
-    await state.storage.put({ telegram_subject: String(subject), do_name: route(subject).doName });
+    await state.storage.put({ telegram_subject: String(subject), do_name: route(subject).doName, timezone: 'Asia/Kolkata' });
     const runtime = instance as unknown as { setup(): { ready: Promise<void> }; serial(work: () => Promise<void>): Promise<void> };
     await runtime.setup().ready;
     await runtime.serial(async () => undefined);
     // With the clock pinned, mark that day's cards as already sent so the alarm has no day plan to make.
     // Without this the planner model call returns once the pinned instant is past IST midnight (observed at 18:30:00.001Z).
-    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
     const { DAY_CARDS } = await import('../src/prompt/day-cards');
     for (const card of DAY_CARDS) state.storage.sql.exec('INSERT OR REPLACE INTO day_plan (day, card, time, reason, sent) VALUES (?, ?, ?, ?, 1)', today, card.id, '12:00', 'test fixture');
+    expect(state.storage.sql.exec<{ day: string }>('SELECT DISTINCT day FROM day_plan').toArray()).toEqual([{ day: today }]);
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
     await inbox.admit({ bot: 'hermetic-test-bot-token', subject: String(subject), doName: route(subject).doName }, updateId, 'PRIVATE_INTERRUPTED_REQUEST');
     await inbox.claim(`hermetic-test-bot-token:telegram:${updateId}`, 'interrupted-attempt', 'interrupted-run', Date.now() + 150_000);
     await state.storage.put('interruption-fixture-effect-count', 1);
     const records = await inbox.records(); const interrupted = records.find(row => row.updateId === updateId)!;
     interrupted.admittedAt = Date.parse('2026-10-03T18:00:00Z');
-    await state.storage.put({ telegram_owner_inbox_v1: records, timezone: 'Asia/Kolkata' });
+    await state.storage.put({ telegram_owner_inbox_v1: records });
     callsBefore = modelInputs.length;
     await armAlarm(state.storage, Date.now() + 3600000);
   });
@@ -184,7 +185,7 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:59.999Z', '2026-10-04T18:
     expect(await new TelegramOwnerInbox(state.storage, persistInboxWake).claim(`hermetic-test-bot-token:telegram:${updateId}`, 'retry', 'retry-run', Date.now() + 150_000)).toBeNull();
     await state.storage.deleteAlarm();
   });
-  } finally { vi.useRealTimers(); }
+  } finally { date.mockRestore(); }
 });
 
 it('actual recovery retains its notice wake after outbox capacity failure and queues only once', async () => {
