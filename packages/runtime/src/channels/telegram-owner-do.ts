@@ -323,9 +323,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     let boundSubject = this.ctx.storage.kv.get<string>('telegram_subject');
     const boundName = this.ctx.storage.kv.get<string>('do_name');
     if (boundName && boundName !== doName) return new Response('forbidden', { status: 403 });
-    // A stored binding that disagrees with the request (an unlink flag, or a different subject after unlink and relink) is replaced only on the directory's own current answer
+    if (boundSubject && boundSubject !== subject && !this.ctx.storage.kv.get<boolean>('telegram_unlinked')) return new Response('forbidden', { status: 403 });
+    // After an unlink, the stored binding (flag, and the old subject) is replaced only on the directory's own current answer
     // that this subject belongs to this owner. The header alone, like the stored value, is not evidence.
-    if ((boundSubject && boundSubject !== subject) || this.ctx.storage.kv.get<boolean>('telegram_unlinked')) {
+    if (this.ctx.storage.kv.get<boolean>('telegram_unlinked')) {
       let current: Awaited<ReturnType<ReturnType<typeof ownerDirectory>['byPresence']>> = null;
       try { current = await ownerDirectory(this.env).byPresence('telegram', subject); } catch { return new Response('unavailable', { status: 503 }); }
       if (!current || current.doName !== doName || current.subject !== subject) return new Response('forbidden', { status: 403 });
