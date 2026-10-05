@@ -1034,6 +1034,9 @@ it('a complete 33-ref inventory stays limited when the selector omits the last r
   await evictDurableObject(stub(name));
   await admittedTurn(name,97002,'Recall my standup again.',ops());
   expect(request()).toContain('reason class: selection_rejected');
+  expect(request()).toContain('did not raise forgetting');
+  await admittedTurn(name,97003,`Forget only ${topic}.`,ops({forget_topic:topic}));
+  expect(request()).toContain('Say this one reason');expect(request()).not.toContain('did not raise forgetting');
   expect(request()).not.toContain(standup);
   await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]));
 });
@@ -1189,6 +1192,7 @@ it('65 distinct sources resume after a failed provider and reconstruction withou
   seen.selectorThrows=true;
   await admittedTurn(name,110001,'What time is my standup?',ops());
   expect(request()).toContain('reason class: selector_unavailable');
+  expect(request()).toContain('did not raise forgetting');expect(request()).not.toContain('Say this one reason');
   expect(request()).not.toContain(standup);
   await evictDurableObject(stub(name));
   seen.selectorThrows=false;seen.selectedTexts=facts;seen.selectorOutputMessage=true;
@@ -1196,6 +1200,7 @@ it('65 distinct sources resume after a failed provider and reconstruction withou
   await admittedTurn(name,110002,'Please finish my pending cleanup.',ops());
   expect(seen.selectorCalls).toHaveLength(1);
   expect(request()).toContain('reason class: batch_pending');
+  expect(request()).toContain("did not raise forgetting");
   expect(request()).not.toContain('verified exact cleanup targets were removed from inspected retained copies');
   expect(request()).not.toContain(standup);
   await runInDurableObject(stub(name),(_instance,state)=>{
