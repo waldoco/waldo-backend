@@ -56,7 +56,7 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
         ORDER BY l.due LIMIT 3`, localNow, timezone, now).toArray();
     },
     // Open, dated loops with no mail source whose due has passed and that have not been claimed for this due and timezone.
-    nudgeDue(localNow: string, timezone: string, _now = deps.now()): readonly Loop[] {
+    nudgeDue(localNow: string, timezone: string): readonly Loop[] {
       return sql.exec<Loop>(`SELECT l.* FROM loops l WHERE l.status = 'open' AND l.due IS NOT NULL AND l.due <= ?
         AND NOT EXISTS (SELECT 1 FROM loop_mail_sources s WHERE s.loop_id = l.id)
         AND NOT EXISTS (SELECT 1 FROM loop_nudges n WHERE n.loop_id = l.id AND n.nudged_due = l.due AND n.nudged_timezone = ?)

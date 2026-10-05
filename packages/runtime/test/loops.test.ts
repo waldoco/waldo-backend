@@ -105,12 +105,12 @@ describe('owner-stated deadline loops without a mail source', () => {
       const { book, open } = setup(sql);
       await run(open, { title: 'Send Priya the deck', due: '2026-09-26T09:00' });
       await run(open, { title: 'Find a physio' });
-      expect(book.nudgeDue('2026-09-26T08:59', 'Asia/Kolkata', at('2026-09-26T04:00:00Z'))).toEqual([]);
-      const due = book.nudgeDue('2026-09-26T09:00', 'Asia/Kolkata', at('2026-09-26T04:00:00Z'));
+      expect(book.nudgeDue('2026-09-26T08:59', 'Asia/Kolkata')).toEqual([]);
+      const due = book.nudgeDue('2026-09-26T09:00', 'Asia/Kolkata');
       expect(due.map((loop) => loop.title)).toEqual(['Send Priya the deck']);
       expect(book.claimNudge(due[0]!.id, '2026-09-26T09:00', 'Asia/Kolkata', at('2026-09-26T04:00:00Z'))).toBe(true);
       expect(book.claimNudge(due[0]!.id, '2026-09-26T09:00', 'Asia/Kolkata', at('2026-09-26T04:00:00Z'))).toBe(false);
-      expect(book.nudgeDue('2026-09-26T09:30', 'Asia/Kolkata', at('2026-09-26T04:30:00Z'))).toEqual([]);
+      expect(book.nudgeDue('2026-09-26T09:30', 'Asia/Kolkata')).toEqual([]);
     });
   });
   it('closing the loop or changing its due before the claim prevents the nudge; a changed due is a new occurrence', async () => {
@@ -123,7 +123,7 @@ describe('owner-stated deadline loops without a mail source', () => {
       expect(book.claimNudge(b, '2026-09-25T09:00', 'Asia/Kolkata', at('2026-09-26T04:00:00Z'))).toBe(false);
       expect(book.claimNudge(b, '2026-09-26T09:00', 'Asia/Kolkata', at('2026-09-26T04:00:00Z'))).toBe(true);
       sql.exec("UPDATE loops SET due = '2026-09-27T09:00' WHERE id = ?", b);
-      expect(book.nudgeDue('2026-09-27T09:00', 'Asia/Kolkata', at('2026-09-27T04:00:00Z')).map((loop) => loop.id)).toEqual([b]);
+      expect(book.nudgeDue('2026-09-27T09:00', 'Asia/Kolkata').map((loop) => loop.id)).toEqual([b]);
     });
   });
   it('mail-sourced loops stay on the mail review path and are never returned here', async () => {
@@ -131,7 +131,7 @@ describe('owner-stated deadline loops without a mail source', () => {
       const { book } = setup(sql);
       sql.exec("INSERT INTO loops (id, title, due, status, created_at) VALUES ('m1', 'Reply to Sam', '2026-09-26T09:00', 'open', 1)");
       sql.exec("INSERT INTO loop_mail_sources (loop_id, source_ref) VALUES ('m1', 'src1')");
-      expect(book.nudgeDue('2026-09-27T09:00', 'Asia/Kolkata', at('2026-09-27T04:00:00Z'))).toEqual([]);
+      expect(book.nudgeDue('2026-09-27T09:00', 'Asia/Kolkata')).toEqual([]);
     });
   });
 });
