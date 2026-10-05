@@ -5,7 +5,7 @@ import { COMMAND_DEFAULT_TTL_SECONDS, COMMAND_MAX_TTL_SECONDS, CONTRACT_VERSION,
 import { commandPayload, identifier, type Ack, type NotifyPayload, type QueryPayload, type Result } from './wire';
 export type CommandInput = { owner_id: string; device_id: string; request_id: string; class: Capability; payload: QueryPayload | NotifyPayload; ttl_seconds?: number };
 export type CommandSummary = { command_id: string; class: string; state: string; result_status: string | null; result_state: string | null; issued_at: number; expires_at: number };
-type Row = CommandSummary & { owner_id: string; device_id: string; request_id: string; fingerprint: string; idempotency_key: string; message_id: string; wire: string | null; result_message_id: string | null; result_fingerprint: string | null };
+type Row = CommandSummary & { owner_id: string; device_id: string; request_id: string; fingerprint: string; idempotency_key: string; message_id: string; wire: string | null; delivered_generation: string | null; result_message_id: string | null; result_fingerprint: string | null };
 export type EnqueueResult = { accepted: true; command_id: string; state: string; duplicate: boolean } | { accepted: false; reason: 'invalid_shape' | 'idempotency_conflict' | 'rate_limited' | 'unavailable' };
 export type Receipt = { contract_version: string; type: 'receipt'; message_id: string; device_id: string; owner_id: string; command_id: string; revision: 1; idempotency_key: string; payload: { result_message_id: string; received_at: number } };
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -75,7 +75,8 @@ export class DeviceCommandStore {
       if (row.result_message_id) {
         if (row.result_message_id !== frame.message_id || row.result_fingerprint !== fingerprint) throw new Error('idempotency_conflict');
       } else {
-        if (!['sent', 'acked'].includes(row.state)) throw new Error('invalid_shape');
+        // Volatile expiry is not evidence against a durable result from work previously delivered.
+        if (!['sent', 'acked'].includes(row.state) && !(row.state === 'expired' && row.delivered_generation !== null && row.wire !== null)) throw new Error('invalid_shape');
         const payload = row.wire ? JSON.parse(row.wire).payload as QueryPayload : null;
         const result = frame.payload;
         // Query answers echo exactly the requested kind/id; display results cannot impersonate answers.
