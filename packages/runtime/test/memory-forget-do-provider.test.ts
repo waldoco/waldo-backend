@@ -2000,7 +2000,7 @@ it('HELDROWS verdict is the real forgetSources verdict, and the row shapes it li
     const header = heldRowShapes(sql, '', topics, 25, real);
     for (const [index, { topic: t }] of topics.entries()) {
       const r = real(t);
-      expect(header).toContain(`t${index + 1}: ${r.incomplete ? 'incomplete' : 'complete'}${r.heldBy?.length ? ` held by ${r.heldBy.map(h => `${h.table}:${h.rule}:${h.rows}`).join(' ')}` : ''}`);
+      expect(header).toContain(`t${index + 1}: pending ${r.incomplete ? 'incomplete' : 'complete'}${r.heldBy?.length ? ` held by ${r.heldBy.map(h => `${h.table}:${h.rule}:${h.rows}`).join(' ')}` : ''}`);
     }
     const cards = heldRowShapes(sql, 'update_cards', topics, 25, real);
     expect(cards).toMatch(/#2 changes .*other=1\].*t1\[guard_escape/);
@@ -2058,6 +2058,31 @@ it('HELDROWS agrees with the real heldBy for projection and escape holds, includ
     const episodes = heldRowShapes(sql, 'episodes', topics, 25, real);
     expect(episodes).toMatch(/text len=\d+ json=none .*t1\[guard_escape carries=1/);
     expect(episodes).not.toContain('SECRETEPISODE');
+    state.storage.deleteAlarm();
+  });
+});
+
+it('HELDROWS with 128 pending topics bounds the whole reply to the delivery cap and keeps summary and notices', async () => {
+  const label = 'heldrows-many-topics';
+  await admittedTurn(label, 153360, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
+    for (let index = 0; index < 30; index++) sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', `c${index}`, null, `a\\q ${index} T0001`, 0);
+    const topics = Array.from({ length: 128 }, (_, index) => ({ topic: `T${String(index + 1).padStart(4, '0')}`, state: 'pending' as const }));
+    const real = () => ({ incomplete: true, heldBy: [{ table: 'update_cards', rule: 'projection', rows: 1 }, { table: 'day_plan', rule: 'guard_escape', rows: 3 }] });
+    const header = heldRowShapes(sql, '', topics, 25, real);
+    expect(header.length).toBeLessThanOrEqual(4000);
+    expect(header).toMatch(/\+\d+ more topics/);
+    expect(header).toContain('Usage:');
+    const out = heldRowShapes(sql, 'day_plan', topics, 25, real);
+    // What the owner receives is the first 4000 characters.
+    const delivered = out.slice(0, 4000);
+    expect(out.length).toBeLessThanOrEqual(4000);
+    expect(delivered).toContain('rows with a backslash or NUL');
+    expect(delivered).toContain('row listing covers escape/NUL rows only');
+    expect(delivered).toMatch(/\+\d+ more topics/);
+    expect(delivered).toMatch(/truncated: \d+ more rows not shown/);
     state.storage.deleteAlarm();
   });
 });
