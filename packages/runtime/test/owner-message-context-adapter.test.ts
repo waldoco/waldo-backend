@@ -256,7 +256,7 @@ it('canonical provider capture keeps current input, safeguards and live tools wh
         expect(captured.join('\n')).toContain('Bengaluru demo');
         expect(captured.join('\n')).toContain('Respect permissions');
         expect(captured.join('\n')).toContain('Recall is temporarily limited');
-        expect(captured.join('\n')).toContain('Do not mention this limit unless the owner asks about forgetting or memory');
+        expect(captured.join('\n')).toContain('Do not mention this limit unless the owner asks about forgetting, memory, or missing or limited recall or history');
         expect(captured.join('\n')).not.toContain(fact);
         expect(captured.join('\n')).not.toContain('09:10 UTC');
         expect(logs.some(entry => entry.hop === 'tool_get_context' && entry.ok)).toBe(true);
