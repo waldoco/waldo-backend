@@ -2373,7 +2373,7 @@ it.each([['split20', 20], ['nul20', 20], ['split39', 39], ['keyvalue20', 20]] as
   });
 });
 
-it('EXACT-CARD a card that only shares the topic prefix is neither held nor blanked, and a blanked mail card keeps its detail key and join keys', async () => {
+it('EXACT-CARD a card that only shares the topic prefix is held and blanked (fail-closed floor, join keys kept), and a blanked mail card keeps its detail key and join keys', async () => {
   const label = 'forget-card-exact-decoy';
   await admittedTurn(label, 153461, 'My unrelated standup is at 09:10 UTC.', ops());
   await runInDurableObject(stub(label), (_instance, state) => {
@@ -2388,7 +2388,7 @@ it('EXACT-CARD a card that only shares the topic prefix is neither held nor blan
     expect(store.forgetSources(topic, true).incomplete).toBe(true);
     store.purge([], new Date().toISOString(), [topic]);
     const rows = sql.exec<{ changes: string }>('SELECT changes FROM update_cards ORDER BY id').toArray();
-    expect(rows[0]!.changes).toBe(decoy);
+    expect(JSON.parse(rows[0]!.changes)).toEqual([{ source: 'mail', kind: 'new', source_ref: 'mail:t9', source_message_id: 'm9', detail: '[forgotten]' }]);
     const blanked = JSON.parse(rows[1]!.changes) as Record<string, string>[];
     expect(blanked[0]).toMatchObject({ ...keep, detail: FORGOTTEN });
     expect(store.forgetSources(topic, true).incomplete).toBe(false);
@@ -2480,7 +2480,7 @@ it.each(['decoy','mixed','consumers','literal'] as const)('MAIL-FIXTURE %s', asy
   const pending = updates.pendingMail(); const due = loops.reviewDue('2026-10-06T00:00');
   console.log('MAIL-EVIDENCE',kind,JSON.stringify({row,pending,due}));
   expect(row.changes).not.toContain('COBALT');
-  if(kind==='decoy') expect(row.changes).toBe(JSON.stringify(changes));
+  if(kind==='decoy') expect(JSON.parse(row.changes)[0]).toMatchObject({source:'mail',kind:'new',detail:'[forgotten]'});
   if(kind==='mixed'||kind==='literal') { expect(after.at(-1)).toEqual(changes.at(-1)); expect(row.text).toBe(summary); }
   if(kind==='consumers') { expect(pending).toHaveLength(3); expect(due).toHaveLength(3); expect(pending.every(c=>typeof c.detail==='string')).toBe(true); expect(due.every(c=>typeof c.source_detail==='string')).toBe(true); expect(pending.at(-1)!.detail).toBe(MAIL_U); }
   state.storage.deleteAlarm();
@@ -2603,6 +2603,73 @@ it('NEW798 perf big card', async()=> {
  });
 });
 
+// Custody regressions raised on 42d7dbe9: the original prefix hold must stay as the fail-closed floor, and cleanup must not reparse the original card.
+it.each(['changes-vs-summary','across-cards','inline-unrelated'] as const)('CUSTODY %s', async kind => {
+ const label=`custody-${kind}`; await admittedTurn(label,190800,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql; const updates=updateBook(sql); const store=claimStore(sql);
+  const a=MAIL_T.slice(0,46), b=MAIL_T.slice(46);
+  if(kind==='changes-vs-summary') updates.record('d',1,[mailM(0,a)],b);
+  if(kind==='across-cards'){ updates.record('d',1,[mailM(0,a)],'S1'); updates.record('d',1,[mailM(1,b)],'S2'); }
+  if(kind==='inline-unrelated') updates.record('d',1,[mailM(0,`${MAIL_T} and ${MAIL_U}`),mailM(1,a),mailM(2,b)],'S');
+  const before=store.forgetSources(MAIL_T,true).incomplete;
+  store.purge([],new Date().toISOString(),[MAIL_T]);
+  const rows=sql.exec<{changes:string;text:string}>('SELECT changes,text FROM update_cards ORDER BY id').toArray();
+  const after=store.forgetSources(MAIL_T,true).incomplete;
+  const joined=rows.map(r=>r.changes+'|'+r.text).join('#');
+  state.storage.deleteAlarm();
+  if(kind!=='inline-unrelated') expect(before).toBe(true);
+  expect(after).toBe(false);
+  // The first fragment (the part that carries the prefix) is gone, so the topic cannot be rebuilt; a prefix-free tail row is not detectable (#794).
+  expect(joined).not.toContain(a.slice(0,40)); expect(joined).not.toContain(MAIL_T);
+  if(kind==='inline-unrelated') expect(joined).toContain(MAIL_U);
+ });
+});
+
+// #804 review: collision-safe rename, duplicate keys, and a bounded cost for large cards.
+it.each(['rename-collision','duplicate-key','big-card'] as const)('CUSTODY2 %s', async kind => {
+ const label=`custody2-${kind}`; await admittedTurn(label,190950,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql; const updates=updateBook(sql); const store=claimStore(sql);
+  const a=MAIL_T.slice(0,46), b=MAIL_T.slice(46);
+  let t0=0, t1=0;
+  if(kind==='rename-collision') updates.record('d',1,[{[a]:'one',['[forgotten]']:'two',other:'three'},{[b]:'four'}] as any,'S');
+  if(kind==='duplicate-key'){ updates.record('d',1,[mailM(0,a)],'S'); sql.exec('UPDATE update_cards SET changes = ?', `[{"source":"mail","kind":"new","source_ref":"mail:r0","source_message_id":"m0","detail":"${b}","detail":"clean"}]`); }
+  if(kind==='big-card') updates.record('d',1,[mailM(0,a),...Array.from({length:400},(_,i)=>mailM(i+1,`filler ${i}`))],'S');
+  const before=store.forgetSources(MAIL_T,true).incomplete;
+  t0=Date.now(); store.purge([],new Date().toISOString(),[MAIL_T]); t1=Date.now();
+  const rows=sql.exec<{changes:string}>('SELECT changes FROM update_cards ORDER BY id').toArray();
+  const after=store.forgetSources(MAIL_T,true).incomplete;
+  state.storage.deleteAlarm();
+  expect(before).toBe(true); expect(after).toBe(false);
+  if(kind==='rename-collision'){ const first=JSON.parse(rows[0]!.changes)[0]; expect(Object.keys(first)).toHaveLength(3); expect(rows[0]!.changes).toContain('"three"'); }
+  if(kind==='duplicate-key') expect(rows[0]!.changes).not.toContain(b);
+  if(kind==='big-card') expect(t1-t0).toBeLessThan(2000);
+ });
+});
+
+// #804 round 3: bounded search must not widen the blast radius, and unrelated cards keep their stored bytes.
+it('CUSTODY3 a split topic in a card of 70 leaves blanks only its pieces, and an unrelated card keeps its exact bytes', async () => {
+ const label='custody3-big'; await admittedTurn(label,191000,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql; const updates=updateBook(sql); const store=claimStore(sql);
+  const a=MAIL_T.slice(0,46), b=MAIL_T.slice(46);
+  const filler=Array.from({length:34},(_,i)=>mailM(i+10,`unrelated invoice detail ${i}`));
+  updates.record('d',1,[...filler.slice(0,17),mailM(0,a),mailM(1,b),...filler.slice(17)],'S');
+  updates.record('d',1,[mailM(90,'plain')],'S2');
+  const exactBytes='[{"n":9007199254740993,"big":1e400,"detail":"keep me"}]';
+  sql.exec('UPDATE update_cards SET changes = ? WHERE id = (SELECT MAX(id) FROM update_cards)',exactBytes);
+  const t0=Date.now(); store.purge([],new Date().toISOString(),[MAIL_T]); const ms=Date.now()-t0;
+  const rows=sql.exec<{changes:string}>('SELECT changes FROM update_cards ORDER BY id').toArray();
+  state.storage.deleteAlarm();
+  const first=rows[0]!.changes;
+  expect(first).not.toContain(a.slice(0,40)); expect(first).not.toContain(b);
+  for(let i=0;i<34;i++) expect(first).toContain(`unrelated invoice detail ${i}`);
+  expect(rows[1]!.changes).toBe(exactBytes);
+  expect(ms).toBeLessThan(2000);
+ });
+});
+
 // Console-first signup builds the owner runtime before any Telegram binding exists; the later link must not leave that runtime cached.
 it('OWNERCACHE a runtime built before the Telegram binding is rebuilt once the binding changes, and reused while it does not', async () => {
  const label='owner-cache-binding'; await admittedTurn(label,190900,'Standup at 09:10 UTC.',ops());
@@ -2616,5 +2683,76 @@ it('OWNERCACHE a runtime built before the Telegram binding is rebuilt once the b
   expect(after).not.toBe(before);
   expect(setup()).toBe(after);
   state.storage.deleteAlarm();
+ });
+});
+
+
+it('FRESH804 unrelated noncanonical JSON must remain byte-identical',async()=> {
+ const label='fresh804-numbers';await admittedTurn(label,191000,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+ const sql=state.storage.sql;const updates=updateBook(sql); updates.record('d',1,[mailM(0,MAIL_U)],'S');
+ const original='[{"source":"mail","kind":"new","source_ref":"mail:large-number","source_message_id":"9007199254740993","detail":"Invoice unrelated","invoice_id":9007199254740993,"amount":1e400}]';
+ sql.exec('UPDATE update_cards SET changes = ?',original);const store=claimStore(sql);expect(store.forgetSources(MAIL_T,true).incomplete).toBe(false);
+ store.purge([],new Date().toISOString(),[MAIL_T]);const after=sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes;
+ console.log('FRESH804-NUMBERS',JSON.stringify({original,after}));state.storage.deleteAlarm();expect(after).toBe(original);
+ });
+});
+it.each([64,65])('FRESH804 cap %s preserves unrelated content',async n=> {
+ const label=`fresh804-cap-${n}`;await admittedTurn(label,191010,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+ const sql=state.storage.sql;const updates=updateBook(sql);updates.record('d',1,[],'S'); const p=[MAIL_T.slice(0,46),...Array.from({length:n-1},(_,i)=>`Invoice ${i}`)];sql.exec('UPDATE update_cards SET changes = ?',JSON.stringify(p));const store=claimStore(sql);
+ const shape=heldRowShapes(sql,'update_cards',[{topic:MAIL_T,state:'incomplete'}],5,t=>store.forgetSources(t,true));expect(shape).toMatch(/^#1 t1\[projection/m);
+ store.purge([],new Date().toISOString(),[MAIL_T]);const first=sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes;store.purge([],new Date().toISOString(),[MAIL_T]);const second=sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes;
+ console.log('FRESH804-CAP',n,JSON.stringify({remaining:JSON.parse(first).filter((s:string)=>s.startsWith('Invoice')).length,incomplete:store.forgetSources(MAIL_T,true).incomplete}));state.storage.deleteAlarm();expect(second).toBe(first);expect(store.forgetSources(MAIL_T,true).incomplete).toBe(false);expect(JSON.parse(first).at(-1)).toBe(`Invoice ${n-2}`);
+ });
+});
+it.each(['summary','rows','inline'] as const)('FRESH804 exact mailed %s',async kind=> {
+ const label=`fresh804-mail-${kind}`;await admittedTurn(label,195020,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=>{const sql=state.storage.sql;const updates=updateBook(sql); const M=(i:number,detail:string)=>({...mailM(i,detail),source_ref:`mail:cross-${i}`});
+ if(kind==='summary')updates.record('d',1,[M(0,MAIL_T.slice(0,46))],MAIL_T.slice(46));
+ if(kind==='rows'){updates.record('d',1,[M(0,MAIL_T.slice(0,46))],null);updates.record('d',1,[M(1,MAIL_T.slice(46))],null);}
+ if(kind==='inline')updates.record('d',1,[M(0,MAIL_T+' '+MAIL_U),M(1,MAIL_T.slice(0,20)),M(2,MAIL_T.slice(20))],'Unrelated summary');
+ claimStore(sql).beginTopicCoverage(MAIL_T,new Date().toISOString());state.storage.deleteAlarm();});
+ await evictDurableObject(stub(label));seen.selectedTexts=[];seen.selectorOutputMessage=true;
+ await admittedTurn(label,195021,'Continue my requested forgetting.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {const sql=state.storage.sql;const store=claimStore(sql);expect(store.incompleteTopics()).toEqual([MAIL_T]);expect(store.forgetSources(MAIL_T,true).incomplete).toBe(true);sql.exec('DELETE FROM topic_purge_pending');store.purge([],new Date().toISOString(),[MAIL_T]);const rows=sql.exec<{changes:string;text:string}>('SELECT changes,text FROM update_cards').toArray();console.log('FRESH804-MAIL',kind,JSON.stringify(rows));expect(store.forgetSources(MAIL_T,true).incomplete).toBe(false);if(kind==='inline'){expect(JSON.parse(rows[0]!.changes)[0].detail).toBe(FORGOTTEN+' '+MAIL_U);expect(rows[0]!.text).toBe('Unrelated summary');}state.storage.deleteAlarm();});
+});
+// Documented limit (#794): a card nested thousands deep that carries the prefix cannot be decoded or blanked, so it stays held (fail-closed).
+it('FRESH804 full split beyond cap preserves unrelated mail siblings',async()=>{
+ const label='fresh804-fullcap';await admittedTurn(label,191030,'Standup at 09:10 UTC.',ops());await runInDurableObject(stub(label),(_instance,state)=>{
+ const sql=state.storage.sql;const changes=[mailM(0,MAIL_T.slice(0,20)),mailM(1,MAIL_T.slice(20)),...Array.from({length:31},(_,i)=>mailM(i+2,`Invoice ${i}`))];updateBook(sql).record('d',1,changes,'S');const store=claimStore(sql);store.purge([],new Date().toISOString(),[MAIL_T]);const after=JSON.parse(sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes);console.log('FRESH804-FULLCAP',JSON.stringify({last:after.at(-1),incomplete:store.forgetSources(MAIL_T,true).incomplete}));state.storage.deleteAlarm();expect(after.at(-1)).toEqual(changes.at(-1));
+ });
+});
+
+it('ADV804 unicode-expanded interior preserves unrelated siblings',async()=>{
+ const label='adv804-unicode';await admittedTurn(label,199010,'Standup at 09:10 UTC.',ops());await runInDurableObject(stub(label),(_instance,state)=>{
+ const sql=state.storage.sql;const topic='AİİİİB';const items=['Unrelated invoice','A','i\u0307'.repeat(4),'B','Unrelated footer'];updateBook(sql).record('d',1,[],'S');sql.exec('UPDATE update_cards SET changes = ?',JSON.stringify(items));const store=claimStore(sql);expect(store.forgetSources(topic,true).incomplete).toBe(true);console.log('ADV804-HELDROWS',heldRowShapes(sql,'update_cards',[{topic,state:'incomplete'}],5,t=>store.forgetSources(t,true)));store.purge([],new Date().toISOString(),[topic]);const after=JSON.parse(sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes);console.log('ADV804-UNICODE',after);state.storage.deleteAlarm();expect(store.forgetSources(topic,true).incomplete).toBe(false);expect(after[0]).toBe(items[0]);expect(after[4]).toBe(items[4]);});
+});
+it('ADV804 full split plus lone prefix settles',async()=>{
+ const label='adv804-prefixcopy';await admittedTurn(label,199011,'Standup at 09:10 UTC.',ops());await runInDurableObject(stub(label),(_instance,state)=>{
+ const sql=state.storage.sql;const items=[MAIL_T.slice(0,20),MAIL_T.slice(20),'Invoice divider',MAIL_T.slice(0,46),'Invoice footer'];updateBook(sql).record('d',1,[],'S');sql.exec('UPDATE update_cards SET changes = ?',JSON.stringify(items));const store=claimStore(sql);store.purge([],new Date().toISOString(),[MAIL_T]);const after=sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes;console.log('ADV804-PREFIXCOPY',after,store.forgetSources(MAIL_T,true));expect(store.forgetSources(MAIL_T,true).incomplete).toBe(true);store.purge([],new Date().toISOString(),[MAIL_T]);console.log('ADV804-PREFIXSECOND',store.forgetSources(MAIL_T,true).incomplete);state.storage.deleteAlarm();expect(store.forgetSources(MAIL_T,true).incomplete).toBe(false);});
+});
+
+it.each(['empty','nul','long'] as const)('ADV804COST %s real purge',async mode=>{
+ const label=`adv804-cost-${mode}`;await admittedTurn(label,199015,'Standup at 09:10 UTC.',ops());await runInDurableObject(stub(label),(_instance,state)=>{
+ const sql=state.storage.sql;const topic=mode==='long'?'a'.repeat(400)+'Z':MAIL_T;const items=mode==='long'?['a'.repeat(40),...Array(360).fill('a'),'Z','Invoice footer']:[MAIL_T.slice(0,20),...Array(800).fill(mode==='nul'?'\0':''),MAIL_T.slice(20),'Invoice footer'];updateBook(sql).record('d',1,[],'S');sql.exec('UPDATE update_cards SET changes = ?',JSON.stringify(items));const store=claimStore(sql);const before=Date.now();store.purge([],new Date().toISOString(),[topic]);const elapsed=Date.now()-before;console.log('ADV804-COST',mode,elapsed);state.storage.deleteAlarm();expect(store.forgetSources(topic,true).incomplete).toBe(false);const after=JSON.parse(sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes);expect(after.at(-1)).toBe('Invoice footer');});
+});
+it.each([
+ '[ { "detail" : "Invoice", "n": -0, "big":9007199254740993, "overflow":1e400 } ]',
+ '[{"z":"\\u0049nvoice","a":"slash\\/back\\\\quote\\\"","negative":-1e-400}]',
+ '[{"emoji":"😀","unicode":"İΣßé","array":[true,null,1.00000]}]',
+ ' { "b" : 2, "a" : [ "Invoice", -0.0, 1E+6 ] } '
+])('ADV804BYTES %s',async original=>{
+ const label='adv804-bytes-'+original.length;await admittedTurn(label,199016,'Standup at 09:10 UTC.',ops());await runInDurableObject(stub(label),(_instance,state)=>{const sql=state.storage.sql;updateBook(sql).record('d',1,[],'S');sql.exec('UPDATE update_cards SET changes = ?',original);const store=claimStore(sql);store.purge([],new Date().toISOString(),[MAIL_T]);state.storage.deleteAlarm();expect(sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes).toBe(original);});
+});
+
+it.each(['', '\0'])('ROUND4 empty separator collateral %j',async gap=>{
+ const label='round4-space-'+gap.length; await admittedTurn(label,199030,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=>{
+ const sql=state.storage.sql; const topic='Alpha  Beta'; const items=['Unrelated invoice','Alpha',gap,'Beta','Unrelated footer'];
+ updateBook(sql).record('d',1,[],'S');sql.exec('UPDATE update_cards SET changes = ?',JSON.stringify(items));const store=claimStore(sql);
+ expect(store.forgetSources(topic,true).incomplete).toBe(true);store.purge([],new Date().toISOString(),[topic]);
+ const after=JSON.parse(sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes);console.log('ROUND4-SPACE',JSON.stringify({gap,after}));
+ state.storage.deleteAlarm();expect(store.forgetSources(topic,true).incomplete).toBe(false);expect(after[0]).toBe(items[0]);expect(after[4]).toBe(items[4]);
  });
 });

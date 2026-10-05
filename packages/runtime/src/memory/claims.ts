@@ -112,6 +112,29 @@ export const projectionPredicate = (columns: readonly string[]) => columns.map(c
 // update_cards: one card is tied to a topic when the topic appears whole in its raw text, in any decoded JSON key or value, or across its pieces in order
 // (a topic split between values or between a key and its value, with or without NULs). The hold and the purge exit share this one function.
 // A piece order interleaved with unrelated text is not provable and is not detected (tracked in #794).
+// True when any object in already-valid JSON text repeats a key. Reads the text with the JSON string grammar, no pattern matching.
+const hasDuplicateKeys = (json: string): boolean => {
+  const stack: Array<Set<string> | null> = [];
+  let expectKey = false;
+  for (let i = 0; i < json.length; i++) {
+    const ch = json[i]!;
+    if (ch === '"') {
+      let end = i + 1;
+      while (json[end] !== '"') end += json[end] === '\\' ? 2 : 1;
+      const top = stack[stack.length - 1];
+      if (expectKey && top) {
+        const key = JSON.parse(json.slice(i, end + 1)) as string;
+        if (top.has(key)) return true;
+        top.add(key); expectKey = false;
+      }
+      i = end;
+    } else if (ch === '{') { stack.push(new Set()); expectKey = true; }
+    else if (ch === '[') { stack.push(null); expectKey = false; }
+    else if (ch === '}' || ch === ']') { stack.pop(); expectKey = false; }
+    else if (ch === ',') expectKey = stack[stack.length - 1] instanceof Set;
+  }
+  return false;
+};
 const CARD_JOIN_KEYS = ['source', 'kind', 'source_ref', 'source_message_id'];
 export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string): boolean => {
   if (changes !== null && changes !== undefined && typeof changes !== 'string') return true;
@@ -120,10 +143,17 @@ export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string)
   const exact = (value: string) => carriesTopic(value, topic) || hidesTopic(value, topic) || (value.includes('\u0000') && (carriesTopic(strip(value), topic) || hidesTopic(strip(value), topic)));
   // Decoded text (the summary, keys and values of a parsed card) is judged by what it says; escape ambiguity applies only to serialized text that did not parse.
   const decoded = (value: string) => carriesTopic(value, topic) || (value.includes('\u0000') && carriesTopic(strip(value), topic));
+  // Fail-closed floor kept from the original prefix hold: a card whose raw text holds the topic's first LIKE_PREFILTER_MAX characters stays held even when the rest sits in another field or row,
+  // which no per-card test can prove. The purge exit blanks it (every leaf when the pieces cannot be localised); join keys and send state stay.
+  const prefix = topic.slice(0, LIKE_PREFILTER_MAX).toLowerCase();
+  const raw = [changes, text].filter((value): value is string => typeof value === 'string');
+  if (prefix && raw.some(value => value.toLowerCase().includes(prefix) || (value.includes('\u0000') && strip(value).toLowerCase().includes(prefix)))) return true;
   if (typeof text === 'string' && decoded(text)) return true;
   if (typeof changes !== 'string') return false;
   let parsed: unknown;
   try { parsed = JSON.parse(changes); } catch (error) { return !(error instanceof SyntaxError) || exact(changes); }
+  // Duplicate keys in one object hide bytes from the decoded view (parse keeps only the last): the card stays held and the purge rewrites it.
+  if (hasDuplicateKeys(changes)) return true;
   // A card that parses is judged on its decoded keys and values: the serialized text escapes quotes and backslashes, which would make an unrelated card look unprovable.
   // In-order pieces: the values alone (keys between them would break a split topic) and keys plus values (a key/value split).
   const all: string[] = []; const values: string[] = [];
@@ -161,10 +191,18 @@ export const blankCardPieces = (parsed: unknown, topic: string): unknown => {
   const holds = (list: Leaf[], from: number, to: number, separator: string) => exact(list.slice(from, to + 1).map(leaf => leaf.text).join(separator));
   // Same piece lists and join modes as cardCarriesTopic. For each start take the shortest run holding the topic, and skip a run whose tail alone still holds it (a later start finds that one),
   // so unrelated leaves before, between or after the copies are never marked. Marks accumulate over every list and join mode, because separate copies may need different ones.
-  for (const list of [leaves.filter(leaf => !leaf.key), leaves]) {
-    for (const separator of ['', ' ']) {
+  // A leaf that is empty once NULs are stripped adds nothing when leaves are joined with '' (and would let a run extend without bound there), so that mode skips it.
+  // Joined with ' ' each leaf, empty or not, adds a separator, which the run bound counts, so that mode keeps every leaf.
+  const topicLength = topic.toLowerCase().length;
+  for (const separator of ['', ' ']) {
+    const base = separator === '' ? leaves.filter(leaf => leaf.text.replace(/\u0000/g, '').length > 0) : leaves;
+    for (const list of [base.filter(leaf => !leaf.key), base]) {
       for (let from = 0; from < list.length; from++) {
+        // Leaves strictly between the first and last of a run that holds the topic lie wholly inside it, so their total length cannot exceed the topic's: stop extending past that.
+        // This keeps the search near linear instead of cubic (it was about 1s at 200 leaves).
+        let inside = 0;
         for (let to = from; to < list.length; to++) {
+          if (to > from + 1) { inside += list[to - 1]!.text.replace(/\u0000/g, '').toLowerCase().length + separator.length; if (inside > topicLength) break; }
           if (!holds(list, from, to, separator)) continue;
           if (!(from < to && holds(list, from + 1, to, separator))) for (let index = from; index <= to; index++) marked.add(`${list[index]!.path}|${list[index]!.key}`);
           break;
@@ -172,15 +210,27 @@ export const blankCardPieces = (parsed: unknown, topic: string): unknown => {
       }
     }
   }
+  // A card held only by the prefix floor has no localisable run: redact just the leaves whose own text carries the prefix, and everything only if none does.
+  if (marked.size === 0) {
+    const prefix = topic.slice(0, LIKE_PREFILTER_MAX).toLowerCase();
+    for (const leaf of leaves) if (prefix && leaf.text.replace(/\u0000/g, '').toLowerCase().includes(prefix)) marked.add(`${leaf.path}|${leaf.key}`);
+  }
   const all = marked.size === 0;
   const rebuild = (node: unknown, path: string, key: boolean): unknown => {
     if (typeof node === 'string') return all || marked.has(`${path}|${key}`) ? FORGOTTEN : node;
     if (Array.isArray(node)) return node.map((child, index) => rebuild(child, `${path}/${index}`, false));
-    if (node !== null && typeof node === 'object') return Object.fromEntries(Object.entries(node).map(([name, child]) => {
-      if (CARD_JOIN_KEYS.includes(name)) return [name, child];
-      const keyBlanked = (all || marked.has(`${path}/${JSON.stringify(name)}#key|true`)) && !CARD_SCHEMA_KEYS.includes(name);
-      return [keyBlanked ? FORGOTTEN : name, rebuild(child, `${path}/${JSON.stringify(name)}`, false)];
-    }));
+    if (node !== null && typeof node === 'object') {
+      // A renamed key must not land on another key of the same object (an unrelated key may already be named like the placeholder), or one value would overwrite the other.
+      const names = new Set(Object.keys(node));
+      let next = 1;
+      return Object.fromEntries(Object.entries(node).map(([name, child]) => {
+        if (CARD_JOIN_KEYS.includes(name)) return [name, child];
+        const keyBlanked = (all || marked.has(`${path}/${JSON.stringify(name)}#key|true`)) && !CARD_SCHEMA_KEYS.includes(name);
+        let renamed = name;
+        if (keyBlanked) { do { renamed = `${FORGOTTEN} ${next++}`; } while (names.has(renamed)); names.add(renamed); }
+        return [renamed, rebuild(child, `${path}/${JSON.stringify(name)}`, false)];
+      }));
+    }
     return node;
   };
   return rebuild(parsed, '', false);
@@ -530,14 +580,17 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             const redactedChanges = parsed === undefined
               ? ci(row.changes)
               : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
-            const changed = parsed === undefined ? redactedChanges !== row.changes : redactedChanges !== JSON.stringify(parsed);
+            // Only a card that redaction changed, or one whose duplicate keys hide bytes from the decoded view, is rewritten; every other card keeps its stored bytes.
+            const changed = parsed === undefined ? redactedChanges !== row.changes : redactedChanges !== JSON.stringify(parsed) || hasDuplicateKeys(row.changes);
             // A card that still carries the topic after redaction (split across values or keys, or broken by a NUL) cannot be proven clean by the per-value pass.
             // update_cards rows record no source and siblings of a matching fragment may be unrelated, so only the leaves that carry the topic's pieces are blanked
             // (values, and keys renamed unless they are schema keys). Join keys, other leaves, the summary text when clean and the send state stay. Same predicate as the hold.
             const changesTied = topics.length > 0 && cardCarriesTopic(redactedChanges, null, text);
+            // Blank what the redaction left, not the original: leaves the literal pass already cleaned (and unrelated text sharing them) stay as they are.
+            const cleaned = parsed === undefined ? undefined : parsedJson(redactedChanges);
             const textTied = topics.length > 0 && redactedText !== null && cardCarriesTopic('[]', redactedText, text);
             if (changesTied || textTied) {
-              const nextChanges = !changesTied ? redactedChanges : parsed === undefined ? JSON.stringify(FORGOTTEN) : JSON.stringify(blankCardPieces(parsed, text));
+              const nextChanges = !changesTied ? redactedChanges : parsed === undefined ? JSON.stringify(FORGOTTEN) : JSON.stringify(blankCardPieces(cleaned ?? parsed, text));
               sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', nextChanges, textTied ? FORGOTTEN : redactedText, row.id);
               continue;
             }
