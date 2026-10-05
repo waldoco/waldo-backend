@@ -149,12 +149,19 @@ const httpHeaders = (method, path, body = '', deviceId) => {
     'X-Waldo-Signature': sign(null, Buffer.from([timestamp, n, method, path, sha256(body)].join('\n')), keypair.privateKey).toString('base64url'),
     ...(deviceId ? { 'X-Waldo-Device-Id': deviceId } : {}) };
 };
-const heartbeat = device => {
-  const frame = { contract_version: '0.2.3', device_id: device.device_id, owner_id: device.owner_id,
-    message_id: messageId(), type: 'heartbeat', timestamp: nowSeconds(), nonce: nonce(),
-    payload: { declared_capabilities: capabilities, outbox_depth: 0 } };
+const signedFrame = logical => {
+  const frame = { ...logical, timestamp: nowSeconds(), nonce: nonce() };
   const base = [frame.timestamp, frame.type, frame.message_id, frame.nonce, sha256(canonical(frame))].join('\n');
   return { ...frame, signature: sign(null, Buffer.from(base), keypair.privateKey).toString('base64url') };
+};
+const heartbeat = (device, depth = 0) => signedFrame({ contract_version: '0.2.3', device_id: device.device_id, owner_id: device.owner_id,
+  message_id: messageId(), type: 'heartbeat', payload: { declared_capabilities: capabilities, outbox_depth: depth } });
+const commandReply = (device, command, type, payload) => ({ contract_version: '0.2.3', device_id: device.device_id, owner_id: device.owner_id,
+  command_id: command.command_id, revision: command.revision, idempotency_key: command.idempotency_key, message_id: messageId(), type, payload });
+const nextFrame = async socket => {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) { if (socket.traceInbox?.length) return socket.traceInbox.shift(); await delay(25); }
+  throw new Error('command/receipt frame deadline exceeded');
 };
 const connectPath = '/devices/connect?contract_version=0.2.3&declared_capabilities=machine_state_query,notify_local';
 const rejected = async response => {
@@ -164,6 +171,8 @@ const rejected = async response => {
 };
 const openSocket = (origin, device) => new Promise((resolve, reject) => {
   const socket = new WebSocket(`${origin.replace('http:', 'ws:')}${connectPath}`, { headers: httpHeaders('GET', connectPath, '', device.device_id) });
+  socket.traceInbox = [];
+  socket.on('message', data => { const frame = JSON.parse(data.toString()); assert.equal(canonical(frame), data.toString(), 'backend frame must be canonical'); socket.traceInbox.push(frame); });
   const timeout = setTimeout(() => { socket.terminate(); reject(new Error('socket open deadline exceeded')); }, 5000);
   let status;
   socket.once('upgrade', response => { status = response.statusCode; });
@@ -216,11 +225,12 @@ try {
   // Process arguments contain no secrets. Wrangler output is retained only in memory and
   // checked for leaks; the synthetic local keys never reach the terminal or evidence.
   let workerOutput = '';
+  const origin = `http://127.0.0.1:${workerPort}`;
+  const startWorker = async () => {
   worker = spawn(process.execPath, ['--no-warnings', join(runtime, 'node_modules/wrangler/wrangler-dist/cli.js'), 'dev', '--local', '--config', configFile, '--port', `${workerPort}`, '--persist-to', join(scratch, 'state')],
     { cwd: scratch, env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, WRANGLER_SEND_METRICS: 'false' }, stdio: ['ignore', 'pipe', 'pipe'] });
   for (const output of [worker.stdout, worker.stderr]) output.on('data', chunk => { workerOutput += chunk.toString(); });
   let workerExit; worker.once('exit', code => { workerExit = code; });
-  const origin = `http://127.0.0.1:${workerPort}`;
   let booted = false;
   const bootDeadline = Date.now() + 30000;
   for (let attempt = 0; attempt < 100 && Date.now() < bootDeadline; attempt++) {
@@ -228,7 +238,15 @@ try {
     try { const response = await localFetch(`${origin}/healthz`, { signal: AbortSignal.timeout(1000) }); if (response.ok && (await response.json()).ok) { booted = true; break; } } catch {}
     await delay(200);
   }
-  assert.ok(booted, 'isolated worker health deadline'); report('isolated worker health 200');
+  assert.ok(booted, 'isolated worker health deadline');
+  };
+  const stopWorker = async () => {
+    if (!worker || worker.exitCode !== null) return;
+    worker.kill('SIGTERM');
+    await Promise.race([new Promise(resolve => worker.once('exit', resolve)), delay(3000)]);
+    if (worker.exitCode === null) { worker.kill('SIGKILL'); await new Promise(resolve => worker.once('exit', resolve)); }
+  };
+  await startWorker(); report('isolated worker health 200');
   const login = await localFetch(`${origin}/console/verify`, { method: 'POST', redirect: 'manual',
     body: new URLSearchParams({ email: fixtureEmail, code: otp }) });
   assert.equal(login.status, 303, 'synthetic owner must sign in through real console grant');
@@ -240,8 +258,8 @@ try {
   const html = await page.text();
   const csrf = html.match(/name="csrf" value="([a-f0-9]+)"/)?.[1];
   assert.ok(csrf, 'real console form must expose CSRF');
-  const action = (action, id = '') => localFetch(`${origin}/console/action`, { method: 'POST', redirect: 'manual', headers: { cookie },
-    body: new URLSearchParams({ action, id, value: '', csrf }) });
+  const action = (action, id = '', fields = {}) => localFetch(`${origin}/console/action`, { method: 'POST', redirect: 'manual', headers: { cookie },
+    body: new URLSearchParams({ action, id, value: '', csrf, ...fields }) });
   const pair = await action('device.pair');
   assert.equal(pair.status, 200); assert.ok(pair.headers.get('cache-control')?.includes('no-store'));
   const code = (await pair.text()).match(/\b[A-Za-z0-9_-]{43}\b/)?.[0];
@@ -267,6 +285,56 @@ try {
   }
   assert.ok(online, 'heartbeat must durably touch binding and console must show online');
   report('signed heartbeat accepted; console shows online');
+  const effects = new Set(), outbox = new Map();
+  const checkCommand = command => {
+    assert.equal(command.type, 'command'); assert.equal(command.contract_version, '0.2.3');
+    assert.equal(command.device_id, device.device_id); assert.equal(command.owner_id, device.owner_id); assert.equal(command.revision, 1);
+    assert.ok(!('signature' in command) && !('timestamp' in command) && !('nonce' in command), 'backend commands use TLS only');
+    assert.ok(command.expires_at > nowSeconds() && command.expires_at <= nowSeconds() + 86400);
+    assert.ok(!effects.has(command.command_id), 'trace fake must apply a command effect once'); effects.add(command.command_id);
+  };
+  const checkReceipt = (receipt, result) => {
+    assert.equal(receipt.type, 'receipt'); assert.equal(receipt.payload.result_message_id, result.message_id);
+    for (const key of ['device_id','owner_id','command_id','revision','idempotency_key']) assert.equal(receipt[key], result[key]);
+    assert.ok(!('signature' in receipt) && !('timestamp' in receipt) && !('nonce' in receipt));
+  };
+  const queryRequest = randomUUID();
+  assert.equal((await action('device.query', device.device_id, { request_id: queryRequest, query_kind: 'session_status' })).status, 303);
+  const query = await nextFrame(socket); checkCommand(query); assert.equal(query.class, 'machine_state_query');
+  socket.send(canonical(signedFrame(commandReply(device, query, 'ack', { state: 'accepted' }))));
+  const answered = commandReply(device, query, 'result', { status: 'answered', answer: { query_id: query.payload.query_id, query_kind: query.payload.query_kind, state: 'unknown' } });
+  outbox.set(answered.message_id, answered); socket.send(canonical(signedFrame(answered)));
+  const queryReceipt = await nextFrame(socket); checkReceipt(queryReceipt, answered); outbox.delete(answered.message_id);
+  socket.send(canonical(signedFrame(answered))); const queryReceipt2 = await nextFrame(socket); checkReceipt(queryReceipt2, answered); assert.notEqual(queryReceipt2.message_id, queryReceipt.message_id);
+  report('owner device.query -> command -> ack accepted -> answered unknown -> receipt; duplicate result -> fresh re-receipt');
+  socket.send(canonical(heartbeat(device, outbox.size))); await delay(100);
+  const notifyRequest = randomUUID(), notificationId = randomUUID();
+  const notifyFields = { request_id: notifyRequest, notification_id: notificationId, title: 'Waldo status', body: 'Your Mac is connected.', severity: 'info' };
+  assert.equal((await action('device.notify', device.device_id, { ...notifyFields, body: 'arbitrary text outside status scope' })).status, 400);
+  assert.equal((await action('device.notify', device.device_id, notifyFields)).status, 303);
+  const notification = await nextFrame(socket); checkCommand(notification); assert.equal(notification.class, 'notify_local'); assert.equal(notification.payload.body, notifyFields.body);
+  socket.send(canonical(signedFrame(commandReply(device, notification, 'ack', { state: 'accepted' }))));
+  const delivered = commandReply(device, notification, 'result', { status: 'delivered' }); outbox.set(delivered.message_id, delivered);
+  // Pause device reads before flushing the result: its receipt is deliberately never observed or applied.
+  socket.pause();
+  await new Promise((resolve, reject) => socket.send(canonical(signedFrame(delivered)), error => { if (error) reject(new Error('result flush failed')); else resolve(); }));
+  let committed = false;
+  for (let i = 0; i < 50; i++) {
+    const view = await localFetch(`${origin}/console/devices`, { headers: { cookie } });
+    if (view.status === 200 && (await view.text()).includes('notify_local: delivered')) { committed = true; break; }
+    await delay(50);
+  }
+  assert.ok(committed, 'result must commit despite deliberately lost receipt');
+  assert.equal(outbox.size, 1, 'lost receipt leaves one fake-device outbox row');
+  assert.equal(socket.traceInbox.length, 0, 'paused fake device must not observe a receipt');
+  await stopWorker(); socket.terminate(); await startWorker();
+  report('owner device.notify -> command -> ack accepted -> delivered committed; receipt deliberately unread; wrangler process stopped/restarted with identical persisted state');
+  socket = await openSocket(origin, device); sockets.push(socket);
+  socket.send(canonical(heartbeat(device, outbox.size))); await delay(100); assert.equal(socket.traceInbox.length, 0, 'reconnect cannot issue new work before outbox reconciliation');
+  socket.send(canonical(signedFrame(delivered))); const notifyReceipt = await nextFrame(socket); checkReceipt(notifyReceipt, delivered); outbox.delete(delivered.message_id);
+  assert.equal(outbox.size, 0); assert.equal(effects.size, 2, 'two classes each produce exactly one fake-device effect');
+  socket.send(canonical(heartbeat(device, outbox.size))); await delay(100);
+  report('same delivered result freshly signed after process restart -> receipt re-issued -> fake-device outbox cleared; one effect per class');
   const beforeForged = devices.get(device.device_id).last_seen_at;
   const forged = heartbeat(device); forged.signature = randomBytes(64).toString('base64url');
   const forgedClose = closedWithoutFrame(socket); socket.send(canonical(forged)); await forgedClose;
@@ -284,7 +352,7 @@ try {
   assert.equal(stubFailure, null, 'every signed RPC must match fixture schema and HMAC');
   assert.ok(!workerOutput.includes(code), 'pairing code must never reach worker logs');
   // Wrangler masks local binding values; any code leakage is a hard failure above.
-  report(`PASS slice 1 local trace in ${((performance.now() - traceStarted) / 1000).toFixed(2)}s; real Kennel TLS and hosted resources UNVERIFIED`);
+  report(`PASS slices 1+2 local trace in ${((performance.now() - traceStarted) / 1000).toFixed(2)}s; real Kennel TLS and hosted resources UNVERIFIED`);
 } catch (error) {
   // Do not serialize request/response objects or assertion actual values (cookies/codes).
   console.error(`SOURCE local: FAIL ${stubFailure ?? error.message}`); process.exitCode = 1;
