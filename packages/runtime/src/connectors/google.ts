@@ -91,13 +91,39 @@ export function googleConsentUrl(app: GoogleApp, state: string, codeChallenge: s
   return url.toString();
 }
 
+export type GoogleTokenFailure = 'auth' | 'transient' | 'configuration' | 'protocol';
+export class GoogleTokenError extends Error {
+  readonly status: number;
+  constructor(readonly kind: GoogleTokenFailure, readonly providerStatus?: number) {
+    super(`google token ${kind} failure`);
+    this.name = 'GoogleTokenError';
+    this.status = kind === 'auth' ? 401 : kind === 'transient' && providerStatus && (providerStatus === 429 || providerStatus >= 500) ? providerStatus : 502;
+  }
+}
+const tokenFailure = (status: number, code?: unknown): GoogleTokenError => {
+  if (status === 429 || status >= 500 || code === 'temporarily_unavailable' || code === 'server_error') return new GoogleTokenError('transient', status);
+  if (code === 'invalid_grant') return new GoogleTokenError('auth', status);
+  if (code === 'invalid_client' || code === 'unauthorized_client') return new GoogleTokenError('configuration', status);
+  return new GoogleTokenError('protocol', status);
+};
+
 async function token(app: GoogleApp, body: Record<string, string>, fetcher: Fetch): Promise<{ access_token: string; refresh_token?: string; id_token?: string; scope?: string }> {
-  const response = await fetcher('https://oauth2.googleapis.com/token', {
-    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: app.clientId, client_secret: app.clientSecret, ...body }).toString(),
-  });
-  const json = await response.json() as { access_token?: string; refresh_token?: string; id_token?: string; error?: string };
-  if (!response.ok || !json.access_token) throw new Error(`google token failed: ${json.error ?? response.status}`);
+  let response: Response;
+  try {
+    response = await fetcher('https://oauth2.googleapis.com/token', {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: app.clientId, client_secret: app.clientSecret, ...body }).toString(),
+    });
+  } catch {
+    throw new GoogleTokenError('transient');
+  }
+  let json: { access_token?: string; refresh_token?: string; id_token?: string; scope?: string; error?: unknown } | null;
+  try { json = await response.json() as typeof json; }
+  catch (error) {
+    if (error instanceof SyntaxError || !response.ok) throw tokenFailure(response.status);
+    throw new GoogleTokenError('transient');
+  }
+  if (!response.ok || !json || typeof json.access_token !== 'string' || !json.access_token) throw tokenFailure(response.status, json?.error);
   return json as { access_token: string; refresh_token?: string; id_token?: string; scope?: string };
 }
 
@@ -245,20 +271,20 @@ const threadBody = (payload: GmailPayload | undefined): string => {
 // calls are rare enough that one refresh per call beats a second cache to keep consistent.
 export async function googleAccessToken(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void): Promise<string> {
   const result = await token(app, { refresh_token: tokens.refresh_token, grant_type: 'refresh_token' }, fetcher).catch((error: unknown) => {
-    health?.(error instanceof Error ? error.message : String(error));
+    if (error instanceof GoogleTokenError && error.kind === 'auth') health?.(error.message);
     throw error;
   });
   health?.('');
   return result.access_token;
 }
 
-// health hears '' after a good refresh and the error after a failed one, so the console can offer a reconnect.
+// Only an invalid grant marks connection health; provider outages and client configuration do not require owner reconnect.
 export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void, account: CalendarPage['account'] = {connection_id: null, email: tokens.email ?? null}): GoogleClient & Required<Pick<GoogleClient, 'calendarPage'>> {
   let access: { token: string; until: number } | null = null;
   const bearer = async () => {
     if (access && access.until > Date.now()) return access.token;
     const result = await token(app, { refresh_token: tokens.refresh_token, grant_type: 'refresh_token' }, fetcher).catch((error: unknown) => {
-      health?.(error instanceof Error ? error.message : String(error));
+      if (error instanceof GoogleTokenError && error.kind === 'auth') health?.(error.message);
       throw error;
     });
     health?.('');
