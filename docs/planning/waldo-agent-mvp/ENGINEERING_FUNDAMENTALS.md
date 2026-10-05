@@ -56,6 +56,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Writes that belong to one turn settle before the next turn reads them.
 - Anything that reads and then writes shared state runs inside the DO's serial queue or one transaction.
 - External writes use a version check (etag / If-Match) so we never overwrite a change the owner made meanwhile.
+- Calendar Undo retains the applied write response etag across desk recreation, compares a fresh read, and uses that exact version for conditional PATCH/DELETE. Test unchanged create/move, later edits, read/write races, missing/legacy versions, repeated callbacks and provider failures; never promote a newer owner version into Undo permission.
 
 ### Time
 - All user-facing times are in the owner's timezone. Tests cover midnight crossings, quiet hours across midnight and DST-free zones like IST.
@@ -137,6 +138,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 | Date | Bug | Class | Test added | Checklist line |
 |---|---|---|---|---|
+| 2026-10-05 | Calendar Undo discarded applied etags and overwrote/deleted later owner edits; a delayed duplicate error could downgrade confirmed Undo | Concurrency | approvals.test.ts actual worker desk create/move preservation RED, conditional-race/versionless/repeated/provider-failure matrix and late duplicate uncertainty RED | Calendar Undo retains the applied response etag and never promotes a newer version into permission; confirmed Undo receipts survive duplicate errors |
 | 2026-10-01 | Dashboard shell returned plain-text 401 before React could expose login recovery; HEAD used a method the overview read rejects | Routing / authentication | dashboard-static.test.ts and dashboard-static-worker.test.ts: fixed signin redirect, root/alias/HEAD, legacy and ticket/JSON/receipt exclusions | Console entry preserves protected routes and receipts; HEAD uses GET auth |
 | 2026-10-03 | Existing conversational publication cached stale meeting decisions and indexed undelivered JSON; payload-only forgetting left source codes in metadata; quiet deferral preceded expiry | Calendar preparation / final delivery | Default-DO cancelled-history, changed-source retry, metadata-only forget, quiet-expiry and owner-local delivery regressions | Transient structured decisions, hashed derived keys, literal metadata cleanup and expiry-before-deferral |
 | 2026-09-30 | Owner-local artifact metadata used shared R2 body keys based on short IDs; two owners with the same ID overwrote and read each other | Trust boundaries | artifacts.test.ts: same-ID shared bucket create/revise/restart, missing namespace, percent/slash namespace collision, no legacy fallback | Shared object-storage keys include immutable owner scope |
