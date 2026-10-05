@@ -1,3 +1,4 @@
+import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { TASK_SOURCE_INSTRUCTION, TASK_SOURCE_SCHEMA, taskSourceAllowed, taskSourceRequired, taskSourcePrompt, type OwnerTaskSourceScope, type TaskSourceSnapshot, type TaskSourceFamily } from './task-source-scope';
 import { asciiLiteralIncludes, forgetSnapshot, forgetSourceBatch, selectedForgetTexts, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, type ForgetSource } from '../memory/selective-forget';
@@ -129,8 +130,8 @@ export const createOwnerResponder = (
   probeGuard?: { suppressMemory: boolean; stripLiveTools: boolean },
   // A7: the owner's standing orders join every reply's system prompt (read-only context,
   // owner-authored via owner-confirmed turns). The supplier returns '' when none exist.
-  // Called with 'orders' for the forget check (owner-authored orders only); with no argument it returns orders plus what Waldo is on (open loops), the system-prompt context. The prompt section is withheld while an incomplete forget topic matches it.
-  standingOrders?: (only?: 'orders') => string,
+  // No argument: the owner's standing orders. With { loopsRoom }: the open-loops section, budgeted to that many characters.
+  standingOrders?: (loops?: Readonly<{ loopsRoom: number }>) => string,
   // A5b: delegate children record background-run rows (parent = this turn's trace). Optional:
   // the console and probes construct turns without the owner DO's run book.
   runs?: RunBook,
@@ -393,7 +394,7 @@ export const createOwnerResponder = (
     const more = !!('more' in local && local.more) || !!(conversation && 'more' in conversation && conversation.more) || !!(ledger && 'more' in ledger && ledger.more);
     const rows = [...local.sources, ...conversation?.sources ?? [], ...ledger?.sources ?? []];
     const snapshot = batch ? forgetSourceBatch(topic, rows, more) : forgetSnapshot(topic, rows);
-    return { ...snapshot, more: 'more' in snapshot && snapshot.more === true, incomplete: snapshot.incomplete || local.incomplete || (!!store && !conversation) || !!conversation?.incomplete || (!!cleanupLedger && !ledger) || !!ledger?.incomplete || !!standingOrders?.('orders').toLowerCase().includes(topic.toLowerCase()) };
+    return { ...snapshot, more: 'more' in snapshot && snapshot.more === true, incomplete: snapshot.incomplete || local.incomplete || (!!store && !conversation) || !!conversation?.incomplete || (!!cleanupLedger && !ledger) || !!ledger?.incomplete || !!standingOrders?.().toLowerCase().includes(topic.toLowerCase()) };
   };
   const cleanupRetained = async (texts: readonly string[], ids: readonly number[], topics: readonly string[], coveredTopic?: string) => {
     let rewritten = 0;
@@ -582,6 +583,11 @@ export const createOwnerResponder = (
           const ordersRaw = sourceFamilyAvailable('local') ? standingOrders?.() ?? '' : '';
           const sourceNotice = interactiveSource && requireTaskScope ? sourceSnapshot ? taskSourcePrompt(sourceSnapshot) : 'Current owner task source scope is unavailable. Do not read connected or retained sources; ask for clarification.' : '';
           const ordersSection = forgettingState?.incompleteTopics().some(topic => ordersRaw.toLowerCase().includes(topic.toLowerCase())) ? '' : ordersRaw;
+          // Open loops: owner text that may hide a forgotten topic (escapes, NUL), so it is withheld on the same proof the forget coverage uses.
+          const loopsSectionFor = (loopsRoom: number): string => {
+            const raw = sourceFamilyAvailable('local') ? standingOrders?.({ loopsRoom }) ?? '' : '';
+            return forgettingState?.incompleteTopics().some(topic => carriesTopic(raw, topic) || hidesTopic(raw, topic)) ? '' : raw;
+          };
           const recallNotice = forgettingState?.incompleteTopics().length ? 'Recall is temporarily limited while requested forgetting coverage is incomplete. Use the current request and permitted live tools. Do not claim complete erasure or absence of associated facts.' : '';
           await assertCurrent();
           const skillPrompt = skills && (!binding || request.tools.includes('skills_load')) ? await skills.prompt(CANARIES) : undefined;
@@ -619,7 +625,10 @@ export const createOwnerResponder = (
           const unboundSystem = (): string => {
             const wrapped = skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined);
             const before = [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), sourceNotice, ...(recallNotice ? [recallNotice] : []), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : [])];
-            const after = [...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
+            const afterBase = [...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
+            // Open loops take at most half of the room left after the fixed parts, so owner memory keeps the other half; the section names what it left out.
+            const loopsSection = loopsSectionFor(Math.max(0, Math.floor(systemRoom(withOwnerSkillProcedures([...before, ...afterBase].join('\n\n'), wrapped)) / 2)));
+            const after = [...(ordersSection ? [ordersSection] : []), ...(loopsSection ? [loopsSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
             const room = systemRoom(withOwnerSkillProcedures([...before, ...after].join('\n\n'), wrapped));
             const memoryPart = memory && sourceFamilyAvailable('local') ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText, room)] : [];
             return withOwnerSkillProcedures([...before, ...memoryPart, ...after].join('\n\n'), wrapped);
@@ -796,11 +805,11 @@ export const createOwnerResponder = (
           rows.push(...requestSources());
           const more = local.more || !!(conversation && 'more' in conversation && conversation.more) || !!ledger?.more;
           const snapshot = forgetSourceBatch(topic, rows, more);
-          const standingHit = !!standingOrders?.('orders').toLowerCase().includes(topic.toLowerCase());
+          const standingHit = !!standingOrders?.().toLowerCase().includes(topic.toLowerCase());
           const heldStanding = (local.held ?? []).includes('standing_orders') || standingHit;
           // Named only when standing orders are the sole cause; any other incompleteness keeps the generic class so an unreadable-copy reason is never hidden.
           forgetHeld = heldStanding && !snapshot.incomplete && !local.otherIncomplete && !(local.incomplete && !local.held?.length) && !ledger?.incomplete && !conversation?.incomplete ? ['standing_orders'] : [];
-          return { ...snapshot, incomplete: snapshot.incomplete || local.incomplete || !!ledger?.incomplete || !!conversation?.incomplete || !!standingOrders?.('orders').toLowerCase().includes(topic.toLowerCase()) };
+          return { ...snapshot, incomplete: snapshot.incomplete || local.incomplete || !!ledger?.incomplete || !!conversation?.incomplete || !!standingOrders?.().toLowerCase().includes(topic.toLowerCase()) };
         };
         let forgetHeld: readonly string[] = [];
         const supplied = await gather();

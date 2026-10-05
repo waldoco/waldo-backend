@@ -99,10 +99,21 @@ describe('openLoopsPrompt', () => {
     const { openLoopsPrompt } = await import('../src/channels/loops');
     const rows: Array<Record<string, unknown>> = [];
     const book = { list: () => rows } as never;
-    expect(openLoopsPrompt(book, 'UTC')).toBe('');
+    expect(openLoopsPrompt(book, 'UTC', 10_000)).toBe('');
     rows.push({ id: 'a1', title: 'Send the shortlist', due: '2026-10-09T10:00', source_ref: null }, { id: 'b2', title: 'From mail', due: null, source_ref: 'gmail:x' });
-    const text = openLoopsPrompt(book, 'UTC');
+    const text = openLoopsPrompt(book, 'UTC', 10_000);
     expect(text).toContain('Send the shortlist (due 2026-10-09 10:00) [a1]');
     expect(text).not.toContain('From mail');
+  });
+  it('budgets to the room it is given, keeps soonest-due first and names what it left out', async () => {
+    const { openLoopsPrompt } = await import('../src/channels/loops');
+    const rows = Array.from({ length: 50 }, (_, i) => ({ id: `b${i}`, title: `Task ${i} ${'a'.repeat(100)}`, due: null, source_ref: null }));
+    const book = { list: () => rows } as never;
+    const text = openLoopsPrompt(book, 'UTC', 1000);
+    expect(text.length).toBeLessThanOrEqual(1000);
+    expect(text).toMatch(/\(\d+ more open loops are not shown here/);
+    const shown = (text.match(/^- /gm) ?? []).length;
+    expect(text).toContain(`(${50 - shown} more open loops`);
+    expect(openLoopsPrompt(book, 'UTC', 10)).toBe('');
   });
 });

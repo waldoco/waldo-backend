@@ -1860,3 +1860,40 @@ it('LEDGER open loops reach the interactive reply, mail-linked loops stay out, a
   expect(request()).not.toContain('Open loops Waldo is on for the owner');
   expect(request()).not.toContain('Send the venue shortlist');
 });
+
+it('REVIEW774 escaped loop topic must be withheld by the interactive prompt barrier', async () => {
+  const name = 'review774-escaped'; const topic = 'LEDGERTOPIC';
+  const title = String.raw`{"note":"\u004cEDGERTOPIC private venue"}`;
+  await admittedTurn(name, 170000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(name), (_instance, state) => {
+    loopBook(state.storage.sql, { now: () => Date.now(), newId: () => 'escape' }).open({ title, due: null });
+    const memory = claimStore(state.storage.sql);
+    memory.beginTopicCoverage(topic, new Date().toISOString());
+    expect(memory.forgetSources(topic).incomplete).toBe(true);
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(name));
+  await admittedTurn(name, 170001, 'What are you on right now?', ops());
+  await runInDurableObject(stub(name), (_instance, state) => {
+    expect(claimStore(state.storage.sql).incompleteTopics()).toContain(topic);
+    state.storage.deleteAlarm();
+  });
+  const body = seen.requests.at(-1) as { instructions?: string };
+
+  expect(request()).not.toContain('Open loops Waldo is on for the owner');
+});
+
+it('REVIEW774 many schema-valid loops must not silently drop the entire system prompt', async () => {
+  const name = 'review774-many';
+  await admittedTurn(name, 171000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(name), (_instance, state) => {
+    let n = 0;
+    const loops = loopBook(state.storage.sql, { now: () => Date.now(), newId: () => `many${++n}` });
+    for (let i = 0; i < 160; i++) loops.open({ title: `Task ${i}: ` + 'a'.repeat(185), due: null });
+    state.storage.deleteAlarm();
+  });
+  await admittedTurn(name, 171001, 'What are you on right now?', ops());
+  const body = seen.requests.at(-1) as { instructions?: string };
+
+  expect(body.instructions).toBeTruthy();
+});
