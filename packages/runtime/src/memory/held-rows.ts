@@ -64,9 +64,12 @@ export const heldRowShapes = (sql: Sql, table: string, topics: readonly HeldTopi
   // Verdicts run the real forgetSources, so they are computed only for the topics shown.
   const head: string[] = []; let headSize = 0; let shown = 0;
   for (const [index, { topic, state }] of topics.entries()) {
+    const room = HELDROWS_TOPIC_BUDGET - headSize - 1;
+    if (room < 24) break;
     const r = real(topic);
-    const line = `t${index + 1}: ${state} ${r.incomplete ? 'incomplete' : 'complete'}${r.heldBy?.length ? ` held by ${r.heldBy.map(h => `${h.table}:${h.rule}:${h.rows}`).join(' ')}` : ''}`;
-    if (headSize + line.length + 1 > HELDROWS_TOPIC_BUDGET) break;
+    const full = `t${index + 1}: ${state} ${r.incomplete ? 'incomplete' : 'complete'}${r.heldBy?.length ? ` held by ${r.heldBy.map(h => `${h.table}:${h.rule}:${h.rows}`).join(' ')}` : ''}`;
+    // A topic is evaluated only if it will be shown; a line longer than the room is cut, not dropped.
+    const line = full.length > room ? `${full.slice(0, room - 3)}...` : full;
     head.push(line); headSize += line.length + 1; shown++;
   }
   const headLines = topics.length ? [`topics ${topics.length}${shown < topics.length ? ` (+${topics.length - shown} more topics not shown)` : ''}`, ...head] : ['topics none pending'];
@@ -100,28 +103,32 @@ export const heldRowShapes = (sql: Sql, table: string, topics: readonly HeldTopi
   }
   const summary = `${table}: ${lines.length} listed of ${scanned} rows with a backslash or NUL${more ? `; PARTIAL, continue with /heldrows ${table} ${after}` : ''}`;
   // Projection and decoded-leaf holds: the same predicate and decoder forgetSources uses (shared code in claims.ts), names and sizes only.
-  const extra: string[] = [];
+  const extra: string[] = []; const notes: string[] = []; let stopped = false; const after0 = from !== undefined ? from : first - 1;
   const projection = PROJECTION_STORES.find(([name]) => name === table);
   const leafStore = LITERAL_REDACTED_STORES.find(([name]) => name === table);
   for (const [index, { topic }] of topics.slice(0, Math.max(shown, 1)).entries()) {
+    if (extra.length > limit) { stopped = true; break; }
     const like = likePrefilter(topic);
     if (projection) {
       const cols = present.filter(column => (projection[1] as readonly string[]).includes(column));
       if (cols.length) {
         const flags = cols.map(column => `length(${column}) AS ${column}_len, json_valid(${column}) AS ${column}_json, ${projectionRawHit(column)} AS ${column}_raw, ${projectionValueHit(column)} AS ${column}_val, ${projectionKeyHit(column)} AS ${column}_key`).join(', ');
-        const rows = sql.exec<Record<string, number | null>>(`SELECT rowid AS rid, ${flags} FROM ${table} WHERE (${projectionPredicate(cols)}) AND rowid > ? ORDER BY rowid LIMIT ?`, ...cols.flatMap(() => [like, like, like]), ...cols.flatMap(() => [like, like, like]), first - 1, limit + 1).toArray();
+        const rows = sql.exec<Record<string, number | null>>(`SELECT rowid AS rid, ${flags} FROM ${table} WHERE (${projectionPredicate(cols)}) AND rowid > ? ORDER BY rowid LIMIT ?`, ...cols.flatMap(() => [like, like, like]), ...cols.flatMap(() => [like, like, like]), after0, limit + 1).toArray();
         for (const row of rows.slice(0, limit)) extra.push(`#${String(row.rid)} t${index + 1}[projection ${cols.map(column => `${column} len=${row[`${column}_len`] ?? 'null'} json=${row[`${column}_json`] ? 1 : 0} raw=${row[`${column}_raw`] ? 1 : 0} val=${row[`${column}_val`] ? 1 : 0} key=${row[`${column}_key`] ? 1 : 0}`).join(' | ')}]`);
-        if (rows.length > limit) extra.push(`t${index + 1}: more projection rows not shown`);
+        if (rows.length > limit) notes.push(`t${index + 1}: more projection rows not shown`);
       }
     }
     if (leafStore) for (const column of present.filter(name => (leafStore[1] as readonly string[]).includes(name))) {
-      const rows = sql.exec<{ rid: number; value: string }>(`SELECT rowid AS rid, ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL AND ${column} != '' AND ${column} NOT LIKE ? ESCAPE '\\' AND rowid > ? ORDER BY rowid LIMIT ?`, like, first - 1, HELDROWS_SCAN_BUDGET).toArray();
-      for (const row of rows) if (decodedLeafHit(row.value, topic)) extra.push(`#${row.rid} t${index + 1}[decoded_leaf_or_unreadable ${column} len=${row.value.length}]`);
+      const rows = sql.exec<{ rid: number; value: string }>(`SELECT rowid AS rid, ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL AND ${column} != '' AND ${column} NOT LIKE ? ESCAPE '\\' AND rowid > ? ORDER BY rowid LIMIT ?`, like, after0, HELDROWS_SCAN_BUDGET + 1).toArray();
+      for (const row of rows.slice(0, HELDROWS_SCAN_BUDGET)) if (decodedLeafHit(row.value, topic)) extra.push(`#${row.rid} t${index + 1}[decoded_leaf_or_unreadable ${column} len=${row.value.length}]`);
+      if (rows.length > HELDROWS_SCAN_BUDGET) notes.push(`t${index + 1}: decoded-leaf scan of ${column} PARTIAL, continue with /heldrows ${table} ${rows[HELDROWS_SCAN_BUDGET - 1]!.rid}`);
     }
   }
+  if (stopped) notes.push('further topics not scanned for projection or decoded-leaf rows');
+  if (notes.length > 5) notes.splice(5, notes.length - 5, `+${notes.length - 5} more notes not shown`);
   lines.push(...extra);
-  const out = [...headLines, summary, 'row listing: escape/NUL rows (summary above), then projection and decoded-leaf rows chosen by the same predicate as the hold']; let size = out.join('\n').length; let cut = 0;
-  const reserve = 'truncated: 999 more rows not shown'.length + 1;
+  const out = [...headLines, summary, 'row listing: escape/NUL rows (summary above), then projection and decoded-leaf rows chosen by the same predicate as the hold', ...notes]; let size = out.join('\n').length; let cut = 0;
+  const reserve = `truncated: ${lines.length} more rows not shown`.length + 1;
   for (const line of lines.slice(0, limit)) {
     if (size + line.length + 1 > HARNESS_MESSAGE_LIMIT - reserve) { cut++; continue; }
     out.push(line); size += line.length + 1;
