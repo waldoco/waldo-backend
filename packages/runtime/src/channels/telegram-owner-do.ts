@@ -320,9 +320,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const subject = request.headers.get('x-waldo-telegram-subject') ?? '';
     const doName = request.headers.get('x-waldo-do-name') ?? '';
     if (!/^\d+$/.test(subject) || !doName || !this.env.TELEGRAM_OWNER_DO || this.env.TELEGRAM_OWNER_DO.idFromName(doName).toString() !== this.ctx.id.toString()) return new Response('forbidden', { status: 403 });
-    const boundSubject = this.ctx.storage.kv.get<string>('telegram_subject');
+    let boundSubject = this.ctx.storage.kv.get<string>('telegram_subject');
     const boundName = this.ctx.storage.kv.get<string>('do_name');
-    if ((boundSubject && boundSubject !== subject) || (boundName && boundName !== doName) || this.ctx.storage.kv.get<boolean>('telegram_unlinked')) return new Response('forbidden', { status: 403 });
+    if (boundName && boundName !== doName) return new Response('forbidden', { status: 403 });
+    // A stored binding that disagrees with the request (an unlink flag, or a different subject after unlink and relink) is replaced only on the directory's own current answer
+    // that this subject belongs to this owner. The header alone, like the stored value, is not evidence.
+    if ((boundSubject && boundSubject !== subject) || this.ctx.storage.kv.get<boolean>('telegram_unlinked')) {
+      let current: Awaited<ReturnType<ReturnType<typeof ownerDirectory>['byPresence']>> = null;
+      try { current = await ownerDirectory(this.env).byPresence('telegram', subject); } catch { return new Response('unavailable', { status: 503 }); }
+      if (!current || current.doName !== doName || current.subject !== subject) return new Response('forbidden', { status: 403 });
+      this.ctx.storage.kv.put('telegram_subject', subject); this.ctx.storage.kv.delete('telegram_unlinked');
+      boundSubject = subject;
+    }
     const body = await request.text();
     if (body.length > 64_000) return new Response('too large', { status: 413 });
     let raw: RawUpdate & { message?: RawUpdate['message'] & { chat?: { id: number; type?: string } }; callback_query?: CallbackQuery & { message?: CallbackQuery['message'] & { chat: { id: number; type?: string } } } };
