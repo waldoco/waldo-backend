@@ -2602,3 +2602,19 @@ it('NEW798 perf big card', async()=> {
   console.log('NEW798-PERF',JSON.stringify({hold:t1-t0,purge:t3-t2})); state.storage.deleteAlarm();
  });
 });
+
+// Console-first signup builds the owner runtime before any Telegram binding exists; the later link must not leave that runtime cached.
+it('OWNERCACHE a runtime built before the Telegram binding is rebuilt once the binding changes, and reused while it does not', async () => {
+ const label='owner-cache-binding'; await admittedTurn(label,190900,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(instance,state)=> {
+  const setup=()=> (instance as unknown as { setup(channel: string): unknown }).setup('telegram');
+  state.storage.kv.delete('telegram_subject');
+  const before=setup();
+  expect(setup()).toBe(before);
+  state.storage.kv.put('telegram_subject','777001');
+  const after=setup();
+  expect(after).not.toBe(before);
+  expect(setup()).toBe(after);
+  state.storage.deleteAlarm();
+ });
+});

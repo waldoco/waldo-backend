@@ -232,6 +232,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       .catch(() => { console.warn(JSON.stringify({ event: 'browser_host_disabled' })); });
   }
   private runtimes: Partial<Record<ChannelKind, OwnerRuntime>> = {};
+  // The owner id each cached runtime was built for. The binding can change under a live cache (console-first signup builds owner 0, the Telegram link binds later).
+  private runtimeOwners: Partial<Record<ChannelKind, number>> = {};
   private queue: Promise<unknown> = Promise.resolve();
   private readonly inbox = new TelegramOwnerInbox(this.ctx.storage, persistInboxWake);
   private readonly liveAttempts = new Set<string>();
@@ -1265,10 +1267,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   private setup(channel: ChannelKind = 'telegram'): OwnerRuntime {
-    const cached = this.runtimes[channel];
-    if (cached) return cached;
     const { TELEGRAM_BOT_TOKEN: token, OPENAI_API_KEY: key } = this.env;
     const identity = this.ctx.storage.kv;
+    const currentOwner = channel === 'whatsapp'
+      ? Number(identity.get<string>('whatsapp_subject') ?? '0') || 0
+      : resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
+    const cached = this.runtimes[channel];
+    // A cached runtime is current only for the owner it was built for. A turn already running keeps its own runtime object; only later turns see the rebuilt one.
+    if (cached && this.runtimeOwners[channel] === currentOwner) return cached;
     // consoleAuth is non-null exactly when the Supabase directory backs this deploy.
     // WhatsApp identity is the E.164-digit subject bound at ingress; a directory-backed DO with
     // no whatsapp_subject resolves owner 0 and every send drops at the gate (same rule as d3a050c).
@@ -2345,7 +2351,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
       },
       timezone: clock.timezone, ready };
-    this.runtimes[channel] = runtime;
+    this.runtimes[channel] = runtime; this.runtimeOwners[channel] = owner;
     return runtime;
   }
 }
