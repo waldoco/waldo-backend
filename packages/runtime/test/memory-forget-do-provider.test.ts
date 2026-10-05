@@ -2395,3 +2395,43 @@ it('EXACT-CARD a card that only shares the topic prefix is neither held nor blan
     state.storage.deleteAlarm();
   });
 });
+
+it.each([['mixed46', 46], ['mixed20', 20]] as const)('EXACT-CARD %s: real mail metadata rows between the fragments do not break the match', async (kind, at) => {
+  const label = `forget-card-exact-${kind}`;
+  await admittedTurn(label, 153470, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    const meta = (n: number) => ({ source: 'mail', kind: 'new', source_ref: `mail:t${n}`, source_message_id: `m${n}` });
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify([{ ...meta(0), detail: topic.slice(0, at) }, { ...meta(1), detail: topic.slice(at) }, { ...meta(2), detail: 'Invoice question from the vendor' }]));
+    const store = claimStore(sql);
+    expect(store.forgetSources(topic, true).incomplete).toBe(true);
+    store.purge([], new Date().toISOString(), [topic]);
+    const after = sql.exec<{ changes: string }>('SELECT changes FROM update_cards').one().changes;
+    expect(after).not.toContain('COBALT');
+    expect(JSON.parse(after)[1]).toMatchObject(meta(1));
+    expect(store.forgetSources(topic, true).incomplete).toBe(false);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('OWNER-TURN a split-at-20 card with real mail metadata between fragments stays incomplete across eviction and an admitted retry', async () => {
+  const label = 'owner-fragment-meta20'; const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+  const meta = (n: number) => ({ source: 'mail', kind: 'new', source_ref: `mail:t${n}`, source_message_id: `m${n}` });
+  await admittedTurn(label, 170200, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify([{ ...meta(0), detail: topic.slice(0, 20) }, { ...meta(1), detail: topic.slice(20) }]));
+    claimStore(sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 170201, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+    state.storage.deleteAlarm();
+  });
+});

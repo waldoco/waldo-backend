@@ -112,6 +112,7 @@ export const projectionPredicate = (columns: readonly string[]) => columns.map(c
 // update_cards: one card is tied to a topic when the topic appears whole in its raw text, in any decoded JSON key or value, or across its pieces in order
 // (a topic split between values or between a key and its value, with or without NULs). The hold and the purge exit share this one function.
 // A piece order interleaved with unrelated text is not provable and is not detected (tracked in #794).
+const CARD_JOIN_KEYS = ['source', 'kind', 'source_ref', 'source_message_id'];
 export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string): boolean => {
   if (changes !== null && changes !== undefined && typeof changes !== 'string') return true;
   if (text !== null && text !== undefined && typeof text !== 'string') return true;
@@ -130,7 +131,8 @@ export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string)
     if (typeof node === 'string') { all.push(node); if (!key) values.push(node); }
     else if (Array.isArray(node)) for (let index = node.length - 1; index >= 0; index--) stack.push({ key: false, node: node[index] });
     else if (node !== null && typeof node === 'object') {
-      const entries = Object.entries(node);
+      // Join keys (source, kind, source_ref, source_message_id) sit between the free-text fragments of a real mail card and are not content.
+      const entries = Object.entries(node).filter(([name]) => !CARD_JOIN_KEYS.includes(name));
       for (let index = entries.length - 1; index >= 0; index--) { stack.push({ key: false, node: entries[index]![1] }); stack.push({ key: true, node: entries[index]![0] }); }
     }
   }
@@ -487,9 +489,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             // (source, kind, source_ref, source_message_id) and the send state stay, so pending mail and due loops still join. Same predicate as the hold.
             if (topics.length > 0 && cardCarriesTopic(redactedChanges, redactedText, text)) {
               const SCHEMA_KEYS = ['source', 'kind', 'detail', 'source_ref', 'source_message_id'];
-              const JOIN_KEYS = ['source', 'kind', 'source_ref', 'source_message_id'];
               const blank = (node: unknown): unknown => Array.isArray(node) ? node.map(blank)
-                : node !== null && typeof node === 'object' ? Object.fromEntries(Object.entries(node).map(([key, child]) => [SCHEMA_KEYS.includes(key) ? key : FORGOTTEN, JOIN_KEYS.includes(key) ? child : blank(child)]))
+                : node !== null && typeof node === 'object' ? Object.fromEntries(Object.entries(node).map(([key, child]) => [SCHEMA_KEYS.includes(key) ? key : FORGOTTEN, CARD_JOIN_KEYS.includes(key) ? child : blank(child)]))
                 : typeof node === 'string' ? FORGOTTEN : node;
               const blanked = parsed === undefined ? JSON.stringify(FORGOTTEN) : JSON.stringify(blank(parsed));
               sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', blanked, row.text === null ? null : FORGOTTEN, row.id);
