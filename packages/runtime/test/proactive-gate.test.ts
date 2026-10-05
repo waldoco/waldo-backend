@@ -38,3 +38,14 @@ describe('proactiveGate', () => {
     expect(proactiveGate({ ...base, kind: 'calendar_prep', ownerEnabled: false })).toEqual({ open: false, reason: 'owner_off' });
   });
 });
+
+describe('loop nudge', () => {
+  const base = { flag: undefined, ownerEnabled: true, googleConnected: false, proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' as const }, now: Date.parse('2026-09-26T04:00:00Z'), timezone: 'Asia/Kolkata' };
+  it('is gated like other proactive work but needs no Google connection', () => {
+    expect(proactiveGate({ ...base, kind: 'loop_nudge' })).toEqual({ open: true });
+    expect(proactiveGate({ ...base, kind: 'loop_nudge', ownerEnabled: false })).toEqual({ open: false, reason: 'owner_off' });
+    expect(proactiveGate({ ...base, kind: 'loop_nudge', flag: '0' })).toEqual({ open: false, reason: 'flag_off' });
+    expect(proactiveGate({ ...base, kind: 'loop_nudge', proactivity: { ...base.proactivity, volume: 'low' } })).toEqual({ open: false, reason: 'volume_low' });
+    expect(proactiveGate({ ...base, kind: 'loop_nudge', proactivity: { quiet_start: '09:00', quiet_end: '11:00', volume: 'normal' } })).toEqual({ open: false, reason: 'quiet_hours' });
+  });
+});
