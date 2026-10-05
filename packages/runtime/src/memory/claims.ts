@@ -1,6 +1,6 @@
 type Sql = Pick<SqlStorage, 'exec'>;
-import type { ForgetSource } from './selective-forget';
-import { asciiLiteralIncludes } from './selective-forget';
+import type { ForgetSource, ForgetBatch } from './selective-forget';
+import { asciiLiteralIncludes, MAX_FORGET_SOURCES } from './selective-forget';
 
 export const CLAIM_KINDS = ['fact', 'preference', 'routine', 'goal', 'followup', 'health', 'event', 'pattern', 'observation'] as const;
 export const CLAIM_SOURCES = ['stated', 'confirmed', 'inferred'] as const;
@@ -551,15 +551,16 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const row = sql.exec<{ topic: string; coverage_incomplete: number }>('SELECT topic, coverage_incomplete FROM topic_purge_pending WHERE fingerprint = ?', textFingerprint(topic.trim())).toArray()[0];
       return row?.topic === topic.trim() ? row.coverage_incomplete : null;
     },
-    forgetSources(topic: string): { sources: ForgetSource[]; incomplete: boolean } {
+    forgetSources(topic: string, batch = false): { sources: ForgetSource[]; incomplete: boolean; more?: boolean } {
       const sources: ForgetSource[] = [];
       let incomplete = false;
+      let more = false;
       const like = likePrefilter(topic);
       const collect = (table: string, id: string, columns: readonly string[]) => {
         if (!tableExists(sql, table)) return;
-        const rows = sql.exec<Record<string, string | number | null>>(`SELECT ${id} AS source_id, ${columns.join(', ')} FROM ${table} WHERE ${columns.map(column => `${column} LIKE ? ESCAPE '\\'`).join(' OR ')} LIMIT 65`, ...columns.map(() => like)).toArray();
-        if (rows.length > 64) incomplete = true;
-        for (const row of rows.slice(0, 64)) for (const column of columns) {
+        const rows = sql.exec<Record<string, string | number | null>>(`SELECT ${id} AS source_id, ${columns.join(', ')} FROM ${table} WHERE ${columns.map(column => `${column} LIKE ? ESCAPE '\\'`).join(' OR ')} ORDER BY ${id} LIMIT ?`, ...columns.map(() => like), MAX_FORGET_SOURCES + 1).toArray();
+        if (rows.length > MAX_FORGET_SOURCES) { if (batch) more = true; else incomplete = true; }
+        for (const row of rows.slice(0, MAX_FORGET_SOURCES)) for (const column of columns) {
           const text = row[column];
           if (typeof text === 'string' && asciiLiteralIncludes(text, topic)) sources.push({ ref: `${table}:${row.source_id}:${column}`, text });
         }
@@ -580,7 +581,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         const available = columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length);
         if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${available.map(column => `(${column} LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE (type = 'text' AND value LIKE ? ESCAPE '\\') OR key LIKE ? ESCAPE '\\'))`).join(' OR ')} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) incomplete = true;
       }
-      return { sources, incomplete };
+      return { sources, incomplete, ...(batch ? { more } : {}) };
+    },
+    forgetSourceBatch(topic: string): ForgetBatch {
+      const page = this.forgetSources(topic, true);
+      return { sources: page.sources, incomplete: page.incomplete, more: !!page.more };
     },
     beginTopicCoverage(topic: string, at: string): void {
       topic = topic.trim();
@@ -593,9 +598,9 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       if (aggregate.length > 128 || new TextEncoder().encode(JSON.stringify(aggregate)).byteLength > 65536) throw new Error('pending topic budget exceeded');
       sql.exec('INSERT INTO topic_purge_pending (fingerprint, topic, created_at, coverage_incomplete) VALUES (?, ?, ?, 1) ON CONFLICT(fingerprint) DO UPDATE SET coverage_incomplete = CASE WHEN topic_purge_pending.coverage_incomplete = 2 THEN 2 ELSE 1 END', fingerprint, topic, at);
     },
-    authoriseTopicCoverage(topic: string, selected: readonly string[], at: string): void {
+    authoriseTopicCoverage(topic: string, selected: readonly string[], at: string, complete = true): void {
       topic = topic.trim();
-      if (!selected.length || selected.length > 32 || /[^\x20-\x7e]/.test(topic) || selected.some(text => text.length < 12 || text.length > 4096 || /[^\x20-\x7e]/.test(text) || !asciiLiteralIncludes(text, topic) || text.trim().toLowerCase() === topic.toLowerCase())) throw new Error('selected topic scope');
+      if (!selected.length || selected.length > MAX_FORGET_SOURCES || /[^\x20-\x7e]/.test(topic) || selected.some(text => text.length < 12 || text.length > 4096 || /[^\x20-\x7e]/.test(text) || !asciiLiteralIncludes(text, topic) || text.trim().toLowerCase() === topic.toLowerCase())) throw new Error('selected topic scope');
       const texts = [...new Set([...this.pendingTopics(), ...selected])];
       const existing = sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending').toArray().map(row => row.topic);
       const aggregate = [...new Set([...existing, ...texts])];
@@ -613,11 +618,17 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // The owner topic stays incomplete until independently verified settlement.
       for (const text of [topic, ...selected]) this.barrier(text, at);
       // One atomic SQL statement couples selected-clause custody to the proof
-      // state. 1 means unproved; 2 means selected coverage awaiting readback.
-      const batch = [...rows.map(row => ({ ...row, coverage: 0 })), { fingerprint: textFingerprint(topic), topic, coverage: 2 }];
+      // state. Partial batches retain 1; only full coverage uses 2, awaiting readback.
+      const batch = [...rows.map(row => ({ ...row, coverage: 0 })), { fingerprint: textFingerprint(topic), topic, coverage: complete ? 2 : 1 }];
       sql.exec(`INSERT INTO topic_purge_pending (fingerprint, topic, created_at, coverage_incomplete)
         SELECT json_extract(value, '$.fingerprint'), json_extract(value, '$.topic'), ?, json_extract(value, '$.coverage') FROM json_each(?) WHERE 1
         ON CONFLICT(fingerprint) DO UPDATE SET coverage_incomplete = excluded.coverage_incomplete`, at, JSON.stringify(batch));
+    },
+    verifyEmptyTopicCoverage(topic: string, at: string): void {
+      // Caller proves complete current inventory, including unsaved requests,
+      // before this transition; settlement still requires independent readback.
+      this.barrier(topic, at);
+      sql.exec('UPDATE topic_purge_pending SET coverage_incomplete = 2 WHERE fingerprint = ? AND topic = ? AND coverage_incomplete != 0', textFingerprint(topic.trim()), topic.trim());
     },
     settle(ids: readonly number[], topics: readonly string[] = [], coveredTopic?: string): void {
       for (const topic of topics) sql.exec('DELETE FROM topic_purge_pending WHERE fingerprint = ? AND coverage_incomplete = 0', textFingerprint(topic.trim()));

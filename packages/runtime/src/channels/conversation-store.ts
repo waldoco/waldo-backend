@@ -1,12 +1,14 @@
 import type { RunEffectScope } from './run-effect-scope';
 import { literalTextRedactor, redactConversationEntry, type ConversationEntry, type ConversationTree } from '@waldo/contracts';
 import { redactSecretUrls } from './egress-guard';
-import { asciiLiteralIncludes, type ForgetSource } from '../memory/selective-forget';
+import { asciiLiteralIncludes, forgetSourceBatch, type ForgetSource, type ForgetBatch } from '../memory/selective-forget';
 
 export type ConversationStore = Readonly<{
   load(): Promise<Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null }>>;
   save(entries: readonly ConversationEntry[], leafId: string, scope?: RunEffectScope): Promise<void>;
   forgetSources?(topic: string): Promise<{ sources: ForgetSource[]; incomplete: boolean }>;
+  forgetSourceBatch?(topic: string): Promise<ForgetBatch>;
+  forgetSourceBatchCurrent?(topic: string): ForgetBatch | null;
   forgetSourcesCurrent?(topic: string): { sources: ForgetSource[]; incomplete: boolean } | null;
 }>;
 
@@ -15,6 +17,17 @@ type KeyValueStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & { kv
 const entryKey = (seq: number) => `conv:${String(seq).padStart(10, '0')}`;
 
 export const durableConversationStore = (storage: KeyValueStorage): ConversationStore => ({
+  async forgetSourceBatch(topic) {
+    const all = await this.forgetSources!(topic);
+    const batch = forgetSourceBatch(topic, all.sources);
+    return { ...batch, incomplete: batch.incomplete || all.incomplete };
+  },
+  forgetSourceBatchCurrent(topic) {
+    const all = this.forgetSourcesCurrent!(topic);
+    if (!all) return null;
+    const batch = forgetSourceBatch(topic, all.sources);
+    return { ...batch, incomplete: batch.incomplete || all.incomplete };
+  },
   forgetSources: topic => conversationForgetSources(storage, topic),
   forgetSourcesCurrent: topic => storage.kv?.list ? conversationForgetSourcesCurrent(storage.kv as Pick<DurableObjectStorage['kv'], 'list'>, topic) : null,
   async load() {

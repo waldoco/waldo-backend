@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from 'cloudflare:test';
-import { expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 
 const seen = vi.hoisted(() => ({ writerOps: [] as string[], replyInputs: [] as string[], writerInputs: [] as string[], replyOutputs: [] as unknown[][], logs: [] as unknown[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
@@ -8,6 +8,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
   if (writer) seen.writerInputs.push(JSON.stringify(body)); else seen.replyInputs.push(JSON.stringify(body));
   return { id: 'fixture', output_text: writer ? seen.writerOps.shift() ?? '{}' : 'pong', output: writer ? [] : seen.replyOutputs.shift() ?? [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
 } }; } }));
+beforeEach(() => { seen.writerOps.length=0; seen.replyInputs.length=0; seen.writerInputs.length=0; seen.replyOutputs.length=0; seen.logs.length=0; });
 const { createOwnerResponder } = await import('../src/channels/owner-turn');
 const { claimStore } = await import('../src/memory/claims');
 const { episodeIndex } = await import('../src/channels/episodes');
@@ -284,7 +285,7 @@ it('a failing retry keeps the block and cannot be steered by the next turn text'
     expect(store.incompleteTopics()).toEqual([topic]);
     // The blanket block still applies to the reply after the failed retry.
     expect(system()).toContain('Recall is temporarily limited');
-  });
+  },undefined,undefined,sql=>episodeIndex(sql).add('retry-source','owner',`${topic} synthetic note`,1));
 });
 
 it('ADVERSARIAL selector must not certify punctuation-padded bare instruction marker', async () => {
@@ -323,7 +324,7 @@ it('the reply instructions carry the reason class of an incomplete forget, witho
     expect(system()).not.toContain('some saved copies could not be fully read');
   }, undefined, undefined, sql => episodeIndex(sql).add('why4-src', 'owner', fact, 1));
 });
-it('a selector that cannot run is named selector_unavailable, and an over-bound source set is named sources_incomplete', async () => {
+it('a selector that cannot run is named selector_unavailable, and omitted coverage in a source batch is named selection_rejected', async () => {
   const topic = 'WHY2-757-TOPIC';
   await session('forget-why-unavailable', async (turn, store) => {
     seen.writerOps.push(ops({ forget_topic: topic }));
@@ -335,7 +336,21 @@ it('a selector that cannot run is named selector_unavailable, and an over-bound 
     seen.writerOps.push(ops({ forget_topic: 'WHY3-757-TOPIC' }));
     await turn('tg-why3', 'Forget only WHY3-757-TOPIC.', JSON.stringify({ spans: [], reviewed_refs: [], complete: true }));
     const hop = seen.logs.filter(entry => (entry as { hop: string }).hop === 'memory').at(-1) as { detail: string };
-    expect(hop.detail).toMatch(/forget_incomplete sources_incomplete\(64\)/);
+    expect(hop.detail).toMatch(/forget_incomplete selection_rejected\(64 sources\)/);
     expect(store.incompleteTopics()).toEqual(['WHY3-757-TOPIC']);
   }, undefined, undefined, sql => { const ep = episodeIndex(sql); for (let i = 0; i < 70; i++) ep.add(`many-${i}`, 'owner', `WHY3-757-TOPIC row ${i}`, i + 1); });
+});
+
+it('bounded batch progress logs its count without topic text and tells the owner only that reason',async()=>{
+  const topic='BAT';const facts=Array.from({length:65},(_,i)=>`BAT note ${String(i).padStart(3,'0')}`);
+  await session('forget-batch-reason-count',async(turn,store)=>{
+    seen.writerOps.push(ops({forget_topic:topic}));
+    await turn('tg-batch-count',`Forget only ${topic}.`,JSON.stringify({spans:facts.slice(0,64).map((text,i)=>({ref:`episodes:${i+1}:text`,text})),reviewed_refs:facts.slice(0,64).map((_,i)=>`episodes:${i+1}:text`),complete:true}));
+    expect(store.topicCoverage(topic)).toBe(1);
+    const hop=seen.logs.filter(entry=>(entry as {hop:string}).hop==='memory').at(-1) as {detail:string};
+    expect(hop.detail).toContain('forget_incomplete batch_pending(64)');expect(hop.detail).not.toContain(topic);
+    expect(system()).toContain('reason class: batch_pending)');expect(system()).toContain('a bounded batch was checked');
+    expect(system()).not.toContain('some saved copies could not be fully read');
+    expect(system()).not.toContain('verified exact cleanup targets were removed');
+  },undefined,undefined,sql=>facts.forEach((fact,i)=>episodeIndex(sql).add(`batch-${i}`,'owner',fact,i)));
 });

@@ -1,6 +1,6 @@
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { TASK_SOURCE_INSTRUCTION, TASK_SOURCE_SCHEMA, taskSourceAllowed, taskSourceRequired, taskSourcePrompt, type OwnerTaskSourceScope, type TaskSourceSnapshot, type TaskSourceFamily } from './task-source-scope';
-import { asciiLiteralIncludes, forgetSnapshot, selectedForgetTexts, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, type ForgetSource } from '../memory/selective-forget';
+import { asciiLiteralIncludes, forgetSnapshot, forgetSourceBatch, selectedForgetTexts, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, type ForgetSource } from '../memory/selective-forget';
 import { ownerForgetTopic, hasForgetIntent } from '../memory/claims';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
@@ -221,6 +221,7 @@ export const createOwnerResponder = (
   let forgetOverflow = false;
   let forgetUnsafe = false;
   let forgettingTurn = false;
+  let forgetBatchesRemaining = MAX_TOOL_ROUNDS;
   // Heard steering text reaches the provider JSON-escaped (turn-control quotes it), so a forgotten clause with quotes or backslashes
   // must match in its escaped form too. Same marker; the escaped needle is the string body JSON.stringify would write.
   const forgetNeedles = () => [...forgottenTexts].flatMap(text => { const escaped = JSON.stringify(text).slice(1, -1); return escaped === text ? [text] : [text, escaped]; });
@@ -268,6 +269,7 @@ export const createOwnerResponder = (
       if (!transientDecision && skills && expectedProcedure !== undefined) await skills.assertProcedureCurrent(expectedProcedure, CANARIES);
       return result;
     } } : adapter;
+    const sanitise = safety.sanitise;
     const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker }).complete({
       ...(privateRunScope ? { runScope: privateRunScope } : {}),
       trigger: 'user_message',
@@ -278,7 +280,14 @@ export const createOwnerResponder = (
         ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
         ...(tools ? { tools: [...tools] } : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
       }),
-    }, safety);
+    }, purpose === 'forget_source' && sanitise ? {
+      ...safety,
+      // Private coverage JSON is model context, never owner reply prose. Its
+      // source snapshot is bounded; retain the existing internal-context cap.
+      sanitise: (input: Parameters<NonNullable<typeof sanitise>>[0]) => sanitise({
+        ...input, destination: input.destination === 'owner_reply' ? 'internal_context' : input.destination,
+      }),
+    } : safety);
     await assertCurrent();
     privateRunScope?.admit();
     const input = JSON.stringify([{ role: 'system', content: system }, ...userMessages, ...(turns ?? [])]);
@@ -376,12 +385,14 @@ export const createOwnerResponder = (
   };
   // The final proof and SQL transition share one event-loop segment. An async
   // supplier without this current-read seam cannot certify stable coverage.
-  const currentForgetSources = (topic: string) => {
-    const local = forgettingState?.forgetSources(topic) ?? { sources: [], incomplete: true };
-    const conversation = store?.forgetSourcesCurrent?.(topic);
-    const ledger = cleanupLedger?.forgetSourcesCurrent(topic);
-    const snapshot = forgetSnapshot(topic, [...local.sources, ...conversation?.sources ?? [], ...ledger?.sources ?? []]);
-    return { ...snapshot, incomplete: snapshot.incomplete || local.incomplete || (!!store && !conversation) || !!conversation?.incomplete || (!!cleanupLedger && !ledger) || !!ledger?.incomplete || !!standingOrders?.().toLowerCase().includes(topic.toLowerCase()) };
+  const currentForgetSources = (topic: string, batch = false) => {
+    const local = (batch ? forgettingState?.forgetSourceBatch(topic) : forgettingState?.forgetSources(topic)) ?? { sources: [], incomplete: true };
+    const conversation = batch && store?.forgetSourceBatchCurrent ? store.forgetSourceBatchCurrent(topic) : store?.forgetSourcesCurrent?.(topic);
+    const ledger = batch && cleanupLedger?.forgetSourceBatchCurrent ? cleanupLedger.forgetSourceBatchCurrent(topic) : cleanupLedger?.forgetSourcesCurrent(topic);
+    const more = !!('more' in local && local.more) || !!(conversation && 'more' in conversation && conversation.more) || !!(ledger && 'more' in ledger && ledger.more);
+    const rows = [...local.sources, ...conversation?.sources ?? [], ...ledger?.sources ?? []];
+    const snapshot = batch ? forgetSourceBatch(topic, rows, more) : forgetSnapshot(topic, rows);
+    return { ...snapshot, more: 'more' in snapshot && snapshot.more === true, incomplete: snapshot.incomplete || local.incomplete || (!!store && !conversation) || !!conversation?.incomplete || (!!cleanupLedger && !ledger) || !!ledger?.incomplete || !!standingOrders?.().toLowerCase().includes(topic.toLowerCase()) };
   };
   const cleanupRetained = async (texts: readonly string[], ids: readonly number[], topics: readonly string[], coveredTopic?: string) => {
     let rewritten = 0;
@@ -769,56 +780,65 @@ export const createOwnerResponder = (
           throw error;
         }
         const gather = async () => {
-          const local = writerStore!.forgetSources(topic);
+          const local = writerStore!.forgetSourceBatch(topic);
           const rows: ForgetSource[] = [...local.sources];
-          const conversation = await store?.forgetSources?.(topic);
+          const conversation = await store?.forgetSourceBatch?.(topic) ?? await store?.forgetSources?.(topic);
           rows.push(...conversation?.sources ?? []);
           for (const entry of conversation ? [] : (await store?.load())?.entries ?? []) {
             rows.push({ ref: `conversation:${entry.id}:model`, text: entry.modelPayload }, { ref: `conversation:${entry.id}:app`, text: entry.appPayload });
             if (entry.modelProjection.mode === 'replace') rows.push({ ref: `conversation:${entry.id}:replace`, text: entry.modelProjection.payload });
           }
-          const ledger = await cleanupLedger?.forgetSources(topic);
+          const ledger = await cleanupLedger?.forgetSourceBatch(topic);
           rows.push(...ledger?.sources ?? []);
           // This request will be retained after the reply. Cover its instruction
           // and any fact clauses now, so clean history cannot be recontaminated.
           rows.push(...requestSources());
-          const snapshot = forgetSnapshot(topic, rows);
+          const more = local.more || !!(conversation && 'more' in conversation && conversation.more) || !!ledger?.more;
+          const snapshot = forgetSourceBatch(topic, rows, more);
           return { ...snapshot, incomplete: snapshot.incomplete || local.incomplete || !!ledger?.incomplete || !!conversation?.incomplete || !!standingOrders?.().toLowerCase().includes(topic.toLowerCase()) };
         };
         const supplied = await gather();
         await assertCurrent();
         let selection: string | null = null;
         if (supplied.incomplete) forgetWhy = `sources_incomplete(${supplied.sources.length})`;
-        if (!supplied.incomplete) {
+        else if (writerStore.pendingTopics().length) forgetWhy = `cleanup_pending(${supplied.sources.length})`;
+        else if (supplied.sources.length && forgetBatchesRemaining === 0) forgetWhy = `batch_pending(${supplied.sources.length})`;
+        if (!forgetWhy) {
           try {
-            selection = supplied.sources.length === 0 && writerStore.topicCoverage(topic) === 2 ? '' : await ask(id, 'forget_source', SELECTIVE_FORGET_INSTRUCTION, JSON.stringify({ topic, sources: supplied.sources }), { name: 'forget_source_spans', schema: SELECTIVE_FORGET_SCHEMA }, undefined, undefined, undefined, memoryModel);
+            if (supplied.sources.length) forgetBatchesRemaining--;
+            selection = supplied.sources.length === 0 ? '' : await ask(id, 'forget_source', SELECTIVE_FORGET_INSTRUCTION, JSON.stringify({ topic, sources: supplied.sources }), { name: 'forget_source_spans', schema: SELECTIVE_FORGET_SCHEMA }, undefined, undefined, undefined, memoryModel);
           } catch (error) { if (error instanceof ClosedRunError) throw error; }
         }
         await assertCurrent();
         if (selection !== null) await gather();
         await assertCurrent();
-        const retainedFresh = selection === null ? null : currentForgetSources(topic);
-        const requestFresh = retainedFresh === null ? null : forgetSnapshot(topic, [...retainedFresh.sources, ...requestSources()]);
+        const retainedFresh = selection === null ? null : currentForgetSources(topic, true);
+        const requestFresh = retainedFresh === null ? null : forgetSourceBatch(topic, [...retainedFresh.sources, ...requestSources()], retainedFresh.more);
         const fresh = requestFresh === null ? null : { ...requestFresh, incomplete: requestFresh.incomplete || retainedFresh!.incomplete };
-        const emptyRecovery = writerStore.topicCoverage(topic) === 2 && !supplied.incomplete && supplied.sources.length === 0 && fresh !== null && !fresh.incomplete && fresh.sources.length === 0;
-        let texts = emptyRecovery ? [] : selection === null || fresh === null ? null : selectedForgetTexts(topic, supplied, selection, fresh);
+        const emptyRecovery = !supplied.incomplete && !supplied.more && supplied.sources.length === 0 && fresh !== null && !fresh.incomplete && !fresh.more && fresh.sources.length === 0;
+        let texts = selection === null || fresh === null || supplied.more !== fresh.more ? null : emptyRecovery ? [] : selectedForgetTexts(topic, supplied, selection, fresh);
         // The unsaved request is absent from durable readback. Prove its exact
         // retention projection is clean too; a single span cannot cover a mixed row.
-        if (texts !== null) {
+        const complete = !supplied.more && fresh !== null && !fresh.more;
+        if (texts !== null && complete) {
           const redact = literalTextRedactor(texts, FORGOTTEN);
           if (requestSources().some(source => asciiLiteralIncludes(redact(source.text), topic))) texts = null;
         }
         if (texts !== null) {
-          if (texts.length) writerStore.authoriseTopicCoverage(topic, texts, at);
-          coveredTopic = topic;
+          if (texts.length) writerStore.authoriseTopicCoverage(topic, texts, at, complete);
+          else writerStore.verifyEmptyTopicCoverage(topic, at);
+          if (complete) coveredTopic = topic;
+          else forgetWhy = `batch_pending(${supplied.sources.length})`;
           raw = JSON.stringify({ ...JSON.parse(raw), forget_topic: null });
         }
         else {
           if (!forgetWhy) forgetWhy = selection === null ? `selector_unavailable(${supplied.sources.length})` : fresh === null || fresh.incomplete ? `fresh_incomplete(${supplied.sources.length})` : `selection_rejected(${supplied.sources.length} sources)`;
           const ops = JSON.parse(raw);
           raw = JSON.stringify({ ...ops, forget_topic: null });
+        }
+        if (forgetWhy) {
           const reasonClass = forgetWhy.split('(')[0]!;
-          const reasonMeaning: Record<string, string> = { sources_incomplete: 'some saved copies could not be fully read', selector_unavailable: 'the span check could not run', fresh_incomplete: 'a recheck after the span check was incomplete', selection_rejected: 'the checked spans did not cover every copy' };
+          const reasonMeaning: Record<string, string> = { sources_incomplete: 'some saved copies could not be fully read', selector_unavailable: 'the span check could not run', fresh_incomplete: 'a recheck after the span check was incomplete', selection_rejected: 'the checked spans did not cover every copy', batch_pending: 'a bounded batch was checked but cleanup is not yet complete', cleanup_pending: 'earlier exact cleanup still needs verified readback' };
           memoryReceipts.push(`Requested forgetting is incomplete (reason class: ${reasonClass}). Retained recall is temporarily limited; current requests and ordinary tools remain available. Say this one reason to the owner in plain words and no other: ${reasonMeaning[reasonClass] ?? 'coverage could not be proven'}. Do not claim that every associated fact was erased.`);
         }
       }
@@ -836,7 +856,8 @@ export const createOwnerResponder = (
       log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}${conv.failed ? ' verification incomplete' : ''}` : ''}${interrupted ? ` interrupted${interrupted}` : ''}${forgetWhy ? `; forget_incomplete ${forgetWhy}` : ''}` });
       // Emitted last, after redaction, settle and logging: an error above returns 'uncertain' with no receipt.
       const o = outcome as ClaimOutcome | undefined;
-      if (!conv?.failed && o !== undefined && (coveredTopic || o.written || o.held || o.downgraded || o.corrected || o.confirmed || o.dismissed || o.forgetClaimsAttempted || o.forgetNodes || o.forgetAllowed)) memoryReceipts.push(memoryReceipt(o, !settled ? Math.max(conv?.remaining ?? 0, 1) : 0, conv?.rewritten ?? 0, coveredTopic || purgeTopics.length || writerStore.pendingTopics().length ? settled && (coveredTopic || purgeTopics.length) ? 'settled' : 'pending' : undefined));
+      const topicUnverified = topic !== null && writerStore.incompleteTopics().includes(topic);
+      if (!conv?.failed && o !== undefined && (coveredTopic || o.written || o.held || o.downgraded || o.corrected || o.confirmed || o.dismissed || o.forgetClaimsAttempted || o.forgetNodes || o.forgetAllowed)) memoryReceipts.push(memoryReceipt(o, !settled ? Math.max(conv?.remaining ?? 0, 1) : 0, conv?.rewritten ?? 0, topicUnverified ? 'pending' : coveredTopic || purgeTopics.length || writerStore.pendingTopics().length ? settled && (coveredTopic || purgeTopics.length) ? 'settled' : 'pending' : undefined));
       return conv?.failed ? 'uncertain' : 'saved';
     } catch (error) {
       log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: 'memory operation failed', code: 'provider_error', detail: stage });
@@ -867,6 +888,7 @@ export const createOwnerResponder = (
       traceId = id;
       interactiveSource = true;
       sourceAdmissionCalls = 0;
+      forgetBatchesRemaining = MAX_TOOL_ROUNDS;
       classifiedHeard = 0;
       sourceTurnBudget = undefined;
       try {

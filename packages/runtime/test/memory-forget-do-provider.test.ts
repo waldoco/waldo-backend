@@ -18,7 +18,7 @@ import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 
 // Real registered two-argument owner DO and its fenced inbox/listener/responder path.
 // Only the model SDK and Telegram transport are scripted. No live provider or source service.
-const seen = vi.hoisted(() => ({ writer: '{}', requests: [] as unknown[], fetches: [] as string[], replyText: 'Recorded fixture response.', reasoning: undefined as string | undefined, toolSuppliers: [] as (() => Promise<readonly import('../src/context-composer/types').ContextFragment[]>)[], offloads: [] as import('../src/conversation/tool-output-store').ToolOutputStore[], selectorThrows: false, selectedText: undefined as string | undefined, selectedTexts: [] as string[], selectorInputs: [] as string[], onReply: undefined as undefined | (() => unknown[] | undefined | Promise<unknown[] | undefined>) }));
+const seen = vi.hoisted(() => ({ writer: '{}', requests: [] as unknown[], fetches: [] as string[], replyText: 'Recorded fixture response.', reasoning: undefined as string | undefined, toolSuppliers: [] as (() => Promise<readonly import('../src/context-composer/types').ContextFragment[]>)[], offloads: [] as import('../src/conversation/tool-output-store').ToolOutputStore[], selectorThrows: false, selectedText: undefined as string | undefined, selectedTexts: [] as string[], selectorInputs: [] as string[], selectorCalls: [] as unknown[], failCleanup: false, onCleanup: undefined as undefined | (() => void), selectorOutputMessage: false, selectorMode: 'normal' as 'normal' | 'empty' | 'invalid' | 'missing-ref' | 'capped', onSelector: undefined as undefined | (() => void), onReply: undefined as undefined | (() => unknown[] | undefined | Promise<unknown[] | undefined>) }));
 vi.mock('../src/run-loop/adapters', async load => {
  const actual = await load<typeof import('../src/run-loop/adapters')>();
  return { ...actual, resolveRunLoopAdapters: (...args: Parameters<typeof actual.resolveRunLoopAdapters>) => {
@@ -29,6 +29,15 @@ vi.mock('../src/run-loop/adapters', async load => {
 vi.mock('../src/conversation/tool-output-store', async load => {
   const real = await load<typeof import('../src/conversation/tool-output-store')>();
   return { ...real, inMemoryToolOutputStore: () => { const store = real.inMemoryToolOutputStore(); seen.offloads.push(store); return store; } };
+});
+vi.mock('../src/channels/conversation-store', async load => {
+  const actual = await load<typeof import('../src/channels/conversation-store')>();
+  return { ...actual, redactConversationEntries: async (...args: Parameters<typeof actual.redactConversationEntries>) => {
+    if (seen.failCleanup) throw new Error('Synthetic retained cleanup unavailable');
+    const receipt = await actual.redactConversationEntries(...args);
+    seen.onCleanup?.();
+    return receipt;
+  } };
 });
 vi.mock('../src/channels/telegram-api', async (load) => ({
   ...await load<typeof import('../src/channels/telegram-api')>(),
@@ -41,12 +50,16 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
   const output = !name ? await seen.onReply?.() ?? [] : [];
   let selection = '{}';
   if (name === 'forget_source_spans') {
+    seen.selectorCalls.push(body);
     if (seen.selectorThrows) throw new Error('Synthetic selector unavailable');
     const input = (body as { input: string }).input; seen.selectorInputs.push(input);
     const supplied = JSON.parse(input.slice(input.indexOf('{'))) as { sources: Array<{ ref: string; text: string }> };
+    seen.onSelector?.();
     const texts = [...seen.selectedTexts, ...(seen.selectedText ? [seen.selectedText] : [])];
-    selection = JSON.stringify({ complete: !!texts.length, reviewed_refs: supplied.sources.map(row => row.ref), spans: supplied.sources.flatMap(row => texts.filter(text => row.text.includes(text)).map(text => ({ ref: row.ref, text }))) });
+    const spans = supplied.sources.flatMap(row => texts.filter(text => row.text.includes(text)).map(text => ({ ref: row.ref, text })));
+    selection = seen.selectorMode === 'empty' ? '' : seen.selectorMode === 'invalid' ? '{invalid' : JSON.stringify({ complete: !!texts.length, reviewed_refs: supplied.sources.map(row => row.ref), spans: seen.selectorMode === 'missing-ref' ? spans.slice(1) : seen.selectorMode === 'capped' ? spans.slice(0, 32) : spans });
   }
+  if (name === 'forget_source_spans' && seen.selectorOutputMessage) output.push({type:'message',id:'fixture-selector',role:'assistant',status:'completed',content:[{type:'output_text',text:selection,annotations:[]}]});
   if (!name && seen.reasoning) output.push({ type: 'reasoning', summary: [{ type: 'summary_text', text: seen.reasoning }] });
   return { id: 'local-fixture', output_text: name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : name === 'claim_ops' ? seen.writer
     : name === 'forget_source_spans' ? selection : name === 'reaction' ? '{"reaction":null}' : seen.replyText, output,
@@ -73,7 +86,7 @@ const turn = async (name: string, id: number, text: string, writer: string) => {
   });
 };
 beforeEach(() => {
-  seen.selectedTexts.length = 0; seen.selectorInputs.length = 0; seen.requests.length = 0; seen.fetches.length = 0; seen.toolSuppliers.length = 0; seen.offloads.length = 0; seen.onReply = undefined; seen.selectedText = undefined; seen.selectorThrows = false; seen.replyText = 'Recorded fixture response.'; seen.reasoning = undefined;
+  seen.failCleanup = false; seen.onCleanup = undefined; seen.selectorOutputMessage = false; seen.selectorMode = 'normal'; seen.onSelector = undefined; seen.selectorCalls.length = 0; seen.selectedTexts.length = 0; seen.selectorInputs.length = 0; seen.requests.length = 0; seen.fetches.length = 0; seen.toolSuppliers.length = 0; seen.offloads.length = 0; seen.onReply = undefined; seen.selectedText = undefined; seen.selectorThrows = false; seen.replyText = 'Recorded fixture response.'; seen.reasoning = undefined;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => { seen.fetches.push(String(input)); throw new Error('unmocked network is forbidden'); });
 });
 afterEach(() => { vi.unstubAllGlobals(); expect(seen.fetches).toEqual([]); });
@@ -986,4 +999,442 @@ it('the registered DO export_artifact tool returns an owner link with a full-uui
   const served = await stub(name).fetch(receipt.data.delivery.url, { headers: { cookie: `${CONSOLE_COOKIE}=${seeded.token}` } });
   expect(served.status).toBe(200);
   expect(new TextDecoder().decode((await served.arrayBuffer()).slice(0, 5))).toBe('%PDF-');
+});
+
+
+it('a complete 33-ref inventory stays limited when the selector omits the last ref', async () => {
+  const name='memory-diagnosis-capacity-33';
+  const topic='SYNTH-CAP';
+  const fact=`${topic} note`;
+  const standup='Synthetic standup starts at 09:10 UTC';
+  await admittedTurn(name,97000,standup,ops({add:[add(standup)]}));
+  await runInDurableObject(stub(name),async(_instance,state)=>{
+    claimStore(state.storage.sql).beginTopicCoverage(topic,new Date().toISOString());
+    for(let i=0;i<33;i++)episodeIndex(state.storage.sql).add(`c${i}`,'owner',fact,Date.now());
+  });
+  await evictDurableObject(stub(name));
+  seen.selectedText=fact; seen.selectorMode='capped';
+  await admittedTurn(name,97001,'What time is my unrelated standup?',ops());
+  const call=seen.selectorCalls.at(-1) as {input:string;text:{format:{schema:{properties:{spans:{maxItems:number}}}}}};
+  const snapshot=JSON.parse(call.input.slice(call.input.indexOf('{'))) as {topic:string;sources:{ref:string;text:string}[]};
+  expect(snapshot.sources).toHaveLength(33);
+  expect(snapshot.sources.every(row=>row.text.includes(topic))).toBe(true);
+  expect(call.text.format.schema.properties.spans.maxItems).toBe(64);
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+    expect(claimStore(state.storage.sql).claims().some(row=>row.text===standup)).toBe(true);
+    expect(claimStore(state.storage.sql).forgetSources(topic).sources).toHaveLength(33);
+  });
+  expect(request()).not.toContain(standup);
+  expect(request()).toContain('Recall is temporarily limited');
+  expect(request()).toContain('reason class: selection_rejected');
+  await evictDurableObject(stub(name));
+  await admittedTurn(name,97002,'Recall my standup again.',ops());
+  expect(request()).toContain('reason class: selection_rejected');
+  expect(request()).not.toContain(standup);
+  await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]));
+});
+
+// Each case uses the registered Wrangler DO. Mutations in onSelector model an
+// inventory change while the provider is awaited; no private responder is supplied.
+for (const [mode, reason] of [
+  ['throws', 'selector_unavailable'], ['empty', 'selector_unavailable'],
+  ['invalid', 'selection_rejected'], ['missing-ref', 'selection_rejected'],
+  ['inventory-unsupported', 'sources_incomplete'],
+  ['fresh-unsupported', 'fresh_incomplete'], ['fresh-change', 'selection_rejected'],
+] as const) {
+  it(`ordinary retry preserves unrelated standup and holds recall for ${mode}: ${reason}`, async () => {
+    const name = `memory-diagnosis-${mode}`;
+    const topic = 'SYNTH-PENDING';
+    const fact = `${topic} synthetic note`;
+    const standup = 'Synthetic standup starts at 09:10 UTC';
+    await admittedTurn(name, 98000, standup, ops({ add: [add(standup)] }));
+    let keeper: unknown;
+    let expectedSources: unknown;
+    await runInDurableObject(stub(name), (_instance, state) => {
+      const memory = claimStore(state.storage.sql);
+      keeper = memory.claims().find(row => row.text === standup);
+      expect(keeper).toBeDefined();
+      memory.beginTopicCoverage(topic, new Date().toISOString());
+      const episodes = episodeIndex(state.storage.sql);
+      for (let i = 0; i < (1); i++) episodes.add(`p${i}`, 'owner', fact, Date.now());
+      if (mode === 'inventory-unsupported') {
+        state.storage.sql.exec('UPDATE claims SET aliases = ? WHERE text = ?',JSON.stringify([topic]),standup);
+        keeper = memory.claims().find(row=>row.text===standup);
+      }
+      expectedSources = memory.forgetSources(topic).sources;
+    });
+    await evictDurableObject(stub(name));
+    // Refresh the SQL handle for a provider-await mutation after eviction.
+    if (mode === 'fresh-change' || mode === 'fresh-unsupported') await runInDurableObject(stub(name), (_instance, state) => {
+      seen.onSelector = () => {
+        seen.onSelector = undefined;
+        if (mode === 'fresh-unsupported') {
+          state.storage.sql.exec('UPDATE claims SET aliases = ? WHERE text = ?',JSON.stringify([topic]),standup);
+          keeper=claimStore(state.storage.sql).claims().find(row=>row.text===standup);
+        } else episodeIndex(state.storage.sql).add('p1','owner',fact,Date.now());
+      };
+    });
+    seen.selectedText = fact;
+    seen.selectorThrows = mode === 'throws';
+    if (mode === 'empty' || mode === 'invalid' || mode === 'missing-ref') seen.selectorMode = mode;
+    await admittedTurn(name, 98001, 'What time is my unrelated standup?', ops());
+    expect(request()).toContain(`reason class: ${reason}`);
+    expect(request()).toContain('Recall is temporarily limited');
+    expect(request()).not.toContain(standup);
+    if (mode === 'inventory-unsupported') expect(seen.selectorCalls).toHaveLength(0);
+    else {
+      expect(seen.selectorCalls).toHaveLength(mode === 'throws' ? 2 : 1);
+      const call = seen.selectorCalls[0] as { input: string; text: { format: { name: string; schema: unknown } } };
+      const supplied = JSON.parse(call.input.slice(call.input.indexOf('{')));
+      expect(supplied).toEqual({ topic, sources: expectedSources });
+      expect(call.text.format.name).toBe('forget_source_spans');
+      expect(call.text.format.schema).toMatchObject({ properties: { spans: { maxItems: 64 }, reviewed_refs: { maxItems: 64 } } });
+      expect(call.input).not.toContain(standup);
+      expect(call.input).not.toContain('What time is my unrelated standup?');
+    }
+    await runInDurableObject(stub(name), (_instance, state) => {
+      const memory = claimStore(state.storage.sql);
+      expect(memory.incompleteTopics()).toEqual([topic]);
+      expect(memory.claims().find(row => row.text === standup)).toEqual(keeper);
+      expect(memory.forgetSources(topic).sources.length).toBeGreaterThan(0);
+    });
+  });
+}
+it('healthy ordinary retry restores standup from durable owner memory with a host receipt after restart', async () => {
+  const name = 'memory-diagnosis-standup-recovered';
+  const topic = 'SYNTH-RECOVER';
+  const fact = `${topic} synthetic note`;
+  const standup = 'Synthetic standup starts at 09:10 UTC';
+  await admittedTurn(name, 99000, `${fact}. ${standup}.`, ops({ add: [add(fact), add(standup)] }));
+  let keeper: unknown;
+  await runInDurableObject(stub(name), (_instance, state) => { keeper = claimStore(state.storage.sql).claims().find(row => row.text === standup); });
+  seen.selectorThrows = true;
+  const instruction = `Forget only ${topic}.`;
+  await admittedTurn(name, 99001, instruction, ops({ forget_topic: topic }));
+  expect(request()).toContain('reason class: selector_unavailable');
+  expect(request()).not.toContain(standup);
+  await evictDurableObject(stub(name));
+  seen.selectorThrows = false; seen.selectedTexts = [fact, instruction];
+  await admittedTurn(name, 99002, 'What time is my standup?', ops());
+  expect(request()).toContain(standup);
+  expect(request()).not.toContain('Recall is temporarily limited');
+  await runInDurableObject(stub(name), (_instance, state) => {
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
+    expect(claimStore(state.storage.sql).claims().find(row => row.text === standup)).toEqual(keeper);
+  });
+  await evictDurableObject(stub(name));
+  let round = 0;
+  seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'standup-receipt', name: 'read_owner_context', arguments: JSON.stringify({ topic: 'standup', limit: 10 }) }] : [];
+  await admittedTurn(name, 99003, 'Recall my standup again.', ops());
+  const provider = seen.requests.at(-1) as { input: Array<{ type: string; call_id?: string; output?: string }> };
+  const receipt = JSON.parse(provider.input.find(item => item.type === 'function_call_output' && item.call_id === 'standup-receipt')!.output!);
+  expect(receipt).toMatchObject({ ok: true, data: { complete: true, authority: 'context_only_not_action_approval', claims: [{ text: standup, origin: 'owner', source_ref: 'owner, tg-99000' }] } });
+  expect(receipt.data.claims).toHaveLength(1);
+  expect(request()).not.toContain(topic);
+});
+
+for (const count of [32, 33, 64]) {
+  it(`ordinary recovery covers ${count} distinct sources and retains standup after reconstruction`, async () => {
+    const name = `memory-capacity-fix-${count}`;
+    const topic = 'CAP';
+    const facts = Array.from({length:count}, (_,i)=>`CAP note ${String(i).padStart(3,'0')}`);
+    const standup = 'Synthetic standup starts at 09:10 UTC';
+    await admittedTurn(name, 100000, standup, ops({add:[add(standup)]}));
+    let keeper: unknown;
+    await runInDurableObject(stub(name), (_instance,state)=>{
+      const memory = claimStore(state.storage.sql);
+      keeper = memory.claims().find(row=>row.text===standup); expect(keeper).toBeDefined();
+      memory.beginTopicCoverage(topic,new Date().toISOString());
+      facts.forEach((fact,i)=>episodeIndex(state.storage.sql).add(`c${i}`,'owner',fact,Date.now()));
+      expect(memory.forgetSources(topic)).toMatchObject({incomplete:false});
+      expect(memory.forgetSources(topic).sources).toHaveLength(count);
+    });
+    await evictDurableObject(stub(name));
+    seen.selectedTexts=facts; seen.selectorOutputMessage=true;
+    await admittedTurn(name,100001,'What time is my unrelated standup?',ops());
+    await runInDurableObject(stub(name),(_instance,state)=>{
+      const memory=claimStore(state.storage.sql);
+      expect(memory.incompleteTopics()).toEqual([]);
+      expect(memory.forgetSources(topic)).toEqual({sources:[],incomplete:false});
+      expect(memory.claims().find(row=>row.text===standup)).toEqual(keeper);
+    });
+    expect(request()).toContain(standup);
+    expect(request()).not.toContain('Recall is temporarily limited');
+    await evictDurableObject(stub(name));
+    let round=0;
+    seen.onReply=()=>++round===1?[{type:'function_call',call_id:'capacity-standup',name:'read_owner_context',arguments:JSON.stringify({topic:'standup',limit:10})}]:[];
+    await admittedTurn(name,100002,'Recall my standup again.',ops());
+    const provider=seen.requests.at(-1) as {input:Array<{type:string;call_id?:string;output?:string}>};
+    const receipt=JSON.parse(provider.input.find(item=>item.type==='function_call_output'&&item.call_id==='capacity-standup')!.output!);
+    expect(receipt).toMatchObject({ok:true,data:{complete:true,claims:[{text:standup,origin:'owner',source_ref:'owner, tg-100000'}]}});
+    expect(receipt.data.claims).toHaveLength(1);
+  });
+}
+
+it('65 distinct sources resume after a failed provider and reconstruction without early success',async()=>{
+  const name='memory-batches-65'; const topic='BAT';
+  const facts=Array.from({length:65},(_,i)=>`BAT note ${String(i).padStart(3,'0')}`);
+  const standup='Synthetic standup starts at 09:10 UTC';
+  await admittedTurn(name,110000,standup,ops({add:[add(standup)]}));
+  let keeper:unknown;
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql); keeper=memory.claims().find(row=>row.text===standup);expect(keeper).toBeDefined();
+    memory.beginTopicCoverage(topic,new Date().toISOString());
+    facts.forEach((fact,i)=>episodeIndex(state.storage.sql).add(`b${i}`,'owner',fact,Date.now()));
+  });
+  seen.selectorThrows=true;
+  await admittedTurn(name,110001,'What time is my standup?',ops());
+  expect(request()).toContain('reason class: selector_unavailable');
+  expect(request()).not.toContain(standup);
+  await evictDurableObject(stub(name));
+  seen.selectorThrows=false;seen.selectedTexts=facts;seen.selectorOutputMessage=true;
+  seen.selectorCalls.length=0;
+  await admittedTurn(name,110002,'Please finish my pending cleanup.',ops());
+  expect(seen.selectorCalls).toHaveLength(1);
+  expect(request()).toContain('reason class: batch_pending');
+  expect(request()).not.toContain('verified exact cleanup targets were removed from inspected retained copies');
+  expect(request()).not.toContain(standup);
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql); expect(memory.incompleteTopics()).toEqual([topic]);
+    expect(memory.topicCoverage(topic)).toBe(1); expect(memory.pendingTopics()).toEqual([]);
+    expect(memory.forgetSources(topic).sources).toHaveLength(1);
+    expect(memory.claims().find(row=>row.text===standup)).toEqual(keeper);
+  });
+  await evictDurableObject(stub(name));seen.selectorCalls.length=0;
+  await admittedTurn(name,110003,'What time is my standup now?',ops());
+  expect(seen.selectorCalls).toHaveLength(1);
+  expect(request()).toContain(standup);expect(request()).not.toContain('Recall is temporarily limited');
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
+    expect(claimStore(state.storage.sql).forgetSources(topic)).toEqual({sources:[],incomplete:false});
+    expect(claimStore(state.storage.sql).claims().find(row=>row.text===standup)).toEqual(keeper);
+  });
+  await evictDurableObject(stub(name));let round=0;
+  seen.onReply=()=>++round===1?[{type:'function_call',call_id:'batch-standup',name:'read_owner_context',arguments:JSON.stringify({topic:'standup',limit:10})}]:[];
+  await admittedTurn(name,110004,'Recall my standup again.',ops());
+  const provider=seen.requests.at(-1) as {input:Array<{type:string;call_id?:string;output?:string}>};
+  const receipt=JSON.parse(provider.input.find(item=>item.type==='function_call_output'&&item.call_id==='batch-standup')!.output!);
+  expect(receipt).toMatchObject({ok:true,data:{complete:true,claims:[{text:standup,origin:'owner',source_ref:'owner, tg-110000'}]}});
+});
+
+const pendingBatchFixture=async(name:string,count:number,duplicate=false)=>{
+  const topic='BCH';const standup='Synthetic standup starts at 09:10 UTC';
+  const facts=Array.from({length:count},(_,i)=>`BCH note ${String(duplicate?0:i).padStart(3,'0')}`);
+  await admittedTurn(name,120000,standup,ops({add:[add(standup)]}));
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);memory.beginTopicCoverage(topic,new Date().toISOString());
+    facts.forEach((fact,i)=>episodeIndex(state.storage.sql).add(`b${i}`,'owner',fact,Date.now()));
+  });
+  seen.selectedTexts=[...new Set(facts)];seen.selectorOutputMessage=true;
+  return {topic,standup,facts};
+};
+it('129 distinct sources make bounded progress across three reconstructed owner turns',async()=>{
+  const name='memory-batches-129';const {topic,standup}=await pendingBatchFixture(name,129);
+  for(let step=0;step<3;step++){
+    await evictDurableObject(stub(name));seen.selectorCalls.length=0;
+    await admittedTurn(name,120001+step,'What time is my unrelated standup?',ops());
+    expect(seen.selectorCalls).toHaveLength(1);
+    await runInDurableObject(stub(name),(_instance,state)=>{
+      const memory=claimStore(state.storage.sql);
+      expect(memory.forgetSourceBatch(topic).sources).toHaveLength(step===0?64:step===1?1:0);
+      expect(memory.incompleteTopics()).toEqual(step<2?[topic]:[]);
+      expect(memory.pendingTopics()).toEqual([]);
+    });
+    if(step<2){expect(request()).toContain('reason class: batch_pending');expect(request()).not.toContain(standup);}
+    else {expect(request()).toContain(standup);expect(request()).not.toContain('Recall is temporarily limited');}
+  }
+});
+it('65 duplicate copies require durable partial custody then complete empty readback',async()=>{
+  const name='memory-batches-duplicates';const {topic,standup}=await pendingBatchFixture(name,65,true);
+  await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
+  expect(request()).toContain('reason class: batch_pending');expect(request()).not.toContain(standup);
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([topic]);
+    expect(memory.forgetSources(topic)).toEqual({sources:[],incomplete:false});
+  });
+  await evictDurableObject(stub(name));seen.selectorCalls.length=0;
+  await admittedTurn(name,120002,'What time is my standup?',ops());
+  expect(seen.selectorCalls).toHaveLength(0);expect(request()).toContain(standup);
+  await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]));
+});
+for(const change of ['first-page','off-page'] as const){
+  it(`source change in ${change} cannot cause early batch completion`,async()=>{
+    const name=`memory-batches-change-${change}`;const {topic,standup}=await pendingBatchFixture(name,65);
+    const changed='BCH changed note';
+    await runInDurableObject(stub(name),(_instance,state)=>{
+      seen.onSelector=()=>{
+        seen.onSelector=undefined;
+        if(change==='first-page')state.storage.sql.exec('UPDATE episodes SET text = ? WHERE entry_id = ?',changed,'b0');
+        else episodeIndex(state.storage.sql).add('late-source','owner',changed,Date.now());
+      };
+    });
+    await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
+    expect(request()).not.toContain(standup);
+    expect(request()).toContain(`reason class: ${change==='first-page'?'selection_rejected':'batch_pending'}`);
+    await runInDurableObject(stub(name),(_instance,state)=>{
+      const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([topic]);
+      expect(memory.forgetSources(topic).sources.length).toBe(change==='first-page'?64:2);
+      expect(episodeIndex(state.storage.sql).get(change==='first-page'?'3':'68')?.text).toBe(changed);
+    });
+    seen.selectedTexts.push(changed);
+    for(let retry=0;retry<(change==='first-page'?2:1);retry++){
+      await evictDurableObject(stub(name));await admittedTurn(name,120002+retry,'Finish the pending cleanup.',ops());
+    }
+    await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]));
+    expect(request()).toContain(standup);
+  });
+}
+it('failed retained cleanup retains exact batch custody and resumes after reconstruction',async()=>{
+  const name='memory-batches-cleanup-failure';const {topic,standup}=await pendingBatchFixture(name,65);
+  seen.failCleanup=true;
+  await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([topic]);
+    expect(memory.pendingTopics()).toHaveLength(64);expect(memory.forgetSources(topic).sources).toHaveLength(1);
+  });
+  await evictDurableObject(stub(name));seen.selectorCalls.length=0;
+  await admittedTurn(name,120002,'Continue my pending cleanup.',ops());
+  expect(seen.selectorCalls).toHaveLength(0);expect(request()).toContain('reason class: cleanup_pending');expect(request()).not.toContain(standup);
+  seen.failCleanup=false;await evictDurableObject(stub(name));
+  await admittedTurn(name,120003,'What time is my standup?',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([]);expect(memory.pendingTopics()).toEqual([]);
+  });
+  expect(request()).toContain(standup);
+});
+it('final independent readback rejects a new source arriving after selector authorization',async()=>{
+  const name='memory-batches-final-readback';const {topic,standup}=await pendingBatchFixture(name,1);
+  const late='BCH late synthetic note';
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    seen.onCleanup=()=>{seen.onCleanup=undefined;episodeIndex(state.storage.sql).add('late-readback','owner',late,Date.now());};
+  });
+  await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([topic]);
+    expect(memory.topicCoverage(topic)).toBe(2);expect(memory.forgetSources(topic).sources.map(row=>row.text)).toEqual([late]);
+  });
+  expect(request()).toContain('Recall is temporarily limited');expect(request()).not.toContain(standup);
+  seen.selectedTexts.push(late);await evictDurableObject(stub(name));
+  await admittedTurn(name,120002,'What time is my standup?',ops());
+  expect(request()).toContain(standup);
+  await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]));
+});
+it('unreadable unsupported coverage blocks a batch even when more supported sources remain',async()=>{
+  const name='memory-batches-unsupported';const {topic,standup,facts}=await pendingBatchFixture(name,65);
+  await runInDurableObject(stub(name),(_instance,state)=>state.storage.sql.exec('UPDATE claims SET aliases = ? WHERE text = ?',JSON.stringify([topic]),standup));
+  seen.selectorCalls.length=0;
+  await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
+  expect(seen.selectorCalls).toHaveLength(0);expect(request()).toContain('reason class: sources_incomplete');
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+    expect(episodeIndex(state.storage.sql).get('3')?.text).toBe(facts[0]);
+    expect(episodeIndex(state.storage.sql).get('67')?.text).toBe(facts[64]);
+  });
+});
+
+for(const action of ['explicit-forget','new-add'] as const){
+  it(`partial progress with ${action} never emits a whole-topic success receipt`,async()=>{
+    const name=`memory-batches-receipt-${action}`;const {topic,standup}=await pendingBatchFixture(name,65);
+    const instruction=`Forget only ${topic}.`;const desk='Synthetic desk is near the window';
+    seen.selectedTexts.push(instruction);
+    await admittedTurn(name,120001,action==='explicit-forget'?instruction:desk,action==='explicit-forget'?ops({forget_topic:topic}):ops({add:[add(desk)]}));
+    expect(request()).toContain('reason class: batch_pending');
+    expect(request()).not.toContain('verified exact cleanup targets were removed from inspected retained copies');
+    expect(request()).toContain('requested topic cleanup is pending');
+    expect(request()).not.toContain(standup);
+    await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]));
+    await evictDurableObject(stub(name));
+    await admittedTurn(name,120002,'Finish the pending cleanup.',ops());
+    await runInDurableObject(stub(name),async(_instance,state)=>{
+      const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([]);
+      if(action==='new-add')expect(memory.claims().some(row=>row.text===desk)).toBe(true);
+      expect(JSON.stringify(await durableConversationStore(state.storage).load())).not.toContain(instruction);
+    });
+    expect(request()).toContain(standup);
+  });
+}
+
+it('batched conversation and retained ledger copies reach full readback without changing unrelated history',async()=>{
+  const name='memory-batches-retained-families';const topic='BCH';const standup='Synthetic standup starts at 09:10 UTC';
+  const facts=Array.from({length:65},(_,i)=>`BCH note ${String(i).padStart(3,'0')}`);
+  await admittedTurn(name,130000,standup,ops({add:[add(standup)]}));
+  let original:unknown;
+  await runInDurableObject(stub(name),async(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);memory.beginTopicCoverage(topic,new Date().toISOString());
+    const conversation=durableConversationStore(state.storage);const loaded=await conversation.load();
+    original=loaded.entries[0];expect(original).toBeDefined();let parent=loaded.leafId;
+    const entries=facts.map((fact,i)=>{const entry={...loaded.entries[0]!,id:`synthetic-history-${i}`,parentId:parent,modelPayload:fact,appPayload:fact,modelProjection:{mode:'include' as const}};parent=entry.id;return entry;});
+    await conversation.save(entries,parent!);
+    await state.storage.put(Object.fromEntries(facts.map((fact,i)=>[`toolout:${String(i).padStart(10,'0')}`,{tool:'fixture_read',ok:true,at:i,taint:'external',summary:fact}])));
+  });
+  seen.selectedTexts=facts;seen.selectorOutputMessage=true;
+  for(let step=0;step<3;step++){
+    await evictDurableObject(stub(name));seen.selectorCalls.length=0;
+    await admittedTurn(name,130001+step,'What time is my unrelated standup?',ops());
+    expect(seen.selectorCalls).toHaveLength(1);
+    await runInDurableObject(stub(name),async(_instance,state)=>{
+      expect(claimStore(state.storage.sql).incompleteTopics()).toEqual(step<2?[topic]:[]);
+      expect((await durableConversationStore(state.storage).load()).entries[0]).toEqual(original);
+      if(step===2){
+        expect((await durableConversationStore(state.storage).forgetSources!(topic)).sources).toEqual([]);
+        expect((await toolOutputLedger(state.storage).forgetSources(topic)).sources).toEqual([]);
+      }
+    });
+    if(step<2)expect(request()).not.toContain(standup);else expect(request()).toContain(standup);
+  }
+});
+
+it('200 distinct sources complete across four bounded reconstructed turns',async()=>{
+  const name='memory-batches-200';const {topic,standup}=await pendingBatchFixture(name,200);
+  for(let step=0;step<4;step++){
+    await evictDurableObject(stub(name));seen.selectorCalls.length=0;
+    await admittedTurn(name,120001+step,'What time is my unrelated standup?',ops());
+    expect(seen.selectorCalls).toHaveLength(1);
+    await runInDurableObject(stub(name),(_instance,state)=>{
+      const memory=claimStore(state.storage.sql);const remaining=200-64*(step+1);
+      expect(memory.forgetSourceBatch(topic).sources).toHaveLength(Math.max(0,Math.min(64,remaining)));
+      expect(memory.pendingTopics()).toEqual([]);expect(memory.incompleteTopics()).toEqual(step<3?[topic]:[]);
+    });
+    if(step<3){expect(request()).toContain('reason class: batch_pending');expect(request()).not.toContain(standup);}
+    else {expect(request()).toContain(standup);expect(request()).not.toContain('Recall is temporarily limited');}
+  }
+});
+it('an inventory over 8 KiB completes through byte-bounded pages instead of a permanent incomplete flag',async()=>{
+  const name='memory-batches-byte-budget';const topic='BCH';const standup='Synthetic standup starts at 09:10 UTC';
+  const facts=Array.from({length:20},(_,i)=>`BCH note ${String(i).padStart(3,'0')} ${'x'.repeat(600)}`);
+  expect(new TextEncoder().encode(JSON.stringify(facts)).byteLength).toBeGreaterThan(8192);
+  await admittedTurn(name,120000,standup,ops({add:[add(standup)]}));
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    claimStore(state.storage.sql).beginTopicCoverage(topic,new Date().toISOString());
+    facts.forEach((fact,i)=>episodeIndex(state.storage.sql).add(`bytes-${i}`,'owner',fact,Date.now()));
+  });
+  seen.selectedTexts=facts;seen.selectorOutputMessage=true;
+  for(let step=0;step<2;step++){
+    await evictDurableObject(stub(name));seen.selectorCalls.length=0;
+    await admittedTurn(name,120001+step,'What time is my unrelated standup?',ops());
+    expect(seen.selectorCalls).toHaveLength(1);
+    const body=seen.selectorCalls[0] as {input:string};const supplied=JSON.parse(body.input.slice(body.input.indexOf('{')));
+    expect(new TextEncoder().encode(JSON.stringify(supplied)).byteLength).toBeLessThanOrEqual(8192);
+    await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual(step===0?[topic]:[]));
+    if(step===0){expect(request()).toContain('reason class: batch_pending');expect(request()).not.toContain(standup);}
+    else expect(request()).toContain(standup);
+  }
+});
+it('a stale page cannot erase a newly changed unrelated clause in the same source row',async()=>{
+  const name='memory-batches-stale-unrelated';const {topic,standup,facts}=await pendingBatchFixture(name,65);
+  const keep='New unrelated synthetic item stays';
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    seen.onSelector=()=>{seen.onSelector=undefined;state.storage.sql.exec('UPDATE episodes SET text = ? WHERE entry_id = ?',`${facts[0]}. ${keep}.`,'b0');};
+  });
+  await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
+  expect(request()).toContain('reason class: selection_rejected');expect(request()).not.toContain(standup);
+  await runInDurableObject(stub(name),(_instance,state)=>expect(episodeIndex(state.storage.sql).get('3')?.text).toBe(`${facts[0]}. ${keep}.`));
+  for(let retry=0;retry<2;retry++){await evictDurableObject(stub(name));await admittedTurn(name,120002+retry,'Finish the pending cleanup.',ops());}
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
+    expect(episodeIndex(state.storage.sql).get('3')?.text).toContain(keep);
+    expect(episodeIndex(state.storage.sql).get('3')?.text).not.toContain(topic);
+  });
+  expect(request()).toContain(standup);
 });

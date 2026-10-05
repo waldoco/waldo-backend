@@ -1,5 +1,5 @@
 import type { RunEffectScope } from '../channels/run-effect-scope';
-import { asciiLiteralIncludes } from '../memory/selective-forget';
+import { asciiLiteralIncludes, forgetSourceBatch } from '../memory/selective-forget';
 // Recent tool outputs as composable context (BUILD_ORDER 12). The tool loop's outputs
 // used to live only inside one turn; this ledger keeps the last few so the context
 // composer can stage them as tool_result sources with provenance and taint.
@@ -85,6 +85,17 @@ const ledgerSourcesFromRows = (topic: string, rows: Iterable<[string, ToolOutput
 };
 
 export const toolOutputLedger = (storage: KeyValueStorage) => ({
+  forgetSourceBatchCurrent(topic: string) {
+    const all = this.forgetSourcesCurrent(topic);
+    if (!all) return null;
+    const batch = forgetSourceBatch(topic, all.sources);
+    return { ...batch, incomplete: batch.incomplete || all.incomplete };
+  },
+  async forgetSourceBatch(topic: string) {
+    const all = await this.forgetSources(topic);
+    const batch = forgetSourceBatch(topic, all.sources);
+    return { ...batch, incomplete: batch.incomplete || all.incomplete };
+  },
   forgetSourcesCurrent(topic: string) { return storage.kv?.list ? ledgerSourcesFromRows(topic, storage.kv.list<ToolOutputEntry>({ prefix: 'toolout:' })) : null; },
   async forgetSources(topic: string) { return ledgerSourcesFromRows(topic, await storage.list<ToolOutputEntry>({ prefix: 'toolout:' })); },
   async record(entry: Omit<ToolOutputEntry, 'at'> & { at: number }, scope?: RunEffectScope): Promise<void> {
