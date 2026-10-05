@@ -9,7 +9,7 @@ import { TASK_SOURCE_FAMILIES, type TaskSourceProposal } from './task-source-sco
 export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
 
-type Undo = { op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string };
+type Undo = ({ op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string }) & { applied_etag?: string };
 type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null };
 export class EmailProposalError extends Error {
   constructor(readonly reason: 'identifier_reused' | 'card_unconfirmed' | 'already_handled') { super(reason); }
@@ -143,13 +143,16 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const expired = (entry: LedgerRow, p: Stored) =>
     deps.now() - entry.created_at > (entry.kind === 'browser_submit' ? BROWSER_SUBMIT_TTL_MS : PROPOSAL_TTL_MS) || (entry.kind !== 'browser_submit' && p.start !== undefined && Date.parse(p.start) <= deps.now());
   const apply = async (client: GoogleClient, p: Stored): Promise<Undo | null | 'stale'> => {
-    if (p.action === 'create') return { op: 'cancel', id: (await client.createEvent({ title: p.title!, start: p.start!, end: p.end! })).id };
+    if (p.action === 'create') {
+      const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end! });
+      return applied.etag ? { op: 'cancel', id: applied.id, applied_etag: applied.etag } : null;
+    }
     const before = await client.event(p.event_id!);
     if (p.seen_etag && before.etag && before.etag !== p.seen_etag) return 'stale';
     try {
       if (p.action === 'move') {
-        await client.moveEvent(p.event_id!, p.start!, p.end!, before.etag);
-        return { op: 'move', id: p.event_id!, start: before.start, end: before.end };
+        const applied = await client.moveEvent(p.event_id!, p.start!, p.end!, before.etag);
+        return applied.etag ? { op: 'move', id: p.event_id!, start: before.start, end: before.end, applied_etag: applied.etag } : null;
       }
       await client.cancelEvent(p.event_id!, before.etag);
     } catch (error) {
@@ -158,9 +161,19 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     }
     return null;
   };
-  const revert = async (client: GoogleClient, undo: Undo) => {
-    if (undo.op === 'cancel') await client.cancelEvent(undo.id);
-    else await client.moveEvent(undo.id, undo.start, undo.end);
+  const revert = async (client: GoogleClient, undo: Undo): Promise<'undone' | 'stale' | 'unavailable'> => {
+    // Legacy entries have no applied version. A fresh owner edit never grants Undo authority.
+    if (!undo.applied_etag) return 'unavailable';
+    const current = await client.event(undo.id);
+    if (current.etag !== undo.applied_etag) return 'stale';
+    try {
+      if (undo.op === 'cancel') await client.cancelEvent(undo.id, undo.applied_etag);
+      else await client.moveEvent(undo.id, undo.start, undo.end, undo.applied_etag);
+    } catch (error) {
+      if (error instanceof GoogleError && error.status === 412) return 'stale';
+      throw error;
+    }
+    return 'undone';
   };
 
   const decide = async (id: string, action: 'a' | 's' | 'e' | 'u', trace: string): Promise<ApprovalDecision> => {
@@ -315,9 +328,17 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             out = { toast: 'Done', message: `Done: ${describe(proposal)}.${undo ? ' Undo is available for 10 minutes.' : " This one can't be undone from here."}` };
           }
         } else if (entry.undo_json && entry.decided_at !== null && deps.now() - entry.decided_at <= UNDO_WINDOW_MS) {
-          await revert(client, JSON.parse(entry.undo_json) as Undo);
-          setStatus(id, 'undone');
-          out = { toast: 'Undone', message: `Undone: ${describe(proposal)}.` };
+          const result = await revert(client, JSON.parse(entry.undo_json) as Undo);
+          if (result === 'undone') {
+            setStatus(id, 'undone');
+            out = { toast: 'Undone', message: `Undone: ${describe(proposal)}.` };
+          } else if (result === 'stale') {
+            out = { toast: 'The event changed', message: "The event changed after I applied this, so I didn't undo it. Your calendar was left as it is." };
+          } else {
+            out = { toast: "Can't be undone", message: 'I cannot safely undo this because its applied calendar version is unavailable. Nothing was reversed.' };
+          }
+        } else if (!entry.undo_json) {
+          out = { toast: "Can't be undone", message: 'This calendar change cannot be safely undone from here. Nothing was reversed.' };
         } else {
           out = { toast: 'Too late to undo', message: 'The 10-minute undo window has passed, so I left it as it is.' };
         }

@@ -56,6 +56,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Writes that belong to one turn settle before the next turn reads them.
 - Anything that reads and then writes shared state runs inside the DO's serial queue or one transaction.
 - External writes use a version check (etag / If-Match) so we never overwrite a change the owner made meanwhile.
+- Calendar Undo retains the applied write response etag across desk recreation, compares a fresh read, and uses that exact version for conditional PATCH/DELETE. Test unchanged create/move, later edits, read/write races, missing/legacy versions, repeated callbacks and provider failures; never promote a newer owner version into Undo permission.
 
 ### Time
 - All user-facing times are in the owner's timezone. Tests cover midnight crossings, quiet hours across midnight and DST-free zones like IST.
