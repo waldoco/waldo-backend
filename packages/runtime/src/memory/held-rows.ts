@@ -1,4 +1,5 @@
 import { carriesTopic, hidesTopic } from './forget-guard';
+import { decodedLeafHit, LITERAL_REDACTED_STORES, likePrefilter, PROJECTION_STORES, projectionKeyHit, projectionPredicate, projectionRawHit, projectionValueHit } from './claims';
 
 // Owner-only diagnostic: the shape of stored rows that hold a forget, never their content.
 // A row is listed only when the real hold predicate is true for a pending topic (named t1, t2 by order, never by text):
@@ -54,20 +55,33 @@ const jsonShape = (value: string): { json: 'none' | 'ok' | 'bad' | 'unreadable';
 export type RealHold = (topic: string) => Readonly<{ incomplete: boolean; heldBy?: readonly Readonly<{ table: string; rule: string; rows: number }>[] }>;
 // Rows read per call; a larger store continues from the printed rowid.
 export const HELDROWS_SCAN_BUDGET = 200;
+// Characters the per-topic block may use; the rest of the 4000 is kept for the summary, the label and the truncation notice.
+export const HELDROWS_TOPIC_BUDGET = 2400;
 
 export const heldRowShapes = (sql: Sql, table: string, topics: readonly HeldTopic[], limit: number, real: RealHold, from?: number | 'invalid'): string => {
   const usage = `Usage: /heldrows <${Object.keys(HELD_ROW_TABLES).join(' | ')}> [fromRowid]`;
-  const header = `topics ${topics.map((topic, index) => `t${index + 1}=${topic.state}`).join(' ') || 'none pending'}`;
-  const verdicts = topics.map(({ topic }, index) => { const r = real(topic); return `t${index + 1}: ${r.incomplete ? 'incomplete' : 'complete'}${r.heldBy?.length ? ` held by ${r.heldBy.map(h => `${h.table}:${h.rule}:${h.rows}`).join(' ')}` : ''}`; });
-  if (table === '') return [header, ...verdicts, usage].join('\n');
+  // The topic block shares a fixed budget so the summary and notices below always fit inside the delivery cap.
+  // Verdicts run the real forgetSources, so they are computed only for the topics shown.
+  const head: string[] = []; let headSize = 0; let shown = 0;
+  for (const [index, { topic, state }] of topics.entries()) {
+    const room = HELDROWS_TOPIC_BUDGET - headSize - 1;
+    if (room < 24) break;
+    const r = real(topic);
+    const full = `t${index + 1}: ${state} ${r.incomplete ? 'incomplete' : 'complete'}${r.heldBy?.length ? ` held by ${r.heldBy.map(h => `${h.table}:${h.rule}:${h.rows}`).join(' ')}` : ''}`;
+    // A topic is evaluated only if it will be shown; a line longer than the room is cut, not dropped.
+    const line = full.length > room ? `${full.slice(0, room - 3)}...` : full;
+    head.push(line); headSize += line.length + 1; shown++;
+  }
+  const headLines = topics.length ? [`topics ${topics.length}${shown < topics.length ? ` (+${topics.length - shown} more topics not shown)` : ''}`, ...head] : ['topics none pending'];
+  if (table === '') return [...headLines, usage].join('\n');
   if (!Object.hasOwn(HELD_ROW_TABLES, table) || from === 'invalid') return usage;
   const columns = HELD_ROW_TABLES[table]!;
   if (!sql.exec('SELECT 1 FROM sqlite_master WHERE name = ?', table).toArray().length) return `${table}: no such table`;
   const present = columns.filter(column => sql.exec('SELECT name FROM pragma_table_info(?) WHERE name = ?', table, column).toArray().length);
-  if (!present.length || !topics.length) return [header, ...verdicts, `${table}: nothing to inspect`].join('\n');
+  if (!present.length || !topics.length) return [...headLines, `${table}: nothing to inspect`].join('\n');
   const first = sql.exec<{ m: number | null }>(`SELECT MIN(rowid) AS m FROM ${table}`).toArray()[0]?.m ?? 0;
   let after = from !== undefined ? from : first - 1;
-  // Budget bounds rows read per call, not bytes or CPU; the header above runs the real forgetSources per topic (the cost of a real forget).
+  // Budget bounds rows read per call, not bytes or CPU; the topic block runs the real forgetSources per topic (the cost of a real forget).
   const selector = present.map(column => `instr(${column}, char(92)) > 0 OR instr(CAST(${column} AS BLOB), x'00') > 0`).join(' OR ');
   const page = sql.exec<Record<string, SqlStorageValue>>(`SELECT rowid AS rid, ${present.join(', ')} FROM ${table} WHERE rowid > ? AND (${selector}) ORDER BY rowid LIMIT ?`, after, HELDROWS_SCAN_BUDGET + 1).toArray();
   const more = page.length > HELDROWS_SCAN_BUDGET;
@@ -88,8 +102,33 @@ export const heldRowShapes = (sql: Sql, table: string, topics: readonly HeldTopi
     if (parts.length) lines.push(`#${String(row.rid)} ${parts.join(' | ')}`);
   }
   const summary = `${table}: ${lines.length} listed of ${scanned} rows with a backslash or NUL${more ? `; PARTIAL, continue with /heldrows ${table} ${after}` : ''}`;
-  const out = [header, ...verdicts, summary, 'row listing covers escape/NUL rows only; projection and decoded-leaf holds are count-only in the "held by" lines above']; let size = out.join('\n').length; let cut = 0;
-  const reserve = 'truncated: 999 more rows not shown'.length + 1;
+  // Projection and decoded-leaf holds: the same predicate and decoder forgetSources uses (shared code in claims.ts), names and sizes only.
+  const extra: string[] = []; const notes: string[] = []; let stopped = false; const after0 = from !== undefined ? from : first - 1;
+  const projection = PROJECTION_STORES.find(([name]) => name === table);
+  const leafStore = LITERAL_REDACTED_STORES.find(([name]) => name === table);
+  for (const [index, { topic }] of topics.slice(0, Math.max(shown, 1)).entries()) {
+    if (extra.length > limit) { stopped = true; break; }
+    const like = likePrefilter(topic);
+    if (projection) {
+      const cols = present.filter(column => (projection[1] as readonly string[]).includes(column));
+      if (cols.length) {
+        const flags = cols.map(column => `length(${column}) AS ${column}_len, json_valid(${column}) AS ${column}_json, ${projectionRawHit(column)} AS ${column}_raw, ${projectionValueHit(column)} AS ${column}_val, ${projectionKeyHit(column)} AS ${column}_key`).join(', ');
+        const rows = sql.exec<Record<string, number | null>>(`SELECT rowid AS rid, ${flags} FROM ${table} WHERE (${projectionPredicate(cols)}) AND rowid > ? ORDER BY rowid LIMIT ?`, ...cols.flatMap(() => [like, like, like]), ...cols.flatMap(() => [like, like, like]), after0, limit + 1).toArray();
+        for (const row of rows.slice(0, limit)) extra.push(`#${String(row.rid)} t${index + 1}[projection ${cols.map(column => `${column} len=${row[`${column}_len`] ?? 'null'} json=${row[`${column}_json`] ? 1 : 0} raw=${row[`${column}_raw`] ? 1 : 0} val=${row[`${column}_val`] ? 1 : 0} key=${row[`${column}_key`] ? 1 : 0}`).join(' | ')}]`);
+        if (rows.length > limit) notes.push(`t${index + 1}: more projection rows not shown`);
+      }
+    }
+    if (leafStore) for (const column of present.filter(name => (leafStore[1] as readonly string[]).includes(name))) {
+      const rows = sql.exec<{ rid: number; value: string }>(`SELECT rowid AS rid, ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL AND ${column} != '' AND ${column} NOT LIKE ? ESCAPE '\\' AND rowid > ? ORDER BY rowid LIMIT ?`, like, after0, HELDROWS_SCAN_BUDGET + 1).toArray();
+      for (const row of rows.slice(0, HELDROWS_SCAN_BUDGET)) if (decodedLeafHit(row.value, topic)) extra.push(`#${row.rid} t${index + 1}[decoded_leaf_or_unreadable ${column} len=${row.value.length}]`);
+      if (rows.length > HELDROWS_SCAN_BUDGET) notes.push(`t${index + 1}: decoded-leaf scan of ${column} PARTIAL, continue with /heldrows ${table} ${rows[HELDROWS_SCAN_BUDGET - 1]!.rid}`);
+    }
+  }
+  if (stopped) notes.push('further topics not scanned for projection or decoded-leaf rows');
+  if (notes.length > 5) notes.splice(5, notes.length - 5, `+${notes.length - 5} more notes not shown`);
+  lines.push(...extra);
+  const out = [...headLines, summary, 'row listing: escape/NUL rows (summary above), then projection and decoded-leaf rows chosen by the same predicate as the hold', ...notes]; let size = out.join('\n').length; let cut = 0;
+  const reserve = `truncated: ${lines.length} more rows not shown`.length + 1;
   for (const line of lines.slice(0, limit)) {
     if (size + line.length + 1 > HARNESS_MESSAGE_LIMIT - reserve) { cut++; continue; }
     out.push(line); size += line.length + 1;

@@ -52,12 +52,12 @@ export const cleanAliases = (raw: readonly string[] | undefined): string | null 
 // other stores, and SQLite replace() alone would leave those variants behind.
 // Owner-DO free-text stores: in the selector inventory, redacted with the same case-insensitive literal as every other store, and read back.
 // trace_log.note and runtime_trace.detail_json are diagnostic logs whose hop names would match short topics, so they stay tracked as gaps in forget-store-table.
-const LITERAL_REDACTED_STORES = [
+export const LITERAL_REDACTED_STORES = [
   ['thread_topic_index', ['topic']], ['memory_blocks', ['content', 'decision_log']], ['memory_inbox', ['claim', 'content']], ['patrol_log', ['summary']],
   ['goals', ['description', 'baseline', 'target', 'progress']],
 ] as const;
 // Decoded string leaves (and keys) of a JSON value. null: the text is not JSON, so the raw check applies. 'unreadable': it parsed or should have, but the decoder failed on resources (depth, size), so it can never be proven clean. The walk is iterative, so nesting depth cannot throw.
-const jsonLeaves = (value: string): string[] | null | 'unreadable' => {
+export const jsonLeaves = (value: string): string[] | null | 'unreadable' => {
   let parsed: unknown;
   try { parsed = JSON.parse(value); } catch (error) { return error instanceof SyntaxError ? null : 'unreadable'; }
   if (parsed === null || (typeof parsed !== 'object' && typeof parsed !== 'string')) return [];
@@ -94,7 +94,27 @@ const likeEscape = (text: string) => text.replace(/[\\%_]/g, (char) => `\\${char
 // on a short literal prefix chunk instead; the JS-side case-insensitive full-text match keeps
 // exact semantics - the SQL LIKE only ever selects a superset of the real matches.
 const LIKE_PREFILTER_MAX = 40;
-const likePrefilter = (text: string) => `%${likeEscape(text.slice(0, LIKE_PREFILTER_MAX))}%`;
+export const likePrefilter = (text: string) => `%${likeEscape(text.slice(0, LIKE_PREFILTER_MAX))}%`;
+
+// Existing cleanup projections outside the bounded selector's source contract. A row that still carries the topic (raw text, a JSON string value or a JSON key) keeps the forget incomplete.
+// The predicate is shared with the /heldrows diagnostic so the two cannot disagree. Three bound parameters per column: like, like, like.
+export const PROJECTION_STORES = [
+  ['claims', ['aliases']], ['memory_backups', ['payload']], ['spots', ['text', 'evidence']],
+  ['core_file_revisions', ['content']], ['update_cards', ['changes', 'text']],
+  ['day_plan', ['reason']], ['standing_orders', ['scope', 'escalation']],
+  ['run_candidates', ['candidate_json']], ['outbox', ['payload']],
+  ['held_candidates', ['candidate_json']], ['schedule', ['payload_json']],
+] as const;
+export const projectionRawHit = (column: string) => `${column} LIKE ? ESCAPE '\\'`;
+export const projectionValueHit = (column: string) => `EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE type = 'text' AND value LIKE ? ESCAPE '\\')`;
+export const projectionKeyHit = (column: string) => `EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE key LIKE ? ESCAPE '\\')`;
+export const projectionPredicate = (columns: readonly string[]) => columns.map(column => `(${projectionRawHit(column)} OR ${projectionValueHit(column)} OR ${projectionKeyHit(column)})`).join(' OR ');
+// A decoded JSON leaf carries the topic (or our decoder failed) although the raw text does not.
+export const decodedLeafHit = (value: string, topic: string): boolean => {
+  const leaves = jsonLeaves(value);
+  if (leaves === null) return false;
+  return leaves === 'unreadable' || leaves.some(leaf => leaf.toLowerCase().includes(topic.toLowerCase()));
+};
 
 // Salience screen (owner direction 2026-09-28: memory still saves messaging noise). The gate's
 // grounding checks prove WHO said a thing; none of them prove it is WORTH KEEPING. Staging
@@ -671,27 +691,17 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           if (!sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) continue;
           // Held, never treated as clean: a decoded leaf carries the topic, or our own decoder failed on it. Our decoder (not SQLite json_valid, which rejects nesting over 1,000) is what proves a row clean.
           const decodedOnly = sql.exec<{ value: string }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL AND ${column} != '' AND ${column} NOT LIKE ? ESCAPE '\\'`, like).toArray()
-            .some(row => {
-              const leaves = jsonLeaves(row.value);
-              if (leaves === null) return false;
-              return leaves === 'unreadable' || leaves.some(leaf => leaf.toLowerCase().includes(topic.toLowerCase()));
-            });
+            .some(row => decodedLeafHit(row.value, topic));
           if (decodedOnly) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'decoded_leaf_or_unreadable', rows: 1 }); }
         }
       }
       const incompleteBeforeHeld = incomplete;
       // These existing cleanup projections are outside the bounded selector's
       // source contract. Preserve their originals if they still carry the topic.
-      for (const [table, columns] of [
-        ['claims', ['aliases']], ['memory_backups', ['payload']], ['spots', ['text', 'evidence']],
-        ['core_file_revisions', ['content']], ['update_cards', ['changes', 'text']],
-        ['day_plan', ['reason']], ['standing_orders', ['scope', 'escalation']],
-        ['run_candidates', ['candidate_json']], ['outbox', ['payload']],
-        ['held_candidates', ['candidate_json']], ['schedule', ['payload_json']],
-      ] as const) {
+      for (const [table, columns] of PROJECTION_STORES) {
         if (!tableExists(sql, table)) continue;
         const available = columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length);
-        if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${available.map(column => `(${column} LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE (type = 'text' AND value LIKE ? ESCAPE '\\') OR key LIKE ? ESCAPE '\\'))`).join(' OR ')} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'projection', rows: 1 }); }
+        if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${projectionPredicate(available)} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'projection', rows: 1 }); }
         if (available.length && !held.includes(table)) {
           guard(table, available, true);
         }
