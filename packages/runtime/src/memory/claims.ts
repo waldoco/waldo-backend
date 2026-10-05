@@ -72,6 +72,9 @@ const jsonLeaves = (value: string): string[] | null | 'unreadable' => {
     return out;
   } catch { return 'unreadable'; }
 };
+// A hard safety line, not a parser: any backslash escape other than the plain JSON whitespace and quote escapes (\u, \x, or an identity escape such as \p) can spell the topic in a way a LIKE, JS JSON.parse and SQLite json_tree may each read differently (duplicate keys, JSON5 text). A row with no raw match and such an escape cannot be proven clean, so it is held.
+const HIDING_ESCAPE = /\\(?!["\\/bfnrt])/;
+const hidesTopic = (value: string): boolean => HIDING_ESCAPE.test(value);
 const ciRedact = (value: string, needle: string, marker: string): string =>
   needle ? value.replace(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), marker) : value;
 
@@ -583,7 +586,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           if (!tableExists(sql, table)) return;
           for (const column of columns) {
             if (!sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) continue;
-            add(table, sql.exec<{ value: string | null }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL`).toArray().filter(row => typeof row.value === 'string' && (exact(row.value) || ((leaves) => leaves === 'unreadable' || (leaves !== null && leaves.some(exact)))(jsonLeaves(row.value)))).length);
+            add(table, sql.exec<{ value: string | null }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL`).toArray().filter(row => typeof row.value === 'string' && (exact(row.value) || hidesTopic(row.value) || ((leaves) => leaves === 'unreadable' || (leaves !== null && leaves.some(exact)))(jsonLeaves(row.value)))).length);
           }
         });
         if (tableExists(sql, 'reminder_notes')) attempt('reminder_notes', () => add('reminder_notes', sql.exec<{ note: string }>('SELECT note FROM reminder_notes').toArray().filter(row => exact(row.note)).length));
@@ -654,6 +657,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           const decodedOnly = sql.exec<{ value: string }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL AND ${column} != '' AND ${column} NOT LIKE ? ESCAPE '\\'`, like).toArray()
             .some(row => {
               const leaves = jsonLeaves(row.value);
+              if (hidesTopic(row.value)) return true;
               if (leaves === null) return false;
               return leaves === 'unreadable' || leaves.some(leaf => leaf.toLowerCase().includes(topic.toLowerCase()));
             });
@@ -673,6 +677,10 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         if (!tableExists(sql, table)) continue;
         const available = columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length);
         if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${available.map(column => `(${column} LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE (type = 'text' AND value LIKE ? ESCAPE '\\') OR key LIKE ? ESCAPE '\\'))`).join(' OR ')} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) { incomplete = true; held.push(table); }
+        if (available.length && !held.includes(table)) {
+          const hidden = available.some(column => sql.exec<{ value: string }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL AND instr(${column}, char(92)) > 0 AND ${column} NOT LIKE ? ESCAPE '\\'`, like).toArray().some(row => typeof row.value === 'string' && hidesTopic(row.value)));
+          if (hidden) { incomplete = true; held.push(table); }
+        }
       }
       return { sources, incomplete, ...(held.length ? { held, otherIncomplete: incompleteBeforeHeld || held.some(table => table !== 'standing_orders') } : {}), ...(batch ? { more } : {}) };
     },

@@ -1655,9 +1655,9 @@ it('REVIEW-769 a standing order plus another preserved store keeps the generic s
   expect(request()).not.toContain('preserved_store');
 });
 
-it('REVIEW-769 JSON redaction rewrites only rows whose string leaf changed: pretty text, a big integer, 1.0 and escapes survive in a row without the topic', async () => {
+it('REVIEW-769 JSON redaction rewrites only rows whose string leaf changed: pretty text, a big integer and 1.0 survive in a row without the topic', async () => {
   const label = 'review-769-json-exact'; const topic = 'POSJSONEXACT769';
-  const pretty = '[\n  { "n": 12345678901234567890, "x": 1.0, "e": "\\u00e9" }\n]';
+  const pretty = '[\n  { "n": 12345678901234567890, "x": 1.0 }\n]';
   await admittedTurn(label, 153000, 'My unrelated standup is at 09:10 UTC.', ops());
   await runInDurableObject(stub(label), (_instance, state) => {
     state.storage.sql.exec(MEMORY_BLOCKS_DDL);
@@ -1692,7 +1692,7 @@ const jsonRow = (n: number, name: string, decisionLog: string, expectSettled: bo
   await admittedTurn(label, 154001 + n * 10, 'Continue my requested forgetting.', ops());
   await runInDurableObject(stub(label), (_instance, state) => {
     const log = state.storage.sql.exec<{ decision_log: string }>('SELECT decision_log FROM memory_blocks').toArray()[0]!.decision_log;
-    expect(() => JSON.parse(log)).not.toThrow();
+    if (unchanged) expect(log).toBe(decisionLog); else expect(() => JSON.parse(log)).not.toThrow();
     if (unchanged) expect(log).toBe(decisionLog);
     expect(claimStore(state.storage.sql).incompleteTopics()).toEqual(expectSettled ? [] : [topic]);
     if (expectSettled) expect(log).not.toContain(topic);
@@ -1714,3 +1714,24 @@ jsonRow(106, 'large shallow no-topic', JSON.stringify(Array.from({length:100000}
 jsonRow(107, 'split across leaves literal contract', '["Call POSCLO","SED769 about lunch"]', true, true);
 jsonRow(108, 'canonical key kept incomplete', '{"Call POSCLOSED769 about lunch":"unrelated"}', false, true);
 jsonRow(109, 'encoded 1001 deep exact boundary', '['.repeat(1001) + '"Call \\u0050\\u004f\\u0053\\u0043\\u004c\\u004f\\u0053\\u0045\\u0044\\u0037\\u0036\\u0039 about lunch"' + ']'.repeat(1001), false, true);
+
+const ENC = '\\u0050\\u004f\\u0053\\u0043\\u004c\\u004f\\u0053\\u0045\\u0044\\u0037\\u0036\\u0039';
+// No parser is the proof: a row with no raw match and a hiding escape is held, however JS, SQLite or JSON5 would read it.
+jsonRow(201, 'duplicate keys, the last one wins in JS but the escaped topic is still readable', `{"k":"Call ${ENC} about lunch","k":"x"}`, false, true);
+jsonRow(202, 'JSON5 unquoted key with an escaped topic (a JS SyntaxError is not plain text)', `{k:"Call ${ENC} about lunch"}`, false, true);
+jsonRow(203, 'single-quoted JSON5 string with a \\x escape', `{'k':'Call \\x50OSCLOSED769 about lunch'}`, false, true);
+it('REVIEW-769 JSON fail-closed: a cleanup-projection row nested over 1000 levels with an escaped topic is held (SQLite json_valid rejects it)', async () => {
+  const label = 'review-769-projection-deep'; const topic = 'POSCLOSED769';
+  const raw = '['.repeat(1100) + `"Call ${ENC} about lunch"` + ']'.repeat(1100);
+  await admittedTurn(label, 155000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
+    state.storage.sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'deep', null, raw, 0);
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 155001, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => { expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]); state.storage.deleteAlarm(); });
+});
