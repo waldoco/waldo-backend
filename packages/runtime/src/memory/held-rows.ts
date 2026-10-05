@@ -46,45 +46,52 @@ const jsonShape = (value: string): { json: 'none' | 'ok' | 'bad' | 'unreadable';
   return { json: 'ok', depth, values, keys };
 };
 
-export const heldRowShapes = (sql: Sql, table: string, topics: readonly HeldTopic[], limit: number): string => {
-  if (!Object.hasOwn(HELD_ROW_TABLES, table)) return `Usage: /heldrows <${Object.keys(HELD_ROW_TABLES).join(' | ')}>`;
+// The hold verdict comes from the real guard (`real` is claimStore.forgetSources), so this view cannot disagree with it.
+// Row shapes cover only what the guard's own row test selects: a row with a backslash or NUL (SQL instr, no case folding),
+// judged by hidesTopic and the NUL rule. carries/val/key are facts about the row, not holds.
+export type RealHold = (topic: string) => Readonly<{ incomplete: boolean; heldBy?: readonly Readonly<{ table: string; rule: string; rows: number }>[] }>;
+// Rows read per call; a larger store continues from the printed rowid.
+export const HELDROWS_SCAN_BUDGET = 200;
+
+export const heldRowShapes = (sql: Sql, table: string, topics: readonly HeldTopic[], limit: number, real: RealHold, from?: number): string => {
+  const usage = `Usage: /heldrows <${Object.keys(HELD_ROW_TABLES).join(' | ')}> [fromRowid]`;
+  const header = `topics ${topics.map((topic, index) => `t${index + 1}=${topic.state}`).join(' ') || 'none pending'}`;
+  const verdicts = topics.map(({ topic }, index) => { const r = real(topic); return `t${index + 1}: ${r.incomplete ? 'incomplete' : 'complete'}${r.heldBy?.length ? ` held by ${r.heldBy.map(h => `${h.table}:${h.rule}:${h.rows}`).join(' ')}` : ''}`; });
+  if (table === '') return [header, ...verdicts, usage].join('\n');
+  if (!Object.hasOwn(HELD_ROW_TABLES, table)) return usage;
   const columns = HELD_ROW_TABLES[table]!;
   if (!sql.exec('SELECT 1 FROM sqlite_master WHERE name = ?', table).toArray().length) return `${table}: no such table`;
   const present = columns.filter(column => sql.exec('SELECT name FROM pragma_table_info(?) WHERE name = ?', table, column).toArray().length);
-  const header = `${table}: topics ${topics.map((topic, index) => `t${index + 1}=${topic.state}`).join(' ') || 'none pending'}`;
-  if (!present.length || !topics.length) return `${header}; nothing to inspect`;
-  // Paged in JS by rowid, one page of `limit` rows at a time: SQLite LIKE and lower() fold ASCII only, so a SQL pre-filter would miss non-ASCII case variants the guard (JS toLowerCase) holds. Memory stays at one page; the scan stops after `limit` held rows.
-  const lines: string[] = []; let held = 0; let scanned = 0; let after = -1; let stopped = false;
-  for (;;) {
-    const page = sql.exec<Record<string, SqlStorageValue>>(`SELECT rowid AS rid, ${present.join(', ')} FROM ${table} WHERE rowid > ? ORDER BY rowid LIMIT ?`, after, limit).toArray();
-    if (!page.length) break;
-    for (const row of page) {
-      scanned++; after = Number(row.rid);
-      const parts: string[] = [];
-      for (const column of present) {
-        const value = row[column];
-        if (typeof value !== 'string') continue;
-        const escapes = escapeCounts(value); const nul = value.split('\0').length - 1; const shape = jsonShape(value); const low = value.toLowerCase();
-        const holds = topics.flatMap(({ topic }, index) => {
-          const lowered = topic.toLowerCase();
-          const raw = low.includes(lowered); const val = shape.values.some(v => v.toLowerCase().includes(lowered)); const key = shape.keys.some(k => k.toLowerCase().includes(lowered));
-          const rules = [...(hidesTopic(value, topic) ? ['guard_escape'] : []), ...(value.includes('\0') && carriesTopic(value, topic) ? ['nul'] : []), ...(raw || val || key ? ['projection'] : [])];
-          return rules.length ? [`t${index + 1}[hold=${rules.join('+')} raw=${raw ? 1 : 0} val=${val ? 1 : 0} key=${key ? 1 : 0}]`] : [];
-        });
-        if (holds.length) parts.push(`${column} len=${value.length} json=${shape.json} depth=${shape.depth} esc[u=${escapes.u} bad_u=${escapes.bad_u} q=${escapes.quote_slash} ctl=${escapes.ctl} other=${escapes.other}] nul=${nul} ${holds.join(' ')}`);
-      }
-      if (parts.length) { held++; lines.push(`#${String(row.rid)} ${parts.join(' | ')}`); }
-      if (held >= limit) { stopped = true; break; }
+  if (!present.length || !topics.length) return [header, ...verdicts, `${table}: nothing to inspect`].join('\n');
+  const first = sql.exec<{ m: number | null }>(`SELECT MIN(rowid) AS m FROM ${table}`).toArray()[0]?.m ?? 0;
+  let after = from !== undefined ? from : first - 1;
+  const selector = present.map(column => `instr(${column}, char(92)) > 0 OR instr(CAST(${column} AS BLOB), x'00') > 0`).join(' OR ');
+  const page = sql.exec<Record<string, SqlStorageValue>>(`SELECT rowid AS rid, ${present.join(', ')} FROM ${table} WHERE rowid > ? AND (${selector}) ORDER BY rowid LIMIT ?`, after, HELDROWS_SCAN_BUDGET + 1).toArray();
+  const more = page.length > HELDROWS_SCAN_BUDGET;
+  const lines: string[] = []; let scanned = 0;
+  for (const row of page.slice(0, HELDROWS_SCAN_BUDGET)) {
+    scanned++; after = Number(row.rid);
+    const parts: string[] = [];
+    for (const column of present) {
+      const value = row[column];
+      if (typeof value !== 'string') continue;
+      const escapes = escapeCounts(value); const nul = value.split('\0').length - 1; const shape = jsonShape(value);
+      const holds = topics.flatMap(({ topic }, index) => {
+        const rules = [...(hidesTopic(value, topic) ? ['guard_escape'] : []), ...(nul && carriesTopic(value, topic) ? ['nul'] : [])];
+        return rules.length ? [`t${index + 1}[${rules.join('+')} carries=${carriesTopic(value, topic) ? 1 : 0} val=${shape.values.some(v => carriesTopic(v, topic)) ? 1 : 0} key=${shape.keys.some(k => carriesTopic(k, topic)) ? 1 : 0}]`] : [];
+      });
+      if (holds.length) parts.push(`${column} len=${value.length} json=${shape.json} depth=${shape.depth} esc[u=${escapes.u} bad_u=${escapes.bad_u} q=${escapes.quote_slash} ctl=${escapes.ctl} other=${escapes.other}] nul=${nul} ${holds.join(' ')}`);
     }
-    if (stopped || page.length < limit) break;
+    if (parts.length) lines.push(`#${String(row.rid)} ${parts.join(' | ')}`);
   }
-  const summary = `${header}; ${held} held, ${scanned} rows scanned${stopped ? ` (stopped at ${limit} held, up to rowid ${after})` : ''}`;
-  const reserve = 'truncated: 99 more held rows not shown'.length + 1;
-  const out = [summary]; let size = summary.length; let cut = 0;
-  for (const line of lines) {
+  const summary = `${table}: ${lines.length} listed of ${scanned} rows with a backslash or NUL${more ? `; PARTIAL, continue with /heldrows ${table} ${after}` : ''}`;
+  const out = [header, ...verdicts, summary]; let size = out.join('\n').length; let cut = 0;
+  const reserve = 'truncated: 999 more rows not shown'.length + 1;
+  for (const line of lines.slice(0, limit)) {
     if (size + line.length + 1 > HARNESS_MESSAGE_LIMIT - reserve) { cut++; continue; }
     out.push(line); size += line.length + 1;
   }
-  if (cut) out.push(`truncated: ${cut} more held rows not shown`);
+  cut += Math.max(0, lines.length - limit);
+  if (cut) out.push(`truncated: ${cut} more rows not shown`);
   return out.join('\n');
 };

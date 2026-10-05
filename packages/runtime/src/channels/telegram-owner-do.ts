@@ -1232,7 +1232,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       // Shape only. 25 rows matches the /trace default.
       const memory = claimStore(this.ctx.storage.sql);
       const topics = [...memory.incompleteTopics().map(topic => ({ topic, state: 'incomplete' as const })), ...memory.pendingTopics().map(topic => ({ topic, state: 'pending' as const }))];
-      return heldRowShapes(this.ctx.storage.sql, command.table ?? '', topics, 25);
+      return heldRowShapes(this.ctx.storage.sql, command.table ?? '', topics, 25, topic => memory.forgetSources(topic, true), command.from ?? undefined);
     }
     if (command.kind !== 'fire') return '';
     if (command.target === null) return `Usage: /fire <${FIRE_TARGETS.join(' | ')}>`;
