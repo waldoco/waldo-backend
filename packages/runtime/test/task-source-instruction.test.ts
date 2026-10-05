@@ -29,3 +29,27 @@ it.each([['web only', ['web'], 'owner_transition', true], ['web and browser', ['
   expect(result.snapshot.ready).toBe(ready);
   if (ready) expect(taskSourceAllowed(result.snapshot, { name: 'browse_act' })).toBe(true);
 }));
+
+it('never treats naming a source as a limit, allows several sources per query, and keeps explicit owner limits', () => {
+  expect(TASK_SOURCE_INSTRUCTION).toContain('Naming a source the owner wants read is never a limit');
+  expect(TASK_SOURCE_INSTRUCTION).toContain('one or several in the same query');
+  expect(TASK_SOURCE_INSTRUCTION).toContain('Use restrict only for that explicit owner limit');
+  expect(TASK_SOURCE_INSTRUCTION).toContain('such a limit stays in force until the owner lifts it');
+});
+import { ownerReadSources as defaultsFor } from '../src/channels/task-source-scope';
+it('a mail and calendar query becomes one ready task over both sources with no card', () => custody('mail-and-calendar', async (sql, scope) => {
+  const text = 'Check my GitHub mail, then find a free slot tomorrow morning';
+  const cap = createTaskSourceScope(sql, 'owner', scope, async () => {}, { inputRef: 'in-3', text }, defaultsFor([{ id: 'g' }] as never));
+  await cap.classify(JSON.stringify({ decision: 'restrict', sources: ['web'] }), 'prev');
+  const result = await cap.classify(JSON.stringify({ decision: 'new', sources: ['mail', 'calendar'], evidence: text }), 'in-3', text);
+  expect(result.outcome).toBe('owner_transition');
+  expect(result.proposal).toBeUndefined();
+  for (const name of ['search_communication', 'query_availability'] as const) expect(taskSourceAllowed(result.snapshot, { name })).toBe(true);
+}));
+it('an explicit owner exclusion still holds: a retained mail-only limit refuses calendar reads', () => custody('explicit-exclusion', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner', scope, async () => {}, { inputRef: 'in-4', text: 'only mail, do not touch my calendar' }, defaultsFor([{ id: 'g' }] as never));
+  await cap.classify(JSON.stringify({ decision: 'restrict', sources: ['mail'] }), 'in-4');
+  const kept = await cap.classify(JSON.stringify({ decision: 'retain', sources: [], evidence: null }), 'in-5');
+  expect(taskSourceAllowed(kept.snapshot, { name: 'query_calendar' })).toBe(false);
+  expect(taskSourceAllowed(kept.snapshot, { name: 'search_communication' })).toBe(true);
+}));
