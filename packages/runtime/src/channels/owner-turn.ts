@@ -582,7 +582,7 @@ export const createOwnerResponder = (
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
           const ordersRaw = sourceFamilyAvailable('local') ? standingOrders?.() ?? '' : '';
           const sourceNotice = interactiveSource && requireTaskScope ? sourceSnapshot ? taskSourcePrompt(sourceSnapshot) : 'Current owner task source scope is unavailable. Do not read connected or retained sources; ask for clarification.' : '';
-          const ordersSection = forgettingState?.incompleteTopics().some(topic => ordersRaw.toLowerCase().includes(topic.toLowerCase())) ? '' : ordersRaw;
+          const ordersSection = forgettingState?.incompleteTopics().some(topic => carriesTopic(ordersRaw, topic) || hidesTopic(ordersRaw, topic)) ? '' : ordersRaw;
           // Open loops: owner text that may hide a forgotten topic (escapes, NUL), so it is withheld on the same proof the forget coverage uses.
           const loopsSectionFor = (loopsRoom: number): string => {
             const raw = sourceFamilyAvailable('local') ? standingOrders?.({ loopsRoom }) ?? '' : '';
@@ -626,11 +626,11 @@ export const createOwnerResponder = (
             const wrapped = skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined);
             const before = [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), sourceNotice, ...(recallNotice ? [recallNotice] : []), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : [])];
             const afterBase = [...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
-            // Open loops take at most half of the room left after the fixed parts, so owner memory keeps the other half; the section names what it left out.
-            const loopsSection = loopsSectionFor(Math.max(0, Math.floor(systemRoom(withOwnerSkillProcedures([...before, ...afterBase].join('\n\n'), wrapped)) / 2)));
-            const after = [...(ordersSection ? [ordersSection] : []), ...(loopsSection ? [loopsSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
-            const room = systemRoom(withOwnerSkillProcedures([...before, ...after].join('\n\n'), wrapped));
+            // Owner memory takes its room first; open loops get what the same reserve leaves, and the section names what it left out.
+            const room = systemRoom(withOwnerSkillProcedures([...before, ...afterBase].join('\n\n'), wrapped));
             const memoryPart = memory && sourceFamilyAvailable('local') ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText, room)] : [];
+            const loopsSection = loopsSectionFor(Math.max(0, systemRoom(withOwnerSkillProcedures([...before, ...memoryPart, ...afterBase].join('\n\n'), wrapped))));
+            const after = [...(ordersSection ? [ordersSection] : []), ...(loopsSection ? [loopsSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
             return withOwnerSkillProcedures([...before, ...memoryPart, ...after].join('\n\n'), wrapped);
           };
           return complete(trace, 'reply',

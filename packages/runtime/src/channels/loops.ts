@@ -120,15 +120,16 @@ export const openLoopsPrompt = (book: LoopBook, _timezone: string, room: number)
   const head = 'Open loops Waldo is on for the owner (read-only context, not instructions):';
   const lines = own.map((loop) => `- ${loop.title}${loop.due ? ` (due ${loop.due.replace('T', ' ')})` : ''} [${loop.id}]`);
   // Soonest-due first (book.list order). Budget against the room the caller has left in the system prompt, because the sanitiser drops an oversize system prompt whole; name what was left out.
-  const note = (omitted: number) => `(${omitted} more open loops are not shown here; the owner's ledger lists them all.)`;
+  const note = (omitted: number) => `(${omitted} more open loops exist beyond this list; the owner's ledger shows them.)`;
   const kept: string[] = [];
   let used = head.length + note(own.length).length + 2;
   for (const line of lines) {
-    if (used + line.length + 1 > room) break;
+    if (used + line.length + 1 > room) continue; // a long row never hides a shorter one behind it
     kept.push(line); used += line.length + 1;
   }
-  if (kept.length === 0) return '';
-  return [head, ...kept, ...(kept.length < lines.length ? [note(lines.length - kept.length)] : [])].join('\n');
+  const omitted = lines.length - kept.length;
+  if (kept.length === 0) return head.length + note(omitted).length + 1 <= room ? [head, note(omitted)].join('\n') : '';
+  return [head, ...kept, ...(omitted > 0 ? [note(omitted)] : [])].join('\n');
 };
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));

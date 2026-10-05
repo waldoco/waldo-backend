@@ -1897,3 +1897,18 @@ it('REVIEW774 many schema-valid loops must not silently drop the entire system p
 
   expect(body.instructions).toBeTruthy();
 });
+
+it('REVIEW774 escaped standing-order text is withheld while a matching forget is incomplete', async () => {
+  const name = 'review774-orders-escaped'; const topic = 'LEDGERTOPIC';
+  await admittedTurn(name, 172000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(name), (_instance, state) => {
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS standing_orders (id TEXT PRIMARY KEY, scope TEXT NOT NULL, trigger TEXT NOT NULL, at TEXT, gate TEXT NOT NULL, escalation TEXT NOT NULL, created_at INTEGER NOT NULL)');
+    state.storage.sql.exec('INSERT INTO standing_orders (id, scope, trigger, at, gate, escalation, created_at) VALUES (?,?,?,?,?,?,?)', 'ord-esc', String.raw`watch \u004cEDGERTOPIC venue`, 'every_turn', null, 'ask', 'ping me', 1);
+    const memory = claimStore(state.storage.sql);
+    memory.beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(name));
+  await admittedTurn(name, 172001, 'What standing orders do you have?', ops());
+  expect(request()).not.toContain('venue');
+});

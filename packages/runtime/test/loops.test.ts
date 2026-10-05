@@ -111,9 +111,16 @@ describe('openLoopsPrompt', () => {
     const book = { list: () => rows } as never;
     const text = openLoopsPrompt(book, 'UTC', 1000);
     expect(text.length).toBeLessThanOrEqual(1000);
-    expect(text).toMatch(/\(\d+ more open loops are not shown here/);
+    expect(text).toMatch(/\(\d+ more open loops exist beyond this list/);
     const shown = (text.match(/^- /gm) ?? []).length;
-    expect(text).toContain(`(${50 - shown} more open loops`);
+    expect(text).toContain(`(${50 - shown} more open loops exist beyond this list`);
     expect(openLoopsPrompt(book, 'UTC', 10)).toBe('');
+    // A long row never hides a shorter one behind it, and when nothing fits the omission line still says loops exist.
+    const mixed = { list: () => [{ id: 'l1', title: 'x'.repeat(200), due: '2026-10-09T10:00', source_ref: null }, { id: 's2', title: 'short', due: null, source_ref: null }] } as never;
+    expect(openLoopsPrompt(mixed, 'UTC', 230)).toContain('- short [s2]');
+    expect(openLoopsPrompt(mixed, 'UTC', 230)).toContain('(1 more open loops exist beyond this list');
+    const none = openLoopsPrompt({ list: () => [{ id: 'l1', title: 'x'.repeat(200), due: null, source_ref: null }] } as never, 'UTC', 170);
+    expect(none).toContain('(1 more open loops exist beyond this list');
+    expect(none).not.toContain('xxxx');
   });
 });
