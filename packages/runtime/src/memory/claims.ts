@@ -160,8 +160,8 @@ export const blankCardPieces = (parsed: unknown, topic: string): unknown => {
   const marked = new Set<string>();
   const holds = (list: Leaf[], from: number, to: number, separator: string) => exact(list.slice(from, to + 1).map(leaf => leaf.text).join(separator));
   // Same piece lists and join modes as cardCarriesTopic. For each start take the shortest run holding the topic, and skip a run whose tail alone still holds it (a later start finds that one),
-  // so unrelated leaves before, between or after the copies are never marked.
-  search: for (const list of [leaves.filter(leaf => !leaf.key), leaves]) {
+  // so unrelated leaves before, between or after the copies are never marked. Marks accumulate over every list and join mode, because separate copies may need different ones.
+  for (const list of [leaves.filter(leaf => !leaf.key), leaves]) {
     for (const separator of ['', ' ']) {
       for (let from = 0; from < list.length; from++) {
         for (let to = from; to < list.length; to++) {
@@ -170,7 +170,6 @@ export const blankCardPieces = (parsed: unknown, topic: string): unknown => {
           break;
         }
       }
-      if (marked.size) break search;
     }
   }
   const all = marked.size === 0;

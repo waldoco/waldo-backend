@@ -2567,3 +2567,40 @@ it('ADVERSARIAL798 duplicate topic copies and literal plus split are not reconst
   console.log('ADVERSARIAL798-REPEAT',first);state.storage.deleteAlarm();expect(store.forgetSources(MAIL_T,true).incomplete).toBe(false);expect(second).toEqual(first);expect(first.changes).not.toContain('COBALT');
  });
 });
+
+const T8 = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+const sp = T8.indexOf(' about');
+it.each(['literal+spacesplit','valuesplit+kvspace','nestedarray'] as const)('NEW798 %s', async kind => {
+ const label=`new798-${kind}`; await admittedTurn(label,190600,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql; const updates=updateBook(sql); const store=claimStore(sql);
+  const U=mailM(9,MAIL_U);
+  if(kind==='literal+spacesplit') updates.record('d',1,[mailM(0,T8),mailM(1,T8.slice(0,sp)),mailM(2,T8.slice(sp+1)),U],'S');
+  if(kind==='valuesplit+kvspace') updates.record('d',1,[mailM(0,T8.slice(0,20)),mailM(1,T8.slice(20)),{[T8.slice(0,sp)]:T8.slice(sp+1)},U] as any,'S');
+  if(kind==='crosscard'){ updates.record('d',1,[mailM(0,T8.slice(0,30))],'S'); updates.record('d',1,[mailM(1,T8.slice(30))],'S'); }
+  if(kind==='textchanges') updates.record('d',1,[mailM(0,T8.slice(0,30)),U],T8.slice(30));
+  if(kind==='nestedarray') updates.record('d',1,[{a:[[T8.slice(0,30)],{b:[T8.slice(30)]}]},U] as any,'S');
+  const before=store.forgetSources(T8,true).incomplete;
+  store.purge([],new Date().toISOString(),[T8]);
+  const rows=sql.exec<{changes:string;text:string}>('SELECT changes,text FROM update_cards ORDER BY id').toArray();
+  const after=store.forgetSources(T8,true).incomplete;
+  const joined=rows.map(r=>r.changes+r.text).join('|');
+  console.log('NEW798',kind,JSON.stringify({before,after,rows}));
+  state.storage.deleteAlarm();
+  expect(after).toBe(false); expect(joined).not.toContain('COBALT'); expect(joined).not.toContain('ZEBRA');
+  if(kind!=='crosscard') expect(joined).toContain(MAIL_U);
+ });
+});
+// Declared limits (#794, not detectable by a per-card test): a topic split across two update_cards rows, or between a card's changes and its summary text.
+it('NEW798 perf big card', async()=> {
+ const label='new798-perf'; await admittedTurn(label,190700,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql; const updates=updateBook(sql); const store=claimStore(sql);
+  updates.record('d',1,Array.from({length:400},(_,i)=>mailM(i,`unrelated filler text number ${i} `.repeat(3))),'S');
+  for(let i=0;i<300;i++) updates.record('d',1,[mailM(500+i,'other')],'S');
+  const t0=Date.now(); store.forgetSources(T8,true); const t1=Date.now();
+  updates.record('d',1,[mailM(1000,T8.slice(0,20)),...Array.from({length:400},(_,i)=>mailM(2000+i,`filler ${i}`)),mailM(1001,T8.slice(20))],'S');
+  const t2=Date.now(); store.purge([],new Date().toISOString(),[T8]); const t3=Date.now();
+  console.log('NEW798-PERF',JSON.stringify({hold:t1-t0,purge:t3-t2})); state.storage.deleteAlarm();
+ });
+});
