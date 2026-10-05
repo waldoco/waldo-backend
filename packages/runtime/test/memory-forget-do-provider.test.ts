@@ -1509,23 +1509,6 @@ it('REVIEW-769 a topic only in a reminder note is redacted and verified, never s
   });
 });
 
-it('REVIEW-769 a topic that survives only in an unverified owner store keeps the forget incomplete', async () => {
-  const name='review-769-unverified-store'; const topic='UNIQUEPATROL769';
-  await admittedTurn(name,134000,'My unrelated standup is at 09:10 UTC.',ops());
-  await runInDurableObject(stub(name),(_instance,state)=>{
-    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS patrol_log (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, observed_at TEXT NOT NULL, entry_type TEXT NOT NULL, summary TEXT NOT NULL, source_ref TEXT, created_at TEXT NOT NULL)');
-    state.storage.sql.exec('INSERT INTO patrol_log (id, user_id, observed_at, entry_type, summary, source_ref, created_at) VALUES (?,?,?,?,?,?,?)','patrol-769','u','t','x',`Saw ${topic} private detail`,null,'t');
-    claimStore(state.storage.sql).beginTopicCoverage(topic,new Date().toISOString());
-    state.storage.deleteAlarm();
-  });
-  await evictDurableObject(stub(name));
-  await admittedTurn(name,134001,'Continue my requested forgetting.',ops());
-  await runInDurableObject(stub(name),(_instance,state)=>{
-    expect(claimStore(state.storage.sql).incompleteTopics()).toContain(topic);
-    state.storage.deleteAlarm();
-  });
-});
-
 const positiveStore = (label: string, topic: string, seed: (sql: SqlStorage, text: string) => void, read: (sql: SqlStorage) => string) =>
   it(`REVIEW-769 positive cleanup: ${label} is selected, redacted, verified and settles, keeps its unrelated clause, and recall stays open after a second eviction`, async () => {
     const name = `review-769-positive-${label}`; const clause = `Discuss ${topic} private detail`; const keep = 'keep the tea order';
@@ -1552,6 +1535,40 @@ const positiveStore = (label: string, topic: string, seed: (sql: SqlStorage, tex
     expect(request()).not.toContain('temporarily limited');
     await runInDurableObject(stub(name), (_instance, state) => { expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]); expect(read(state.storage.sql)).not.toContain(topic); state.storage.deleteAlarm(); });
   });
+positiveStore('patrol_log', 'POSPATROL769', (sql, text) => {
+  sql.exec('CREATE TABLE IF NOT EXISTS patrol_log (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, observed_at TEXT NOT NULL, entry_type TEXT NOT NULL, summary TEXT NOT NULL, source_ref TEXT, created_at TEXT NOT NULL)');
+  sql.exec('INSERT INTO patrol_log (id, user_id, observed_at, entry_type, summary, source_ref, created_at) VALUES (?,?,?,?,?,?,?)', 'pos-769-patrol', 'u', 't', 'x', text, null, 't');
+}, sql => JSON.stringify(sql.exec('SELECT id, summary FROM patrol_log').toArray()));
+positiveStore('goals', 'POSGOAL769', (sql, text) => {
+  sql.exec('CREATE TABLE IF NOT EXISTS goals (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, description TEXT NOT NULL, baseline TEXT, target TEXT, progress TEXT, deadline TEXT, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)');
+  sql.exec('INSERT INTO goals (id, user_id, description, created_at, updated_at) VALUES (?,?,?,?,?)', 'pos-769-goal', 'u', text, 't', 't');
+}, sql => JSON.stringify(sql.exec('SELECT id, description FROM goals').toArray()));
+
+it('REVIEW-769 an incidental short-topic match in goals and patrol_log does not lock the owner out: the forget completes and recall comes back', async () => {
+  const name = 'review-769-incidental'; const topic = 'Tom';
+  await admittedTurn(name, 135000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(name), (_instance, state) => {
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS goals (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, description TEXT NOT NULL, baseline TEXT, target TEXT, progress TEXT, deadline TEXT, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)');
+    state.storage.sql.exec('INSERT INTO goals (id, user_id, description, created_at, updated_at) VALUES (?,?,?,?,?)', 'inc-goal', 'u', 'Finish the report tomorrow', 't', 't');
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(name));
+  seen.selectedTexts = ['Finish the report tomorrow']; seen.selectorMode = 'normal';
+  await admittedTurn(name, 135001, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(name), (_instance, state) => {
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
+    expect(JSON.stringify(state.storage.sql.exec('SELECT description FROM goals').toArray()).toLowerCase()).not.toContain('tom');
+    state.storage.deleteAlarm();
+  });
+  seen.selectorMode = 'normal';
+  await admittedTurn(name, 135002, 'What time is my standup?', ops());
+  expect(request()).not.toContain('temporarily limited');
+});
+
 positiveStore('loops', 'POSLOOP769', (sql, text) => { loopBook(sql, { now: () => Date.now(), newId: () => 'pos-769-loop' }).open({ title: text, due: null }); }, sql => JSON.stringify(sql.exec('SELECT title FROM loops').toArray()));
 positiveStore('background_runs', 'POSBG769', (sql, text) => { sql.exec('INSERT INTO background_runs (id,kind,status,summary,parent_id,started_at,ended_at) VALUES (?,?,?,?,?,?,?)', 'pos-769-bg', 'event', 'completed', text, null, 1, 2); }, sql => JSON.stringify(sql.exec('SELECT summary FROM background_runs').toArray()));
 positiveStore('reminder_notes', 'POSNOTE769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)'); sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', 'pos-769-note', text, 1); }, sql => JSON.stringify(sql.exec('SELECT note FROM reminder_notes').toArray()));
+positiveStore('thread_topic_index', 'POSTOPIC769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS thread_topic_index (user_id TEXT NOT NULL, topic TEXT NOT NULL, thread_id TEXT NOT NULL, last_user_message_at TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, PRIMARY KEY (user_id, topic, thread_id))'); sql.exec('INSERT INTO thread_topic_index (user_id, topic, thread_id, last_user_message_at, is_active, updated_at) VALUES (?,?,?,?,?,?)', 'u', text, 't1', 't', 1, 't'); }, sql => JSON.stringify(sql.exec('SELECT topic FROM thread_topic_index').toArray()));
+positiveStore('memory_blocks', 'POSBLOCK769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS memory_blocks (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, hall_type TEXT NOT NULL, content TEXT NOT NULL, decision_log TEXT NOT NULL DEFAULT \'[]\', confidence REAL NOT NULL, created_at TEXT NOT NULL, valid_from TEXT NOT NULL, source_trust TEXT NOT NULL)'); sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'pos-769-block', 'u', 'facts', text, '[]', 0.9, 't', 't', 'user_stated'); }, sql => JSON.stringify(sql.exec('SELECT content, decision_log FROM memory_blocks').toArray()));
+positiveStore('memory_inbox', 'POSINBOX769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS memory_inbox (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, operation TEXT NOT NULL, hall TEXT NOT NULL, claim TEXT NOT NULL, content TEXT NOT NULL, proposed_pattern_id TEXT NOT NULL, observed_at TEXT NOT NULL, source_trust TEXT NOT NULL, rationale TEXT NOT NULL, source TEXT NOT NULL)'); sql.exec('INSERT INTO memory_inbox (id, user_id, operation, hall, claim, content, proposed_pattern_id, observed_at, source_trust, rationale, source) VALUES (?,?,?,?,?,?,?,?,?,?,?)', 'pos-769-inbox', 'u', 'ADD', 'facts', text, text, 'p', 't', 'user_stated', 'r', 's'); }, sql => JSON.stringify(sql.exec('SELECT claim, content FROM memory_inbox').toArray()));

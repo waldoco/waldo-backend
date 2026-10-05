@@ -49,6 +49,12 @@ export const cleanAliases = (raw: readonly string[] | undefined): string | null 
 
 // Case-insensitive literal replace: the forgotten text may appear with different casing in
 // other stores, and SQLite replace() alone would leave those variants behind.
+// Owner-DO free-text stores: in the selector inventory, redacted with the same case-insensitive literal as every other store, and read back.
+// trace_log.note and runtime_trace.detail_json are diagnostic logs whose hop names would match short topics, so they stay tracked as gaps in forget-store-table.
+const LITERAL_REDACTED_STORES = [
+  ['thread_topic_index', ['topic']], ['memory_blocks', ['content', 'decision_log']], ['memory_inbox', ['claim', 'content']], ['patrol_log', ['summary']],
+  ['goals', ['description', 'baseline', 'target', 'progress']],
+] as const;
 const ciRedact = (value: string, needle: string, marker: string): string =>
   needle ? value.replace(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), marker) : value;
 
@@ -404,6 +410,17 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             if (changed || redactedText !== row.text) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', changed ? redactedChanges : row.changes, redactedText, row.id);
           }
         });
+        for (const [table, columns] of LITERAL_REDACTED_STORES) attempt(table, () => {
+          if (!tableExists(sql, table)) return;
+          for (const column of columns) {
+            if (!sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) continue;
+            for (const row of sql.exec<{ rowid: number; value: string | null }>(`SELECT rowid, ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL`).toArray()) {
+              if (typeof row.value !== 'string') continue;
+              const next = ci(row.value);
+              if (next !== row.value) { sql.exec(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`, next, row.rowid); tally('redacted', table); }
+            }
+          }
+        });
         if (tableExists(sql, 'reminder_notes')) attempt('reminder_notes', () => {
           for (const row of sql.exec<{ id: string; note: string }>('SELECT id, note FROM reminder_notes').toArray()) {
             const note = ci(row.note);
@@ -533,6 +550,13 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           // unverifiable: it lands in failed and the source stays purging.
           if (rows.some((row) => parsedJson(row.changes) === undefined)) throw new Error('update_cards changes unparseable');
         });
+        for (const [table, columns] of LITERAL_REDACTED_STORES) attempt(table, () => {
+          if (!tableExists(sql, table)) return;
+          for (const column of columns) {
+            if (!sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) continue;
+            add(table, sql.exec<{ value: string | null }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL`).toArray().filter(row => typeof row.value === 'string' && exact(row.value)).length);
+          }
+        });
         if (tableExists(sql, 'reminder_notes')) attempt('reminder_notes', () => add('reminder_notes', sql.exec<{ note: string }>('SELECT note FROM reminder_notes').toArray().filter(row => exact(row.note)).length));
         if (tableExists(sql, 'background_runs')) attempt('background_runs', () => add('background_runs', sql.exec<{ summary: string }>('SELECT summary FROM background_runs').toArray().filter(row => exact(row.summary)).length));
         if (hasSourceLoops) attempt('loops', () => add('loops', sql.exec<{ title: string }>('SELECT l.title FROM loops l').toArray().filter(row => exact(row.title)).length));
@@ -586,6 +610,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       collect('loops', 'id', ['title']);
       collect('background_runs', 'id', ['summary']);
       collect('reminder_notes', 'id', ['note']);
+      // The selector sees these stores, so an incidental short-topic match is simply not selected and never locks the owner out; selected spans are redacted and read back.
+      for (const [table, columns] of LITERAL_REDACTED_STORES) {
+        const available = tableExists(sql, table) ? columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) : [];
+        if (available.length) collect(table, 'rowid', available);
+      }
       // These existing cleanup projections are outside the bounded selector's
       // source contract. Preserve their originals if they still carry the topic.
       for (const [table, columns] of [
@@ -594,9 +623,6 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         ['day_plan', ['reason']],
         ['run_candidates', ['candidate_json']], ['outbox', ['payload']],
         ['held_candidates', ['candidate_json']], ['schedule', ['payload_json']],
-        // Owner-DO free-text stores with no redactor yet: a topic still present keeps the forget incomplete instead of clearing it. trace_log.note and runtime_trace.detail_json are diagnostic logs whose hop names would match short topics case-insensitively, so they stay tracked as gaps in forget-store-table, not here.
-        ['thread_topic_index', ['topic']], ['memory_blocks', ['content', 'decision_log']], ['memory_inbox', ['claim', 'content']], ['patrol_log', ['summary']],
-        ['goals', ['description', 'baseline', 'target', 'progress']], ['standing_orders', ['scope', 'escalation']],
       ] as const) {
         if (!tableExists(sql, table)) continue;
         const available = columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length);
