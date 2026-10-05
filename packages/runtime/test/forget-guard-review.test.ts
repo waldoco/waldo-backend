@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from 'cloudflare:test';
-import { expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { claimStore } from '../src/memory/claims';
 import { hidesTopic } from '../src/memory/forget-guard';
 import { conversationForgetSources } from '../src/channels/conversation-store';
@@ -57,4 +57,19 @@ it('conversation JSON-shaped payload with an escaped topic still holds, includin
   expect(await convHold('review-conv-json', '{"t":"DLD-\\u0032026 secret"}', 'DLD-2026 secret')).toBe(true);
   expect(await convHold('review-conv-json5', '{t:"DLD-\\u0032026 secret"}', 'DLD-2026 secret')).toBe(true);
   expect(await convHold('review-conv-array', '["DLD-\\u0032026 secret"]', 'DLD-2026 secret')).toBe(true);
+});
+
+describe('hidesTopic unicode escapes', () => {
+  it('holds when the escape spells a character the topic contains, in either case', async () => {
+    const { hidesTopic } = await import('../src/memory/forget-guard');
+    expect(hidesTopic('x \\u0057 y', 'code word')).toBe(true);
+    expect(hidesTopic('x \\u0043 y', 'code word')).toBe(true);
+    expect(hidesTopic('x \\ud83d y', 'plan \u{1F600}')).toBe(true);
+  });
+  it('lets an escape for a character the topic lacks pass, and still holds a malformed one', async () => {
+    const { hidesTopic } = await import('../src/memory/forget-guard');
+    expect(hidesTopic('moved \\u2013 see agenda', 'code word')).toBe(false);
+    expect(hidesTopic('moved \\u20 see agenda', 'code word')).toBe(true);
+    expect(hidesTopic('C:\\Users', 'code word')).toBe(true);
+  });
 });
