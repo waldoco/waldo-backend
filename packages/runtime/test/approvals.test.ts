@@ -612,3 +612,15 @@ it('approved email propagates ledger intent and pending proxy outcome remains un
   expect(state.storage.sql.exec<{status:string}>('SELECT status FROM ledger WHERE id=?',id).one().status).toBe('uncertain');await desk.decide(id,'a','fixture');expect(sends).toBe(1);
  });
 });
+
+describe('task source card ledger write', () => {
+  it('names its columns, so a ledger table with an extra column still takes the card', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-task-source-extra-column'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec('CREATE TABLE ledger (id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL, undo_json TEXT, created_at INTEGER NOT NULL, decided_at INTEGER, extra TEXT)');
+      const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => ({ result: { message_id: 1 } }), google: async () => null, newId: () => 'x1', now: () => 1000, timezone: 'UTC', log: () => {} });
+      const id = await desk.proposeTaskSources({ ownerKey: 'o', taskId: 't', revision: 1, nonce: 'n1', action: 'change', sources: ['mail', 'calendar'], expiresAt: 10_000_000 } as never);
+      expect(state.storage.sql.exec<{ kind: string }>('SELECT kind FROM ledger WHERE id = ?', id).one().kind).toBe('task_sources');
+    });
+  });
+});
