@@ -109,6 +109,12 @@ export const projectionRawHit = (column: string) => `${column} LIKE ? ESCAPE '\\
 export const projectionValueHit = (column: string) => `EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE type = 'text' AND value LIKE ? ESCAPE '\\')`;
 export const projectionKeyHit = (column: string) => `EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE key LIKE ? ESCAPE '\\')`;
 export const projectionPredicate = (columns: readonly string[]) => columns.map(column => `(${projectionRawHit(column)} OR ${projectionValueHit(column)} OR ${projectionKeyHit(column)})`).join(' OR ');
+// The purge exit and the projection hold must agree: a value is tied to the topic when its raw text OR any decoded JSON string value or key carries the prefilter prefix (JSON escapes a quote or backslash, so the raw text alone is not enough).
+const prefixTied = (value: string, prefix: string): boolean => {
+  if (value.toLowerCase().includes(prefix)) return true;
+  const leaves = jsonLeaves(value);
+  return leaves === 'unreadable' || (leaves !== null && leaves.some(leaf => leaf.toLowerCase().includes(prefix)));
+};
 // Verifies one projection column value with the real guard: the raw text, a decoded JSON string value or a JSON key carries the topic. An unreadable JSON value cannot be proven clean, so it holds.
 export const projectionValueHolds = (value: unknown, topic: string): boolean => {
   // Only NULL is provably empty; a BLOB or number cannot be proven clean here, so it holds.
@@ -460,7 +466,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             // while the join keys other consumers rely on (source, kind, source_ref, source_message_id) and the send state stay.
             // Splits that break the prefix itself are not detected here (the same limit as the hold; tracked in #794).
             const prefix = text.slice(0, LIKE_PREFILTER_MAX).toLowerCase();
-            const stillTied = topics.length > 0 && prefix.length > 0 && [redactedChanges, redactedText ?? ''].some(value => value.toLowerCase().includes(prefix));
+            const stillTied = topics.length > 0 && prefix.length > 0 && [redactedChanges, redactedText ?? ''].some(value => prefixTied(value, prefix));
             if (stillTied) {
               const KEEP = ['source', 'kind', 'source_ref', 'source_message_id'];
               const blank = (node: unknown): unknown => Array.isArray(node) ? node.map(blank)

@@ -2336,3 +2336,19 @@ it('OWNER-TURN a fragment-split card keeps a pending topic incomplete across evi
     state.storage.deleteAlarm();
   });
 });
+
+it.each([['quote', 'the "secret" code word that I told you about earlier today is ZEBRA-COBALT'], ['backslash', 'the C:\\secret code word that I told you about earlier today is ZEBRA-COBALT']] as const)('REPRO: a topic with a %s inside its first 40 chars, split in a card, is blanked as well as held', async (kind, topic) => {
+  const label = `forget-update-cards-escape-${kind}`;
+  await admittedTurn(label, 153450, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify([{ detail: topic.slice(0, 46) }, { detail: topic.slice(46) }]));
+    const store = claimStore(sql);
+    expect(store.forgetSources(topic, true).incomplete).toBe(true);
+    store.purge([], new Date().toISOString(), [topic]);
+    expect(sql.exec<{ changes: string }>('SELECT changes FROM update_cards').one().changes).not.toContain('COBALT');
+    expect(store.forgetSources(topic, true).incomplete).toBe(false);
+    state.storage.deleteAlarm();
+  });
+});
