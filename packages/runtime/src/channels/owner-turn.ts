@@ -563,7 +563,9 @@ export const createOwnerResponder = (
             canonicalPrompt = composition.prompt;
             composedSourceRevision = sourceSnapshot?.revision;
           }
-          const entries = forgettingState?.incompleteTopics().length ? [...request.messages.slice(-1)] : interactiveSource && requireTaskScope && !sourceFamilyAvailable('local') ? [...taskHistoryMessages(tree, trace, sourceSnapshot?.startRef ?? trace)] : [...request.messages];
+          const incompleteTopics = forgettingState?.incompleteTopics() ?? [];
+          // History stays available except entries that literally carry a topic whose forgetting is incomplete (the same exact-literal test the forget itself certifies with); the current message always stays. Reference: owner-turn standing-order and task-context scoping below.
+          const entries = incompleteTopics.length ? [...request.messages.filter((message, index) => index === request.messages.length - 1 || !incompleteTopics.some(topic => asciiLiteralIncludes(message.content, topic)))] : interactiveSource && requireTaskScope && !sourceFamilyAvailable('local') ? [...taskHistoryMessages(tree, trace, sourceSnapshot?.startRef ?? trace)] : [...request.messages];
           const ownerCurrentText = (entries[entries.length - 1]?.content ?? '') + added;
           if (turnReplyContext) entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + '\n\n' + turnReplyContext };
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };

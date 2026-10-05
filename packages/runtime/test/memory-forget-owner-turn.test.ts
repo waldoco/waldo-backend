@@ -310,6 +310,19 @@ it('an incomplete forget names the gate that held in the memory hop, with counts
     expect(JSON.stringify(seen.logs)).not.toContain('Keep tea');
   }, undefined, undefined, sql => episodeIndex(sql).add('why-src', 'owner', fact, 1));
 });
+it('while a forget is incomplete, earlier history that does not carry the topic stays in the reply context and entries that do are withheld', async () => {
+  const topic = 'HIST-761-TOPIC';
+  await session('forget-history-scope', async (turn, store, responder) => {
+    await turn('tg-hist-plain', 'My standup is at 9:15 with Priya (HIST-761-STANDUP).', ops({}));
+    await turn('tg-hist-forget', `Forget only ${topic} it is the cobalt plan.`, ops({ forget_topic: topic }));
+    expect(store.incompleteTopics()).toEqual([topic]);
+    await responder.respond({ traceId: 'tg-hist-next', conversationRef: 'owner', surface: 'telegram', text: 'Which standup did I mean?', memoryWrites: false }, (_n, w) => w());
+    const input = seen.replyInputs.at(-1)!;
+    expect(input).toContain('HIST-761-STANDUP');
+    expect(input).toContain('Which standup did I mean?');
+    expect(input).not.toContain(topic);
+  });
+});
 it('the reply instructions carry the reason class of an incomplete forget, without topic text or counts', async () => {
   const topic = 'WHY4-757-TOPIC'; const fact = `${topic} likes cobalt paper`;
   await session('forget-why-reply', async (turn, store) => {
