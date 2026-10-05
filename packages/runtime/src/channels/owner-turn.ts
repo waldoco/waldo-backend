@@ -129,7 +129,8 @@ export const createOwnerResponder = (
   probeGuard?: { suppressMemory: boolean; stripLiveTools: boolean },
   // A7: the owner's standing orders join every reply's system prompt (read-only context,
   // owner-authored via owner-confirmed turns). The supplier returns '' when none exist.
-  standingOrders?: () => string,
+  // Called with 'orders' for the forget check (owner-authored orders only); with no argument it returns orders plus what Waldo is on (open loops), the system-prompt context. The prompt section is withheld while an incomplete forget topic matches it.
+  standingOrders?: (only?: 'orders') => string,
   // A5b: delegate children record background-run rows (parent = this turn's trace). Optional:
   // the console and probes construct turns without the owner DO's run book.
   runs?: RunBook,
@@ -392,7 +393,7 @@ export const createOwnerResponder = (
     const more = !!('more' in local && local.more) || !!(conversation && 'more' in conversation && conversation.more) || !!(ledger && 'more' in ledger && ledger.more);
     const rows = [...local.sources, ...conversation?.sources ?? [], ...ledger?.sources ?? []];
     const snapshot = batch ? forgetSourceBatch(topic, rows, more) : forgetSnapshot(topic, rows);
-    return { ...snapshot, more: 'more' in snapshot && snapshot.more === true, incomplete: snapshot.incomplete || local.incomplete || (!!store && !conversation) || !!conversation?.incomplete || (!!cleanupLedger && !ledger) || !!ledger?.incomplete || !!standingOrders?.().toLowerCase().includes(topic.toLowerCase()) };
+    return { ...snapshot, more: 'more' in snapshot && snapshot.more === true, incomplete: snapshot.incomplete || local.incomplete || (!!store && !conversation) || !!conversation?.incomplete || (!!cleanupLedger && !ledger) || !!ledger?.incomplete || !!standingOrders?.('orders').toLowerCase().includes(topic.toLowerCase()) };
   };
   const cleanupRetained = async (texts: readonly string[], ids: readonly number[], topics: readonly string[], coveredTopic?: string) => {
     let rewritten = 0;
@@ -795,11 +796,11 @@ export const createOwnerResponder = (
           rows.push(...requestSources());
           const more = local.more || !!(conversation && 'more' in conversation && conversation.more) || !!ledger?.more;
           const snapshot = forgetSourceBatch(topic, rows, more);
-          const standingHit = !!standingOrders?.().toLowerCase().includes(topic.toLowerCase());
+          const standingHit = !!standingOrders?.('orders').toLowerCase().includes(topic.toLowerCase());
           const heldStanding = (local.held ?? []).includes('standing_orders') || standingHit;
           // Named only when standing orders are the sole cause; any other incompleteness keeps the generic class so an unreadable-copy reason is never hidden.
           forgetHeld = heldStanding && !snapshot.incomplete && !local.otherIncomplete && !(local.incomplete && !local.held?.length) && !ledger?.incomplete && !conversation?.incomplete ? ['standing_orders'] : [];
-          return { ...snapshot, incomplete: snapshot.incomplete || local.incomplete || !!ledger?.incomplete || !!conversation?.incomplete || !!standingOrders?.().toLowerCase().includes(topic.toLowerCase()) };
+          return { ...snapshot, incomplete: snapshot.incomplete || local.incomplete || !!ledger?.incomplete || !!conversation?.incomplete || !!standingOrders?.('orders').toLowerCase().includes(topic.toLowerCase()) };
         };
         let forgetHeld: readonly string[] = [];
         const supplied = await gather();

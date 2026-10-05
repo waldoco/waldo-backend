@@ -93,3 +93,16 @@ describe('update card feedback', () => {
     });
   });
 });
+
+describe('openLoopsPrompt', () => {
+  it('lists only open owner or agent made loops, with due, and is empty when none', async () => {
+    const { openLoopsPrompt } = await import('../src/channels/loops');
+    const rows: Array<Record<string, unknown>> = [];
+    const book = { list: () => rows } as never;
+    expect(openLoopsPrompt(book, 'UTC')).toBe('');
+    rows.push({ id: 'a1', title: 'Send the shortlist', due: '2026-10-09T10:00', source_ref: null }, { id: 'b2', title: 'From mail', due: null, source_ref: 'gmail:x' });
+    const text = openLoopsPrompt(book, 'UTC');
+    expect(text).toContain('Send the shortlist (due 2026-10-09 10:00) [a1]');
+    expect(text).not.toContain('From mail');
+  });
+});

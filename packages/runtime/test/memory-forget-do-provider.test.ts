@@ -1835,3 +1835,28 @@ it('ADVERSARIAL cleanup projection deep allowed slash escape must hold', async (
     state.storage.deleteAlarm(); expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
   });
 });
+
+it('LEDGER open loops reach the interactive reply, mail-linked loops stay out, and the section is withheld while a matching forget is incomplete', async () => {
+  const name = 'ledger-open-loops'; const topic = 'LEDGERTOPIC';
+  await admittedTurn(name, 160000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(name), (_instance, state) => {
+    const book = loopBook(state.storage.sql, { now: () => Date.now(), newId: (() => { let n = 0; return () => `lg${++n}`; })() });
+    book.open({ title: 'Send the venue shortlist', due: null });
+    const mail = book.open({ title: 'Reply to the landlord from mail', due: '2026-10-09T10:00' });
+    state.storage.sql.exec('INSERT INTO loop_mail_sources (loop_id, source_ref) VALUES (?, ?)', mail.id, 'gmail:thread:abc');
+    state.storage.deleteAlarm();
+  });
+  await admittedTurn(name, 160001, 'What are you on right now?', ops());
+  expect(request()).toContain('Open loops Waldo is on for the owner');
+  expect(request()).toContain('Send the venue shortlist');
+  expect(request()).not.toContain('Reply to the landlord from mail');
+  await runInDurableObject(stub(name), (_instance, state) => {
+    loopBook(state.storage.sql, { now: () => Date.now(), newId: () => 'lg9' }).open({ title: `Draft the ${topic} note`, due: null });
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  seen.selectorMode = 'invalid';
+  await admittedTurn(name, 160002, 'What are you on right now?', ops());
+  expect(request()).not.toContain('Open loops Waldo is on for the owner');
+  expect(request()).not.toContain('Send the venue shortlist');
+});
