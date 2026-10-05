@@ -19,3 +19,13 @@ it.each(['native','bearer'])('%s local refresh reports only invalid grants to he
   failing=false;await call();expect(health.mock.calls.at(-1)).toEqual(['']);expect(credentials).toEqual(['pinned-refresh','pinned-refresh']);
  }
 });
+import {googleHandlers} from '../src/tools/live/google';
+it('local invalid grant reaches the native auth-failed result while an outage has no reconnect',async()=>{
+ for(const [status,error] of [[400,'invalid_grant'],[503,'temporarily_unavailable'],[401,'invalid_client']] as const){
+  const client=googleClient(app,{refresh_token:'pinned-refresh'},async()=>Response.json({error},{status}));
+  const handler=googleHandlers({client:async()=>client},{propose:async()=>'',proposeSendEmail:async()=>'',record:()=>{}}).find(value=>value.name==='get_tasks')!;
+  const result=await handler.handle({status:'all',limit:1},{} as never);
+  expect(result).toMatchObject({ok:false,code:status===400?'auth_failed':'transient'});
+  if(status===400)expect(result).toHaveProperty('connect.reason','reauth_needed');else expect(result).not.toHaveProperty('connect');
+ }
+});

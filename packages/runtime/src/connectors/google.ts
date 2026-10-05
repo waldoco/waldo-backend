@@ -91,15 +91,6 @@ export function googleConsentUrl(app: GoogleApp, state: string, codeChallenge: s
   return url.toString();
 }
 
-export type GoogleTokenFailure = 'auth' | 'transient' | 'configuration' | 'protocol';
-export class GoogleTokenError extends Error {
-  readonly status: number;
-  constructor(readonly kind: GoogleTokenFailure, readonly providerStatus?: number) {
-    super(`google token ${kind} failure`);
-    this.name = 'GoogleTokenError';
-    this.status = kind === 'auth' ? 401 : kind === 'transient' && providerStatus && (providerStatus === 429 || providerStatus >= 500) ? providerStatus : 502;
-  }
-}
 const tokenFailure = (status: number, code?: unknown): GoogleTokenError => {
   if (status === 429 || status >= 500 || code === 'temporarily_unavailable' || code === 'server_error') return new GoogleTokenError('transient', status);
   if (code === 'invalid_grant') return new GoogleTokenError('auth', status);
@@ -159,6 +150,14 @@ export class GoogleError extends Error {
   constructor(readonly status: number, message: string, readonly reason?: GoogleErrorReason) { super(message); }
 }
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+export type GoogleTokenFailure = 'auth' | 'transient' | 'configuration' | 'protocol';
+export class GoogleTokenError extends GoogleError {
+  constructor(readonly kind: GoogleTokenFailure, readonly providerStatus?: number) {
+    super(kind === 'auth' ? 401 : kind === 'transient' && providerStatus && (providerStatus === 429 || providerStatus >= 500) ? providerStatus : 502, `google token ${kind} failure`);
+    this.name = 'GoogleTokenError';
+  }
+}
+
 export const googleErrorReason = (body: unknown): GoogleErrorReason | undefined => {
   const error = isObject(body) && isObject(body.error) ? body.error : undefined;
   const info = Array.isArray(error?.details) ? error.details.find((d) => isObject(d) && d['@type'] === 'type.googleapis.com/google.rpc.ErrorInfo' && d.domain === 'googleapis.com') : undefined;
