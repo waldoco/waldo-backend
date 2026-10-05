@@ -143,14 +143,14 @@ describe('runToolLoop exit classification', () => {
     expect(exit).toBe('budget_exhausted');
   });
 
-  it('settles withdrawn when the failure streak withdraws the tools', async () => {
+  it('settles budget_exhausted after failed rounds consume the hard budget', async () => {
     let exit: LoopExit | undefined;
     await runToolLoop({
       handlers: [stubRead('web_search')], ctx, maxSteps: 25,
       onSettle: (settled) => { exit = settled; },
       step: async (tools) => (tools ? { text: '', tool_calls: [{ call_id: `x${Math.random()}`, name: 'launch_rocket', arguments: `{"n":${Math.random()}}` }] } : { text: 'gave up.' }),
     });
-    expect(exit).toBe('withdrawn');
+    expect(exit).toBe('budget_exhausted');
   });
 });
 

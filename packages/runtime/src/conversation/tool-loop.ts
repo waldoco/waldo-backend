@@ -33,40 +33,14 @@ export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherCont
     parameters: toolParameters(handler.schema),
   }));
 
-// The model calls tools until it answers. maxSteps is a safety budget, not a plan (see
-// docs/planning/TOOL_LOOP_BUDGET.md). The loop also stops offering tools after
-// FAILED_ROUNDS_LIMIT rounds in a row where every call failed. Once tools are withdrawn the
-// model must answer, so a turn always ends in words. Identical repeated calls are refused.
-export const FAILED_ROUNDS_LIMIT = 3;
-
-// Warn-first escalation: a silent hard stop at maxSteps surprises the model mid-plan, so
-// results delivered inside the last WARN_WINDOW_ROUNDS rounds carry an explicit
-// remaining-rounds notice and the model can close in words before tools are withdrawn.
+// The model judges progress within hard round/shared budgets and run-scope fences.
+// Settled exact calls stay deduped; read-only transient failures get bounded recovery.
+export const READ_ATTEMPT_LIMIT = 3;
 export const WARN_WINDOW_ROUNDS = 5;
 
-// Semantic no-progress detection: byte-exact dedupe misses the same call re-issued with fresh
-// request ids, cursors or timestamps in args, or answered with fresh ids/timestamps in the
-// result. Volatile spans - ISO-8601 timestamps, uuid-shaped ids, and 20+ char token runs that
-// carry a digit, underscore, or hyphen (cursors, request ids) - are blanked before hashing.
-// Pure-alphabetic long words (ordinary search terms like electroencephalography) survive, so
-// genuinely different calls never collide; small integers (page numbers, amounts) survive too.
-// Once the same stabilized (tool, args, result) triple appears NO_PROGRESS_LIMIT times in a
-// turn, that stabilized (tool, args) pair is refused pre-dispatch until a successful gated
-// mutation opens a new state epoch and clears it.
-export const NO_PROGRESS_LIMIT = 3;
-
-// Token shapes only: dates, UUIDs, and 20+ char runs carrying digit/underscore evidence
-// (cursors, ids, keys). Hyphenated natural-language phrases carry no such evidence and must
-// never blank - 'post-traumatic-stress-disorder' and 'large-language-model-evaluation' are
-// distinct searches, not volatile tokens.
-const VOLATILE_SPANS = /(\d{4}-\d{2}-\d{2}[T ][0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)|([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})|((?=[\w-]*[\d_])[\w-]{20,})/gi;
-const stabilize = (text: string): string => text.replace(VOLATILE_SPANS, '#');
-
-// How the loop ended, for callers that hand a child loop's outcome back to a parent (subagent
-// orchestration spec, owner-delegated 2026-09-26): 'completed' = the model closed in words while
-// tools were still offered; 'budget_exhausted' = maxSteps withdrew them; 'withdrawn' = the
-// failure streak did. Hermes propagates the same distinction as exit_reason
-// (tools/delegate_tool_child_run.py:586,602).
+// 'completed' means the model closed while resources remained. 'budget_exhausted'
+// means the loop withdrew tools at its local/shared cap. Keep 'withdrawn' in the
+// caller contract for existing child outcome consumers.
 export type LoopExit = 'completed' | 'budget_exhausted' | 'withdrawn';
 
 
@@ -89,52 +63,43 @@ export async function runToolLoop(input: Readonly<{
 }>): Promise<string> {
   const tools = toolDefinitions(input.handlers);
   const turns: LLMToolTurn[] = [];
-  const seen = new Set<string>();
+  const seen = new Map<string, Awaited<ReturnType<typeof dispatch>>>();
+  const readAttempts = new Map<string, number>();
   const offered = new Set<string>();
-  const noProgressTriples = new Map<string, number>();
-  const noProgressBlocked = new Set<string>();
   // Delivery URLs returned by successful tool receipts this loop; the final reply may show no other artifact link.
   const receiptUrls = new Set<string>();
-  // Mutation-resets-streak: a state change landing between repeats makes the next identical
-  // call a new experiment, not a loop. Waldo's mutation class is the autonomy-gated/privileged
-  // set (ADR-0049: direct external mutation or send) plus desk-routed state mutations
-  // (mutates_state: the live handlers are desk-routed, not privilege-gated). A successful
-  // gated or mutating call clears both
-  // no-progress maps and read-side exact-call dedupe (a new state epoch); duplicate protection
-  // for mutations themselves is retained, so a write or send can never be re-fired by a reset.
+  // A landed mutation opens a new read epoch. Mutation replay keys and transient
+  // attempt counts survive epoch resets, so a state change cannot re-fire a write
+  // or replenish an identical read's recovery allowance.
   const mutationTools = new Set(input.handlers.filter((h) => h.autonomy_gated || h.mutates_state).map((h) => h.name));
-  let failedRounds = 0;
   let exit: LoopExit = 'completed';
   for (let round = 0; ; round += 1) {
-    const offer = tools.length > 0 && round < input.maxSteps && failedRounds < FAILED_ROUNDS_LIMIT
+    const offer = tools.length > 0 && round < input.maxSteps
       && (input.budget === undefined || input.budget.remaining > 0);
     if (!offer && tools.length > 0 && exit === 'completed') {
-      exit = round >= input.maxSteps || (input.budget !== undefined && input.budget.remaining <= 0) ? 'budget_exhausted' : 'withdrawn';
+      exit = 'budget_exhausted';
     }
     if (offer && input.budget !== undefined) input.budget.remaining -= 1;
     input.ctx.runScope?.admit();
     const response = await input.step(offer ? tools : undefined, turns);
     input.ctx.runScope?.admit();
-    if (response.tool_calls === undefined) {
+    if (response.tool_calls === undefined || !offer) {
       input.onSettle?.(exit);
-      return guardArtifactLinks(response.text, receiptUrls);
+      return guardArtifactLinks(response.text || (exit === 'budget_exhausted' ? 'Tool budget exhausted; no further tools were run.' : ''), receiptUrls);
     }
-    let anyOk = false;
-    let anyGenuineFailure = false;
     let firstCall = true;
     for (const call of response.tool_calls) {
       input.ctx.runScope?.admit();
       const started = Date.now();
       const key = `${call.name}\u0000${call.arguments}`;
-      const stablePair = `${call.name}\u0000${stabilize(call.arguments)}`;
-      // Harness refusals carry a typed code and never feed FAILED_ROUNDS_LIMIT: a refusal is the
-      // harness declining a redundant call, not a tool failure. Counting refusals lets a cheap
-      // refusal feed the streak that fires the next, harder one.
-      const result = seen.has(key)
-        ? { ok: false, error: 'Same call already made this turn; use its result.', code: 'repeat_refusal' as const }
-        : noProgressBlocked.has(stablePair)
-          ? { ok: false, error: 'No progress: this call keeps returning the same outcome apart from volatile ids/timestamps; stop retrying it and answer with what you have.', code: 'no_progress' as const }
-          : await dispatch(call, input);
+      const previous = seen.get(key);
+      // Preserve settled failures verbatim, including auth errors and the last
+      // transient error at the recovery cap. Replaying them performs no I/O.
+      const result = previous
+        ? previous.ok
+          ? { ok: false, error: 'Same call already made this turn; use its result.', code: 'repeat_refusal' as const }
+          : previous
+        : await dispatch(call, input);
       input.ctx.runScope?.admit();
       if (!result.ok && result.connect) {
         const offerKey = `${result.connect.service}:${result.connect.reason}`;
@@ -144,14 +109,18 @@ export async function runToolLoop(input: Readonly<{
           try { await input.onConnect?.(intent); } catch { /* an offer failure must not break the turn */ }
         }
       }
-      seen.add(key);
+      const mutation = mutationTools.has(call.name as never);
+      if (!previous && !mutation) readAttempts.set(key, (readAttempts.get(key) ?? 0) + 1);
+      if (mutation || result.ok || result.code !== 'transient' || (readAttempts.get(key) ?? 0) >= READ_ATTEMPT_LIMIT) {
+        seen.set(key, result);
+      }
       const receipt = receiptUrl(call.name, result);
       if (receipt !== null) receiptUrls.add(receipt);
       if (result.ok && mutationTools.has(call.name as never)) {
-        noProgressTriples.clear();
-        noProgressBlocked.clear();
-        for (const seenKey of seen) {
-          if (!mutationTools.has(seenKey.slice(0, seenKey.indexOf('\u0000')) as never)) seen.delete(seenKey);
+        for (const [seenKey, settled] of seen) {
+          const exhaustedRead = !settled.ok && settled.code === 'transient'
+            && (readAttempts.get(seenKey) ?? 0) >= READ_ATTEMPT_LIMIT;
+          if (!mutationTools.has(seenKey.slice(0, seenKey.indexOf('\u0000')) as never) && !exhaustedRead) seen.delete(seenKey);
         }
       }
       // Turn taint accumulation (ADR-0049): a result stamped external taints the rest of the
@@ -162,13 +131,7 @@ export async function runToolLoop(input: Readonly<{
       if ((result as { source_taint?: 'external' | null }).source_taint === 'external') {
         (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint = 'external';
       }
-      if (!noProgressBlocked.has(stablePair)) {
-        const triple = `${stablePair}\u0000${stabilize(JSON.stringify(result))}`;
-        const hits = (noProgressTriples.get(triple) ?? 0) + 1;
-        noProgressTriples.set(triple, hits);
-        if (hits >= NO_PROGRESS_LIMIT) noProgressBlocked.add(stablePair);
-      }
-      const roundsLeft = input.maxSteps - round - 1;
+      const roundsLeft = Math.min(input.maxSteps - round - 1, input.budget?.remaining ?? Infinity);
       // Notes only exist when the cap exceeds the window (the real 25); tiny test caps that
       // exercise the withdrawal mechanism itself stay note-free. Pressure escalates as the
       // window closes, and the
@@ -181,7 +144,10 @@ export async function runToolLoop(input: Readonly<{
             ? `\n[budget: ${roundsLeft} tool round${roundsLeft === 1 ? '' : 's'} left this turn - wrap up and answer now]`
             : `\n[budget: ${roundsLeft} tool rounds left this turn - start wrapping up]`
         : '';
-      const output = capToolOutput(JSON.stringify(result), input.offload, call.call_id) + budgetNote;
+      const replayNote = previous && !previous.ok
+        ? '\n[repeat: cached failure from this turn; no new tool execution]'
+        : '';
+      const output = capToolOutput(JSON.stringify(result), input.offload, call.call_id) + replayNote + budgetNote;
       turns.push({ call, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
       firstCall = false;
       // The typed code/reason ride the span as their own fields so a failed hop stays
@@ -197,11 +163,7 @@ export async function runToolLoop(input: Readonly<{
         ...(typed?.reason ? { reason: typed.reason } : {}),
         ...(typed?.guard ? { guard: typed.guard } : {}),
       });
-      anyOk ||= result.ok;
-      anyGenuineFailure ||= !result.ok && (result as { code?: string }).code !== 'repeat_refusal' && (result as { code?: string }).code !== 'no_progress';
     }
-    // A refusal-only round neither feeds nor resets the failure streak: nothing failed.
-    failedRounds = anyOk ? 0 : anyGenuineFailure ? failedRounds + 1 : failedRounds;
   }
 }
 
