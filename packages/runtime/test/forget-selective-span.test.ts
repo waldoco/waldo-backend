@@ -263,3 +263,12 @@ it('one ref carrying a matching and a non-matching text is a conflict even when 
   expect(forgetSourceBatch(topic, [{ ref: 'episodes:1:text', text: `${topic} private` }, { ref: 'episodes:1:text', text: 'unrelated text' }]).incomplete).toBe(true);
   expect(forgetSourceBatch(topic, [{ ref: 'episodes:1:text', text: `${topic} private` }, { ref: 'episodes:1:text', text: `${topic} private` }]).incomplete).toBe(false);
 });
+
+it('a ref conflict is found across a batch boundary in either order, and identical duplicates stay valid', () => {
+  const topic = 'BOUNDARY-769';
+  const rows = Array.from({ length: 70 }, (_, i) => ({ ref: `episodes:${i}:text`, text: `${topic} row ${i}` }));
+  expect(forgetSourceBatch(topic, rows).more).toBe(true);
+  expect(forgetSourceBatch(topic, [...rows, { ref: 'episodes:3:text', text: 'a different text' }]).incomplete).toBe(true);
+  expect(forgetSourceBatch(topic, [{ ref: 'episodes:3:text', text: 'a different text' }, ...rows]).incomplete).toBe(true);
+  expect(forgetSourceBatch(topic, [...rows, rows[3]!, rows[69]!]).incomplete).toBe(false);
+});

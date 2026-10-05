@@ -1525,3 +1525,33 @@ it('REVIEW-769 a topic that survives only in an unverified owner store keeps the
     state.storage.deleteAlarm();
   });
 });
+
+const positiveStore = (label: string, topic: string, seed: (sql: SqlStorage, text: string) => void, read: (sql: SqlStorage) => string) =>
+  it(`REVIEW-769 positive cleanup: ${label} is selected, redacted, verified and settles, keeps its unrelated clause, and recall stays open after a second eviction`, async () => {
+    const name = `review-769-positive-${label}`; const clause = `Discuss ${topic} private detail`; const keep = 'keep the tea order';
+    await admittedTurn(name, 140000, 'My unrelated standup is at 09:10 UTC.', ops());
+    await runInDurableObject(stub(name), (_instance, state) => {
+      seed(state.storage.sql, `${clause}; ${keep}`);
+      claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+      state.storage.deleteAlarm();
+    });
+    await evictDurableObject(stub(name));
+    seen.selectedTexts = [clause]; seen.selectorOutputMessage = true;
+    await admittedTurn(name, 140001, 'Continue my requested forgetting.', ops());
+    await runInDurableObject(stub(name), (_instance, state) => {
+      const memory = claimStore(state.storage.sql); const stored = read(state.storage.sql);
+      expect(stored).not.toContain(topic);
+      expect(stored).toContain(keep);
+      expect(memory.incompleteTopics()).toEqual([]);
+      expect(memory.pendingTopics()).toEqual([]);
+      state.storage.deleteAlarm();
+    });
+    await evictDurableObject(stub(name));
+    seen.selectedTexts = []; seen.selectorOutputMessage = false;
+    await admittedTurn(name, 140002, 'What time is my standup?', ops());
+    expect(request()).not.toContain('temporarily limited');
+    await runInDurableObject(stub(name), (_instance, state) => { expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]); expect(read(state.storage.sql)).not.toContain(topic); state.storage.deleteAlarm(); });
+  });
+positiveStore('loops', 'POSLOOP769', (sql, text) => { loopBook(sql, { now: () => Date.now(), newId: () => 'pos-769-loop' }).open({ title: text, due: null }); }, sql => JSON.stringify(sql.exec('SELECT title FROM loops').toArray()));
+positiveStore('background_runs', 'POSBG769', (sql, text) => { sql.exec('INSERT INTO background_runs (id,kind,status,summary,parent_id,started_at,ended_at) VALUES (?,?,?,?,?,?,?)', 'pos-769-bg', 'event', 'completed', text, null, 1, 2); }, sql => JSON.stringify(sql.exec('SELECT summary FROM background_runs').toArray()));
+positiveStore('reminder_notes', 'POSNOTE769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)'); sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', 'pos-769-note', text, 1); }, sql => JSON.stringify(sql.exec('SELECT note FROM reminder_notes').toArray()));
