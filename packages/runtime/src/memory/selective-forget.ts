@@ -88,8 +88,9 @@ export const selectedForgetResult = (topic: string, snapshot: ForgetSnapshot, ra
   for (const row of snapshot.sources) {
     if (spans.some((entry: { ref?: unknown }) => entry.ref === row.ref)) continue;
     if (row.ref.split(':')[0] !== 'episodes') return { reason: `row_without_span:${row.ref.split(':')[0]}` };
+    if (row.text.length > 4096 || /[^\x20-\x7e]/.test(row.text)) return { reason: 'row_without_span:episodes' };
     if (!/[a-z0-9]/.test(row.text.toLowerCase().split(topic.toLowerCase()).join(' '))) continue;
-    if (row.text.length < 12 || row.text.length > 4096 || /[^\x20-\x7e]/.test(row.text)) return { reason: 'row_without_span:episodes' };
+    if (row.text.length < 12) return { reason: 'row_without_span:episodes' };
     texts.push(row.text);
   }
   return { texts: [...new Set(texts)].sort((a, b) => b.length - a.length) };
