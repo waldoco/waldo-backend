@@ -455,11 +455,19 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
               ? ci(row.changes)
               : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
             const changed = parsed === undefined ? redactedChanges !== row.changes : redactedChanges !== JSON.stringify(parsed);
-            // update_cards rows record no source, and a topic can be split or NUL-broken anywhere inside a card, so no per-row test proves a card clean.
-            // A topic purge therefore blanks the text of every card (derived projections: rows and send state stay; the next collection rebuilds them).
-            if (topics.length > 0) {
-              const blanked = parsed === undefined ? JSON.stringify(FORGOTTEN) : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? FORGOTTEN : value);
-              if (blanked !== row.changes || (row.text !== null && row.text !== FORGOTTEN)) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', blanked, row.text === null ? null : FORGOTTEN, row.id);
+            // A card that still carries the topic's prefilter prefix after redaction (a topic split across values or keys after that prefix, or NUL-broken)
+            // cannot be proven clean. update_cards rows record no source, so the scope is that row only: its free text, values and keys are blanked,
+            // while the join keys other consumers rely on (source, kind, source_ref, source_message_id) and the send state stay.
+            // Splits that break the prefix itself are not detected here (the same limit as the hold; tracked in #794).
+            const prefix = text.slice(0, LIKE_PREFILTER_MAX).toLowerCase();
+            const stillTied = topics.length > 0 && prefix.length > 0 && [redactedChanges, redactedText ?? ''].some(value => value.toLowerCase().includes(prefix));
+            if (stillTied) {
+              const KEEP = ['source', 'kind', 'source_ref', 'source_message_id'];
+              const blank = (node: unknown): unknown => Array.isArray(node) ? node.map(blank)
+                : node !== null && typeof node === 'object' ? Object.fromEntries(Object.entries(node).map(([key, child]) => KEEP.includes(key) ? [key, child] : [FORGOTTEN, blank(child)]))
+                : typeof node === 'string' ? FORGOTTEN : node;
+              const blanked = parsed === undefined ? JSON.stringify(FORGOTTEN) : JSON.stringify(blank(parsed));
+              sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', blanked, row.text === null ? null : FORGOTTEN, row.id);
               continue;
             }
             if (changed || redactedText !== row.text) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', changed ? redactedChanges : row.changes, redactedText, row.id);
@@ -718,8 +726,9 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       for (const [table, columns] of PROJECTION_STORES) {
         if (!tableExists(sql, table)) continue;
         const available = columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length);
-        // The SQL predicate only prefilters (a LIKE on the first characters of the topic); a row holds the forget only if the real guard says it carries the topic.
-        if (available.length && sql.exec<Record<string, SqlStorageValue>>(`SELECT ${available.join(', ')} FROM ${table} WHERE ${projectionPredicate(available)}`, ...available.flatMap(() => [like, like, like])).toArray().some(row => available.some(column => projectionValueHolds(row[column], topic)))) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'projection', rows: 1 }); }
+        // Fail closed: a row whose text matches the topic prefilter holds the forget. Verification cannot release it, because a topic split across values or broken by a NUL is not provable clean.
+        // The exit is the purge, which blanks such rows (see the update_cards pass above).
+        if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${projectionPredicate(available)} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'projection', rows: 1 }); }
         if (available.length && !held.includes(table)) {
           guard(table, available, true);
         }

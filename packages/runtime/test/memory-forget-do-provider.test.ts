@@ -2207,7 +2207,7 @@ it('REPRO: a BLOB projection value cannot be proven clean and keeps the hold', a
   });
 });
 
-it('REPRO: /heldrows pages past prefix decoys instead of reporting held with nothing listed', async () => {
+it('/heldrows lists prefix candidates and gives a continue-from note when the scan is partial', async () => {
   const label = 'forget-update-cards-decoys';
   await admittedTurn(label, 153403, 'My unrelated standup is at 09:10 UTC.', ops());
   await runInDurableObject(stub(label), (_instance, state) => {
@@ -2218,19 +2218,19 @@ it('REPRO: /heldrows pages past prefix decoys instead of reporting held with not
     sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify([{ detail: topic }]));
     const out = heldRowShapes(sql, 'update_cards', [{ topic, state: 'incomplete' }], 5, t => claimStore(sql).forgetSources(t, true));
     const text = JSON.stringify(out);
-    expect(text.includes('PARTIAL') || text.includes('#301')).toBe(true);
+    expect(text).toContain('continue with /heldrows update_cards');
   });
 });
 
-it.each(['split', 'nul', 'split20', 'nul20', 'split39'] as const)('REPRO: a topic %s inside a retained card does not leave fragments or an unprovable hold', async kind => {
+it.each(['split', 'nul', 'keyvalue'] as const)('REPRO: a topic %s inside a retained card does not leave fragments or an unprovable hold', async kind => {
   const label = `forget-update-cards-frag-${kind}`;
   await admittedTurn(label, 153410, 'My unrelated standup is at 09:10 UTC.', ops());
   await runInDurableObject(stub(label), (_instance, state) => {
     const sql = state.storage.sql;
     const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
     sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
-    const at = { split: 46, nul: 41, split20: 20, nul20: 20, split39: 39 }[kind];
-    const changes = kind.startsWith('split')
+    const at = { split: 46, nul: 41, keyvalue: 45 }[kind];
+    const changes = kind === 'keyvalue' ? [{ [topic.slice(0, at)]: topic.slice(at) }] : kind.startsWith('split')
       ? [{ detail: topic.slice(0, at) }, { detail: topic.slice(at) }]
       : [{ detail: `${topic.slice(0, at)}\u0000${topic.slice(at)}` }];
     sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify(changes));
@@ -2240,7 +2240,7 @@ it.each(['split', 'nul', 'split20', 'nul20', 'split39'] as const)('REPRO: a topi
     const rows = sql.exec<{ changes: string }>('SELECT changes FROM update_cards ORDER BY id').toArray().map(r => r.changes);
     expect(rows[0]).not.toContain('ZEBRA');
     expect(rows[0]).not.toContain('COBALT');
-    expect(rows[1]).not.toContain('Standup');
+    expect(rows[1]).toContain('Standup moved');
     expect(sql.exec<{ n: number }>('SELECT count(*) AS n FROM update_cards').one().n).toBe(2);
     expect(store.forgetSources(topic, true).incomplete).toBe(false);
     state.storage.deleteAlarm();
@@ -2254,7 +2254,7 @@ it('REPRO: after a real DO eviction the retried topic purge blanks cards and is 
   await runInDurableObject(stub(label), (_instance, state) => {
     const sql = state.storage.sql;
     sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
-    sql.exec('INSERT INTO update_cards (at, day, changes, pushed) VALUES (?,?,?,1)', 1, 'd', JSON.stringify([{ detail: topic.slice(0, 20) }, { detail: topic.slice(20) }]));
+    sql.exec('INSERT INTO update_cards (at, day, changes, pushed) VALUES (?,?,?,1)', 1, 'd', JSON.stringify([{ detail: topic.slice(0, 46) }, { detail: topic.slice(46) }]));
     state.storage.deleteAlarm();
   });
   await evictDurableObject(stub(label));
@@ -2268,6 +2268,44 @@ it('REPRO: after a real DO eviction the retried topic purge blanks cards and is 
       expect(row.pushed).toBe(1);
       expect(store.forgetSources(topic, true).incomplete).toBe(false);
     }
+    state.storage.deleteAlarm();
+  });
+});
+
+it('a blanked card keeps the join keys and send state other consumers use; unrelated cards are untouched', async () => {
+  const label = 'forget-update-cards-joinkeys';
+  await admittedTurn(label, 153430, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    const keep = { source: 'mail', kind: 'new', source_ref: 'mail:thread-1', source_message_id: 'msg-1' };
+    sql.exec('INSERT INTO update_cards (at, day, changes, pushed, folded) VALUES (?,?,?,1,1)', 1, 'd', JSON.stringify([{ ...keep, detail: topic.slice(0, 46) }, { detail: topic.slice(46) }]));
+    const other = JSON.stringify([{ ...keep, source_ref: 'mail:thread-2', source_message_id: 'msg-2', detail: 'Invoice question from the vendor' }]);
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', other);
+    claimStore(sql).purge([], new Date().toISOString(), [topic]);
+    const rows = sql.exec<{ changes: string; pushed: number; folded: number }>('SELECT changes, pushed, folded FROM update_cards ORDER BY id').toArray();
+    const first = JSON.parse(rows[0]!.changes) as Record<string, string>[];
+    expect(first[0]).toMatchObject(keep);
+    expect(rows[0]!.changes).not.toContain('COBALT');
+    expect([rows[0]!.pushed, rows[0]!.folded]).toEqual([1, 1]);
+    expect(rows[1]!.changes).toBe(other);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('a fragment-split card keeps the forget held until the purge blanks it, so an empty-inventory retry cannot settle clean', async () => {
+  const label = 'forget-update-cards-heldbefore';
+  await admittedTurn(label, 153440, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify([{ detail: topic.slice(0, 46) }, { detail: topic.slice(46) }]));
+    const store = claimStore(sql);
+    expect(store.forgetSources(topic, true).incomplete).toBe(true);
+    store.purge([], new Date().toISOString(), [topic]);
+    expect(store.forgetSources(topic, true).incomplete).toBe(false);
     state.storage.deleteAlarm();
   });
 });
