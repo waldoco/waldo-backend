@@ -9,6 +9,8 @@ export const HELD_ROW_TABLES: Readonly<Record<string, readonly string[]>> = {
   run_candidates: ['candidate_json'], held_candidates: ['candidate_json'], outbox: ['payload'], schedule: ['payload_json'],
   claims: ['text', 'evidence', 'aliases', 'source_ref'], thread_topic_index: ['topic'], memory_blocks: ['content', 'decision_log'],
   memory_inbox: ['claim', 'content'], patrol_log: ['summary'], goals: ['description', 'baseline', 'target', 'progress'],
+  // Mirrors the collect() list in claims.ts forgetSources (a hand copy; keep in step with it).
+  episodes: ['text'], constellation_nodes: ['label', 'summary'], loops: ['title'], background_runs: ['summary'], reminder_notes: ['note'],
 };
 
 type Sql = Pick<SqlStorage, 'exec'>;
@@ -53,18 +55,19 @@ export type RealHold = (topic: string) => Readonly<{ incomplete: boolean; heldBy
 // Rows read per call; a larger store continues from the printed rowid.
 export const HELDROWS_SCAN_BUDGET = 200;
 
-export const heldRowShapes = (sql: Sql, table: string, topics: readonly HeldTopic[], limit: number, real: RealHold, from?: number): string => {
+export const heldRowShapes = (sql: Sql, table: string, topics: readonly HeldTopic[], limit: number, real: RealHold, from?: number | 'invalid'): string => {
   const usage = `Usage: /heldrows <${Object.keys(HELD_ROW_TABLES).join(' | ')}> [fromRowid]`;
   const header = `topics ${topics.map((topic, index) => `t${index + 1}=${topic.state}`).join(' ') || 'none pending'}`;
   const verdicts = topics.map(({ topic }, index) => { const r = real(topic); return `t${index + 1}: ${r.incomplete ? 'incomplete' : 'complete'}${r.heldBy?.length ? ` held by ${r.heldBy.map(h => `${h.table}:${h.rule}:${h.rows}`).join(' ')}` : ''}`; });
   if (table === '') return [header, ...verdicts, usage].join('\n');
-  if (!Object.hasOwn(HELD_ROW_TABLES, table)) return usage;
+  if (!Object.hasOwn(HELD_ROW_TABLES, table) || from === 'invalid') return usage;
   const columns = HELD_ROW_TABLES[table]!;
   if (!sql.exec('SELECT 1 FROM sqlite_master WHERE name = ?', table).toArray().length) return `${table}: no such table`;
   const present = columns.filter(column => sql.exec('SELECT name FROM pragma_table_info(?) WHERE name = ?', table, column).toArray().length);
   if (!present.length || !topics.length) return [header, ...verdicts, `${table}: nothing to inspect`].join('\n');
   const first = sql.exec<{ m: number | null }>(`SELECT MIN(rowid) AS m FROM ${table}`).toArray()[0]?.m ?? 0;
   let after = from !== undefined ? from : first - 1;
+  // Budget bounds rows read per call, not bytes or CPU; the header above runs the real forgetSources per topic (the cost of a real forget).
   const selector = present.map(column => `instr(${column}, char(92)) > 0 OR instr(CAST(${column} AS BLOB), x'00') > 0`).join(' OR ');
   const page = sql.exec<Record<string, SqlStorageValue>>(`SELECT rowid AS rid, ${present.join(', ')} FROM ${table} WHERE rowid > ? AND (${selector}) ORDER BY rowid LIMIT ?`, after, HELDROWS_SCAN_BUDGET + 1).toArray();
   const more = page.length > HELDROWS_SCAN_BUDGET;
@@ -77,7 +80,7 @@ export const heldRowShapes = (sql: Sql, table: string, topics: readonly HeldTopi
       if (typeof value !== 'string') continue;
       const escapes = escapeCounts(value); const nul = value.split('\0').length - 1; const shape = jsonShape(value);
       const holds = topics.flatMap(({ topic }, index) => {
-        const rules = [...(hidesTopic(value, topic) ? ['guard_escape'] : []), ...(nul && carriesTopic(value, topic) ? ['nul'] : [])];
+        const rules = [...(hidesTopic(value, topic) ? ['guard_escape'] : []), ...(nul && !hidesTopic(value, topic) && carriesTopic(value, topic) ? ['nul'] : [])];
         return rules.length ? [`t${index + 1}[${rules.join('+')} carries=${carriesTopic(value, topic) ? 1 : 0} val=${shape.values.some(v => carriesTopic(v, topic)) ? 1 : 0} key=${shape.keys.some(k => carriesTopic(k, topic)) ? 1 : 0}]`] : [];
       });
       if (holds.length) parts.push(`${column} len=${value.length} json=${shape.json} depth=${shape.depth} esc[u=${escapes.u} bad_u=${escapes.bad_u} q=${escapes.quote_slash} ctl=${escapes.ctl} other=${escapes.other}] nul=${nul} ${holds.join(' ')}`);
@@ -85,7 +88,7 @@ export const heldRowShapes = (sql: Sql, table: string, topics: readonly HeldTopi
     if (parts.length) lines.push(`#${String(row.rid)} ${parts.join(' | ')}`);
   }
   const summary = `${table}: ${lines.length} listed of ${scanned} rows with a backslash or NUL${more ? `; PARTIAL, continue with /heldrows ${table} ${after}` : ''}`;
-  const out = [header, ...verdicts, summary]; let size = out.join('\n').length; let cut = 0;
+  const out = [header, ...verdicts, summary, 'row listing covers escape/NUL rows only; projection and decoded-leaf holds are count-only in the "held by" lines above']; let size = out.join('\n').length; let cut = 0;
   const reserve = 'truncated: 999 more rows not shown'.length + 1;
   for (const line of lines.slice(0, limit)) {
     if (size + line.length + 1 > HARNESS_MESSAGE_LIMIT - reserve) { cut++; continue; }
