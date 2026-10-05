@@ -817,7 +817,9 @@ export const createOwnerResponder = (
           if (!forgetWhy) forgetWhy = selection === null ? `selector_unavailable(${supplied.sources.length})` : fresh === null || fresh.incomplete ? `fresh_incomplete(${supplied.sources.length})` : `selection_rejected(${supplied.sources.length} sources)`;
           const ops = JSON.parse(raw);
           raw = JSON.stringify({ ...ops, forget_topic: null });
-          memoryReceipts.push(`Requested forgetting is incomplete (reason class: ${forgetWhy.split('(')[0]}). Retained recall is temporarily limited; current requests and ordinary tools remain available. Say the reason class to the owner in plain words (sources_incomplete: some saved copies could not be fully read; selector_unavailable: the span check could not run; fresh_incomplete: a recheck after the check was incomplete; selection_rejected: the checked spans did not cover every copy). Do not claim that every associated fact was erased.`);
+          const reasonClass = forgetWhy.split('(')[0]!;
+          const reasonMeaning: Record<string, string> = { sources_incomplete: 'some saved copies could not be fully read', selector_unavailable: 'the span check could not run', fresh_incomplete: 'a recheck after the span check was incomplete', selection_rejected: 'the checked spans did not cover every copy' };
+          memoryReceipts.push(`Requested forgetting is incomplete (reason class: ${reasonClass}). Retained recall is temporarily limited; current requests and ordinary tools remain available. Say this one reason to the owner in plain words and no other: ${reasonMeaning[reasonClass] ?? 'coverage could not be proven'}. Do not claim that every associated fact was erased.`);
         }
       }
       let purged: readonly string[] = [];
