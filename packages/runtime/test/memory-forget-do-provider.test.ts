@@ -1,4 +1,6 @@
-import { HELDROWS_SCAN_BUDGET, heldRowShapes } from '../src/memory/held-rows';
+import { HELDROWS_SCAN_BUDGET, HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../src/memory/held-rows';
+import { likePrefilter, projectionPredicate } from '../src/memory/claims';
+import { parseHarnessCommand } from '../src/channels/harness';
 import { env, evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
@@ -2000,7 +2002,7 @@ it('HELDROWS verdict is the real forgetSources verdict, and the row shapes it li
     const header = heldRowShapes(sql, '', topics, 25, real);
     for (const [index, { topic: t }] of topics.entries()) {
       const r = real(t);
-      expect(header).toContain(`t${index + 1}: ${r.incomplete ? 'incomplete' : 'complete'}${r.heldBy?.length ? ` held by ${r.heldBy.map(h => `${h.table}:${h.rule}:${h.rows}`).join(' ')}` : ''}`);
+      expect(header).toContain(`t${index + 1}: pending ${r.incomplete ? 'incomplete' : 'complete'}${r.heldBy?.length ? ` held by ${r.heldBy.map(h => `${h.table}:${h.rule}:${h.rows}`).join(' ')}` : ''}`);
     }
     const cards = heldRowShapes(sql, 'update_cards', topics, 25, real);
     expect(cards).toMatch(/#2 changes .*other=1\].*t1\[guard_escape/);
@@ -2053,11 +2055,120 @@ it('HELDROWS agrees with the real heldBy for projection and escape holds, includ
     expect(header).toContain('day_plan:projection');
     expect(header).toContain('episodes:guard_escape');
     const plan = heldRowShapes(sql, 'day_plan', topics, 25, real);
-    expect(plan).toContain('count-only');
     expect(plan).toContain('0 listed of 0 rows');
+    expect(plan).toMatch(/^#\d+ t1\[projection reason len=\d+ json=1 raw=1 val=1 key=0\]/m);
+    expect(plan).not.toContain(topic.toLowerCase() + ' ');
     const episodes = heldRowShapes(sql, 'episodes', topics, 25, real);
     expect(episodes).toMatch(/text len=\d+ json=none .*t1\[guard_escape carries=1/);
     expect(episodes).not.toContain('SECRETEPISODE');
+    state.storage.deleteAlarm();
+  });
+});
+
+it('HELDROWS with 128 pending topics bounds the whole reply to the delivery cap and keeps summary and notices', async () => {
+  const label = 'heldrows-many-topics';
+  await admittedTurn(label, 153360, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
+    for (let index = 0; index < 30; index++) sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', `c${index}`, null, `a\\q ${index} T0001`, 0);
+    const topics = Array.from({ length: 128 }, (_, index) => ({ topic: `T${String(index + 1).padStart(4, '0')}`, state: 'pending' as const }));
+    const real = () => ({ incomplete: true, heldBy: [{ table: 'update_cards', rule: 'projection', rows: 1 }, { table: 'day_plan', rule: 'guard_escape', rows: 3 }] });
+    const header = heldRowShapes(sql, '', topics, 25, real);
+    expect(header.length).toBeLessThanOrEqual(4000);
+    expect(header).toMatch(/\+\d+ more topics/);
+    expect(header).toContain('Usage:');
+    const out = heldRowShapes(sql, 'day_plan', topics, 25, real);
+    // What the owner receives is the first 4000 characters.
+    const delivered = out.slice(0, 4000);
+    expect(out.length).toBeLessThanOrEqual(4000);
+    expect(delivered).toContain('rows with a backslash or NUL');
+    expect(delivered).toContain('row listing: escape/NUL rows');
+    expect(delivered).toMatch(/\+\d+ more topics/);
+    expect(delivered).toMatch(/truncated: \d+ more rows not shown/);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('HELDROWS lists the held rows of a projection hold and a decoded-leaf hold, chosen by the real predicate, with no backslash needed', async () => {
+  const label = 'heldrows-differential-projection'; const topic = 'DIFFPROJTOPIC';
+  await admittedTurn(label, 153370, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    const add = (changes: string, text: string | null) => sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?,?,?,?)', 1, 'd', changes, text);
+    add('[{"note":"nothing here"}]', 'clean card');
+    add(JSON.stringify([{ note: `SECRETVALUE ${topic}` }]), 'a');
+    add(JSON.stringify([{ [topic]: 'x' }]), null);
+    sql.exec('CREATE TABLE IF NOT EXISTS memory_blocks (id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT, decision_log TEXT)');
+    sql.exec('INSERT INTO memory_blocks (content, decision_log) VALUES (?, ?)', JSON.stringify({ note: 'DIFFPROJ\u0054OPIC' }).replace('\u0054', '\\u0054'), null);
+    const real = realOf(state); const topics = [{ topic, state: 'pending' as const }];
+    const verdict = real(topic);
+    expect(verdict.heldBy?.map(h => `${h.table}:${h.rule}`)).toContain('update_cards:projection');
+    const cards = heldRowShapes(sql, 'update_cards', topics, 25, real);
+    expect(cards).toMatch(/^#2 t1\[projection changes len=\d+ json=1 raw=1 val=1 key=0 \| text len=1 json=0 raw=0 val=0 key=0\]/m);
+    expect(cards).toMatch(/^#3 t1\[projection changes len=\d+ json=1 raw=1 val=0 key=1/m);
+    expect(cards).not.toMatch(/^#1 /m);
+    expect(cards).not.toContain('SECRETVALUE');
+    const blocks = heldRowShapes(sql, 'memory_blocks', topics, 25, real);
+    expect(verdict.heldBy?.map(h => h.rule)).toContain('decoded_leaf_or_unreadable');
+    expect(blocks).toMatch(/^#1 t1\[decoded_leaf_or_unreadable content len=\d+\]/m);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('HELDROWS continues projection and decoded-leaf listings from the given rowid, announces a partial leaf scan, and bounds a many-topic reply through the real harness path', async () => {
+  const label = 'heldrows-review-fixes'; const topic = 'LATEHOLDTOPIC';
+  await admittedTurn(label, 153380, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), async (instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec('CREATE TABLE IF NOT EXISTS memory_blocks (id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT, decision_log TEXT)');
+    for (let index = 0; index < HELDROWS_SCAN_BUDGET + 20; index++) sql.exec('INSERT INTO memory_blocks (content) VALUES (?)', JSON.stringify({ n: `plain ${index}` }));
+    sql.exec('INSERT INTO memory_blocks (content) VALUES (?)', '{"note":"LATEHOLD\\u0054OPIC"}');
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    for (let index = 0; index < 3; index++) sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?,?,?,?)', 1, 'd', JSON.stringify([{ n: topic }]), null);
+    const real = realOf(state); const topics = [{ topic, state: 'pending' as const }];
+    // (a) the late decoded-leaf hold is announced as partial, then found by continuing.
+    const first = heldRowShapes(sql, 'memory_blocks', topics, 25, real);
+    const next = Number(/decoded-leaf scan of content PARTIAL, continue with \/heldrows memory_blocks (\d+)/.exec(first)![1]);
+    expect(first).not.toContain('decoded_leaf_or_unreadable content len=');
+    expect(heldRowShapes(sql, 'memory_blocks', topics, 25, real, next)).toMatch(/^#\d+ t1\[decoded_leaf_or_unreadable content/m);
+    // (b) projection rows honor fromRowid.
+    expect(heldRowShapes(sql, 'update_cards', topics, 25, real)).toMatch(/^#1 t1\[projection/m);
+    const later = heldRowShapes(sql, 'update_cards', topics, 25, real, 2);
+    expect(later).not.toMatch(/^#[12] /m);
+    expect(later).toMatch(/^#3 t1\[projection/m);
+    // (d) an omitted topic is never evaluated.
+    const many = Array.from({ length: 128 }, (_, index) => ({ topic: `M${String(index + 1).padStart(4, '0')}`, state: 'pending' as const }));
+    const calls: string[] = [];
+    const out = heldRowShapes(sql, '', many, 25, t => { calls.push(t); return real(t); });
+    const shown = Number(/^t(\d+): .*$/m.exec(out.split('\n').filter(l => /^t\d+:/.test(l)).at(-1)!)![1]);
+    expect(calls.length).toBe(shown);
+    // (c) real caller path: 128 pending topics, then the delivery slice.
+    for (const t of many) sql.exec('INSERT OR IGNORE INTO topic_purge_pending (fingerprint, topic, created_at) VALUES (?,?,?)', `fp-${t.topic}`, t.topic, '2026-10-05T00:00:00Z');
+    sql.exec('UPDATE update_cards SET changes = ?', JSON.stringify([{ n: 'M0001 M0002 M0003 M0004' }]));
+    const reply = (await (instance as unknown as { runHarness(c: unknown, id: number): Promise<string> }).runHarness(parseHarnessCommand('/heldrows update_cards'), 1)).slice(0, HARNESS_MESSAGE_LIMIT);
+    expect(reply).toMatch(/more topics not shown/);
+    expect(reply).toMatch(/projection/);
+    expect(reply).toContain('row listing: escape/NUL rows');
+    state.storage.deleteAlarm();
+  });
+});
+
+it('claims projection predicate equals the previous inline predicate on json value, key and raw rows', async () => {
+  const label = 'projection-predicate-differential';
+  await admittedTurn(label, 153390, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql; const topic = 'PREDTOPIC'; const like = likePrefilter(topic);
+    sql.exec('CREATE TABLE IF NOT EXISTS pd (id INTEGER PRIMARY KEY, a TEXT, b TEXT)');
+    const rows: Array<[string | null, string | null]> = [[`raw ${topic}`, null], [JSON.stringify({ k: topic }), 'x'], [JSON.stringify({ [topic]: 1 }), null], [JSON.stringify([{ deep: { v: `x ${topic} y` } }]), null], ['{"note":"clean"}', 'clean'], [null, JSON.stringify({ n: 5 })], ['not json', `b ${topic}`], ['{bad json', null]];
+    for (const [a, b] of rows) sql.exec('INSERT INTO pd (a, b) VALUES (?,?)', a, b);
+    const oldSql = (columns: string[]) => columns.map(column => `(${column} LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE (type = 'text' AND value LIKE ? ESCAPE '\\') OR key LIKE ? ESCAPE '\\'))`).join(' OR ');
+    for (const columns of [['a'], ['b'], ['a', 'b']]) {
+      const ids = (where: string) => sql.exec<{ id: number }>(`SELECT id FROM pd WHERE ${where} ORDER BY id`, ...columns.flatMap(() => [like, like, like])).toArray().map(r => r.id);
+      expect(ids(projectionPredicate(columns))).toEqual(ids(oldSql(columns)));
+      expect(ids(projectionPredicate(columns)).length).toBeGreaterThan(0);
+    }
     state.storage.deleteAlarm();
   });
 });
