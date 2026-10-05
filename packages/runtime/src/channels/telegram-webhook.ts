@@ -68,12 +68,13 @@ const sender = (update: SenderUpdate): string | null => {
 // The webhook resolves which owner a Telegram sender belongs to and wakes only that owner's Durable Object.
 // A sender with no owner can only redeem a one-time link code issued from the console.
 // One status word per inbound update, no ids or text: lets an operator tell routed from dropped without reading a tenant's DO.
-const outcome = (status: string, response: Response): Response => {
-  console.log(JSON.stringify({ hop: 'telegram_webhook', ok: response.status < 400, status, http: response.status }));
-  return response;
-};
+// "routed" means the owner DO accepted the HTTP request, not that a turn was admitted (the DO also answers 200 for ignored updates).
+// The inner handler names its outcome; the wrapper below logs exactly one line, including when the handler throws.
+const outcomes = new WeakMap<Response, string>();
+const outcome = (status: string, response: Response): Response => { outcomes.set(response, status); return response; };
+const log = (status: string, http: number) => console.log(JSON.stringify({ hop: 'telegram_webhook', ok: http > 0 && http < 400, status, http }));
 
-export const handleTelegramWebhook = async (
+const handle = async (
   request: Request,
   env: TelegramWebhookEnv,
   waitUntil: (work: Promise<unknown>) => void,
@@ -81,7 +82,7 @@ export const handleTelegramWebhook = async (
 ): Promise<Response> => {
   const secret = env.TELEGRAM_WEBHOOK_SECRET;
   if (request.method !== 'POST' || !secret || !env.TELEGRAM_OWNER_DO) {
-    return new Response('not found', { status: 404 });
+    return outcome(request.method !== 'POST' ? 'not_post' : 'not_configured', new Response('not found', { status: 404 }));
   }
   if (!sameSecret(request.headers.get('x-telegram-bot-api-secret-token') ?? '', secret)) {
     return outcome('bad_secret', new Response('forbidden', { status: 403 }));
@@ -111,7 +112,7 @@ export const handleTelegramWebhook = async (
         headers: { 'x-waldo-inbox-secret': secret },
         body: JSON.stringify({ bot, subject: coded.subject, name, id: coded.updateId, digest, hash }),
       });
-      return outcome(admission.ok ? 'setup_admitted' : 'setup_refused', new Response(admission.ok ? 'ok' : 'admission unavailable', { status: admission.ok ? 200 : admission.status === 409 ? 409 : 503 }));
+      return outcome(admission.ok ? 'setup_admitted' : `setup_refused_${admission.status}`, new Response(admission.ok ? 'ok' : 'admission unavailable', { status: admission.ok ? 200 : admission.status === 409 ? 409 : 503 }));
     } catch { return outcome('setup_unavailable', new Response('admission unavailable', { status: 503 })); }
   }
   let route;
@@ -129,4 +130,17 @@ export const handleTelegramWebhook = async (
   }
   // Unknown non-coded/unsupported setup is ignored, never model input.
   return outcome('no_route', new Response('ok'));
+};
+
+export const handleTelegramWebhook = async (
+  request: Request,
+  env: TelegramWebhookEnv,
+  waitUntil: (work: Promise<unknown>) => void,
+  directory: OwnerDirectory = ownerDirectory(env),
+): Promise<Response> => {
+  let response: Response;
+  try { response = await handle(request, env, waitUntil, directory); }
+  catch (error) { log('handler_threw', 0); throw error; }
+  log(outcomes.get(response) ?? 'unnamed', response.status);
+  return response;
 };
