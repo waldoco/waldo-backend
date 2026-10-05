@@ -1,6 +1,7 @@
 import type { RunEffectScope } from './run-effect-scope';
 import { literalTextRedactor, redactConversationEntry, type ConversationEntry, type ConversationTree } from '@waldo/contracts';
 import { redactSecretUrls } from './egress-guard';
+import { hidesTopic } from '../memory/forget-guard';
 import { asciiLiteralIncludes, forgetSourceBatch, type ForgetSource, type ForgetBatch } from '../memory/selective-forget';
 
 export type ConversationStore = Readonly<{
@@ -111,6 +112,8 @@ const conversationSourcesFromRows = (legacy: Map<string, ConversationEntry>, can
   };
   const add = (key: string, entry: ConversationEntry) => {
     const fields = [['model', entry.modelPayload], ['app', entry.appPayload], ...(entry.modelProjection.mode === 'replace' ? [['replace', entry.modelProjection.payload]] : [])] as const;
+    // Shared safety line: a hiding escape can spell the topic where asciiLiteralIncludes cannot see it, so the entry is held, never read as clean.
+    if (fields.some(([, text]) => hidesTopic(text, topic))) incomplete = true;
     for (const [field, text] of fields) if (asciiLiteralIncludes(text, topic)) {
       if (!verified(key, entry)) { incomplete = true; continue; }
       sources.push({ ref: `conversation:${key}:${field}`, text });
@@ -181,7 +184,7 @@ export const redactConversationEntries = async (
       await flush();
     }
   }
-  const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryText(entry).includes(needle.toLowerCase()));
+  const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryText(entry).includes(needle.toLowerCase()) || hidesTopic(`${entry.modelPayload}\n${entry.appPayload}\n${entry.modelProjection.mode === 'replace' ? entry.modelProjection.payload : ''}`, needle));
   const afterLegacy = rewritten > 0 ? await storage.list<ConversationEntry>({ prefix: 'conv:' }) : legacy;
   const afterCanonical = Object.keys(writes).length > 0 ? await storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX }) : canonical;
   let remaining = 0;
