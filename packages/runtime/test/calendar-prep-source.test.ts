@@ -18,7 +18,7 @@ describe('meeting-prep calendar source', () => {
   });
 
   it('does not expose unsafe calendar URLs or invent missing participants', async () => {
-    for (const htmlLink of ['javascript:alert(1)', 'https://calendar.google.com.attacker.invalid/calendar/event', 'https://user:password@calendar.google.com/calendar/event']) {
+    for (const htmlLink of ['javascript:alert(1)', 'https://calendar.google.com.attacker.invalid/calendar/event', 'https://user:password@calendar.google.com/calendar/event', `https://calendar.google.com/calendar/event?eid=${' x'.repeat(900)}`]) {
       const value = await client({ ...event, htmlLink, attendees: undefined }).event('instance-1');
       expect(value).not.toHaveProperty('source_url');
       expect(value).not.toHaveProperty('attendee_names');
