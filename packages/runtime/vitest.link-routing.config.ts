@@ -3,7 +3,7 @@ import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  test: { include: ['test/telegram-link-routing-do.test.ts'] },
+  test: { include: ['test/telegram-link-routing-do.test.ts', 'test/telegram-relink-owner-do.test.ts'] },
   plugins: [cloudflareTest({
     miniflare: { bindings: {
       WALDO_ENV: 'test', RUN_LOOP_PROVIDER_MODE: 'fake',
