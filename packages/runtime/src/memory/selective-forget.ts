@@ -84,8 +84,14 @@ export const selectedForgetResult = (topic: string, snapshot: ForgetSnapshot, ra
   }
   // Relevant rows with no selected fact remain unproved, rather than destroying
   // their marker and making later association impossible.
-  const unspanned = snapshot.sources.find(row => !spans.some((entry: { ref?: unknown }) => entry.ref === row.ref));
-  if (unspanned) return { reason: `row_without_span:${unspanned.ref.split(':')[0]}` };
+  // Exit for raw chat lines (the episodes store): a line the selector reviewed and gave no span is purged as one whole line. Each line is one message, so the loss stays inside a message that mentions the topic. Other stores stay held: their rows carry structure that a whole-row purge would destroy.
+  for (const row of snapshot.sources) {
+    if (spans.some((entry: { ref?: unknown }) => entry.ref === row.ref)) continue;
+    if (row.ref.split(':')[0] !== 'episodes') return { reason: `row_without_span:${row.ref.split(':')[0]}` };
+    if (!/[a-z0-9]/.test(row.text.toLowerCase().split(topic.toLowerCase()).join(' '))) continue;
+    if (row.text.length < 12 || row.text.length > 4096 || /[^\x20-\x7e]/.test(row.text)) return { reason: 'row_without_span:episodes' };
+    texts.push(row.text);
+  }
   return { texts: [...new Set(texts)].sort((a, b) => b.length - a.length) };
 };
 
