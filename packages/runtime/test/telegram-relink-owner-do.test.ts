@@ -69,8 +69,8 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
     usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
 } }; } }));
 
-const directoryState=vi.hoisted(()=>({linked:new Map<string,string>(),target:'',sends:[] as any[]}));
-vi.mock('../src/identity/owner-directory',async load=>({...await load<typeof import('../src/identity/owner-directory')>(),ownerDirectory:()=>({byPresence:async (_p:string,s:string)=>directoryState.linked.has(s)?{doName:directoryState.linked.get(s),subject:s}:null,redeemHashed:async (_p:string,s:string)=>{directoryState.linked.set(s,directoryState.target);return {kind:'redeemed'};}})}));
+const directoryState=vi.hoisted(()=>({linked:new Map<string,string>(),target:'',sends:[] as any[],gate:null as null|Promise<void>,gateAt:0,calls:0}));
+vi.mock('../src/identity/owner-directory',async load=>({...await load<typeof import('../src/identity/owner-directory')>(),ownerDirectory:()=>({byPresence:async (_p:string,s:string)=>{const answer=directoryState.linked.has(s)?{doName:directoryState.linked.get(s),subject:s}:null;directoryState.calls++;if(directoryState.gateAt&&directoryState.calls===directoryState.gateAt)await directoryState.gate;return answer;},redeemHashed:async (_p:string,s:string)=>{directoryState.linked.set(s,directoryState.target);return {kind:'redeemed'};}})}));
 vi.mock('../src/identity/console-auth',async load=>({...await load<typeof import('../src/identity/console-auth')>(),consoleAuth:()=>({assertChannelPresence:async(n:string,_p:string,s:string)=>directoryState.linked.get(s)===n,saveSettings:async()=>true,unlinkTelegram:async(n:string)=>{for(const [subject,name] of directoryState.linked)if(name===n)directoryState.linked.delete(subject);return true;},listSessions:async()=>[]})}));
 // Replace only transport capture, never the registered owner DO or its inbox/listener/outbox.
 vi.mock('../src/channels/telegram-api',async load=>({...await load<typeof import('../src/channels/telegram-api')>(),createTelegramCaller:()=>async(m:string,p:any)=>{directoryState.sends.push({m,p});return m==='getMe'?{username:'fixture_bot'}:m==='sendMessage'?{message_id:directoryState.sends.length,chat:{id:p.chat_id}}:true;}}));
@@ -119,4 +119,23 @@ it('ADV runtime switch is atomic and old subject turn is fenced after rebind',as
  seen.onReply=async()=>{await runInDurableObject(stub(name),async(instance,state)=>{old=(instance as any).setup();state.storage.kv.put('telegram_subject','87002');directoryState.linked.delete('87001');directoryState.linked.set('87002',name);const next=(instance as any).setup();expect(next).not.toBe(old);expect(old.owner).toBe(87001);expect(next.owner).toBe(87002);await next.ready;});return [];};
  const row=await drain(name,87001);expect(row?.state).toBe('quarantined');expect(directoryState.sends.filter(r=>r.m==='sendMessage'&&r.p.text==='Recorded fixture response.')).toEqual([]);
  seen.onReply=undefined;await webhook(87002,87002,'New owner turn');expect((await drain(name,87002))?.reason).toBe('delivery_ack');
+});
+const unlink=async(name:string)=>runInDurableObject(stub(name),async(instance,state)=>{const token=await consoleAccess(state.storage).grant();const session=(await consoleAccess(state.storage).session(token))!;const form=new FormData();form.set('csrf',session.csrf);form.set('action','telegram.unlink');const result=await instance.fetch!(new Request('https://owner/console/action',{method:'POST',headers:{cookie:`${CONSOLE_COOKIE}=${token}`},body:form}));expect(result.status).toBe(303);expect(state.storage.kv.get('telegram_unlinked')).toBe(true);});
+it('RACE a stale directory answer cannot clear a newer unlink',async()=>{
+ const name='adv-unlink-race',subject=90001;
+ await boot(name);await link(name,subject,subject);await webhook(subject,subject+100,'Initial');expect((await drain(name,subject+100))?.reason).toBe('delivery_ack');
+ await unlink(name);
+ // The directory still answers "linked" to the in-flight enqueue's own lookup, but that answer is held back.
+ directoryState.linked.set(String(subject),name);
+ let release!:()=>void;directoryState.gate=new Promise<void>(r=>{release=r;});
+ directoryState.calls=0;directoryState.gateAt=2;
+ const inflight=webhook(subject,subject+200,'Stale in flight');
+ await new Promise(r=>setTimeout(r,100));
+ directoryState.gateAt=0;
+ await link(name,subject,subject+250);
+ await unlink(name);
+ release();
+ await inflight;
+ await runInDurableObject(stub(name),async(_i,state)=>{expect(state.storage.kv.get('telegram_unlinked')).toBe(true);});
+ const row=await drain(name,subject+200);expect(row?.reason).not.toBe('delivery_ack');
 });

@@ -327,9 +327,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     // After an unlink, the stored binding (flag, and the old subject) is replaced only on the directory's own current answer
     // that this subject belongs to this owner. The header alone, like the stored value, is not evidence.
     if (this.ctx.storage.kv.get<boolean>('telegram_unlinked')) {
+      // Any unlink or link that lands while the directory answers makes that answer stale.
+      const epoch = this.ctx.storage.kv.get<number>('telegram_link_epoch') ?? 0;
       let current: Awaited<ReturnType<ReturnType<typeof ownerDirectory>['byPresence']>> = null;
       try { current = await ownerDirectory(this.env).byPresence('telegram', subject); } catch { return new Response('unavailable', { status: 503 }); }
       if (!current || current.doName !== doName || current.subject !== subject) return new Response('forbidden', { status: 403 });
+      if ((this.ctx.storage.kv.get<number>('telegram_link_epoch') ?? 0) !== epoch || !this.ctx.storage.kv.get<boolean>('telegram_unlinked')) return new Response('unavailable', { status: 503 });
       this.ctx.storage.kv.put('telegram_subject', subject); this.ctx.storage.kv.delete('telegram_unlinked');
       boundSubject = subject;
     }
@@ -726,11 +729,17 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     return new Response('ok');
   }
 
+  private markUnlinked(): void {
+    const { kv } = this.ctx.storage;
+    kv.put('telegram_unlinked', true);
+    kv.put('telegram_link_epoch', (kv.get<number>('telegram_link_epoch') ?? 0) + 1);
+  }
+
   // The webhook names the Telegram subject and timezone it resolved for this owner; they outlive deploy variables.
   private bindIdentity(headers: Headers): void {
     const { kv } = this.ctx.storage;
     const subject = headers.get('x-waldo-telegram-subject');
-    if (subject) kv.delete('telegram_unlinked');
+    if (subject && kv.get<boolean>('telegram_unlinked')) { kv.delete('telegram_unlinked'); kv.put('telegram_link_epoch', (kv.get<number>('telegram_link_epoch') ?? 0) + 1); }
     if (subject && kv.get<string>('telegram_subject') !== subject) {
       kv.put('telegram_subject', subject);
       delete this.runtimes.telegram;
@@ -861,7 +870,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
               }
               if(action.action==='telegram.unlink'){
                 const name=this.ctx.storage.kv.get<string>('do_name'),done=name?await consoleAuth(this.env)?.unlinkTelegram(name):false;
-                if(done)this.ctx.storage.kv.put('telegram_unlinked',true);return !!done;
+                if(done)this.markUnlinked();return !!done;
               }
               if(action.action==='session.signout'||action.action==='session.signout.all'){
                 if(action.action==='session.signout.all')await access.signOutAll();else await access.signOut(session.token);
@@ -936,7 +945,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       if (action?.action === 'telegram.unlink') {
         const done = admin && doName ? await admin.unlinkTelegram(doName) : false;
-        if (done) this.ctx.storage.kv.put('telegram_unlinked', true);
+        if (done) this.markUnlinked();
         return back(done ? 'telegram.unlink' : 'invalid');
       }
       if (action && ['approval.approve', 'approval.skip', 'approval.undo'].includes(action.action)) {
