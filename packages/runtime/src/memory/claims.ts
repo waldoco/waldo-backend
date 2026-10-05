@@ -340,7 +340,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const hasRevisions = tableExists(sql, 'core_file_revisions');
       const hasCards = tableExists(sql, 'update_cards');
       const hasPlan = tableExists(sql, 'day_plan');
-      const hasSourceLoops = tableExists(sql, 'loops') && tableExists(sql, 'loop_mail_sources');
+      // Every loop title is owner or source text, mail-sourced or not, so redaction and readback cover all of them.
+      const hasSourceLoops = tableExists(sql, 'loops');
       const receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } = { deleted: {}, redacted: {}, terminalised: {} };
       const tally = (kind: keyof typeof receipt, store: string) => { receipt[kind][store] = (receipt[kind][store] ?? 0) + 1; };
       const hasRunCandidates = tableExists(sql, 'run_candidates');
@@ -403,14 +404,14 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             if (changed || redactedText !== row.text) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', changed ? redactedChanges : row.changes, redactedText, row.id);
           }
         });
-        if (hasSourceLoops) attempt('mail_source_loops', () => {
-          for (const row of sql.exec<{ id: string; title: string; status: string }>('SELECT l.id, l.title, l.status FROM loops l JOIN loop_mail_sources s ON s.loop_id = l.id').toArray()) {
+        if (hasSourceLoops) attempt('loops', () => {
+          for (const row of sql.exec<{ id: string; title: string; status: string }>('SELECT l.id, l.title, l.status FROM loops l').toArray()) {
             const title = ci(row.title);
             if (title !== row.title) {
               sql.exec("UPDATE loops SET title = ?, status = CASE WHEN status = 'open' THEN 'dropped' ELSE status END, closed_at = CASE WHEN status = 'open' THEN ? ELSE closed_at END WHERE id = ?", title, Date.parse(at), row.id);
-              if (row.status === 'open' && tableExists(sql, 'observed_mail')) sql.exec('UPDATE observed_mail SET attached = 0 WHERE source_ref IN (SELECT source_ref FROM loop_mail_sources WHERE loop_id = ?)', row.id);
-              tally('redacted', 'mail_source_loops');
-              if (row.status === 'open') tally('terminalised', 'mail_source_loops');
+              if (row.status === 'open' && tableExists(sql, 'observed_mail') && tableExists(sql, 'loop_mail_sources')) sql.exec('UPDATE observed_mail SET attached = 0 WHERE source_ref IN (SELECT source_ref FROM loop_mail_sources WHERE loop_id = ?)', row.id);
+              tally('redacted', 'loops');
+              if (row.status === 'open') tally('terminalised', 'loops');
             }
           }
         });
@@ -520,7 +521,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           // unverifiable: it lands in failed and the source stays purging.
           if (rows.some((row) => parsedJson(row.changes) === undefined)) throw new Error('update_cards changes unparseable');
         });
-        if (hasSourceLoops) attempt('mail_source_loops', () => add('mail_source_loops', sql.exec<{ title: string }>('SELECT l.title FROM loops l JOIN loop_mail_sources s ON s.loop_id = l.id').toArray().filter(row => exact(row.title)).length));
+        if (hasSourceLoops) attempt('loops', () => add('loops', sql.exec<{ title: string }>('SELECT l.title FROM loops l').toArray().filter(row => exact(row.title)).length));
         if (hasPlan) attempt('day_plan', () => add('day_plan', sql.exec<{ reason: string }>(`SELECT reason FROM day_plan WHERE reason LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.reason)).length));
         const jsonHits = (raw: string) => { const parsed = parsedJson(raw); return (parsed === undefined ? [raw] : stringsOf(parsed)).some(exact); };
         if (hasRunCandidates) attempt('run_candidates', () => add('run_candidates', sql.exec<{ candidate_json: string }>(`SELECT candidate_json FROM run_candidates WHERE candidate_json LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => jsonHits(row.candidate_json)).length));
@@ -571,7 +572,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       for (const [table, columns] of [
         ['claims', ['aliases']], ['memory_backups', ['payload']], ['spots', ['text', 'evidence']],
         ['core_file_revisions', ['content']], ['update_cards', ['changes', 'text']],
-        ['day_plan', ['reason']], ['loops', ['title']],
+        ['day_plan', ['reason']],
         ['run_candidates', ['candidate_json']], ['outbox', ['payload']],
         ['held_candidates', ['candidate_json']], ['schedule', ['payload_json']],
       ] as const) {
