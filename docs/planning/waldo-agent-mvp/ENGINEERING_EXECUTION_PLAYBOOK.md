@@ -2,7 +2,7 @@
 
 Version 1.4 · 5 October 2026 · Maintainers: Dalda and Core (Instinct)
 
-Build the smallest usable change, verify its real behavior, and improve the loop from observed failures. This playbook records the working direction for Waldo engineering. The process below is reusable; the dated checkpoint is historical evidence, not a permanent statement of readiness. Proposed CI improvements remain proposals until implemented and verified.
+Build the smallest usable change, verify its real behavior, and improve the loop from observed failures. This playbook records the working direction for Waldo engineering. The process below is reusable; the dated checkpoint is historical evidence, not a permanent statement of readiness. This update follows the owner's explicit request to put the workflow in the playbook for future agents. Proposed implementation or CI changes remain proposals until reviewed and merged, and need deployment and acceptance evidence before capability claims.
 
 ## Ownership and build direction
 
@@ -69,7 +69,11 @@ Run a reasonable preflight: candidate identity, target, current authorization, r
 
 Apply only the exact authorized SQL, in order. Verify ledger and schema postconditions, reconcile partial outcomes before retrying, and distinguish rollback from forward recovery. Serialize conflicting mutations; do not cancel an in-flight migration merely because a newer candidate exists.
 
-Routine implementation and reuse choices stay with the builders, coordinated with Core / Instinct and the named reviewer. Use existing authorization within its scope; ask only when a decision materially changes the agreed product outcome or crosses an actual access, data-sharing, consequential-action or required approval boundary, or when high-impact risk remains unresolved. Credential creation, destructive operations, spending and other owner-reserved actions retain their applicable approval or handoff requirements. If access or authorization is denied, stop that action and report the blocker; do not switch credentials or execution paths to bypass it. Continue unaffected work. Research and reuse guidance never removes required safeguards or checks.
+Routine engineering choices are implementation and reuse decisions within the agreed user outcome and existing permissions. They stay with the builders, coordinated with Core / Instinct and the named reviewer. Use existing authorization within its scope; ask only when a decision materially changes the agreed product outcome or crosses an actual access, data-sharing, consequential-action or required approval boundary, or when high-impact risk remains unresolved.
+
+New authority requires the applicable owner approval: production changes outside approved scope, creating or expanding credential access, unapproved spending, or sending as the owner without existing authorization. Already-authorized actions do not need blanket reapproval; destructive operations and other owner-reserved actions retain their applicable requirements. Never ask for or paste passwords or tokens in chat; use the supported credential or connection flow.
+
+If access or authorization is denied, stop that action and report the blocker; do not switch credentials or execution paths to bypass it. Continue unaffected work. Research and reuse guidance never removes required safeguards or checks.
 
 ### 5 Accept each case and stabilize
 
