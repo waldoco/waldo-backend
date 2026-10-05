@@ -1005,7 +1005,7 @@ it('the registered DO export_artifact tool returns an owner link with a full-uui
 });
 
 
-it('a complete 33-ref inventory stays limited when the selector omits the last ref', async () => {
+it('a 33-ref inventory of chat lines completes: lines the selector omits are purged whole', async () => {
   const name='memory-diagnosis-capacity-33';
   const topic='SYNTH-CAP';
   const fact=`${topic} note`;
@@ -1023,29 +1023,20 @@ it('a complete 33-ref inventory stays limited when the selector omits the last r
   expect(snapshot.sources).toHaveLength(33);
   expect(snapshot.sources.every(row=>row.text.includes(topic))).toBe(true);
   expect(call.text.format.schema.properties.spans.maxItems).toBe(64);
+  // Policy (slice D): every episodes line the selector left without a span is purged as one whole line, so the topic completes and recall is not held.
   await runInDurableObject(stub(name),(_instance,state)=>{
-    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
     expect(claimStore(state.storage.sql).claims().some(row=>row.text===standup)).toBe(true);
-    expect(claimStore(state.storage.sql).forgetSources(topic).sources).toHaveLength(33);
   });
-  expect(request()).not.toContain(standup);
-  expect(request()).toContain('Recall is temporarily limited');
-  expect(request()).toContain('reason class: selection_rejected');
-  await evictDurableObject(stub(name));
-  await admittedTurn(name,97002,'Recall my standup again.',ops());
-  expect(request()).toContain('reason class: selection_rejected');
-  expect(request()).toContain('did not raise forgetting');
-  await admittedTurn(name,97003,`Forget only ${topic}.`,ops({forget_topic:topic}));
-  expect(request()).toContain('Say this one reason');expect(request()).not.toContain('did not raise forgetting');
-  expect(request()).not.toContain(standup);
-  await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]));
+  expect(request()).not.toContain('Recall is temporarily limited');
+  expect(request()).not.toContain('reason class: selection_rejected');
 });
 
 // Each case uses the registered Wrangler DO. Mutations in onSelector model an
 // inventory change while the provider is awaited; no private responder is supplied.
 for (const [mode, reason] of [
   ['throws', 'selector_unavailable'], ['empty', 'selector_unavailable'],
-  ['invalid', 'selection_rejected'], ['missing-ref', 'selection_rejected'],
+  ['invalid', 'selection_rejected'],
   ['inventory-unsupported', 'sources_incomplete'],
   ['fresh-unsupported', 'fresh_incomplete'], ['fresh-change', 'selection_rejected'],
 ] as const) {
@@ -1083,7 +1074,7 @@ for (const [mode, reason] of [
     });
     seen.selectedText = fact;
     seen.selectorThrows = mode === 'throws';
-    if (mode === 'empty' || mode === 'invalid' || mode === 'missing-ref') seen.selectorMode = mode;
+    if (mode === 'empty' || mode === 'invalid') seen.selectorMode = mode;
     await admittedTurn(name, 98001, 'What time is my unrelated standup?', ops());
     expect(request()).toContain(`reason class: ${reason}`);
     expect(request()).toContain('Recall is temporarily limited');
