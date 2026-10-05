@@ -2,6 +2,8 @@
 
 ## Start here
 
+- [Capability gaps](gaps/LEDGER.md): living gap ledger, [resolution plan](gaps/PLAN.md) and SHA-pinned [audits](gaps/audits/). Supersedes CURRENT_SYSTEM.md for "what is wrong" until that page is re-pinned.
+
 0. [What is built](CURRENT_SYSTEM.md): current state at a pinned SHA, with [messaging behavior](behavior/MESSAGING_BEHAVIOR.md), [production architecture](architecture/PRODUCTION_ARCHITECTURE.md) and [adoption direction](planning/ADOPTION_DIRECTION.md). Operations: [dev loop](ops/DEV_LOOP.md), [observability](ops/OBSERVABILITY.md), [teardown](ops/TEARDOWN.md).
 1. [Worker packet](planning/waldo-agent-mvp/README.md): selected MVP decisions, read order and source index.
 2. [Canonical product architecture and build plan](planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md): one release definition, stack, ownership, slices and acceptance criteria; finalized 21 September 2026.
