@@ -1,3 +1,4 @@
+import { HELDROWS_SCAN_BUDGET, heldRowShapes } from '../src/memory/held-rows';
 import { env, evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
@@ -1973,6 +1974,90 @@ it('ESCAPE-HOLD a retained update card with an ordinary JSON unicode escape and 
   expect(lines.join('\n')).not.toContain('local_stores[update_cards');
   await runInDurableObject(stub(label), (_instance, state) => {
     expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
+    state.storage.deleteAlarm();
+  });
+});
+
+const realOf = (state: DurableObjectState) => (topic: string) => claimStore(state.storage.sql).forgetSources(topic, true);
+
+it('HELDROWS verdict is the real forgetSources verdict, and the row shapes it lists are the guard\'s own escape/NUL rows (differential)', async () => {
+  const label = 'heldrows-differential'; const topic = 'DIFFTOPIC'; const accented = 'Émile';
+  await admittedTurn(label, 153330, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    const add = (changes: string, text: string | null) => sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?,?,?,?)', 1, 'd', changes, text);
+    add('[{"note":"plain private text"}]', 'plain card');
+    add('[{"note":"odd \\x41 escape PRIVATEWORDS"}]', 'a');
+    add('[{"n":"fine"}]', `SECRETTAIL\0nul ${topic}`);
+    add('[{"note":"Meeting moved \\u2013 see agenda"}]', 'unrelated');
+    sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
+    sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'upper', null, 'ÉMILE visited', 0);
+    sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'neg', null, 'x\\y', 0);
+    sql.exec('UPDATE day_plan SET rowid = -5 WHERE card = ?', 'neg');
+    const real = realOf(state);
+    const topics = [{ topic, state: 'pending' as const }, { topic: accented, state: 'pending' as const }];
+    const header = heldRowShapes(sql, '', topics, 25, real);
+    for (const [index, { topic: t }] of topics.entries()) {
+      const r = real(t);
+      expect(header).toContain(`t${index + 1}: ${r.incomplete ? 'incomplete' : 'complete'}${r.heldBy?.length ? ` held by ${r.heldBy.map(h => `${h.table}:${h.rule}:${h.rows}`).join(' ')}` : ''}`);
+    }
+    const cards = heldRowShapes(sql, 'update_cards', topics, 25, real);
+    expect(cards).toMatch(/#2 changes .*other=1\].*t1\[guard_escape/);
+    expect(cards).toMatch(/#3 text .*nul=1 .*t1\[nul carries=1/);
+    // The ordinary \\u2013 row is not held by the real guard for these topics, and the diagnostic does not list it.
+    expect(cards).not.toMatch(/^#4 /m);
+    expect(cards).not.toMatch(/^#1 /m);
+    for (const leak of ['plain private text', 'PRIVATEWORDS', 'SECRETTAIL', 'ÉMILE', 'Meeting moved']) expect(cards).not.toContain(leak);
+    // Opposite-case non-ASCII row is not in the escape/NUL set; a negative rowid is still reached.
+    const plan = heldRowShapes(sql, 'day_plan', topics, 25, real);
+    expect(plan).toMatch(/#-5 reason .*other=1/);
+    expect(plan).not.toContain('visited');
+    expect(heldRowShapes(sql, 'constructor', topics, 25, real)).toMatch(/Usage:/);
+    expect(heldRowShapes(sql, '__proto__', topics, 25, real)).toMatch(/Usage:/);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('HELDROWS budgets the scan, continues from a printed rowid, and keeps its notices inside the harness cap', async () => {
+  const label = 'heldrows-budget'; const topic = 'BUDGETTOPIC';
+  await admittedTurn(label, 153340, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
+    for (let index = 0; index < HELDROWS_SCAN_BUDGET + 50; index++) sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', `c${index}`, null, `a\\q ${index}`, 0);
+    const real = realOf(state); const topics = [{ topic, state: 'pending' as const }];
+    const first = heldRowShapes(sql, 'day_plan', topics, 25, real);
+    expect(first).toMatch(new RegExp(`${HELDROWS_SCAN_BUDGET} rows with a backslash or NUL; PARTIAL, continue with /heldrows day_plan \\d+`));
+    expect(first.length).toBeLessThanOrEqual(4000);
+    expect(first).toMatch(/truncated: \d+ more rows not shown/);
+    const next = Number(/continue with \/heldrows day_plan (\d+)/.exec(first)![1]);
+    const second = heldRowShapes(sql, 'day_plan', topics, 25, real, next);
+    expect(second).toContain('50 rows with a backslash or NUL');
+    expect(heldRowShapes(sql, 'day_plan', topics, 25, real, 'invalid')).toMatch(/^Usage:/);
+    expect(second).not.toContain('PARTIAL');
+    state.storage.deleteAlarm();
+  });
+});
+
+it('HELDROWS agrees with the real heldBy for projection and escape holds, including the guard\'s episodes table, and labels count-only holds', async () => {
+  const label = 'heldrows-projection'; const topic = 'PROJTOPIC';
+  await admittedTurn(label, 153350, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
+    sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'p', null, JSON.stringify({ k: topic }), 0);
+    episodeIndex(sql).add('ep-proj', 'owner', `SECRETEPISODE \\q ${topic}`, Date.now());
+    const real = realOf(state); const topics = [{ topic, state: 'pending' as const }];
+    const header = heldRowShapes(sql, '', topics, 25, real);
+    expect(header).toContain('day_plan:projection');
+    expect(header).toContain('episodes:guard_escape');
+    const plan = heldRowShapes(sql, 'day_plan', topics, 25, real);
+    expect(plan).toContain('count-only');
+    expect(plan).toContain('0 listed of 0 rows');
+    const episodes = heldRowShapes(sql, 'episodes', topics, 25, real);
+    expect(episodes).toMatch(/text len=\d+ json=none .*t1\[guard_escape carries=1/);
+    expect(episodes).not.toContain('SECRETEPISODE');
     state.storage.deleteAlarm();
   });
 });

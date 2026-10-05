@@ -13,7 +13,8 @@ export type HarnessCommand =
   | Readonly<{ kind: 'e2e' }>
   | Readonly<{ kind: 'console' }>
   | Readonly<{ kind: 'usage' }>
-  | Readonly<{ kind: 'langfuse' }>;
+  | Readonly<{ kind: 'langfuse' }>
+  | Readonly<{ kind: 'heldrows'; table: string | null; from: number | 'invalid' | null }>;
 
 export const parseHarnessCommand = (text: string | undefined): HarnessCommand | null => {
   const [command, arg] = (text ?? '').trim().split(/\s+/, 2);
@@ -26,6 +27,10 @@ export const parseHarnessCommand = (text: string | undefined): HarnessCommand | 
   if (command === '/console') return { kind: 'console' };
   if (command === '/usage') return { kind: 'usage' };
   if (command === '/langfuse') return { kind: 'langfuse' };
+  if (command === '/heldrows') {
+    const from = (text ?? '').trim().split(/\s+/)[2];
+    return { kind: 'heldrows', table: arg ?? null, from: from === undefined ? null : /^-?\d{1,15}$/.test(from) ? Number(from) : 'invalid' };
+  }
   return null;
 };
 
