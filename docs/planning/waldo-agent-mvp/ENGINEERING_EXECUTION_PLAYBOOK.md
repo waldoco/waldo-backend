@@ -1,17 +1,17 @@
 # Waldo Engineering Execution Playbook
 
-Version 1.2 · 3 October 2026 · Maintainers: Dalda and Core (Instinct)
+Version 1.4 · 5 October 2026 · Maintainers: Dalda and Core (Instinct)
 
-Build the smallest usable change, verify its real behavior, and improve the loop from observed failures. This playbook records the working direction for Waldo engineering. The process below is reusable; the dated checkpoint is historical evidence, not a permanent statement of readiness. Proposed CI improvements remain proposals until implemented and verified.
+Build the smallest usable change, verify its real behavior, and improve the loop from observed failures. This playbook records the working direction for Waldo engineering. The process below is reusable; the dated checkpoint is historical evidence, not a permanent statement of readiness. This update follows the owner's explicit request to put the workflow in the playbook for future agents. Proposed implementation or CI changes remain proposals until reviewed and merged, and need deployment and acceptance evidence before capability claims.
 
 ## Ownership and build direction
 
 - **Dalda:** Edge, workspace host and Durable Object behavior, memory fixes, signup, migrations, and staging coordination
 - **Core / Instinct:** Core runtime, Drive integration, and files dashboard
-- **Integration:** Agree one owner per changed file and one owner per cross-component interface before parallel implementation. Record request, response, errors, authorization, currentness, and retry semantics. Resolve ordinary engineering decisions directly
+- **Integration:** Agree one owner per changed file and one owner per cross-component interface before parallel implementation. Record request, response, errors, authorization, currentness, and retry semantics. Coordinate routine implementation and reuse choices directly with Core / Instinct; keep one change owner and one independent reviewer, with any required specialist checks retained
 - **Release execution:** Use the existing authorized credentialed executor and reviewed artifacts. A disconnected executor blocks its steps; independent implementation and acceptance preparation can continue
 
-Start with the user outcome and observed problem. Inspect existing code, tests, and relevant mature implementations before adding a custom mechanism. Prefer an established library or typed contract when it fits Waldo's requirements. Explain any necessary difference.
+Start with the user outcome and observed problem. Inspect existing repo solutions, consumers, contracts and tests for each engineering problem. Research relevant mature implementations when the solution is uncertain or a new mechanism is proposed. Prefer an existing repo function, established library or typed contract when it fits Waldo's requirements. Explain any necessary difference.
 
 ### Product and engineering responsibilities
 
@@ -28,7 +28,7 @@ Before every feature or new work item, record a short, risk-proportionate decisi
 - **User job and evidence:** Who needs this, what are they trying to accomplish, and what requests, observations, or failures support the need? Separate evidence from assumptions
 - **Pain and timing:** What fails or creates friction today, how often, and why is this necessary now?
 - **Value:** Identify the improvement to system or agent capability, reliability, UX, or trust. Treat personality and personalization as product behavior: explain their value for relevance, continuity, communication, or user control
-- **Requirements and references:** Research the actual user requirements and verify relevant competitor or mature-harness patterns against current primary sources. Record limitations; do not copy blindly. Competitor adoption is neither proof of value nor a prerequisite for Waldo's distinctive capabilities
+- **Requirements and references:** Ground the actual user requirements in current evidence; when upstream evaluation is needed, verify relevant competitor or mature-harness patterns against current primary sources. Record limitations; do not copy blindly. Competitor adoption is neither proof of value nor a prerequisite for Waldo's distinctive capabilities
 - **Smallest useful slice:** Define the smallest end-to-end change and observable acceptance evidence
 - **Tradeoffs:** Consider cost, complexity, maintenance, dependencies, privacy, and latency against the expected value
 - **Decision:** Build, reuse, defer, or remove. Keep the owner, evidence, reason, expected outcome, and revisit trigger in the lightweight decision ledger
@@ -45,11 +45,11 @@ For bugs, inspect the actual task trace: input, tool arguments, serving version,
 
 ### 2 Implement and prove the relevant behavior
 
-Reproduce the failure, add a regression assertion, make the targeted fix, and rerun the failing case. Include an entry-point integration or UI check where relevant. A growing collection of keyword exceptions or ad hoc regular expressions is a stop signal: inspect the representation and reuse or establish a typed contract rather than adding another brittle special case.
+Reproduce the failure, inspect existing repo consumers and contracts, and apply the mature-implementation evaluation below before inventing custom logic. Add a regression assertion, make the targeted fix, and rerun the failing case. Include an entry-point integration or UI check where relevant. A growing collection of keyword exceptions or ad hoc regular expressions is a stop signal: inspect the representation and reuse or establish a typed contract rather than adding another brittle special case.
 
 Use impact-based verification:
 
-- **Low:** Documentation or presentation changes without executable, permission, or schema effects. Check the diff and relevant rendering or links; self-review is sufficient
+- **Low:** Documentation or presentation changes without executable, permission, or schema effects. Check the diff and relevant rendering or links; keep the independent review lightweight
 - **Normal:** Bounded behavior within an existing trust boundary. Run the regression and affected lint, types, build, and integration checks
 - **High impact:** Auth, tenant isolation, grants, credentials, retention, migrations, irreversible writes, or deployment control. Add targeted boundary/failure tests, recovery evidence, and one independent review
 
@@ -69,7 +69,11 @@ Run a reasonable preflight: candidate identity, target, current authorization, r
 
 Apply only the exact authorized SQL, in order. Verify ledger and schema postconditions, reconcile partial outcomes before retrying, and distinguish rollback from forward recovery. Serialize conflicting mutations; do not cancel an in-flight migration merely because a newer candidate exists.
 
-Escalate genuine product decisions, new authority, changed consequential scope, unavailable credentialed execution, or unresolved high-impact risk. Credential creation, destructive operations, spending, and other owner-reserved actions retain their applicable approval or handoff requirements.
+Routine engineering choices are implementation and reuse decisions within the agreed user outcome and existing permissions. They stay with the builders, coordinated with Core / Instinct and the named reviewer. Use existing authorization within its scope; ask only when a decision materially changes the agreed product outcome or crosses an actual access, data-sharing, consequential-action or required approval boundary, or when high-impact risk remains unresolved.
+
+New authority requires the applicable owner approval: production changes outside approved scope, creating or expanding credential access, unapproved spending, or sending as the owner without existing authorization. Already-authorized actions do not need blanket reapproval; destructive operations and other owner-reserved actions retain their applicable requirements. Never ask for or paste passwords or tokens in chat; use the supported credential or connection flow.
+
+If access or authorization is denied, stop that action and report the blocker; do not switch credentials or execution paths to bypass it. Continue unaffected work. Research and reuse guidance never removes required safeguards or checks.
 
 ### 5 Accept each case and stabilize
 
@@ -77,7 +81,7 @@ Track **source prepared**, **tests**, **merged SHA**, **deployed version**, **mi
 
 Run the actual user path against the serving version. Mark each case PASS, FAIL, BLOCKED, or NOT RUN, with evidence and a narrow claim. One blocked provider must not erase an independently verified workspace result. A shared authorization failure can block every dependent case.
 
-For each selected end-to-end case, follow the user request through the actual tool call, effect and authoritative readback, then the response. Add later-turn or recovery checks when the case demands them; every test need not run the full matrix.
+For each selected end-to-end case, follow the complete user journey: entry or connection, context, actual tool call, effect, authoritative readback, delivered response or artifact, and relevant follow-through. Prove positive utility and answer quality as well as relevant failure, recovery, and owner-isolation behavior; a denial-only suite is not a usable feature. Bind live proof to the exact serving source/version, time and trace or receipt. Add later-turn or recovery checks when the case demands them; every test need not run the full matrix.
 
 Trace failures, repair the responsible boundary, redeploy when authorized, and retest. Record test-data cleanup separately. “Forget” is incomplete while retained topic content remains retrievable. Later-turn readback proves that case; it does not prove eviction/restart durability.
 
@@ -96,14 +100,14 @@ Set explicit latency, cost, and action budgets before comparison. Measure wall t
 
 ## Evaluate mature implementations before reuse
 
-For each candidate pattern:
+For each engineering problem, inspect existing repo solutions first. Use the upstream evaluation below when the solution is uncertain or a new mechanism is proposed. Scale the effort to the consequence and the uncertainty that can change this fix or slice; reuse verified prior evidence while its version and assumptions hold. An obvious mechanical fix with a clear repo precedent needs the relevant source, diff and behavior checks, not an upstream survey or research ceremony. Keep research bounded and stop once the relevant implementation choice is supported.
 
-1. State the concrete problem and required behavior
-2. Inspect official upstream documentation and the relevant version, commit, or source file
-3. Check functional fit, maintenance, dependencies, and licensing obligations
-4. Identify Waldo-specific differences, especially ownership, permissions, state, and recovery
-5. Adapt narrowly and prove the behavior with Waldo regression and acceptance cases
-6. Record adopt, adapt, defer, or reject, with evidence
+1. State the user value and required behavior using the existing why-build note. For a bug, reproduce the real failure and inspect the serving repo functions, consumers, contracts and tests first
+2. When upstream evaluation is needed, inspect relevant mature harnesses or libraries using primary documentation and actual upstream code and tests at the installed or proposed pinned version/commit. A feature name, marketing claim or competitor's reputation is not implementation evidence
+3. Record the reusable pattern, source link and pin, license obligations, dependencies and runtime/API compatibility. Check Waldo's ownership, permissions, provenance, state, currentness and recovery semantics rather than assuming the upstream implementation solved the same problem
+4. Prefer an existing repo or compatible library function, then a thin adaptation. Add small custom code only when the decision note explains why the existing options do not fit; do not blindly copy or add a dependency just because it exists
+5. Prove the chosen behavior through Waldo's actual serving consumers, regression and complete journey acceptance cases. Upstream tests are reference evidence, not proof that our adaptation works
+6. Record adopt, adapt, defer, or reject, with evidence, and coordinate the routine choice with Core / Instinct and the named reviewer
 
 Do not copy blindly. Upstream tests or reputation do not prove Waldo's adapted implementation.
 
@@ -132,7 +136,7 @@ Earlier records include the five-migration checkpoint and failed pre-fix memory 
 - ID, date, status: proposed / accepted / superseded
 - Outcome or observed problem; evidence
 - Owner, affected files, and interface owner
-- Existing implementation and mature reference inspected
+- Existing repo solutions inspected; when upstream evaluation is needed, record the mature pattern, source/version pin, license and compatibility
 - Decision, alternatives, and reason for any custom behavior
 - Authorization and safety boundaries; affected acceptance cases
 - Candidate identity; supersedes; next action

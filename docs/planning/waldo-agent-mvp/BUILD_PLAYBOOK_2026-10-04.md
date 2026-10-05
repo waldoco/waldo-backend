@@ -2,6 +2,8 @@
 
 Layers: SOURCE (merged code), CI, STAGING (trace on the staging bot), LIVE. Say "staging-verified" or "production-verified" only with a trace. Dalda's results are his claims until we read the trace. Status here is read from source on beta-mvp at the time of writing.
 
+Follow the [engineering execution playbook](ENGINEERING_EXECUTION_PLAYBOOK.md) for standing why-build, mature-implementation research and complete journey verification. Track prepared source, tests, merged SHA, deployed version and live behavior separately; this dated inventory is not a release receipt.
+
 Core journey order (Dalda's order, accepted): connect Google -> context -> prepare/act with verification -> follow through. Merging a PR is not an acceptance result. Polling is fine for the first product; event-driven waking is not a gate.
 
 ## Not in the immediate release gate

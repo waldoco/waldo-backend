@@ -6,6 +6,8 @@
 
 Start with the owner request, current issue and branch, and the source and tests for that seam. Use the backend `AGENTS.md` invariants for truth, one-owner isolation and effect proof. Consult the accepted ADRs for the touched seam; older dated plans are background until checked against current source. A contradictory accepted contract needs an explicit disposition before that implementation lands, not an indefinite block on unrelated source reading, tests or private preparation.
 
+Use the [engineering execution playbook](ENGINEERING_EXECUTION_PLAYBOOK.md) for the standing build/research/verification workflow; the [dated build playbook](BUILD_PLAYBOOK_2026-10-04.md) supplies item ownership and acceptance inventory, not current proof of readiness.
+
 | Work | Current starting evidence | Additional check |
 |---|---|---|
 | Chat, Waldo voice and tool list | `packages/runtime/src/prompt/messaging-behavior.ts`, `channels/telegram-turn.ts`, `conversation/tool-loop.ts` | Brand vocabulary `VOCABULARY_AND_BRAND_2026-09-24.md`, fixture/eval and live owner-turn outcome. Waldo has its own voice, not a copied assistant persona. |
