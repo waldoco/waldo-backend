@@ -81,3 +81,23 @@ describe('hidesTopic unicode escapes', () => {
     expect(hidesTopic('x \\U0057 y', 'code word')).toBe(true);
   });
 });
+
+describe('hidesTopic decodes simple escapes too (review round 2)', () => {
+  it('matches a real JSON parse where a skipped tab or newline changes final-sigma context', async () => {
+    const { hidesTopic, carriesTopic } = await import('../src/memory/forget-guard');
+    for (const [json, topic] of [['"\\t\\u03a3"', '\u03c3'], ['"\\n\\u03a3"', '\u03c3'], ['"\\"\\u03a3"', '\u03c3'], ['"\\t\\u0130"', 'i\u0307'], ['"\\t\\u03a3"', '\u03c2']] as const) {
+      const inner = json.slice(1, -1);
+      expect(hidesTopic(inner, topic), `${inner} / ${topic}`).toBe(carriesTopic(JSON.parse(json) as string, topic) && !carriesTopic(inner, topic) || (inner.includes('\\u') && carriesTopic(JSON.parse(json) as string, topic)));
+    }
+    expect(hidesTopic('\\t\\u03a3', '\u03c3')).toBe(true);
+    expect(hidesTopic('\\n\\u03a3', '\u03c3')).toBe(true);
+  });
+  it('pins double-encoded escapes: the guard reads one level, like the consumers', async () => {
+    const { hidesTopic } = await import('../src/memory/forget-guard');
+    expect(hidesTopic('\\\\u0041', 'a')).toBe(false);
+  });
+  it('a benign escape with no effect on the topic still passes', async () => {
+    const { hidesTopic } = await import('../src/memory/forget-guard');
+    expect(hidesTopic('line one\\nline two', 'code word')).toBe(false);
+  });
+});
