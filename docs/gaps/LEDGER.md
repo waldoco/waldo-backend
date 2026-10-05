@@ -1,6 +1,6 @@
 # Gap ledger
 
-Last updated: 2026-10-05 · read at `f38971d5` (held candidate) · staging serves `e3adf20a` · latest audit: [2026-10-05-f38971d5](audits/2026-10-05-f38971d5.md) · plan: [PLAN.md](PLAN.md)
+Last updated: 2026-10-05 · audit read at `f38971d5`; G3 rows re-read at `beta-mvp` tip `82b423e7` (includes #798) · staging serves `e3adf20a` · latest audit: [2026-10-05-f38971d5](audits/2026-10-05-f38971d5.md) · plan: [PLAN.md](PLAN.md)
 
 All rows are source-layer. Status and evidence rules: [README.md](README.md).
 
@@ -8,12 +8,12 @@ All rows are source-layer. Status and evidence rules: [README.md](README.md).
 |---|---|---|---|---|---|---|---|
 | G1 | Two per-owner brains: serving `TelegramOwnerDO` lacks Coordinator/RunLoop effect + closure machinery; conflicts with CLAUDE.md | B6, B7, B8, A7 | `src/index.ts:125,227`; `run-loop/do.ts:374` | Owner (ADR), Core | owner-call | 0.1 ADR + CLAUDE.md amendment | 2026-10-05 opened |
 | G2 | Background-wake context unbounded vs 32,768-char sanitiser cap; failing cards ratchet; 400 misclassified (#787 hypothesis) | A3, B3 | `update-cards.ts:62`; `telegram-owner-do.ts:2186,2193`; `provider.ts:1416`; contracts `sanitise.ts:58` | Core | open | 0.2 falsifier, then Phase 2 | 2026-10-05 opened |
-| G3a | 40-char prefix matching in hold and purge | B2, J4 | `memory/claims.ts:96,468` | Core (fix), Dalda (review) | in-progress (Core plan) | Phase 1 item 1 | 2026-10-05 source-confirmed; f38971d5 held |
-| G3b | Purge collapses all non-kept keys into one `[forgotten]` key; mixed cards lose unrelated content | B2, J4 | `memory/claims.ts:470-476` | Core, Dalda | in-progress | Phase 1 item 2 | 2026-10-05 source-confirmed |
-| G3c | `update_cards` not in span-selector list → hold never exits | B2, A3 | `memory/claims.ts:706-717,352` | Core | open | Phase 1 item 3 | 2026-10-05 opened (not in Core plan) |
-| G3d | Hold, purge, readback use three matchers; readback ignores keys and throws on any unparseable row | B2 | `memory/claims.ts:108-117,162-165,628,632` | Core | open | Phase 1 items 1, 4 | 2026-10-05 opened |
+| G3a | 40-char prefix matching in hold and purge | B2, J4 | f38971d5: `memory/claims.ts:96,468`. 82b423e7: `update_cards` hold and purge share `cardCarriesTopic` (`claims.ts:116,537,803`); `LIKE_PREFILTER_MAX` still prefilters the other projection stores (`:96`) | Core (fix), Dalda (review) | source-fixed for `update_cards` (#798, not deployed); open for other stores | Phase 1 item 1 | 2026-10-05 source-confirmed at f38971d5; #798 merged |
+| G3b | Purge collapses all non-kept keys into one `[forgotten]` key; mixed cards lose unrelated content | B2, J4 | f38971d5: `claims.ts:470-476`. 82b423e7: `blankCardPieces` blanks only topic-bearing leaves, keeps schema keys (`claims.ts:146`). Residual: unparseable `changes` still becomes bare `"[forgotten]"` (`:540`); an unlocalisable match blanks every leaf | Core, Dalda | source-fixed (#798, not deployed); residual open | Phase 1 items 2, 5 | 2026-10-05 source-confirmed; #798 merged |
+| G3c | `update_cards` not in span-selector `collect` list → topic-only forget may never exit | B2, A3 | 82b423e7: `claims.ts:761-781` (not collected); early return for coverage ≠ 0 `[reported]` | Core | open | Phase 1 item 3 | 2026-10-05 opened; still not collected after #798; confirm with a red test |
+| G3d | Readback uses a different matcher (`stringsOf`, values only, ignores keys) and throws on any unparseable row | B2 | 82b423e7: `claims.ts:689-697` | Core | open | Phase 1 item 4 | 2026-10-05 opened; still open after #798 |
 | G3e | Incomplete forget truncates history to last message and clears memory, incl. background wakes | A3, A7 | `owner-turn.ts:579,444-447` | Core, Dalda | open | Closed by G3c fix; verify on trace | 2026-10-05 opened |
-| G3f | Split/NUL before char 40 escapes hold and purge (#794) | B2 | `memory/claims.ts:467` | Owner + Dalda | owner-call | 0.5 decision | #794 open |
+| G3f | Unsupported topic representations (#794) | B2 | f38971d5: split/NUL before char 40 escaped. 82b423e7: in-order splits and NULs inside a card now detected; interleaved pieces still not (`claims.ts:113-115`) | Owner + Dalda | owner-call | 0.5 decision | #794 open; narrowed by #798 |
 | G4a | Gmail send, calendar apply, `message_send`: no claim before I/O | B7, B8 | `channels/approvals.ts:248-250` | Core | open | 3A.1 | 2026-10-05 opened |
 | G4b | Local refresh-token route has no intent ledger → possible duplicate send after crash | B8 | `approvals.ts:241-265`; `telegram-owner-do.ts:1458` | Core | open | 0.3 then 3A.6 | severity pending 0.3 |
 | G4c | No provider readback after successful send / calendar write | B7, J0 | `approvals.ts:249-251,146-159` | Core | open | 3A.2 | 2026-10-05 opened |

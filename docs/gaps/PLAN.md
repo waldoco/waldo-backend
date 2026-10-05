@@ -24,7 +24,7 @@ Ownership follows the tracker: **Core** is sole writer of the shared serving/bac
 
 ## Phase 1 — Forget correction (tracker step 1) · G3
 
-One PR, Core writes, Dalda reviews currentness/preservation/recovery. Replaces Core's planned single-PR correction with these additions.
+Core writes, Dalda reviews currentness/preservation/recovery. #798 (merged to `beta-mvp` at `42d7dbe9`, not deployed) delivered items 1–2 for `update_cards`: shared `cardCarriesTopic` for hold and purge, and leaf-level `blankCardPieces`. Remaining work is items 3–6 plus the 40-char prefilter on other projection stores, and the not-yet-run release evidence.
 
 **Files:** `src/memory/claims.ts`, `src/memory/held-rows.ts`, `src/channels/update-cards.ts`, `src/channels/telegram-owner-do.ts` (day-card call site only).
 
