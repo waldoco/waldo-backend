@@ -416,7 +416,12 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             if (!sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) continue;
             for (const row of sql.exec<{ rowid: number; value: string | null }>(`SELECT rowid, ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL`).toArray()) {
               if (typeof row.value !== 'string') continue;
-              const next = ci(row.value);
+              // JSON-valued columns are redacted on string leaves and re-serialised, so a span can never break the structure; a span that crosses a JSON boundary matches no leaf, stays unredacted, and the readback keeps the forget incomplete.
+              let next: string;
+              try {
+                const parsed: unknown = JSON.parse(row.value);
+                next = parsed !== null && typeof parsed === 'object' ? JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value) : ci(row.value);
+              } catch { next = ci(row.value); }
               if (next !== row.value) { sql.exec(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`, next, row.rowid); tally('redacted', table); }
             }
           }
@@ -589,9 +594,10 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const row = sql.exec<{ topic: string; coverage_incomplete: number }>('SELECT topic, coverage_incomplete FROM topic_purge_pending WHERE fingerprint = ?', textFingerprint(topic.trim())).toArray()[0];
       return row?.topic === topic.trim() ? row.coverage_incomplete : null;
     },
-    forgetSources(topic: string, batch = false): { sources: ForgetSource[]; incomplete: boolean; more?: boolean } {
+    forgetSources(topic: string, batch = false): { sources: ForgetSource[]; incomplete: boolean; held?: string[]; more?: boolean } {
       const sources: ForgetSource[] = [];
       let incomplete = false;
+      const held: string[] = [];
       let more = false;
       const like = likePrefilter(topic);
       const collect = (table: string, id: string, columns: readonly string[]) => {
@@ -610,7 +616,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       collect('loops', 'id', ['title']);
       collect('background_runs', 'id', ['summary']);
       collect('reminder_notes', 'id', ['note']);
-      // The selector sees these stores, so an incidental short-topic match is simply not selected and never locks the owner out; selected spans are redacted and read back.
+      // The selector sees these stores. Every row that carries the topic needs a selected span (existing design: a row with the topic and no span rejects the whole selection), and selected spans are redacted and read back.
       for (const [table, columns] of LITERAL_REDACTED_STORES) {
         const available = tableExists(sql, table) ? columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) : [];
         if (available.length) collect(table, 'rowid', available);
@@ -620,19 +626,19 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       for (const [table, columns] of [
         ['claims', ['aliases']], ['memory_backups', ['payload']], ['spots', ['text', 'evidence']],
         ['core_file_revisions', ['content']], ['update_cards', ['changes', 'text']],
-        ['day_plan', ['reason']],
+        ['day_plan', ['reason']], ['standing_orders', ['scope', 'escalation']],
         ['run_candidates', ['candidate_json']], ['outbox', ['payload']],
         ['held_candidates', ['candidate_json']], ['schedule', ['payload_json']],
       ] as const) {
         if (!tableExists(sql, table)) continue;
         const available = columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length);
-        if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${available.map(column => `(${column} LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE (type = 'text' AND value LIKE ? ESCAPE '\\') OR key LIKE ? ESCAPE '\\'))`).join(' OR ')} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) incomplete = true;
+        if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${available.map(column => `(${column} LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE (type = 'text' AND value LIKE ? ESCAPE '\\') OR key LIKE ? ESCAPE '\\'))`).join(' OR ')} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) { incomplete = true; held.push(table); }
       }
-      return { sources, incomplete, ...(batch ? { more } : {}) };
+      return { sources, incomplete, ...(held.length ? { held } : {}), ...(batch ? { more } : {}) };
     },
     forgetSourceBatch(topic: string): ForgetBatch {
       const page = this.forgetSources(topic, true);
-      return { sources: page.sources, incomplete: page.incomplete, more: !!page.more };
+      return { sources: page.sources, incomplete: page.incomplete, ...(page.held ? { held: page.held } : {}), more: !!page.more };
     },
     beginTopicCoverage(topic: string, at: string): void {
       topic = topic.trim();

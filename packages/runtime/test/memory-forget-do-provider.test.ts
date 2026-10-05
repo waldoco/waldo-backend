@@ -1533,6 +1533,7 @@ const positiveStore = (label: string, topic: string, seed: (sql: SqlStorage, tex
     seen.selectedTexts = []; seen.selectorOutputMessage = false;
     await admittedTurn(name, 140002, 'What time is my standup?', ops());
     expect(request()).not.toContain('temporarily limited');
+    expect(request()).toContain('09:10 UTC');
     await runInDurableObject(stub(name), (_instance, state) => { expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]); expect(read(state.storage.sql)).not.toContain(topic); state.storage.deleteAlarm(); });
   });
 positiveStore('patrol_log', 'POSPATROL769', (sql, text) => {
@@ -1544,7 +1545,7 @@ positiveStore('goals', 'POSGOAL769', (sql, text) => {
   sql.exec('INSERT INTO goals (id, user_id, description, created_at, updated_at) VALUES (?,?,?,?,?)', 'pos-769-goal', 'u', text, 't', 't');
 }, sql => JSON.stringify(sql.exec('SELECT id, description FROM goals').toArray()));
 
-it('REVIEW-769 an incidental short-topic match in goals and patrol_log does not lock the owner out: the forget completes and recall comes back', async () => {
+it('REVIEW-769 when the selector selects the incidental clause too ("tomorrow" for topic "Tom"), the forget completes, that whole clause is redacted, and recall comes back', async () => {
   const name = 'review-769-incidental'; const topic = 'Tom';
   await admittedTurn(name, 135000, 'My unrelated standup is at 09:10 UTC.', ops());
   await runInDurableObject(stub(name), (_instance, state) => {
@@ -1564,6 +1565,28 @@ it('REVIEW-769 an incidental short-topic match in goals and patrol_log does not 
   seen.selectorMode = 'normal';
   await admittedTurn(name, 135002, 'What time is my standup?', ops());
   expect(request()).not.toContain('temporarily limited');
+  expect(request()).toContain('09:10 UTC');
+});
+
+it('REVIEW-769 an unselected incidental row keeps the forget pending and nothing is redacted, including the selected row (spans must cover every row that carries the topic)', async () => {
+  const name = 'review-769-incidental-unselected'; const topic = 'Tom';
+  await admittedTurn(name, 136000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(name), (_instance, state) => {
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS goals (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, description TEXT NOT NULL, baseline TEXT, target TEXT, progress TEXT, deadline TEXT, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)');
+    state.storage.sql.exec('INSERT INTO goals (id, user_id, description, created_at, updated_at) VALUES (?,?,?,?,?)', 'inc-goal', 'u', 'Finish the report tomorrow', 't', 't');
+    state.storage.sql.exec('INSERT INTO goals (id, user_id, description, created_at, updated_at) VALUES (?,?,?,?,?)', 'sel-goal', 'u', 'Call Tom about the lunch plan', 't', 't');
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(name));
+  seen.selectedTexts = ['Call Tom about the lunch plan']; seen.selectorMode = 'normal';
+  await admittedTurn(name, 136001, 'Continue my requested forgetting.', ops());
+  expect(request()).toContain('reason class: selection_rejected');
+  await runInDurableObject(stub(name), (_instance, state) => {
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+    expect(state.storage.sql.exec<{ description: string }>('SELECT description FROM goals ORDER BY id').toArray().map(row => row.description)).toEqual(['Finish the report tomorrow', 'Call Tom about the lunch plan']);
+    state.storage.deleteAlarm();
+  });
 });
 
 positiveStore('loops', 'POSLOOP769', (sql, text) => { loopBook(sql, { now: () => Date.now(), newId: () => 'pos-769-loop' }).open({ title: text, due: null }); }, sql => JSON.stringify(sql.exec('SELECT title FROM loops').toArray()));
@@ -1572,3 +1595,44 @@ positiveStore('reminder_notes', 'POSNOTE769', (sql, text) => { sql.exec('CREATE 
 positiveStore('thread_topic_index', 'POSTOPIC769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS thread_topic_index (user_id TEXT NOT NULL, topic TEXT NOT NULL, thread_id TEXT NOT NULL, last_user_message_at TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, PRIMARY KEY (user_id, topic, thread_id))'); sql.exec('INSERT INTO thread_topic_index (user_id, topic, thread_id, last_user_message_at, is_active, updated_at) VALUES (?,?,?,?,?,?)', 'u', text, 't1', 't', 1, 't'); }, sql => JSON.stringify(sql.exec('SELECT topic FROM thread_topic_index').toArray()));
 positiveStore('memory_blocks', 'POSBLOCK769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS memory_blocks (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, hall_type TEXT NOT NULL, content TEXT NOT NULL, decision_log TEXT NOT NULL DEFAULT \'[]\', confidence REAL NOT NULL, created_at TEXT NOT NULL, valid_from TEXT NOT NULL, source_trust TEXT NOT NULL)'); sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'pos-769-block', 'u', 'facts', text, '[]', 0.9, 't', 't', 'user_stated'); }, sql => JSON.stringify(sql.exec('SELECT content, decision_log FROM memory_blocks').toArray()));
 positiveStore('memory_inbox', 'POSINBOX769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS memory_inbox (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, operation TEXT NOT NULL, hall TEXT NOT NULL, claim TEXT NOT NULL, content TEXT NOT NULL, proposed_pattern_id TEXT NOT NULL, observed_at TEXT NOT NULL, source_trust TEXT NOT NULL, rationale TEXT NOT NULL, source TEXT NOT NULL)'); sql.exec('INSERT INTO memory_inbox (id, user_id, operation, hall, claim, content, proposed_pattern_id, observed_at, source_trust, rationale, source) VALUES (?,?,?,?,?,?,?,?,?,?,?)', 'pos-769-inbox', 'u', 'ADD', 'facts', text, text, 'p', 't', 'user_stated', 'r', 's'); }, sql => JSON.stringify(sql.exec('SELECT claim, content FROM memory_inbox').toArray()));
+
+const MEMORY_BLOCKS_DDL = 'CREATE TABLE IF NOT EXISTS memory_blocks (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, hall_type TEXT NOT NULL, content TEXT NOT NULL, decision_log TEXT NOT NULL DEFAULT \'[]\', confidence REAL NOT NULL, created_at TEXT NOT NULL, valid_from TEXT NOT NULL, source_trust TEXT NOT NULL)';
+const jsonBlock = (span: string, name: string, n: number) => it(`REVIEW-769 JSON column: ${name}`, async () => {
+  const label = `review-769-json-${n}`; const topic = 'POSJSON769';
+  await admittedTurn(label, 150000 + n * 10, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec(MEMORY_BLOCKS_DDL);
+    state.storage.sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'json-block', 'u', 'facts', 'plain note', JSON.stringify([{ note: `Call ${topic} about lunch`, at: 't' }]), 0.9, 't', 't', 'user_stated');
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  seen.selectedTexts = [span]; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 150001 + n * 10, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const log = state.storage.sql.exec<{ decision_log: string }>('SELECT decision_log FROM memory_blocks').toArray()[0]!.decision_log;
+    expect(() => JSON.parse(log)).not.toThrow();
+    if (n === 1) { expect(log).not.toContain(topic); expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]); }
+    else { expect(log).toContain(topic); expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]); }
+    state.storage.deleteAlarm();
+  });
+});
+jsonBlock(`Call POSJSON769 about lunch`, 'a span inside a string leaf is redacted, the JSON stays valid and the forget settles', 1);
+jsonBlock(`Call POSJSON769 about lunch","at":"t`, 'a span crossing a JSON quote changes nothing, the JSON stays valid and the forget stays incomplete', 2);
+
+for (const column of ['scope', 'escalation'] as const) it(`REVIEW-769 standing_orders ${column} keeps the forget incomplete and the owner message names standing_orders`, async () => {
+  const label = `review-769-orders-${column}`; const topic = `POSORD${column.toUpperCase()}769`;
+  await admittedTurn(label, 151000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS standing_orders (id TEXT PRIMARY KEY, scope TEXT NOT NULL, trigger TEXT NOT NULL, at TEXT, gate TEXT NOT NULL, escalation TEXT NOT NULL, created_at INTEGER NOT NULL)');
+    state.storage.sql.exec('INSERT INTO standing_orders (id, scope, trigger, at, gate, escalation, created_at) VALUES (?,?,?,?,?,?,?)', 'ord-769', column === 'scope' ? `watch ${topic}` : 'watch the inbox', 'every_turn', null, 'ask', column === 'escalation' ? `call about ${topic}` : 'ping me', 1);
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 151001, 'Continue my requested forgetting.', ops());
+  expect(request()).toContain('reason class: preserved_store');
+  expect(request()).toContain('standing_orders');
+  await runInDurableObject(stub(label), (_instance, state) => { expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]); state.storage.deleteAlarm(); });
+});

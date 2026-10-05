@@ -795,12 +795,14 @@ export const createOwnerResponder = (
           rows.push(...requestSources());
           const more = local.more || !!(conversation && 'more' in conversation && conversation.more) || !!ledger?.more;
           const snapshot = forgetSourceBatch(topic, rows, more);
+          forgetHeld = [...(local.held ?? []).filter(table => table === 'standing_orders'), ...(standingOrders?.().toLowerCase().includes(topic.toLowerCase()) ? ['standing_orders'] : [])];
           return { ...snapshot, incomplete: snapshot.incomplete || local.incomplete || !!ledger?.incomplete || !!conversation?.incomplete || !!standingOrders?.().toLowerCase().includes(topic.toLowerCase()) };
         };
+        let forgetHeld: readonly string[] = [];
         const supplied = await gather();
         await assertCurrent();
         let selection: string | null = null;
-        if (supplied.incomplete) forgetWhy = `sources_incomplete(${supplied.sources.length})`;
+        if (supplied.incomplete) forgetWhy = forgetHeld.length ? `preserved_store(${[...new Set(forgetHeld)].length})` : `sources_incomplete(${supplied.sources.length})`;
         else if (writerStore.pendingTopics().length) forgetWhy = `cleanup_pending(${supplied.sources.length})`;
         else if (supplied.sources.length && forgetBatchesRemaining === 0) forgetWhy = `batch_pending(${supplied.sources.length})`;
         if (!forgetWhy) {
@@ -838,7 +840,7 @@ export const createOwnerResponder = (
         }
         if (forgetWhy) {
           const reasonClass = forgetWhy.split('(')[0]!;
-          const reasonMeaning: Record<string, string> = { sources_incomplete: 'some saved copies could not be fully read', selector_unavailable: 'the span check could not run', fresh_incomplete: 'a recheck after the span check was incomplete', selection_rejected: 'the checked spans did not cover every copy', batch_pending: 'a bounded batch was checked but cleanup is not yet complete', cleanup_pending: 'earlier exact cleanup still needs verified readback' };
+          const reasonMeaning: Record<string, string> = { sources_incomplete: 'some saved copies could not be fully read', selector_unavailable: 'the span check could not run', fresh_incomplete: 'a recheck after the span check was incomplete', selection_rejected: 'the checked spans did not cover every copy', batch_pending: 'a bounded batch was checked but cleanup is not yet complete', cleanup_pending: 'earlier exact cleanup still needs verified readback', preserved_store: `these saved stores are kept as they are and still mention it, so they need the owner's decision: ${[...new Set(forgetHeld)].join(', ')}` };
           memoryReceipts.push(`Requested forgetting is incomplete (reason class: ${reasonClass}). Retained recall is temporarily limited; current requests and ordinary tools remain available. Say this one reason to the owner in plain words and no other: ${reasonMeaning[reasonClass] ?? 'coverage could not be proven'}. Do not claim that every associated fact was erased.`);
         }
       }
