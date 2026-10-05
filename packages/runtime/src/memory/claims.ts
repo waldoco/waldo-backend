@@ -109,6 +109,12 @@ export const projectionRawHit = (column: string) => `${column} LIKE ? ESCAPE '\\
 export const projectionValueHit = (column: string) => `EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE type = 'text' AND value LIKE ? ESCAPE '\\')`;
 export const projectionKeyHit = (column: string) => `EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE key LIKE ? ESCAPE '\\')`;
 export const projectionPredicate = (columns: readonly string[]) => columns.map(column => `(${projectionRawHit(column)} OR ${projectionValueHit(column)} OR ${projectionKeyHit(column)})`).join(' OR ');
+// The purge exit and the projection hold must agree: a value is tied to the topic when its raw text OR any decoded JSON string value or key carries the prefilter prefix (JSON escapes a quote or backslash, so the raw text alone is not enough).
+const prefixTied = (value: string, prefix: string): boolean => {
+  if (value.toLowerCase().includes(prefix)) return true;
+  const leaves = jsonLeaves(value);
+  return leaves === 'unreadable' || (leaves !== null && leaves.some(leaf => leaf.toLowerCase().includes(prefix)));
+};
 // Verifies one projection column value with the real guard: the raw text, a decoded JSON string value or a JSON key carries the topic. An unreadable JSON value cannot be proven clean, so it holds.
 export const projectionValueHolds = (value: unknown, topic: string): boolean => {
   // Only NULL is provably empty; a BLOB or number cannot be proven clean here, so it holds.
@@ -455,6 +461,21 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
               ? ci(row.changes)
               : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
             const changed = parsed === undefined ? redactedChanges !== row.changes : redactedChanges !== JSON.stringify(parsed);
+            // A card that still carries the topic's prefilter prefix after redaction (a topic split across values or keys after that prefix, or NUL-broken)
+            // cannot be proven clean. update_cards rows record no source, so the scope is that row only: its free text, values and keys are blanked,
+            // while the join keys other consumers rely on (source, kind, source_ref, source_message_id) and the send state stay.
+            // Splits that break the prefix itself are not detected here (the same limit as the hold; tracked in #794).
+            const prefix = text.slice(0, LIKE_PREFILTER_MAX).toLowerCase();
+            const stillTied = topics.length > 0 && prefix.length > 0 && [redactedChanges, redactedText ?? ''].some(value => prefixTied(value, prefix));
+            if (stillTied) {
+              const KEEP = ['source', 'kind', 'source_ref', 'source_message_id'];
+              const blank = (node: unknown): unknown => Array.isArray(node) ? node.map(blank)
+                : node !== null && typeof node === 'object' ? Object.fromEntries(Object.entries(node).map(([key, child]) => KEEP.includes(key) ? [key, child] : [FORGOTTEN, blank(child)]))
+                : typeof node === 'string' ? FORGOTTEN : node;
+              const blanked = parsed === undefined ? JSON.stringify(FORGOTTEN) : JSON.stringify(blank(parsed));
+              sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', blanked, row.text === null ? null : FORGOTTEN, row.id);
+              continue;
+            }
             if (changed || redactedText !== row.text) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', changed ? redactedChanges : row.changes, redactedText, row.id);
           }
         });
@@ -711,8 +732,9 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       for (const [table, columns] of PROJECTION_STORES) {
         if (!tableExists(sql, table)) continue;
         const available = columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length);
-        // The SQL predicate only prefilters (a LIKE on the first characters of the topic); a row holds the forget only if the real guard says it carries the topic.
-        if (available.length && sql.exec<Record<string, SqlStorageValue>>(`SELECT ${available.join(', ')} FROM ${table} WHERE ${projectionPredicate(available)}`, ...available.flatMap(() => [like, like, like])).toArray().some(row => available.some(column => projectionValueHolds(row[column], topic)))) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'projection', rows: 1 }); }
+        // Fail closed: a row whose text matches the topic prefilter holds the forget. Verification cannot release it, because a topic split across values or broken by a NUL is not provable clean.
+        // The exit is the purge, which blanks such rows (see the update_cards pass above).
+        if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${projectionPredicate(available)} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'projection', rows: 1 }); }
         if (available.length && !held.includes(table)) {
           guard(table, available, true);
         }
