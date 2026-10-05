@@ -531,3 +531,11 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] A generated final's frozen plain fallback crosses the same secret-URL persistence and egress boundary as its rich copy. Redact before HTML escaping and at both enqueue lanes; synthetic provider OAuth URLs must disappear from both copies and fallback transport. Literal escaped backslashes remain data.
 
 - Start the built default Worker under its deployed compatibility date and flags: default-off browser code must not import an SDK requiring unsupported Node modules. A configured Cloudflare trial supplies its SDK loader through trusted host preparation; adding runtime compatibility or browser bindings remains a separate reviewed activation.
+
+### Google refresh classification
+
+- [ ] Preserve token-endpoint status and typed failure through native, Drive and MCP reads. Only invalid/revoked grants mark permanent connection health or request reconnect; rate limits, outages, transport/timeouts and client configuration failures leave the pinned account intact. Recover on that same grant without retrying an uncertain effect intent.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Google token 503/temporarily_unavailable became 401 and failing health | connector-proxy-entry.test.ts signed native/Drive/MCP refresh matrix and same-connection recovery; google-token-refresh.test.ts local bearer health | Scoped credentials and intent_pending custody unchanged; no provider retry or account widening |
