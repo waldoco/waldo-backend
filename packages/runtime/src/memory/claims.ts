@@ -109,6 +109,14 @@ export const projectionRawHit = (column: string) => `${column} LIKE ? ESCAPE '\\
 export const projectionValueHit = (column: string) => `EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE type = 'text' AND value LIKE ? ESCAPE '\\')`;
 export const projectionKeyHit = (column: string) => `EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE key LIKE ? ESCAPE '\\')`;
 export const projectionPredicate = (columns: readonly string[]) => columns.map(column => `(${projectionRawHit(column)} OR ${projectionValueHit(column)} OR ${projectionKeyHit(column)})`).join(' OR ');
+// Verifies one projection column value with the real guard: the raw text, a decoded JSON string value or a JSON key carries the topic. An unreadable JSON value cannot be proven clean, so it holds.
+export const projectionValueHolds = (value: unknown, topic: string): boolean => {
+  if (typeof value !== 'string') return false;
+  const exact = (text: string) => carriesTopic(text, topic) || hidesTopic(text, topic);
+  if (exact(value)) return true;
+  const leaves = jsonLeaves(value);
+  return leaves === 'unreadable' || (leaves !== null && leaves.some(exact));
+};
 // A decoded JSON leaf carries the topic (or our decoder failed) although the raw text does not.
 export const decodedLeafHit = (value: string, topic: string): boolean => {
   const leaves = jsonLeaves(value);
@@ -701,7 +709,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       for (const [table, columns] of PROJECTION_STORES) {
         if (!tableExists(sql, table)) continue;
         const available = columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length);
-        if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${projectionPredicate(available)} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'projection', rows: 1 }); }
+        // The SQL predicate only prefilters (a LIKE on the first characters of the topic); a row holds the forget only if the real guard says it carries the topic.
+        if (available.length && sql.exec<Record<string, SqlStorageValue>>(`SELECT ${available.join(', ')} FROM ${table} WHERE ${projectionPredicate(available)}`, ...available.flatMap(() => [like, like, like])).toArray().some(row => available.some(column => projectionValueHolds(row[column], topic)))) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'projection', rows: 1 }); }
         if (available.length && !held.includes(table)) {
           guard(table, available, true);
         }

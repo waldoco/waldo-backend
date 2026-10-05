@@ -2172,3 +2172,23 @@ it('claims projection predicate equals the previous inline predicate on json val
     state.storage.deleteAlarm();
   });
 });
+
+it('REPRO: a long topic purge redacts what the projection hold sees', async () => {
+  const label = 'forget-update-cards-long-topic';
+  await admittedTurn(label, 153401, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    const add = (changes: string) => sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', changes);
+    add(JSON.stringify([{ kind: 'note', detail: `Owner said ${topic}; keep it` }]));
+    add(JSON.stringify([{ kind: 'note', detail: 'The secret code word that I told you about earlier today was discussed in the call' }]));
+    const store = claimStore(sql);
+    store.purge([], new Date().toISOString(), [topic]);
+    const after = store.forgetSources(topic, true);
+    const rows = sql.exec<{ changes: string }>('SELECT changes FROM update_cards ORDER BY id').toArray().map(r => r.changes);
+    expect(rows[0]).not.toContain('ZEBRA');
+    expect({ held: after.heldBy, incomplete: after.incomplete }).toEqual({ held: undefined, incomplete: false });
+    state.storage.deleteAlarm();
+  });
+});
