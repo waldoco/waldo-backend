@@ -779,7 +779,8 @@ export const createOwnerResponder = (
       // Why a forget stayed incomplete, as a code and counts only (never topic or source text), so a staging trace can say which gate held.
       let forgetWhy = '';
       // One bounded retry per record, from stored custody rather than this turn.
-      const topic = ownerForgetTopic(raw, owner) ?? writerStore.incompleteTopics()[0] ?? null;
+      const raisedTopic = ownerForgetTopic(raw, owner);
+      const topic = raisedTopic ?? writerStore.incompleteTopics()[0] ?? null;
       if (topic) {
         const at = new Date().toISOString();
         const requestSources = () => [...pendingRequests].map(([ref, text]) => ({ ref: `request:${ref}`, text: forgetText(text) }));
@@ -858,7 +859,7 @@ export const createOwnerResponder = (
         if (forgetWhy) {
           const reasonClass = forgetWhy.split('(')[0]!;
           const reasonMeaning: Record<string, string> = { sources_incomplete: 'some saved copies could not be fully read', selector_unavailable: 'the span check could not run', fresh_incomplete: 'a recheck after the span check was incomplete', selection_rejected: 'the checked spans did not cover every copy', batch_pending: 'a bounded batch was checked but cleanup is not yet complete', cleanup_pending: 'earlier exact cleanup still needs verified readback', preserved_store: `these saved stores are kept as they are and still mention it, so they need the owner's decision: ${[...new Set(forgetHeld)].join(', ')}` };
-          memoryReceipts.push(`Requested forgetting is incomplete (reason class: ${reasonClass}). Retained recall is temporarily limited; current requests and ordinary tools remain available. Say this one reason to the owner in plain words and no other: ${reasonMeaning[reasonClass] ?? 'coverage could not be proven'}. Do not claim that every associated fact was erased.`);
+          memoryReceipts.push(`Requested forgetting is incomplete (reason class: ${reasonClass}). Retained recall is temporarily limited; current requests and ordinary tools remain available. ${raisedTopic ? 'Say this one reason to the owner in plain words and no other' : 'This is an ordinary turn; the owner did not raise forgetting. Do not mention this unless the owner asks about forgetting, memory, or missing recall; if asked, say this one reason in plain words and no other'}: ${reasonMeaning[reasonClass] ?? 'coverage could not be proven'}. Do not claim that every associated fact was erased.`);
         }
       }
       let purged: readonly string[] = [];
