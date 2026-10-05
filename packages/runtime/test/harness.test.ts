@@ -80,3 +80,8 @@ describe('owner harness', () => {
     });
   });
 });
+
+it('parses /heldrows with an optional table', () => {
+  expect(parseHarnessCommand('/heldrows update_cards')).toEqual({ kind: 'heldrows', table: 'update_cards' });
+  expect(parseHarnessCommand('/heldrows')).toEqual({ kind: 'heldrows', table: null });
+});
