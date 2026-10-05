@@ -73,3 +73,10 @@ it('receipts a first durable result after volatile expired ack and TTL plus repl
   expect(()=>store.acceptResult(invalid as never,`fingerprint_${id}`,600302)).toThrow();
  }
 }));
+it('rejects acknowledgements and results for expired queued work that never reached delivery',async()=>setup(async store=>{
+ const queued=await store.enqueue({...input('query_expired_never_delivered'),ttl_seconds:1},700000,['machine_state_query']); if(!queued.accepted)throw new Error('queue');
+ const command=JSON.parse(store.pending(700000).find(row=>row.command_id===queued.command_id)!.wire); store.pending(700002);
+ const reference={...signed('ack'),command_id:command.command_id,revision:1,idempotency_key:command.idempotency_key};
+ expect(()=>store.acceptAck({...reference,payload:{state:'accepted'}} as never)).toThrow('invalid_shape');
+ expect(()=>store.acceptResult({...reference,type:'result',payload:{status:'answered',answer:{query_id:'query_expired_never_delivered',query_kind:'session_status',state:'unknown'}}} as never,'fingerprint',700302)).toThrow('invalid_shape');
+}));
