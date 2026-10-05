@@ -21,7 +21,7 @@ describe('selectedForgetResult names why a selection was rejected (no content)',
     const rows = [{ ref: 'episodes:12', text: 'Standup moved; also ZEBRA-COBALT is the new vendor code' }, { ref: 'loop:l1:title', text: 'follow up on the ZEBRA-COBALT quote' }];
     const refs = rows.map(r => r.ref);
     const loopSpan = { ref: 'loop:l1:title', text: 'follow up on the ZEBRA-COBALT quote' };
-    expect(selectedForgetResult(topic, snap(rows), pick([loopSpan], refs), snap(rows))).toEqual({ texts: ['Standup moved; also ZEBRA-COBALT is the new vendor code', 'follow up on the ZEBRA-COBALT quote'].sort((a, b) => b.length - a.length) });
+    expect(selectedForgetResult(topic, snap(rows), pick([loopSpan], refs), snap(rows))).toEqual({ texts: ['Standup moved; also ZEBRA-COBALT is the new vendor code', 'follow up on the ZEBRA-COBALT quote'].sort((a, b) => b.length - a.length), wholeRows: 1 });
     expect(selectedForgetResult(topic, snap(rows), pick([{ ref: 'episodes:12', text: 'also ZEBRA-COBALT is the new vendor code' }], refs), snap(rows))).toEqual({ reason: 'row_without_span:loop' });
     const long = [{ ref: 'episodes:13', text: `ZEBRA-COBALT ${'x'.repeat(4100)}` }];
     expect(selectedForgetResult(topic, snap(long), pick([], ['episodes:13']), snap(long))).toEqual({ reason: 'row_without_span:episodes' });

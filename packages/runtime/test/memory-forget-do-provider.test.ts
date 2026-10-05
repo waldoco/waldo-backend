@@ -1017,7 +1017,13 @@ it('a 33-ref inventory of chat lines completes: lines the selector omits are pur
   });
   await evictDurableObject(stub(name));
   seen.selectedText=fact; seen.selectorMode='capped';
-  await admittedTurn(name,97001,'What time is my unrelated standup?',ops());
+  const traceLines: string[] = [];
+  const traceSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { traceLines.push(args.map(String).join(' ')); });
+  try { await admittedTurn(name,97001,'What time is my unrelated standup?',ops()); } finally { traceSpy.mockRestore(); }
+  const whole = traceLines.filter(line => line.includes('forget_whole_rows'));
+  expect(whole).toHaveLength(1);
+  expect(whole[0]).toMatch(/lines_purged_whole.{1,6}\d+/);
+  expect(whole[0]).not.toContain(topic);
   const call=seen.selectorCalls.at(-1) as {input:string;text:{format:{schema:{properties:{spans:{maxItems:number}}}}}};
   const snapshot=JSON.parse(call.input.slice(call.input.indexOf('{'))) as {topic:string;sources:{ref:string;text:string}[]};
   expect(snapshot.sources).toHaveLength(33);
