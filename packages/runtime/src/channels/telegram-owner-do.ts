@@ -46,6 +46,7 @@ import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
 import { CONSOLE_INVITES_PATH, renderMemberInvites } from './console-invites';
 import { newInviteCode, inviteLink } from '../identity/invite-code';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, consoleMayApprove, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
+import { heldRowShapes } from '../memory/held-rows';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
@@ -1227,6 +1228,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (command.kind === 'e2e') return traces.checklist(timezone);
     if (command.kind === 'usage') return traces.usage();
     if (command.kind === 'langfuse') return this.checkLangfuse();
+    if (command.kind === 'heldrows') {
+      // Shape only. 25 rows matches the /trace default.
+      const memory = claimStore(this.ctx.storage.sql);
+      return command.table === null ? heldRowShapes(this.ctx.storage.sql, '', [], 25) : heldRowShapes(this.ctx.storage.sql, command.table, [...memory.incompleteTopics(), ...memory.pendingTopics()], 25);
+    }
     if (command.kind !== 'fire') return '';
     if (command.target === null) return `Usage: /fire <${FIRE_TARGETS.join(' | ')}>`;
     const trace = `harness-${updateId}`;
