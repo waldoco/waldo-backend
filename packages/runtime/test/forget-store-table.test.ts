@@ -38,6 +38,7 @@ const TABLES: Record<string, Row> = {
   event_briefs: exempt('event id and times'), schedule_runs: exempt('ids, status codes and times'),
   observed_mail: exempt('provider source/thread/message IDs, update-card row pointer, observation time and judged/attached flags; no sender/subject/snippet/body; unattached pointers expire after seven days'),
   loop_mail_sources: exempt('loop/source/message IDs, due/timezone, fixed delivery-state code and revisit time; source-derived title lives in loops and source text in update_cards'),
+  loop_nudges: exempt('loop ID, due, timezone and claim time only; the owner-authored title lives in loops, which has its own forgetting row'),
   // Text the owner made or the runtime stored, not reached by a literal forget
   loop_governor_runs: gap('has a reason TEXT column; its writer was not traced'),
   artifacts: gap('name in the table, body in R2; owner-made'), owner_files: gap('file name and caption; owner-made'), reminder_notes: gap('note text; owner-made'),

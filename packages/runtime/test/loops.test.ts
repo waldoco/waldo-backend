@@ -93,3 +93,45 @@ describe('update card feedback', () => {
     });
   });
 });
+
+describe('owner-stated deadline loops without a mail source', () => {
+  const setup = (sql: SqlStorage) => {
+    let id = 0;
+    const book = loopBook(sql, { newId: () => String(++id), now: () => at('2026-09-24T04:00:00Z') });
+    return { book, open: loopHandlers(book)[0]! };
+  };
+  it('are due only once their time has passed, never include undated loops, and are claimed once per due and timezone', async () => {
+    await withSql(async (sql) => {
+      const { book, open } = setup(sql);
+      await run(open, { title: 'Send Priya the deck', due: '2026-09-26T09:00' });
+      await run(open, { title: 'Find a physio' });
+      expect(book.nudgeDue('2026-09-26T08:59', 'Asia/Kolkata')).toEqual([]);
+      const due = book.nudgeDue('2026-09-26T09:00', 'Asia/Kolkata');
+      expect(due.map((loop) => loop.title)).toEqual(['Send Priya the deck']);
+      expect(book.claimNudge(due[0]!.id, '2026-09-26T09:00', 'Asia/Kolkata', at('2026-09-26T04:00:00Z'))).toBe(true);
+      expect(book.claimNudge(due[0]!.id, '2026-09-26T09:00', 'Asia/Kolkata', at('2026-09-26T04:00:00Z'))).toBe(false);
+      expect(book.nudgeDue('2026-09-26T09:30', 'Asia/Kolkata')).toEqual([]);
+    });
+  });
+  it('closing the loop or changing its due before the claim prevents the nudge; a changed due is a new occurrence', async () => {
+    await withSql(async (sql) => {
+      const { book, open } = setup(sql);
+      const a = (await run(open, { title: 'Call the landlord', due: '2026-09-26T09:00' }) as { data: { id: string } }).data.id;
+      const b = (await run(open, { title: 'Pay the plumber', due: '2026-09-26T09:00' }) as { data: { id: string } }).data.id;
+      book.close(a, 'done');
+      expect(book.claimNudge(a, '2026-09-26T09:00', 'Asia/Kolkata', at('2026-09-26T04:00:00Z'))).toBe(false);
+      expect(book.claimNudge(b, '2026-09-25T09:00', 'Asia/Kolkata', at('2026-09-26T04:00:00Z'))).toBe(false);
+      expect(book.claimNudge(b, '2026-09-26T09:00', 'Asia/Kolkata', at('2026-09-26T04:00:00Z'))).toBe(true);
+      sql.exec("UPDATE loops SET due = '2026-09-27T09:00' WHERE id = ?", b);
+      expect(book.nudgeDue('2026-09-27T09:00', 'Asia/Kolkata').map((loop) => loop.id)).toEqual([b]);
+    });
+  });
+  it('mail-sourced loops stay on the mail review path and are never returned here', async () => {
+    await withSql(async (sql) => {
+      const { book } = setup(sql);
+      sql.exec("INSERT INTO loops (id, title, due, status, created_at) VALUES ('m1', 'Reply to Sam', '2026-09-26T09:00', 'open', 1)");
+      sql.exec("INSERT INTO loop_mail_sources (loop_id, source_ref) VALUES ('m1', 'src1')");
+      expect(book.nudgeDue('2026-09-27T09:00', 'Asia/Kolkata')).toEqual([]);
+    });
+  });
+});
