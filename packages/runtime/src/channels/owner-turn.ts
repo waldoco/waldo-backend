@@ -588,7 +588,7 @@ export const createOwnerResponder = (
             const raw = sourceFamilyAvailable('local') ? standingOrders?.({ loopsRoom }) ?? '' : '';
             return forgettingState?.incompleteTopics().some(topic => carriesTopic(raw, topic) || hidesTopic(raw, topic)) ? '' : raw;
           };
-          const recallNotice = forgettingState?.incompleteTopics().length ? 'Recall is temporarily limited while requested forgetting coverage is incomplete. Use the current request and permitted live tools. Do not claim complete erasure or absence of associated facts.' : '';
+          const recallNotice = forgettingState?.incompleteTopics().length ? 'Recall is temporarily limited while requested forgetting coverage is incomplete. Use the current request and permitted live tools. Do not claim complete erasure or absence of associated facts. Do not mention this limit unless the owner asks about forgetting, memory, or missing or limited recall or history.' : '';
           await assertCurrent();
           const skillPrompt = skills && (!binding || request.tools.includes('skills_load')) ? await skills.prompt(CANARIES) : undefined;
           await assertCurrent();
