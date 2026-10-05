@@ -2023,3 +2023,26 @@ it('HELDROWS finds a non-ASCII opposite-case row, separates key-only from value-
     state.storage.deleteAlarm();
   });
 });
+
+it('ESCAPE-HOLD a retained update card with an ordinary JSON unicode escape and no trace of the topic does not hold an unrelated forget', async () => {
+  const label = 'escape-hold-unrelated'; const topic = 'UNRELATED778';
+  const lines: string[] = [];
+  const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
+  try {
+    await admittedTurn(label, 153200, 'My unrelated standup is at 09:10 UTC.', ops());
+    await runInDurableObject(stub(label), (_instance, state) => {
+      state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+      state.storage.sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?,?,?,?)', 1, '2026-10-05', '[{"note":"Meeting moved \\u2013 see agenda"}]', 'Card about lunch');
+      claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+      state.storage.deleteAlarm();
+    });
+    await evictDurableObject(stub(label));
+    seen.selectedTexts = []; seen.selectorOutputMessage = true;
+    await admittedTurn(label, 153201, 'Continue my requested forgetting.', ops());
+  } finally { spy.mockRestore(); }
+  expect(lines.join('\n')).not.toContain('local_stores[update_cards');
+  await runInDurableObject(stub(label), (_instance, state) => {
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
+    state.storage.deleteAlarm();
+  });
+});
