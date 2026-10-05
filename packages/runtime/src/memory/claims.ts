@@ -111,7 +111,9 @@ export const projectionKeyHit = (column: string) => `EXISTS (SELECT 1 FROM json_
 export const projectionPredicate = (columns: readonly string[]) => columns.map(column => `(${projectionRawHit(column)} OR ${projectionValueHit(column)} OR ${projectionKeyHit(column)})`).join(' OR ');
 // Verifies one projection column value with the real guard: the raw text, a decoded JSON string value or a JSON key carries the topic. An unreadable JSON value cannot be proven clean, so it holds.
 export const projectionValueHolds = (value: unknown, topic: string): boolean => {
-  if (typeof value !== 'string') return false;
+  // Only NULL is provably empty; a BLOB or number cannot be proven clean here, so it holds.
+  if (value === null || value === undefined) return false;
+  if (typeof value !== 'string') return true;
   const exact = (text: string) => carriesTopic(text, topic) || hidesTopic(text, topic);
   if (exact(value)) return true;
   const leaves = jsonLeaves(value);

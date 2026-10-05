@@ -2192,3 +2192,32 @@ it('REPRO: a long topic purge redacts what the projection hold sees', async () =
     state.storage.deleteAlarm();
   });
 });
+
+it('REPRO: a BLOB projection value cannot be proven clean and keeps the hold', async () => {
+  const label = 'forget-update-cards-blob';
+  await admittedTurn(label, 153402, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?,?,?,?)', 1, 'd', '[]', new TextEncoder().encode(topic).buffer);
+    const after = claimStore(sql).forgetSources(topic, true);
+    expect(after.incomplete).toBe(true);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('REPRO: /heldrows pages past prefix decoys instead of reporting held with nothing listed', async () => {
+  const label = 'forget-update-cards-decoys';
+  await admittedTurn(label, 153403, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    for (let i = 0; i < 300; i++) sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify([{ detail: `the secret code word that I told you about earlier today ${i}` }]));
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify([{ detail: topic }]));
+    const out = heldRowShapes(sql, 'update_cards', [{ topic, state: 'incomplete' }], 5, t => claimStore(sql).forgetSources(t, true));
+    const text = JSON.stringify(out);
+    expect(text.includes('PARTIAL') || text.includes('#301')).toBe(true);
+  });
+});

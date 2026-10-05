@@ -114,9 +114,12 @@ export const heldRowShapes = (sql: Sql, table: string, topics: readonly HeldTopi
       if (cols.length) {
         const flags = cols.map(column => `${column} AS ${column}_v, length(${column}) AS ${column}_len, json_valid(${column}) AS ${column}_json, ${projectionRawHit(column)} AS ${column}_raw, ${projectionValueHit(column)} AS ${column}_val, ${projectionKeyHit(column)} AS ${column}_key`).join(', ');
         // Candidates come from the prefilter; only rows the real guard says hold the topic are listed (same check as forgetSources).
-        const rows = sql.exec<Record<string, number | string | null>>(`SELECT rowid AS rid, ${flags} FROM ${table} WHERE (${projectionPredicate(cols)}) AND rowid > ? ORDER BY rowid LIMIT ?`, ...cols.flatMap(() => [like, like, like]), ...cols.flatMap(() => [like, like, like]), after0, HELDROWS_SCAN_BUDGET + 1).toArray().filter(row => cols.some(column => projectionValueHolds(row[`${column}_v`], topic)));
+        const candidates = sql.exec<Record<string, number | string | null>>(`SELECT rowid AS rid, ${flags} FROM ${table} WHERE (${projectionPredicate(cols)}) AND rowid > ? ORDER BY rowid LIMIT ?`, ...cols.flatMap(() => [like, like, like]), ...cols.flatMap(() => [like, like, like]), after0, HELDROWS_SCAN_BUDGET + 1).toArray();
+        const scanned = candidates.slice(0, HELDROWS_SCAN_BUDGET);
+        const rows = scanned.filter(row => cols.some(column => projectionValueHolds(row[`${column}_v`], topic)));
         for (const row of rows.slice(0, limit)) extra.push(`#${String(row.rid)} t${index + 1}[projection ${cols.map(column => `${column} len=${row[`${column}_len`] ?? 'null'} json=${row[`${column}_json`] ? 1 : 0} raw=${row[`${column}_raw`] ? 1 : 0} val=${row[`${column}_val`] ? 1 : 0} key=${row[`${column}_key`] ? 1 : 0}`).join(' | ')}]`);
-        if (rows.length > limit) notes.push(`t${index + 1}: more projection rows not shown`);
+        if (rows.length > limit) notes.push(`t${index + 1}: more projection rows not shown, continue with /heldrows ${table} ${String(rows[limit - 1]!.rid)}`);
+        else if (candidates.length > HELDROWS_SCAN_BUDGET) notes.push(`t${index + 1}: projection scan PARTIAL, continue with /heldrows ${table} ${String(scanned[HELDROWS_SCAN_BUDGET - 1]!.rid)}`);
       }
     }
     if (leafStore) for (const column of present.filter(name => (leafStore[1] as readonly string[]).includes(name))) {
