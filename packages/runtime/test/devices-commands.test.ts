@@ -80,3 +80,11 @@ it('rejects acknowledgements and results for expired queued work that never reac
  expect(()=>store.acceptAck({...reference,payload:{state:'accepted'}} as never)).toThrow('invalid_shape');
  expect(()=>store.acceptResult({...reference,type:'result',payload:{status:'answered',answer:{query_id:'query_expired_never_delivered',query_kind:'session_status',state:'unknown'}}} as never,'fingerprint',700302)).toThrow('invalid_shape');
 }));
+it('projects expired offline queued commands honestly at the production console read boundary',async()=>{
+ const stub=env.DEVICE_BRIDGE_DO!.get(env.DEVICE_BRIDGE_DO!.idFromName('dev_expiry_projection_fixture')) as DurableObjectStub<DeviceBridgeDO>;
+ await runInDurableObject(stub,async(instance,state)=>{
+  const store=new DeviceCommandStore(state.storage), now=Math.floor(Date.now()/1000);
+  const queued=await store.enqueue({...input('query_projection_expired'),device_id:'dev_expiry_projection_fixture',ttl_seconds:1},now-5,['machine_state_query']); if(!queued.accepted)throw new Error('queue');
+  expect((await instance.listCommands()).find(row=>row.command_id===queued.command_id)?.state).toBe('expired');
+ });
+});
