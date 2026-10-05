@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { approvalDesk, PROPOSAL_TTL_MS, UNDO_WINDOW_MS } from '../src/channels/approvals';
 import { GoogleError, type GoogleClient } from '../src/connectors/google';
+import { ProxyIntentError } from '../src/connectors/proxy-intent';
 
 const iso = (s: string) => s as never;
 
@@ -236,9 +237,9 @@ describe('approval desk', () => {
       let now = 1_000_000;
       let n = 0;
       const client = {
-        event: async (id: string) => ({ id, title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false }),
-        moveEvent: async (id: string, start: string) => { google.push(`move ${id} ${start}`); return { id, title: 'Gym', start, end: start, all_day: false }; },
-        createEvent: async () => { google.push('create'); return { id: 'new1', title: 'x', start: '', end: '', all_day: false }; },
+        event: async (id: string) => ({ id, title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false, etag: 'v1' }),
+        moveEvent: async (id: string, start: string) => { google.push(`move ${id} ${start}`); return { id, title: 'Gym', start, end: start, all_day: false, etag: 'v1' }; },
+        createEvent: async () => { google.push('create'); return { id: 'new1', title: 'x', start: '', end: '', all_day: false, etag: 'v1' }; },
         cancelEvent: async (id: string) => { google.push(`cancel ${id}`); },
       } as unknown as GoogleClient;
       const desk = approvalDesk(state.storage.sql, {
@@ -299,7 +300,7 @@ describe('approval desk', () => {
         moveEvent: async (id: string, start: string, _end: string, match?: string) => {
           if (conflict) throw new GoogleError(412, 'google 412: precondition failed');
           google.push(`move ${id} ${start} ${match}`);
-          return { id, title: 'Gym', start, end: start, all_day: false };
+          return { id, title: 'Gym', start, end: start, all_day: false, etag: 'v1' };
         },
         cancelEvent: async (id: string, match?: string) => { google.push(`cancel ${id} ${match}`); },
       } as unknown as GoogleClient;
@@ -344,9 +345,9 @@ describe('approval desk', () => {
       let now = 1_000_000;
       let n = 0;
       const client = {
-        event: async (id: string) => ({ id, title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false }),
-        moveEvent: async (id: string, start: string) => { google.push(`move ${id} ${start}`); return { id, title: 'Gym', start, end: start, all_day: false }; },
-        createEvent: async () => { google.push('create'); return { id: 'new1', title: 'x', start: '', end: '', all_day: false }; },
+        event: async (id: string) => ({ id, title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false, etag: 'v1' }),
+        moveEvent: async (id: string, start: string) => { google.push(`move ${id} ${start}`); return { id, title: 'Gym', start, end: start, all_day: false, etag: 'v1' }; },
+        createEvent: async () => { google.push('create'); return { id: 'new1', title: 'x', start: '', end: '', all_day: false, etag: 'v1' }; },
         cancelEvent: async (id: string) => { google.push(`cancel ${id}`); },
       } as unknown as GoogleClient;
       const desk = approvalDesk(state.storage.sql, {
@@ -386,6 +387,180 @@ describe('approval desk', () => {
       expect(desk.pending(now).some((item) => item.id === skip)).toBe(false);
     });
   });
+});
+
+describe('calendar Undo version protection', () => {
+  const setup = async (state: DurableObjectState, action: 'create' | 'move') => {
+    let current: { id: string; title: string; start: string; end: string; all_day: boolean; etag?: string } | null = {
+      id: 'e1', title: 'Gym', start: '2026-10-07T10:00:00Z', end: '2026-10-07T11:00:00Z', all_day: false, etag: 'v1',
+    };
+    const original = { ...current };
+    const writes: { op: string; match?: string }[] = [];
+    let race = false;
+    let failure = false;
+    let missingApplied = false;
+    let readFailure = false;
+    let pendingSecond: Promise<void> | null = null;
+    const waitPending = async () => {
+      if (pendingSecond && writes.length === 3) { await pendingSecond; throw new ProxyIntentError('intent_pending'); }
+    };
+    const check = (match?: string) => {
+      if (race) { current = { ...current!, title: 'Later owner edit', start: '2026-10-07T15:00:00Z', end: '2026-10-07T16:00:00Z', etag: 'v3' }; race = false; }
+      if (failure) throw new GoogleError(503, 'provider unavailable');
+      if (match && match !== current?.etag) throw new GoogleError(412, 'precondition failed');
+    };
+    const client = {
+      event: async () => { if (readFailure) throw new GoogleError(503, 'read unavailable'); return { ...current! }; },
+      createEvent: async (input: { title: string; start: string; end: string }) => {
+        current = { ...current!, ...input, etag: 'v2' };
+        writes.push({ op: 'create' });
+        return { ...current, etag: missingApplied ? undefined : current.etag };
+      },
+      moveEvent: async (_id: string, start: string, end: string, match?: string) => {
+        writes.push({ op: 'move', match }); await waitPending(); check(match);
+        current = { ...current!, start, end, etag: current!.etag === 'v1' ? 'v2' : 'v4' };
+        return { ...current, etag: missingApplied ? undefined : current.etag };
+      },
+      cancelEvent: async (_id: string, match?: string) => { writes.push({ op: 'cancel', match }); await waitPending(); check(match); current = null; },
+    } as unknown as GoogleClient;
+    const deps = { owner: 42, call: async () => ({}), google: async () => client, newId: () => 'version', now: () => 1000, timezone: 'UTC', log: () => {} };
+    const desk = approvalDesk(state.storage.sql, deps);
+    const id = await desk.propose({ action, ...(action === 'move' ? { event_id: 'e1' } : {}), title: 'Gym', start: iso('2026-10-07T12:00:00Z'), end: iso('2026-10-07T13:00:00Z'), reason: 'Owner request' });
+    return { desk, id, original, writes, current: () => current, edit: () => { current = { ...current!, title: 'Later owner edit', start: '2026-10-07T15:00:00Z', end: '2026-10-07T16:00:00Z', etag: 'v3' }; }, race: () => { race = true; }, fail: (value: boolean) => { failure = value; }, missingApplied: () => { missingApplied = true; }, missingCurrent: () => { current = { ...current!, etag: undefined }; }, failRead: () => { readFailure = true; }, delaySecondUndo: () => { let release!: () => void; pendingSecond = new Promise<void>((resolve) => { release = resolve; }); return release; }, reopen: () => approvalDesk(state.storage.sql, deps) };
+  };
+
+  it.each(['create', 'move'] as const)('preserves later owner edits after approved %s', async (action) => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-edited-${action}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const f = await setup(state, action);
+      expect((await f.desk.decide(f.id, 'a', 't')).toast).toBe('Done');
+      f.edit();
+      const out = await f.reopen().decide(f.id, 'u', 't');
+      expect(f.current()).toMatchObject({ title: 'Later owner edit', start: '2026-10-07T15:00:00Z', end: '2026-10-07T16:00:00Z', etag: 'v3' });
+      expect(f.writes).toHaveLength(1);
+      expect(out.toast).toBe('The event changed');
+      expect(out.message).toContain("didn't undo");
+      expect(f.desk.ledger([])).not.toContain('- undone:');
+    });
+  });
+  it.each(['create', 'move'] as const)('undoes unchanged %s once using the persisted applied version', async (action) => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-unchanged-${action}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const f = await setup(state, action);
+      await f.desk.decide(f.id, 'a', 't');
+      const saved = state.storage.sql.exec<{ undo_json: string }>('SELECT undo_json FROM ledger WHERE id = ?', f.id).one();
+      expect(JSON.parse(saved.undo_json)).toMatchObject({ applied_etag: 'v2' });
+      const reopened = f.reopen();
+      await reopened.callback({ id: 'undo-1', from: { id: 42 }, data: `u:${f.id}` }, 't');
+      expect(f.writes.at(-1)).toEqual({ op: action === 'create' ? 'cancel' : 'move', match: 'v2' });
+      expect(f.current()).toEqual(action === 'create' ? null : { ...f.original, etag: 'v4' });
+      await reopened.callback({ id: 'undo-2', from: { id: 42 }, data: `u:${f.id}` }, 't');
+      expect((await reopened.decide(f.id, 'u', 't')).toast).toBe('Already handled.');
+      expect(f.writes).toHaveLength(2);
+      expect(reopened.ledger([])).toContain('- undone:');
+    });
+  });
+
+  it.each(['create', 'move'] as const)('preserves a %s edit between fresh read and conditional Undo write', async (action) => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-raced-${action}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const f = await setup(state, action);
+      await f.desk.decide(f.id, 'a', 't');
+      f.race();
+      const out = await f.desk.decide(f.id, 'u', 't');
+      expect(out.toast).toBe('The event changed');
+      expect(f.writes.at(-1)?.match).toBe('v2');
+      expect(f.current()).toMatchObject({ title: 'Later owner edit', start: '2026-10-07T15:00:00Z', end: '2026-10-07T16:00:00Z', etag: 'v3' });
+      expect(f.desk.ledger([])).not.toContain('- undone:');
+      await f.desk.decide(f.id, 'u', 't');
+      expect(f.writes).toHaveLength(2);
+    });
+  });
+
+  it.each(['create', 'move'] as const)('does not offer unsafe Undo when %s returns no applied etag', async (action) => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-versionless-${action}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const f = await setup(state, action);
+      f.missingApplied();
+      const approved = await f.desk.decide(f.id, 'a', 't');
+      expect(approved.toast).toBe('Done');
+      expect(approved.message).not.toContain('Undo is available');
+      expect(f.desk.pending(1000).some((item) => item.id === f.id && item.undoable)).toBe(false);
+      expect((await f.desk.decide(f.id, 'u', 't')).toast).toBe("Can't be undone");
+      expect(f.writes).toHaveLength(1);
+    });
+  });
+
+  it.each(['create', 'move'] as const)('refuses legacy and missing current versions for %s without writing', async (action) => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-legacy-${action}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const f = await setup(state, action);
+      await f.desk.decide(f.id, 'a', 't');
+      const saved = state.storage.sql.exec<{ undo_json: string }>('SELECT undo_json FROM ledger WHERE id = ?', f.id).one();
+      const legacy = JSON.parse(saved.undo_json) as Record<string, unknown>;
+      delete legacy.applied_etag;
+      state.storage.sql.exec('UPDATE ledger SET undo_json = ? WHERE id = ?', JSON.stringify(legacy), f.id);
+      const legacyOut = await f.reopen().decide(f.id, 'u', 't');
+      expect(legacyOut.toast).toBe("Can't be undone");
+      expect(legacyOut.message).toContain('version is unavailable');
+      state.storage.sql.exec('UPDATE ledger SET undo_json = ? WHERE id = ?', saved.undo_json, f.id);
+      f.missingCurrent();
+      expect((await f.desk.decide(f.id, 'u', 't')).toast).toBe('The event changed');
+      expect(f.writes).toHaveLength(1);
+      expect(f.desk.ledger([])).not.toContain('- undone:');
+    });
+  });
+
+  it.each(['create', 'move'] as const)('keeps %s Undo failures honest and never retries with a newer version', async (action) => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-failure-${action}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const f = await setup(state, action);
+      await f.desk.decide(f.id, 'a', 't');
+      f.fail(true);
+      const failed = await f.desk.decide(f.id, 'u', 't');
+      expect(failed.toast).toBe('That failed');
+      expect(failed.message).not.toContain('Undone');
+      expect(f.current()?.etag).toBe('v2');
+      expect(f.desk.ledger([])).not.toContain('- undone:');
+      f.fail(false); f.edit();
+      expect((await f.desk.decide(f.id, 'u', 't')).toast).toBe('The event changed');
+      expect(f.writes).toHaveLength(2);
+      f.failRead();
+      expect((await f.desk.decide(f.id, 'u', 't')).toast).toBe('That failed');
+      expect(f.writes).toHaveLength(2);
+    });
+  });
+
+  it.each(['create', 'move'] as const)('concurrent %s Undo attempts preserve the confirmed undone ledger', async (action) => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-concurrent-${action}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const f = await setup(state, action);
+      await f.desk.decide(f.id, 'a', 't');
+      const results = await Promise.all([f.desk.decide(f.id, 'u', 't1'), f.desk.decide(f.id, 'u', 't2')]);
+      expect(results.filter((result) => result.toast === 'Undone')).toHaveLength(1);
+      expect(f.current()).toEqual(action === 'create' ? null : { ...f.original, etag: 'v4' });
+      expect(f.desk.ledger([])).toContain('- undone:');
+      expect((await f.desk.decide(f.id, 'u', 't3')).toast).toBe('Already handled.');
+    });
+  });
+
+  it.each(['create', 'move'] as const)('retains confirmed %s Undo after a delayed duplicate proxy uncertainty', async (action) => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-late-pending-${action}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const f = await setup(state, action);
+      await f.desk.decide(f.id, 'a', 't');
+      const release = f.delaySecondUndo();
+      const first = f.desk.decide(f.id, 'u', 't1');
+      const second = f.desk.decide(f.id, 'u', 't2');
+      expect((await first).toast).toBe('Undone');
+      release();
+      await second;
+      expect(f.desk.ledger([])).toContain('- undone:');
+      expect((await f.desk.decide(f.id, 'u', 't3')).toast).toBe('Already handled.');
+      expect(f.current()).toEqual(action === 'create' ? null : { ...f.original, etag: 'v4' });
+    });
+  });
+
 });
 
 describe('approval desk - email_send rail', () => {
