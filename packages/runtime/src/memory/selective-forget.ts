@@ -60,28 +60,34 @@ export const forgetSnapshot = (topic: string, rows: readonly ForgetSource[]): Fo
   return { sources: batch.sources, incomplete: batch.incomplete || batch.more };
 };
 
-export const selectedForgetTexts = (topic: string, snapshot: ForgetSnapshot, raw: string, fresh: ForgetSnapshot): readonly string[] | null => {
-  if (snapshot.incomplete || fresh.incomplete || snapshot.sources.length === 0 || JSON.stringify(snapshot.sources) !== JSON.stringify(fresh.sources)) return null;
+export const selectedForgetResult = (topic: string, snapshot: ForgetSnapshot, raw: string, fresh: ForgetSnapshot): Readonly<{ texts: readonly string[] }> | Readonly<{ reason: string }> => {
+  if (snapshot.incomplete || fresh.incomplete || snapshot.sources.length === 0 || JSON.stringify(snapshot.sources) !== JSON.stringify(fresh.sources)) return { reason: 'snapshot_incomplete_or_changed' };
   let value: unknown;
-  try { value = JSON.parse(raw); } catch { return null; }
-  if (!value || typeof value !== 'object') return null;
+  try { value = JSON.parse(raw); } catch { return { reason: 'selector_output_not_json' }; }
+  if (!value || typeof value !== 'object') return { reason: 'selector_output_shape' };
   const result = value as { spans?: unknown; reviewed_refs?: unknown; complete?: unknown };
-  if (result.complete !== true || !Array.isArray(result.spans) || result.spans.length > MAX_FORGET_SOURCES || !Array.isArray(result.reviewed_refs)) return null;
+  if (result.complete !== true || !Array.isArray(result.spans) || result.spans.length > MAX_FORGET_SOURCES || !Array.isArray(result.reviewed_refs)) return { reason: 'selector_output_incomplete' };
   const spans = result.spans;
   const refs = new Map(snapshot.sources.map(row => [row.ref, row.text]));
-  if (result.reviewed_refs.length !== refs.size || new Set(result.reviewed_refs).size !== refs.size || result.reviewed_refs.some(ref => typeof ref !== 'string' || !refs.has(ref))) return null;
+  if (result.reviewed_refs.length !== refs.size || new Set(result.reviewed_refs).size !== refs.size || result.reviewed_refs.some(ref => typeof ref !== 'string' || !refs.has(ref))) return { reason: 'reviewed_refs_mismatch' };
   const texts: string[] = [];
   for (const entry of spans) {
-    if (!entry || typeof entry !== 'object') return null;
+    if (!entry || typeof entry !== 'object') return { reason: 'span_shape' };
     const span = entry as { ref?: unknown; text?: unknown };
-    if (typeof span.ref !== 'string' || typeof span.text !== 'string' || span.text.length < 12 || span.text.length > 4096 || /[^\x20-\x7e]/.test(span.text)) return null;
-    if (!refs.get(span.ref)?.includes(span.text) || !span.text.toLowerCase().includes(topic.toLowerCase())) return null;
+    if (typeof span.ref !== 'string' || typeof span.text !== 'string' || span.text.length < 12 || span.text.length > 4096 || /[^\x20-\x7e]/.test(span.text)) return { reason: 'span_text_rule' };
+    if (!refs.get(span.ref)?.includes(span.text) || !span.text.toLowerCase().includes(topic.toLowerCase())) return { reason: 'span_not_in_source_or_no_topic' };
     // A span must be a clause around the topic, not the topic with punctuation: removing every topic occurrence must leave a letter or digit.
-    if (!/[a-z0-9]/.test(span.text.toLowerCase().split(topic.toLowerCase()).join(' '))) return null;
+    if (!/[a-z0-9]/.test(span.text.toLowerCase().split(topic.toLowerCase()).join(' '))) return { reason: 'span_is_topic_only' };
     texts.push(span.text);
   }
   // Relevant rows with no selected fact remain unproved, rather than destroying
   // their marker and making later association impossible.
-  if (snapshot.sources.some(row => !spans.some((entry: { ref?: unknown }) => entry.ref === row.ref))) return null;
-  return [...new Set(texts)].sort((a, b) => b.length - a.length);
+  const unspanned = snapshot.sources.find(row => !spans.some((entry: { ref?: unknown }) => entry.ref === row.ref));
+  if (unspanned) return { reason: `row_without_span:${unspanned.ref.split(':')[0]}` };
+  return { texts: [...new Set(texts)].sort((a, b) => b.length - a.length) };
+};
+
+export const selectedForgetTexts = (topic: string, snapshot: ForgetSnapshot, raw: string, fresh: ForgetSnapshot): readonly string[] | null => {
+  const result = selectedForgetResult(topic, snapshot, raw, fresh);
+  return 'texts' in result ? result.texts : null;
 };

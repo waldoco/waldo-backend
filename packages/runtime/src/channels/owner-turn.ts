@@ -1,7 +1,7 @@
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { TASK_SOURCE_INSTRUCTION, TASK_SOURCE_SCHEMA, taskSourceAllowed, taskSourceRequired, taskSourcePrompt, type OwnerTaskSourceScope, type TaskSourceSnapshot, type TaskSourceFamily } from './task-source-scope';
-import { asciiLiteralIncludes, forgetSnapshot, forgetSourceBatch, selectedForgetTexts, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, type ForgetSource } from '../memory/selective-forget';
+import { asciiLiteralIncludes, forgetSnapshot, forgetSourceBatch, selectedForgetResult, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, type ForgetSource } from '../memory/selective-forget';
 import { ownerForgetTopic, hasForgetIntent } from '../memory/claims';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
@@ -808,14 +808,17 @@ export const createOwnerResponder = (
           const standingHit = !!standingOrders?.().toLowerCase().includes(topic.toLowerCase());
           const heldStanding = (local.held ?? []).includes('standing_orders') || standingHit;
           // Named only when standing orders are the sole cause; any other incompleteness keeps the generic class so an unreadable-copy reason is never hidden.
+          // Names of the store classes that reported incomplete, for the diagnostic hop only (never owner text, never a decision).
+          incompleteBy = [...(snapshot.incomplete ? ['source_batch'] : []), ...(local.incomplete ? ['local_stores'] : []), ...(ledger?.incomplete ? ['tool_output_ledger'] : []), ...(conversation?.incomplete ? ['conversation'] : []), ...(standingHit ? ['standing_orders'] : [])];
           forgetHeld = heldStanding && !snapshot.incomplete && !local.otherIncomplete && !(local.incomplete && !local.held?.length) && !ledger?.incomplete && !conversation?.incomplete ? ['standing_orders'] : [];
           return { ...snapshot, incomplete: snapshot.incomplete || local.incomplete || !!ledger?.incomplete || !!conversation?.incomplete || !!standingOrders?.().toLowerCase().includes(topic.toLowerCase()) };
         };
         let forgetHeld: readonly string[] = [];
+        let incompleteBy: readonly string[] = [];
         const supplied = await gather();
         await assertCurrent();
         let selection: string | null = null;
-        if (supplied.incomplete) forgetWhy = forgetHeld.length ? `preserved_store(${[...new Set(forgetHeld)].length})` : `sources_incomplete(${supplied.sources.length})`;
+        if (supplied.incomplete) forgetWhy = forgetHeld.length ? `preserved_store(${[...new Set(forgetHeld)].length})` : `sources_incomplete(${supplied.sources.length}; by ${incompleteBy.join(',') || 'unknown'})`;
         else if (writerStore.pendingTopics().length) forgetWhy = `cleanup_pending(${supplied.sources.length})`;
         else if (supplied.sources.length && forgetBatchesRemaining === 0) forgetWhy = `batch_pending(${supplied.sources.length})`;
         if (!forgetWhy) {
@@ -831,13 +834,14 @@ export const createOwnerResponder = (
         const requestFresh = retainedFresh === null ? null : forgetSourceBatch(topic, [...retainedFresh.sources, ...requestSources()], retainedFresh.more);
         const fresh = requestFresh === null ? null : { ...requestFresh, incomplete: requestFresh.incomplete || retainedFresh!.incomplete };
         const emptyRecovery = !supplied.incomplete && !supplied.more && supplied.sources.length === 0 && fresh !== null && !fresh.incomplete && !fresh.more && fresh.sources.length === 0;
-        let texts = selection === null || fresh === null || supplied.more !== fresh.more ? null : emptyRecovery ? [] : selectedForgetTexts(topic, supplied, selection, fresh);
+        let rejectedBy = '';
+        let texts: readonly string[] | null = selection === null || fresh === null || supplied.more !== fresh.more ? null : emptyRecovery ? [] : (() => { const picked = selectedForgetResult(topic, supplied, selection, fresh); if ('texts' in picked) return picked.texts; rejectedBy = picked.reason; return null; })();
         // The unsaved request is absent from durable readback. Prove its exact
         // retention projection is clean too; a single span cannot cover a mixed row.
         const complete = !supplied.more && fresh !== null && !fresh.more;
         if (texts !== null && complete) {
           const redact = literalTextRedactor(texts, FORGOTTEN);
-          if (requestSources().some(source => asciiLiteralIncludes(redact(source.text), topic))) texts = null;
+          if (requestSources().some(source => asciiLiteralIncludes(redact(source.text), topic))) { texts = null; rejectedBy = 'request_text_residue'; }
         }
         if (texts !== null) {
           if (texts.length) writerStore.authoriseTopicCoverage(topic, texts, at, complete);
@@ -847,7 +851,7 @@ export const createOwnerResponder = (
           raw = JSON.stringify({ ...JSON.parse(raw), forget_topic: null });
         }
         else {
-          if (!forgetWhy) forgetWhy = selection === null ? `selector_unavailable(${supplied.sources.length})` : fresh === null || fresh.incomplete ? `fresh_incomplete(${supplied.sources.length})` : `selection_rejected(${supplied.sources.length} sources)`;
+          if (!forgetWhy) forgetWhy = selection === null ? `selector_unavailable(${supplied.sources.length})` : fresh === null || fresh.incomplete ? `fresh_incomplete(${supplied.sources.length})` : `selection_rejected(${supplied.sources.length} sources; ${rejectedBy || 'unknown'})`;
           const ops = JSON.parse(raw);
           raw = JSON.stringify({ ...ops, forget_topic: null });
         }
