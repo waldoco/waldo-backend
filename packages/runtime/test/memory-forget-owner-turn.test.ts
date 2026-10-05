@@ -310,6 +310,17 @@ it('an incomplete forget names the gate that held in the memory hop, with counts
     expect(JSON.stringify(seen.logs)).not.toContain('Keep tea');
   }, undefined, undefined, sql => episodeIndex(sql).add('why-src', 'owner', fact, 1));
 });
+it('the reply instructions carry the reason class of an incomplete forget, without topic text or counts', async () => {
+  const topic = 'WHY4-757-TOPIC'; const fact = `${topic} likes cobalt paper`;
+  await session('forget-why-reply', async (turn, store) => {
+    seen.writerOps.push(ops({ forget_topic: topic }));
+    await turn('tg-why4', `Forget only ${topic}.`, JSON.stringify({ spans: [], reviewed_refs: [], complete: false }));
+    expect(store.incompleteTopics()).toEqual([topic]);
+    expect(system()).toContain('reason class: selection_rejected)');
+    expect(system()).not.toMatch(/reason class: [a-z_]+\(/);
+    expect(system()).not.toContain(topic);
+  }, undefined, undefined, sql => episodeIndex(sql).add('why4-src', 'owner', fact, 1));
+});
 it('a selector that cannot run is named selector_unavailable, and an over-bound source set is named sources_incomplete', async () => {
   const topic = 'WHY2-757-TOPIC';
   await session('forget-why-unavailable', async (turn, store) => {
