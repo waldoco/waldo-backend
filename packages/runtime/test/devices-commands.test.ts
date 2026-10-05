@@ -53,3 +53,23 @@ it.each([['idle'], { value: 'idle' }, null, 1, true].map(value => [value]))('rej
 it.each([['processing_failed'], { value: 'processing_failed' }, null, 1, true].map(value => [value]))('rejects nonstring failed result reasons %#', value=>{
  expect(resultFrame({...signed('result'),command_id:'cmd_1',revision:1,idempotency_key:'idem_1',payload:{status:'failed',reason:value}})).toBeNull();
 });
+it('receipts a first durable result after volatile expired ack and TTL plus replay horizon, but never for undelivered or rejected work',async()=>setup(async store=>{
+ const queued=await store.enqueue({...input('query_after_expired_ack'),ttl_seconds:1},400000,['machine_state_query']); if(!queued.accepted)throw new Error('queue');
+ const command=JSON.parse(store.pending(400000).find(row=>row.command_id===queued.command_id)!.wire);
+ store.markSent(command.command_id,'generation_fixture');
+ const reference={...signed('result'),command_id:command.command_id,revision:1,idempotency_key:command.idempotency_key};
+ store.acceptAck({...reference,type:'ack',payload:{state:'expired',reason:'expired'}} as never);
+ const result={...reference,payload:{status:'answered',answer:{query_id:'query_after_expired_ack',query_kind:'session_status',state:'unknown'}}};
+ const first=store.acceptResult(result as never,'late-fingerprint',400302);
+ expect(first.payload.result_message_id).toBe(result.message_id);
+ const duplicate=store.acceptResult(result as never,'late-fingerprint',500000); expect(duplicate.message_id).not.toBe(first.message_id);
+ expect(store.list().find(row=>row.command_id===command.command_id)).toMatchObject({state:'answered',result_state:'unknown'});
+ for(const [id,rejected] of [['query_never_sent',false],['query_rejected',true]] as const){
+  const enqueue=await store.enqueue({...input(id),ttl_seconds:1},600000,['machine_state_query']); if(!enqueue.accepted)throw new Error('queue');
+  const pending=JSON.parse(store.pending(600000).find(row=>row.command_id===enqueue.command_id)!.wire);
+  const invalid={...signed('result'),command_id:pending.command_id,revision:1,idempotency_key:pending.idempotency_key,payload:{status:'answered',answer:{query_id:id,query_kind:'session_status',state:'unknown'}}};
+  if(rejected){store.markSent(pending.command_id,'generation_fixture'); store.acceptAck({...invalid,type:'ack',payload:{state:'rejected',reason:'invalid_shape'}} as never);}
+  else store.pending(600002);
+  expect(()=>store.acceptResult(invalid as never,`fingerprint_${id}`,600302)).toThrow();
+ }
+}));
