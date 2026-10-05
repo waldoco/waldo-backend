@@ -177,7 +177,7 @@ it('RPC, malformed provider JSON and OAuth errors never retain private provider 
   if(mode==='oauth')f.healthFail();
   vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
    const url=String(input);if(url.endsWith('/proxy_health'))healthBodies.push(String(init?.body??''));
-   if(mode==='oauth'&&url==='https://oauth2.googleapis.com/token')return Response.json({error:canary},{status:400});
+   if(mode==='oauth'&&url==='https://oauth2.googleapis.com/token')return Response.json({error:'invalid_grant',error_description:canary},{status:400});
    if(url==='https://drivemcp.googleapis.com/mcp/v1'&&JSON.parse(String(init?.body)).method==='tools/call'){
     if(mode==='rpc')return Response.json({error:{message:canary}});if(mode==='malformed')return new Response(canary);
    }
@@ -250,4 +250,62 @@ it.each([
  const out=await(await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'tasks',args:['todo',5]}))).json() as {error:{status:number;reason?:string}};
  expect(out.error.status).toBe(403);expect(out.error.reason).toBe(expected);
  expect(f.rows.size).toBe(0);expect(f.hops).not.toContain('proxy_idem_claim');expect(f.hops).not.toContain('proxy_idem_store');
+});
+
+it('token endpoint outage does not mark health or reconnect and the pinned MCP connection recovers', async () => {
+ const f=fixture();f.scope(['https://www.googleapis.com/auth/drive.readonly']);const provider=fetch;let outage=true;const grants:string[]=[];
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  if(String(input).endsWith('/proxy_access'))grants.push(JSON.parse(String(init?.body)).p_connection);
+  if(String(input)==='https://oauth2.googleapis.com/token'&&outage)return Response.json({error:'temporarily_unavailable'},{status:503});
+  return provider(input,init);
+ }));
+ const out=await dispatchActualRead();expect(out).toMatchObject({ok:false});expect(out).not.toHaveProperty('connect');
+ expect(f.hops).not.toContain('proxy_health');expect(f.effects()).toBe(0);expect(f.rows.size).toBe(0);
+ outage=false;expect(await dispatchActualRead()).toMatchObject({ok:true});expect(grants).toEqual(['conn','conn']);expect(f.effects()).toBe(1);
+});
+
+const refreshCases = [
+ {name:'revoked grant',status:400,error:'invalid_grant',expected:401},
+ {name:'rate limit',status:429,error:'invalid_grant',expected:429},
+ {name:'provider outage',status:503,error:'temporarily_unavailable',expected:503},
+ {name:'HTML outage',status:502,error:null,expected:502},
+ {name:'network',status:0,error:null,expected:502},
+ {name:'timeout',status:0,error:'timeout',expected:502},
+ {name:'client configuration',status:401,error:'invalid_client',expected:502},
+ {name:'malformed success',status:200,error:null,expected:502},
+ {name:'unknown OAuth failure',status:400,error:'PRIVATE_UNKNOWN_ERROR',expected:502},
+];
+it.each(['native','Drive','MCP'])('%s signed read classifies real refresh failures and recovers on the same grant', async lane => {
+ for(const c of refreshCases){
+  const f=fixture();f.scope(['https://www.googleapis.com/auth/drive.readonly','https://www.googleapis.com/auth/calendar.events']);const provider=fetch;let failing=true;const health:unknown[]=[];const connections:string[]=[];const refreshBodies:string[]=[];
+  vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+   const url=String(input);
+   if(url.endsWith('/proxy_access'))connections.push(JSON.parse(String(init?.body)).p_connection);
+   if(url.endsWith('/proxy_health'))health.push(JSON.parse(String(init?.body)));
+   if(url==='https://oauth2.googleapis.com/token'){
+    refreshBodies.push(String(init?.body));
+    if(failing){
+     if(!c.status)throw c.error==='timeout'?new DOMException('PRIVATE_TIMEOUT','TimeoutError'):new TypeError('PRIVATE_NETWORK');
+     return c.error===null?new Response('PRIVATE_HTML',{status:c.status}):Response.json({error:c.error,error_description:'PRIVATE_DESCRIPTION'},{status:c.status});
+    }
+   }
+   if(url.startsWith('https://www.googleapis.com/drive/v3/files'))return Response.json({files:[]});
+   return provider(input,init);
+  }));
+  const input=lane==='MCP'?await readBody():{do_name:'owner',op:'call',connection:'conn',method:lane==='Drive'?'driveListFiles':'event',args:lane==='Drive'?[{}]:['event-one']};
+  const logs=vi.spyOn(console,'log').mockImplementation(()=>{});
+  const out=await(await serve(await request(input))).json();expect(out).toMatchObject({error:{status:c.expected}});
+  expect(health).toEqual(c.expected===401?[{p_do_name:'owner',p_connection:'conn',p_error:'google_refresh_failed'}]:[]);
+  expect(JSON.stringify({out,health,logs:logs.mock.calls})).not.toContain('PRIVATE_');expect(f.effects()).toBe(0);expect(f.rows.size).toBe(0);
+  failing=false;expect(await(await serve(await request(input))).json()).toHaveProperty('data');
+  expect(connections).toEqual(['conn','conn']);expect(refreshBodies).toHaveLength(2);expect(refreshBodies.every(value=>new URLSearchParams(value).get('refresh_token')==='fictional-refresh')).toBe(true);
+  expect(health.at(-1)).toEqual({p_do_name:'owner',p_connection:'conn',p_error:''});logs.mockRestore();
+ }
+});
+it('effect refresh outage retains pending custody and never retries provider after recovery', async () => {
+ const f=fixture();const provider=fetch;let failing=true;
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>String(input)==='https://oauth2.googleapis.com/token'&&failing?Response.json({error:'temporarily_unavailable'},{status:503}):provider(input,init)));
+ expect(await(await serve(await request(body))).json()).toMatchObject({error:{message:'intent_pending',status:503}});
+ failing=false;expect(await(await serve(await request(body))).json()).toMatchObject({error:{message:'intent_pending'}});
+ expect(f.effects()).toBe(0);expect(f.rows.size).toBe(1);expect(f.hops).not.toContain('proxy_idem_store');expect(f.hops).not.toContain('proxy_health');
 });

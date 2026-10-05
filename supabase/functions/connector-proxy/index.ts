@@ -2,7 +2,7 @@
 // sends a connection id and a typed operation, signed with the router secret, and gets data back.
 import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, googleHas, GoogleError, type GoogleErrorReason, type GoogleClient, type GoogleMethod } from '../../../packages/runtime/src/connectors/google.ts';
 import { driveRestClient, DRIVE_REST_METHODS, DriveRestError, type DriveRestMethod } from '../../../packages/runtime/src/connectors/drive-rest.ts';
-import { googleAccessToken } from '../../../packages/runtime/src/connectors/google.ts';
+import { googleAccessToken, GoogleTokenError } from '../../../packages/runtime/src/connectors/google.ts';
 import { executeProxyIntent, ProxyIntentError, type IntentClaim } from '../../../packages/runtime/src/connectors/proxy-intent.ts';
 import { callMcpTransport, McpAuthError, McpToolError } from '../../../packages/runtime/src/connectors/mcp-transport.ts';
 import { safeMcpErrorDiagnostic, type McpErrorDiagnostic } from '../../../packages/runtime/src/connectors/mcp-error-diagnostic.ts';
@@ -100,10 +100,9 @@ const handle = async (body: Body): Promise<Response> => {
       if (read && !googleHas(Array.isArray(grant?.scopes) ? grant.scopes : undefined, 'drive')) return fail(403, 'insufficient scopes');
       const mcpToken = read ? grant?.secret : await db('proxy_secret', { p_do_name: body.do_name, p_connection: body.connection }) as string | null;
       if (!mcpToken) return fail(body.intent_id?503:401, body.intent_id?'intent_unavailable':'connection unavailable');
-      let mcpRefreshError = '';
       try {
         const dispatch = async()=> {
-          const access = await googleAccessToken(app, { refresh_token: mcpToken }, fetch, (error) => { mcpRefreshError = read && error ? 'google_refresh_failed' : error; });
+          const access = await googleAccessToken(app, { refresh_token: mcpToken }, fetch);
           return (await callMcpTransport({ url: body.server_url! }, body.tool!, ((body.args ?? [])[0] ?? {}) as Record<string, unknown>, fetch, async () => access)).content ?? null;
         };
         const content = read ? await dispatch() : await intentDispatch(body, dispatch);
@@ -114,12 +113,12 @@ const handle = async (body: Body): Promise<Response> => {
         // Read failures are provider-controlled content too. Never put that content in
         // response errors or health telemetry: logged() persists the error message.
         if (read) {
-          if (mcpRefreshError) await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: mcpRefreshError }).catch(()=>{console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'}));});
-          return fail(mcpRefreshError ? 401 : error instanceof McpAuthError ? error.status : error instanceof McpToolError ? 400 : 502,
-            mcpRefreshError ? 'google_refresh_failed' : error instanceof McpAuthError ? error.status === 401 ? 'google_reauth_needed' : 'google_scope_missing' : error instanceof McpToolError ? 'mcp_read_rejected' : 'mcp_read_failed', error instanceof McpToolError ? safeMcpErrorDiagnostic(error.diagnostic) : undefined);
+          if (error instanceof GoogleTokenError && error.kind === 'auth') await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: 'google_refresh_failed' }).catch(()=>{console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'}));});
+          return fail(error instanceof GoogleTokenError ? error.status : error instanceof McpAuthError ? error.status : error instanceof McpToolError ? 400 : 502,
+            error instanceof GoogleTokenError ? 'google_refresh_failed' : error instanceof McpAuthError ? error.status === 401 ? 'google_reauth_needed' : 'google_scope_missing' : error instanceof McpToolError ? 'mcp_read_rejected' : 'mcp_read_failed', error instanceof McpToolError ? safeMcpErrorDiagnostic(error.diagnostic) : undefined);
         }
-        if (mcpRefreshError) await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: mcpRefreshError });
-        return fail(mcpRefreshError ? 401 : error instanceof McpAuthError ? error.status : 502, error instanceof Error ? error.message : String(error));
+        if (error instanceof GoogleTokenError && error.kind === 'auth') await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: 'google_refresh_failed' });
+        return fail(error instanceof GoogleTokenError ? error.status : error instanceof McpAuthError ? error.status : 502, error instanceof Error ? error.message : String(error));
       }
     }
     if (body.op !== 'call' || !body.connection || !METHODS.includes(body.method as Method)) return fail(404, 'unknown operation');
@@ -131,15 +130,19 @@ const handle = async (body: Body): Promise<Response> => {
       const allowedScopes = body.method === 'driveReadFileContent' ? ['drive.readonly'] : ['drive.readonly','drive.metadata.readonly'];
       if (!allowedScopes.some(scope => scopes.includes(`https://www.googleapis.com/auth/${scope}`))) return fail(403, 'drive_scope_missing');
       if (!Array.isArray(body.args) || body.args.length !== 1) return fail(400, 'drive_invalid_request');
-      let refreshFailed = false;
-      const client = driveRestClient(fetch, () => googleAccessToken(app, { refresh_token: grant.secret }, fetch, error => { refreshFailed = Boolean(error); }));
+      // Drive wraps bearer errors; retain the typed refresh failure before that boundary.
+      let refreshFailure: GoogleTokenError | undefined;
+      const client = driveRestClient(fetch, () => googleAccessToken(app, { refresh_token: grant.secret }, fetch).catch((error: unknown) => {
+        if (error instanceof GoogleTokenError) refreshFailure = error;
+        throw error;
+      }));
       try {
         const data = await (client[body.method as DriveRestMethod] as (args: unknown) => Promise<unknown>)(body.args[0]);
         await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' }).catch(() => { console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'})); });
         return reply({ data });
       } catch (error) {
-        if (refreshFailed) await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: 'google_refresh_failed' }).catch(() => { console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'})); });
-        return fail(refreshFailed ? 401 : error instanceof DriveRestError ? error.status : 502, refreshFailed ? 'drive_auth_failed' : error instanceof DriveRestError ? error.code : 'drive_read_failed');
+        if (refreshFailure?.kind === 'auth') await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: 'google_refresh_failed' }).catch(() => { console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'})); });
+        return fail(refreshFailure ? refreshFailure.status : error instanceof DriveRestError ? error.status : 502, refreshFailure ? refreshFailure.kind === 'auth' ? 'drive_auth_failed' : 'google_refresh_failed' : error instanceof DriveRestError ? error.code : 'drive_read_failed');
       }
     }
     if(body.method==='calendarPage'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar'))return fail(403,'insufficient scopes');
@@ -147,8 +150,7 @@ const handle = async (body: Body): Promise<Response> => {
     const required = body.method==='sendRaw' ? 'gmail.send' : body.method==='draft' ? 'gmail.compose' : ['createEvent','moveEvent','cancelEvent'].includes(body.method!) ? 'calendar.events' : null;
     if(required && (!Array.isArray(grant.scopes)||!grant.scopes.includes(`https://www.googleapis.com/auth/${required}`)))return fail(body.intent_id?503:403,body.intent_id?'intent_unavailable':'insufficient scopes');
     const token=grant.secret;
-    let refreshError = '';
-    const client = googleClient(app, { refresh_token: token }, fetch, (error) => { refreshError = error; }, {connection_id:body.connection,email:null});
+    const client = googleClient(app, { refresh_token: token }, fetch, undefined, {connection_id:body.connection,email:null});
     try {
       const dispatch=async()=> (await (client[body.method as Method] as (...args: unknown[]) => Promise<unknown>)(...(body.args ?? [])))??null;
       const data = ['draft','sendRaw','createEvent','moveEvent','cancelEvent'].includes(body.method!) ? await intentDispatch(body,dispatch) : await dispatch();
@@ -156,8 +158,8 @@ const handle = async (body: Body): Promise<Response> => {
       return reply({ data: data ?? null });
     } catch (error) {
       if(error instanceof ProxyIntentError)return fail(error.code==='intent_conflict'?409:503,error.code);
-      if (refreshError) await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: refreshError });
-      return fail(refreshError ? 401 : error instanceof GoogleError ? error.status : 502, error instanceof Error ? error.message : String(error), undefined, error instanceof GoogleError ? error.reason : undefined);
+      if (error instanceof GoogleTokenError && error.kind === 'auth') await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: 'google_refresh_failed' });
+      return fail(error instanceof GoogleTokenError ? error.status : error instanceof GoogleError ? error.status : 502, error instanceof Error ? error.message : String(error), undefined, error instanceof GoogleError ? error.reason : undefined);
     }
   } catch (error) {
     if (driveRead(body)) return fail(502, 'drive_read_failed');
