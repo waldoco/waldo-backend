@@ -875,6 +875,27 @@ it('explains a rejected topic-only custody write without claiming pending cleanu
  });
 });
 
+it('forgets an exact marker in an owner-made loop title that has no mail source', async () => {
+  const name = 'forget-plain-loop-marker';
+  await seeded(name);
+  await runInDurableObject(stub(name), async (_instance, state) => {
+    let loopId = 0;
+    const loops = loopBook(state.storage.sql, { now: () => Date.now(), newId: () => `plain-forget-loop-${loopId++}` });
+    loops.open({ title: `Send the deck about ${FORGET}`, due: '2026-10-03T10:00' });
+    loops.open({ title: KEEP, due: null });
+    await state.storage.deleteAlarm();
+  });
+  await forget(name);
+  await runInDurableObject(stub(name), async (_instance, state) => {
+    const retained = state.storage.sql.exec('SELECT title, status FROM loops').toArray();
+    expect(JSON.stringify(retained)).not.toContain(FORGET);
+    expect(retained.find(row => row.title === KEEP)?.status).toBe('open');
+    expect(retained.filter(row => row.status === 'dropped')).toHaveLength(1);
+    expect(claimStore(state.storage.sql).claims('purging')).toEqual([]);
+    await state.storage.deleteAlarm();
+  });
+});
+
 it('forgets an exact source-derived loop marker and an unsent frozen mail follow-up', async () => {
   const name = 'forget-source-mail-marker';
   await seeded(name);
