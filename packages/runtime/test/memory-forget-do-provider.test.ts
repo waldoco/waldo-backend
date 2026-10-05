@@ -1654,6 +1654,26 @@ it('REVIEW-769 a standing order plus another preserved store keeps the generic s
   expect(request()).toContain('reason class: sources_incomplete');
   expect(request()).not.toContain('preserved_store');
 });
+it('LEDGER the memory hop names which store classes held a forget incomplete (diagnostic only)', async () => {
+  const label = 'ledger-incomplete-by'; const topic = 'BYSTORE770';
+  const lines: string[] = [];
+  const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
+  try {
+    await admittedTurn(label, 153000, 'My unrelated standup is at 09:10 UTC.', ops());
+    await runInDurableObject(stub(label), (_instance, state) => {
+      state.storage.sql.exec('CREATE TABLE IF NOT EXISTS standing_orders (id TEXT PRIMARY KEY, scope TEXT NOT NULL, trigger TEXT NOT NULL, at TEXT, gate TEXT NOT NULL, escalation TEXT NOT NULL, created_at INTEGER NOT NULL)');
+      state.storage.sql.exec('INSERT INTO standing_orders (id, scope, trigger, at, gate, escalation, created_at) VALUES (?,?,?,?,?,?,?)', 'ord-by', `watch ${topic}`, 'every_turn', null, 'ask', 'ping me', 1);
+      state.storage.sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
+      state.storage.sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'brief', null, `about ${topic}`, 0);
+      claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+      state.storage.deleteAlarm();
+    });
+    await evictDurableObject(stub(label));
+    seen.selectedTexts = []; seen.selectorOutputMessage = true;
+    await admittedTurn(label, 153001, 'Continue my requested forgetting.', ops());
+  } finally { spy.mockRestore(); }
+  expect(lines.join('\n')).toMatch(/forget_incomplete sources_incomplete\(\d+; by [a-z_,]*standing_orders[a-z_,]*\)/);
+});
 
 it('REVIEW-769 JSON redaction rewrites only rows whose string leaf changed: pretty text, a big integer and 1.0 survive in a row without the topic', async () => {
   const label = 'review-769-json-exact'; const topic = 'POSJSONEXACT769';
