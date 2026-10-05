@@ -2647,3 +2647,25 @@ it.each(['rename-collision','duplicate-key','big-card'] as const)('CUSTODY2 %s',
   if(kind==='big-card') expect(t1-t0).toBeLessThan(2000);
  });
 });
+
+// #804 round 3: bounded search must not widen the blast radius, and unrelated cards keep their stored bytes.
+it('CUSTODY3 a split topic in a card of 70 leaves blanks only its pieces, and an unrelated card keeps its exact bytes', async () => {
+ const label='custody3-big'; await admittedTurn(label,191000,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql; const updates=updateBook(sql); const store=claimStore(sql);
+  const a=MAIL_T.slice(0,46), b=MAIL_T.slice(46);
+  const filler=Array.from({length:34},(_,i)=>mailM(i+10,`unrelated invoice detail ${i}`));
+  updates.record('d',1,[...filler.slice(0,17),mailM(0,a),mailM(1,b),...filler.slice(17)],'S');
+  updates.record('d',1,[mailM(90,'plain')],'S2');
+  const exactBytes='[{"n":9007199254740993,"big":1e400,"detail":"keep me"}]';
+  sql.exec('UPDATE update_cards SET changes = ? WHERE id = (SELECT MAX(id) FROM update_cards)',exactBytes);
+  const t0=Date.now(); store.purge([],new Date().toISOString(),[MAIL_T]); const ms=Date.now()-t0;
+  const rows=sql.exec<{changes:string}>('SELECT changes FROM update_cards ORDER BY id').toArray();
+  state.storage.deleteAlarm();
+  const first=rows[0]!.changes;
+  expect(first).not.toContain(a.slice(0,40)); expect(first).not.toContain(b);
+  for(let i=0;i<34;i++) expect(first).toContain(`unrelated invoice detail ${i}`);
+  expect(rows[1]!.changes).toBe(exactBytes);
+  expect(ms).toBeLessThan(2000);
+ });
+});

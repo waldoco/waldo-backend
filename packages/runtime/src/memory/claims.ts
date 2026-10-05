@@ -170,8 +170,6 @@ export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string)
   }
   return all.some(decoded) || [all, values].some(list => decoded(list.join('')) || decoded(list.join(' ')));
 };
-// Measured: about 1.1s at 200 leaves and 7.9s at 400 for the run search; 64 keeps it to tens of milliseconds.
-const CARD_LOCALISE_MAX_LEAVES = 64;
 const CARD_SCHEMA_KEYS = ['source', 'kind', 'detail', 'source_ref', 'source_message_id'];
 // Blanks only the leaves of a parsed card that carry the topic's pieces: the smallest in-order run of leaves (values alone, else keys plus values) whose concatenation holds the topic.
 // A card the pieces test cannot localise (raw or unreadable match) is blanked leaf by leaf entirely. Join keys and their values are never touched.
@@ -193,10 +191,14 @@ export const blankCardPieces = (parsed: unknown, topic: string): unknown => {
   const holds = (list: Leaf[], from: number, to: number, separator: string) => exact(list.slice(from, to + 1).map(leaf => leaf.text).join(separator));
   // Same piece lists and join modes as cardCarriesTopic. For each start take the shortest run holding the topic, and skip a run whose tail alone still holds it (a later start finds that one),
   // so unrelated leaves before, between or after the copies are never marked. Marks accumulate over every list and join mode, because separate copies may need different ones.
-  for (const list of leaves.length > CARD_LOCALISE_MAX_LEAVES ? [] : [leaves.filter(leaf => !leaf.key), leaves]) {
+  for (const list of [leaves.filter(leaf => !leaf.key), leaves]) {
     for (const separator of ['', ' ']) {
       for (let from = 0; from < list.length; from++) {
+        // Leaves strictly between the first and last of a run that holds the topic lie wholly inside it, so their total length cannot exceed the topic's: stop extending past that.
+        // This keeps the search near linear instead of cubic (it was about 1s at 200 leaves).
+        let inside = 0;
         for (let to = from; to < list.length; to++) {
+          if (to > from + 1) { inside += list[to - 1]!.text.replace(/\u0000/g, '').length + separator.length; if (inside > topic.length) break; }
           if (!holds(list, from, to, separator)) continue;
           if (!(from < to && holds(list, from + 1, to, separator))) for (let index = from; index <= to; index++) marked.add(`${list[index]!.path}|${list[index]!.key}`);
           break;
@@ -204,9 +206,8 @@ export const blankCardPieces = (parsed: unknown, topic: string): unknown => {
       }
     }
   }
-  // Cost is cubic in leaf count (about 1s at 200 leaves). Past this many leaves the card is blanked leaf by leaf instead of localised, which settles the hold at linear cost.
   // A card held only by the prefix floor has no localisable run: redact just the leaves whose own text carries the prefix, and everything only if none does.
-  if (marked.size === 0 && leaves.length <= CARD_LOCALISE_MAX_LEAVES) {
+  if (marked.size === 0) {
     const prefix = topic.slice(0, LIKE_PREFILTER_MAX).toLowerCase();
     for (const leaf of leaves) if (prefix && leaf.text.replace(/\u0000/g, '').toLowerCase().includes(prefix)) marked.add(`${leaf.path}|${leaf.key}`);
   }
@@ -575,8 +576,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             const redactedChanges = parsed === undefined
               ? ci(row.changes)
               : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
-            // Compared with the stored bytes, so a card the decoded view cannot see all of (duplicate keys) is rewritten canonical.
-            const changed = redactedChanges !== row.changes;
+            // Only a card that redaction changed, or one whose duplicate keys hide bytes from the decoded view, is rewritten; every other card keeps its stored bytes.
+            const changed = parsed === undefined ? redactedChanges !== row.changes : redactedChanges !== JSON.stringify(parsed) || hasDuplicateKeys(row.changes);
             // A card that still carries the topic after redaction (split across values or keys, or broken by a NUL) cannot be proven clean by the per-value pass.
             // update_cards rows record no source and siblings of a matching fragment may be unrelated, so only the leaves that carry the topic's pieces are blanked
             // (values, and keys renamed unless they are schema keys). Join keys, other leaves, the summary text when clean and the send state stay. Same predicate as the hold.
