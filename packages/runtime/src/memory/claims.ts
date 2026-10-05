@@ -1,6 +1,6 @@
 type Sql = Pick<SqlStorage, 'exec'>;
 import { carriesTopic, hidesTopic } from './forget-guard';
-import type { ForgetSource, ForgetBatch } from './selective-forget';
+import type { ForgetSource, ForgetBatch, ForgetHeldBy } from './selective-forget';
 import { asciiLiteralIncludes, MAX_FORGET_SOURCES } from './selective-forget';
 
 export const CLAIM_KINDS = ['fact', 'preference', 'routine', 'goal', 'followup', 'health', 'event', 'pattern', 'observation'] as const;
@@ -619,18 +619,25 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const row = sql.exec<{ topic: string; coverage_incomplete: number }>('SELECT topic, coverage_incomplete FROM topic_purge_pending WHERE fingerprint = ?', textFingerprint(topic.trim())).toArray()[0];
       return row?.topic === topic.trim() ? row.coverage_incomplete : null;
     },
-    forgetSources(topic: string, batch = false): { sources: ForgetSource[]; incomplete: boolean; held?: string[]; otherIncomplete?: boolean; more?: boolean } {
+    forgetSources(topic: string, batch = false): { sources: ForgetSource[]; incomplete: boolean; held?: string[]; heldBy?: ForgetHeldBy[]; otherIncomplete?: boolean; more?: boolean } {
       const sources: ForgetSource[] = [];
       let incomplete = false;
       const held: string[] = [];
       // Rows LIKE cannot be trusted on: any hiding escape, or a NUL with the topic in the full string. Held, never settled.
-      const guard = (table: string, columns: readonly string[]) => {
+      const heldBy: ForgetHeldBy[] = [];
+      const guard = (table: string, columns: readonly string[], projection = false) => {
         if (held.includes(table) || !tableExists(sql, table)) return;
         for (const column of columns) {
           if (!sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) continue;
-          const risky = sql.exec<{ value: string }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL AND (instr(${column}, char(92)) > 0 OR instr(CAST(${column} AS BLOB), x'00') > 0)`).toArray()
-            .some(row => typeof row.value === 'string' && (hidesTopic(row.value, topic) || (row.value.includes('\0') && carriesTopic(row.value, topic))));
-          if (risky) { incomplete = true; held.push(table); return; }
+          const rows = sql.exec<{ value: string }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL AND (instr(${column}, char(92)) > 0 OR instr(CAST(${column} AS BLOB), x'00') > 0)`).toArray();
+          const escaped = rows.filter(row => typeof row.value === 'string' && hidesTopic(row.value, topic)).length;
+          const nul = rows.filter(row => typeof row.value === 'string' && !hidesTopic(row.value, topic) && row.value.includes('\0') && carriesTopic(row.value, topic)).length;
+          if (escaped || nul) {
+            incomplete = true; held.push(table);
+            // Names and counts only; never row text or ids.
+            heldBy.push({ table, rule: projection ? 'projection' : escaped ? 'guard_escape' : 'nul', rows: escaped + nul });
+            return;
+          }
         }
       };
       let more = false;
@@ -669,7 +676,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
               if (leaves === null) return false;
               return leaves === 'unreadable' || leaves.some(leaf => leaf.toLowerCase().includes(topic.toLowerCase()));
             });
-          if (decodedOnly) { incomplete = true; held.push(table); }
+          if (decodedOnly) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'decoded_leaf_or_unreadable', rows: 1 }); }
         }
       }
       const incompleteBeforeHeld = incomplete;
@@ -684,16 +691,16 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       ] as const) {
         if (!tableExists(sql, table)) continue;
         const available = columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length);
-        if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${available.map(column => `(${column} LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE (type = 'text' AND value LIKE ? ESCAPE '\\') OR key LIKE ? ESCAPE '\\'))`).join(' OR ')} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) { incomplete = true; held.push(table); }
+        if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${available.map(column => `(${column} LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE (type = 'text' AND value LIKE ? ESCAPE '\\') OR key LIKE ? ESCAPE '\\'))`).join(' OR ')} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'projection', rows: 1 }); }
         if (available.length && !held.includes(table)) {
-          guard(table, available);
+          guard(table, available, true);
         }
       }
-      return { sources, incomplete, ...(held.length ? { held, otherIncomplete: incompleteBeforeHeld || held.some(table => table !== 'standing_orders') } : {}), ...(batch ? { more } : {}) };
+      return { sources, incomplete, ...(held.length ? { held, heldBy, otherIncomplete: incompleteBeforeHeld || held.some(table => table !== 'standing_orders') } : {}), ...(batch ? { more } : {}) };
     },
     forgetSourceBatch(topic: string): ForgetBatch {
       const page = this.forgetSources(topic, true);
-      return { sources: page.sources, incomplete: page.incomplete, ...(page.held ? { held: page.held, otherIncomplete: page.otherIncomplete } : {}), more: !!page.more };
+      return { sources: page.sources, incomplete: page.incomplete, ...(page.held ? { held: page.held, heldBy: page.heldBy, otherIncomplete: page.otherIncomplete } : {}), more: !!page.more };
     },
     beginTopicCoverage(topic: string, at: string): void {
       topic = topic.trim();

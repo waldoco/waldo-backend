@@ -22,7 +22,9 @@ export const SELECTIVE_FORGET_SCHEMA = {
 
 // `more` is ordinary page exhaustion. `incomplete` is an unreadable or
 // unprovable source set; it must never be converted into batching progress.
-export type ForgetBatch = ForgetSnapshot & Readonly<{ more: boolean; held?: readonly string[]; otherIncomplete?: boolean }>;
+// Diagnostic only: which store held a forget and by which rule. Table names and counts; never row text or ids.
+export type ForgetHeldBy = Readonly<{ table: string; rule: string; rows: number }>;
+export type ForgetBatch = ForgetSnapshot & Readonly<{ more: boolean; held?: readonly string[]; heldBy?: readonly ForgetHeldBy[]; otherIncomplete?: boolean }>;
 export const forgetSourceBatch = (topic: string, rows: readonly ForgetSource[], more = false): ForgetBatch => {
   if (topic.length < 3 || topic.length > 512 || /[^\x20-\x7e]/.test(topic)) return { sources: [], incomplete: true, more };
   // A ref seen with two different texts is a conflict whether or not either text carries the topic.

@@ -1672,7 +1672,28 @@ it('LEDGER the memory hop names which store classes held a forget incomplete (di
     seen.selectedTexts = []; seen.selectorOutputMessage = true;
     await admittedTurn(label, 153001, 'Continue my requested forgetting.', ops());
   } finally { spy.mockRestore(); }
-  expect(lines.join('\n')).toMatch(/forget_incomplete sources_incomplete\(\d+; by [a-z_,]*standing_orders[a-z_,]*\)/);
+  expect(lines.join('\n')).toMatch(/forget_incomplete sources_incomplete\(\d+; by [^)]*standing_orders[^)]*\)/);
+});
+
+it('LEDGER the memory hop names the held table, rule and row count for local_stores (names and counts only)', async () => {
+  const label = 'ledger-held-table'; const topic = 'HELDTABLE777';
+  const lines: string[] = [];
+  const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
+  try {
+    await admittedTurn(label, 153100, 'My unrelated standup is at 09:10 UTC.', ops());
+    await runInDurableObject(stub(label), (_instance, state) => {
+      state.storage.sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
+      state.storage.sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'brief', null, `about ${topic}`, 0);
+      claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+      state.storage.deleteAlarm();
+    });
+    await evictDurableObject(stub(label));
+    seen.selectedTexts = []; seen.selectorOutputMessage = true;
+    await admittedTurn(label, 153101, 'Continue my requested forgetting.', ops());
+  } finally { spy.mockRestore(); }
+  const hop = lines.join('\n');
+  expect(hop).toContain('local_stores[day_plan:projection:1]');
+  expect(hop).not.toContain(`about ${topic}`);
 });
 
 it('REVIEW-769 JSON redaction rewrites only rows whose string leaf changed: pretty text, a big integer and 1.0 survive in a row without the topic', async () => {
