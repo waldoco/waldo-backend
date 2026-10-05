@@ -29,3 +29,19 @@ it.each([['web only', ['web'], 'owner_transition', true], ['web and browser', ['
   expect(result.snapshot.ready).toBe(ready);
   if (ready) expect(taskSourceAllowed(result.snapshot, { name: 'browse_act' })).toBe(true);
 }));
+
+it('treats an ordinary read of a default connected source outside the stored limit as a new task, never uncertain', () => {
+  expect(TASK_SOURCE_INSTRUCTION).toContain('names a connected source the host offers by default (mail, calendar, contacts, tasks, drive) and falls outside the stored limit starts a new task over that source');
+  expect(TASK_SOURCE_INSTRUCTION).toContain('never uncertain');
+});
+import { ownerReadSources } from '../src/channels/task-source-scope';
+it('a calendar read after a mail-only task becomes a ready calendar task without an owner card', () => custody('calendar-after-mail', async (sql, scope) => {
+  const text = "What's on my calendar tomorrow?";
+  const cap = createTaskSourceScope(sql, 'owner', scope, async () => {}, { inputRef: 'in-2', text }, ownerReadSources([{ id: 'g' }] as never));
+  await cap.classify(JSON.stringify({ decision: 'restrict', sources: ['mail'] }), 'prev');
+  const result = await cap.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: text }), 'in-2', text);
+  expect(result.outcome).toBe('owner_transition');
+  expect(result.proposal).toBeUndefined();
+  expect(result.snapshot.ready).toBe(true);
+  expect(taskSourceAllowed(result.snapshot, { name: 'query_calendar' })).toBe(true);
+}));
