@@ -17,8 +17,6 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
     id TEXT PRIMARY KEY, title TEXT NOT NULL, due TEXT, status TEXT NOT NULL DEFAULT 'open', created_at INTEGER NOT NULL, closed_at INTEGER)`);
   sql.exec('CREATE TABLE IF NOT EXISTS observed_mail (source_ref TEXT PRIMARY KEY, thread_id TEXT NOT NULL, observed_at INTEGER NOT NULL, message_id TEXT NOT NULL, judged INTEGER NOT NULL DEFAULT 0, update_id INTEGER, attached INTEGER NOT NULL DEFAULT 0)');
   sql.exec('CREATE TABLE IF NOT EXISTS loop_mail_sources (loop_id TEXT PRIMARY KEY, source_ref TEXT NOT NULL UNIQUE, nudged_due TEXT, nudged_timezone TEXT, delivery_state TEXT, nudged_message_id TEXT, review_after INTEGER)');
-  // Once-only claim per loop, due and timezone for owner-stated deadline loops that have no mail source.
-  sql.exec('CREATE TABLE IF NOT EXISTS loop_nudges (loop_id TEXT PRIMARY KEY, nudged_due TEXT NOT NULL, nudged_timezone TEXT NOT NULL, claimed_at INTEGER NOT NULL)');
   sql.exec('CREATE INDEX IF NOT EXISTS loops_status_due_idx ON loops (status, due)');
   sql.exec('CREATE TABLE IF NOT EXISTS proactivity (id INTEGER PRIMARY KEY CHECK (id = 1), settings TEXT NOT NULL)');
   return {
@@ -54,21 +52,6 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
         FROM loops l JOIN loop_mail_sources s ON s.loop_id = l.id JOIN observed_mail m ON m.source_ref = s.source_ref JOIN update_cards c ON c.id = m.update_id, json_each(c.changes) j
         WHERE json_extract(j.value, '$.source_ref') = m.source_ref AND json_extract(j.value, '$.source_message_id') = m.message_id AND l.status = 'open' AND l.due IS NOT NULL AND l.due <= ? AND (s.nudged_due IS NULL OR s.nudged_due != l.due OR s.nudged_timezone != ? OR s.nudged_message_id != m.message_id OR (s.delivery_state = 'skipped' AND s.review_after <= ?))
         ORDER BY l.due LIMIT 3`, localNow, timezone, now).toArray();
-    },
-    // Open, dated loops with no mail source whose due has passed and that have not been claimed for this due and timezone.
-    nudgeDue(localNow: string, timezone: string): readonly Loop[] {
-      return sql.exec<Loop>(`SELECT l.* FROM loops l WHERE l.status = 'open' AND l.due IS NOT NULL AND l.due <= ?
-        AND NOT EXISTS (SELECT 1 FROM loop_mail_sources s WHERE s.loop_id = l.id)
-        AND NOT EXISTS (SELECT 1 FROM loop_nudges n WHERE n.loop_id = l.id AND n.nudged_due = l.due AND n.nudged_timezone = ?)
-        ORDER BY l.due LIMIT 3`, localNow, timezone).toArray();
-    },
-    // Atomic once-only claim: succeeds only while the loop is still open at exactly this due and has not been claimed for it.
-    claimNudge(loopId: string, due: string, timezone: string, now = deps.now()): boolean {
-      return sql.exec(`INSERT INTO loop_nudges (loop_id, nudged_due, nudged_timezone, claimed_at)
-        SELECT l.id, ?, ?, ? FROM loops l WHERE l.id = ? AND l.status = 'open' AND l.due = ? AND NOT EXISTS (SELECT 1 FROM loop_mail_sources s WHERE s.loop_id = l.id)
-        ON CONFLICT(loop_id) DO UPDATE SET nudged_due = excluded.nudged_due, nudged_timezone = excluded.nudged_timezone, claimed_at = excluded.claimed_at
-        WHERE loop_nudges.nudged_due != excluded.nudged_due OR loop_nudges.nudged_timezone != excluded.nudged_timezone
-        RETURNING loop_id`, due, timezone, now, loopId, due).toArray().length > 0;
     },
     reviewEligible(receipt: MailFollowupReceipt, timezone: string): boolean {
       return receipt.timezone === timezone && sql.exec("SELECT 1 FROM loops l JOIN loop_mail_sources s ON s.loop_id = l.id JOIN observed_mail m ON m.source_ref = s.source_ref WHERE l.id = ? AND l.status = 'open' AND l.due = ? AND s.source_ref = ? AND m.message_id = ?", receipt.loopId, receipt.due, receipt.sourceRef, receipt.messageId).toArray().length > 0;
