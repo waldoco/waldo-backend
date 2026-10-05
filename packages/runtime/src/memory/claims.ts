@@ -417,10 +417,15 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             for (const row of sql.exec<{ rowid: number; value: string | null }>(`SELECT rowid, ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL`).toArray()) {
               if (typeof row.value !== 'string') continue;
               // JSON-valued columns are redacted on string leaves and re-serialised, so a span can never break the structure; a span that crosses a JSON boundary matches no leaf, stays unredacted, and the readback keeps the forget incomplete.
-              let next: string;
+              let next = row.value;
               try {
                 const parsed: unknown = JSON.parse(row.value);
-                next = parsed !== null && typeof parsed === 'object' ? JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value) : ci(row.value);
+                if (parsed !== null && (typeof parsed === 'object' || typeof parsed === 'string')) {
+                  // Rewrite only when a string leaf changed, so rows without the topic keep their exact original text (no whitespace, big-number or escape normalisation).
+                  const normal = JSON.stringify(parsed);
+                  const redacted = JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
+                  if (redacted !== normal) next = redacted;
+                }
               } catch { next = ci(row.value); }
               if (next !== row.value) { sql.exec(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`, next, row.rowid); tally('redacted', table); }
             }
@@ -594,7 +599,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const row = sql.exec<{ topic: string; coverage_incomplete: number }>('SELECT topic, coverage_incomplete FROM topic_purge_pending WHERE fingerprint = ?', textFingerprint(topic.trim())).toArray()[0];
       return row?.topic === topic.trim() ? row.coverage_incomplete : null;
     },
-    forgetSources(topic: string, batch = false): { sources: ForgetSource[]; incomplete: boolean; held?: string[]; more?: boolean } {
+    forgetSources(topic: string, batch = false): { sources: ForgetSource[]; incomplete: boolean; held?: string[]; otherIncomplete?: boolean; more?: boolean } {
       const sources: ForgetSource[] = [];
       let incomplete = false;
       const held: string[] = [];
@@ -621,6 +626,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         const available = tableExists(sql, table) ? columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) : [];
         if (available.length) collect(table, 'rowid', available);
       }
+      const incompleteBeforeHeld = incomplete;
       // These existing cleanup projections are outside the bounded selector's
       // source contract. Preserve their originals if they still carry the topic.
       for (const [table, columns] of [
@@ -634,11 +640,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         const available = columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length);
         if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${available.map(column => `(${column} LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE (type = 'text' AND value LIKE ? ESCAPE '\\') OR key LIKE ? ESCAPE '\\'))`).join(' OR ')} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) { incomplete = true; held.push(table); }
       }
-      return { sources, incomplete, ...(held.length ? { held } : {}), ...(batch ? { more } : {}) };
+      return { sources, incomplete, ...(held.length ? { held, otherIncomplete: incompleteBeforeHeld || held.some(table => table !== 'standing_orders') } : {}), ...(batch ? { more } : {}) };
     },
     forgetSourceBatch(topic: string): ForgetBatch {
       const page = this.forgetSources(topic, true);
-      return { sources: page.sources, incomplete: page.incomplete, ...(page.held ? { held: page.held } : {}), more: !!page.more };
+      return { sources: page.sources, incomplete: page.incomplete, ...(page.held ? { held: page.held, otherIncomplete: page.otherIncomplete } : {}), more: !!page.more };
     },
     beginTopicCoverage(topic: string, at: string): void {
       topic = topic.trim();

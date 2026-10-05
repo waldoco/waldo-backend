@@ -1636,3 +1636,44 @@ for (const column of ['scope', 'escalation'] as const) it(`REVIEW-769 standing_o
   expect(request()).toContain('standing_orders');
   await runInDurableObject(stub(label), (_instance, state) => { expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]); state.storage.deleteAlarm(); });
 });
+
+it('REVIEW-769 a standing order plus another preserved store keeps the generic sources_incomplete class, so the other cause is not hidden', async () => {
+  const label = 'review-769-orders-mixed'; const topic = 'POSMIXED769';
+  await admittedTurn(label, 152000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS standing_orders (id TEXT PRIMARY KEY, scope TEXT NOT NULL, trigger TEXT NOT NULL, at TEXT, gate TEXT NOT NULL, escalation TEXT NOT NULL, created_at INTEGER NOT NULL)');
+    state.storage.sql.exec('INSERT INTO standing_orders (id, scope, trigger, at, gate, escalation, created_at) VALUES (?,?,?,?,?,?,?)', 'ord-mixed', `watch ${topic}`, 'every_turn', null, 'ask', 'ping me', 1);
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
+    state.storage.sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'brief', null, `about ${topic}`, 0);
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 152001, 'Continue my requested forgetting.', ops());
+  expect(request()).toContain('reason class: sources_incomplete');
+  expect(request()).not.toContain('preserved_store');
+});
+
+it('REVIEW-769 JSON redaction rewrites only rows whose string leaf changed: pretty text, a big integer, 1.0 and escapes survive in a row without the topic', async () => {
+  const label = 'review-769-json-exact'; const topic = 'POSJSONEXACT769';
+  const pretty = '[\n  { "n": 12345678901234567890, "x": 1.0, "e": "\\u00e9" }\n]';
+  await admittedTurn(label, 153000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec(MEMORY_BLOCKS_DDL);
+    state.storage.sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'json-keep', 'u', 'facts', 'plain note', pretty, 0.9, 't', 't', 'user_stated');
+    state.storage.sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'json-hit', 'u', 'facts', 'plain note', JSON.stringify([{ note: `Call ${topic} about lunch` }]), 0.9, 't', 't', 'user_stated');
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  seen.selectedTexts = [`Call ${topic} about lunch`]; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 153001, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const rows = Object.fromEntries(state.storage.sql.exec<{ id: string; decision_log: string }>('SELECT id, decision_log FROM memory_blocks').toArray().map(row => [row.id, row.decision_log]));
+    expect(rows['json-keep']).toBe(pretty);
+    expect(rows['json-hit']).not.toContain(topic);
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
+    state.storage.deleteAlarm();
+  });
+});

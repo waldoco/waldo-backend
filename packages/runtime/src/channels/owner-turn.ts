@@ -795,7 +795,10 @@ export const createOwnerResponder = (
           rows.push(...requestSources());
           const more = local.more || !!(conversation && 'more' in conversation && conversation.more) || !!ledger?.more;
           const snapshot = forgetSourceBatch(topic, rows, more);
-          forgetHeld = [...(local.held ?? []).filter(table => table === 'standing_orders'), ...(standingOrders?.().toLowerCase().includes(topic.toLowerCase()) ? ['standing_orders'] : [])];
+          const standingHit = !!standingOrders?.().toLowerCase().includes(topic.toLowerCase());
+          const heldStanding = (local.held ?? []).includes('standing_orders') || standingHit;
+          // Named only when standing orders are the sole cause; any other incompleteness keeps the generic class so an unreadable-copy reason is never hidden.
+          forgetHeld = heldStanding && !snapshot.incomplete && !local.otherIncomplete && !(local.incomplete && !local.held?.length) && !ledger?.incomplete && !conversation?.incomplete ? ['standing_orders'] : [];
           return { ...snapshot, incomplete: snapshot.incomplete || local.incomplete || !!ledger?.incomplete || !!conversation?.incomplete || !!standingOrders?.().toLowerCase().includes(topic.toLowerCase()) };
         };
         let forgetHeld: readonly string[] = [];
