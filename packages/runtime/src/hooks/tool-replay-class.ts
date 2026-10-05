@@ -1,7 +1,7 @@
 import type { ToolName } from '@waldo/contracts';
 
 // What a crash between a tool's effect and the turn's persisted completion means for that tool.
-// This is a reviewed table only. Nothing reads it at runtime yet, so no behavior or prompt changes.
+// Reviewed table plus replayDecision below. No runtime caller yet: owner-path wiring waits on a durable per-call intent record.
 //  safe_read              re-running is harmless.
 //  provider_idempotent    the write carries a key the receiving store collapses (same key, one effect).
 //  reconcilable_write     a re-run can duplicate, but a lookup (message id, dedupe key, revision) can tell
@@ -46,4 +46,22 @@ export const TOOL_REPLAY_CLASS: Readonly<Record<ToolName, ToolReplayRow>> = {
   draft_document: unknown(NO_HANDLER), write_sheet_cell: unknown(NO_HANDLER), execute_code: unknown(NO_HANDLER),
   create_thread: unknown(NO_HANDLER), delete_message: unknown(NO_HANDLER), restore_message: unknown(NO_HANDLER),
   archive_thread: unknown(NO_HANDLER), update_thread_topics: unknown(NO_HANDLER),
+};
+
+// What a retried tool call may do, from its class and what a durable intent record shows about the earlier attempt.
+//  unseen              no record of an earlier attempt: run.
+//  settled             the earlier attempt finished with a stored result: reuse it, never run again.
+//  started_unsettled   an earlier attempt began and its outcome was never stored (crash window).
+// Decision for started_unsettled: safe_read and provider_idempotent run again (same key collapses at the store);
+// reconcilable_write must look the effect up first; non_replayable_uncertain never runs again and the owner is told it may or may not have happened.
+export type PriorCall = 'unseen' | 'settled' | 'started_unsettled';
+export type ReplayDecision = 'run' | 'reuse_result' | 'reconcile_first' | 'refuse_uncertain';
+export const replayDecision = (tool: ToolName, prior: PriorCall): ReplayDecision => {
+  if (prior === 'unseen') return 'run';
+  if (prior === 'settled') return 'reuse_result';
+  switch (TOOL_REPLAY_CLASS[tool].replay) {
+    case 'safe_read': case 'provider_idempotent': return 'run';
+    case 'reconcilable_write': return 'reconcile_first';
+    case 'non_replayable_uncertain': return 'refuse_uncertain';
+  }
 };
