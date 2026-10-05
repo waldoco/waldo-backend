@@ -4,8 +4,9 @@ import { describe, expect, it } from 'vitest';
 //  PURGED    purge() clears the owner's text from it, and `proof` names the test file that seeds a marker and checks it (the guard only checks that file mentions the table name: a substring tripwire against renames and deleted tests, not proof that it seeds one).
 //  EXEMPT    holds no owner-authored text (ids, hashes, counters, flags, timestamps, codes); `why` says what it holds.
 //  KNOWN_GAP may hold owner text and a literal forget does not reach it, or it has not been inspected. No claim is made about it.
-//            Unclear goes here. Whether a forget should reach things the owner made on purpose (reminder notes, standing
-//            orders, artifacts, workspace files) is an open owner decision, deferred.
+//            Unclear goes here. Whether a forget should reach things the owner made on purpose (artifacts, workspace files,
+//            standing orders, which stay preserved and are named in the owner message) is an open owner decision, deferred.
+//            Loops, background run summaries, reminder notes, goals, memory blocks and inbox, patrol log and the thread topic index now have literal redaction with readback (proof: memory-forget-do-provider.test.ts).
 // A table found in src with no row here fails, so the next store is decided deliberately. Layer: SOURCE (reads source text).
 type Row = { kind: 'PURGED'; proof: string } | { kind: 'EXEMPT'; why: string } | { kind: 'KNOWN_GAP'; note: string };
 const purged = (proof: string): Row => ({ kind: 'PURGED', proof });
@@ -15,6 +16,7 @@ const TEXT_JSON = 'text-bearing JSON or free text; no purge wired, contents not 
 
 const TABLES: Record<string, Row> = {
   // Memory and derived stores
+  reminder_notes: purged('memory-forget-do-provider.test.ts'),
   claims: purged('forget-coverage.test.ts'), episodes: purged('forget-coverage.test.ts'),
   memory_backups: purged('forget-coverage.test.ts'), spots: purged('forget-coverage.test.ts'), core_file_revisions: purged('forget-coverage.test.ts'),
   constellation_nodes: purged('forget-coverage.test.ts'), 
@@ -40,16 +42,16 @@ const TABLES: Record<string, Row> = {
   loop_mail_sources: exempt('loop/source/message IDs, due/timezone, fixed delivery-state code and revisit time; source-derived title lives in loops and source text in update_cards'),
   // Text the owner made or the runtime stored, not reached by a literal forget
   loop_governor_runs: gap('has a reason TEXT column; its writer was not traced'),
-  artifacts: gap('name in the table, body in R2; owner-made'), owner_files: gap('file name and caption; owner-made'), reminder_notes: gap('note text; owner-made'),
-  standing_orders: gap('trigger and escalation text; owner-made'), loops: gap('generic owner-made titles remain outside literal purge; source-linked titles now have exact-literal redaction/closure verified in memory-forget-do-provider.test.ts, not blanket coverage'), background_runs: gap('summary text'),
+  artifacts: gap('name in the table, body in R2; owner-made'), owner_files: gap('file name and caption; owner-made'),
+  standing_orders: gap('trigger and escalation text; owner-made instructions stay preserved and a topic present keeps a forget incomplete (named in the owner message)'), loops: purged('memory-forget-do-provider.test.ts'), background_runs: purged('memory-forget-do-provider.test.ts'),
   ledger: gap('summary and payload JSON'), event_admissions: gap('delivery body'), trace_log: gap('note column; trace sinks not verified'), journal: gap('run journal; only a partial reference in purge, not shown covered'),
   claim_recall: gap('FTS index kept in step with claims by triggers (content=claims); no test checks the index for a marker after a purge'),
   constellation_edges: gap('ids plus a relation label; node removal drops its edges per purge comments, no test checks edges'),
   proactivity: gap('settings JSON, not inspected'), watch_state: gap('key and value, not inspected'), proxy_intent_routes: gap('purpose text, not inspected'), workspace_manifest: gap('state JSON with file names'),
   runtime_runs: gap(TEXT_JSON), runtime_invocation_v2: gap(TEXT_JSON), runtime_journal: gap(TEXT_JSON), runtime_trace: gap(TEXT_JSON),
   // Product-schema tables (do-schema.ts), none wired to purge
-  memory_blocks: gap(TEXT_JSON), memory_inbox: gap(TEXT_JSON), patrol_log: gap(TEXT_JSON), interventions: gap(TEXT_JSON), adjustments: gap(TEXT_JSON),
-  skills: gap(TEXT_JSON), sheet_commits: gap(TEXT_JSON), thread_topic_index: gap(TEXT_JSON), drafts: gap(TEXT_JSON), goals: gap(TEXT_JSON),
+  memory_blocks: purged('memory-forget-do-provider.test.ts'), memory_inbox: purged('memory-forget-do-provider.test.ts'), patrol_log: purged('memory-forget-do-provider.test.ts'), interventions: gap(TEXT_JSON), adjustments: gap(TEXT_JSON),
+  skills: gap(TEXT_JSON), sheet_commits: gap(TEXT_JSON), thread_topic_index: purged('memory-forget-do-provider.test.ts'), drafts: gap(TEXT_JSON), goals: purged('memory-forget-do-provider.test.ts'),
   outcomes: gap(TEXT_JSON), missions: gap(TEXT_JSON), work_units: gap(TEXT_JSON), owner_domain_events: gap(TEXT_JSON), responsibility_commands: gap(TEXT_JSON),
   responsibility_projection: gap(TEXT_JSON), responsibility_projection_state: gap(TEXT_JSON), planning_execution_requests: gap(TEXT_JSON),
   planning_agent_sessions: gap(TEXT_JSON), planning_provider_invocations: gap(TEXT_JSON), execution_attempts: gap(TEXT_JSON), execution_observations: gap(TEXT_JSON),
@@ -62,7 +64,7 @@ const TABLES: Record<string, Row> = {
 // @ts-expect-error vite-only API
 const sources: Record<string, string> = import.meta.glob('../src/**/*.ts', { query: '?raw', import: 'default', eager: true });
 // @ts-expect-error vite-only API
-const tests: Record<string, string> = import.meta.glob('./forget*.test.ts', { query: '?raw', import: 'default', eager: true });
+const tests: Record<string, string> = import.meta.glob(['./forget*.test.ts', './memory-forget*.test.ts'], { query: '?raw', import: 'default', eager: true });
 const created = new Set<string>();
 for (const text of Object.values(sources)) for (const m of text.matchAll(/CREATE (?:VIRTUAL )?TABLE (?:IF NOT EXISTS )?([a-z][a-z0-9_]*)/g)) if (!m[1]!.endsWith('_next')) created.add(m[1]!);
 // The shared manifests list substrate tables that are created through the same statements.

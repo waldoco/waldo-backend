@@ -1,5 +1,6 @@
+import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import type { RunEffectScope } from '../channels/run-effect-scope';
-import { asciiLiteralIncludes } from '../memory/selective-forget';
+import { asciiLiteralIncludes, forgetSourceBatch } from '../memory/selective-forget';
 // Recent tool outputs as composable context (BUILD_ORDER 12). The tool loop's outputs
 // used to live only inside one turn; this ledger keeps the last few so the context
 // composer can stage them as tool_result sources with provenance and taint.
@@ -69,6 +70,7 @@ const ledgerSourcesFromRows = (topic: string, rows: Iterable<[string, ToolOutput
   let incomplete = false;
   for (const [key, row] of rows) {
     let index = 0;
+    const before = sources.length;
     const add = (text: string) => { if (asciiLiteralIncludes(text, topic)) sources.push({ ref: `ledger:${key}:${index++}`, text }); };
     add(row.summary);
     const decoded = (value: unknown): void => {
@@ -80,11 +82,24 @@ const ledgerSourcesFromRows = (topic: string, rows: Iterable<[string, ToolOutput
       }
     };
     try { decoded(JSON.parse(row.summary)); } catch { if (/\\u/i.test(row.summary)) incomplete = true; }
+    // Shared safety line. A row whose decoded text carries the topic goes to the selector and its redaction re-serialises the row; any other row with a hiding escape (or the topic in a NUL-bearing string) cannot be proven clean from a parse, so it is held.
+    if (sources.length === before && (hidesTopic(row.summary, topic) || (row.summary.includes('\0') && carriesTopic(row.summary, topic)))) incomplete = true;
   }
   return { sources, incomplete };
 };
 
 export const toolOutputLedger = (storage: KeyValueStorage) => ({
+  forgetSourceBatchCurrent(topic: string) {
+    const all = this.forgetSourcesCurrent(topic);
+    if (!all) return null;
+    const batch = forgetSourceBatch(topic, all.sources);
+    return { ...batch, incomplete: batch.incomplete || all.incomplete };
+  },
+  async forgetSourceBatch(topic: string) {
+    const all = await this.forgetSources(topic);
+    const batch = forgetSourceBatch(topic, all.sources);
+    return { ...batch, incomplete: batch.incomplete || all.incomplete };
+  },
   forgetSourcesCurrent(topic: string) { return storage.kv?.list ? ledgerSourcesFromRows(topic, storage.kv.list<ToolOutputEntry>({ prefix: 'toolout:' })) : null; },
   async forgetSources(topic: string) { return ledgerSourcesFromRows(topic, await storage.list<ToolOutputEntry>({ prefix: 'toolout:' })); },
   async record(entry: Omit<ToolOutputEntry, 'at'> & { at: number }, scope?: RunEffectScope): Promise<void> {

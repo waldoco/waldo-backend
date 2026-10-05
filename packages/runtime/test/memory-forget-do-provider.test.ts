@@ -18,7 +18,7 @@ import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 
 // Real registered two-argument owner DO and its fenced inbox/listener/responder path.
 // Only the model SDK and Telegram transport are scripted. No live provider or source service.
-const seen = vi.hoisted(() => ({ writer: '{}', requests: [] as unknown[], fetches: [] as string[], replyText: 'Recorded fixture response.', reasoning: undefined as string | undefined, toolSuppliers: [] as (() => Promise<readonly import('../src/context-composer/types').ContextFragment[]>)[], offloads: [] as import('../src/conversation/tool-output-store').ToolOutputStore[], selectorThrows: false, selectedText: undefined as string | undefined, selectedTexts: [] as string[], selectorInputs: [] as string[], onReply: undefined as undefined | (() => unknown[] | undefined | Promise<unknown[] | undefined>) }));
+const seen = vi.hoisted(() => ({ writer: '{}', requests: [] as unknown[], fetches: [] as string[], replyText: 'Recorded fixture response.', reasoning: undefined as string | undefined, toolSuppliers: [] as (() => Promise<readonly import('../src/context-composer/types').ContextFragment[]>)[], offloads: [] as import('../src/conversation/tool-output-store').ToolOutputStore[], selectorThrows: false, selectedText: undefined as string | undefined, selectedTexts: [] as string[], selectorInputs: [] as string[], selectorCalls: [] as unknown[], failCleanup: false, onCleanup: undefined as undefined | (() => void), selectorOutputMessage: false, selectorMode: 'normal' as 'normal' | 'empty' | 'invalid' | 'missing-ref' | 'capped', onSelector: undefined as undefined | (() => void), onReply: undefined as undefined | (() => unknown[] | undefined | Promise<unknown[] | undefined>) }));
 vi.mock('../src/run-loop/adapters', async load => {
  const actual = await load<typeof import('../src/run-loop/adapters')>();
  return { ...actual, resolveRunLoopAdapters: (...args: Parameters<typeof actual.resolveRunLoopAdapters>) => {
@@ -29,6 +29,15 @@ vi.mock('../src/run-loop/adapters', async load => {
 vi.mock('../src/conversation/tool-output-store', async load => {
   const real = await load<typeof import('../src/conversation/tool-output-store')>();
   return { ...real, inMemoryToolOutputStore: () => { const store = real.inMemoryToolOutputStore(); seen.offloads.push(store); return store; } };
+});
+vi.mock('../src/channels/conversation-store', async load => {
+  const actual = await load<typeof import('../src/channels/conversation-store')>();
+  return { ...actual, redactConversationEntries: async (...args: Parameters<typeof actual.redactConversationEntries>) => {
+    if (seen.failCleanup) throw new Error('Synthetic retained cleanup unavailable');
+    const receipt = await actual.redactConversationEntries(...args);
+    seen.onCleanup?.();
+    return receipt;
+  } };
 });
 vi.mock('../src/channels/telegram-api', async (load) => ({
   ...await load<typeof import('../src/channels/telegram-api')>(),
@@ -41,12 +50,16 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
   const output = !name ? await seen.onReply?.() ?? [] : [];
   let selection = '{}';
   if (name === 'forget_source_spans') {
+    seen.selectorCalls.push(body);
     if (seen.selectorThrows) throw new Error('Synthetic selector unavailable');
     const input = (body as { input: string }).input; seen.selectorInputs.push(input);
     const supplied = JSON.parse(input.slice(input.indexOf('{'))) as { sources: Array<{ ref: string; text: string }> };
+    seen.onSelector?.();
     const texts = [...seen.selectedTexts, ...(seen.selectedText ? [seen.selectedText] : [])];
-    selection = JSON.stringify({ complete: !!texts.length, reviewed_refs: supplied.sources.map(row => row.ref), spans: supplied.sources.flatMap(row => texts.filter(text => row.text.includes(text)).map(text => ({ ref: row.ref, text }))) });
+    const spans = supplied.sources.flatMap(row => texts.filter(text => row.text.includes(text)).map(text => ({ ref: row.ref, text })));
+    selection = seen.selectorMode === 'empty' ? '' : seen.selectorMode === 'invalid' ? '{invalid' : JSON.stringify({ complete: !!texts.length, reviewed_refs: supplied.sources.map(row => row.ref), spans: seen.selectorMode === 'missing-ref' ? spans.slice(1) : seen.selectorMode === 'capped' ? spans.slice(0, 32) : spans });
   }
+  if (name === 'forget_source_spans' && seen.selectorOutputMessage) output.push({type:'message',id:'fixture-selector',role:'assistant',status:'completed',content:[{type:'output_text',text:selection,annotations:[]}]});
   if (!name && seen.reasoning) output.push({ type: 'reasoning', summary: [{ type: 'summary_text', text: seen.reasoning }] });
   return { id: 'local-fixture', output_text: name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : name === 'claim_ops' ? seen.writer
     : name === 'forget_source_spans' ? selection : name === 'reaction' ? '{"reaction":null}' : seen.replyText, output,
@@ -73,7 +86,7 @@ const turn = async (name: string, id: number, text: string, writer: string) => {
   });
 };
 beforeEach(() => {
-  seen.selectedTexts.length = 0; seen.selectorInputs.length = 0; seen.requests.length = 0; seen.fetches.length = 0; seen.toolSuppliers.length = 0; seen.offloads.length = 0; seen.onReply = undefined; seen.selectedText = undefined; seen.selectorThrows = false; seen.replyText = 'Recorded fixture response.'; seen.reasoning = undefined;
+  seen.failCleanup = false; seen.onCleanup = undefined; seen.selectorOutputMessage = false; seen.selectorMode = 'normal'; seen.onSelector = undefined; seen.selectorCalls.length = 0; seen.selectedTexts.length = 0; seen.selectorInputs.length = 0; seen.requests.length = 0; seen.fetches.length = 0; seen.toolSuppliers.length = 0; seen.offloads.length = 0; seen.onReply = undefined; seen.selectedText = undefined; seen.selectorThrows = false; seen.replyText = 'Recorded fixture response.'; seen.reasoning = undefined;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => { seen.fetches.push(String(input)); throw new Error('unmocked network is forbidden'); });
 });
 afterEach(() => { vi.unstubAllGlobals(); expect(seen.fetches).toEqual([]); });
@@ -986,4 +999,839 @@ it('the registered DO export_artifact tool returns an owner link with a full-uui
   const served = await stub(name).fetch(receipt.data.delivery.url, { headers: { cookie: `${CONSOLE_COOKIE}=${seeded.token}` } });
   expect(served.status).toBe(200);
   expect(new TextDecoder().decode((await served.arrayBuffer()).slice(0, 5))).toBe('%PDF-');
+});
+
+
+it('a complete 33-ref inventory stays limited when the selector omits the last ref', async () => {
+  const name='memory-diagnosis-capacity-33';
+  const topic='SYNTH-CAP';
+  const fact=`${topic} note`;
+  const standup='Synthetic standup starts at 09:10 UTC';
+  await admittedTurn(name,97000,standup,ops({add:[add(standup)]}));
+  await runInDurableObject(stub(name),async(_instance,state)=>{
+    claimStore(state.storage.sql).beginTopicCoverage(topic,new Date().toISOString());
+    for(let i=0;i<33;i++)episodeIndex(state.storage.sql).add(`c${i}`,'owner',fact,Date.now());
+  });
+  await evictDurableObject(stub(name));
+  seen.selectedText=fact; seen.selectorMode='capped';
+  await admittedTurn(name,97001,'What time is my unrelated standup?',ops());
+  const call=seen.selectorCalls.at(-1) as {input:string;text:{format:{schema:{properties:{spans:{maxItems:number}}}}}};
+  const snapshot=JSON.parse(call.input.slice(call.input.indexOf('{'))) as {topic:string;sources:{ref:string;text:string}[]};
+  expect(snapshot.sources).toHaveLength(33);
+  expect(snapshot.sources.every(row=>row.text.includes(topic))).toBe(true);
+  expect(call.text.format.schema.properties.spans.maxItems).toBe(64);
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+    expect(claimStore(state.storage.sql).claims().some(row=>row.text===standup)).toBe(true);
+    expect(claimStore(state.storage.sql).forgetSources(topic).sources).toHaveLength(33);
+  });
+  expect(request()).not.toContain(standup);
+  expect(request()).toContain('Recall is temporarily limited');
+  expect(request()).toContain('reason class: selection_rejected');
+  await evictDurableObject(stub(name));
+  await admittedTurn(name,97002,'Recall my standup again.',ops());
+  expect(request()).toContain('reason class: selection_rejected');
+  expect(request()).not.toContain(standup);
+  await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]));
+});
+
+// Each case uses the registered Wrangler DO. Mutations in onSelector model an
+// inventory change while the provider is awaited; no private responder is supplied.
+for (const [mode, reason] of [
+  ['throws', 'selector_unavailable'], ['empty', 'selector_unavailable'],
+  ['invalid', 'selection_rejected'], ['missing-ref', 'selection_rejected'],
+  ['inventory-unsupported', 'sources_incomplete'],
+  ['fresh-unsupported', 'fresh_incomplete'], ['fresh-change', 'selection_rejected'],
+] as const) {
+  it(`ordinary retry preserves unrelated standup and holds recall for ${mode}: ${reason}`, async () => {
+    const name = `memory-diagnosis-${mode}`;
+    const topic = 'SYNTH-PENDING';
+    const fact = `${topic} synthetic note`;
+    const standup = 'Synthetic standup starts at 09:10 UTC';
+    await admittedTurn(name, 98000, standup, ops({ add: [add(standup)] }));
+    let keeper: unknown;
+    let expectedSources: unknown;
+    await runInDurableObject(stub(name), (_instance, state) => {
+      const memory = claimStore(state.storage.sql);
+      keeper = memory.claims().find(row => row.text === standup);
+      expect(keeper).toBeDefined();
+      memory.beginTopicCoverage(topic, new Date().toISOString());
+      const episodes = episodeIndex(state.storage.sql);
+      for (let i = 0; i < (1); i++) episodes.add(`p${i}`, 'owner', fact, Date.now());
+      if (mode === 'inventory-unsupported') {
+        state.storage.sql.exec('UPDATE claims SET aliases = ? WHERE text = ?',JSON.stringify([topic]),standup);
+        keeper = memory.claims().find(row=>row.text===standup);
+      }
+      expectedSources = memory.forgetSources(topic).sources;
+    });
+    await evictDurableObject(stub(name));
+    // Refresh the SQL handle for a provider-await mutation after eviction.
+    if (mode === 'fresh-change' || mode === 'fresh-unsupported') await runInDurableObject(stub(name), (_instance, state) => {
+      seen.onSelector = () => {
+        seen.onSelector = undefined;
+        if (mode === 'fresh-unsupported') {
+          state.storage.sql.exec('UPDATE claims SET aliases = ? WHERE text = ?',JSON.stringify([topic]),standup);
+          keeper=claimStore(state.storage.sql).claims().find(row=>row.text===standup);
+        } else episodeIndex(state.storage.sql).add('p1','owner',fact,Date.now());
+      };
+    });
+    seen.selectedText = fact;
+    seen.selectorThrows = mode === 'throws';
+    if (mode === 'empty' || mode === 'invalid' || mode === 'missing-ref') seen.selectorMode = mode;
+    await admittedTurn(name, 98001, 'What time is my unrelated standup?', ops());
+    expect(request()).toContain(`reason class: ${reason}`);
+    expect(request()).toContain('Recall is temporarily limited');
+    expect(request()).not.toContain(standup);
+    if (mode === 'inventory-unsupported') expect(seen.selectorCalls).toHaveLength(0);
+    else {
+      expect(seen.selectorCalls).toHaveLength(mode === 'throws' ? 2 : 1);
+      const call = seen.selectorCalls[0] as { input: string; text: { format: { name: string; schema: unknown } } };
+      const supplied = JSON.parse(call.input.slice(call.input.indexOf('{')));
+      expect(supplied).toEqual({ topic, sources: expectedSources });
+      expect(call.text.format.name).toBe('forget_source_spans');
+      expect(call.text.format.schema).toMatchObject({ properties: { spans: { maxItems: 64 }, reviewed_refs: { maxItems: 64 } } });
+      expect(call.input).not.toContain(standup);
+      expect(call.input).not.toContain('What time is my unrelated standup?');
+    }
+    await runInDurableObject(stub(name), (_instance, state) => {
+      const memory = claimStore(state.storage.sql);
+      expect(memory.incompleteTopics()).toEqual([topic]);
+      expect(memory.claims().find(row => row.text === standup)).toEqual(keeper);
+      expect(memory.forgetSources(topic).sources.length).toBeGreaterThan(0);
+    });
+  });
+}
+it('healthy ordinary retry restores standup from durable owner memory with a host receipt after restart', async () => {
+  const name = 'memory-diagnosis-standup-recovered';
+  const topic = 'SYNTH-RECOVER';
+  const fact = `${topic} synthetic note`;
+  const standup = 'Synthetic standup starts at 09:10 UTC';
+  await admittedTurn(name, 99000, `${fact}. ${standup}.`, ops({ add: [add(fact), add(standup)] }));
+  let keeper: unknown;
+  await runInDurableObject(stub(name), (_instance, state) => { keeper = claimStore(state.storage.sql).claims().find(row => row.text === standup); });
+  seen.selectorThrows = true;
+  const instruction = `Forget only ${topic}.`;
+  await admittedTurn(name, 99001, instruction, ops({ forget_topic: topic }));
+  expect(request()).toContain('reason class: selector_unavailable');
+  expect(request()).not.toContain(standup);
+  await evictDurableObject(stub(name));
+  seen.selectorThrows = false; seen.selectedTexts = [fact, instruction];
+  await admittedTurn(name, 99002, 'What time is my standup?', ops());
+  expect(request()).toContain(standup);
+  expect(request()).not.toContain('Recall is temporarily limited');
+  await runInDurableObject(stub(name), (_instance, state) => {
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
+    expect(claimStore(state.storage.sql).claims().find(row => row.text === standup)).toEqual(keeper);
+  });
+  await evictDurableObject(stub(name));
+  let round = 0;
+  seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'standup-receipt', name: 'read_owner_context', arguments: JSON.stringify({ topic: 'standup', limit: 10 }) }] : [];
+  await admittedTurn(name, 99003, 'Recall my standup again.', ops());
+  const provider = seen.requests.at(-1) as { input: Array<{ type: string; call_id?: string; output?: string }> };
+  const receipt = JSON.parse(provider.input.find(item => item.type === 'function_call_output' && item.call_id === 'standup-receipt')!.output!);
+  expect(receipt).toMatchObject({ ok: true, data: { complete: true, authority: 'context_only_not_action_approval', claims: [{ text: standup, origin: 'owner', source_ref: 'owner, tg-99000' }] } });
+  expect(receipt.data.claims).toHaveLength(1);
+  expect(request()).not.toContain(topic);
+});
+
+for (const count of [32, 33, 64]) {
+  it(`ordinary recovery covers ${count} distinct sources and retains standup after reconstruction`, async () => {
+    const name = `memory-capacity-fix-${count}`;
+    const topic = 'CAP';
+    const facts = Array.from({length:count}, (_,i)=>`CAP note ${String(i).padStart(3,'0')}`);
+    const standup = 'Synthetic standup starts at 09:10 UTC';
+    await admittedTurn(name, 100000, standup, ops({add:[add(standup)]}));
+    let keeper: unknown;
+    await runInDurableObject(stub(name), (_instance,state)=>{
+      const memory = claimStore(state.storage.sql);
+      keeper = memory.claims().find(row=>row.text===standup); expect(keeper).toBeDefined();
+      memory.beginTopicCoverage(topic,new Date().toISOString());
+      facts.forEach((fact,i)=>episodeIndex(state.storage.sql).add(`c${i}`,'owner',fact,Date.now()));
+      expect(memory.forgetSources(topic)).toMatchObject({incomplete:false});
+      expect(memory.forgetSources(topic).sources).toHaveLength(count);
+    });
+    await evictDurableObject(stub(name));
+    seen.selectedTexts=facts; seen.selectorOutputMessage=true;
+    await admittedTurn(name,100001,'What time is my unrelated standup?',ops());
+    await runInDurableObject(stub(name),(_instance,state)=>{
+      const memory=claimStore(state.storage.sql);
+      expect(memory.incompleteTopics()).toEqual([]);
+      expect(memory.forgetSources(topic)).toEqual({sources:[],incomplete:false});
+      expect(memory.claims().find(row=>row.text===standup)).toEqual(keeper);
+    });
+    expect(request()).toContain(standup);
+    expect(request()).not.toContain('Recall is temporarily limited');
+    await evictDurableObject(stub(name));
+    let round=0;
+    seen.onReply=()=>++round===1?[{type:'function_call',call_id:'capacity-standup',name:'read_owner_context',arguments:JSON.stringify({topic:'standup',limit:10})}]:[];
+    await admittedTurn(name,100002,'Recall my standup again.',ops());
+    const provider=seen.requests.at(-1) as {input:Array<{type:string;call_id?:string;output?:string}>};
+    const receipt=JSON.parse(provider.input.find(item=>item.type==='function_call_output'&&item.call_id==='capacity-standup')!.output!);
+    expect(receipt).toMatchObject({ok:true,data:{complete:true,claims:[{text:standup,origin:'owner',source_ref:'owner, tg-100000'}]}});
+    expect(receipt.data.claims).toHaveLength(1);
+  });
+}
+
+it('65 distinct sources resume after a failed provider and reconstruction without early success',async()=>{
+  const name='memory-batches-65'; const topic='BAT';
+  const facts=Array.from({length:65},(_,i)=>`BAT note ${String(i).padStart(3,'0')}`);
+  const standup='Synthetic standup starts at 09:10 UTC';
+  await admittedTurn(name,110000,standup,ops({add:[add(standup)]}));
+  let keeper:unknown;
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql); keeper=memory.claims().find(row=>row.text===standup);expect(keeper).toBeDefined();
+    memory.beginTopicCoverage(topic,new Date().toISOString());
+    facts.forEach((fact,i)=>episodeIndex(state.storage.sql).add(`b${i}`,'owner',fact,Date.now()));
+  });
+  seen.selectorThrows=true;
+  await admittedTurn(name,110001,'What time is my standup?',ops());
+  expect(request()).toContain('reason class: selector_unavailable');
+  expect(request()).not.toContain(standup);
+  await evictDurableObject(stub(name));
+  seen.selectorThrows=false;seen.selectedTexts=facts;seen.selectorOutputMessage=true;
+  seen.selectorCalls.length=0;
+  await admittedTurn(name,110002,'Please finish my pending cleanup.',ops());
+  expect(seen.selectorCalls).toHaveLength(1);
+  expect(request()).toContain('reason class: batch_pending');
+  expect(request()).not.toContain('verified exact cleanup targets were removed from inspected retained copies');
+  expect(request()).not.toContain(standup);
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql); expect(memory.incompleteTopics()).toEqual([topic]);
+    expect(memory.topicCoverage(topic)).toBe(1); expect(memory.pendingTopics()).toEqual([]);
+    expect(memory.forgetSources(topic).sources).toHaveLength(1);
+    expect(memory.claims().find(row=>row.text===standup)).toEqual(keeper);
+  });
+  await evictDurableObject(stub(name));seen.selectorCalls.length=0;
+  await admittedTurn(name,110003,'What time is my standup now?',ops());
+  expect(seen.selectorCalls).toHaveLength(1);
+  expect(request()).toContain(standup);expect(request()).not.toContain('Recall is temporarily limited');
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
+    expect(claimStore(state.storage.sql).forgetSources(topic)).toEqual({sources:[],incomplete:false});
+    expect(claimStore(state.storage.sql).claims().find(row=>row.text===standup)).toEqual(keeper);
+  });
+  await evictDurableObject(stub(name));let round=0;
+  seen.onReply=()=>++round===1?[{type:'function_call',call_id:'batch-standup',name:'read_owner_context',arguments:JSON.stringify({topic:'standup',limit:10})}]:[];
+  await admittedTurn(name,110004,'Recall my standup again.',ops());
+  const provider=seen.requests.at(-1) as {input:Array<{type:string;call_id?:string;output?:string}>};
+  const receipt=JSON.parse(provider.input.find(item=>item.type==='function_call_output'&&item.call_id==='batch-standup')!.output!);
+  expect(receipt).toMatchObject({ok:true,data:{complete:true,claims:[{text:standup,origin:'owner',source_ref:'owner, tg-110000'}]}});
+});
+
+const pendingBatchFixture=async(name:string,count:number,duplicate=false)=>{
+  const topic='BCH';const standup='Synthetic standup starts at 09:10 UTC';
+  const facts=Array.from({length:count},(_,i)=>`BCH note ${String(duplicate?0:i).padStart(3,'0')}`);
+  await admittedTurn(name,120000,standup,ops({add:[add(standup)]}));
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);memory.beginTopicCoverage(topic,new Date().toISOString());
+    facts.forEach((fact,i)=>episodeIndex(state.storage.sql).add(`b${i}`,'owner',fact,Date.now()));
+  });
+  seen.selectedTexts=[...new Set(facts)];seen.selectorOutputMessage=true;
+  return {topic,standup,facts};
+};
+it('129 distinct sources make bounded progress across three reconstructed owner turns',async()=>{
+  const name='memory-batches-129';const {topic,standup}=await pendingBatchFixture(name,129);
+  for(let step=0;step<3;step++){
+    await evictDurableObject(stub(name));seen.selectorCalls.length=0;
+    await admittedTurn(name,120001+step,'What time is my unrelated standup?',ops());
+    expect(seen.selectorCalls).toHaveLength(1);
+    await runInDurableObject(stub(name),(_instance,state)=>{
+      const memory=claimStore(state.storage.sql);
+      expect(memory.forgetSourceBatch(topic).sources).toHaveLength(step===0?64:step===1?1:0);
+      expect(memory.incompleteTopics()).toEqual(step<2?[topic]:[]);
+      expect(memory.pendingTopics()).toEqual([]);
+    });
+    if(step<2){expect(request()).toContain('reason class: batch_pending');expect(request()).not.toContain(standup);}
+    else {expect(request()).toContain(standup);expect(request()).not.toContain('Recall is temporarily limited');}
+  }
+});
+it('65 duplicate copies require durable partial custody then complete empty readback',async()=>{
+  const name='memory-batches-duplicates';const {topic,standup}=await pendingBatchFixture(name,65,true);
+  await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
+  expect(request()).toContain('reason class: batch_pending');expect(request()).not.toContain(standup);
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([topic]);
+    expect(memory.forgetSources(topic)).toEqual({sources:[],incomplete:false});
+  });
+  await evictDurableObject(stub(name));seen.selectorCalls.length=0;
+  await admittedTurn(name,120002,'What time is my standup?',ops());
+  expect(seen.selectorCalls).toHaveLength(0);expect(request()).toContain(standup);
+  await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]));
+});
+for(const change of ['first-page','off-page'] as const){
+  it(`source change in ${change} cannot cause early batch completion`,async()=>{
+    const name=`memory-batches-change-${change}`;const {topic,standup}=await pendingBatchFixture(name,65);
+    const changed='BCH changed note';
+    await runInDurableObject(stub(name),(_instance,state)=>{
+      seen.onSelector=()=>{
+        seen.onSelector=undefined;
+        if(change==='first-page')state.storage.sql.exec('UPDATE episodes SET text = ? WHERE entry_id = ?',changed,'b0');
+        else episodeIndex(state.storage.sql).add('late-source','owner',changed,Date.now());
+      };
+    });
+    await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
+    expect(request()).not.toContain(standup);
+    expect(request()).toContain(`reason class: ${change==='first-page'?'selection_rejected':'batch_pending'}`);
+    await runInDurableObject(stub(name),(_instance,state)=>{
+      const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([topic]);
+      expect(memory.forgetSources(topic).sources.length).toBe(change==='first-page'?64:2);
+      expect(episodeIndex(state.storage.sql).get(change==='first-page'?'3':'68')?.text).toBe(changed);
+    });
+    seen.selectedTexts.push(changed);
+    for(let retry=0;retry<(change==='first-page'?2:1);retry++){
+      await evictDurableObject(stub(name));await admittedTurn(name,120002+retry,'Finish the pending cleanup.',ops());
+    }
+    await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]));
+    expect(request()).toContain(standup);
+  });
+}
+it('failed retained cleanup retains exact batch custody and resumes after reconstruction',async()=>{
+  const name='memory-batches-cleanup-failure';const {topic,standup}=await pendingBatchFixture(name,65);
+  seen.failCleanup=true;
+  await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([topic]);
+    expect(memory.pendingTopics()).toHaveLength(64);expect(memory.forgetSources(topic).sources).toHaveLength(1);
+  });
+  await evictDurableObject(stub(name));seen.selectorCalls.length=0;
+  await admittedTurn(name,120002,'Continue my pending cleanup.',ops());
+  expect(seen.selectorCalls).toHaveLength(0);expect(request()).toContain('reason class: cleanup_pending');expect(request()).not.toContain(standup);
+  seen.failCleanup=false;await evictDurableObject(stub(name));
+  await admittedTurn(name,120003,'What time is my standup?',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([]);expect(memory.pendingTopics()).toEqual([]);
+  });
+  expect(request()).toContain(standup);
+});
+it('final independent readback rejects a new source arriving after selector authorization',async()=>{
+  const name='memory-batches-final-readback';const {topic,standup}=await pendingBatchFixture(name,1);
+  const late='BCH late synthetic note';
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    seen.onCleanup=()=>{seen.onCleanup=undefined;episodeIndex(state.storage.sql).add('late-readback','owner',late,Date.now());};
+  });
+  await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([topic]);
+    expect(memory.topicCoverage(topic)).toBe(2);expect(memory.forgetSources(topic).sources.map(row=>row.text)).toEqual([late]);
+  });
+  expect(request()).toContain('Recall is temporarily limited');expect(request()).not.toContain(standup);
+  seen.selectedTexts.push(late);await evictDurableObject(stub(name));
+  await admittedTurn(name,120002,'What time is my standup?',ops());
+  expect(request()).toContain(standup);
+  await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]));
+});
+it('unreadable unsupported coverage blocks a batch even when more supported sources remain',async()=>{
+  const name='memory-batches-unsupported';const {topic,standup,facts}=await pendingBatchFixture(name,65);
+  await runInDurableObject(stub(name),(_instance,state)=>state.storage.sql.exec('UPDATE claims SET aliases = ? WHERE text = ?',JSON.stringify([topic]),standup));
+  seen.selectorCalls.length=0;
+  await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
+  expect(seen.selectorCalls).toHaveLength(0);expect(request()).toContain('reason class: sources_incomplete');
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+    expect(episodeIndex(state.storage.sql).get('3')?.text).toBe(facts[0]);
+    expect(episodeIndex(state.storage.sql).get('67')?.text).toBe(facts[64]);
+  });
+});
+
+for(const action of ['explicit-forget','new-add'] as const){
+  it(`partial progress with ${action} never emits a whole-topic success receipt`,async()=>{
+    const name=`memory-batches-receipt-${action}`;const {topic,standup}=await pendingBatchFixture(name,65);
+    const instruction=`Forget only ${topic}.`;const desk='Synthetic desk is near the window';
+    seen.selectedTexts.push(instruction);
+    await admittedTurn(name,120001,action==='explicit-forget'?instruction:desk,action==='explicit-forget'?ops({forget_topic:topic}):ops({add:[add(desk)]}));
+    expect(request()).toContain('reason class: batch_pending');
+    expect(request()).not.toContain('verified exact cleanup targets were removed from inspected retained copies');
+    expect(request()).toContain('requested topic cleanup is pending');
+    expect(request()).not.toContain(standup);
+    await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]));
+    await evictDurableObject(stub(name));
+    await admittedTurn(name,120002,'Finish the pending cleanup.',ops());
+    await runInDurableObject(stub(name),async(_instance,state)=>{
+      const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([]);
+      if(action==='new-add')expect(memory.claims().some(row=>row.text===desk)).toBe(true);
+      expect(JSON.stringify(await durableConversationStore(state.storage).load())).not.toContain(instruction);
+    });
+    expect(request()).toContain(standup);
+  });
+}
+
+it('batched conversation and retained ledger copies reach full readback without changing unrelated history',async()=>{
+  const name='memory-batches-retained-families';const topic='BCH';const standup='Synthetic standup starts at 09:10 UTC';
+  const facts=Array.from({length:65},(_,i)=>`BCH note ${String(i).padStart(3,'0')}`);
+  await admittedTurn(name,130000,standup,ops({add:[add(standup)]}));
+  let original:unknown;
+  await runInDurableObject(stub(name),async(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);memory.beginTopicCoverage(topic,new Date().toISOString());
+    const conversation=durableConversationStore(state.storage);const loaded=await conversation.load();
+    original=loaded.entries[0];expect(original).toBeDefined();let parent=loaded.leafId;
+    const entries=facts.map((fact,i)=>{const entry={...loaded.entries[0]!,id:`synthetic-history-${i}`,parentId:parent,modelPayload:fact,appPayload:fact,modelProjection:{mode:'include' as const}};parent=entry.id;return entry;});
+    await conversation.save(entries,parent!);
+    await state.storage.put(Object.fromEntries(facts.map((fact,i)=>[`toolout:${String(i).padStart(10,'0')}`,{tool:'fixture_read',ok:true,at:i,taint:'external',summary:fact}])));
+  });
+  seen.selectedTexts=facts;seen.selectorOutputMessage=true;
+  for(let step=0;step<3;step++){
+    await evictDurableObject(stub(name));seen.selectorCalls.length=0;
+    await admittedTurn(name,130001+step,'What time is my unrelated standup?',ops());
+    expect(seen.selectorCalls).toHaveLength(1);
+    await runInDurableObject(stub(name),async(_instance,state)=>{
+      expect(claimStore(state.storage.sql).incompleteTopics()).toEqual(step<2?[topic]:[]);
+      expect((await durableConversationStore(state.storage).load()).entries[0]).toEqual(original);
+      if(step===2){
+        expect((await durableConversationStore(state.storage).forgetSources!(topic)).sources).toEqual([]);
+        expect((await toolOutputLedger(state.storage).forgetSources(topic)).sources).toEqual([]);
+      }
+    });
+    if(step<2)expect(request()).not.toContain(standup);else expect(request()).toContain(standup);
+  }
+});
+
+it('200 distinct sources complete across four bounded reconstructed turns',async()=>{
+  const name='memory-batches-200';const {topic,standup}=await pendingBatchFixture(name,200);
+  for(let step=0;step<4;step++){
+    await evictDurableObject(stub(name));seen.selectorCalls.length=0;
+    await admittedTurn(name,120001+step,'What time is my unrelated standup?',ops());
+    expect(seen.selectorCalls).toHaveLength(1);
+    await runInDurableObject(stub(name),(_instance,state)=>{
+      const memory=claimStore(state.storage.sql);const remaining=200-64*(step+1);
+      expect(memory.forgetSourceBatch(topic).sources).toHaveLength(Math.max(0,Math.min(64,remaining)));
+      expect(memory.pendingTopics()).toEqual([]);expect(memory.incompleteTopics()).toEqual(step<3?[topic]:[]);
+    });
+    if(step<3){expect(request()).toContain('reason class: batch_pending');expect(request()).not.toContain(standup);}
+    else {expect(request()).toContain(standup);expect(request()).not.toContain('Recall is temporarily limited');}
+  }
+});
+it('an inventory over 8 KiB completes through byte-bounded pages instead of a permanent incomplete flag',async()=>{
+  const name='memory-batches-byte-budget';const topic='BCH';const standup='Synthetic standup starts at 09:10 UTC';
+  const facts=Array.from({length:20},(_,i)=>`BCH note ${String(i).padStart(3,'0')} ${'x'.repeat(600)}`);
+  expect(new TextEncoder().encode(JSON.stringify(facts)).byteLength).toBeGreaterThan(8192);
+  await admittedTurn(name,120000,standup,ops({add:[add(standup)]}));
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    claimStore(state.storage.sql).beginTopicCoverage(topic,new Date().toISOString());
+    facts.forEach((fact,i)=>episodeIndex(state.storage.sql).add(`bytes-${i}`,'owner',fact,Date.now()));
+  });
+  seen.selectedTexts=facts;seen.selectorOutputMessage=true;
+  for(let step=0;step<2;step++){
+    await evictDurableObject(stub(name));seen.selectorCalls.length=0;
+    await admittedTurn(name,120001+step,'What time is my unrelated standup?',ops());
+    expect(seen.selectorCalls).toHaveLength(1);
+    const body=seen.selectorCalls[0] as {input:string};const supplied=JSON.parse(body.input.slice(body.input.indexOf('{')));
+    expect(new TextEncoder().encode(JSON.stringify(supplied)).byteLength).toBeLessThanOrEqual(8192);
+    await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual(step===0?[topic]:[]));
+    if(step===0){expect(request()).toContain('reason class: batch_pending');expect(request()).not.toContain(standup);}
+    else expect(request()).toContain(standup);
+  }
+});
+it('a stale page cannot erase a newly changed unrelated clause in the same source row',async()=>{
+  const name='memory-batches-stale-unrelated';const {topic,standup,facts}=await pendingBatchFixture(name,65);
+  const keep='New unrelated synthetic item stays';
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    seen.onSelector=()=>{seen.onSelector=undefined;state.storage.sql.exec('UPDATE episodes SET text = ? WHERE entry_id = ?',`${facts[0]}. ${keep}.`,'b0');};
+  });
+  await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
+  expect(request()).toContain('reason class: selection_rejected');expect(request()).not.toContain(standup);
+  await runInDurableObject(stub(name),(_instance,state)=>expect(episodeIndex(state.storage.sql).get('3')?.text).toBe(`${facts[0]}. ${keep}.`));
+  for(let retry=0;retry<2;retry++){await evictDurableObject(stub(name));await admittedTurn(name,120002+retry,'Finish the pending cleanup.',ops());}
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
+    expect(episodeIndex(state.storage.sql).get('3')?.text).toContain(keep);
+    expect(episodeIndex(state.storage.sql).get('3')?.text).not.toContain(topic);
+  });
+  expect(request()).toContain(standup);
+});
+
+it('ADVERSARIAL unique loop-only topic must not settle empty coverage', async () => {
+  const name='review-769-loop-only'; const topic='UNIQUELOOP769';
+  await admittedTurn(name,130000,'My unrelated standup is at 09:10 UTC.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    loopBook(state.storage.sql,{now:()=>Date.now(),newId:()=> 'review-769-loop'}).open({title:`Discuss ${topic} private detail`,due:null});
+    claimStore(state.storage.sql).beginTopicCoverage(topic,new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(name));
+  await admittedTurn(name,130001,'Continue my requested forgetting.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);
+    const rows=state.storage.sql.exec('SELECT title FROM loops').toArray();
+    console.log('ADVERSARIAL LOOP RESULT',JSON.stringify({rows,incomplete:memory.incompleteTopics(),coverage:memory.topicCoverage(topic)}));
+    expect(rows.some(row=>String(row.title).includes(topic)) && !memory.incompleteTopics().includes(topic)).toBe(false);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('ADVERSARIAL explicit forget must not certify surviving loop topic', async () => {
+  const name='review-769-explicit-loop';const topic='EXPLICITLOOP769';
+  await admittedTurn(name,131000,'My unrelated standup is at 09:10 UTC.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    loopBook(state.storage.sql,{now:()=>Date.now(),newId:()=> 'review-769-explicit'}).open({title:`Discuss ${topic} private detail`,due:null});
+    state.storage.deleteAlarm();
+  });
+  seen.selectedTexts=[`Forget ${topic}.`]; seen.selectorOutputMessage=true;
+  await admittedTurn(name,131001,`Forget ${topic}.`,ops({forget_topic:topic}));
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);const rows=state.storage.sql.exec('SELECT title FROM loops').toArray();
+    console.log('ADVERSARIAL EXPLICIT RESULT',JSON.stringify({rows,incomplete:memory.incompleteTopics(),coverage:memory.topicCoverage(topic),provider:request().includes('topic cleanup verified and settled')}));
+    expect(rows.some(row=>String(row.title).includes(topic)) && !memory.incompleteTopics().includes(topic)).toBe(false);
+  });
+});
+
+it('ADVERSARIAL background summary only must not settle empty coverage', async () => {
+  const name='review-769-background-only';const topic='UNIQUEBG769';
+  await admittedTurn(name,132000,'My unrelated standup is at 09:10 UTC.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    state.storage.sql.exec('INSERT INTO background_runs (id,kind,status,summary,parent_id,started_at,ended_at) VALUES (?,?,?,?,?,?,?)','review-769-bg','event','completed',`Observed ${topic} private detail`,null,1,2);
+    claimStore(state.storage.sql).beginTopicCoverage(topic,new Date().toISOString());
+  });
+  await evictDurableObject(stub(name));
+  await admittedTurn(name,132001,'Continue my requested forgetting.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);const rows=state.storage.sql.exec('SELECT summary FROM background_runs').toArray();
+    console.log('ADVERSARIAL BACKGROUND RESULT',JSON.stringify({rows,incomplete:memory.incompleteTopics(),coverage:memory.topicCoverage(topic)}));
+    expect(rows.some(row=>String(row.summary).includes(topic)) && !memory.incompleteTopics().includes(topic)).toBe(false);
+  });
+});
+
+it('REVIEW-769 a topic only in a reminder note is redacted and verified, never settled as absent', async () => {
+  const name='review-769-reminder-note'; const topic='UNIQUENOTE769';
+  await admittedTurn(name,133000,'My unrelated standup is at 09:10 UTC.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)');
+    state.storage.sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)','note-769',`Bring ${topic} private detail`,1);
+    claimStore(state.storage.sql).beginTopicCoverage(topic,new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(name));
+  await admittedTurn(name,133001,'Continue my requested forgetting.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);
+    const rows=state.storage.sql.exec('SELECT note FROM reminder_notes').toArray();
+    expect(rows.some(row=>String(row.note).includes(topic)) && !memory.incompleteTopics().includes(topic)).toBe(false);
+    state.storage.deleteAlarm();
+  });
+});
+
+const positiveStore = (label: string, topic: string, seed: (sql: SqlStorage, text: string) => void, read: (sql: SqlStorage) => string) =>
+  it(`REVIEW-769 positive cleanup: ${label} is selected, redacted, verified and settles, keeps its unrelated clause, and recall stays open after a second eviction`, async () => {
+    const name = `review-769-positive-${label}`; const clause = `Discuss ${topic} private detail`; const keep = 'keep the tea order';
+    await admittedTurn(name, 140000, 'My unrelated standup is at 09:10 UTC.', ops());
+    await runInDurableObject(stub(name), (_instance, state) => {
+      seed(state.storage.sql, `${clause}; ${keep}`);
+      claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+      state.storage.deleteAlarm();
+    });
+    await evictDurableObject(stub(name));
+    seen.selectedTexts = [clause]; seen.selectorOutputMessage = true;
+    await admittedTurn(name, 140001, 'Continue my requested forgetting.', ops());
+    await runInDurableObject(stub(name), (_instance, state) => {
+      const memory = claimStore(state.storage.sql); const stored = read(state.storage.sql);
+      expect(stored).not.toContain(topic);
+      expect(stored).toContain(keep);
+      expect(memory.incompleteTopics()).toEqual([]);
+      expect(memory.pendingTopics()).toEqual([]);
+      state.storage.deleteAlarm();
+    });
+    await evictDurableObject(stub(name));
+    seen.selectedTexts = []; seen.selectorOutputMessage = false;
+    await admittedTurn(name, 140002, 'What time is my standup?', ops());
+    expect(request()).not.toContain('temporarily limited');
+    expect(request()).toContain('09:10 UTC');
+    await runInDurableObject(stub(name), (_instance, state) => { expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]); expect(read(state.storage.sql)).not.toContain(topic); state.storage.deleteAlarm(); });
+  });
+positiveStore('patrol_log', 'POSPATROL769', (sql, text) => {
+  sql.exec('CREATE TABLE IF NOT EXISTS patrol_log (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, observed_at TEXT NOT NULL, entry_type TEXT NOT NULL, summary TEXT NOT NULL, source_ref TEXT, created_at TEXT NOT NULL)');
+  sql.exec('INSERT INTO patrol_log (id, user_id, observed_at, entry_type, summary, source_ref, created_at) VALUES (?,?,?,?,?,?,?)', 'pos-769-patrol', 'u', 't', 'x', text, null, 't');
+}, sql => JSON.stringify(sql.exec('SELECT id, summary FROM patrol_log').toArray()));
+positiveStore('goals', 'POSGOAL769', (sql, text) => {
+  sql.exec('CREATE TABLE IF NOT EXISTS goals (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, description TEXT NOT NULL, baseline TEXT, target TEXT, progress TEXT, deadline TEXT, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)');
+  sql.exec('INSERT INTO goals (id, user_id, description, created_at, updated_at) VALUES (?,?,?,?,?)', 'pos-769-goal', 'u', text, 't', 't');
+}, sql => JSON.stringify(sql.exec('SELECT id, description FROM goals').toArray()));
+
+it('REVIEW-769 when the selector selects the incidental clause too ("tomorrow" for topic "Tom"), the forget completes, that whole clause is redacted, and recall comes back', async () => {
+  const name = 'review-769-incidental'; const topic = 'Tom';
+  await admittedTurn(name, 135000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(name), (_instance, state) => {
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS goals (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, description TEXT NOT NULL, baseline TEXT, target TEXT, progress TEXT, deadline TEXT, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)');
+    state.storage.sql.exec('INSERT INTO goals (id, user_id, description, created_at, updated_at) VALUES (?,?,?,?,?)', 'inc-goal', 'u', 'Finish the report tomorrow', 't', 't');
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(name));
+  seen.selectedTexts = ['Finish the report tomorrow']; seen.selectorMode = 'normal';
+  await admittedTurn(name, 135001, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(name), (_instance, state) => {
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
+    expect(JSON.stringify(state.storage.sql.exec('SELECT description FROM goals').toArray()).toLowerCase()).not.toContain('tom');
+    state.storage.deleteAlarm();
+  });
+  seen.selectorMode = 'normal';
+  await admittedTurn(name, 135002, 'What time is my standup?', ops());
+  expect(request()).not.toContain('temporarily limited');
+  expect(request()).toContain('09:10 UTC');
+});
+
+it('REVIEW-769 an unselected incidental row keeps the forget pending and nothing is redacted, including the selected row (spans must cover every row that carries the topic)', async () => {
+  const name = 'review-769-incidental-unselected'; const topic = 'Tom';
+  await admittedTurn(name, 136000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(name), (_instance, state) => {
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS goals (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, description TEXT NOT NULL, baseline TEXT, target TEXT, progress TEXT, deadline TEXT, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)');
+    state.storage.sql.exec('INSERT INTO goals (id, user_id, description, created_at, updated_at) VALUES (?,?,?,?,?)', 'inc-goal', 'u', 'Finish the report tomorrow', 't', 't');
+    state.storage.sql.exec('INSERT INTO goals (id, user_id, description, created_at, updated_at) VALUES (?,?,?,?,?)', 'sel-goal', 'u', 'Call Tom about the lunch plan', 't', 't');
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(name));
+  seen.selectedTexts = ['Call Tom about the lunch plan']; seen.selectorMode = 'normal';
+  await admittedTurn(name, 136001, 'Continue my requested forgetting.', ops());
+  expect(request()).toContain('reason class: selection_rejected');
+  await runInDurableObject(stub(name), (_instance, state) => {
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+    expect(state.storage.sql.exec<{ description: string }>('SELECT description FROM goals ORDER BY id').toArray().map(row => row.description)).toEqual(['Finish the report tomorrow', 'Call Tom about the lunch plan']);
+    state.storage.deleteAlarm();
+  });
+});
+
+positiveStore('loops', 'POSLOOP769', (sql, text) => { loopBook(sql, { now: () => Date.now(), newId: () => 'pos-769-loop' }).open({ title: text, due: null }); }, sql => JSON.stringify(sql.exec('SELECT title FROM loops').toArray()));
+positiveStore('background_runs', 'POSBG769', (sql, text) => { sql.exec('INSERT INTO background_runs (id,kind,status,summary,parent_id,started_at,ended_at) VALUES (?,?,?,?,?,?,?)', 'pos-769-bg', 'event', 'completed', text, null, 1, 2); }, sql => JSON.stringify(sql.exec('SELECT summary FROM background_runs').toArray()));
+positiveStore('reminder_notes', 'POSNOTE769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)'); sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', 'pos-769-note', text, 1); }, sql => JSON.stringify(sql.exec('SELECT note FROM reminder_notes').toArray()));
+positiveStore('thread_topic_index', 'POSTOPIC769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS thread_topic_index (user_id TEXT NOT NULL, topic TEXT NOT NULL, thread_id TEXT NOT NULL, last_user_message_at TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, PRIMARY KEY (user_id, topic, thread_id))'); sql.exec('INSERT INTO thread_topic_index (user_id, topic, thread_id, last_user_message_at, is_active, updated_at) VALUES (?,?,?,?,?,?)', 'u', text, 't1', 't', 1, 't'); }, sql => JSON.stringify(sql.exec('SELECT topic FROM thread_topic_index').toArray()));
+positiveStore('memory_blocks', 'POSBLOCK769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS memory_blocks (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, hall_type TEXT NOT NULL, content TEXT NOT NULL, decision_log TEXT NOT NULL DEFAULT \'[]\', confidence REAL NOT NULL, created_at TEXT NOT NULL, valid_from TEXT NOT NULL, source_trust TEXT NOT NULL)'); sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'pos-769-block', 'u', 'facts', text, '[]', 0.9, 't', 't', 'user_stated'); }, sql => JSON.stringify(sql.exec('SELECT content, decision_log FROM memory_blocks').toArray()));
+positiveStore('memory_inbox', 'POSINBOX769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS memory_inbox (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, operation TEXT NOT NULL, hall TEXT NOT NULL, claim TEXT NOT NULL, content TEXT NOT NULL, proposed_pattern_id TEXT NOT NULL, observed_at TEXT NOT NULL, source_trust TEXT NOT NULL, rationale TEXT NOT NULL, source TEXT NOT NULL)'); sql.exec('INSERT INTO memory_inbox (id, user_id, operation, hall, claim, content, proposed_pattern_id, observed_at, source_trust, rationale, source) VALUES (?,?,?,?,?,?,?,?,?,?,?)', 'pos-769-inbox', 'u', 'ADD', 'facts', text, text, 'p', 't', 'user_stated', 'r', 's'); }, sql => JSON.stringify(sql.exec('SELECT claim, content FROM memory_inbox').toArray()));
+
+const MEMORY_BLOCKS_DDL = 'CREATE TABLE IF NOT EXISTS memory_blocks (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, hall_type TEXT NOT NULL, content TEXT NOT NULL, decision_log TEXT NOT NULL DEFAULT \'[]\', confidence REAL NOT NULL, created_at TEXT NOT NULL, valid_from TEXT NOT NULL, source_trust TEXT NOT NULL)';
+const jsonBlock = (span: string, name: string, n: number) => it(`REVIEW-769 JSON column: ${name}`, async () => {
+  const label = `review-769-json-${n}`; const topic = 'POSJSON769';
+  await admittedTurn(label, 150000 + n * 10, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec(MEMORY_BLOCKS_DDL);
+    state.storage.sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'json-block', 'u', 'facts', 'plain note', JSON.stringify([{ note: `Call ${topic} about lunch`, at: 't' }]), 0.9, 't', 't', 'user_stated');
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  seen.selectedTexts = [span]; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 150001 + n * 10, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const log = state.storage.sql.exec<{ decision_log: string }>('SELECT decision_log FROM memory_blocks').toArray()[0]!.decision_log;
+    expect(() => JSON.parse(log)).not.toThrow();
+    if (n === 1) { expect(log).not.toContain(topic); expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]); }
+    else { expect(log).toContain(topic); expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]); }
+    state.storage.deleteAlarm();
+  });
+});
+jsonBlock(`Call POSJSON769 about lunch`, 'a span inside a string leaf is redacted, the JSON stays valid and the forget settles', 1);
+jsonBlock(`Call POSJSON769 about lunch","at":"t`, 'a span crossing a JSON quote changes nothing, the JSON stays valid and the forget stays incomplete', 2);
+
+for (const column of ['scope', 'escalation'] as const) it(`REVIEW-769 standing_orders ${column} keeps the forget incomplete and the owner message names standing_orders`, async () => {
+  const label = `review-769-orders-${column}`; const topic = `POSORD${column.toUpperCase()}769`;
+  await admittedTurn(label, 151000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS standing_orders (id TEXT PRIMARY KEY, scope TEXT NOT NULL, trigger TEXT NOT NULL, at TEXT, gate TEXT NOT NULL, escalation TEXT NOT NULL, created_at INTEGER NOT NULL)');
+    state.storage.sql.exec('INSERT INTO standing_orders (id, scope, trigger, at, gate, escalation, created_at) VALUES (?,?,?,?,?,?,?)', 'ord-769', column === 'scope' ? `watch ${topic}` : 'watch the inbox', 'every_turn', null, 'ask', column === 'escalation' ? `call about ${topic}` : 'ping me', 1);
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 151001, 'Continue my requested forgetting.', ops());
+  expect(request()).toContain('reason class: preserved_store');
+  expect(request()).toContain('standing_orders');
+  await runInDurableObject(stub(label), (_instance, state) => { expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]); state.storage.deleteAlarm(); });
+});
+
+it('REVIEW-769 a standing order plus another preserved store keeps the generic sources_incomplete class, so the other cause is not hidden', async () => {
+  const label = 'review-769-orders-mixed'; const topic = 'POSMIXED769';
+  await admittedTurn(label, 152000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS standing_orders (id TEXT PRIMARY KEY, scope TEXT NOT NULL, trigger TEXT NOT NULL, at TEXT, gate TEXT NOT NULL, escalation TEXT NOT NULL, created_at INTEGER NOT NULL)');
+    state.storage.sql.exec('INSERT INTO standing_orders (id, scope, trigger, at, gate, escalation, created_at) VALUES (?,?,?,?,?,?,?)', 'ord-mixed', `watch ${topic}`, 'every_turn', null, 'ask', 'ping me', 1);
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
+    state.storage.sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'brief', null, `about ${topic}`, 0);
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 152001, 'Continue my requested forgetting.', ops());
+  expect(request()).toContain('reason class: sources_incomplete');
+  expect(request()).not.toContain('preserved_store');
+});
+
+it('REVIEW-769 JSON redaction rewrites only rows whose string leaf changed: pretty text, a big integer and 1.0 survive in a row without the topic', async () => {
+  const label = 'review-769-json-exact'; const topic = 'POSJSONEXACT769';
+  const pretty = '[\n  { "n": 12345678901234567890, "x": 1.0 }\n]';
+  await admittedTurn(label, 153000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec(MEMORY_BLOCKS_DDL);
+    state.storage.sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'json-keep', 'u', 'facts', 'plain note', pretty, 0.9, 't', 't', 'user_stated');
+    state.storage.sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'json-hit', 'u', 'facts', 'plain note', JSON.stringify([{ note: `Call ${topic} about lunch` }]), 0.9, 't', 't', 'user_stated');
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  seen.selectedTexts = [`Call ${topic} about lunch`]; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 153001, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const rows = Object.fromEntries(state.storage.sql.exec<{ id: string; decision_log: string }>('SELECT id, decision_log FROM memory_blocks').toArray().map(row => [row.id, row.decision_log]));
+    expect(rows['json-keep']).toBe(pretty);
+    expect(rows['json-hit']).not.toContain(topic);
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
+    state.storage.deleteAlarm();
+  });
+});
+
+const jsonRow = (n: number, name: string, decisionLog: string, expectSettled: boolean, unchanged?: boolean) => it(`REVIEW-769 JSON fail-closed: ${name}`, async () => {
+  const label = `review-769-json-closed-${n}`; const topic = 'POSCLOSED769';
+  await admittedTurn(label, 154000 + n * 10, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec(MEMORY_BLOCKS_DDL);
+    state.storage.sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'closed', 'u', 'facts', 'plain note', decisionLog, 0.9, 't', 't', 'user_stated');
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  seen.selectedTexts = [`Call ${topic} about lunch`]; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 154001 + n * 10, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const log = state.storage.sql.exec<{ decision_log: string }>('SELECT decision_log FROM memory_blocks').toArray()[0]!.decision_log;
+    if (unchanged) expect(log).toBe(decisionLog); else expect(() => JSON.parse(log)).not.toThrow();
+    if (unchanged) expect(log).toBe(decisionLog);
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual(expectSettled ? [] : [topic]);
+    if (expectSettled) expect(log).not.toContain(topic);
+    state.storage.deleteAlarm();
+  });
+});
+// The topic hidden behind \u escapes: raw LIKE sees nothing, the decoded leaf carries it, so the forget must not settle.
+jsonRow(1, 'a topic encoded as \\u escapes is found on the decoded leaf and keeps the forget incomplete', '[{"note":"Call \\u0050\\u004f\\u0053\\u0043\\u004c\\u004f\\u0053\\u0045\\u0044\\u0037\\u0036\\u0039 about lunch"}]', false, true);
+// A row that would not round-trip (big integer, 1.0) is not rewritten: it stays incomplete and unchanged.
+jsonRow(2, 'a non-canonical row with the topic and a big integer is left byte-identical and the forget stays incomplete', '[ { "n": 12345678901234567890, "x": 1.0, "note": "Call POSCLOSED769 about lunch" } ]', false, true);
+// A canonical row still redacts and settles.
+jsonRow(3, 'a canonical row with the topic is redacted and settles', '[{"n":1,"note":"Call POSCLOSED769 about lunch"}]', true);
+
+jsonRow(101, 'encoded key', '{"Call \\u0050\\u004f\\u0053\\u0043\\u004c\\u004f\\u0053\\u0045\\u0044\\u0037\\u0036\\u0039 about lunch":"unrelated"}', false, true);
+jsonRow(102, 'encoded nested arrays', '[[[{"note":"Call \\u0050\\u004f\\u0053\\u0043\\u004c\\u004f\\u0053\\u0045\\u0044\\u0037\\u0036\\u0039 about lunch"}]]]', false, true);
+jsonRow(103, 'encoded 1100 deep', '['.repeat(1100) + '"Call \\u0050\\u004f\\u0053\\u0043\\u004c\\u004f\\u0053\\u0045\\u0044\\u0037\\u0036\\u0039 about lunch"' + ']'.repeat(1100), false, true);
+jsonRow(105, 'encoded 12000 deep', '['.repeat(12000) + '"Call \\u0050\\u004f\\u0053\\u0043\\u004c\\u004f\\u0053\\u0045\\u0044\\u0037\\u0036\\u0039 about lunch"' + ']'.repeat(12000), false, true);
+jsonRow(106, 'large shallow no-topic', JSON.stringify(Array.from({length:100000}, () => 'unrelated value')), true, true);
+jsonRow(107, 'split across leaves literal contract', '["Call POSCLO","SED769 about lunch"]', true, true);
+jsonRow(108, 'canonical key kept incomplete', '{"Call POSCLOSED769 about lunch":"unrelated"}', false, true);
+jsonRow(109, 'encoded 1001 deep exact boundary', '['.repeat(1001) + '"Call \\u0050\\u004f\\u0053\\u0043\\u004c\\u004f\\u0053\\u0045\\u0044\\u0037\\u0036\\u0039 about lunch"' + ']'.repeat(1001), false, true);
+
+const ENC = '\\u0050\\u004f\\u0053\\u0043\\u004c\\u004f\\u0053\\u0045\\u0044\\u0037\\u0036\\u0039';
+// No parser is the proof: a row with no raw match and a hiding escape is held, however JS, SQLite or JSON5 would read it.
+jsonRow(201, 'duplicate keys, the last one wins in JS but the escaped topic is still readable', `{"k":"Call ${ENC} about lunch","k":"x"}`, false, true);
+jsonRow(202, 'JSON5 unquoted key with an escaped topic (a JS SyntaxError is not plain text)', `{k:"Call ${ENC} about lunch"}`, false, true);
+jsonRow(203, 'single-quoted JSON5 string with a \\x escape', `{'k':'Call \\x50OSCLOSED769 about lunch'}`, false, true);
+it('REVIEW-769 JSON fail-closed: a cleanup-projection row nested over 1000 levels with an escaped topic is held (SQLite json_valid rejects it)', async () => {
+  const label = 'review-769-projection-deep'; const topic = 'POSCLOSED769';
+  const raw = '['.repeat(1100) + `"Call ${ENC} about lunch"` + ']'.repeat(1100);
+  await admittedTurn(label, 155000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
+    state.storage.sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'deep', null, raw, 0);
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 155001, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => { expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]); state.storage.deleteAlarm(); });
+});
+
+it('ADVERSARIAL reminder_notes escaped topic must hold across owner retry', async () => {
+  const label = 'adversarial-reminder-escape'; const topic = 'POSCLOSED769';
+  const raw = `{"k":"Call ${ENC} about lunch","k":"x"}`;
+  await admittedTurn(label, 170000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)');
+    state.storage.sql.exec('INSERT INTO reminder_notes VALUES (?,?,?)', 'hidden', raw, 1);
+    const memory = claimStore(state.storage.sql);
+    memory.beginTopicCoverage(topic, new Date().toISOString());
+    console.log('ADVERSARIAL reminder inventory', JSON.stringify(memory.forgetSourceBatch(topic)));
+    console.log('ADVERSARIAL reminder sqlite', JSON.stringify(state.storage.sql.exec("SELECT value FROM json_tree((SELECT note FROM reminder_notes WHERE id = 'hidden')) WHERE type = 'text'").toArray()));
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 170001, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    expect(state.storage.sql.exec<{ note: string }>('SELECT note FROM reminder_notes').toArray()[0]!.note).toBe(raw);
+    console.log('ADVERSARIAL reminder final', JSON.stringify(claimStore(state.storage.sql).incompleteTopics()));
+    state.storage.deleteAlarm();
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+  });
+});
+
+it('ADVERSARIAL NUL before raw topic must hold', async () => {
+  const label = 'adversarial-nul'; const topic = 'POSCLOSED769';
+  const raw = 'unrelated\0Call POSCLOSED769 about lunch';
+  await admittedTurn(label, 170010, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec(MEMORY_BLOCKS_DDL);
+    state.storage.sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'nul', 'u', 'facts', raw, '[]', 0.9, 't', 't', 'user_stated');
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    console.log('ADVERSARIAL NUL inventory', JSON.stringify(claimStore(state.storage.sql).forgetSourceBatch(topic)));
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label)); seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 170011, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    console.log('ADVERSARIAL NUL final', JSON.stringify(claimStore(state.storage.sql).incompleteTopics()), JSON.stringify(state.storage.sql.exec('SELECT content FROM memory_blocks').toArray()));
+    state.storage.deleteAlarm(); expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+  });
+});
+
+it('ADVERSARIAL allowed slash escape plus duplicate key must hold', async () => {
+  const label = 'adversarial-slash'; const topic = 'POS/CLOSED769';
+  const raw = '{"k":"Call POS\\/CLOSED769 about lunch","k":"x"}';
+  await admittedTurn(label, 170020, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec(MEMORY_BLOCKS_DDL);
+    state.storage.sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'slash', 'u', 'facts', 'plain note', raw, 0.9, 't', 't', 'user_stated');
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    console.log('ADVERSARIAL slash inventory', JSON.stringify(claimStore(state.storage.sql).forgetSourceBatch(topic)));
+    console.log('ADVERSARIAL slash sqlite', JSON.stringify(state.storage.sql.exec("SELECT value FROM json_tree((SELECT decision_log FROM memory_blocks)) WHERE type = 'text'").toArray()));
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label)); seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 170021, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    console.log('ADVERSARIAL slash final', JSON.stringify(claimStore(state.storage.sql).incompleteTopics()), JSON.stringify(state.storage.sql.exec('SELECT decision_log FROM memory_blocks').toArray()));
+    state.storage.deleteAlarm(); expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+  });
+});
+
+it('ADVERSARIAL retained ledger duplicate escaped topic must hold', async () => {
+  const label = 'adversarial-ledger'; const topic = 'POSCLOSED769';
+  const raw = `{"k":"Call ${ENC} about lunch","k":"x"}`;
+  await admittedTurn(label, 170030, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), async (_instance, state) => {
+    await state.storage.put('toolout:0000000000', {tool:'fixture_read',ok:true,at:1,taint:'external',summary:raw});
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    console.log('ADVERSARIAL ledger inventory', JSON.stringify(await toolOutputLedger(state.storage).forgetSourceBatch(topic)));
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label)); seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 170031, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), async (_instance, state) => {
+    console.log('ADVERSARIAL ledger final', JSON.stringify(claimStore(state.storage.sql).incompleteTopics()), JSON.stringify(await state.storage.get('toolout:0000000000')));
+    state.storage.deleteAlarm(); expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+  });
+});
+
+it('ADVERSARIAL cleanup projection deep allowed slash escape must hold', async () => {
+  const label = 'adversarial-deep-slash'; const topic = 'POS/CLOSED769';
+  const raw = '['.repeat(1100) + '"Call POS\\/CLOSED769 about lunch"' + ']'.repeat(1100);
+  await admittedTurn(label, 170040, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
+    state.storage.sql.exec('INSERT INTO day_plan VALUES (?,?,?,?,?)', '2026-10-05','slash',null,raw,0);
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    console.log('ADVERSARIAL deep-slash inventory', JSON.stringify(claimStore(state.storage.sql).forgetSourceBatch(topic)), 'JS decoded includes', JSON.stringify(JSON.parse(raw)).includes(topic));
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label)); seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 170041, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    console.log('ADVERSARIAL deep-slash final', JSON.stringify(claimStore(state.storage.sql).incompleteTopics()), 'unchanged', state.storage.sql.exec<{reason:string}>("SELECT reason FROM day_plan WHERE card = 'slash'").toArray()[0]!.reason === raw);
+    state.storage.deleteAlarm(); expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+  });
 });
