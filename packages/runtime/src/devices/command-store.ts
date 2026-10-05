@@ -60,7 +60,7 @@ export class DeviceCommandStore {
     const row = this.storage.sql.exec<Row>('SELECT * FROM commands WHERE command_id=?', frame.command_id).toArray()[0];
     // Never acknowledge or receipt a frame without trustworthy device, owner and command binding.
     if (!row) throw new Error('unknown_message');
-    if (frame.revision !== 1 || row.device_id !== frame.device_id || row.owner_id !== frame.owner_id || row.idempotency_key !== frame.idempotency_key || row.state === 'queued' || row.state === 'cancelled') throw new Error('invalid_shape');
+    if (frame.revision !== 1 || row.device_id !== frame.device_id || row.owner_id !== frame.owner_id || row.idempotency_key !== frame.idempotency_key || row.delivered_generation === null || row.state === 'queued' || row.state === 'cancelled') throw new Error('invalid_shape');
     return row;
   }
   acceptAck(frame: Ack): void {
