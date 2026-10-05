@@ -1,3 +1,4 @@
+import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import { asciiLiteralIncludes, forgetSourceBatch } from '../memory/selective-forget';
 // Recent tool outputs as composable context (BUILD_ORDER 12). The tool loop's outputs
@@ -69,6 +70,7 @@ const ledgerSourcesFromRows = (topic: string, rows: Iterable<[string, ToolOutput
   let incomplete = false;
   for (const [key, row] of rows) {
     let index = 0;
+    const before = sources.length;
     const add = (text: string) => { if (asciiLiteralIncludes(text, topic)) sources.push({ ref: `ledger:${key}:${index++}`, text }); };
     add(row.summary);
     const decoded = (value: unknown): void => {
@@ -80,6 +82,8 @@ const ledgerSourcesFromRows = (topic: string, rows: Iterable<[string, ToolOutput
       }
     };
     try { decoded(JSON.parse(row.summary)); } catch { if (/\\u/i.test(row.summary)) incomplete = true; }
+    // Shared safety line. A row whose decoded text carries the topic goes to the selector and its redaction re-serialises the row; any other row with a hiding escape (or the topic in a NUL-bearing string) cannot be proven clean from a parse, so it is held.
+    if (sources.length === before && (hidesTopic(row.summary, topic) || (row.summary.includes('\0') && carriesTopic(row.summary, topic)))) incomplete = true;
   }
   return { sources, incomplete };
 };

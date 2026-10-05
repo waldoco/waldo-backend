@@ -1,4 +1,5 @@
 type Sql = Pick<SqlStorage, 'exec'>;
+import { carriesTopic, hidesTopic } from './forget-guard';
 import type { ForgetSource, ForgetBatch } from './selective-forget';
 import { asciiLiteralIncludes, MAX_FORGET_SOURCES } from './selective-forget';
 
@@ -72,9 +73,6 @@ const jsonLeaves = (value: string): string[] | null | 'unreadable' => {
     return out;
   } catch { return 'unreadable'; }
 };
-// A hard safety line, not a parser: any backslash escape other than the plain JSON whitespace and quote escapes (\u, \x, or an identity escape such as \p) can spell the topic in a way a LIKE, JS JSON.parse and SQLite json_tree may each read differently (duplicate keys, JSON5 text). A row with no raw match and such an escape cannot be proven clean, so it is held.
-const HIDING_ESCAPE = /\\(?!["\\/bfnrt])/;
-const hidesTopic = (value: string): boolean => HIDING_ESCAPE.test(value);
 const ciRedact = (value: string, needle: string, marker: string): string =>
   needle ? value.replace(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), marker) : value;
 
@@ -562,7 +560,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         const like = likePrefilter(text);
         // The LIKE above is only a prefilter; exactness is the case-insensitive full-text
         // substring check here, matching what the redaction loops rewrote.
-        const exact = (value: string) => value.toLowerCase().includes(text.toLowerCase());
+        const exact = (value: string) => carriesTopic(value, text) || hidesTopic(value, text);
         const add = (store: string, n: number) => { if (n > 0) remaining[store] = (remaining[store] ?? 0) + n; };
         // Same honesty contract as the redaction loops: a store that errors lands in failed,
         // the claim stays 'purging', and the console reports incomplete - no worker crash.
@@ -586,7 +584,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           if (!tableExists(sql, table)) return;
           for (const column of columns) {
             if (!sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) continue;
-            add(table, sql.exec<{ value: string | null }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL`).toArray().filter(row => typeof row.value === 'string' && (exact(row.value) || hidesTopic(row.value) || ((leaves) => leaves === 'unreadable' || (leaves !== null && leaves.some(exact)))(jsonLeaves(row.value)))).length);
+            add(table, sql.exec<{ value: string | null }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL`).toArray().filter(row => typeof row.value === 'string' && (exact(row.value) || ((leaves) => leaves === 'unreadable' || (leaves !== null && leaves.some(exact)))(jsonLeaves(row.value)))).length);
           }
         });
         if (tableExists(sql, 'reminder_notes')) attempt('reminder_notes', () => add('reminder_notes', sql.exec<{ note: string }>('SELECT note FROM reminder_notes').toArray().filter(row => exact(row.note)).length));
@@ -625,10 +623,21 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const sources: ForgetSource[] = [];
       let incomplete = false;
       const held: string[] = [];
+      // Rows LIKE cannot be trusted on: any hiding escape, or a NUL with the topic in the full string. Held, never settled.
+      const guard = (table: string, columns: readonly string[]) => {
+        if (held.includes(table) || !tableExists(sql, table)) return;
+        for (const column of columns) {
+          if (!sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) continue;
+          const risky = sql.exec<{ value: string }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL AND (instr(${column}, char(92)) > 0 OR instr(CAST(${column} AS BLOB), x'00') > 0)`).toArray()
+            .some(row => typeof row.value === 'string' && (hidesTopic(row.value, topic) || (row.value.includes('\0') && carriesTopic(row.value, topic))));
+          if (risky) { incomplete = true; held.push(table); return; }
+        }
+      };
       let more = false;
       const like = likePrefilter(topic);
       const collect = (table: string, id: string, columns: readonly string[]) => {
         if (!tableExists(sql, table)) return;
+        guard(table, columns);
         const rows = sql.exec<Record<string, string | number | null>>(`SELECT ${id} AS source_id, ${columns.join(', ')} FROM ${table} WHERE ${columns.map(column => `${column} LIKE ? ESCAPE '\\'`).join(' OR ')} ORDER BY ${id} LIMIT ?`, ...columns.map(() => like), MAX_FORGET_SOURCES + 1).toArray();
         if (rows.length > MAX_FORGET_SOURCES) { if (batch) more = true; else incomplete = true; }
         for (const row of rows.slice(0, MAX_FORGET_SOURCES)) for (const column of columns) {
@@ -657,7 +666,6 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           const decodedOnly = sql.exec<{ value: string }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL AND ${column} != '' AND ${column} NOT LIKE ? ESCAPE '\\'`, like).toArray()
             .some(row => {
               const leaves = jsonLeaves(row.value);
-              if (hidesTopic(row.value)) return true;
               if (leaves === null) return false;
               return leaves === 'unreadable' || leaves.some(leaf => leaf.toLowerCase().includes(topic.toLowerCase()));
             });
@@ -678,8 +686,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         const available = columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length);
         if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${available.map(column => `(${column} LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE (type = 'text' AND value LIKE ? ESCAPE '\\') OR key LIKE ? ESCAPE '\\'))`).join(' OR ')} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) { incomplete = true; held.push(table); }
         if (available.length && !held.includes(table)) {
-          const hidden = available.some(column => sql.exec<{ value: string }>(`SELECT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL AND instr(${column}, char(92)) > 0 AND ${column} NOT LIKE ? ESCAPE '\\'`, like).toArray().some(row => typeof row.value === 'string' && hidesTopic(row.value)));
-          if (hidden) { incomplete = true; held.push(table); }
+          guard(table, available);
         }
       }
       return { sources, incomplete, ...(held.length ? { held, otherIncomplete: incompleteBeforeHeld || held.some(table => table !== 'standing_orders') } : {}), ...(batch ? { more } : {}) };

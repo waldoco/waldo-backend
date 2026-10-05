@@ -1735,3 +1735,103 @@ it('REVIEW-769 JSON fail-closed: a cleanup-projection row nested over 1000 level
   await admittedTurn(label, 155001, 'Continue my requested forgetting.', ops());
   await runInDurableObject(stub(label), (_instance, state) => { expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]); state.storage.deleteAlarm(); });
 });
+
+it('ADVERSARIAL reminder_notes escaped topic must hold across owner retry', async () => {
+  const label = 'adversarial-reminder-escape'; const topic = 'POSCLOSED769';
+  const raw = `{"k":"Call ${ENC} about lunch","k":"x"}`;
+  await admittedTurn(label, 170000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)');
+    state.storage.sql.exec('INSERT INTO reminder_notes VALUES (?,?,?)', 'hidden', raw, 1);
+    const memory = claimStore(state.storage.sql);
+    memory.beginTopicCoverage(topic, new Date().toISOString());
+    console.log('ADVERSARIAL reminder inventory', JSON.stringify(memory.forgetSourceBatch(topic)));
+    console.log('ADVERSARIAL reminder sqlite', JSON.stringify(state.storage.sql.exec("SELECT value FROM json_tree((SELECT note FROM reminder_notes WHERE id = 'hidden')) WHERE type = 'text'").toArray()));
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 170001, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    expect(state.storage.sql.exec<{ note: string }>('SELECT note FROM reminder_notes').toArray()[0]!.note).toBe(raw);
+    console.log('ADVERSARIAL reminder final', JSON.stringify(claimStore(state.storage.sql).incompleteTopics()));
+    state.storage.deleteAlarm();
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+  });
+});
+
+it('ADVERSARIAL NUL before raw topic must hold', async () => {
+  const label = 'adversarial-nul'; const topic = 'POSCLOSED769';
+  const raw = 'unrelated\0Call POSCLOSED769 about lunch';
+  await admittedTurn(label, 170010, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec(MEMORY_BLOCKS_DDL);
+    state.storage.sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'nul', 'u', 'facts', raw, '[]', 0.9, 't', 't', 'user_stated');
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    console.log('ADVERSARIAL NUL inventory', JSON.stringify(claimStore(state.storage.sql).forgetSourceBatch(topic)));
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label)); seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 170011, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    console.log('ADVERSARIAL NUL final', JSON.stringify(claimStore(state.storage.sql).incompleteTopics()), JSON.stringify(state.storage.sql.exec('SELECT content FROM memory_blocks').toArray()));
+    state.storage.deleteAlarm(); expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+  });
+});
+
+it('ADVERSARIAL allowed slash escape plus duplicate key must hold', async () => {
+  const label = 'adversarial-slash'; const topic = 'POS/CLOSED769';
+  const raw = '{"k":"Call POS\\/CLOSED769 about lunch","k":"x"}';
+  await admittedTurn(label, 170020, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec(MEMORY_BLOCKS_DDL);
+    state.storage.sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'slash', 'u', 'facts', 'plain note', raw, 0.9, 't', 't', 'user_stated');
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    console.log('ADVERSARIAL slash inventory', JSON.stringify(claimStore(state.storage.sql).forgetSourceBatch(topic)));
+    console.log('ADVERSARIAL slash sqlite', JSON.stringify(state.storage.sql.exec("SELECT value FROM json_tree((SELECT decision_log FROM memory_blocks)) WHERE type = 'text'").toArray()));
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label)); seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 170021, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    console.log('ADVERSARIAL slash final', JSON.stringify(claimStore(state.storage.sql).incompleteTopics()), JSON.stringify(state.storage.sql.exec('SELECT decision_log FROM memory_blocks').toArray()));
+    state.storage.deleteAlarm(); expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+  });
+});
+
+it('ADVERSARIAL retained ledger duplicate escaped topic must hold', async () => {
+  const label = 'adversarial-ledger'; const topic = 'POSCLOSED769';
+  const raw = `{"k":"Call ${ENC} about lunch","k":"x"}`;
+  await admittedTurn(label, 170030, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), async (_instance, state) => {
+    await state.storage.put('toolout:0000000000', {tool:'fixture_read',ok:true,at:1,taint:'external',summary:raw});
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    console.log('ADVERSARIAL ledger inventory', JSON.stringify(await toolOutputLedger(state.storage).forgetSourceBatch(topic)));
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label)); seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 170031, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), async (_instance, state) => {
+    console.log('ADVERSARIAL ledger final', JSON.stringify(claimStore(state.storage.sql).incompleteTopics()), JSON.stringify(await state.storage.get('toolout:0000000000')));
+    state.storage.deleteAlarm(); expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+  });
+});
+
+it('ADVERSARIAL cleanup projection deep allowed slash escape must hold', async () => {
+  const label = 'adversarial-deep-slash'; const topic = 'POS/CLOSED769';
+  const raw = '['.repeat(1100) + '"Call POS\\/CLOSED769 about lunch"' + ']'.repeat(1100);
+  await admittedTurn(label, 170040, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
+    state.storage.sql.exec('INSERT INTO day_plan VALUES (?,?,?,?,?)', '2026-10-05','slash',null,raw,0);
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    console.log('ADVERSARIAL deep-slash inventory', JSON.stringify(claimStore(state.storage.sql).forgetSourceBatch(topic)), 'JS decoded includes', JSON.stringify(JSON.parse(raw)).includes(topic));
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label)); seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 170041, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    console.log('ADVERSARIAL deep-slash final', JSON.stringify(claimStore(state.storage.sql).incompleteTopics()), 'unchanged', state.storage.sql.exec<{reason:string}>("SELECT reason FROM day_plan WHERE card = 'slash'").toArray()[0]!.reason === raw);
+    state.storage.deleteAlarm(); expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+  });
+});
