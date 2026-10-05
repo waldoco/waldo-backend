@@ -135,6 +135,58 @@ const hasDuplicateKeys = (json: string): boolean => {
   }
   return false;
 };
+// Same text with every repeated key in an object renamed (base name, NUL, count) so a parse keeps all of them; used only to judge a card, never stored.
+const uniqueKeys = (json: string): string => {
+  let out = ''; let last = 0;
+  const stack: Array<{ seen: Map<string, number> } | null> = [];
+  let expectKey = false;
+  for (let i = 0; i < json.length; i++) {
+    const ch = json[i]!;
+    if (ch === '"') {
+      let end = i + 1;
+      while (json[end] !== '"') end += json[end] === '\\' ? 2 : 1;
+      const top = stack[stack.length - 1];
+      if (expectKey && top) {
+        const key = JSON.parse(json.slice(i, end + 1)) as string;
+        const count = top.seen.get(key) ?? 0;
+        top.seen.set(key, count + 1); expectKey = false;
+        if (count > 0) { out += json.slice(last, i) + JSON.stringify(`${key}\u0000${count}`); last = end + 1; }
+      }
+      i = end;
+    } else if (ch === '{') { stack.push({ seen: new Map() }); expectKey = true; }
+    else if (ch === '[') { stack.push(null); expectKey = false; }
+    else if (ch === '}' || ch === ']') { stack.pop(); expectKey = false; }
+    else if (ch === ',') expectKey = stack[stack.length - 1] != null;
+  }
+  return out + json.slice(last);
+};
+// Redacts string VALUE tokens in the raw JSON text, keeping every other byte (key order, duplicate keys, spacing). A card with duplicate keys is never
+// parsed and re-serialised: SQLite reads the first duplicate and JS the last, so a round trip would change what an unrelated reader sees.
+const redactRawJsonValues = (json: string, redact: (value: string) => string): string => {
+  let out = ''; let last = 0;
+  const stack: Array<'o' | 'a'> = [];
+  let expectKey = false;
+  for (let i = 0; i < json.length; i++) {
+    const ch = json[i]!;
+    if (ch === '"') {
+      let end = i + 1;
+      while (json[end] !== '"') end += json[end] === '\\' ? 2 : 1;
+      const isKey = expectKey && stack[stack.length - 1] === 'o';
+      if (isKey) expectKey = false;
+      else {
+        const token = json.slice(i, end + 1);
+        const value = JSON.parse(token) as string;
+        const next = redact(value);
+        if (next !== value) { out += json.slice(last, i) + JSON.stringify(next); last = end + 1; }
+      }
+      i = end;
+    } else if (ch === '{') { stack.push('o'); expectKey = true; }
+    else if (ch === '[') { stack.push('a'); expectKey = false; }
+    else if (ch === '}' || ch === ']') { stack.pop(); expectKey = false; }
+    else if (ch === ',') expectKey = stack[stack.length - 1] === 'o';
+  }
+  return out + json.slice(last);
+};
 const CARD_JOIN_KEYS = ['source', 'kind', 'source_ref', 'source_message_id'];
 export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string): boolean => {
   if (changes !== null && changes !== undefined && typeof changes !== 'string') return true;
@@ -152,8 +204,8 @@ export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string)
   if (typeof changes !== 'string') return false;
   let parsed: unknown;
   try { parsed = JSON.parse(changes); } catch (error) { return !(error instanceof SyntaxError) || exact(changes); }
-  // Duplicate keys in one object hide bytes from the decoded view (parse keeps only the last): the card stays held and the purge rewrites it.
-  if (hasDuplicateKeys(changes)) return true;
+  // Duplicate keys hide bytes from the decoded view (parse keeps only the last), so a card with them is judged with every duplicate kept.
+  if (hasDuplicateKeys(changes)) { try { parsed = JSON.parse(uniqueKeys(changes)); } catch { return true; } }
   // A card that parses is judged on its decoded keys and values: the serialized text escapes quotes and backslashes, which would make an unrelated card look unprovable.
   // In-order pieces: the values alone (keys between them would break a split topic) and keys plus values (a key/value split).
   const all: string[] = []; const values: string[] = [];
@@ -164,7 +216,7 @@ export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string)
     else if (Array.isArray(node)) for (let index = node.length - 1; index >= 0; index--) stack.push({ key: false, node: node[index] });
     else if (node !== null && typeof node === 'object') {
       // Join keys (source, kind, source_ref, source_message_id) sit between the free-text fragments of a real mail card and are not content.
-      const entries = Object.entries(node).filter(([name]) => !CARD_JOIN_KEYS.includes(name));
+      const entries = Object.entries(node).filter(([name]) => !CARD_JOIN_KEYS.includes(name.split('\u0000')[0]!));
       for (let index = entries.length - 1; index >= 0; index--) { stack.push({ key: false, node: entries[index]![1] }); stack.push({ key: true, node: entries[index]![0] }); }
     }
   }
@@ -577,11 +629,13 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             const redactedText = row.text === null ? null : ci(row.text);
             // A malformed row is redacted as plain text and never aborts the other rows.
             const parsed = parsedJson(row.changes);
+            const duplicated = parsed !== undefined && hasDuplicateKeys(row.changes);
             const redactedChanges = parsed === undefined
               ? ci(row.changes)
+              : duplicated ? redactRawJsonValues(row.changes, ci)
               : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
             // Only a card that redaction changed, or one whose duplicate keys hide bytes from the decoded view, is rewritten; every other card keeps its stored bytes.
-            const changed = parsed === undefined ? redactedChanges !== row.changes : redactedChanges !== JSON.stringify(parsed) || hasDuplicateKeys(row.changes);
+            const changed = parsed === undefined || duplicated ? redactedChanges !== row.changes : redactedChanges !== JSON.stringify(parsed);
             // A card that still carries the topic after redaction (split across values or keys, or broken by a NUL) cannot be proven clean by the per-value pass.
             // update_cards rows record no source and siblings of a matching fragment may be unrelated, so only the leaves that carry the topic's pieces are blanked
             // (values, and keys renamed unless they are schema keys). Join keys, other leaves, the summary text when clean and the send state stay. Same predicate as the hold.
