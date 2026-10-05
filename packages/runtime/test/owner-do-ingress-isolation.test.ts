@@ -139,7 +139,7 @@ it.each(['00:00:00.001', '12:00:00.000', '23:59:59.999'])('actual owner eviction
   // Evict the registered DO itself: recovery must not depend on its in-memory attempt set.
   await runInDurableObject(stub, async (instance, state) => {
     await state.storage.put({ telegram_subject: String(subject), do_name: route(subject).doName, timezone: 'Asia/Kolkata' });
-    const runtime = instance as unknown as { setup(): { ready: Promise<void> }; serial(work: () => Promise<void>): Promise<void> };
+    const runtime = instance as unknown as { setup(): { ready: Promise<void>; scheduler: import('../src/scheduler/multiplexer').Scheduler }; serial(work: () => Promise<void>): Promise<void> };
     await runtime.setup().ready;
     await runtime.serial(async () => undefined);
     // With the clock pinned, mark that day's cards as already sent so the alarm has no day plan to make.
@@ -147,6 +147,8 @@ it.each(['00:00:00.001', '12:00:00.000', '23:59:59.999'])('actual owner eviction
     const { DAY_CARDS } = await import('../src/prompt/day-cards');
     for (const card of DAY_CARDS) state.storage.sql.exec('INSERT OR REPLACE INTO day_plan (day, card, time, reason, sent) VALUES (?, ?, ?, ?, 1)', today, card.id, '12:00', 'test fixture');
     expect(state.storage.sql.exec<{ day: string }>('SELECT DISTINCT day FROM day_plan').toArray()).toEqual([{ day: today }]);
+    // This crash cut covers inbox recovery; unrelated due daily jobs must not add model calls.
+    for (const row of state.storage.sql.exec<{ id: string }>('SELECT id FROM schedule').toArray()) await runtime.setup().scheduler.cancel(row.id);
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
     await inbox.admit({ bot: 'hermetic-test-bot-token', subject: String(subject), doName: route(subject).doName }, updateId, 'PRIVATE_INTERRUPTED_REQUEST');
     await inbox.claim(`hermetic-test-bot-token:telegram:${updateId}`, 'interrupted-attempt', 'interrupted-run', Date.now() + 150_000);
