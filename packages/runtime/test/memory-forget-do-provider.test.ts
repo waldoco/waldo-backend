@@ -1489,3 +1489,39 @@ it('ADVERSARIAL background summary only must not settle empty coverage', async (
     expect(rows.some(row=>String(row.summary).includes(topic)) && !memory.incompleteTopics().includes(topic)).toBe(false);
   });
 });
+
+it('REVIEW-769 a topic only in a reminder note is redacted and verified, never settled as absent', async () => {
+  const name='review-769-reminder-note'; const topic='UNIQUENOTE769';
+  await admittedTurn(name,133000,'My unrelated standup is at 09:10 UTC.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)');
+    state.storage.sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)','note-769',`Bring ${topic} private detail`,1);
+    claimStore(state.storage.sql).beginTopicCoverage(topic,new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(name));
+  await admittedTurn(name,133001,'Continue my requested forgetting.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);
+    const rows=state.storage.sql.exec('SELECT note FROM reminder_notes').toArray();
+    expect(rows.some(row=>String(row.note).includes(topic)) && !memory.incompleteTopics().includes(topic)).toBe(false);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('REVIEW-769 a topic that survives only in an unverified owner store keeps the forget incomplete', async () => {
+  const name='review-769-unverified-store'; const topic='UNIQUEPATROL769';
+  await admittedTurn(name,134000,'My unrelated standup is at 09:10 UTC.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS patrol_log (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, observed_at TEXT NOT NULL, entry_type TEXT NOT NULL, summary TEXT NOT NULL, source_ref TEXT, created_at TEXT NOT NULL)');
+    state.storage.sql.exec('INSERT INTO patrol_log (id, user_id, observed_at, entry_type, summary, source_ref, created_at) VALUES (?,?,?,?,?,?,?)','patrol-769','u','t','x',`Saw ${topic} private detail`,null,'t');
+    claimStore(state.storage.sql).beginTopicCoverage(topic,new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(name));
+  await admittedTurn(name,134001,'Continue my requested forgetting.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    expect(claimStore(state.storage.sql).incompleteTopics()).toContain(topic);
+    state.storage.deleteAlarm();
+  });
+});

@@ -404,6 +404,12 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             if (changed || redactedText !== row.text) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', changed ? redactedChanges : row.changes, redactedText, row.id);
           }
         });
+        if (tableExists(sql, 'reminder_notes')) attempt('reminder_notes', () => {
+          for (const row of sql.exec<{ id: string; note: string }>('SELECT id, note FROM reminder_notes').toArray()) {
+            const note = ci(row.note);
+            if (note !== row.note) { sql.exec('UPDATE reminder_notes SET note = ? WHERE id = ?', note, row.id); tally('redacted', 'reminder_notes'); }
+          }
+        });
         if (tableExists(sql, 'background_runs')) attempt('background_runs', () => {
           for (const row of sql.exec<{ id: string; summary: string }>('SELECT id, summary FROM background_runs').toArray()) {
             const summary = ci(row.summary);
@@ -527,6 +533,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           // unverifiable: it lands in failed and the source stays purging.
           if (rows.some((row) => parsedJson(row.changes) === undefined)) throw new Error('update_cards changes unparseable');
         });
+        if (tableExists(sql, 'reminder_notes')) attempt('reminder_notes', () => add('reminder_notes', sql.exec<{ note: string }>('SELECT note FROM reminder_notes').toArray().filter(row => exact(row.note)).length));
         if (tableExists(sql, 'background_runs')) attempt('background_runs', () => add('background_runs', sql.exec<{ summary: string }>('SELECT summary FROM background_runs').toArray().filter(row => exact(row.summary)).length));
         if (hasSourceLoops) attempt('loops', () => add('loops', sql.exec<{ title: string }>('SELECT l.title FROM loops l').toArray().filter(row => exact(row.title)).length));
         if (hasPlan) attempt('day_plan', () => add('day_plan', sql.exec<{ reason: string }>(`SELECT reason FROM day_plan WHERE reason LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.reason)).length));
@@ -578,6 +585,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // Owner-made loop titles and background run summaries carry owner and source text; the selector must see them or an empty inventory settles a forget while they survive.
       collect('loops', 'id', ['title']);
       collect('background_runs', 'id', ['summary']);
+      collect('reminder_notes', 'id', ['note']);
       // These existing cleanup projections are outside the bounded selector's
       // source contract. Preserve their originals if they still carry the topic.
       for (const [table, columns] of [
@@ -586,6 +594,9 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         ['day_plan', ['reason']],
         ['run_candidates', ['candidate_json']], ['outbox', ['payload']],
         ['held_candidates', ['candidate_json']], ['schedule', ['payload_json']],
+        // Owner-DO free-text stores with no redactor yet: a topic still present keeps the forget incomplete instead of clearing it. trace_log.note and runtime_trace.detail_json are diagnostic logs whose hop names would match short topics case-insensitively, so they stay tracked as gaps in forget-store-table, not here.
+        ['thread_topic_index', ['topic']], ['memory_blocks', ['content', 'decision_log']], ['memory_inbox', ['claim', 'content']], ['patrol_log', ['summary']],
+        ['goals', ['description', 'baseline', 'target', 'progress']], ['standing_orders', ['scope', 'escalation']],
       ] as const) {
         if (!tableExists(sql, table)) continue;
         const available = columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length);
