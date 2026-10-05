@@ -14,8 +14,8 @@ export const HELD_ROW_TABLES: Readonly<Record<string, readonly string[]>> = {
 type Sql = Pick<SqlStorage, 'exec'>;
 export type HeldTopic = Readonly<{ topic: string; state: 'incomplete' | 'pending' }>;
 
-// Telegram's documented single-message limit; output stops before it and says so.
-const MESSAGE_LIMIT = 4096;
+// The harness reply is cut at this length before it is sent (telegram-owner-do), so the output is capped to it and the cut is announced inside it.
+export const HARNESS_MESSAGE_LIMIT = 4000;
 
 const escapeCounts = (value: string) => {
   const counts = { u: 0, bad_u: 0, quote_slash: 0, ctl: 0, other: 0 };
@@ -53,33 +53,36 @@ export const heldRowShapes = (sql: Sql, table: string, topics: readonly HeldTopi
   const present = columns.filter(column => sql.exec('SELECT name FROM pragma_table_info(?) WHERE name = ?', table, column).toArray().length);
   const header = `${table}: topics ${topics.map((topic, index) => `t${index + 1}=${topic.state}`).join(' ') || 'none pending'}`;
   if (!present.length || !topics.length) return `${header}; nothing to inspect`;
-  // SQL narrows to rows that can hold (a backslash, a NUL, or a raw topic hit) so a large store is never read whole.
-  const likes = topics.map(({ topic }) => `%${topic.replace(/[\\%_]/g, char => `\\${char}`)}%`);
-  const where = present.map(column => `(instr(${column}, char(92)) > 0 OR instr(CAST(${column} AS BLOB), x'00') > 0${likes.map(() => ` OR ${column} LIKE ? ESCAPE '\\'`).join('')})`).join(' OR ');
-  const bindings = present.flatMap(() => likes);
-  const candidates = sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table} WHERE ${where}`, ...bindings).toArray()[0]?.n ?? 0;
-  const rows = sql.exec<Record<string, SqlStorageValue>>(`SELECT rowid AS rid, ${present.join(', ')} FROM ${table} WHERE ${where} ORDER BY rowid LIMIT ?`, ...bindings, limit).toArray();
-  const lines: string[] = []; let held = 0;
-  for (const row of rows) {
-    const parts: string[] = [];
-    for (const column of present) {
-      const value = row[column];
-      if (typeof value !== 'string') continue;
-      const escapes = escapeCounts(value); const nul = value.split('\0').length - 1; const shape = jsonShape(value); const low = value.toLowerCase();
-      const holds = topics.flatMap(({ topic }, index) => {
-        const lowered = topic.toLowerCase();
-        const raw = low.includes(lowered); const val = shape.values.some(v => v.toLowerCase().includes(lowered)); const key = shape.keys.some(k => k.toLowerCase().includes(lowered));
-        const rules = [...(hidesTopic(value, topic) ? ['guard_escape'] : []), ...(value.includes('\0') && carriesTopic(value, topic) ? ['nul'] : []), ...(raw || val || key ? ['projection'] : [])];
-        return rules.length ? [`t${index + 1}[hold=${rules.join('+')} raw=${raw ? 1 : 0} val=${val ? 1 : 0} key=${key ? 1 : 0}]`] : [];
-      });
-      if (holds.length) parts.push(`${column} len=${value.length} json=${shape.json} depth=${shape.depth} esc[u=${escapes.u} bad_u=${escapes.bad_u} q=${escapes.quote_slash} ctl=${escapes.ctl} other=${escapes.other}] nul=${nul} ${holds.join(' ')}`);
+  // Paged in JS by rowid, one page of `limit` rows at a time: SQLite LIKE and lower() fold ASCII only, so a SQL pre-filter would miss non-ASCII case variants the guard (JS toLowerCase) holds. Memory stays at one page; the scan stops after `limit` held rows.
+  const lines: string[] = []; let held = 0; let scanned = 0; let after = -1; let stopped = false;
+  for (;;) {
+    const page = sql.exec<Record<string, SqlStorageValue>>(`SELECT rowid AS rid, ${present.join(', ')} FROM ${table} WHERE rowid > ? ORDER BY rowid LIMIT ?`, after, limit).toArray();
+    if (!page.length) break;
+    for (const row of page) {
+      scanned++; after = Number(row.rid);
+      const parts: string[] = [];
+      for (const column of present) {
+        const value = row[column];
+        if (typeof value !== 'string') continue;
+        const escapes = escapeCounts(value); const nul = value.split('\0').length - 1; const shape = jsonShape(value); const low = value.toLowerCase();
+        const holds = topics.flatMap(({ topic }, index) => {
+          const lowered = topic.toLowerCase();
+          const raw = low.includes(lowered); const val = shape.values.some(v => v.toLowerCase().includes(lowered)); const key = shape.keys.some(k => k.toLowerCase().includes(lowered));
+          const rules = [...(hidesTopic(value, topic) ? ['guard_escape'] : []), ...(value.includes('\0') && carriesTopic(value, topic) ? ['nul'] : []), ...(raw || val || key ? ['projection'] : [])];
+          return rules.length ? [`t${index + 1}[hold=${rules.join('+')} raw=${raw ? 1 : 0} val=${val ? 1 : 0} key=${key ? 1 : 0}]`] : [];
+        });
+        if (holds.length) parts.push(`${column} len=${value.length} json=${shape.json} depth=${shape.depth} esc[u=${escapes.u} bad_u=${escapes.bad_u} q=${escapes.quote_slash} ctl=${escapes.ctl} other=${escapes.other}] nul=${nul} ${holds.join(' ')}`);
+      }
+      if (parts.length) { held++; lines.push(`#${String(row.rid)} ${parts.join(' | ')}`); }
+      if (held >= limit) { stopped = true; break; }
     }
-    if (parts.length) { held++; lines.push(`#${String(row.rid)} ${parts.join(' | ')}`); }
+    if (stopped || page.length < limit) break;
   }
-  const summary = `${header}; ${held} held among ${rows.length} scanned of ${candidates} candidate rows (backslash, NUL or topic substring)${candidates > rows.length ? `, first ${limit} by rowid` : ''}`;
+  const summary = `${header}; ${held} held, ${scanned} rows scanned${stopped ? ` (stopped at ${limit} held, up to rowid ${after})` : ''}`;
+  const reserve = 'truncated: 99 more held rows not shown'.length + 1;
   const out = [summary]; let size = summary.length; let cut = 0;
   for (const line of lines) {
-    if (size + line.length + 1 > MESSAGE_LIMIT - 40) { cut++; continue; }
+    if (size + line.length + 1 > HARNESS_MESSAGE_LIMIT - reserve) { cut++; continue; }
     out.push(line); size += line.length + 1;
   }
   if (cut) out.push(`truncated: ${cut} more held rows not shown`);

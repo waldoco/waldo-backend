@@ -46,7 +46,7 @@ import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
 import { CONSOLE_INVITES_PATH, renderMemberInvites } from './console-invites';
 import { newInviteCode, inviteLink } from '../identity/invite-code';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, consoleMayApprove, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
-import { heldRowShapes } from '../memory/held-rows';
+import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
@@ -1192,7 +1192,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       if (harness) {
         if (!durable) await this.ctx.storage.put(offsetKey, updateId + 1);
-        await call('sendMessage', { chat_id: owner, text: (await this.runHarness(harness, updateId)).slice(0, 4000) });
+        await call('sendMessage', { chat_id: owner, text: (await this.runHarness(harness, updateId)).slice(0, HARNESS_MESSAGE_LIMIT) });
         return;
       }
       const feedback = raw.callback_query?.data?.match(/^fb:(\d+):([un])$/);

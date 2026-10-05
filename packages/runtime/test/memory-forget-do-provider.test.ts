@@ -1971,7 +1971,7 @@ it('HELDROWS lists only rows the real hold predicate holds, over a real SQLite s
   await runInDurableObject(stub(label), (_instance, state) => {
     const out = heldRowShapes(state.storage.sql, 'update_cards', [{ topic, state: 'incomplete' }, { topic: other, state: 'pending' }], 25);
     expect(out).toContain('topics t1=incomplete t2=pending');
-    expect(out).toMatch(/3 held among 3 scanned of 3 candidate rows/);
+    expect(out).toMatch(/3 held, \d+ rows scanned/);
     expect(out).toMatch(/#2 changes .*json=ok .*t1\[hold=projection raw=1 val=0 key=1\]/);
     expect(out).toMatch(/#3 changes .*esc\[u=0 bad_u=0 q=0 ctl=0 other=1\].*t1\[hold=guard_escape raw=0 val=0 key=0\]/);
     expect(out).toMatch(/#4 text .*nul=1 .*t1\[hold=nul\+projection/);
@@ -1992,9 +1992,34 @@ it('HELDROWS stops before the message limit and says it truncated', async () => 
     sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
     for (let index = 0; index < 60; index++) sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', `c${index}`, null, `about ${topic}`, 0);
     const out = heldRowShapes(sql, 'day_plan', [{ topic, state: 'pending' }], 60);
-    expect(out.length).toBeLessThanOrEqual(4096);
+    expect(out.length).toBeLessThanOrEqual(4000);
     expect(out).toMatch(/truncated: \d+ more held rows not shown/);
-    expect(out).toContain('60 held among 60 scanned of 60 candidate rows');
+    expect(out).toMatch(/60 held, \d+ rows scanned/);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('HELDROWS finds a non-ASCII opposite-case row, separates key-only from value-only hits, survives a very long topic, and keeps its cut notice inside the harness cap', async () => {
+  const label = 'heldrows-fold'; const topic = 'Émile';
+  await admittedTurn(label, 153320, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
+    sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', 'upper', null, 'ÉMILE visited', 0);
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?,?,?,?)', 1, 'd', JSON.stringify({ [topic]: 'v' }), null);
+    sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?,?,?,?)', 1, 'd', JSON.stringify({ k: topic }), null);
+    const plan = heldRowShapes(state.storage.sql, 'day_plan', [{ topic, state: 'pending' }], 25);
+    expect(plan).toMatch(/1 held, \d+ rows scanned/);
+    expect(plan).toMatch(/#\d+ reason .*t1\[hold=projection raw=1/);
+    const cards = heldRowShapes(state.storage.sql, 'update_cards', [{ topic, state: 'pending' }], 25);
+    expect(cards).toMatch(/changes .*raw=1 val=0 key=1/);
+    expect(cards).toMatch(/changes .*raw=1 val=1 key=0/);
+    expect(() => heldRowShapes(state.storage.sql, 'day_plan', [{ topic: 'x'.repeat(2000), state: 'pending' }], 25)).not.toThrow();
+    for (let index = 0; index < 80; index++) sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', `c${index}`, null, `note ${topic}`, 0);
+    const capped = heldRowShapes(state.storage.sql, 'day_plan', [{ topic, state: 'pending' }, { topic: 'second', state: 'incomplete' }], 25);
+    expect(capped).toMatch(/25 held, \d+ rows scanned \(stopped at 25 held, up to rowid \d+\)/);
+    expect(capped.slice(0, 4000)).toBe(capped);
     state.storage.deleteAlarm();
   });
 });
