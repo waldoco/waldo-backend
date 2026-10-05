@@ -23,3 +23,14 @@ it.each([['info'], { value:'info' }, null, 1, true].map(value => [value]))('reje
   expect(result).toMatchObject({accepted:false,reason:'invalid_shape'}); expect(store.list()).toHaveLength(0);
  });
 });
+it('refuses changing a notification retry request ID instead of issuing an untracked successful alias',async()=>{
+ const stub=env.DEVICE_BRIDGE_DO!.get(env.DEVICE_BRIDGE_DO!.idFromName('dev_notify_request_fixture')) as DurableObjectStub<DeviceBridgeDO>;
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const store=new DeviceCommandStore(state.storage);
+  const input=(request_id:string,notification_id:string)=>({owner_id:'owner_fixture',device_id:'dev_notify_request_fixture',request_id,class:'notify_local' as const,payload:{notification_id,title:'Waldo status',body:'Status update',severity:'info' as const}});
+  expect(await store.enqueue(input('request_a','notification_n'),1000,['notify_local'])).toMatchObject({accepted:true,duplicate:false});
+  expect(await store.enqueue(input('request_b','notification_n'),1001,['notify_local'])).toMatchObject({accepted:false,reason:'idempotency_conflict'});
+  expect(await store.enqueue(input('request_b','notification_m'),1002,['notify_local'])).toMatchObject({accepted:true,duplicate:false});
+  expect(store.list()).toHaveLength(2);
+ });
+});
