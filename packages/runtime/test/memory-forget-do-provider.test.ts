@@ -2458,3 +2458,112 @@ it('EXACT-CARD only the fragment leaves are blanked: an unrelated sibling leaf a
     state.storage.deleteAlarm();
   });
 });
+
+const MAIL_T = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+const MAIL_D = MAIL_T.slice(0,40) + ' the public lunch agenda says AMBER';
+const MAIL_U = 'Invoice question from the vendor, unrelated and due tomorrow';
+const mailM = (i: number, detail: string) => ({source:'mail' as const,kind:'new' as const,source_ref:`mail:review-${i}`,source_message_id:`msg-mail:review-${i}`,detail});
+it.each(['decoy','mixed','consumers','literal'] as const)('MAIL-FIXTURE %s', async kind => {
+ const label = `mail-fixture-${kind}`;
+ await admittedTurn(label, 190100, 'My unrelated standup is at 09:10 UTC.', ops());
+ await runInDurableObject(stub(label), (_instance,state) => {
+  const sql = state.storage.sql; const updates = updateBook(sql);
+  const changes = kind === 'decoy' ? [mailM(0,MAIL_D)] : kind === 'literal' ? [mailM(0,MAIL_T),mailM(1,MAIL_U)] : [mailM(0,MAIL_T.slice(0,46)),mailM(1,MAIL_T.slice(46)),mailM(2,MAIL_U)];
+  const summary = 'Invoice summary unrelated to the secret';
+  changes.forEach((c,i) => updates.observeMail(c.source_ref,`thread-${i}`,i,c.source_message_id));
+  const id = updates.record('d',1,changes,summary);
+  const loops = loopBook(sql,{newId:()=> String(Math.random()),now:()=>1});
+  changes.forEach(c=>loops.open({title:MAIL_U,due:'2026-10-05T00:00',source_ref:c.source_ref}));
+  claimStore(sql).purge([],new Date().toISOString(),[MAIL_T]);
+  const row = sql.exec<{changes:string;text:string;pushed:number;folded:number}>('SELECT changes,text,pushed,folded FROM update_cards WHERE id = ?',id).one();
+  const after = JSON.parse(row.changes);
+  const pending = updates.pendingMail(); const due = loops.reviewDue('2026-10-06T00:00');
+  console.log('MAIL-EVIDENCE',kind,JSON.stringify({row,pending,due}));
+  expect(row.changes).not.toContain('COBALT');
+  if(kind==='decoy') expect(row.changes).toBe(JSON.stringify(changes));
+  if(kind==='mixed'||kind==='literal') { expect(after.at(-1)).toEqual(changes.at(-1)); expect(row.text).toBe(summary); }
+  if(kind==='consumers') { expect(pending).toHaveLength(3); expect(due).toHaveLength(3); expect(pending.every(c=>typeof c.detail==='string')).toBe(true); expect(due.every(c=>typeof c.source_detail==='string')).toBe(true); expect(pending.at(-1)!.detail).toBe(MAIL_U); }
+  state.storage.deleteAlarm();
+ });
+});
+it.each(['split20','nul20'] as const)('MAIL-FIXTURE admitted eviction retry %s', async kind => {
+ const label=`mail-fixture-${kind}`; await admittedTurn(label,190200,'My unrelated standup is at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const updates=updateBook(state.storage.sql);
+  updates.record('d',1,kind==='split20'?[mailM(0,MAIL_T.slice(0,20)),mailM(1,MAIL_T.slice(20))]:[mailM(0,MAIL_T.slice(0,20)+'\u0000'+MAIL_T.slice(20))],null);
+  claimStore(state.storage.sql).beginTopicCoverage(MAIL_T,new Date().toISOString()); state.storage.deleteAlarm();
+ });
+ await evictDurableObject(stub(label)); seen.selectedTexts=[]; seen.selectorOutputMessage=true;
+ await admittedTurn(label,190201,'Continue my requested forgetting.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  console.log('MAIL-EVIDENCE',kind,JSON.stringify({pending:claimStore(state.storage.sql).incompleteTopics(),cards:state.storage.sql.exec('SELECT changes FROM update_cards').toArray()}));
+  expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([MAIL_T]); state.storage.deleteAlarm();
+ });
+});
+it('REVIEW798 mixed matching card still erases unrelated sibling and summary', async () => {
+ const label='review798-collateral'; await admittedTurn(label,190300,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql;const updates=updateBook(sql);
+  const sibling=mailM(2,MAIL_U); const summary='Invoice summary unrelated to the secret';
+  updates.observeMail(sibling.source_ref,'thread-2',1,sibling.source_message_id);
+  updates.record('d',1,[{detail:MAIL_T.slice(0,20)},{detail:MAIL_T.slice(20)},sibling] as any,summary);
+  const store=claimStore(sql); expect(store.forgetSources(MAIL_T,true).incomplete).toBe(true);
+  console.log('REVIEW798-HELDROWS',heldRowShapes(sql,'update_cards',[{topic:MAIL_T,state:'incomplete'}],5,t=>store.forgetSources(t,true)));
+  store.purge([],new Date().toISOString(),[MAIL_T]);
+  const row=sql.exec<{changes:string;text:string}>('SELECT changes,text FROM update_cards').one();
+  console.log('REVIEW798-COLLATERAL',JSON.stringify({row,pending:updates.pendingMail()})); state.storage.deleteAlarm();
+  expect(JSON.parse(row.changes).at(-1)).toEqual(sibling); expect(row.text).toBe(summary);
+ });
+});
+it('REVIEW798 mail split20 /heldrows incorrectly says no holding rows',async()=> {
+ const label='review798-shapes';await admittedTurn(label,190400,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+ const sql=state.storage.sql;updateBook(sql).record('d',1,[mailM(0,MAIL_T.slice(0,20)),mailM(1,MAIL_T.slice(20))],null);
+ const store=claimStore(sql);const shape=heldRowShapes(sql,'update_cards',[{topic:MAIL_T,state:'incomplete'}],5,t=>store.forgetSources(t,true));
+ console.log('REVIEW798-MAIL-SHAPE',shape);state.storage.deleteAlarm();expect(shape).toMatch(/^#1 t1\[projection/m);
+ });
+});
+
+it('ADVERSARIAL798 preserves unrelated preceding sibling as well as following sibling', async () => {
+ const label='adv798-leading'; await admittedTurn(label,190501,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql; const updates=updateBook(sql); const changes=[mailM(0,MAIL_U),mailM(1,MAIL_T.slice(0,20)),mailM(2,MAIL_T.slice(20)),mailM(3,'Other unrelated tail')];
+  updates.record('d',1,changes,'Clean summary'); const store=claimStore(sql);
+  expect(store.forgetSources(MAIL_T,true).incomplete).toBe(true);
+  store.purge([],new Date().toISOString(),[MAIL_T]);
+  const row=sql.exec<{changes:string;text:string}>('SELECT changes,text FROM update_cards').one();
+  console.log('ADVERSARIAL798-LEADING',row); state.storage.deleteAlarm();
+  expect(JSON.parse(row.changes)[0]).toEqual(changes[0]); expect(JSON.parse(row.changes)[3]).toEqual(changes[3]);
+ });
+});
+it.each(['quote','backslash','space','keyvalue','upper','sigma','nested'] as const)('ADVERSARIAL798 topic variants %s hold purge shapes',async kind=> {
+ const label=`adv798-variant-${kind}`;await admittedTurn(label,190510,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql;const updates=updateBook(sql);const T=kind==='quote'?'the private word is "ZEBRA" today':kind==='backslash'?'the private path is C:\\zebra today':kind==='sigma'?'private ΟΣ value':MAIL_T;
+  const k=Math.floor(T.length/2); let a=T.slice(0,k),b=T.slice(k);
+  if(kind==='upper'){a=a.toUpperCase();b=b.toUpperCase();}
+  const changes=kind==='keyvalue'?[{[a]:b},mailM(2,MAIL_U)]:kind==='nested'?[{payload:{detail:a}},{payload:{detail:b}},mailM(2,MAIL_U)]:[mailM(0,kind==='space'?a.trimEnd():a),mailM(1,kind==='space'?b.trimStart():b),mailM(2,MAIL_U)];
+  updates.record('d',1,changes as any,'Clean summary');const store=claimStore(sql);
+  const before=store.forgetSources(T,true);const shape=heldRowShapes(sql,'update_cards',[{topic:T,state:'incomplete'}],5,t=>store.forgetSources(t,true));
+  store.purge([],new Date().toISOString(),[T]); const row=sql.exec<{changes:string;text:string}>('SELECT changes,text FROM update_cards').one();const after=store.forgetSources(T,true);
+  console.log('ADVERSARIAL798-VARIANT',kind,JSON.stringify({before,shape,row,after}));state.storage.deleteAlarm();
+  expect(before.incomplete).toBe(true);expect(shape).toMatch(/^#1 t1\[projection/m);expect(after.incomplete).toBe(false);expect(JSON.parse(row.changes).at(-1)).toEqual(changes.at(-1));expect(row.text).toBe('Clean summary');
+ });
+});
+it.each(['quote','backslash'] as const)('ADVERSARIAL798 unrelated escaped %s card remains identical',async kind=> {
+ const label=`adv798-clean-${kind}`;await admittedTurn(label,190520,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql;const updates=updateBook(sql);const topic=kind==='quote'?'my secret is "ZEBRA"':'my secret is C:\\zebra';
+  const changes=[mailM(0,kind==='quote'?'Invoice says "AMBER" only':'Invoice file C:\\amber only')];updates.record('d',1,changes,'Clean summary');
+  const store=claimStore(sql);const before=store.forgetSources(topic,true);store.purge([],new Date().toISOString(),[topic]);const row=sql.exec<{changes:string}>('SELECT changes FROM update_cards').one();
+  console.log('ADVERSARIAL798-CLEAN',kind,JSON.stringify({before,row}));state.storage.deleteAlarm();expect(row.changes).toBe(JSON.stringify(changes));
+ });
+});
+it('ADVERSARIAL798 duplicate topic copies and literal plus split are not reconstructable after purge',async()=> {
+ const label='adv798-repeat';await admittedTurn(label,190530,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql;const updates=updateBook(sql);updates.record('d',1,[mailM(0,MAIL_T),mailM(1,MAIL_T.slice(0,20)),mailM(2,MAIL_T.slice(20)),mailM(3,MAIL_U),mailM(4,MAIL_T.slice(0,46)),mailM(5,MAIL_T.slice(46))],'Clean summary');
+  const store=claimStore(sql);store.purge([],new Date().toISOString(),[MAIL_T]);const first=sql.exec<{changes:string}>('SELECT changes FROM update_cards').one();store.purge([],new Date().toISOString(),[MAIL_T]);const second=sql.exec<{changes:string}>('SELECT changes FROM update_cards').one();
+  console.log('ADVERSARIAL798-REPEAT',first);state.storage.deleteAlarm();expect(store.forgetSources(MAIL_T,true).incomplete).toBe(false);expect(second).toEqual(first);expect(first.changes).not.toContain('COBALT');
+ });
+});

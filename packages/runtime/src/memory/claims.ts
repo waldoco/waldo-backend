@@ -118,11 +118,13 @@ export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string)
   if (text !== null && text !== undefined && typeof text !== 'string') return true;
   const strip = (value: string) => value.replace(/\u0000/g, '');
   const exact = (value: string) => carriesTopic(value, topic) || hidesTopic(value, topic) || (value.includes('\u0000') && (carriesTopic(strip(value), topic) || hidesTopic(strip(value), topic)));
-  if (typeof text === 'string' && exact(text)) return true;
+  // Decoded text (the summary, keys and values of a parsed card) is judged by what it says; escape ambiguity applies only to serialized text that did not parse.
+  const decoded = (value: string) => carriesTopic(value, topic) || (value.includes('\u0000') && carriesTopic(strip(value), topic));
+  if (typeof text === 'string' && decoded(text)) return true;
   if (typeof changes !== 'string') return false;
-  if (exact(changes)) return true;
   let parsed: unknown;
-  try { parsed = JSON.parse(changes); } catch (error) { return !(error instanceof SyntaxError); }
+  try { parsed = JSON.parse(changes); } catch (error) { return !(error instanceof SyntaxError) || exact(changes); }
+  // A card that parses is judged on its decoded keys and values: the serialized text escapes quotes and backslashes, which would make an unrelated card look unprovable.
   // In-order pieces: the values alone (keys between them would break a split topic) and keys plus values (a key/value split).
   const all: string[] = []; const values: string[] = [];
   const stack: Array<{ key: boolean; node: unknown }> = [{ key: false, node: parsed }];
@@ -136,7 +138,7 @@ export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string)
       for (let index = entries.length - 1; index >= 0; index--) { stack.push({ key: false, node: entries[index]![1] }); stack.push({ key: true, node: entries[index]![0] }); }
     }
   }
-  return all.some(exact) || [all, values].some(list => exact(list.join('')) || exact(list.join(' ')));
+  return all.some(decoded) || [all, values].some(list => decoded(list.join('')) || decoded(list.join(' ')));
 };
 const CARD_SCHEMA_KEYS = ['source', 'kind', 'detail', 'source_ref', 'source_message_id'];
 // Blanks only the leaves of a parsed card that carry the topic's pieces: the smallest in-order run of leaves (values alone, else keys plus values) whose concatenation holds the topic.
@@ -156,15 +158,20 @@ export const blankCardPieces = (parsed: unknown, topic: string): unknown => {
   walk(parsed, '', false);
   const exact = (value: string) => carriesTopic(value, topic) || carriesTopic(value.replace(/\u0000/g, ''), topic);
   const marked = new Set<string>();
-  for (const list of [leaves.filter(leaf => !leaf.key), leaves]) {
-    for (let from = 0; from < list.length; from++) {
-      let joined = '';
-      for (let to = from; to < list.length; to++) {
-        joined += list[to]!.text;
-        if (exact(joined)) { for (let index = from; index <= to; index++) marked.add(`${list[index]!.path}|${list[index]!.key}`); break; }
+  const holds = (list: Leaf[], from: number, to: number, separator: string) => exact(list.slice(from, to + 1).map(leaf => leaf.text).join(separator));
+  // Same piece lists and join modes as cardCarriesTopic. For each start take the shortest run holding the topic, and skip a run whose tail alone still holds it (a later start finds that one),
+  // so unrelated leaves before, between or after the copies are never marked.
+  search: for (const list of [leaves.filter(leaf => !leaf.key), leaves]) {
+    for (const separator of ['', ' ']) {
+      for (let from = 0; from < list.length; from++) {
+        for (let to = from; to < list.length; to++) {
+          if (!holds(list, from, to, separator)) continue;
+          if (!(from < to && holds(list, from + 1, to, separator))) for (let index = from; index <= to; index++) marked.add(`${list[index]!.path}|${list[index]!.key}`);
+          break;
+        }
       }
+      if (marked.size) break search;
     }
-    if (marked.size) break;
   }
   const all = marked.size === 0;
   const rebuild = (node: unknown, path: string, key: boolean): unknown => {
