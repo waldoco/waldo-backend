@@ -2435,3 +2435,26 @@ it('OWNER-TURN a split-at-20 card with real mail metadata between fragments stay
     state.storage.deleteAlarm();
   });
 });
+
+it('EXACT-CARD only the fragment leaves are blanked: an unrelated sibling leaf and a clean summary text stay readable', async () => {
+  const label = 'forget-card-exact-siblings';
+  await admittedTurn(label, 153480, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    const meta = (n: number) => ({ source: 'mail', kind: 'new', source_ref: `mail:t${n}`, source_message_id: `m${n}` });
+    const unrelated = { ...meta(2), detail: 'Invoice question from the vendor' };
+    sql.exec('INSERT INTO update_cards (at, day, changes, text, pushed) VALUES (?,?,?,?,1)', 1, 'd', JSON.stringify([{ detail: topic.slice(0, 20) }, { detail: topic.slice(20) }, unrelated]), 'Two updates today.');
+    const store = claimStore(sql);
+    store.purge([], new Date().toISOString(), [topic]);
+    const row = sql.exec<{ changes: string; text: string; pushed: number }>('SELECT changes, text, pushed FROM update_cards').one();
+    const after = JSON.parse(row.changes) as Record<string, string>[];
+    expect(row.changes).not.toContain('COBALT');
+    expect(after[2]).toEqual(unrelated);
+    expect(row.text).toBe('Two updates today.');
+    expect(row.pushed).toBe(1);
+    expect(store.forgetSources(topic, true).incomplete).toBe(false);
+    state.storage.deleteAlarm();
+  });
+});

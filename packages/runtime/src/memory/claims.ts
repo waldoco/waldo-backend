@@ -138,6 +138,47 @@ export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string)
   }
   return all.some(exact) || [all, values].some(list => exact(list.join('')) || exact(list.join(' ')));
 };
+const CARD_SCHEMA_KEYS = ['source', 'kind', 'detail', 'source_ref', 'source_message_id'];
+// Blanks only the leaves of a parsed card that carry the topic's pieces: the smallest in-order run of leaves (values alone, else keys plus values) whose concatenation holds the topic.
+// A card the pieces test cannot localise (raw or unreadable match) is blanked leaf by leaf entirely. Join keys and their values are never touched.
+export const blankCardPieces = (parsed: unknown, topic: string): unknown => {
+  type Leaf = { path: string; key: boolean; text: string };
+  const leaves: Leaf[] = [];
+  const walk = (node: unknown, path: string, key: boolean) => {
+    if (typeof node === 'string') leaves.push({ path, key, text: node });
+    else if (Array.isArray(node)) node.forEach((child, index) => walk(child, `${path}/${index}`, false));
+    else if (node !== null && typeof node === 'object') for (const [name, child] of Object.entries(node)) {
+      if (CARD_JOIN_KEYS.includes(name)) continue;
+      walk(name, `${path}/${JSON.stringify(name)}#key`, true);
+      walk(child, `${path}/${JSON.stringify(name)}`, false);
+    }
+  };
+  walk(parsed, '', false);
+  const exact = (value: string) => carriesTopic(value, topic) || carriesTopic(value.replace(/\u0000/g, ''), topic);
+  const marked = new Set<string>();
+  for (const list of [leaves.filter(leaf => !leaf.key), leaves]) {
+    for (let from = 0; from < list.length; from++) {
+      let joined = '';
+      for (let to = from; to < list.length; to++) {
+        joined += list[to]!.text;
+        if (exact(joined)) { for (let index = from; index <= to; index++) marked.add(`${list[index]!.path}|${list[index]!.key}`); break; }
+      }
+    }
+    if (marked.size) break;
+  }
+  const all = marked.size === 0;
+  const rebuild = (node: unknown, path: string, key: boolean): unknown => {
+    if (typeof node === 'string') return all || marked.has(`${path}|${key}`) ? FORGOTTEN : node;
+    if (Array.isArray(node)) return node.map((child, index) => rebuild(child, `${path}/${index}`, false));
+    if (node !== null && typeof node === 'object') return Object.fromEntries(Object.entries(node).map(([name, child]) => {
+      if (CARD_JOIN_KEYS.includes(name)) return [name, child];
+      const keyBlanked = (all || marked.has(`${path}/${JSON.stringify(name)}#key|true`)) && !CARD_SCHEMA_KEYS.includes(name);
+      return [keyBlanked ? FORGOTTEN : name, rebuild(child, `${path}/${JSON.stringify(name)}`, false)];
+    }));
+    return node;
+  };
+  return rebuild(parsed, '', false);
+};
 // Verifies one projection column value with the real guard: the raw text, a decoded JSON string value or a JSON key carries the topic. An unreadable JSON value cannot be proven clean, so it holds.
 export const projectionValueHolds = (value: unknown, topic: string): boolean => {
   // Only NULL is provably empty; a BLOB or number cannot be proven clean here, so it holds.
@@ -485,15 +526,13 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
               : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
             const changed = parsed === undefined ? redactedChanges !== row.changes : redactedChanges !== JSON.stringify(parsed);
             // A card that still carries the topic after redaction (split across values or keys, or broken by a NUL) cannot be proven clean by the per-value pass.
-            // update_cards rows record no source, so the scope is that card only. Its values are blanked and unknown keys renamed; schema keys, join keys
-            // (source, kind, source_ref, source_message_id) and the send state stay, so pending mail and due loops still join. Same predicate as the hold.
-            if (topics.length > 0 && cardCarriesTopic(redactedChanges, redactedText, text)) {
-              const SCHEMA_KEYS = ['source', 'kind', 'detail', 'source_ref', 'source_message_id'];
-              const blank = (node: unknown): unknown => Array.isArray(node) ? node.map(blank)
-                : node !== null && typeof node === 'object' ? Object.fromEntries(Object.entries(node).map(([key, child]) => [SCHEMA_KEYS.includes(key) ? key : FORGOTTEN, CARD_JOIN_KEYS.includes(key) ? child : blank(child)]))
-                : typeof node === 'string' ? FORGOTTEN : node;
-              const blanked = parsed === undefined ? JSON.stringify(FORGOTTEN) : JSON.stringify(blank(parsed));
-              sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', blanked, row.text === null ? null : FORGOTTEN, row.id);
+            // update_cards rows record no source and siblings of a matching fragment may be unrelated, so only the leaves that carry the topic's pieces are blanked
+            // (values, and keys renamed unless they are schema keys). Join keys, other leaves, the summary text when clean and the send state stay. Same predicate as the hold.
+            const changesTied = topics.length > 0 && cardCarriesTopic(redactedChanges, null, text);
+            const textTied = topics.length > 0 && redactedText !== null && cardCarriesTopic('[]', redactedText, text);
+            if (changesTied || textTied) {
+              const nextChanges = !changesTied ? redactedChanges : parsed === undefined ? JSON.stringify(FORGOTTEN) : JSON.stringify(blankCardPieces(parsed, text));
+              sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', nextChanges, textTied ? FORGOTTEN : redactedText, row.id);
               continue;
             }
             if (changed || redactedText !== row.text) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', changed ? redactedChanges : row.changes, redactedText, row.id);
