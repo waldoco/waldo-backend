@@ -33,7 +33,7 @@ export type NotifyPayload = { notification_id: string; title: string; body: stri
 export function commandPayload(kind: unknown, value: unknown): value is QueryPayload | NotifyPayload {
   if (!record(value)) return false;
   if (kind === 'machine_state_query') return exact(value, ['query_id', 'query_kind']) && identifier(value.query_id) && queryKind(value.query_kind);
-  if (kind === 'notify_local') return exact(value, ['notification_id', 'title', 'body', 'severity']) && identifier(value.notification_id) && byteString(value.title, 1, NOTIFY_TITLE_BYTES) && byteString(value.body, 1, NOTIFY_BODY_BYTES) && ['info', 'warning', 'error'].includes(String(value.severity));
+  if (kind === 'notify_local') return exact(value, ['notification_id', 'title', 'body', 'severity']) && identifier(value.notification_id) && byteString(value.title, 1, NOTIFY_TITLE_BYTES) && byteString(value.body, 1, NOTIFY_BODY_BYTES) && typeof value.severity === 'string' && ['info', 'warning', 'error'].includes(value.severity);
   return false;
 }
 export type CommandReference = { contract_version: string; type: 'ack' | 'result'; message_id: string; device_id: string; owner_id: string; command_id: string; revision: 1; idempotency_key: string; timestamp: number; nonce: string; signature: string };
@@ -48,15 +48,15 @@ export function ackFrame(value: unknown): Ack | null {
   const payload = value.payload;
   if (payload.state === 'accepted' && exact(payload, ['state'])) return value as Ack;
   if (payload.state === 'expired' && exact(payload, ['state', 'reason']) && payload.reason === 'expired') return value as Ack;
-  if (payload.state === 'rejected' && exact(payload, ['state', 'reason']) && ['invalid_shape', 'idempotency_conflict', 'unknown_command', 'version_mismatch'].includes(String(payload.reason))) return value as Ack;
+  if (payload.state === 'rejected' && exact(payload, ['state', 'reason']) && typeof payload.reason === 'string' && ['invalid_shape', 'idempotency_conflict', 'unknown_command', 'version_mismatch'].includes(payload.reason)) return value as Ack;
   return null;
 }
 export function resultFrame(value: unknown): Result | null {
   if (!reference(value, 'result')) return null;
   const payload = value.payload;
   if (payload.status === 'delivered' && exact(payload, ['status'])) return value as Result;
-  if (payload.status === 'failed' && exact(payload, ['status', 'reason']) && ['processing_failed', 'delivery_unknown'].includes(String(payload.reason))) return value as Result;
+  if (payload.status === 'failed' && exact(payload, ['status', 'reason']) && typeof payload.reason === 'string' && ['processing_failed', 'delivery_unknown'].includes(payload.reason)) return value as Result;
   const answer = payload.answer;
-  if (payload.status === 'answered' && exact(payload, ['status', 'answer']) && record(answer) && exact(answer, ['query_id', 'query_kind', 'state']) && identifier(answer.query_id) && queryKind(answer.query_kind) && (answer.query_kind === 'worktree_watch' ? ['watching', 'stopped', 'unknown'] : ['idle', 'running', 'done', 'failed', 'unknown']).includes(String(answer.state))) return value as Result;
+  if (payload.status === 'answered' && exact(payload, ['status', 'answer']) && record(answer) && exact(answer, ['query_id', 'query_kind', 'state']) && identifier(answer.query_id) && queryKind(answer.query_kind) && typeof answer.state === 'string' && (answer.query_kind === 'worktree_watch' ? ['watching', 'stopped', 'unknown'] : ['idle', 'running', 'done', 'failed', 'unknown']).includes(answer.state)) return value as Result;
   return null;
 }
