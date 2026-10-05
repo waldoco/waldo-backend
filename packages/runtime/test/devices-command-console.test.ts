@@ -41,3 +41,8 @@ it.each([['query_kind','arbitrary_task'], ['request_id',''], ['title',''], ['bod
   expect((await deviceConsoleAction(request, 'csrf_fixture', 'owner_do_fixture', directory(), namespace(enqueue))).status).toBe(400);
   expect(enqueue).not.toHaveBeenCalled();
 });
+it('gives independent query and notification forms distinct stable request identities',()=>{
+ const html=renderDevices([device],'csrf_fixture');
+ const requests=[...html.matchAll(/name="request_id" value="([^"]+)"/g)].map(match=>match[1]);
+ expect(requests).toHaveLength(2); expect(new Set(requests).size).toBe(2);
+});
