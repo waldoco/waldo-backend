@@ -120,8 +120,8 @@ describe('status log', () => {
       const l = logs();
       await run(post('s', message(42, 'secret words')), env(n), dir(route));
       const [line] = l.lines();
-      expect(JSON.parse(line)).toEqual({ hop: 'telegram_webhook', ok: http < 400, status: word, http });
-      expect(line).not.toContain('secret words'); expect(line).not.toContain('42');
+      expect(JSON.parse(line!)).toEqual({ hop: 'telegram_webhook', ok: http < 400, status: word, http });
+      expect(line!).not.toContain('secret words'); expect(line).not.toContain('42');
       l.spy.mockRestore();
     }
   });
