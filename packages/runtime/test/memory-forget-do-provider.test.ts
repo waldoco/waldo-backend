@@ -2577,8 +2577,6 @@ it.each(['literal+spacesplit','valuesplit+kvspace','nestedarray'] as const)('NEW
   const U=mailM(9,MAIL_U);
   if(kind==='literal+spacesplit') updates.record('d',1,[mailM(0,T8),mailM(1,T8.slice(0,sp)),mailM(2,T8.slice(sp+1)),U],'S');
   if(kind==='valuesplit+kvspace') updates.record('d',1,[mailM(0,T8.slice(0,20)),mailM(1,T8.slice(20)),{[T8.slice(0,sp)]:T8.slice(sp+1)},U] as any,'S');
-  if(kind==='crosscard'){ updates.record('d',1,[mailM(0,T8.slice(0,30))],'S'); updates.record('d',1,[mailM(1,T8.slice(30))],'S'); }
-  if(kind==='textchanges') updates.record('d',1,[mailM(0,T8.slice(0,30)),U],T8.slice(30));
   if(kind==='nestedarray') updates.record('d',1,[{a:[[T8.slice(0,30)],{b:[T8.slice(30)]}]},U] as any,'S');
   const before=store.forgetSources(T8,true).incomplete;
   store.purge([],new Date().toISOString(),[T8]);
@@ -2588,7 +2586,7 @@ it.each(['literal+spacesplit','valuesplit+kvspace','nestedarray'] as const)('NEW
   console.log('NEW798',kind,JSON.stringify({before,after,rows}));
   state.storage.deleteAlarm();
   expect(after).toBe(false); expect(joined).not.toContain('COBALT'); expect(joined).not.toContain('ZEBRA');
-  if(kind!=='crosscard') expect(joined).toContain(MAIL_U);
+  expect(joined).toContain(MAIL_U);
  });
 });
 // Declared limits (#794, not detectable by a per-card test): a topic split across two update_cards rows, or between a card's changes and its summary text.
