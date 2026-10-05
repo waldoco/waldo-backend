@@ -56,7 +56,7 @@ async function proof(work: (h: {
   mapping: { owner_id: string; environment: string; namespace: string; do_name: string; do_id: string; state_version: number; mapping_version: number };
   absent(): void; unlinked(): void; pauseMapping(afterReservation?: boolean): ReturnType<typeof deferred>; pausePut(): ReturnType<typeof deferred>;
   onPut(fn: () => void): void; dispatches: MockInstance<typeof dispatcher.dispatchTool>;
-}) => Promise<void>, numericWorkspaceIdsAfter?: number) {
+}) => Promise<void>, numericWorkspaceIdsAfter?: number, extraEnv: Record<string, string> = {}) {
   const name = `registered-workspace-${++sequence}`;
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const nativeUuid = crypto.randomUUID.bind(crypto);
@@ -73,7 +73,7 @@ async function proof(work: (h: {
     const mapping = { owner_id: OWNER, environment: 'fixture', namespace: 'fixture-owner-namespace', do_name: name, do_id: state.id.toString(), state_version: 0, mapping_version: 1 };
     const bytes = new Map<string, Uint8Array>(); const puts: string[] = []; const gets: string[] = []; const rpc: string[] = []; const unexpected: string[] = []; const pauses: ReturnType<typeof deferred>[] = [];
     let pauseAfterReservation = false; let missing = false; let mappingPause: ReturnType<typeof deferred> | undefined; let putPause: ReturnType<typeof deferred> | undefined; let afterPut: (() => void) | undefined;
-    const fixtureEnv = { ...env, WALDO_ENVIRONMENT: mapping.environment, WALDO_OWNER_DO_NAMESPACE: mapping.namespace,
+    const fixtureEnv = { ...env, ...extraEnv, WALDO_ENVIRONMENT: mapping.environment, WALDO_OWNER_DO_NAMESPACE: mapping.namespace,
       TELEGRAM_BOT_TOKEN: '12345:fictional', TELEGRAM_WEBHOOK_SECRET: 'fictional-inbox-secret', OPENAI_API_KEY: 'fictional-model-key',
       SUPABASE_PROJECT_URL: 'https://signed-metadata.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-publishable', WALDO_ROUTER_HMAC_SECRET: 'fictional-router-secret',
       ARTIFACTS: {
@@ -615,4 +615,18 @@ it.each(['uncertain', 'not json'] as const)('a classifier miss (%s) keeps worksp
     expect(result.edit!.ok, 'an existing-file edit is not admitted on a miss').toBe(false);
     // Known, pre-existing: creating a NEW file (expected_revision 0) is not scope-gated on any path, so a miss does not block it either.
   });
+});
+
+it('the task-source custody trace names the classifier outcome even when text capture is on', async () => {
+  await proof(async h => {
+    model.sourceDecision = JSON.stringify({ decision: 'uncertain', sources: [] });
+    model.reply = () => 'ok';
+    const id = await h.send('Say ok.');
+    const note = h.state.storage.sql.exec<{ note: string }>('SELECT note FROM trace_log WHERE trace = ? AND hop = ?', `tg-${id}`, 'task_source_custody').one().note;
+    expect(note).toContain('"outcome":"uncertain"'); expect(note).toContain('"ready_after":false');
+    model.sourceDecision = 'not json';
+    const bad = await h.send('Say ok again.');
+    const badNote = h.state.storage.sql.exec<{ note: string }>('SELECT note FROM trace_log WHERE trace = ? AND hop = ?', `tg-${bad}`, 'task_source_custody').one().note;
+    expect(badNote).toContain('"outcome":"invalid_decision","decode":"json_syntax"');
+  }, undefined, { LANGFUSE_CAPTURE_TEXT: 'true' });
 });
