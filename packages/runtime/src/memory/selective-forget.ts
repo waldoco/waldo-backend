@@ -62,7 +62,7 @@ export const forgetSnapshot = (topic: string, rows: readonly ForgetSource[]): Fo
   return { sources: batch.sources, incomplete: batch.incomplete || batch.more };
 };
 
-export const selectedForgetResult = (topic: string, snapshot: ForgetSnapshot, raw: string, fresh: ForgetSnapshot): Readonly<{ texts: readonly string[] }> | Readonly<{ reason: string }> => {
+export const selectedForgetResult = (topic: string, snapshot: ForgetSnapshot, raw: string, fresh: ForgetSnapshot): Readonly<{ texts: readonly string[]; wholeRows?: number }> | Readonly<{ reason: string }> => {
   if (snapshot.incomplete || fresh.incomplete || snapshot.sources.length === 0 || JSON.stringify(snapshot.sources) !== JSON.stringify(fresh.sources)) return { reason: 'snapshot_incomplete_or_changed' };
   let value: unknown;
   try { value = JSON.parse(raw); } catch { return { reason: 'selector_output_not_json' }; }
@@ -73,6 +73,7 @@ export const selectedForgetResult = (topic: string, snapshot: ForgetSnapshot, ra
   const refs = new Map(snapshot.sources.map(row => [row.ref, row.text]));
   if (result.reviewed_refs.length !== refs.size || new Set(result.reviewed_refs).size !== refs.size || result.reviewed_refs.some(ref => typeof ref !== 'string' || !refs.has(ref))) return { reason: 'reviewed_refs_mismatch' };
   const texts: string[] = [];
+  let wholeRows = 0;
   for (const entry of spans) {
     if (!entry || typeof entry !== 'object') return { reason: 'span_shape' };
     const span = entry as { ref?: unknown; text?: unknown };
@@ -92,8 +93,9 @@ export const selectedForgetResult = (topic: string, snapshot: ForgetSnapshot, ra
     if (!/[a-z0-9]/.test(row.text.toLowerCase().split(topic.toLowerCase()).join(' '))) continue;
     if (row.text.length < 12) return { reason: 'row_without_span:episodes' };
     texts.push(row.text);
+    wholeRows++;
   }
-  return { texts: [...new Set(texts)].sort((a, b) => b.length - a.length) };
+  return { texts: [...new Set(texts)].sort((a, b) => b.length - a.length), wholeRows };
 };
 
 export const selectedForgetTexts = (topic: string, snapshot: ForgetSnapshot, raw: string, fresh: ForgetSnapshot): readonly string[] | null => {

@@ -279,3 +279,11 @@ it.each([['non-ascii letters','ZEBRA-COBALT 東京'],['emoji','ZEBRA-COBALT 🙂
   const raw = JSON.stringify({ spans: [], reviewed_refs: ['episodes:1:text'], complete: true });
   expect(selectedForgetResult(topic, snapshot, raw, snapshot)).toEqual({ reason: 'row_without_span:episodes' });
 });
+
+it('reports how many unspanned episodes lines were purged whole, as a count only', () => {
+  const topic = 'ZEBRA-COBALT';
+  const rows = [{ ref: 'episodes:1:text', text: 'ZEBRA-COBALT is the code word' }, { ref: 'episodes:2:text', text: 'ZEBRA-COBALT again with other words' }];
+  const snapshot = forgetSnapshot(topic, rows);
+  const raw = JSON.stringify({ spans: [], reviewed_refs: rows.map(row => row.ref), complete: true });
+  expect(selectedForgetResult(topic, snapshot, raw, snapshot)).toMatchObject({ wholeRows: 2 });
+});
