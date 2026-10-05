@@ -104,3 +104,9 @@ describe('ownerClockLine', () => {
     expect(MESSAGING_BEHAVIOR).toContain('Keep the search for each fare or room separate');
   });
 });
+
+it('keeps named dates and relative days like tomorrow exact when widening a bare today', () => {
+  const line = ownerClockLine({ timezone: 'Asia/Calcutta', now: () => new Date('2026-10-05T18:43:00Z') });
+  expect(line).toContain('applies only to a bare "today"');
+  expect(line).toContain('"tomorrow" means exactly that day');
+});
