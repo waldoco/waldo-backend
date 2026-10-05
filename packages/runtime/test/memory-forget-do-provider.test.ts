@@ -1912,3 +1912,20 @@ it('REVIEW774 escaped standing-order text is withheld while a matching forget is
   await admittedTurn(name, 172001, 'What standing orders do you have?', ops());
   expect(request()).not.toContain('venue');
 });
+it('TOPIC-ONLY a retained row that is exactly the topic is redacted whole and the forget completes (no permanent selection_rejected)', async () => {
+  const name = 'topic-only-row'; const topic = 'SYNTH-PENDING';
+  await admittedTurn(name, 154000, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(name), (_instance, state) => {
+    claimStore(state.storage.sql).beginTopicCoverage(topic, new Date().toISOString());
+    episodeIndex(state.storage.sql).add('topic-only', 'owner', topic, Date.now());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(name));
+  seen.selectedTexts = [topic]; seen.selectorOutputMessage = true;
+  await admittedTurn(name, 154001, 'Continue my requested forgetting.', ops());
+  expect(request()).not.toContain('reason class: selection_rejected');
+  await runInDurableObject(stub(name), (_instance, state) => {
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
+    expect(episodeIndex(state.storage.sql).since(0, 30_000).map(row => row.text).join('\n')).not.toContain(topic);
+  });
+});
