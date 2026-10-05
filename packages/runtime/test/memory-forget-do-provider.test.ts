@@ -2352,3 +2352,253 @@ it.each([['quote', 'the "secret" code word that I told you about earlier today i
     state.storage.deleteAlarm();
   });
 });
+
+it.each([['split20', 20], ['nul20', 20], ['split39', 39], ['keyvalue20', 20]] as const)('EXACT-CARD %s: a split or NUL inside the first 40 chars is held before purge and blanked by it', async (kind, at) => {
+  const label = `forget-card-exact-${kind}`;
+  await admittedTurn(label, 153460, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    const changes = kind === 'keyvalue20' ? [{ [topic.slice(0, at)]: topic.slice(at) }]
+      : kind.startsWith('nul') ? [{ detail: `${topic.slice(0, at)}\u0000${topic.slice(at)}` }]
+      : [{ detail: topic.slice(0, at) }, { detail: topic.slice(at) }];
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify(changes));
+    const store = claimStore(sql);
+    expect(store.forgetSources(topic, true).incomplete).toBe(true);
+    store.purge([], new Date().toISOString(), [topic]);
+    expect(sql.exec<{ changes: string }>('SELECT changes FROM update_cards').one().changes).not.toContain('COBALT');
+    expect(store.forgetSources(topic, true).incomplete).toBe(false);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('EXACT-CARD a card that only shares the topic prefix is neither held nor blanked, and a blanked mail card keeps its detail key and join keys', async () => {
+  const label = 'forget-card-exact-decoy';
+  await admittedTurn(label, 153461, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    const decoy = JSON.stringify([{ source: 'mail', kind: 'new', source_ref: 'mail:t9', source_message_id: 'm9', detail: 'the secret code word that I told you about earlier today was a joke' }]);
+    const keep = { source: 'mail', kind: 'new', source_ref: 'mail:t1', source_message_id: 'm1' };
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', decoy);
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify([{ ...keep, detail: topic.slice(0, 30) }, { detail: topic.slice(30) }]));
+    const store = claimStore(sql);
+    expect(store.forgetSources(topic, true).incomplete).toBe(true);
+    store.purge([], new Date().toISOString(), [topic]);
+    const rows = sql.exec<{ changes: string }>('SELECT changes FROM update_cards ORDER BY id').toArray();
+    expect(rows[0]!.changes).toBe(decoy);
+    const blanked = JSON.parse(rows[1]!.changes) as Record<string, string>[];
+    expect(blanked[0]).toMatchObject({ ...keep, detail: FORGOTTEN });
+    expect(store.forgetSources(topic, true).incomplete).toBe(false);
+    state.storage.deleteAlarm();
+  });
+});
+
+it.each([['mixed46', 46], ['mixed20', 20]] as const)('EXACT-CARD %s: real mail metadata rows between the fragments do not break the match', async (kind, at) => {
+  const label = `forget-card-exact-${kind}`;
+  await admittedTurn(label, 153470, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    const meta = (n: number) => ({ source: 'mail', kind: 'new', source_ref: `mail:t${n}`, source_message_id: `m${n}` });
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify([{ ...meta(0), detail: topic.slice(0, at) }, { ...meta(1), detail: topic.slice(at) }, { ...meta(2), detail: 'Invoice question from the vendor' }]));
+    const store = claimStore(sql);
+    expect(store.forgetSources(topic, true).incomplete).toBe(true);
+    store.purge([], new Date().toISOString(), [topic]);
+    const after = sql.exec<{ changes: string }>('SELECT changes FROM update_cards').one().changes;
+    expect(after).not.toContain('COBALT');
+    expect(JSON.parse(after)[1]).toMatchObject(meta(1));
+    expect(store.forgetSources(topic, true).incomplete).toBe(false);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('OWNER-TURN a split-at-20 card with real mail metadata between fragments stays incomplete across eviction and an admitted retry', async () => {
+  const label = 'owner-fragment-meta20'; const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+  const meta = (n: number) => ({ source: 'mail', kind: 'new', source_ref: `mail:t${n}`, source_message_id: `m${n}` });
+  await admittedTurn(label, 170200, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify([{ ...meta(0), detail: topic.slice(0, 20) }, { ...meta(1), detail: topic.slice(20) }]));
+    claimStore(sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 170201, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('EXACT-CARD only the fragment leaves are blanked: an unrelated sibling leaf and a clean summary text stay readable', async () => {
+  const label = 'forget-card-exact-siblings';
+  await admittedTurn(label, 153480, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    const meta = (n: number) => ({ source: 'mail', kind: 'new', source_ref: `mail:t${n}`, source_message_id: `m${n}` });
+    const unrelated = { ...meta(2), detail: 'Invoice question from the vendor' };
+    sql.exec('INSERT INTO update_cards (at, day, changes, text, pushed) VALUES (?,?,?,?,1)', 1, 'd', JSON.stringify([{ detail: topic.slice(0, 20) }, { detail: topic.slice(20) }, unrelated]), 'Two updates today.');
+    const store = claimStore(sql);
+    store.purge([], new Date().toISOString(), [topic]);
+    const row = sql.exec<{ changes: string; text: string; pushed: number }>('SELECT changes, text, pushed FROM update_cards').one();
+    const after = JSON.parse(row.changes) as Record<string, string>[];
+    expect(row.changes).not.toContain('COBALT');
+    expect(after[2]).toEqual(unrelated);
+    expect(row.text).toBe('Two updates today.');
+    expect(row.pushed).toBe(1);
+    expect(store.forgetSources(topic, true).incomplete).toBe(false);
+    state.storage.deleteAlarm();
+  });
+});
+
+const MAIL_T = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+const MAIL_D = MAIL_T.slice(0,40) + ' the public lunch agenda says AMBER';
+const MAIL_U = 'Invoice question from the vendor, unrelated and due tomorrow';
+const mailM = (i: number, detail: string) => ({source:'mail' as const,kind:'new' as const,source_ref:`mail:review-${i}`,source_message_id:`msg-mail:review-${i}`,detail});
+it.each(['decoy','mixed','consumers','literal'] as const)('MAIL-FIXTURE %s', async kind => {
+ const label = `mail-fixture-${kind}`;
+ await admittedTurn(label, 190100, 'My unrelated standup is at 09:10 UTC.', ops());
+ await runInDurableObject(stub(label), (_instance,state) => {
+  const sql = state.storage.sql; const updates = updateBook(sql);
+  const changes = kind === 'decoy' ? [mailM(0,MAIL_D)] : kind === 'literal' ? [mailM(0,MAIL_T),mailM(1,MAIL_U)] : [mailM(0,MAIL_T.slice(0,46)),mailM(1,MAIL_T.slice(46)),mailM(2,MAIL_U)];
+  const summary = 'Invoice summary unrelated to the secret';
+  changes.forEach((c,i) => updates.observeMail(c.source_ref,`thread-${i}`,i,c.source_message_id));
+  const id = updates.record('d',1,changes,summary);
+  const loops = loopBook(sql,{newId:()=> String(Math.random()),now:()=>1});
+  changes.forEach(c=>loops.open({title:MAIL_U,due:'2026-10-05T00:00',source_ref:c.source_ref}));
+  claimStore(sql).purge([],new Date().toISOString(),[MAIL_T]);
+  const row = sql.exec<{changes:string;text:string;pushed:number;folded:number}>('SELECT changes,text,pushed,folded FROM update_cards WHERE id = ?',id).one();
+  const after = JSON.parse(row.changes);
+  const pending = updates.pendingMail(); const due = loops.reviewDue('2026-10-06T00:00');
+  console.log('MAIL-EVIDENCE',kind,JSON.stringify({row,pending,due}));
+  expect(row.changes).not.toContain('COBALT');
+  if(kind==='decoy') expect(row.changes).toBe(JSON.stringify(changes));
+  if(kind==='mixed'||kind==='literal') { expect(after.at(-1)).toEqual(changes.at(-1)); expect(row.text).toBe(summary); }
+  if(kind==='consumers') { expect(pending).toHaveLength(3); expect(due).toHaveLength(3); expect(pending.every(c=>typeof c.detail==='string')).toBe(true); expect(due.every(c=>typeof c.source_detail==='string')).toBe(true); expect(pending.at(-1)!.detail).toBe(MAIL_U); }
+  state.storage.deleteAlarm();
+ });
+});
+it.each(['split20','nul20'] as const)('MAIL-FIXTURE admitted eviction retry %s', async kind => {
+ const label=`mail-fixture-${kind}`; await admittedTurn(label,190200,'My unrelated standup is at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const updates=updateBook(state.storage.sql);
+  updates.record('d',1,kind==='split20'?[mailM(0,MAIL_T.slice(0,20)),mailM(1,MAIL_T.slice(20))]:[mailM(0,MAIL_T.slice(0,20)+'\u0000'+MAIL_T.slice(20))],null);
+  claimStore(state.storage.sql).beginTopicCoverage(MAIL_T,new Date().toISOString()); state.storage.deleteAlarm();
+ });
+ await evictDurableObject(stub(label)); seen.selectedTexts=[]; seen.selectorOutputMessage=true;
+ await admittedTurn(label,190201,'Continue my requested forgetting.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  console.log('MAIL-EVIDENCE',kind,JSON.stringify({pending:claimStore(state.storage.sql).incompleteTopics(),cards:state.storage.sql.exec('SELECT changes FROM update_cards').toArray()}));
+  expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([MAIL_T]); state.storage.deleteAlarm();
+ });
+});
+it('REVIEW798 mixed matching card still erases unrelated sibling and summary', async () => {
+ const label='review798-collateral'; await admittedTurn(label,190300,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql;const updates=updateBook(sql);
+  const sibling=mailM(2,MAIL_U); const summary='Invoice summary unrelated to the secret';
+  updates.observeMail(sibling.source_ref,'thread-2',1,sibling.source_message_id);
+  updates.record('d',1,[{detail:MAIL_T.slice(0,20)},{detail:MAIL_T.slice(20)},sibling] as any,summary);
+  const store=claimStore(sql); expect(store.forgetSources(MAIL_T,true).incomplete).toBe(true);
+  console.log('REVIEW798-HELDROWS',heldRowShapes(sql,'update_cards',[{topic:MAIL_T,state:'incomplete'}],5,t=>store.forgetSources(t,true)));
+  store.purge([],new Date().toISOString(),[MAIL_T]);
+  const row=sql.exec<{changes:string;text:string}>('SELECT changes,text FROM update_cards').one();
+  console.log('REVIEW798-COLLATERAL',JSON.stringify({row,pending:updates.pendingMail()})); state.storage.deleteAlarm();
+  expect(JSON.parse(row.changes).at(-1)).toEqual(sibling); expect(row.text).toBe(summary);
+ });
+});
+it('REVIEW798 mail split20 /heldrows incorrectly says no holding rows',async()=> {
+ const label='review798-shapes';await admittedTurn(label,190400,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+ const sql=state.storage.sql;updateBook(sql).record('d',1,[mailM(0,MAIL_T.slice(0,20)),mailM(1,MAIL_T.slice(20))],null);
+ const store=claimStore(sql);const shape=heldRowShapes(sql,'update_cards',[{topic:MAIL_T,state:'incomplete'}],5,t=>store.forgetSources(t,true));
+ console.log('REVIEW798-MAIL-SHAPE',shape);state.storage.deleteAlarm();expect(shape).toMatch(/^#1 t1\[projection/m);
+ });
+});
+
+it('ADVERSARIAL798 preserves unrelated preceding sibling as well as following sibling', async () => {
+ const label='adv798-leading'; await admittedTurn(label,190501,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql; const updates=updateBook(sql); const changes=[mailM(0,MAIL_U),mailM(1,MAIL_T.slice(0,20)),mailM(2,MAIL_T.slice(20)),mailM(3,'Other unrelated tail')];
+  updates.record('d',1,changes,'Clean summary'); const store=claimStore(sql);
+  expect(store.forgetSources(MAIL_T,true).incomplete).toBe(true);
+  store.purge([],new Date().toISOString(),[MAIL_T]);
+  const row=sql.exec<{changes:string;text:string}>('SELECT changes,text FROM update_cards').one();
+  console.log('ADVERSARIAL798-LEADING',row); state.storage.deleteAlarm();
+  expect(JSON.parse(row.changes)[0]).toEqual(changes[0]); expect(JSON.parse(row.changes)[3]).toEqual(changes[3]);
+ });
+});
+it.each(['quote','backslash','space','keyvalue','upper','sigma','nested'] as const)('ADVERSARIAL798 topic variants %s hold purge shapes',async kind=> {
+ const label=`adv798-variant-${kind}`;await admittedTurn(label,190510,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql;const updates=updateBook(sql);const T=kind==='quote'?'the private word is "ZEBRA" today':kind==='backslash'?'the private path is C:\\zebra today':kind==='sigma'?'private ΟΣ value':MAIL_T;
+  const k=Math.floor(T.length/2); let a=T.slice(0,k),b=T.slice(k);
+  if(kind==='upper'){a=a.toUpperCase();b=b.toUpperCase();}
+  const changes=kind==='keyvalue'?[{[a]:b},mailM(2,MAIL_U)]:kind==='nested'?[{payload:{detail:a}},{payload:{detail:b}},mailM(2,MAIL_U)]:[mailM(0,kind==='space'?a.trimEnd():a),mailM(1,kind==='space'?b.trimStart():b),mailM(2,MAIL_U)];
+  updates.record('d',1,changes as any,'Clean summary');const store=claimStore(sql);
+  const before=store.forgetSources(T,true);const shape=heldRowShapes(sql,'update_cards',[{topic:T,state:'incomplete'}],5,t=>store.forgetSources(t,true));
+  store.purge([],new Date().toISOString(),[T]); const row=sql.exec<{changes:string;text:string}>('SELECT changes,text FROM update_cards').one();const after=store.forgetSources(T,true);
+  console.log('ADVERSARIAL798-VARIANT',kind,JSON.stringify({before,shape,row,after}));state.storage.deleteAlarm();
+  expect(before.incomplete).toBe(true);expect(shape).toMatch(/^#1 t1\[projection/m);expect(after.incomplete).toBe(false);expect(JSON.parse(row.changes).at(-1)).toEqual(changes.at(-1));expect(row.text).toBe('Clean summary');
+ });
+});
+it.each(['quote','backslash'] as const)('ADVERSARIAL798 unrelated escaped %s card remains identical',async kind=> {
+ const label=`adv798-clean-${kind}`;await admittedTurn(label,190520,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql;const updates=updateBook(sql);const topic=kind==='quote'?'my secret is "ZEBRA"':'my secret is C:\\zebra';
+  const changes=[mailM(0,kind==='quote'?'Invoice says "AMBER" only':'Invoice file C:\\amber only')];updates.record('d',1,changes,'Clean summary');
+  const store=claimStore(sql);const before=store.forgetSources(topic,true);store.purge([],new Date().toISOString(),[topic]);const row=sql.exec<{changes:string}>('SELECT changes FROM update_cards').one();
+  console.log('ADVERSARIAL798-CLEAN',kind,JSON.stringify({before,row}));state.storage.deleteAlarm();expect(row.changes).toBe(JSON.stringify(changes));
+ });
+});
+it('ADVERSARIAL798 duplicate topic copies and literal plus split are not reconstructable after purge',async()=> {
+ const label='adv798-repeat';await admittedTurn(label,190530,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql;const updates=updateBook(sql);updates.record('d',1,[mailM(0,MAIL_T),mailM(1,MAIL_T.slice(0,20)),mailM(2,MAIL_T.slice(20)),mailM(3,MAIL_U),mailM(4,MAIL_T.slice(0,46)),mailM(5,MAIL_T.slice(46))],'Clean summary');
+  const store=claimStore(sql);store.purge([],new Date().toISOString(),[MAIL_T]);const first=sql.exec<{changes:string}>('SELECT changes FROM update_cards').one();store.purge([],new Date().toISOString(),[MAIL_T]);const second=sql.exec<{changes:string}>('SELECT changes FROM update_cards').one();
+  console.log('ADVERSARIAL798-REPEAT',first);state.storage.deleteAlarm();expect(store.forgetSources(MAIL_T,true).incomplete).toBe(false);expect(second).toEqual(first);expect(first.changes).not.toContain('COBALT');
+ });
+});
+
+const T8 = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+const sp = T8.indexOf(' about');
+it.each(['literal+spacesplit','valuesplit+kvspace','nestedarray'] as const)('NEW798 %s', async kind => {
+ const label=`new798-${kind}`; await admittedTurn(label,190600,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql; const updates=updateBook(sql); const store=claimStore(sql);
+  const U=mailM(9,MAIL_U);
+  if(kind==='literal+spacesplit') updates.record('d',1,[mailM(0,T8),mailM(1,T8.slice(0,sp)),mailM(2,T8.slice(sp+1)),U],'S');
+  if(kind==='valuesplit+kvspace') updates.record('d',1,[mailM(0,T8.slice(0,20)),mailM(1,T8.slice(20)),{[T8.slice(0,sp)]:T8.slice(sp+1)},U] as any,'S');
+  if(kind==='nestedarray') updates.record('d',1,[{a:[[T8.slice(0,30)],{b:[T8.slice(30)]}]},U] as any,'S');
+  const before=store.forgetSources(T8,true).incomplete;
+  store.purge([],new Date().toISOString(),[T8]);
+  const rows=sql.exec<{changes:string;text:string}>('SELECT changes,text FROM update_cards ORDER BY id').toArray();
+  const after=store.forgetSources(T8,true).incomplete;
+  const joined=rows.map(r=>r.changes+r.text).join('|');
+  console.log('NEW798',kind,JSON.stringify({before,after,rows}));
+  state.storage.deleteAlarm();
+  expect(after).toBe(false); expect(joined).not.toContain('COBALT'); expect(joined).not.toContain('ZEBRA');
+  expect(joined).toContain(MAIL_U);
+ });
+});
+// Declared limits (#794, not detectable by a per-card test): a topic split across two update_cards rows, or between a card's changes and its summary text.
+it('NEW798 perf big card', async()=> {
+ const label='new798-perf'; await admittedTurn(label,190700,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql; const updates=updateBook(sql); const store=claimStore(sql);
+  updates.record('d',1,Array.from({length:400},(_,i)=>mailM(i,`unrelated filler text number ${i} `.repeat(3))),'S');
+  for(let i=0;i<300;i++) updates.record('d',1,[mailM(500+i,'other')],'S');
+  const t0=Date.now(); store.forgetSources(T8,true); const t1=Date.now();
+  updates.record('d',1,[mailM(1000,T8.slice(0,20)),...Array.from({length:400},(_,i)=>mailM(2000+i,`filler ${i}`)),mailM(1001,T8.slice(20))],'S');
+  const t2=Date.now(); store.purge([],new Date().toISOString(),[T8]); const t3=Date.now();
+  console.log('NEW798-PERF',JSON.stringify({hold:t1-t0,purge:t3-t2})); state.storage.deleteAlarm();
+ });
+});
