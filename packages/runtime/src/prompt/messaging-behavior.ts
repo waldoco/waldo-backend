@@ -92,7 +92,9 @@ export function ownerClockLine(clock: MessagingClock): string {
     zone = 'UTC';
     local = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', dateStyle: 'full', timeStyle: 'short' }).format(clock.now());
   }
-  return `The owner's current local time: ${local} (${zone}). Anchor greetings and time-of-day references to this; call get_context if you need fresh precision mid-turn.`;
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: zone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(clock.now());
+  const sinceMidnight = `${Number(parts.find((part) => part.type === 'hour')?.value ?? 0)}h ${Number(parts.find((part) => part.type === 'minute')?.value ?? 0)}m`;
+  return `The owner's current local time: ${local} (${zone}). The local day began ${sinceMidnight} ago. Anchor greetings and time-of-day references to this; call get_context if you need fresh precision mid-turn. When the local day is only just under way, "today" in a request usually means the day that just ended; search or read the last 24 hours instead of the new calendar day, and say which window you used. This applies only to a bare "today": a named date or a relative day such as "tomorrow" means exactly that day.`;
 }
 
 // These canonical restrictions remain last on the private skill-enabled reply path.
