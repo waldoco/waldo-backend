@@ -341,7 +341,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       }
       const id = `p${deps.newId()}`;
       const summary = describeTaskSources(payload);
-      sql.exec("INSERT INTO ledger VALUES (?, 'task_sources', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'task_sources', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
       const delivered = await say(`${summary}? This changes only this task's read scope; separately current source permissions still apply.`, [[payload.action === 'close' ? 'Close task' : 'Use these sources', `a:${id}`], ['Not now', `s:${id}`]]);
       if (delivered == null) throw new Error('Task source card not confirmed');
       sql.exec("UPDATE ledger SET status = 'open' WHERE id = ? AND status = 'card_unconfirmed'", id);
