@@ -30,8 +30,8 @@ export class DeviceCommandStore {
       if (this.storage.sql.exec("SELECT value FROM meta WHERE key='revoked'").toArray().length) return { accepted: false, reason: 'unavailable' };
       const previous = this.storage.sql.exec<Row>('SELECT * FROM commands WHERE request_id=? OR notification_id=?', input.request_id, notification).toArray();
       if (previous.length) {
-        // Stable request and notification identities cannot be recycled for changed content or devices.
-        if (previous.length !== 1 || previous[0]!.fingerprint !== fingerprint) return { accepted: false, reason: 'idempotency_conflict' };
+        // Successful retries preserve both request and notification identities; no untracked request alias may later change meaning.
+        if (previous.length !== 1 || previous[0]!.request_id !== input.request_id || previous[0]!.fingerprint !== fingerprint) return { accepted: false, reason: 'idempotency_conflict' };
         const row = previous[0]!;
         return { accepted: true, command_id: row.command_id, state: row.state, duplicate: true };
       }
