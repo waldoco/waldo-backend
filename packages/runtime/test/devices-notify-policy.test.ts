@@ -15,3 +15,11 @@ it('atomically enforces strict rolling notification caps and counts stable retri
   expect(store.list(100)).toHaveLength(20); store.cancelQueued(); expect(store.pending(1300)).toHaveLength(0);
  });
 });
+it.each([['info'], { value:'info' }, null, 1, true])('rejects nonstring notification severities %#',async severity=>{
+ const stub=env.DEVICE_BRIDGE_DO!.get(env.DEVICE_BRIDGE_DO!.idFromName('dev_notify_shape_fixture')) as DurableObjectStub<DeviceBridgeDO>;
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const store=new DeviceCommandStore(state.storage);
+  const result=await store.enqueue({owner_id:'owner_fixture',device_id:'dev_notify_shape_fixture',request_id:'shape_fixture',class:'notify_local',payload:{notification_id:'shape_notification',title:'Waldo status',body:'Status update',severity}} as never,1000,['notify_local']);
+  expect(result).toMatchObject({accepted:false,reason:'invalid_shape'}); expect(store.list()).toHaveLength(0);
+ });
+});

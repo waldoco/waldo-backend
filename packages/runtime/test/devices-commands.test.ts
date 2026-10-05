@@ -44,3 +44,12 @@ it('reconciles a possibly delivered expired command through the same bytes and v
  expect(store.hasInFlight()).toBe(false);
  expect(store.list().find(row=>row.command_id===command.command_id)?.state).toBe('expired');
 }));
+it.each([['invalid_shape'], { value: 'invalid_shape' }, null, 1, true])('rejects nonstring ack reasons %#', value=>{
+ expect(ackFrame({...signed('ack'),command_id:'cmd_1',revision:1,idempotency_key:'idem_1',payload:{state:'rejected',reason:value}})).toBeNull();
+});
+it.each([['idle'], { value: 'idle' }, null, 1, true])('rejects nonstring query answer labels %#', value=>{
+ expect(resultFrame({...signed('result'),command_id:'cmd_1',revision:1,idempotency_key:'idem_1',payload:{status:'answered',answer:{query_id:'query_1',query_kind:'session_status',state:value}}})).toBeNull();
+});
+it.each([['processing_failed'], { value: 'processing_failed' }, null, 1, true])('rejects nonstring failed result reasons %#', value=>{
+ expect(resultFrame({...signed('result'),command_id:'cmd_1',revision:1,idempotency_key:'idem_1',payload:{status:'failed',reason:value}})).toBeNull();
+});
