@@ -809,7 +809,7 @@ export const createOwnerResponder = (
           const heldStanding = (local.held ?? []).includes('standing_orders') || standingHit;
           // Named only when standing orders are the sole cause; any other incompleteness keeps the generic class so an unreadable-copy reason is never hidden.
           // Names of the store classes that reported incomplete, for the diagnostic hop only (never owner text, never a decision).
-          incompleteBy = [...(snapshot.incomplete ? ['source_batch'] : []), ...(local.incomplete ? ['local_stores'] : []), ...(ledger?.incomplete ? ['tool_output_ledger'] : []), ...(conversation?.incomplete ? ['conversation'] : []), ...(standingHit ? ['standing_orders'] : [])];
+          incompleteBy = [...(snapshot.incomplete ? ['source_batch'] : []), ...(local.incomplete ? [`local_stores${local.heldBy?.length ? `[${local.heldBy.map(h => `${h.table}:${h.rule}:${h.rows}`).join(' ')}]` : ''}`] : []), ...(ledger?.incomplete ? ['tool_output_ledger'] : []), ...(conversation?.incomplete ? ['conversation'] : []), ...(standingHit ? ['standing_orders'] : [])];
           forgetHeld = heldStanding && !snapshot.incomplete && !local.otherIncomplete && !(local.incomplete && !local.held?.length) && !ledger?.incomplete && !conversation?.incomplete ? ['standing_orders'] : [];
           return { ...snapshot, incomplete: snapshot.incomplete || local.incomplete || !!ledger?.incomplete || !!conversation?.incomplete || !!standingOrders?.().toLowerCase().includes(topic.toLowerCase()) };
         };
