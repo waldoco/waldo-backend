@@ -38,12 +38,10 @@ export type TelegramOwnerListenerOptions = Readonly<{
   saveOffset(offset: number): Promise<void>;
   log?(entry: TurnLogEntry): void;
   now?(): number;
-  progressAfterMs?: number;
   typingEveryMs?: number;
   ackEmoji?: string;
   doneEmoji?: string;
   failedEmoji?: string;
-  progressText?: string;
   failureText?: string;
   unsupportedText?: string;
 }>;
@@ -138,10 +136,7 @@ export class TelegramOwnerListener {
     const typing = async () => { try { await api.sendChatAction({ chat_id, action: 'typing' }); } catch { /* bounded UX only */ } };
     await time('typing', typing);
     const typingTimer = setInterval(typing, this.options.typingEveryMs ?? 4_000);
-    const progressTimer = setTimeout(() => {
-      void time('progress', async () => api.sendMessage({ chat_id, text: this.options.progressText ?? 'On it - still working on this, reply coming shortly.' })).catch(() => undefined);
-    }, this.options.progressAfterMs ?? 8_000);
-    const clearRunTimers = () => { clearTimeout(progressTimer); clearInterval(typingTimer); };
+    const clearRunTimers = () => { clearInterval(typingTimer); };
     turn.runScope?.signal.addEventListener('abort', clearRunTimers, { once: true });
     try {
       const limit = turn.runScope ? Math.max(0, turn.runScope.deadline - now()) : this.options.turnTimeoutMs ?? TURN_TIMEOUT_MS;
@@ -149,7 +144,6 @@ export class TelegramOwnerListener {
       const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new TurnTimeout(limit)), limit); });
       const text = (await time('respond', () => Promise.race([this.options.respond(turn, time), timeout]).finally(() => clearTimeout(timer)))).trim();
       if (text.length === 0) throw new Error('empty reply');
-      clearTimeout(progressTimer);
       // The responder has already applied current-turn artifact receipt admission.
       // Rich formatting is confined to this final reply, never progress/events/errors.
       const guardedText = redactSecretUrls(text).text;
@@ -167,7 +161,6 @@ export class TelegramOwnerListener {
       this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, text: { input: turn.text, output: text } });
       return 'answered';
     } catch (error) {
-      clearTimeout(progressTimer);
       const failure = error instanceof TurnTimeout
         ? 'That took too long. In-flight changes may still finish. Try again, or split it into smaller asks.'
         : this.options.failureText ?? 'Sorry - I hit a problem answering that. Please try again in a moment.';
@@ -177,7 +170,6 @@ export class TelegramOwnerListener {
       log('turn', now() - started, false, error instanceof Error ? error.message : String(error), turnFailureCode(error));
       return 'failed';
     } finally {
-      clearTimeout(progressTimer);
       turn.runScope?.signal.removeEventListener('abort', clearRunTimers);
       this.options.clearTurnReceipts?.(trace);
       clearInterval(typingTimer);
