@@ -365,6 +365,11 @@ describe('Calendar pagination arguments',()=>{
 
 describe('Calendar page receipts',()=>{
  const page={events:[],next_page_token:null,fetched_count:0,account:{connection_id:null,email:null},observed_at:'2026-10-02T12:00:00Z'};
+ it('admits the event fields the Google connector emits (status, updated, recurrence, source link, attendee names)',()=>{
+  const event={id:'e1',title:'Standup',start:'2026-10-06T09:00:00Z',end:'2026-10-06T09:30:00Z',all_day:false,status:'confirmed' as const,updated:'2026-10-05T10:00:00Z',recurring_event_id:'series1',original_start:'2026-10-06T09:00:00Z',source_url:'https://calendar.google.com/event?eid=abc',attendee_names:['A B']};
+  const full={...page,events:[event],fetched_count:1};
+  expect(calendarPageSchema.parse(full)).toEqual(full);
+ });
  it('admits empty exhausted pages with explicitly unavailable account metadata',()=>{
   expect(calendarPageSchema.parse(page)).toEqual(page);
  });
