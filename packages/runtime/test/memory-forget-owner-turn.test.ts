@@ -305,7 +305,7 @@ it('an incomplete forget names the gate that held in the memory hop, with counts
     await turn('tg-why', `Forget only ${topic}. Keep tea.`, JSON.stringify({ spans: [], reviewed_refs: [], complete: false }));
     expect(store.incompleteTopics()).toEqual([topic]);
     const hop = seen.logs.filter(entry => (entry as { hop: string }).hop === 'memory').at(-1) as { detail: string };
-    expect(hop.detail).toMatch(/forget_incomplete selection_rejected\(\d+ sources\)/);
+    expect(hop.detail).toMatch(/forget_incomplete selection_rejected\(\d+ sources; [a-z_:]+\)/);
     expect(hop.detail).not.toContain(topic);
     expect(JSON.stringify(seen.logs)).not.toContain('cobalt paper');
     expect(JSON.stringify(seen.logs)).not.toContain('Keep tea');
@@ -336,7 +336,7 @@ it('a selector that cannot run is named selector_unavailable, and omitted covera
     seen.writerOps.push(ops({ forget_topic: 'WHY3-757-TOPIC' }));
     await turn('tg-why3', 'Forget only WHY3-757-TOPIC.', JSON.stringify({ spans: [], reviewed_refs: [], complete: true }));
     const hop = seen.logs.filter(entry => (entry as { hop: string }).hop === 'memory').at(-1) as { detail: string };
-    expect(hop.detail).toMatch(/forget_incomplete selection_rejected\(64 sources\)/);
+    expect(hop.detail).toMatch(/forget_incomplete selection_rejected\(64 sources; [a-z_:]+\)/);
     expect(store.incompleteTopics()).toEqual(['WHY3-757-TOPIC']);
   }, undefined, undefined, sql => { const ep = episodeIndex(sql); for (let i = 0; i < 70; i++) ep.add(`many-${i}`, 'owner', `WHY3-757-TOPIC row ${i}`, i + 1); });
 });
