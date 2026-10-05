@@ -318,6 +318,7 @@ it('the reply instructions carry the reason class of an incomplete forget, witho
     expect(store.incompleteTopics()).toEqual([topic]);
     expect(system()).toContain('reason class: selection_rejected)');
     expect(system()).not.toMatch(/reason class: [a-z_]+\(/);
+    expect(system()).not.toContain(topic);
   }, undefined, undefined, sql => episodeIndex(sql).add('why4-src', 'owner', fact, 1));
 });
 it('a selector that cannot run is named selector_unavailable, and an over-bound source set is named sources_incomplete', async () => {
