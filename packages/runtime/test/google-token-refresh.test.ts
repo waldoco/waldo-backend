@@ -23,7 +23,7 @@ import {googleHandlers} from '../src/tools/live/google';
 it('local invalid grant reaches the native auth-failed result while an outage has no reconnect',async()=>{
  for(const [status,error] of [[400,'invalid_grant'],[503,'temporarily_unavailable'],[401,'invalid_client']] as const){
   const client=googleClient(app,{refresh_token:'pinned-refresh'},async()=>Response.json({error},{status}));
-  const handler=googleHandlers({client:async()=>client},{propose:async()=>'',proposeSendEmail:async()=>'',record:()=>{}}).find(value=>value.name==='get_tasks')!;
+  const handler=googleHandlers({client:async()=>client},{propose:async()=>'',proposeSendEmail:async()=>'',record:()=>{}},{timezone:'UTC',now:()=>new Date('2026-10-01T00:00:00Z')}).find(value=>value.name==='get_tasks')!;
   const result=await handler.handle({status:'all',limit:1},{} as never);
   expect(result).toMatchObject({ok:false,code:status===400?'auth_failed':'transient'});
   if(status===400)expect(result).toHaveProperty('connect.reason','reauth_needed');else expect(result).not.toHaveProperty('connect');
