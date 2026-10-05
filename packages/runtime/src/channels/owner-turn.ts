@@ -729,7 +729,7 @@ export const createOwnerResponder = (
         ...(privateRunScope ? { runScope: privateRunScope } : {}),
         authenticatedOwnerId: ownerId, invocation,
         context: { ...(binding?.admission.snapshot ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null },
-        userEntry: { id, ownerId, chatId: conversationRef, parentId, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' } },
+        userEntry: { id, ownerId, chatId: conversationRef, parentId: parentId !== null && tree.get(parentId)?.chatId === conversationRef ? parentId : null, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' } },
         assistantEntryId: `${id}-reply`,
         ...(interactiveSource && requireTaskScope && !sourceFamilyAvailable('local') ? { historyStartRef: sourceSnapshot?.startRef ?? id } : {}),
       })).finally(() => { ownerTurnActive = false; backgroundToolNames = undefined; control.end(); });
