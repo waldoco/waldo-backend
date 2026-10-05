@@ -1438,3 +1438,54 @@ it('a stale page cannot erase a newly changed unrelated clause in the same sourc
   });
   expect(request()).toContain(standup);
 });
+
+it('ADVERSARIAL unique loop-only topic must not settle empty coverage', async () => {
+  const name='review-769-loop-only'; const topic='UNIQUELOOP769';
+  await admittedTurn(name,130000,'My unrelated standup is at 09:10 UTC.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    loopBook(state.storage.sql,{now:()=>Date.now(),newId:()=> 'review-769-loop'}).open({title:`Discuss ${topic} private detail`,due:null});
+    claimStore(state.storage.sql).beginTopicCoverage(topic,new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(name));
+  await admittedTurn(name,130001,'Continue my requested forgetting.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);
+    const rows=state.storage.sql.exec('SELECT title FROM loops').toArray();
+    console.log('ADVERSARIAL LOOP RESULT',JSON.stringify({rows,incomplete:memory.incompleteTopics(),coverage:memory.topicCoverage(topic)}));
+    expect(rows.some(row=>String(row.title).includes(topic)) && !memory.incompleteTopics().includes(topic)).toBe(false);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('ADVERSARIAL explicit forget must not certify surviving loop topic', async () => {
+  const name='review-769-explicit-loop';const topic='EXPLICITLOOP769';
+  await admittedTurn(name,131000,'My unrelated standup is at 09:10 UTC.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    loopBook(state.storage.sql,{now:()=>Date.now(),newId:()=> 'review-769-explicit'}).open({title:`Discuss ${topic} private detail`,due:null});
+    state.storage.deleteAlarm();
+  });
+  seen.selectedTexts=[`Forget ${topic}.`]; seen.selectorOutputMessage=true;
+  await admittedTurn(name,131001,`Forget ${topic}.`,ops({forget_topic:topic}));
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);const rows=state.storage.sql.exec('SELECT title FROM loops').toArray();
+    console.log('ADVERSARIAL EXPLICIT RESULT',JSON.stringify({rows,incomplete:memory.incompleteTopics(),coverage:memory.topicCoverage(topic),provider:request().includes('topic cleanup verified and settled')}));
+    expect(rows.some(row=>String(row.title).includes(topic)) && !memory.incompleteTopics().includes(topic)).toBe(false);
+  });
+});
+
+it('ADVERSARIAL background summary only must not settle empty coverage', async () => {
+  const name='review-769-background-only';const topic='UNIQUEBG769';
+  await admittedTurn(name,132000,'My unrelated standup is at 09:10 UTC.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    state.storage.sql.exec('INSERT INTO background_runs (id,kind,status,summary,parent_id,started_at,ended_at) VALUES (?,?,?,?,?,?,?)','review-769-bg','event','completed',`Observed ${topic} private detail`,null,1,2);
+    claimStore(state.storage.sql).beginTopicCoverage(topic,new Date().toISOString());
+  });
+  await evictDurableObject(stub(name));
+  await admittedTurn(name,132001,'Continue my requested forgetting.',ops());
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    const memory=claimStore(state.storage.sql);const rows=state.storage.sql.exec('SELECT summary FROM background_runs').toArray();
+    console.log('ADVERSARIAL BACKGROUND RESULT',JSON.stringify({rows,incomplete:memory.incompleteTopics(),coverage:memory.topicCoverage(topic)}));
+    expect(rows.some(row=>String(row.summary).includes(topic)) && !memory.incompleteTopics().includes(topic)).toBe(false);
+  });
+});

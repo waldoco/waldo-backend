@@ -256,3 +256,10 @@ it('deduplicates identical source receipts but holds conflicting receipts even b
   expect(forgetSourceBatch('BAT',[...rows,...rows])).toMatchObject({more:false,incomplete:false});
   expect(forgetSourceBatch('BAT',[...rows,{ref:'other',text:'BAT next note'},{...rows[0]!,text:'BAT changed note'}])).toMatchObject({more:true,incomplete:true});
 });
+
+it('one ref carrying a matching and a non-matching text is a conflict even when the non-matching row comes first', () => {
+  const topic = 'CONFLICT-769';
+  expect(forgetSourceBatch(topic, [{ ref: 'episodes:1:text', text: 'unrelated text' }, { ref: 'episodes:1:text', text: `${topic} private` }]).incomplete).toBe(true);
+  expect(forgetSourceBatch(topic, [{ ref: 'episodes:1:text', text: `${topic} private` }, { ref: 'episodes:1:text', text: 'unrelated text' }]).incomplete).toBe(true);
+  expect(forgetSourceBatch(topic, [{ ref: 'episodes:1:text', text: `${topic} private` }, { ref: 'episodes:1:text', text: `${topic} private` }]).incomplete).toBe(false);
+});

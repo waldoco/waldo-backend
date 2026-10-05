@@ -25,9 +25,16 @@ export const SELECTIVE_FORGET_SCHEMA = {
 export type ForgetBatch = ForgetSnapshot & Readonly<{ more: boolean }>;
 export const forgetSourceBatch = (topic: string, rows: readonly ForgetSource[], more = false): ForgetBatch => {
   if (topic.length < 3 || topic.length > 512 || /[^\x20-\x7e]/.test(topic)) return { sources: [], incomplete: true, more };
+  // A ref seen with two different texts is a conflict whether or not either text carries the topic.
+  const seenText = new Map<string, string>();
+  let incomplete = false;
+  for (const row of rows) {
+    const prior = seenText.get(row.ref);
+    if (prior === undefined) seenText.set(row.ref, row.text);
+    else if (prior !== row.text) incomplete = true;
+  }
   const matched = rows.filter(row => asciiLiteralIncludes(row.text, topic));
   const sources: ForgetSource[] = [];
-  let incomplete = false;
   const refs = new Map<string, string>();
   let full = false;
   for (const row of matched) {

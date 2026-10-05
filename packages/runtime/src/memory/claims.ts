@@ -404,6 +404,12 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             if (changed || redactedText !== row.text) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', changed ? redactedChanges : row.changes, redactedText, row.id);
           }
         });
+        if (tableExists(sql, 'background_runs')) attempt('background_runs', () => {
+          for (const row of sql.exec<{ id: string; summary: string }>('SELECT id, summary FROM background_runs').toArray()) {
+            const summary = ci(row.summary);
+            if (summary !== row.summary) { sql.exec('UPDATE background_runs SET summary = ? WHERE id = ?', summary, row.id); tally('redacted', 'background_runs'); }
+          }
+        });
         if (hasSourceLoops) attempt('loops', () => {
           for (const row of sql.exec<{ id: string; title: string; status: string }>('SELECT l.id, l.title, l.status FROM loops l').toArray()) {
             const title = ci(row.title);
@@ -521,6 +527,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           // unverifiable: it lands in failed and the source stays purging.
           if (rows.some((row) => parsedJson(row.changes) === undefined)) throw new Error('update_cards changes unparseable');
         });
+        if (tableExists(sql, 'background_runs')) attempt('background_runs', () => add('background_runs', sql.exec<{ summary: string }>('SELECT summary FROM background_runs').toArray().filter(row => exact(row.summary)).length));
         if (hasSourceLoops) attempt('loops', () => add('loops', sql.exec<{ title: string }>('SELECT l.title FROM loops l').toArray().filter(row => exact(row.title)).length));
         if (hasPlan) attempt('day_plan', () => add('day_plan', sql.exec<{ reason: string }>(`SELECT reason FROM day_plan WHERE reason LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.reason)).length));
         const jsonHits = (raw: string) => { const parsed = parsedJson(raw); return (parsed === undefined ? [raw] : stringsOf(parsed)).some(exact); };
@@ -568,6 +575,9 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       collect('episodes', 'rowid', ['text']);
       collect('claims', 'id', ['text', 'evidence', 'source_ref']);
       collect('constellation_nodes', 'id', ['label', 'summary']);
+      // Owner-made loop titles and background run summaries carry owner and source text; the selector must see them or an empty inventory settles a forget while they survive.
+      collect('loops', 'id', ['title']);
+      collect('background_runs', 'id', ['summary']);
       // These existing cleanup projections are outside the bounded selector's
       // source contract. Preserve their originals if they still carry the topic.
       for (const [table, columns] of [
