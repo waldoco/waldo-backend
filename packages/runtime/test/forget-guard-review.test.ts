@@ -60,16 +60,24 @@ it('conversation JSON-shaped payload with an escaped topic still holds, includin
 });
 
 describe('hidesTopic unicode escapes', () => {
-  it('holds when the escape spells a character the topic contains, in either case', async () => {
-    const { hidesTopic } = await import('../src/memory/forget-guard');
-    expect(hidesTopic('x \\u0057 y', 'code word')).toBe(true);
-    expect(hidesTopic('x \\u0043 y', 'code word')).toBe(true);
-    expect(hidesTopic('x \\ud83d y', 'plan \u{1F600}')).toBe(true);
+  it('holds exactly when the decoded string carries the topic, by the same fold as carriesTopic', async () => {
+    const { hidesTopic, carriesTopic } = await import('../src/memory/forget-guard');
+    const cases: Array<[string, string]> = [
+      ['x \\u0057 y', 'code word'], ['x \\u0077 y', 'code word'], ['\u03b1\\u03a3', '\u03b1\u03c2'], ['I\\u0307', 'i\u0307'],
+      ['\\u212a', 'k'], ['a \\u0000 b', 'a\u0000b'], ['\\u0063ode \\u2013 note', 'code'], ['moved \\u2013 see agenda', 'code word'],
+      ['e\\u0301', 'e'], ['a\\u00a0b', 'a b'], ['\\uff43ode', 'code'], ['stra\\u00dfe', 'strasse'], ['\\ufb01le', 'file'], ['x \\u0057 y plus \\u2013', 'code word'],
+    ];
+    for (const [value, topic] of cases) {
+      const decoded = value.replace(/\\u([0-9a-fA-F]{4})/g, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+      expect(hidesTopic(value, topic), `${value} / ${topic}`).toBe(carriesTopic(decoded, topic));
+    }
   });
-  it('lets an escape for a character the topic lacks pass, and still holds a malformed one', async () => {
+  it('pins the sigma and dotted-I fail-open found in review, and keeps malformed escapes held', async () => {
     const { hidesTopic } = await import('../src/memory/forget-guard');
+    expect(hidesTopic('\u03b1\\u03a3', '\u03b1\u03c2')).toBe(true);
     expect(hidesTopic('moved \\u2013 see agenda', 'code word')).toBe(false);
     expect(hidesTopic('moved \\u20 see agenda', 'code word')).toBe(true);
     expect(hidesTopic('C:\\Users', 'code word')).toBe(true);
+    expect(hidesTopic('x \\U0057 y', 'code word')).toBe(true);
   });
 });
