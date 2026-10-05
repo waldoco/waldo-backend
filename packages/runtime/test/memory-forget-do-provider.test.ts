@@ -2685,3 +2685,63 @@ it('OWNERCACHE a runtime built before the Telegram binding is rebuilt once the b
   state.storage.deleteAlarm();
  });
 });
+
+
+it('FRESH804 unrelated noncanonical JSON must remain byte-identical',async()=> {
+ const label='fresh804-numbers';await admittedTurn(label,191000,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+ const sql=state.storage.sql;const updates=updateBook(sql); updates.record('d',1,[mailM(0,MAIL_U)],'S');
+ const original='[{"source":"mail","kind":"new","source_ref":"mail:large-number","source_message_id":"9007199254740993","detail":"Invoice unrelated","invoice_id":9007199254740993,"amount":1e400}]';
+ sql.exec('UPDATE update_cards SET changes = ?',original);const store=claimStore(sql);expect(store.forgetSources(MAIL_T,true).incomplete).toBe(false);
+ store.purge([],new Date().toISOString(),[MAIL_T]);const after=sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes;
+ console.log('FRESH804-NUMBERS',JSON.stringify({original,after}));state.storage.deleteAlarm();expect(after).toBe(original);
+ });
+});
+it.each([64,65])('FRESH804 cap %s preserves unrelated content',async n=> {
+ const label=`fresh804-cap-${n}`;await admittedTurn(label,191010,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+ const sql=state.storage.sql;const updates=updateBook(sql);updates.record('d',1,[],'S'); const p=[MAIL_T.slice(0,46),...Array.from({length:n-1},(_,i)=>`Invoice ${i}`)];sql.exec('UPDATE update_cards SET changes = ?',JSON.stringify(p));const store=claimStore(sql);
+ const shape=heldRowShapes(sql,'update_cards',[{topic:MAIL_T,state:'incomplete'}],5,t=>store.forgetSources(t,true));expect(shape).toMatch(/^#1 t1\[projection/m);
+ store.purge([],new Date().toISOString(),[MAIL_T]);const first=sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes;store.purge([],new Date().toISOString(),[MAIL_T]);const second=sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes;
+ console.log('FRESH804-CAP',n,JSON.stringify({remaining:JSON.parse(first).filter((s:string)=>s.startsWith('Invoice')).length,incomplete:store.forgetSources(MAIL_T,true).incomplete}));state.storage.deleteAlarm();expect(second).toBe(first);expect(store.forgetSources(MAIL_T,true).incomplete).toBe(false);expect(JSON.parse(first).at(-1)).toBe(`Invoice ${n-2}`);
+ });
+});
+it.each(['summary','rows','inline'] as const)('FRESH804 exact mailed %s',async kind=> {
+ const label=`fresh804-mail-${kind}`;await admittedTurn(label,195020,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=>{const sql=state.storage.sql;const updates=updateBook(sql); const M=(i:number,detail:string)=>({...mailM(i,detail),source_ref:`mail:cross-${i}`});
+ if(kind==='summary')updates.record('d',1,[M(0,MAIL_T.slice(0,46))],MAIL_T.slice(46));
+ if(kind==='rows'){updates.record('d',1,[M(0,MAIL_T.slice(0,46))],null);updates.record('d',1,[M(1,MAIL_T.slice(46))],null);}
+ if(kind==='inline')updates.record('d',1,[M(0,MAIL_T+' '+MAIL_U),M(1,MAIL_T.slice(0,20)),M(2,MAIL_T.slice(20))],'Unrelated summary');
+ claimStore(sql).beginTopicCoverage(MAIL_T,new Date().toISOString());state.storage.deleteAlarm();});
+ await evictDurableObject(stub(label));seen.selectedTexts=[];seen.selectorOutputMessage=true;
+ await admittedTurn(label,195021,'Continue my requested forgetting.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {const sql=state.storage.sql;const store=claimStore(sql);expect(store.incompleteTopics()).toEqual([MAIL_T]);expect(store.forgetSources(MAIL_T,true).incomplete).toBe(true);sql.exec('DELETE FROM topic_purge_pending');store.purge([],new Date().toISOString(),[MAIL_T]);const rows=sql.exec<{changes:string;text:string}>('SELECT changes,text FROM update_cards').toArray();console.log('FRESH804-MAIL',kind,JSON.stringify(rows));expect(store.forgetSources(MAIL_T,true).incomplete).toBe(false);if(kind==='inline'){expect(JSON.parse(rows[0]!.changes)[0].detail).toBe(FORGOTTEN+' '+MAIL_U);expect(rows[0]!.text).toBe('Unrelated summary');}state.storage.deleteAlarm();});
+});
+// Documented limit (#794): a card nested thousands deep that carries the prefix cannot be decoded or blanked, so it stays held (fail-closed).
+it('FRESH804 full split beyond cap preserves unrelated mail siblings',async()=>{
+ const label='fresh804-fullcap';await admittedTurn(label,191030,'Standup at 09:10 UTC.',ops());await runInDurableObject(stub(label),(_instance,state)=>{
+ const sql=state.storage.sql;const changes=[mailM(0,MAIL_T.slice(0,20)),mailM(1,MAIL_T.slice(20)),...Array.from({length:31},(_,i)=>mailM(i+2,`Invoice ${i}`))];updateBook(sql).record('d',1,changes,'S');const store=claimStore(sql);store.purge([],new Date().toISOString(),[MAIL_T]);const after=JSON.parse(sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes);console.log('FRESH804-FULLCAP',JSON.stringify({last:after.at(-1),incomplete:store.forgetSources(MAIL_T,true).incomplete}));state.storage.deleteAlarm();expect(after.at(-1)).toEqual(changes.at(-1));
+ });
+});
+
+it('ADV804 unicode-expanded interior preserves unrelated siblings',async()=>{
+ const label='adv804-unicode';await admittedTurn(label,199010,'Standup at 09:10 UTC.',ops());await runInDurableObject(stub(label),(_instance,state)=>{
+ const sql=state.storage.sql;const topic='AİİİİB';const items=['Unrelated invoice','A','i\u0307'.repeat(4),'B','Unrelated footer'];updateBook(sql).record('d',1,[],'S');sql.exec('UPDATE update_cards SET changes = ?',JSON.stringify(items));const store=claimStore(sql);expect(store.forgetSources(topic,true).incomplete).toBe(true);console.log('ADV804-HELDROWS',heldRowShapes(sql,'update_cards',[{topic,state:'incomplete'}],5,t=>store.forgetSources(t,true)));store.purge([],new Date().toISOString(),[topic]);const after=JSON.parse(sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes);console.log('ADV804-UNICODE',after);state.storage.deleteAlarm();expect(store.forgetSources(topic,true).incomplete).toBe(false);expect(after[0]).toBe(items[0]);expect(after[4]).toBe(items[4]);});
+});
+it('ADV804 full split plus lone prefix settles',async()=>{
+ const label='adv804-prefixcopy';await admittedTurn(label,199011,'Standup at 09:10 UTC.',ops());await runInDurableObject(stub(label),(_instance,state)=>{
+ const sql=state.storage.sql;const items=[MAIL_T.slice(0,20),MAIL_T.slice(20),'Invoice divider',MAIL_T.slice(0,46),'Invoice footer'];updateBook(sql).record('d',1,[],'S');sql.exec('UPDATE update_cards SET changes = ?',JSON.stringify(items));const store=claimStore(sql);store.purge([],new Date().toISOString(),[MAIL_T]);const after=sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes;console.log('ADV804-PREFIXCOPY',after,store.forgetSources(MAIL_T,true));expect(store.forgetSources(MAIL_T,true).incomplete).toBe(true);store.purge([],new Date().toISOString(),[MAIL_T]);console.log('ADV804-PREFIXSECOND',store.forgetSources(MAIL_T,true).incomplete);state.storage.deleteAlarm();expect(store.forgetSources(MAIL_T,true).incomplete).toBe(false);});
+});
+
+it.each(['empty','nul','long'] as const)('ADV804COST %s real purge',async mode=>{
+ const label=`adv804-cost-${mode}`;await admittedTurn(label,199015,'Standup at 09:10 UTC.',ops());await runInDurableObject(stub(label),(_instance,state)=>{
+ const sql=state.storage.sql;const topic=mode==='long'?'a'.repeat(400)+'Z':MAIL_T;const items=mode==='long'?['a'.repeat(40),...Array(360).fill('a'),'Z','Invoice footer']:[MAIL_T.slice(0,20),...Array(800).fill(mode==='nul'?'\0':''),MAIL_T.slice(20),'Invoice footer'];updateBook(sql).record('d',1,[],'S');sql.exec('UPDATE update_cards SET changes = ?',JSON.stringify(items));const store=claimStore(sql);const before=Date.now();store.purge([],new Date().toISOString(),[topic]);const elapsed=Date.now()-before;console.log('ADV804-COST',mode,elapsed);state.storage.deleteAlarm();expect(store.forgetSources(topic,true).incomplete).toBe(false);const after=JSON.parse(sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes);expect(after.at(-1)).toBe('Invoice footer');});
+});
+it.each([
+ '[ { "detail" : "Invoice", "n": -0, "big":9007199254740993, "overflow":1e400 } ]',
+ '[{"z":"\\u0049nvoice","a":"slash\\/back\\\\quote\\\"","negative":-1e-400}]',
+ '[{"emoji":"😀","unicode":"İΣßé","array":[true,null,1.00000]}]',
+ ' { "b" : 2, "a" : [ "Invoice", -0.0, 1E+6 ] } '
+])('ADV804BYTES %s',async original=>{
+ const label='adv804-bytes-'+original.length;await admittedTurn(label,199016,'Standup at 09:10 UTC.',ops());await runInDurableObject(stub(label),(_instance,state)=>{const sql=state.storage.sql;updateBook(sql).record('d',1,[],'S');sql.exec('UPDATE update_cards SET changes = ?',original);const store=claimStore(sql);store.purge([],new Date().toISOString(),[MAIL_T]);state.storage.deleteAlarm();expect(sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes).toBe(original);});
+});

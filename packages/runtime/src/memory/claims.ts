@@ -191,14 +191,17 @@ export const blankCardPieces = (parsed: unknown, topic: string): unknown => {
   const holds = (list: Leaf[], from: number, to: number, separator: string) => exact(list.slice(from, to + 1).map(leaf => leaf.text).join(separator));
   // Same piece lists and join modes as cardCarriesTopic. For each start take the shortest run holding the topic, and skip a run whose tail alone still holds it (a later start finds that one),
   // so unrelated leaves before, between or after the copies are never marked. Marks accumulate over every list and join mode, because separate copies may need different ones.
-  for (const list of [leaves.filter(leaf => !leaf.key), leaves]) {
+  // A leaf that is empty once NULs are stripped adds nothing to any run, so it is left out of the search (it would otherwise let a run extend without bound).
+  const searchable = leaves.filter(leaf => leaf.text.replace(/\u0000/g, '').length > 0);
+  const topicLength = topic.toLowerCase().length;
+  for (const list of [searchable.filter(leaf => !leaf.key), searchable]) {
     for (const separator of ['', ' ']) {
       for (let from = 0; from < list.length; from++) {
         // Leaves strictly between the first and last of a run that holds the topic lie wholly inside it, so their total length cannot exceed the topic's: stop extending past that.
         // This keeps the search near linear instead of cubic (it was about 1s at 200 leaves).
         let inside = 0;
         for (let to = from; to < list.length; to++) {
-          if (to > from + 1) { inside += list[to - 1]!.text.replace(/\u0000/g, '').length + separator.length; if (inside > topic.length) break; }
+          if (to > from + 1) { inside += list[to - 1]!.text.replace(/\u0000/g, '').toLowerCase().length + separator.length; if (inside > topicLength) break; }
           if (!holds(list, from, to, separator)) continue;
           if (!(from < to && holds(list, from + 1, to, separator))) for (let index = from; index <= to; index++) marked.add(`${list[index]!.path}|${list[index]!.key}`);
           break;
