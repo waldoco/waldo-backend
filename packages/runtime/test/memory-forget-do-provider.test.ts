@@ -1693,8 +1693,8 @@ const jsonRow = (n: number, name: string, decisionLog: string, expectSettled: bo
   await runInDurableObject(stub(label), (_instance, state) => {
     const log = state.storage.sql.exec<{ decision_log: string }>('SELECT decision_log FROM memory_blocks').toArray()[0]!.decision_log;
     expect(() => JSON.parse(log)).not.toThrow();
-    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual(expectSettled ? [] : [topic]);
     if (unchanged) expect(log).toBe(decisionLog);
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual(expectSettled ? [] : [topic]);
     if (expectSettled) expect(log).not.toContain(topic);
     state.storage.deleteAlarm();
   });
@@ -1705,3 +1705,12 @@ jsonRow(1, 'a topic encoded as \\u escapes is found on the decoded leaf and keep
 jsonRow(2, 'a non-canonical row with the topic and a big integer is left byte-identical and the forget stays incomplete', '[ { "n": 12345678901234567890, "x": 1.0, "note": "Call POSCLOSED769 about lunch" } ]', false, true);
 // A canonical row still redacts and settles.
 jsonRow(3, 'a canonical row with the topic is redacted and settles', '[{"n":1,"note":"Call POSCLOSED769 about lunch"}]', true);
+
+jsonRow(101, 'encoded key', '{"Call \\u0050\\u004f\\u0053\\u0043\\u004c\\u004f\\u0053\\u0045\\u0044\\u0037\\u0036\\u0039 about lunch":"unrelated"}', false, true);
+jsonRow(102, 'encoded nested arrays', '[[[{"note":"Call \\u0050\\u004f\\u0053\\u0043\\u004c\\u004f\\u0053\\u0045\\u0044\\u0037\\u0036\\u0039 about lunch"}]]]', false, true);
+jsonRow(103, 'encoded 1100 deep', '['.repeat(1100) + '"Call \\u0050\\u004f\\u0053\\u0043\\u004c\\u004f\\u0053\\u0045\\u0044\\u0037\\u0036\\u0039 about lunch"' + ']'.repeat(1100), false, true);
+jsonRow(105, 'encoded 12000 deep', '['.repeat(12000) + '"Call \\u0050\\u004f\\u0053\\u0043\\u004c\\u004f\\u0053\\u0045\\u0044\\u0037\\u0036\\u0039 about lunch"' + ']'.repeat(12000), false, true);
+jsonRow(106, 'large shallow no-topic', JSON.stringify(Array.from({length:100000}, () => 'unrelated value')), true, true);
+jsonRow(107, 'split across leaves literal contract', '["Call POSCLO","SED769 about lunch"]', true, true);
+jsonRow(108, 'canonical key kept incomplete', '{"Call POSCLOSED769 about lunch":"unrelated"}', false, true);
+jsonRow(109, 'encoded 1001 deep exact boundary', '['.repeat(1001) + '"Call \\u0050\\u004f\\u0053\\u0043\\u004c\\u004f\\u0053\\u0045\\u0044\\u0037\\u0036\\u0039 about lunch"' + ']'.repeat(1001), false, true);
