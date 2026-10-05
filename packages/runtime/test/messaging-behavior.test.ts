@@ -86,6 +86,12 @@ describe('ownerClockLine', () => {
     expect(line).toContain('(Asia/Calcutta)');
   });
 
+  it('says how long the local day has run so a request just after midnight can widen "today"', () => {
+    const line = ownerClockLine({ timezone: 'Asia/Calcutta', now: () => new Date('2026-10-05T18:43:00Z') });
+    expect(line).toContain('The local day began 0h 13m ago');
+    expect(line).toContain('last 24 hours');
+  });
+
   it('falls back to UTC instead of throwing on a malformed stored timezone', () => {
     const line = ownerClockLine({ timezone: 'Not/AZone', now: () => new Date('2026-09-27T11:42:00Z') });
     expect(line).toContain('(UTC)');
@@ -97,4 +103,10 @@ describe('ownerClockLine', () => {
     expect(MESSAGING_BEHAVIOR).toContain('If you could not read any candidates, say what you could not read');
     expect(MESSAGING_BEHAVIOR).toContain('Keep the search for each fare or room separate');
   });
+});
+
+it('keeps named dates and relative days like tomorrow exact when widening a bare today', () => {
+  const line = ownerClockLine({ timezone: 'Asia/Calcutta', now: () => new Date('2026-10-05T18:43:00Z') });
+  expect(line).toContain('applies only to a bare "today"');
+  expect(line).toContain('"tomorrow" means exactly that day');
 });
