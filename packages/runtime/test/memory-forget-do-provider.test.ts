@@ -2352,3 +2352,46 @@ it.each([['quote', 'the "secret" code word that I told you about earlier today i
     state.storage.deleteAlarm();
   });
 });
+
+it.each([['split20', 20], ['nul20', 20], ['split39', 39], ['keyvalue20', 20]] as const)('EXACT-CARD %s: a split or NUL inside the first 40 chars is held before purge and blanked by it', async (kind, at) => {
+  const label = `forget-card-exact-${kind}`;
+  await admittedTurn(label, 153460, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    const changes = kind === 'keyvalue20' ? [{ [topic.slice(0, at)]: topic.slice(at) }]
+      : kind.startsWith('nul') ? [{ detail: `${topic.slice(0, at)}\u0000${topic.slice(at)}` }]
+      : [{ detail: topic.slice(0, at) }, { detail: topic.slice(at) }];
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify(changes));
+    const store = claimStore(sql);
+    expect(store.forgetSources(topic, true).incomplete).toBe(true);
+    store.purge([], new Date().toISOString(), [topic]);
+    expect(sql.exec<{ changes: string }>('SELECT changes FROM update_cards').one().changes).not.toContain('COBALT');
+    expect(store.forgetSources(topic, true).incomplete).toBe(false);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('EXACT-CARD a card that only shares the topic prefix is neither held nor blanked, and a blanked mail card keeps its detail key and join keys', async () => {
+  const label = 'forget-card-exact-decoy';
+  await admittedTurn(label, 153461, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    const decoy = JSON.stringify([{ source: 'mail', kind: 'new', source_ref: 'mail:t9', source_message_id: 'm9', detail: 'the secret code word that I told you about earlier today was a joke' }]);
+    const keep = { source: 'mail', kind: 'new', source_ref: 'mail:t1', source_message_id: 'm1' };
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', decoy);
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', JSON.stringify([{ ...keep, detail: topic.slice(0, 30) }, { detail: topic.slice(30) }]));
+    const store = claimStore(sql);
+    expect(store.forgetSources(topic, true).incomplete).toBe(true);
+    store.purge([], new Date().toISOString(), [topic]);
+    const rows = sql.exec<{ changes: string }>('SELECT changes FROM update_cards ORDER BY id').toArray();
+    expect(rows[0]!.changes).toBe(decoy);
+    const blanked = JSON.parse(rows[1]!.changes) as Record<string, string>[];
+    expect(blanked[0]).toMatchObject({ ...keep, detail: FORGOTTEN });
+    expect(store.forgetSources(topic, true).incomplete).toBe(false);
+    state.storage.deleteAlarm();
+  });
+});

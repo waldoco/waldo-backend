@@ -109,11 +109,32 @@ export const projectionRawHit = (column: string) => `${column} LIKE ? ESCAPE '\\
 export const projectionValueHit = (column: string) => `EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE type = 'text' AND value LIKE ? ESCAPE '\\')`;
 export const projectionKeyHit = (column: string) => `EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE 'null' END) WHERE key LIKE ? ESCAPE '\\')`;
 export const projectionPredicate = (columns: readonly string[]) => columns.map(column => `(${projectionRawHit(column)} OR ${projectionValueHit(column)} OR ${projectionKeyHit(column)})`).join(' OR ');
-// The purge exit and the projection hold must agree: a value is tied to the topic when its raw text OR any decoded JSON string value or key carries the prefilter prefix (JSON escapes a quote or backslash, so the raw text alone is not enough).
-const prefixTied = (value: string, prefix: string): boolean => {
-  if (value.toLowerCase().includes(prefix)) return true;
-  const leaves = jsonLeaves(value);
-  return leaves === 'unreadable' || (leaves !== null && leaves.some(leaf => leaf.toLowerCase().includes(prefix)));
+// update_cards: one card is tied to a topic when the topic appears whole in its raw text, in any decoded JSON key or value, or across its pieces in order
+// (a topic split between values or between a key and its value, with or without NULs). The hold and the purge exit share this one function.
+// A piece order interleaved with unrelated text is not provable and is not detected (tracked in #794).
+export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string): boolean => {
+  if (changes !== null && changes !== undefined && typeof changes !== 'string') return true;
+  if (text !== null && text !== undefined && typeof text !== 'string') return true;
+  const strip = (value: string) => value.replace(/\u0000/g, '');
+  const exact = (value: string) => carriesTopic(value, topic) || hidesTopic(value, topic) || (value.includes('\u0000') && (carriesTopic(strip(value), topic) || hidesTopic(strip(value), topic)));
+  if (typeof text === 'string' && exact(text)) return true;
+  if (typeof changes !== 'string') return false;
+  if (exact(changes)) return true;
+  let parsed: unknown;
+  try { parsed = JSON.parse(changes); } catch (error) { return !(error instanceof SyntaxError); }
+  // In-order pieces: the values alone (keys between them would break a split topic) and keys plus values (a key/value split).
+  const all: string[] = []; const values: string[] = [];
+  const stack: Array<{ key: boolean; node: unknown }> = [{ key: false, node: parsed }];
+  while (stack.length) {
+    const { key, node } = stack.pop()!;
+    if (typeof node === 'string') { all.push(node); if (!key) values.push(node); }
+    else if (Array.isArray(node)) for (let index = node.length - 1; index >= 0; index--) stack.push({ key: false, node: node[index] });
+    else if (node !== null && typeof node === 'object') {
+      const entries = Object.entries(node);
+      for (let index = entries.length - 1; index >= 0; index--) { stack.push({ key: false, node: entries[index]![1] }); stack.push({ key: true, node: entries[index]![0] }); }
+    }
+  }
+  return all.some(exact) || [all, values].some(list => exact(list.join('')) || exact(list.join(' ')));
 };
 // Verifies one projection column value with the real guard: the raw text, a decoded JSON string value or a JSON key carries the topic. An unreadable JSON value cannot be proven clean, so it holds.
 export const projectionValueHolds = (value: unknown, topic: string): boolean => {
@@ -461,16 +482,14 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
               ? ci(row.changes)
               : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
             const changed = parsed === undefined ? redactedChanges !== row.changes : redactedChanges !== JSON.stringify(parsed);
-            // A card that still carries the topic's prefilter prefix after redaction (a topic split across values or keys after that prefix, or NUL-broken)
-            // cannot be proven clean. update_cards rows record no source, so the scope is that row only: its free text, values and keys are blanked,
-            // while the join keys other consumers rely on (source, kind, source_ref, source_message_id) and the send state stay.
-            // Splits that break the prefix itself are not detected here (the same limit as the hold; tracked in #794).
-            const prefix = text.slice(0, LIKE_PREFILTER_MAX).toLowerCase();
-            const stillTied = topics.length > 0 && prefix.length > 0 && [redactedChanges, redactedText ?? ''].some(value => prefixTied(value, prefix));
-            if (stillTied) {
-              const KEEP = ['source', 'kind', 'source_ref', 'source_message_id'];
+            // A card that still carries the topic after redaction (split across values or keys, or broken by a NUL) cannot be proven clean by the per-value pass.
+            // update_cards rows record no source, so the scope is that card only. Its values are blanked and unknown keys renamed; schema keys, join keys
+            // (source, kind, source_ref, source_message_id) and the send state stay, so pending mail and due loops still join. Same predicate as the hold.
+            if (topics.length > 0 && cardCarriesTopic(redactedChanges, redactedText, text)) {
+              const SCHEMA_KEYS = ['source', 'kind', 'detail', 'source_ref', 'source_message_id'];
+              const JOIN_KEYS = ['source', 'kind', 'source_ref', 'source_message_id'];
               const blank = (node: unknown): unknown => Array.isArray(node) ? node.map(blank)
-                : node !== null && typeof node === 'object' ? Object.fromEntries(Object.entries(node).map(([key, child]) => KEEP.includes(key) ? [key, child] : [FORGOTTEN, blank(child)]))
+                : node !== null && typeof node === 'object' ? Object.fromEntries(Object.entries(node).map(([key, child]) => [SCHEMA_KEYS.includes(key) ? key : FORGOTTEN, JOIN_KEYS.includes(key) ? child : blank(child)]))
                 : typeof node === 'string' ? FORGOTTEN : node;
               const blanked = parsed === undefined ? JSON.stringify(FORGOTTEN) : JSON.stringify(blank(parsed));
               sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', blanked, row.text === null ? null : FORGOTTEN, row.id);
@@ -734,7 +753,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         const available = columns.filter(column => sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length);
         // Fail closed: a row whose text matches the topic prefilter holds the forget. Verification cannot release it, because a topic split across values or broken by a NUL is not provable clean.
         // The exit is the purge, which blanks such rows (see the update_cards pass above).
-        if (available.length && sql.exec(`SELECT 1 FROM ${table} WHERE ${projectionPredicate(available)} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'projection', rows: 1 }); }
+        // update_cards is checked card by card with the shared exact test (it also catches splits and NULs inside the first characters); other stores keep the prefilter.
+        const cardHold = table === 'update_cards' && available.includes('changes')
+          ? sql.exec<Record<string, SqlStorageValue>>(`SELECT ${available.join(', ')} FROM update_cards`).toArray().some(row => cardCarriesTopic(row.changes, available.includes('text') ? row.text : null, topic))
+          : null;
+        if (available.length && (cardHold ?? sql.exec(`SELECT 1 FROM ${table} WHERE ${projectionPredicate(available)} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length > 0)) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'projection', rows: 1 }); }
         if (available.length && !held.includes(table)) {
           guard(table, available, true);
         }
