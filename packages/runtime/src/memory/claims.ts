@@ -120,6 +120,11 @@ export const cardCarriesTopic = (changes: unknown, text: unknown, topic: string)
   const exact = (value: string) => carriesTopic(value, topic) || hidesTopic(value, topic) || (value.includes('\u0000') && (carriesTopic(strip(value), topic) || hidesTopic(strip(value), topic)));
   // Decoded text (the summary, keys and values of a parsed card) is judged by what it says; escape ambiguity applies only to serialized text that did not parse.
   const decoded = (value: string) => carriesTopic(value, topic) || (value.includes('\u0000') && carriesTopic(strip(value), topic));
+  // Fail-closed floor kept from the original prefix hold: a card whose raw text holds the topic's first LIKE_PREFILTER_MAX characters stays held even when the rest sits in another field or row,
+  // which no per-card test can prove. The purge exit blanks it (every leaf when the pieces cannot be localised); join keys and send state stay.
+  const prefix = topic.slice(0, LIKE_PREFILTER_MAX).toLowerCase();
+  const raw = [changes, text].filter((value): value is string => typeof value === 'string');
+  if (prefix && raw.some(value => value.toLowerCase().includes(prefix) || (value.includes('\u0000') && strip(value).toLowerCase().includes(prefix)))) return true;
   if (typeof text === 'string' && decoded(text)) return true;
   if (typeof changes !== 'string') return false;
   let parsed: unknown;
@@ -535,9 +540,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             // update_cards rows record no source and siblings of a matching fragment may be unrelated, so only the leaves that carry the topic's pieces are blanked
             // (values, and keys renamed unless they are schema keys). Join keys, other leaves, the summary text when clean and the send state stay. Same predicate as the hold.
             const changesTied = topics.length > 0 && cardCarriesTopic(redactedChanges, null, text);
+            // Blank what the redaction left, not the original: leaves the literal pass already cleaned (and unrelated text sharing them) stay as they are.
+            const cleaned = parsed === undefined ? undefined : parsedJson(redactedChanges);
             const textTied = topics.length > 0 && redactedText !== null && cardCarriesTopic('[]', redactedText, text);
             if (changesTied || textTied) {
-              const nextChanges = !changesTied ? redactedChanges : parsed === undefined ? JSON.stringify(FORGOTTEN) : JSON.stringify(blankCardPieces(parsed, text));
+              const nextChanges = !changesTied ? redactedChanges : parsed === undefined ? JSON.stringify(FORGOTTEN) : JSON.stringify(blankCardPieces(cleaned ?? parsed, text));
               sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', nextChanges, textTied ? FORGOTTEN : redactedText, row.id);
               continue;
             }

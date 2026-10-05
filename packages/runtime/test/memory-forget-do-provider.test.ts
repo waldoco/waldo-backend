@@ -2373,7 +2373,7 @@ it.each([['split20', 20], ['nul20', 20], ['split39', 39], ['keyvalue20', 20]] as
   });
 });
 
-it('EXACT-CARD a card that only shares the topic prefix is neither held nor blanked, and a blanked mail card keeps its detail key and join keys', async () => {
+it('EXACT-CARD a card that only shares the topic prefix is held and blanked (fail-closed floor, join keys kept), and a blanked mail card keeps its detail key and join keys', async () => {
   const label = 'forget-card-exact-decoy';
   await admittedTurn(label, 153461, 'My unrelated standup is at 09:10 UTC.', ops());
   await runInDurableObject(stub(label), (_instance, state) => {
@@ -2388,7 +2388,7 @@ it('EXACT-CARD a card that only shares the topic prefix is neither held nor blan
     expect(store.forgetSources(topic, true).incomplete).toBe(true);
     store.purge([], new Date().toISOString(), [topic]);
     const rows = sql.exec<{ changes: string }>('SELECT changes FROM update_cards ORDER BY id').toArray();
-    expect(rows[0]!.changes).toBe(decoy);
+    expect(JSON.parse(rows[0]!.changes)).toEqual([{ source: 'mail', kind: 'new', source_ref: 'mail:t9', source_message_id: 'm9', detail: '[forgotten]' }]);
     const blanked = JSON.parse(rows[1]!.changes) as Record<string, string>[];
     expect(blanked[0]).toMatchObject({ ...keep, detail: FORGOTTEN });
     expect(store.forgetSources(topic, true).incomplete).toBe(false);
@@ -2480,7 +2480,7 @@ it.each(['decoy','mixed','consumers','literal'] as const)('MAIL-FIXTURE %s', asy
   const pending = updates.pendingMail(); const due = loops.reviewDue('2026-10-06T00:00');
   console.log('MAIL-EVIDENCE',kind,JSON.stringify({row,pending,due}));
   expect(row.changes).not.toContain('COBALT');
-  if(kind==='decoy') expect(row.changes).toBe(JSON.stringify(changes));
+  if(kind==='decoy') expect(JSON.parse(row.changes)[0]).toMatchObject({source:'mail',kind:'new',detail:'[forgotten]'});
   if(kind==='mixed'||kind==='literal') { expect(after.at(-1)).toEqual(changes.at(-1)); expect(row.text).toBe(summary); }
   if(kind==='consumers') { expect(pending).toHaveLength(3); expect(due).toHaveLength(3); expect(pending.every(c=>typeof c.detail==='string')).toBe(true); expect(due.every(c=>typeof c.source_detail==='string')).toBe(true); expect(pending.at(-1)!.detail).toBe(MAIL_U); }
   state.storage.deleteAlarm();
@@ -2600,5 +2600,28 @@ it('NEW798 perf big card', async()=> {
   updates.record('d',1,[mailM(1000,T8.slice(0,20)),...Array.from({length:400},(_,i)=>mailM(2000+i,`filler ${i}`)),mailM(1001,T8.slice(20))],'S');
   const t2=Date.now(); store.purge([],new Date().toISOString(),[T8]); const t3=Date.now();
   console.log('NEW798-PERF',JSON.stringify({hold:t1-t0,purge:t3-t2})); state.storage.deleteAlarm();
+ });
+});
+
+// Custody regressions raised on 42d7dbe9: the original prefix hold must stay as the fail-closed floor, and cleanup must not reparse the original card.
+it.each(['changes-vs-summary','across-cards','inline-unrelated'] as const)('CUSTODY %s', async kind => {
+ const label=`custody-${kind}`; await admittedTurn(label,190800,'Standup at 09:10 UTC.',ops());
+ await runInDurableObject(stub(label),(_instance,state)=> {
+  const sql=state.storage.sql; const updates=updateBook(sql); const store=claimStore(sql);
+  const a=MAIL_T.slice(0,46), b=MAIL_T.slice(46);
+  if(kind==='changes-vs-summary') updates.record('d',1,[mailM(0,a)],b);
+  if(kind==='across-cards'){ updates.record('d',1,[mailM(0,a)],'S1'); updates.record('d',1,[mailM(1,b)],'S2'); }
+  if(kind==='inline-unrelated') updates.record('d',1,[mailM(0,`${MAIL_T} and ${MAIL_U}`),mailM(1,a),mailM(2,b)],'S');
+  const before=store.forgetSources(MAIL_T,true).incomplete;
+  store.purge([],new Date().toISOString(),[MAIL_T]);
+  const rows=sql.exec<{changes:string;text:string}>('SELECT changes,text FROM update_cards ORDER BY id').toArray();
+  const after=store.forgetSources(MAIL_T,true).incomplete;
+  const joined=rows.map(r=>r.changes+'|'+r.text).join('#');
+  state.storage.deleteAlarm();
+  if(kind!=='inline-unrelated') expect(before).toBe(true);
+  expect(after).toBe(false);
+  // The first fragment (the part that carries the prefix) is gone, so the topic cannot be rebuilt; a prefix-free tail row is not detectable (#794).
+  expect(joined).not.toContain(a.slice(0,40)); expect(joined).not.toContain(MAIL_T);
+  if(kind==='inline-unrelated') expect(joined).toContain(MAIL_U);
  });
 });
