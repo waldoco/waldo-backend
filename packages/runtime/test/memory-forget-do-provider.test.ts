@@ -2309,3 +2309,30 @@ it('a fragment-split card keeps the forget held until the purge blanks it, so an
     state.storage.deleteAlarm();
   });
 });
+
+it('OWNER-TURN a fragment-split card keeps a pending topic incomplete across eviction and a harmless retry, with join keys and unrelated cards intact', async () => {
+  const label = 'owner-fragment-card'; const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+  const keep = { source: 'mail', kind: 'new', source_ref: 'mail:thread-1', source_message_id: 'msg-1' };
+  const other = JSON.stringify([{ ...keep, source_ref: 'mail:thread-2', source_message_id: 'msg-2', detail: 'Invoice question from the vendor' }]);
+  await admittedTurn(label, 170100, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    sql.exec('INSERT INTO update_cards (at, day, changes, pushed) VALUES (?,?,?,1)', 1, 'd', JSON.stringify([{ ...keep, detail: topic.slice(0, 46) }, { detail: topic.slice(46) }]));
+    sql.exec('INSERT INTO update_cards (at, day, changes) VALUES (?,?,?)', 1, 'd', other);
+    claimStore(sql).beginTopicCoverage(topic, new Date().toISOString());
+    state.storage.deleteAlarm();
+  });
+  await evictDurableObject(stub(label));
+  seen.selectedTexts = []; seen.selectorOutputMessage = true;
+  await admittedTurn(label, 170101, 'Continue my requested forgetting.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    // The retained fragment holds the topic: no clean settle from an empty inventory.
+    expect(claimStore(sql).incompleteTopics()).toEqual([topic]);
+    const rows = sql.exec<{ changes: string; pushed: number }>('SELECT changes, pushed FROM update_cards ORDER BY id').toArray();
+    expect(rows[1]!.changes).toBe(other);
+    expect(rows[0]!.pushed).toBe(1);
+    state.storage.deleteAlarm();
+  });
+});
