@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { approvalDesk, PROPOSAL_TTL_MS, UNDO_WINDOW_MS } from '../src/channels/approvals';
 import { GoogleError, type GoogleClient } from '../src/connectors/google';
+import { ProxyIntentError } from '../src/connectors/proxy-intent';
 
 const iso = (s: string) => s as never;
 
@@ -399,6 +400,10 @@ describe('calendar Undo version protection', () => {
     let failure = false;
     let missingApplied = false;
     let readFailure = false;
+    let pendingSecond: Promise<void> | null = null;
+    const waitPending = async () => {
+      if (pendingSecond && writes.length === 3) { await pendingSecond; throw new ProxyIntentError('intent_pending'); }
+    };
     const check = (match?: string) => {
       if (race) { current = { ...current!, title: 'Later owner edit', start: '2026-10-07T15:00:00Z', end: '2026-10-07T16:00:00Z', etag: 'v3' }; race = false; }
       if (failure) throw new GoogleError(503, 'provider unavailable');
@@ -412,16 +417,16 @@ describe('calendar Undo version protection', () => {
         return { ...current, etag: missingApplied ? undefined : current.etag };
       },
       moveEvent: async (_id: string, start: string, end: string, match?: string) => {
-        writes.push({ op: 'move', match }); check(match);
+        writes.push({ op: 'move', match }); await waitPending(); check(match);
         current = { ...current!, start, end, etag: current!.etag === 'v1' ? 'v2' : 'v4' };
         return { ...current, etag: missingApplied ? undefined : current.etag };
       },
-      cancelEvent: async (_id: string, match?: string) => { writes.push({ op: 'cancel', match }); check(match); current = null; },
+      cancelEvent: async (_id: string, match?: string) => { writes.push({ op: 'cancel', match }); await waitPending(); check(match); current = null; },
     } as unknown as GoogleClient;
     const deps = { owner: 42, call: async () => ({}), google: async () => client, newId: () => 'version', now: () => 1000, timezone: 'UTC', log: () => {} };
     const desk = approvalDesk(state.storage.sql, deps);
     const id = await desk.propose({ action, ...(action === 'move' ? { event_id: 'e1' } : {}), title: 'Gym', start: iso('2026-10-07T12:00:00Z'), end: iso('2026-10-07T13:00:00Z'), reason: 'Owner request' });
-    return { desk, id, original, writes, current: () => current, edit: () => { current = { ...current!, title: 'Later owner edit', start: '2026-10-07T15:00:00Z', end: '2026-10-07T16:00:00Z', etag: 'v3' }; }, race: () => { race = true; }, fail: (value: boolean) => { failure = value; }, missingApplied: () => { missingApplied = true; }, missingCurrent: () => { current = { ...current!, etag: undefined }; }, failRead: () => { readFailure = true; }, reopen: () => approvalDesk(state.storage.sql, deps) };
+    return { desk, id, original, writes, current: () => current, edit: () => { current = { ...current!, title: 'Later owner edit', start: '2026-10-07T15:00:00Z', end: '2026-10-07T16:00:00Z', etag: 'v3' }; }, race: () => { race = true; }, fail: (value: boolean) => { failure = value; }, missingApplied: () => { missingApplied = true; }, missingCurrent: () => { current = { ...current!, etag: undefined }; }, failRead: () => { readFailure = true; }, delaySecondUndo: () => { let release!: () => void; pendingSecond = new Promise<void>((resolve) => { release = resolve; }); return release; }, reopen: () => approvalDesk(state.storage.sql, deps) };
   };
 
   it.each(['create', 'move'] as const)('preserves later owner edits after approved %s', async (action) => {
@@ -465,7 +470,7 @@ describe('calendar Undo version protection', () => {
       const out = await f.desk.decide(f.id, 'u', 't');
       expect(out.toast).toBe('The event changed');
       expect(f.writes.at(-1)?.match).toBe('v2');
-      expect(f.current()).toMatchObject({ title: 'Later owner edit', start: '2026-10-07T15:00:00Z', end: '2026-10-07T16:00:00Z', etag: 'v3', start: '2026-10-07T15:00:00Z' });
+      expect(f.current()).toMatchObject({ title: 'Later owner edit', start: '2026-10-07T15:00:00Z', end: '2026-10-07T16:00:00Z', etag: 'v3' });
       expect(f.desk.ledger([])).not.toContain('- undone:');
       await f.desk.decide(f.id, 'u', 't');
       expect(f.writes).toHaveLength(2);
@@ -536,6 +541,23 @@ describe('calendar Undo version protection', () => {
       expect(f.current()).toEqual(action === 'create' ? null : { ...f.original, etag: 'v4' });
       expect(f.desk.ledger([])).toContain('- undone:');
       expect((await f.desk.decide(f.id, 'u', 't3')).toast).toBe('Already handled.');
+    });
+  });
+
+  it.each(['create', 'move'] as const)('retains confirmed %s Undo after a delayed duplicate proxy uncertainty', async (action) => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-late-pending-${action}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const f = await setup(state, action);
+      await f.desk.decide(f.id, 'a', 't');
+      const release = f.delaySecondUndo();
+      const first = f.desk.decide(f.id, 'u', 't1');
+      const second = f.desk.decide(f.id, 'u', 't2');
+      expect((await first).toast).toBe('Undone');
+      release();
+      await second;
+      expect(f.desk.ledger([])).toContain('- undone:');
+      expect((await f.desk.decide(f.id, 'u', 't3')).toast).toBe('Already handled.');
+      expect(f.current()).toEqual(action === 'create' ? null : { ...f.original, etag: 'v4' });
     });
   });
 

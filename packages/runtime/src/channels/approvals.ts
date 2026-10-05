@@ -346,6 +346,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       deps.log({ trace, hop: `approval_${action}`, ms: deps.now() - started, ok: true, detail: id });
       return out;
     } catch (error) {
+      // A late duplicate failure cannot replace a confirmed Undo receipt.
+      if (action === 'u' && row(id)?.status === 'undone') return { toast: 'Already handled.', message: 'Already handled.' };
       if(error instanceof ProxyIntentError || (error instanceof GoogleError && error.message==='intent_pending')) { setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The operation outcome is unknown. Check the result before retrying; nothing was run again.'}; }
       deps.log({ trace, hop: `approval_${action}`, ms: deps.now() - started, ok: false, error: String(error) });
       return { toast: 'That failed', message: `That didn't work: ${error instanceof Error ? error.message : String(error)}` };
