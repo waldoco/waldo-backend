@@ -109,3 +109,37 @@ it('returns deliberate errors for malformed payload and failed directory', async
   expect(n.fetch).not.toHaveBeenCalled();
 });
 it('limiter error fails closed without routing-object allocation',async()=>{const{idFromName,ns}=namespace();const env:TelegramWebhookEnv={TELEGRAM_OWNER_DO:ns,TELEGRAM_WEBHOOK_SECRET:'s3cret',TELEGRAM_BOT_TOKEN:'7:token',RESPONSIBILITY_RATE_LIMITER:{limit:async()=>{throw Error('limiter fault')}}as unknown as RateLimit};expect((await run(post('s3cret',message(7,'/link ABCDEFGH23')),env)).status).toBe(503);expect(idFromName).not.toHaveBeenCalled()});
+
+describe('status log', () => {
+  const dir = (route: unknown): OwnerDirectory => ({ byPresence: async () => route as never, redeem: async () => null as never } as unknown as OwnerDirectory);
+  const env = (n: ReturnType<typeof namespace>, extra: Partial<TelegramWebhookEnv> = {}): TelegramWebhookEnv => ({ TELEGRAM_WEBHOOK_SECRET: 's', TELEGRAM_BOT_TOKEN: 'token', TELEGRAM_OWNER_DO: n.ns, ...extra });
+  const route = { doName: 'do-a', subject: '42', timezone: null };
+  const lines = async (work: () => Promise<unknown>) => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try { await work().catch(() => {}); return spy.mock.calls.map(c => String(c[0])).filter(l => l.includes('telegram_webhook')); } finally { spy.mockRestore(); }
+  };
+  const cases: ReadonlyArray<readonly [string, () => Promise<unknown>, string, number]> = [
+    ['routed', () => run(post('s', message(42, 'secret words')), env(namespace()), dir(route)), 'routed', 200],
+    ['no_route', () => run(post('s', message(42, 'secret words')), env(namespace()), dir(null)), 'no_route', 200],
+    ['owner refusal', () => { const n = namespace(); n.fetch.mockResolvedValue(new Response('no', { status: 403 })); return run(post('s'), env(n), dir(route)); }, 'owner_refused_403', 503],
+    ['owner unreachable', () => { const n = namespace(); n.fetch.mockRejectedValue(new Error('x')); return run(post('s'), env(n), dir(route)); }, 'owner_unreachable', 503],
+    ['bad secret', () => run(post('wrong'), env(namespace()), dir(route)), 'bad_secret', 403],
+    ['bad json', () => run(post('s', 'not json'), env(namespace()), dir(route)), 'bad_json', 400],
+    ['no sender', () => run(post('s', '{"x":1}'), env(namespace()), dir(route)), 'no_sender', 200],
+    ['not configured', () => run(post('s'), env(namespace(), { TELEGRAM_WEBHOOK_SECRET: undefined }), dir(route)), 'not_configured', 404],
+    ['not post', () => run(new Request('https://w.test/telegram/webhook'), env(namespace()), dir(route)), 'not_post', 404],
+    ['route lookup failed', () => run(post('s'), env(namespace()), { byPresence: async () => { throw new Error('x'); } } as unknown as OwnerDirectory), 'route_lookup_failed', 503],
+  ];
+  it.each(cases)('logs exactly one status-only line: %s', async (_name, work, status, http) => {
+    const out = await lines(work);
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0]!)).toEqual({ hop: 'telegram_webhook', ok: http < 400, status, http });
+    expect(out[0]).not.toContain('secret words');
+  });
+  it('logs a throw once and still throws', async () => {
+    const throwing = { get TELEGRAM_WEBHOOK_SECRET(): string { return 's'; }, TELEGRAM_OWNER_DO: namespace().ns } as TelegramWebhookEnv;
+    const request = post('s', '{"message":{"from":{"id":{"toString":null}}}}');
+    const out = await lines(() => handleTelegramWebhook(request, throwing, () => {}, dir(route)).then(() => { throw new Error('no throw'); }, e => { if (String(e).includes('no throw')) throw e; }));
+    expect(out.map(l => JSON.parse(l).status)).toEqual(['handler_threw']);
+  });
+});
