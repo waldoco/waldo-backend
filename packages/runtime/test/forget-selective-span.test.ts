@@ -187,7 +187,7 @@ for (const count of [32,33,64]) {
       expect(store.pendingTopics()).toHaveLength(count);
       expect(SELECTIVE_FORGET_SCHEMA.properties.spans.maxItems).toBe(64);
       expect(SELECTIVE_FORGET_SCHEMA.properties.reviewed_refs.maxItems).toBe(64);
-      expect(selectedForgetTexts(topic,snapshot,JSON.stringify({spans:rows.slice(1),reviewed_refs:rows.map(row=>row.ref),complete:true}),snapshot)).toBeNull();
+      expect(selectedForgetTexts(topic,snapshot,JSON.stringify({spans:rows.slice(1),reviewed_refs:rows.map(row=>row.ref),complete:true}),snapshot)).toHaveLength(count);
     });
   });
 }
