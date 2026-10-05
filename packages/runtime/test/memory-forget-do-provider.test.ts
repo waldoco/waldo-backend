@@ -2459,6 +2459,33 @@ it('EXACT-CARD only the fragment leaves are blanked: an unrelated sibling leaf a
   });
 });
 
+it('DUPKEY an unrelated duplicate-key card keeps the exact bytes SQLite reads (first duplicate), and a duplicate that hides the topic is still removed', async () => {
+  const label = 'forget-card-dupkey-unrelated';
+  await admittedTurn(label, 153490, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    const topic = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    const detailDup = '[{"source":"mail","kind":"new","source_ref":"mail:invoice","detail":"invoice2719","detail":"lunch agenda"}]';
+    const refDup = '[{"source":"mail","kind":"new","source_ref":"mail:invoice","source_ref":"mail:lunch","detail":"Invoice question"}]';
+    const collide = `[{"detail":"the secret code word","detail":" that I told you about earlier today is ZEBRA-COBALT","detail\\u00001":"clean"}]`;
+    const hidden = `[{"source":"mail","kind":"new","source_ref":"mail:h","detail":"${topic}","detail":"x"}]`;
+    for (const changes of [detailDup, refDup, hidden]) sql.exec('INSERT INTO update_cards (at, day, changes, text, pushed) VALUES (?,?,?,?,1)', 1, 'd', changes, null);
+    const store = claimStore(sql);
+    store.purge([], new Date().toISOString(), [topic]);
+    const rows = sql.exec<{ changes: string }>('SELECT changes FROM update_cards ORDER BY id').toArray().map(r => r.changes);
+    expect(rows[0]).toBe(detailDup);
+    expect(rows[1]).toBe(refDup);
+    expect(sql.exec<{ v: string }>("SELECT json_extract(changes, '$[0].detail') AS v FROM update_cards WHERE id = 1").one().v).toBe('invoice2719');
+    expect(rows[2]).not.toContain('COBALT');
+    expect(store.forgetSources(topic, true).incomplete).toBe(false);
+    // A renamed duplicate must not collide with a real key: this card keeps the topic split over duplicates and is held, not judged clean.
+    sql.exec('INSERT INTO update_cards (at, day, changes, text, pushed) VALUES (?,?,?,?,1)', 1, 'd', collide, null);
+    expect(store.forgetSources(topic, true).incomplete).toBe(true);
+    state.storage.deleteAlarm();
+  });
+});
+
 const MAIL_T = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
 const MAIL_D = MAIL_T.slice(0,40) + ' the public lunch agenda says AMBER';
 const MAIL_U = 'Invoice question from the vendor, unrelated and due tomorrow';
@@ -2634,7 +2661,7 @@ it.each(['rename-collision','duplicate-key','big-card'] as const)('CUSTODY2 %s',
   const a=MAIL_T.slice(0,46), b=MAIL_T.slice(46);
   let t0=0, t1=0;
   if(kind==='rename-collision') updates.record('d',1,[{[a]:'one',['[forgotten]']:'two',other:'three'},{[b]:'four'}] as any,'S');
-  if(kind==='duplicate-key'){ updates.record('d',1,[mailM(0,a)],'S'); sql.exec('UPDATE update_cards SET changes = ?', `[{"source":"mail","kind":"new","source_ref":"mail:r0","source_message_id":"m0","detail":"${b}","detail":"clean"}]`); }
+  if(kind==='duplicate-key'){ updates.record('d',1,[mailM(0,a)],'S'); sql.exec('UPDATE update_cards SET changes = ?', `[{"source":"mail","kind":"new","source_ref":"mail:r0","source_message_id":"m0","detail":"${a}","detail":"${b}"}]`); }
   if(kind==='big-card') updates.record('d',1,[mailM(0,a),...Array.from({length:400},(_,i)=>mailM(i+1,`filler ${i}`))],'S');
   const before=store.forgetSources(MAIL_T,true).incomplete;
   t0=Date.now(); store.purge([],new Date().toISOString(),[MAIL_T]); t1=Date.now();
@@ -2643,7 +2670,7 @@ it.each(['rename-collision','duplicate-key','big-card'] as const)('CUSTODY2 %s',
   state.storage.deleteAlarm();
   expect(before).toBe(true); expect(after).toBe(false);
   if(kind==='rename-collision'){ const first=JSON.parse(rows[0]!.changes)[0]; expect(Object.keys(first)).toHaveLength(3); expect(rows[0]!.changes).toContain('"three"'); }
-  if(kind==='duplicate-key') expect(rows[0]!.changes).not.toContain(b);
+  if(kind==='duplicate-key') { expect(rows[0]!.changes).not.toContain(b); expect(rows[0]!.changes).not.toContain(a); }
   if(kind==='big-card') expect(t1-t0).toBeLessThan(2000);
  });
 });
