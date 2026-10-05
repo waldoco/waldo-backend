@@ -1,3 +1,4 @@
+import { heldRowShapes } from '../src/memory/held-rows';
 import { env, evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
@@ -1952,4 +1953,48 @@ it('REVIEW774 escaped standing-order text is withheld while a matching forget is
   await evictDurableObject(stub(name));
   await admittedTurn(name, 172001, 'What standing orders do you have?', ops());
   expect(request()).not.toContain('venue');
+});
+
+it('HELDROWS lists only rows the real hold predicate holds, over a real SQLite store, as shape without content', async () => {
+  const label = 'heldrows-real-sql'; const topic = 'HELDROWSTOPIC'; const other = 'SECONDPENDING';
+  await admittedTurn(label, 153300, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    const add = (changes: string, text: string | null) => sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?,?,?,?)', 1, '2026-10-05', changes, text);
+    add('[{"note":"plain private text"}]', 'plain card');
+    add(`[{"${topic}":"x"}]`, null);
+    add('[{"note":"odd \\x41 escape PRIVATEWORDS"}]', 'a');
+    add('[{"n":"fine"}]', 'carries\0nul ' + topic);
+    add('{"unterminated": ', 'tail');
+  });
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const out = heldRowShapes(state.storage.sql, 'update_cards', [{ topic, state: 'incomplete' }, { topic: other, state: 'pending' }], 25);
+    expect(out).toContain('topics t1=incomplete t2=pending');
+    expect(out).toMatch(/3 held among 3 scanned of 3 candidate rows/);
+    expect(out).toMatch(/#2 changes .*json=ok .*t1\[hold=projection raw=1 val=0 key=1\]/);
+    expect(out).toMatch(/#3 changes .*esc\[u=0 bad_u=0 q=0 ctl=0 other=1\].*t1\[hold=guard_escape raw=0 val=0 key=0\]/);
+    expect(out).toMatch(/#4 text .*nul=1 .*t1\[hold=nul\+projection/);
+    expect(out).not.toMatch(/^#1 /m);
+    expect(out).not.toMatch(/^#5 /m);
+    for (const leak of ['plain private text', 'PRIVATEWORDS', 'carries', topic, other]) expect(out).not.toContain(leak);
+    expect(heldRowShapes(state.storage.sql, 'constructor', [], 25)).toMatch(/^Usage:/);
+    expect(heldRowShapes(state.storage.sql, '__proto__', [], 25)).toMatch(/^Usage:/);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('HELDROWS stops before the message limit and says it truncated', async () => {
+  const label = 'heldrows-truncate'; const topic = 'TRUNCTOPIC';
+  await admittedTurn(label, 153310, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec('CREATE TABLE IF NOT EXISTS day_plan (day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, card))');
+    for (let index = 0; index < 60; index++) sql.exec('INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?,?,?,?,?)', '2026-10-05', `c${index}`, null, `about ${topic}`, 0);
+    const out = heldRowShapes(sql, 'day_plan', [{ topic, state: 'pending' }], 60);
+    expect(out.length).toBeLessThanOrEqual(4096);
+    expect(out).toMatch(/truncated: \d+ more held rows not shown/);
+    expect(out).toContain('60 held among 60 scanned of 60 candidate rows');
+    state.storage.deleteAlarm();
+  });
 });
