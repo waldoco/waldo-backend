@@ -94,6 +94,13 @@ export const conversationForgetSources = async (storage: KeyValueStorage, topic:
   conversationSourcesFromRows(await storage.list<ConversationEntry>({ prefix: 'conv:' }), await storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX }), topic, expected);
 export const conversationForgetSourcesCurrent = (storage: Pick<DurableObjectStorage['kv'], 'list'>, topic: string, expected?: ExpectedForgetOwner) =>
   conversationSourcesFromRows(new Map(storage.list<ConversationEntry>({ prefix: 'conv:' })), new Map(storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX })), topic, expected);
+// Conversation payloads are plain text that nothing JSON-decodes, so a backslash in prose (a Windows path, code) hides nothing. Only a JSON-shaped payload (starts with { [ or a quote, or decodes as JSON) can carry an escaped topic, so only those take the hidden-escape guard; prose gets the literal match.
+const jsonShaped = (text: string): boolean => {
+  const head = text.trimStart()[0];
+  if (head === '{' || head === '[' || head === '"') return true;
+  try { JSON.parse(text); return true; } catch { return false; }
+};
+const conversationHides = (text: string, topic: string): boolean => jsonShaped(text) && hidesTopic(text, topic);
 const conversationSourcesFromRows = (legacy: Map<string, ConversationEntry>, canonical: Map<string, ConversationEntry | Witness>, topic: string, expected?: ExpectedForgetOwner): { sources: ForgetSource[]; incomplete: boolean } => {
   const sources: ForgetSource[] = [];
   let incomplete = false;
@@ -113,7 +120,7 @@ const conversationSourcesFromRows = (legacy: Map<string, ConversationEntry>, can
   const add = (key: string, entry: ConversationEntry) => {
     const fields = [['model', entry.modelPayload], ['app', entry.appPayload], ...(entry.modelProjection.mode === 'replace' ? [['replace', entry.modelProjection.payload]] : [])] as const;
     // Shared safety line: a hiding escape can spell the topic where asciiLiteralIncludes cannot see it, so the entry is held, never read as clean.
-    if (fields.some(([, text]) => hidesTopic(text, topic))) incomplete = true;
+    if (fields.some(([, text]) => conversationHides(text, topic))) incomplete = true;
     for (const [field, text] of fields) if (asciiLiteralIncludes(text, topic)) {
       if (!verified(key, entry)) { incomplete = true; continue; }
       sources.push({ ref: `conversation:${key}:${field}`, text });
@@ -184,7 +191,7 @@ export const redactConversationEntries = async (
       await flush();
     }
   }
-  const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryText(entry).includes(needle.toLowerCase()) || hidesTopic(`${entry.modelPayload}\n${entry.appPayload}\n${entry.modelProjection.mode === 'replace' ? entry.modelProjection.payload : ''}`, needle));
+  const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryText(entry).includes(needle.toLowerCase()) || [entry.modelPayload, entry.appPayload, ...(entry.modelProjection.mode === 'replace' ? [entry.modelProjection.payload] : [])].some(text => conversationHides(text, needle)));
   const afterLegacy = rewritten > 0 ? await storage.list<ConversationEntry>({ prefix: 'conv:' }) : legacy;
   const afterCanonical = Object.keys(writes).length > 0 ? await storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX }) : canonical;
   let remaining = 0;
