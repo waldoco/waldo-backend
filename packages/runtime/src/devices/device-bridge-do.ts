@@ -139,7 +139,12 @@ export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
       if (command.state === 'queued') break;
     }
   }
-  async listCommands(): Promise<CommandSummary[]> { return new DeviceCommandStore(this.ctx.storage).list(); }
+  async listCommands(): Promise<CommandSummary[]> {
+    const commands = new DeviceCommandStore(this.ctx.storage);
+    // Offline queues expire at the read boundary too; possibly delivered work remains uncertain.
+    commands.pending(Math.floor(Date.now() / 1000));
+    return commands.list();
+  }
   async revoke(): Promise<void> {
     this.ctx.storage.transactionSync(() => {
       new DeviceCommandStore(this.ctx.storage).cancelQueued();
