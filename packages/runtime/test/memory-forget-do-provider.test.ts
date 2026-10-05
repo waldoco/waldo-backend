@@ -2053,8 +2053,9 @@ it('HELDROWS agrees with the real heldBy for projection and escape holds, includ
     expect(header).toContain('day_plan:projection');
     expect(header).toContain('episodes:guard_escape');
     const plan = heldRowShapes(sql, 'day_plan', topics, 25, real);
-    expect(plan).toContain('count-only');
     expect(plan).toContain('0 listed of 0 rows');
+    expect(plan).toMatch(/^#\d+ t1\[projection reason len=\d+ json=1 raw=1 val=1 key=0\]/m);
+    expect(plan).not.toContain(topic.toLowerCase() + ' ');
     const episodes = heldRowShapes(sql, 'episodes', topics, 25, real);
     expect(episodes).toMatch(/text len=\d+ json=none .*t1\[guard_escape carries=1/);
     expect(episodes).not.toContain('SECRETEPISODE');
@@ -2080,9 +2081,36 @@ it('HELDROWS with 128 pending topics bounds the whole reply to the delivery cap 
     const delivered = out.slice(0, 4000);
     expect(out.length).toBeLessThanOrEqual(4000);
     expect(delivered).toContain('rows with a backslash or NUL');
-    expect(delivered).toContain('row listing covers escape/NUL rows only');
+    expect(delivered).toContain('row listing: escape/NUL rows');
     expect(delivered).toMatch(/\+\d+ more topics/);
     expect(delivered).toMatch(/truncated: \d+ more rows not shown/);
+    state.storage.deleteAlarm();
+  });
+});
+
+it('HELDROWS lists the held rows of a projection hold and a decoded-leaf hold, chosen by the real predicate, with no backslash needed', async () => {
+  const label = 'heldrows-differential-projection'; const topic = 'DIFFPROJTOPIC';
+  await admittedTurn(label, 153370, 'My unrelated standup is at 09:10 UTC.', ops());
+  await runInDurableObject(stub(label), (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0, feedback TEXT)`);
+    const add = (changes: string, text: string | null) => sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?,?,?,?)', 1, 'd', changes, text);
+    add('[{"note":"nothing here"}]', 'clean card');
+    add(JSON.stringify([{ note: `SECRETVALUE ${topic}` }]), 'a');
+    add(JSON.stringify([{ [topic]: 'x' }]), null);
+    sql.exec('CREATE TABLE IF NOT EXISTS memory_blocks (id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT, decision_log TEXT)');
+    sql.exec('INSERT INTO memory_blocks (content, decision_log) VALUES (?, ?)', JSON.stringify({ note: 'DIFFPROJ\u0054OPIC' }).replace('\u0054', '\\u0054'), null);
+    const real = realOf(state); const topics = [{ topic, state: 'pending' as const }];
+    const verdict = real(topic);
+    expect(verdict.heldBy?.map(h => `${h.table}:${h.rule}`)).toContain('update_cards:projection');
+    const cards = heldRowShapes(sql, 'update_cards', topics, 25, real);
+    expect(cards).toMatch(/^#2 t1\[projection changes len=\d+ json=1 raw=1 val=1 key=0 \| text len=1 json=0 raw=0 val=0 key=0\]/m);
+    expect(cards).toMatch(/^#3 t1\[projection changes len=\d+ json=1 raw=1 val=0 key=1/m);
+    expect(cards).not.toMatch(/^#1 /m);
+    expect(cards).not.toContain('SECRETVALUE');
+    const blocks = heldRowShapes(sql, 'memory_blocks', topics, 25, real);
+    expect(verdict.heldBy?.map(h => h.rule)).toContain('decoded_leaf_or_unreadable');
+    expect(blocks).toMatch(/^#1 t1\[decoded_leaf_or_unreadable content len=\d+\]/m);
     state.storage.deleteAlarm();
   });
 });

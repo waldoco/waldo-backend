@@ -1,4 +1,5 @@
 import { carriesTopic, hidesTopic } from './forget-guard';
+import { decodedLeafHit, LITERAL_REDACTED_STORES, likePrefilter, PROJECTION_STORES, projectionKeyHit, projectionPredicate, projectionRawHit, projectionValueHit } from './claims';
 
 // Owner-only diagnostic: the shape of stored rows that hold a forget, never their content.
 // A row is listed only when the real hold predicate is true for a pending topic (named t1, t2 by order, never by text):
@@ -98,7 +99,28 @@ export const heldRowShapes = (sql: Sql, table: string, topics: readonly HeldTopi
     if (parts.length) lines.push(`#${String(row.rid)} ${parts.join(' | ')}`);
   }
   const summary = `${table}: ${lines.length} listed of ${scanned} rows with a backslash or NUL${more ? `; PARTIAL, continue with /heldrows ${table} ${after}` : ''}`;
-  const out = [...headLines, summary, 'row listing covers escape/NUL rows only; projection and decoded-leaf holds are count-only in the "held by" lines above']; let size = out.join('\n').length; let cut = 0;
+  // Projection and decoded-leaf holds: the same predicate and decoder forgetSources uses (shared code in claims.ts), names and sizes only.
+  const extra: string[] = [];
+  const projection = PROJECTION_STORES.find(([name]) => name === table);
+  const leafStore = LITERAL_REDACTED_STORES.find(([name]) => name === table);
+  for (const [index, { topic }] of topics.slice(0, Math.max(shown, 1)).entries()) {
+    const like = likePrefilter(topic);
+    if (projection) {
+      const cols = present.filter(column => (projection[1] as readonly string[]).includes(column));
+      if (cols.length) {
+        const flags = cols.map(column => `length(${column}) AS ${column}_len, json_valid(${column}) AS ${column}_json, ${projectionRawHit(column)} AS ${column}_raw, ${projectionValueHit(column)} AS ${column}_val, ${projectionKeyHit(column)} AS ${column}_key`).join(', ');
+        const rows = sql.exec<Record<string, number | null>>(`SELECT rowid AS rid, ${flags} FROM ${table} WHERE (${projectionPredicate(cols)}) AND rowid > ? ORDER BY rowid LIMIT ?`, ...cols.flatMap(() => [like, like, like]), ...cols.flatMap(() => [like, like, like]), first - 1, limit + 1).toArray();
+        for (const row of rows.slice(0, limit)) extra.push(`#${String(row.rid)} t${index + 1}[projection ${cols.map(column => `${column} len=${row[`${column}_len`] ?? 'null'} json=${row[`${column}_json`] ? 1 : 0} raw=${row[`${column}_raw`] ? 1 : 0} val=${row[`${column}_val`] ? 1 : 0} key=${row[`${column}_key`] ? 1 : 0}`).join(' | ')}]`);
+        if (rows.length > limit) extra.push(`t${index + 1}: more projection rows not shown`);
+      }
+    }
+    if (leafStore) for (const column of present.filter(name => (leafStore[1] as readonly string[]).includes(name))) {
+      const rows = sql.exec<{ rid: number; value: string }>(`SELECT rowid AS rid, ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL AND ${column} != '' AND ${column} NOT LIKE ? ESCAPE '\\' AND rowid > ? ORDER BY rowid LIMIT ?`, like, first - 1, HELDROWS_SCAN_BUDGET).toArray();
+      for (const row of rows) if (decodedLeafHit(row.value, topic)) extra.push(`#${row.rid} t${index + 1}[decoded_leaf_or_unreadable ${column} len=${row.value.length}]`);
+    }
+  }
+  lines.push(...extra);
+  const out = [...headLines, summary, 'row listing: escape/NUL rows (summary above), then projection and decoded-leaf rows chosen by the same predicate as the hold']; let size = out.join('\n').length; let cut = 0;
   const reserve = 'truncated: 999 more rows not shown'.length + 1;
   for (const line of lines.slice(0, limit)) {
     if (size + line.length + 1 > HARNESS_MESSAGE_LIMIT - reserve) { cut++; continue; }
