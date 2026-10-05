@@ -43,16 +43,16 @@ describe('TelegramOwnerListener', () => {
     expect(saved).toEqual([9]);
   });
 
-  it('sends a progress beat on slow turns and an honest failure message on errors', async () => {
+  it('sends no fixed progress message on slow turns (typing only) and an honest failure message on errors', async () => {
     vi.useFakeTimers();
     const { calls, api } = recorder();
     let finish!: (text: string) => void;
-    const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, respond: () => new Promise((resolve) => { finish = resolve; }), saveOffset: async () => undefined, progressAfterMs: 100, typingEveryMs: 1_000 });
+    const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, respond: () => new Promise((resolve) => { finish = resolve; }), saveOffset: async () => undefined, typingEveryMs: 1_000 });
     const pending = listener.handle({ updateId: 1, messageId: 3, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'slow' });
-    await vi.advanceTimersByTimeAsync(150);
+    await vi.advanceTimersByTimeAsync(9_000);
     finish('done');
     await expect(pending).resolves.toBe('answered');
-    expect(calls.filter(([kind]) => kind === 'send').map(([, r]) => (r as { text: string }).text)).toEqual(['On it - still working on this, reply coming shortly.', 'done']);
+    expect(calls.filter(([kind]) => kind === 'send').map(([, r]) => (r as { text: string }).text)).toEqual(['done']);
 
     const failing = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, respond: async () => { throw new Error('model down'); }, saveOffset: async () => undefined });
     await expect(failing.handle({ updateId: 2, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'x' })).resolves.toBe('failed');
@@ -164,7 +164,7 @@ describe('TelegramOwnerListener', () => {
     vi.useFakeTimers();
     const { calls, api } = recorder();
     let finish!: (text: string) => void;
-    const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, respond: () => new Promise((resolve) => { finish = resolve; }), saveOffset: async () => undefined, progressAfterMs: 10_000, turnTimeoutMs: 1_000 });
+    const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, respond: () => new Promise((resolve) => { finish = resolve; }), saveOffset: async () => undefined, turnTimeoutMs: 1_000 });
     const pending = listener.handle({ updateId: 9, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'huge' });
     await vi.advanceTimersByTimeAsync(1_001);
     await expect(pending).resolves.toBe('failed');

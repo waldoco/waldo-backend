@@ -15,7 +15,7 @@ it.each([60_000, 120_000])('queues final after %sms response with old request bu
   });
   const pending = listener.handle({ updateId: 1, senderId: 7, chatId: 7, messageId: 2, sentAt: null, text: 'slow' });
   await vi.advanceTimersByTimeAsync(delay + 1); expect(await pending).toBe('queued');
-  expect(outbox.records()[0]?.status).toBe('pending'); expect(requestSend).toHaveBeenCalledTimes(1); // only progress
+  expect(outbox.records()[0]?.status).toBe('pending'); expect(requestSend).not.toHaveBeenCalled(); // no progress message; the final goes through the outbox
   await vi.advanceTimersByTimeAsync(300);
   const freshSend = vi.fn(async () => ({ message_id: 9, chat: { id: 7 } }));
   await outbox.drain({ allowed: async () => true, send: freshSend, settled: async () => undefined });
