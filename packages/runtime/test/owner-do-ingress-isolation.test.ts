@@ -84,6 +84,14 @@ const traceIdentities = new Map<number, NonNullable<OwnerRoute['traceIdentity']>
 const route = (subject: number): OwnerRoute => ({ doName: `hermetic-owner-${subject}`, subject: String(subject), timezone: 'Asia/Kolkata',
   ...(traceIdentities.has(subject) ? { traceIdentity: traceIdentities.get(subject) } : {}) });
 const directory: OwnerDirectory = { byPresence: async (provider, subject) => provider === 'telegram' && ['81101', '81102', '81103', '81104'].includes(subject) ? route(Number(subject)) : null, redeem: async () => null };
+// On failure, name what is armed and what was sent (ids, kinds, methods; no message text) so a timing flake explains itself.
+const worldNote = (state: { storage: { sql: { exec(q: string): { toArray(): unknown[] } } } }) => {
+  const armed = state.storage.sql.exec("SELECT id, kind, status, due_at FROM schedule").toArray();
+  const finals = (state.storage as unknown as { kv: { get<T>(key: string): T | undefined } }).kv.get<{ trace: string; status: string; attempts: number; settled?: boolean; dueAt: number; createdAt: number }[]>('telegram_final_outbox_v1') ?? [];
+  const inbox = (state.storage as unknown as { kv: { get<T>(key: string): T | undefined } }).kv.get<{ updateId: number; state: string; reason?: string }[]>('telegram_owner_inbox_v1') ?? [];
+  const runs = state.storage.sql.exec("SELECT schedule_id, fired_at, outcome FROM schedule_runs WHERE schedule_id LIKE 'card:%' OR schedule_id = 'heartbeat-tick' ORDER BY fired_at DESC LIMIT 8").toArray();
+  return `runs=${JSON.stringify(runs)} finals=${JSON.stringify(finals.map(r => [r.trace, r.status, r.attempts, r.settled, r.createdAt, r.dueAt]))} inbox=${JSON.stringify(inbox.map(r => [r.updateId, r.state, r.reason]))} now=${Date.now()} schedule=${JSON.stringify(armed)} outbox=${JSON.stringify(outbox.map(item => [item.method, item.body.chat_id]))}`;
+};
 const send = async (subject: number, text: string, updateId: number, replyTo?: Record<string, unknown>) => {
   const pending: Promise<unknown>[] = [];
   const response = await handleTelegramWebhook(new Request('https://fixture.invalid/telegram/webhook', {
@@ -112,6 +120,7 @@ const callback = async (subject: number, from: number, data: string, updateId: n
 };
 const doStub = (subject: number) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(route(subject).doName)) as DurableObjectStub<TelegramOwnerDO>;
 
+afterEach(() => { vi.useRealTimers(); });
 describe('actual owner interruption recovery', () => {
   afterEach(async () => {
     traceIdentities.clear();
@@ -125,7 +134,7 @@ describe('actual owner interruption recovery', () => {
   });
 // The DO runs in Asia/Kolkata here, and a day-card planner model call appeared once the real clock passed IST midnight.
 // Pin Date for the whole test (setup, both alarms) at several instants, including both sides of the IST day boundary.
-it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:59.999Z', '2026-10-04T18:30:00.001Z'])('actual owner eviction after a claimed write produces one durable uncertainty status without replay (clock %s)', async (pinned) => {
+it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:00.000Z', '2026-10-04T18:30:00.001Z'])('actual owner eviction after a claimed write produces one durable uncertainty status without replay (clock %s)', async (pinned) => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date(pinned));
   try {
@@ -143,7 +152,7 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:59.999Z', '2026-10-04T18:
     await runtime.serial(async () => undefined);
     // With the clock pinned, mark that day's cards as already sent so the alarm has no day plan to make.
     // Without this the planner model call returns once the pinned instant is past IST midnight (observed at 18:30:00.001Z).
-    // The clock can tick past IST midnight while the test runs (the 18:29:59.999Z case sits 1 ms before it), so mark both that day and the next.
+    // The clock can tick past IST midnight while the test runs (the 18:29:00Z case sits one minute before it; a 1 ms margin flaked on CI), so mark both that day and the next.
     const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' });
     const days = [dayFmt.format(new Date()), dayFmt.format(new Date(Date.now() + 86_400_000))];
     const { DAY_CARDS } = await import('../src/prompt/day-cards');
@@ -182,7 +191,7 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:59.999Z', '2026-10-04T18:
     expect(state.storage.kv.get<number>('interruption-fixture-effect-count')).toBe(1);
     // Same strict bound, but a failure names what called the model (a day plan, a reply, a memory pass) instead of only a count.
     const describeCall = (body: unknown) => { const b = body as { text?: { format?: { name?: string } }; instructions?: string; input?: unknown }; return `${b.text?.format?.name ?? 'unnamed'}: instr=${(typeof b.instructions === 'string' ? b.instructions : '').slice(0, 80)} | input=${JSON.stringify(b.input ?? '').slice(-260)}`; };
-    expect(modelInputs.slice(callsBefore).map(describeCall)).toEqual([]);
+    expect(modelInputs.slice(callsBefore).map(describeCall), worldNote(state)).toEqual([]);
     expect(await new TelegramOwnerInbox(state.storage, persistInboxWake).claim(`hermetic-test-bot-token:telegram:${updateId}`, 'retry', 'retry-run', Date.now() + 150_000)).toBeNull();
     await state.storage.deleteAlarm();
   });
@@ -446,9 +455,15 @@ describe('real owner-DO ingress in a sealed test world', () => {
       expect(own.every(input => input.prompt_cache_key === `waldo:prn_10000000000000000000${String(subject).padStart(12, '0')}`)).toBe(true);
     }
     expect(outbox.every((item) => item.method === 'setWebhook' || [81101, 81102].includes(Number(item.body.chat_id)))).toBe(true);
+    // The DO's scheduler runs on the wall clock: cards, the heartbeat and the event sweep fall due at :00/:30 IST marks, so a CI run
+    // that crosses one adds a reply here (caught at 13:59:38 IST with the midday card due at 14:00). Pin the clock for the duplicate send only.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T05:07:00.000Z'));
     const before = outbox.length;
+    const outboxBefore = JSON.stringify(outbox.map(item => [item.method, item.body.chat_id]));
     expect((await send(81101, 'My private fixture is cedar.', update)).status).toBe(200);
-    expect(outbox.length).toBe(before); // duplicate ingress cannot re-send effects
+    const worldAfter = await runInDurableObject(doStub(81101), async (_instance, state) => worldNote(state));
+    expect(outbox.length, `before=${outboxBefore} ${worldAfter}`).toBe(before); // duplicate ingress cannot re-send effects
     await runInDurableObject(doStub(81101), async (_instance, state) => {
       expect(state.storage.kv.get('telegram_subject')).toBe('81101');
     });
