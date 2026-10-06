@@ -158,7 +158,7 @@ export const approveTaskSourceProposal = (sql: SqlStorage, ownerKey: string, sup
 };
 
 const TOOL_SOURCE: Partial<Record<ToolName, TaskSourceFamily>> = {
-  get_context: 'local', read_owner_context: 'local', read_memory: 'local', search_episodes: 'local', read_tool_output: 'local',
+  read_owner_context: 'local', read_memory: 'local', search_episodes: 'local', read_tool_output: 'local',
   workspace_list: 'workspace', workspace_read: 'workspace', workspace_search: 'workspace', workspace_render: 'workspace', export_artifact: 'workspace', read_artifact: 'workspace', list_artifacts: 'workspace', get_communication: 'mail', search_communication: 'mail', read_thread: 'mail',
   query_calendar: 'calendar', query_availability: 'calendar', get_tasks: 'tasks', read_drive: 'drive', web_search: 'web', browse_page: 'web', browse_act: 'web', read_mcp_tool: 'mcp', call_mcp_tool: 'mcp',
 };
@@ -169,7 +169,8 @@ const taskSourceFamily = (handler: Readonly<{ name: ToolName }>, args?: unknown)
 // The owner's own reminder and standing-order lists read what the owner set, not retained memory or a connected source. The pasted-only
 // scope (tools/source-scope.ts) already classes them 'allow'; a task scope that needed 'local' refused them whenever the per-turn classifier
 // left local out (F14b: listing reminders refused while create and cancel worked).
-const OWNER_OWN_LISTS = ['list_reminders', 'list_standing_orders'];
+// get_context is the clock/date read (tools/source-scope.ts classes it 'allow': it reads no owner or outside content), so it needs no source family either.
+const OWNER_OWN_LISTS = ['list_reminders', 'list_standing_orders', 'get_context'];
 export const taskSourceRequired = (handler: Readonly<{ name: ToolName; requires_connector?: true; mutates_state?: true; autonomy_gated?: boolean }>, args?: unknown): boolean => !!taskSourceFamily(handler, args) || !!handler.requires_connector || !(handler.mutates_state || handler.autonomy_gated || ['delegate_task', 'skills_list', 'skills_load', 'skills_install', 'skills_disable', ...OWNER_OWN_LISTS].includes(handler.name));
 export const taskSourceAllowed = (snapshot: TaskSourceSnapshot, handler: Readonly<{ name: ToolName; requires_connector?: true; mutates_state?: true; autonomy_gated?: boolean }>, args?: unknown): boolean => {
   const family = taskSourceFamily(handler, args);
