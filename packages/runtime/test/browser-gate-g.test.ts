@@ -165,7 +165,9 @@ describe('browser gate: request permit (fake request broker, not live firewall p
   it('G20 a redirect from an allowed GET to a write target is aborted', async () => {
     const t = setup();
     t.site.addRedirect(`${t.site.origin}/feedback`, `${t.site.origin}/api/side-effect`);
+    t.site.setAllow((r) => r.method === 'GET');
     await t.gate.command(OWNER, { operation: 'goto', url: `${t.site.origin}/feedback` }).catch(() => undefined);
+    expect(t.site.blockedWrites()).toHaveLength(1);   // the redirect hop was attempted and refused by the host
     expect(t.site.posts()).toEqual([]);
   });
   it('G21 Enter in a text field is a native submit and is held', async () => {
