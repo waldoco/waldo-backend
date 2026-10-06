@@ -110,3 +110,8 @@ it('keeps named dates and relative days like tomorrow exact when widening a bare
   expect(line).toContain('applies only to a bare "today"');
   expect(line).toContain('"tomorrow" means exactly that day');
 });
+
+it('tells the model to talk about the owner life, not tool internals, and to read mail for a "today" ask', () => {
+  expect(MESSAGING_BEHAVIOR).toContain('Speak about the owner');
+  expect(MESSAGING_BEHAVIOR).toContain('read the calendar and the recent inbox');
+});

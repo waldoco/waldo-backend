@@ -474,7 +474,7 @@ describe('real owner-DO ingress in a sealed test world', () => {
       expect(row.start_ref).toBe(priorBoundary);
       expect(state.storage.kv.get('google:accounts')).toBeUndefined();
     });
-    const card = outbox.find(item => item.method === 'sendMessage' && String(item.body.text).includes('Start a new task with read access only to: mail'))!;
+    const card = outbox.find(item => item.method === 'sendMessage' && String(item.body.text).includes('Start a new task with read access only to: your email'))!;
     expect(card).toBeDefined();
     const buttons = (card.body.reply_markup as { inline_keyboard: { callback_data: string }[][] }).inline_keyboard.flat();
     const approve = buttons.find(button => button.callback_data.startsWith('a:'))!.callback_data;
@@ -490,7 +490,7 @@ describe('real owner-DO ingress in a sealed test world', () => {
     await send(81101, 'Read the fixture inbox for the same fictional mail task.', update + 4);
     expect(sourceWorld.accessLog('a@example.invalid')).toEqual([expect.objectContaining({ source: 'mail', kind: 'list', owner_id: 'a@example.invalid' })]);
     expect(sourceWorld.outbox('a@example.invalid')).toEqual([]);
-    expect(outbox.filter(item => item.method === 'sendMessage' && String(item.body.text).includes('Start a new task with read access only to: mail'))).toHaveLength(1);
+    expect(outbox.filter(item => item.method === 'sendMessage' && String(item.body.text).includes('Start a new task with read access only to: your email'))).toHaveLength(1);
   });
   it('pending initial external confirmation cannot be bypassed by restrict before a real owner callback', async () => {
     sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T11:00:00Z', owners: [{ id: 'b@example.invalid' }], sources: { mail: [
@@ -505,7 +505,7 @@ describe('real owner-DO ingress in a sealed test world', () => {
     const text = 'Read the fixture inbox for a new mail task.';
     taskDecision = { decision: 'new', sources: ['mail'], evidence: text };
     await send(81102, text, update);
-    const card = outbox.find(item => item.method === 'sendMessage' && String(item.body.text).includes('Start a new task with read access only to: mail'))!;
+    const card = outbox.find(item => item.method === 'sendMessage' && String(item.body.text).includes('Start a new task with read access only to: your email'))!;
     expect(card).toBeDefined(); expect(sourceWorld.accessLog('b@example.invalid')).toEqual([]);
     const snapshot = () => runInDurableObject(doStub(81102), async (_instance, state) => state.storage.sql.exec('SELECT * FROM owner_task_source_scope').one());
     const before = await snapshot();
@@ -534,7 +534,7 @@ describe('real owner-DO ingress in a sealed test world', () => {
     const text = 'Start another task. Read the fixture inbox using mail only.';
     taskDecision = { decision: 'new', sources: ['mail'], evidence: text };
     await send(81101, text, update);
-    const card = outbox.find(item => item.method === 'sendMessage' && String(item.body.text).includes('Start a new task with read access only to: mail'))!;
+    const card = outbox.find(item => item.method === 'sendMessage' && String(item.body.text).includes('Start a new task with read access only to: your email'))!;
     const buttons = (card.body.reply_markup as { inline_keyboard: { callback_data: string }[][] }).inline_keyboard.flat();
     await callback(81101, 81101, buttons.find(button => button.callback_data.startsWith('a:'))!.callback_data, update + 1);
     await runInDurableObject(doStub(81101), async (_instance, state) => {

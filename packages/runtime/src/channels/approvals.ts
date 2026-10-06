@@ -133,9 +133,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (entry.kind === 'mcp_call') return describeMcp(JSON.parse(entry.payload_json) as McpCallProposal);
     return describe(JSON.parse(entry.payload_json) as Stored);
   };
+  const sourceLabel: Record<string, string> = { mail: 'your email', calendar: 'your calendar', drive: 'your files', contacts: 'your contacts', tasks: 'your tasks', local: 'your notes', browser: 'the web pages you name', mcp: 'your connected apps', web: 'web search', workspace: 'your workspace' };
   const describeTaskSources = (p: TaskSourceProposal) => p.action === 'close'
     ? 'Close the current task and stop its source reads until a new task is established'
-    : `${p.action === 'new' ? 'Start a new task' : 'Change the current task'} with read access only to: ${p.sources.length ? p.sources.join(', ') : 'supplied task data'}`;
+    : `${p.action === 'new' ? 'Start a new task' : 'Change the current task'} with read access only to: ${p.sources.length ? p.sources.map(x => sourceLabel[x] ?? x).join(', ') : 'what you gave me'}`;
   // ADR-0054 exactly-once: a second approval of the same idempotency key collapses onto the
   // first send instead of double-delivering.
   const alreadySent = (key: string, selfId: string) =>
