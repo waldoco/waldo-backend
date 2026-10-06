@@ -2824,3 +2824,85 @@ it.each(['', '\0'])('ROUND4 empty separator collateral %j',async gap=>{
  state.storage.deleteAlarm();expect(store.forgetSources(topic,true).incomplete).toBe(false);expect(after[0]).toBe(items[0]);expect(after[4]).toBe(items[4]);
  });
 });
+
+it('REVIEW862 serialized retained results cannot conceal a held topic', async () => {
+  await runInDurableObject(stub('review862-encoded-tool'), async (_instance, state) => {
+    const TOPIC = 'Synthetic cobalt paper workshop';
+    const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const kv = durableConversationStore(state.storage);
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', kv, memory];
+    args[11] = async () => { throw new Error('fixture retained cleanup unavailable'); };
+    const episodes = episodeIndex(state.storage.sql);
+    args[5] = [(await import('../src/tools/live/search-episodes')).searchEpisodesHandler(episodes)];
+    const responder = createOwnerResponder(...args);
+    const direct = (id: string, text: string) => responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text, memoryWrites: false }, (_hop, work) => work());
+    seen.writer = ops(); await direct('a1', TOPIC);
+    episodes.add('encoded-row','owner','\\u0053ynthetic cobalt paper workshop meets at 09:10 UTC',Date.now());
+    seen.selectorThrows = true; seen.writer = ops({forget_topic: TOPIC});
+    await responder.respond({traceId:'forget-a1',conversationRef:'owner',surface:'telegram',text:`Forget only ${TOPIC}.`},(_hop,work)=>work());
+    expect(memory.incompleteTopics()).toContain(TOPIC);
+    const ref = String(state.storage.sql.exec<{ref:number}>("SELECT rowid AS ref FROM episodes WHERE entry_id='encoded-row'").one().ref);
+    expect(episodes.get(ref)?.text).toContain('\\u0053ynthetic');
+    let round = 0;
+    seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'review862-encoded', name: 'search_episodes', arguments: JSON.stringify({ref}) }] : [];
+    await direct('a2', 'Read retained workshop material.');
+    const provider = seen.requests.at(-1) as { input: Array<{type:string;call_id?:string;output?:string}> };
+    const output = JSON.parse(provider.input.find(item => item.type === 'function_call_output' && item.call_id === 'review862-encoded')!.output!);
+    console.log('REVIEW862 receipt',JSON.stringify(output)); expect(output).toMatchObject({ok:false,code:'transient'});
+  });
+});
+it('REVIEW862 mixed result preserves unrelated rows', async () => {
+  await runInDurableObject(stub('review862-mixed-tool'), async (_instance, state) => {
+    const TOPIC = 'Synthetic cobalt paper workshop';
+    const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const kv = durableConversationStore(state.storage);
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', kv, memory];
+    args[11] = async () => { throw new Error('fixture retained cleanup unavailable'); };
+    const episodes = episodeIndex(state.storage.sql);
+    args[5] = [{ ...(await import('../src/tools/live/search-episodes')).searchEpisodesHandler(episodes),
+      handle: async () => ({ok:true,data:{hits:[{text:TOPIC+' workshop'},{text:'Unrelated workshop preference: amber bookmarks'}]},source_taint:'external'}) } as never];
+    const responder = createOwnerResponder(...args);
+    const direct = (id: string, text: string) => responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text, memoryWrites: false }, (_hop, work) => work());
+    seen.writer = ops(); await direct('a1', TOPIC);
+    seen.selectorThrows = true; seen.writer = ops({forget_topic: TOPIC});
+    await responder.respond({traceId:'forget-a1',conversationRef:'owner',surface:'telegram',text:`Forget only ${TOPIC}.`},(_hop,work)=>work());
+    expect(memory.incompleteTopics()).toContain(TOPIC);
+    episodes.add('held-row','owner',TOPIC+' workshop',Date.now());
+    episodes.add('clean-row','owner','Unrelated workshop preference: amber bookmarks',Date.now());
+    let round = 0;
+    seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'review862-encoded', name: 'search_episodes', arguments: JSON.stringify({query:'workshop',limit:10}) }] : [];
+    await direct('a2', 'Read retained workshop material.');
+    const provider = seen.requests.at(-1) as { input: Array<{type:string;call_id?:string;output?:string}> };
+    const output = JSON.parse(provider.input.find(item => item.type === 'function_call_output' && item.call_id === 'review862-encoded')!.output!);
+    console.log('REVIEW862 mixed receipt',JSON.stringify(output)); expect(output).toMatchObject({ok:true});
+    expect(JSON.stringify(output)).toContain('amber bookmarks');
+    expect(JSON.stringify(output)).not.toContain(TOPIC);
+  });
+});
+it('REVIEW862 highlighted episode snippets cannot conceal a held topic', async () => {
+  await runInDurableObject(stub('review862-snippet-tool'), async (_instance, state) => {
+    const TOPIC = 'Synthetic cobalt paper workshop';
+    const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const kv = durableConversationStore(state.storage);
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', kv, memory];
+    args[11] = async () => { throw new Error('fixture retained cleanup unavailable'); };
+    const episodes = episodeIndex(state.storage.sql);
+    args[5] = [(await import('../src/tools/live/search-episodes')).searchEpisodesHandler(episodes)];
+    const responder = createOwnerResponder(...args);
+    const direct = (id: string, text: string) => responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text, memoryWrites: false }, (_hop, work) => work());
+    seen.writer = ops(); await direct('a1', TOPIC);
+    seen.selectorThrows = true; seen.writer = ops({forget_topic: TOPIC});
+    await responder.respond({traceId:'forget-a1',conversationRef:'owner',surface:'telegram',text:`Forget only ${TOPIC}.`},(_hop,work)=>work());
+    expect(memory.incompleteTopics()).toContain(TOPIC);
+    episodes.add('held-row','owner',TOPIC+' workshop',Date.now());
+    episodes.add('clean-row','owner','Unrelated workshop preference: amber bookmarks',Date.now());
+    let round = 0;
+    seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'review862-encoded', name: 'search_episodes', arguments: JSON.stringify({query:'workshop',limit:10}) }] : [];
+    await direct('a2', 'Read retained workshop material.');
+    const provider = seen.requests.at(-1) as { input: Array<{type:string;call_id?:string;output?:string}> };
+    const output = JSON.parse(provider.input.find(item => item.type === 'function_call_output' && item.call_id === 'review862-encoded')!.output!);
+    console.log('REVIEW862 snippet receipt',JSON.stringify(output));
+    expect(JSON.stringify(output)).not.toContain('cobalt paper');
+    expect(JSON.stringify(output)).toContain('amber bookmarks');
+  });
+});
