@@ -39,7 +39,7 @@ describe('telegram api egress timeout', () => {
     const api: TelegramOwnerApi = {
       setMessageReaction: async (r) => { calls.push(['react', r]); await new Promise(() => undefined); },
       sendChatAction: async (r) => { calls.push(['typing', r]); },
-      sendMessage: async (r) => { calls.push(['send', r]); },
+      sendMessage: async (r) => { calls.push(['send', r]); return { message_id: 1 }; },
     };
     const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, respond: async (t) => `echo ${t.text}`, saveOffset: async () => undefined, reactionTimeoutMs: 50 });
     const pending = listener.handle(turn);

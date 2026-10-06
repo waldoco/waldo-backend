@@ -44,7 +44,7 @@ export const isolatedTelegramIngress = (
       const api: TelegramOwnerApi = {
         setMessageReaction: async (request) => { bucket.sends.push({ method: 'setMessageReaction', request }); },
         sendChatAction: async (request) => { bucket.sends.push({ method: 'sendChatAction', request }); },
-        sendMessage: async (request) => { bucket.sends.push({ method: 'sendMessage', request }); },
+        sendMessage: async (request) => { bucket.sends.push({ method: 'sendMessage', request }); return { message_id: bucket.sends.length }; },
       };
       const listener = new TelegramOwnerListener({
         ownerTelegramId: sender, api,
