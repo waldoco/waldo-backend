@@ -4,17 +4,19 @@ import { Dashboard, DashboardNavigation, DashboardFeedback, resolveRoute } from 
 import type { OverviewV1 } from './model';
 const empty: OverviewV1 = { version: 1, as_of: '2026-09-29T07:40:00Z', timezone: 'Asia/Kolkata', brief: { status: 'not_sent', at: null }, waiting: { count: 0, first: null }, next_card: null, latest_activity: null, services: [] };
 describe('dashboard routing and overview boundaries', () => {
-  it('groups account and sessions in Settings while keeping connections separate', () => {
+  it('keeps primary navigation to four destinations and puts everything else under Settings', () => {
     const html = renderToStaticMarkup(<DashboardNavigation route="connections" />);
-    expect(html).not.toContain('Account &amp; sign out');
-    expect(html).toContain('href="/console/legacy"');
-    expect(html).not.toContain('Original console');
-    expect(html).toContain('href="#/settings"');
-    expect(html).not.toContain('href="#/account"');
+    for (const path of ['today', 'waiting', 'memory', 'patrol']) expect(html).toContain(`href="#/${path}"`);
+    for (const path of ['#/connections', '#/files', '#/invites', '#/settings', '/console/legacy']) expect(html).not.toContain(`href="${path}"`);
+    const settings = renderToStaticMarkup(<Dashboard data={empty} route="settings"/>);
+    for (const path of ['#/settings/day', '#/connections', '#/files', '#/settings/usage', '#/settings/account', '#/invites', '/console/legacy']) expect(settings).toContain(`href="${path}"`);
+    expect(settings).not.toContain('href="#/admin"');
+    expect(renderToStaticMarkup(<Dashboard data={empty} route="settings" isAdmin/>)).toContain('href="#/admin"');
+    expect(settings).not.toContain('href="#/account"');
   });
   it('loads controls independently rather than turning overview summaries into complete records', () => {
     const record: OverviewV1 = { ...empty, waiting: { count: 1, first: { id: 'p1', summary: 'Overview-only proposal' } }, services: [{ account_id: 'g1', email: 'owner@example.test', grants: ['calendar'], health: 'needs_reconnect' }] };
-    for (const [route, title] of [['waiting', 'Waiting.'], ['patrol', 'Patrol.'], ['connections', 'Connections.'], ['day', 'Settings.'], ['files', 'Files.'], ['usage', 'Settings.'], ['setup', 'Settings.']] as const) {
+    for (const [route, title] of [['waiting', 'Waiting.'], ['patrol', 'Patrol.'], ['connections', 'Settings.'], ['day', 'Settings.'], ['files', 'Settings.'], ['usage', 'Settings.'], ['setup', 'Settings.']] as const) {
       const html = renderToStaticMarkup(<Dashboard data={record} route={route} />);
       expect(html).toContain(title);
       expect(html).toContain('role="status"');
@@ -37,12 +39,10 @@ describe('dashboard routing and overview boundaries', () => {
     expect(profile).not.toContain('href="/console/memory"');
     expect(profile).not.toContain('No saved profile');
   });
-  it('keeps one Memory destination and backed waiting counts in navigation', () => {
-    const nav = renderToStaticMarkup(<DashboardNavigation route="memory/constellation" waitingCount={2}/>);
+  it('keeps one Memory destination and shows no waiting count in navigation', () => {
+    const nav = renderToStaticMarkup(<DashboardNavigation route="memory/constellation"/>);
     expect(nav).toMatch(/aria-current="page"[^>]*href="#\/memory"/);
-    expect(nav).toContain('href="#/settings"');
-    expect(nav).toContain('2 waiting decisions');
-    expect(renderToStaticMarkup(<DashboardNavigation route="today"/>)).not.toContain('0 waiting decisions');
+    expect(nav).not.toMatch(/nav-count|waiting decision/);
   });
   it('preserves sibling routes with hash query strings', () => {
     for (const route of ['today', 'waiting', 'patrol', 'connections', 'day', 'files', 'usage', 'setup', 'admin'] as const) {
@@ -58,9 +58,8 @@ describe('dashboard routing and overview boundaries', () => {
   });
   it('keeps supported destinations and Today links inside the shell', () => {
     const nav = renderToStaticMarkup(<DashboardNavigation route="today"/>);
-    for (const path of ['today', 'waiting', 'patrol', 'memory', 'connections', 'files', 'settings']) expect(nav).toContain(`href="#/${path}"`);
-    for (const path of ['legacy']) expect(nav).toContain(`href="/console/${path}"`);
-    const today = renderToStaticMarkup(<Dashboard data={empty} route="today"/>);
+    for (const path of ['today', 'waiting', 'patrol', 'memory']) expect(nav).toContain(`href="#/${path}"`);
+    const today = renderToStaticMarkup(<Dashboard data={{ ...empty, waiting: { count: 1, first: null } }} route="today"/>);
     for (const path of ['waiting', 'settings/day', 'patrol']) expect(today).toContain(`href="#/${path}"`);
     expect(today).not.toContain('href="/console/day"');
   });
@@ -97,23 +96,23 @@ describe('dashboard routing and overview boundaries', () => {
     const record: OverviewV1 = { ...empty, waiting: { count: 2, first: null } };
     for (const route of ['overview', 'today'] as const) {
       const html = renderToStaticMarkup(<Dashboard data={record} route={route}/>);
-      expect(html).toContain('2 decisions waiting.');
-      expect(html).toContain('The decision summary is unavailable. Open the full proposals to review.');
+      expect(html).toContain('2 decisions need you.');
+      expect(html).toContain('He couldn’t summarise it. Open the proposals to read it in full.');
       expect(html).not.toMatch(/Nothing is waiting|No decision is waiting/);
     }
   });
   it('does not invent a Brief, health score, future card or activity', () => {
     const html = renderToStaticMarkup(<Dashboard data={empty} route="overview"/>);
-    expect(html).toContain('The Brief has not been sent.');
-    expect(html).toContain('No card scheduled ahead.');
+    expect(html).toContain('Not sent yet.');
+    expect(html).toContain('Nothing scheduled ahead.');
     expect(html).toContain('No owner-facing activity in the latest record.');
     expect(html).not.toMatch(/Form 78|delivered|recovery score/);
   });
   it('describes recorded sends without claiming delivery or approving a Today summary', () => {
     const record: OverviewV1 = { ...empty, brief: { status: 'sent_recorded', at: empty.as_of }, waiting: { count: 1, first: { id: 'p1', summary: 'Review a calendar move' } } };
     const html = renderToStaticMarkup(<Dashboard data={record} route="today"/>);
-    expect(html).toContain('does not confirm delivery');
-    expect(html).toContain('Review the full details before deciding.');
+    expect(html).toContain('doesn’t confirm delivery');
+    expect(html).toContain('href="#/waiting"');
     expect(html).not.toMatch(/<button|>Approve|action="\/console\/action"/);
   });
   it('does not mistake a completed heartbeat for owner-facing activity while preserving failed attempts', () => {
@@ -128,12 +127,12 @@ describe('dashboard routing and overview boundaries', () => {
     expect(html).toContain('Update card');
     expect(html).toContain('No outcome summary recorded. This record does not confirm delivery or an external change.');
     expect(html).not.toContain('No owner-facing work appears');
-    expect(html).toContain('overview-grid has-waiting');
-    expect(html.indexOf('Review recipient and effect')).toBeLessThan(html.indexOf('The Brief has not been sent.'));
+    expect(html).toContain('today-action');
+    expect(html.indexOf('Review recipient and effect')).toBeLessThan(html.indexOf('Not sent yet.'));
   });
 });
 it('home uses a timezone-aware greeting and short recorded-plan brief without guessing a name',()=>{
  const html=renderToStaticMarkup(<Dashboard data={{...empty,timezone:'Asia/Kolkata',waiting:{count:1,first:null}}} route="today" now={new Date('2026-10-03T17:00:00Z')}/>);
- expect(html).toContain('<h1>Good evening.</h1>');expect(html).toContain('1 decision is waiting for you. No next card is recorded.');expect(html).not.toContain('<h1>Today.</h1>');
+ expect(html).toContain('<h1>Good <em>evening</em>.</h1>');expect(html).toContain('One decision needs you.');expect(html).toContain('Nothing scheduled ahead.');expect(html).not.toContain('<h1>Today.</h1>');
  expect(renderToStaticMarkup(<DashboardNavigation route="today"/>)).toContain('Today');
 });

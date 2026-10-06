@@ -13,10 +13,13 @@ function Harness(){
  return <MemoryPanel subview={hash.startsWith('#/memory/constellation')?'constellation':'spots'}/>;
 }
 const settle=async()=>{await act(async()=>{await new Promise(resolve=>setTimeout(resolve,10));});};
-async function mount(hash:string){window.history.replaceState(null,'',hash);await act(async()=>root.render(<Harness/>));await settle();}
+async function mount(hash:string){window.history.replaceState(null,'',hash);await act(async()=>root.render(<Harness/>));await settle();await toList();}
+async function toList(){const toggle=Array.from(host.querySelectorAll('button')).find(b=>b.textContent?.trim()==='List');if(toggle){await act(async()=>toggle.click());await settle();}}
 async function hashTo(hash:string){await act(async()=>{window.location.hash=hash;});await settle();}
 async function click(text:string){const element=Array.from(host.querySelectorAll('a,button')).find(e=>e.textContent?.trim()===text||e.querySelector('h2')?.textContent===text);expect(element).toBeDefined();await act(async()=>{(element as HTMLElement).click();});await settle();}
 const readUrls=()=>requests.filter(r=>r.url.startsWith('/console/dashboard/api/v1/memory?')).map(r=>r.url);
+// The graph view also reads the patterns page to draw beside the Spots; only Spots-list reads are counted here.
+const spotReads=()=>readUrls().filter(url=>url.includes('view=claims'));
 const assertReadOnly=()=>{expect(requests.every(r=>!r.options.method||r.options.method==='GET')).toBe(true);expect(requests.every(r=>r.options.credentials==='same-origin'&&r.options.cache==='no-store')).toBe(true);};
 beforeEach(()=>{
  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);requests.length=0;
@@ -37,7 +40,7 @@ describe('mounted Memory read navigation',()=>{
   await click('<script>claim</script>');expect(window.location.hash).toContain('returnCursor=page-two');
   expect(host.textContent).toContain('Saved Spot');await click('← Back to Spots');expect(window.location.hash).toBe('#/memory/spots?cursor=page-two');
   await act(async()=>root.unmount());root=createRoot(host);await act(async()=>root.render(<Harness/>));await settle();
-  expect(readUrls().at(-1)).toContain('cursor=page-two');assertReadOnly();
+  expect(spotReads().at(-1)).toContain('cursor=page-two');assertReadOnly();
  });
  it('handles backward and forward history through hashchange without writes',async()=>{
   await mount('#/memory/spots');await hashTo('#/memory/spots?cursor=page-two');
@@ -54,7 +57,7 @@ describe('mounted Memory read navigation',()=>{
  });
  it('requests nothing for invalid links and recovers through the visible list link',async()=>{
   await mount('#/memory/spots?id=1&owner=other');expect(host.textContent).toContain('Memory link unavailable');expect(requests).toEqual([]);
-  await click('Return to Spots');expect(readUrls()).toHaveLength(1);assertReadOnly();
+  await click('Return to Spots');expect(spotReads()).toEqual(['/console/dashboard/api/v1/memory?view=claims&limit=25']);assertReadOnly();
  });
  it.each([401,503])('aborts and ignores a stale %s response after navigation',async(status)=>{
   let resolve!:(value:Response)=>void;const pending=new Promise<Response>(done=>{resolve=done;});
@@ -72,7 +75,7 @@ describe('mounted Memory read navigation',()=>{
    if(url.includes('cursor=expired')){requests.push({url,options});return Promise.resolve(new Response('{"error":"cursor_invalid"}',{status:400}));}return original(url,options);
   }));
   await mount('#/memory/spots?cursor=expired');expect(host.textContent).toContain('Restart list');const before=readUrls().length;
-  await click('Restart list');expect(window.location.hash).toBe('#/memory/spots');expect(readUrls().slice(before)).toEqual(['/console/dashboard/api/v1/memory?view=claims&limit=25']);assertReadOnly();
+  await click('Restart list');expect(window.location.hash).toBe('#/memory/spots');expect(readUrls().slice(before).filter(url=>url.includes('view=claims'))).toEqual(['/console/dashboard/api/v1/memory?view=claims&limit=25']);assertReadOnly();
  });
  it('preserves cross-view list origin on a failed detail read',async()=>{
   const original=globalThis.fetch;vi.stubGlobal('fetch',vi.fn((url:string,options:RequestInit)=>url.includes('view=detail')?Promise.resolve(new Response('{"error":"not_found"}',{status:404})):original(url,options)));

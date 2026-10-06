@@ -26,8 +26,8 @@ describe('full waiting proposal review', () => {
     expect(html).toContain('Exact message words'); expect(html).toContain('gym-1'); expect(html).toContain('Requested move');
     expect(html.match(/Approve this calendar change/g)).toHaveLength(1);
     expect(html).toContain('Dismiss proposal'); expect(html).toContain('Undo calendar change');
-    expect(html).toContain('exact review card in chat'); expect(html).toContain('Review card delivery was not confirmed');
-    expect(html).toContain('no Send it button was offered'); expect(html).toContain('<details open=""');
+    expect(html).toContain('review card in chat'); expect(html).toContain('couldn’t confirm the review card was delivered');
+    expect(html).toContain('no Send it button'); expect(html).toMatch(/<details[^>]*open=""/);
   });
 
   it('never renders generic email approval even with erroneous action metadata and blocks pending decisions', () => {
@@ -43,9 +43,9 @@ describe('recorded activity and pagination', () => {
   it('preserves recorded suppression/failure/pending distinctions and escapes ledger words', () => {
     const html = renderToStaticMarkup(<ActivityControls record={activity} busy={false} onPage={noop}/>);
     expect(html).toContain('Suppressed during quiet hours'); expect(html).toContain('Failure recorded'); expect(html).toContain('Recorded status: running');
-    expect(html).toContain('No end recorded'); expect(html).toContain('Not seen yet'); expect(html).toContain('not a full activity history');
+    expect(html).toContain('no end recorded'); expect(html).toContain('Not seen yet'); expect(html).toContain('not a full history');
     expect(html).toContain('&lt;script&gt;reminder text&lt;/script&gt;'); expect(html).not.toContain('<script>');
-    expect(html).toContain('does not by itself verify');
+    expect(html).toContain('doesn’t by itself verify');
   });
   it('moves each list independently while preserving the other applied cursor', () => {
     expect(activityPageCursors(activity.data.page, 'trace', true)).toEqual({ trace_before: 11, runs_before: 44 });
@@ -60,7 +60,7 @@ describe('profile, setup, usage and Telegram references', () => {
     const record: ProfileRecord = { ...base, view: 'profile', data: { sections: [], barriers: 2, removal: { state: 'incomplete', pending_count: 1 }, holds: [{ kind: 'shared', reason: '<script>gate reason</script>', created_at: '2026-10-02' }] } };
     const html = renderToStaticMarkup(<ProfileControls record={record}/>);
     expect(html).toContain('Removal incomplete'); expect(html).toContain('not an empty Profile'); expect(html).not.toContain('No profile sections');
-    expect(html).toContain('No retry target is available in this read'); expect(html).toContain('2 recorded do-not-relearn notes'); expect(html).toContain('Corrections currently go through chat');
+    expect(html).toContain('No retry target is available in this read'); expect(html).toContain('2 recorded do-not-relearn notes'); expect(html).toContain('Corrections go through chat');
     expect(html).not.toContain('<script>'); expect(html).toContain('&lt;script&gt;gate reason&lt;/script&gt;');
   });
   it('keeps setup in the modern shell and distinguishes grants from verified reads', () => {
@@ -86,7 +86,7 @@ describe('profile, setup, usage and Telegram references', () => {
 it('uses honest labels with raw types inspectable, without inventing missing outcomes',()=>{
  const record:ActivityRecord={...activity,data:{...activity.data,trace:['update_card','joined_path','llm_reply','unknown_hop'].map(hop=>({time:'10:00',hop,ok:true,ms:0,summary:null}))}};
  const html=renderToStaticMarkup(<ActivityControls record={record} busy={false} onPage={noop}/>);
- for(const label of ['Update card','Conversation processing','Chat reply','Recorded activity'])expect(html).toContain(`<h3>${label}</h3>`);
+ for(const label of ['Update card','Conversation processing','Chat reply','Recorded activity'])expect(html).toContain(`<span class="value">${label}</span>`);
  expect(html).toContain('No outcome summary recorded.');expect(html).toContain('<details');expect(html).toContain('unknown_hop');
- expect(html).not.toMatch(/<h3>(update_card|joined_path|llm_reply|unknown_hop)<\/h3>/);
+ expect(html).not.toMatch(/<span class="value">(update_card|joined_path|llm_reply|unknown_hop)<\/span>/);
 });

@@ -14,7 +14,7 @@ it('old and new settings links load the correct read-only projection and preserv
  const settle=async()=>act(async()=>{await new Promise(r=>setTimeout(r,10));});
  try{
   window.history.replaceState(null,'','#/settings/sessions');await act(async()=>root.render(<Harness/>));await settle();
-  expect(calls.at(-1)).toContain('view=connections');expect(host.querySelector('[aria-current="page"]')?.textContent).toBe('Sessions');
+  expect(calls.at(-1)).toContain('view=connections');expect(host.querySelector('[aria-current="page"]')?.textContent).toBe('Account');
   await act(async()=>{window.location.hash='#/usage';});await settle();expect(calls.at(-1)).toContain('view=usage');expect(host.querySelector('[aria-current="page"]')?.textContent).toBe('Usage');
   await act(async()=>window.history.back());await settle();expect(calls.at(-1)).toContain('view=connections');
   await act(async()=>{window.location.hash='#/settings/day';});await settle();expect(calls.at(-1)).toContain('view=day');

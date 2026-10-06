@@ -15,22 +15,18 @@ it('shows explicit notice for unknown settings destinations',()=>{
  expect(renderToStaticMarkup(<Dashboard data={data} route={route}/>)).toContain('Settings page not found');
  expect(renderToStaticMarkup(<Dashboard data={data} route={route}/>)).not.toContain('Nothing waiting.');
 });
-it('drawer Enter opens, Escape closes, and Menu regains focus',async()=>{
+it('renders one top bar with four destinations and a Settings link, and no drawer or Menu button',async()=>{
  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
- vi.stubGlobal('matchMedia',vi.fn((query:string)=>({matches:query.includes('max-width'),addEventListener(){},removeEventListener(){}})));
  vi.stubGlobal('fetch',vi.fn(async()=>new Response('{}',{status:404})));
- const proto=HTMLDialogElement.prototype;
- const show=vi.spyOn(proto,'showModal').mockImplementation(function(this:HTMLDialogElement){this.open=true;});
- const close=vi.spyOn(proto,'close').mockImplementation(function(this:HTMLDialogElement){this.open=false;this.dispatchEvent(new Event('close'));});
  const host=document.createElement('div');document.body.append(host);const root=createRoot(host);
  try{
   await act(async()=>root.render(<App/>));
-  const menu=host.querySelector('.mobile-header button') as HTMLButtonElement;const dialog=host.querySelector('dialog')!;
-  menu.focus();await act(async()=>menu.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true})));
-  expect(dialog.open).toBe(true);expect(menu.getAttribute('aria-expanded')).toBe('true');expect(document.activeElement?.textContent).toBe('Close menu');
-  await act(async()=>dialog.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true})));
-  expect(dialog.open).toBe(false);expect(menu.getAttribute('aria-expanded')).toBe('false');expect(document.activeElement).toBe(menu);
- }finally{await act(async()=>root.unmount());host.remove();show.mockRestore();close.mockRestore();vi.unstubAllGlobals();}
+  const links=[...host.querySelectorAll('nav[aria-label="Dashboard pages"] a')].map(a=>a.textContent?.trim());
+  expect(links).toEqual(['Today','Waiting','Memory','Patrol']);
+  expect(host.querySelector('a[aria-label="Settings"]')?.getAttribute('href')).toBe('#/settings');
+  expect(host.querySelector('dialog')).toBeNull();
+  expect([...host.querySelectorAll('button')].some(b=>b.textContent==='Menu')).toBe(false);
+ }finally{await act(async()=>root.unmount());host.remove();vi.unstubAllGlobals();}
 });
 it('unknown hashes show a not-found destination and recover to Today through navigation',async()=>{
  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
@@ -44,7 +40,7 @@ it('unknown hashes show a not-found destination and recover to Today through nav
   expect(host.querySelector('main')?.textContent).not.toContain('Nothing waiting.');
   expect(host.querySelector('main a[href="#/today"]')).not.toBeNull();
   await act(async()=>{window.location.hash='#/today';window.dispatchEvent(new Event('hashchange'));});
-  expect(host.querySelector('main')?.textContent).toContain('Nothing waiting.');
+  expect(host.querySelector('main')?.textContent).toContain('Nothing needs you.');
  }finally{await act(async()=>root.unmount());host.remove();window.location.hash='';vi.unstubAllGlobals();}
 });
 it('removes the greeting timer and both refresh listeners on unmount',async()=>{

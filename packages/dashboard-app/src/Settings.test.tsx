@@ -8,17 +8,18 @@ const connection:ConnectionsRecord={version:1,view:'connections',state:'availabl
 describe('simplified console shell',()=>{
  it('groups day, sessions, usage, account and setup under Settings instead of repeating sidebar destinations',()=>{
   const html=renderToStaticMarkup(<DashboardNavigation route="settings/sessions"/>);
-  expect(html).toContain('href="#/settings"');
-  for(const href of ['#/day','#/usage','#/account','#/setup'])expect(html).not.toContain(`href="${href}"`);
-  expect(html).toContain('href="#/connections"');expect(html).toContain('href="#/files"');expect(html).toContain('href="/console/legacy"');
+  for(const href of ['#/day','#/usage','#/account','#/setup','#/settings','#/connections','#/files','/console/legacy'])expect(html).not.toContain(`href="${href}"`);
+  expect(html).not.toMatch(/aria-current="page"/);
+  const tabs=renderToStaticMarkup(<SettingsNavigation selected="account"/>);
+  for(const href of ['#/settings/day','#/connections','#/files','#/settings/usage','#/settings/account','#/invites'])expect(tabs).toContain(`href="${href}"`);
  });
  it('supports settings destinations and deliberate old links',()=>{
   for(const route of ['settings','settings/day','settings/sessions','settings/usage','settings/account','settings/setup'])expect(resolveRoute(route)).toBe(route);
   for(const route of ['day','usage','account','setup'])expect(resolveRoute(route)).toBe(route);
  });
  it('has named subnavigation with the active section',()=>{
-  const html=renderToStaticMarkup(<SettingsNavigation selected="sessions"/>);
-  expect(html).toContain('aria-label="Settings sections"');expect(html).toMatch(/aria-current="page"[^>]*href="#\/settings\/sessions"/);expect(html).toContain('Day &amp; notifications');
+  const html=renderToStaticMarkup(<SettingsNavigation selected="account"/>);
+  expect(html).toContain('aria-label="Settings sections"');expect(html).toMatch(/aria-current="page"[^>]*href="#\/settings\/account"/);expect(html).toContain('Your day');
  });
  it('opens sessions without exposing Google/Telegram controls and keeps channel setup free of session controls',()=>{
   const sessions=renderToStaticMarkup(<ConnectionsControls record={connection} busy={false} onAction={()=>{}} section="sessions"/>);
