@@ -117,7 +117,8 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
         // CAS clears obsolete cards; the new task boundary prevents prior-task referent reuse.
         const closing = decision.decision === 'close';
         // The owner's explicit list is exact; leaving a default out is the owner narrowing. A closed task has no narrowing.
-        const listed = closing ? [] : decision.sources;
+        // The owner's own memory (local) is not a connected source: naming sources for a NEW task never takes it away. restrict, an explicit change of this task's families, or an approved card does.
+        const listed = closing ? [] : decision.decision === 'new' ? families([...new Set([...decision.sources, 'local'])]) : decision.sources;
         const transitioned = await commit(previous, listed, !closing,
           decision.decision === 'change' ? previous.startRef : inputRef!, decision.decision !== 'change', !closing);
         return { snapshot: transitioned, outcome: 'owner_transition' };

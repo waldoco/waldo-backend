@@ -191,7 +191,7 @@ it('fresh owner planning transition clears stale cards, invalidates old reads, a
   expect(approveTaskSourceProposal(sql, 'owner', pending, Date.now(), scope)).toBe(false);
   const recreated = createTaskSourceScope(sql, 'owner', scope, async () => {});
   const follow = (await recreated.classify(decision('retain', ['mail']))).snapshot;
-  expect(follow.sources).toEqual(['workspace']);
+  expect(follow.sources).toEqual(['local', 'workspace']);
   expect(taskSourceAllowed(follow, { name: 'workspace_list' })).toBe(true);
   expect(taskSourceAllowed(follow, { name: 'search_communication', requires_connector: true })).toBe(false);
   expect(sql.exec<{ rows: number }>('SELECT count(*) AS rows FROM owner_task_source_scope').one().rows).toBe(1);
@@ -327,7 +327,8 @@ it('an explicit owner list is exact: restrict, new and change all stay as listed
     await before.classify(raw, 'r1', 'plan my trip');
     expect(narrowedFlag(sql), name).toBe(1);
     const after = owned(sql, scope, ['web', 'mail', 'calendar']);
-    expect((await after.classify(decision('retain'))).snapshot.sources, `${name}: Google connected later must not widen an explicit list`).toEqual(['web']);
+    // A new task keeps the owner's own memory (local); restrict and an explicit change are the limits that remove it.
+    expect((await after.classify(decision('retain'))).snapshot.sources, `${name}: Google connected later must not widen an explicit list`).toEqual(name === 'new' ? ['local', 'web'] : ['web']);
   }
 }));
 

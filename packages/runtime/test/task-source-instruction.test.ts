@@ -53,3 +53,24 @@ it('an explicit owner exclusion still holds: a retained mail-only limit refuses 
   expect(taskSourceAllowed(kept.snapshot, { name: 'query_calendar' })).toBe(false);
   expect(taskSourceAllowed(kept.snapshot, { name: 'search_communication' })).toBe(true);
 }));
+
+// Recall after a named-URL task (staging trace tg-904958308): naming a page to read must not narrow the owner's own memory away.
+it('a named-URL new task does not narrow: the next retained turn can still read the owner\'s own memory', () => custody('url-then-memory', async (sql, scope) => {
+  const text = 'Use browse_page to read https://example.com and tell me its title.';
+  const cap = createTaskSourceScope(sql, 'owner', scope, async () => {}, { inputRef: 'in-5', text }, defaultsFor([{ id: 'g' }] as never));
+  await cap.classify(JSON.stringify({ decision: 'restrict', sources: [] }), 'prev');
+  const opened = await cap.classify(JSON.stringify({ decision: 'new', sources: ['web'], evidence: text }), 'in-5', text);
+  expect(opened.outcome).toBe('owner_transition');
+  const memoryText = 'What is my test pet called?';
+  const next = createTaskSourceScope(sql, 'owner', scope, async () => {}, { inputRef: 'in-6', text: memoryText }, defaultsFor([{ id: 'g' }] as never));
+  const retained = await next.classify(JSON.stringify({ decision: 'retain', sources: [], evidence: null }), 'in-6', memoryText);
+  expect(retained.outcome).toBe('retained');
+  expect(taskSourceAllowed(retained.snapshot, { name: 'read_owner_context' })).toBe(true);
+}));
+it('an explicit owner limit still holds after a named-URL task: restrict keeps memory out', () => custody('url-then-limit', async (sql, scope) => {
+  const text = 'Only use the web for this, do not use my saved memory.';
+  const cap = createTaskSourceScope(sql, 'owner', scope, async () => {}, { inputRef: 'in-7', text }, defaultsFor([{ id: 'g' }] as never));
+  await cap.classify(JSON.stringify({ decision: 'restrict', sources: ['web'] }), 'in-7', text);
+  const retained = await cap.classify(JSON.stringify({ decision: 'retain', sources: [], evidence: null }), 'in-8', 'and the second page?');
+  expect(taskSourceAllowed(retained.snapshot, { name: 'read_owner_context' })).toBe(false);
+}));
