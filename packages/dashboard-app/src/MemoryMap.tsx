@@ -93,7 +93,7 @@ export function MemoryMap({ focus, patterns, spots, returnTo, corner, note, read
   // The page turns to night while the map is open, and back when it closes.
   useEffect(() => { setScene(true); return () => setScene(false); }, []);
   const complete=read.state==='available'&&read.complete&&!!fetched&&fetched.state==='available'&&fetched.complete&&read.page.total===read.page.returned&&fetched.page.total===fetched.page.returned;
-  const status=<div className="mm-read-status" role="status"><p>Map of two returned pages, not all Memory. {read.page.returned} of {read.page.total} {patterns?'patterns':'Spots'} on the main page.</p>{error?<p>Other page unavailable: {error} <button onClick={()=>setRetry(n=>n+1)}>Retry other page</button></p>:fetched?<p>Other page: {fetched.page.returned} of {fetched.page.total} {patterns?'Spots':'patterns'} · {fetched.state}, {fetched.complete?'complete read':'incomplete read'} · {fetched.unavailable_claim_count} claims withheld.</p>:<p>Loading other page…</p>}<p>Map limits: 30 Spots in Spots view, 12 patterns, 14 supports per focused pattern, 2 per overview pattern, 6 loose Spots. Root spokes are layout only (any line style). Solid/dashed edges between records are saved support membership. Dotted Spot-pattern edges are also saved support; dotted pattern-pattern edges are shared support derived here, not saved associations or proof.</p></div>;
+  const status=<div className="mm-read-status" role="status"><p>Map of two returned pages, not all Memory. {read.page.returned} of {read.page.total} {patterns?'patterns':'Spots'} on the main page.</p>{error?<p>Other page unavailable: {error} <button onClick={()=>setRetry(n=>n+1)}>Retry other page</button></p>:fetched?<p>Other page: {fetched.page.returned} of {fetched.page.total} {patterns?'Spots':'patterns'} · {fetched.state}, {fetched.complete?'complete read':'incomplete read'} · {fetched.unavailable_claim_count} claims withheld.</p>:<p>Loading other page…</p>}<details className="mm-map-limits"><summary>Map limits and link meanings</summary><p>Map limits: 30 Spots in Spots view, 12 patterns, 14 supports per focused pattern, 2 per overview pattern, 6 loose Spots. Root spokes are layout only (any line style). Solid/dashed edges between records are saved support membership. Dotted Spot-pattern edges are also saved support; dotted pattern-pattern edges are shared support derived here, not saved associations or proof.</p></details></div>;
   return <>{status}<Web model={model} focus={focus} returnTo={returnTo} complete={complete} corner={corner} note={note}/></>;
 }
 
@@ -113,13 +113,14 @@ function Web({ model, focus, returnTo, complete, corner, note }: { model: MapMod
 
   const paint = () => {
     const occupied:{x:number;y:number;w:number;h:number}[]=[];
-    for (const n of [...sim.nodes].sort((a,b)=>Number(b.id===current)-Number(a.id===current))) {
+    const priority=(id:string)=>id===ROOT?4:id===current?3:nodeOf(model,id)?.shape==='hexagon'?2:1;
+    for (const n of [...sim.nodes].sort((a,b)=>priority(b.id)-priority(a.id))) {
       const el=nodeEls.current.get(n.id);if(!el)continue;
       el.style.setProperty('transform', `translate(${n.x.toFixed(1)}px,${n.y.toFixed(1)}px)`);
       const label=el.querySelector<HTMLElement>('.mm-label');if(!label)continue;
       const w=150,h=52,x=n.x-w/2,y=n.y+17;
       const collides=occupied.some(r=>x<r.x+r.w&&x+w>r.x&&y<r.y+r.h&&y+h>r.y);
-      label.style.visibility=collides&&n.id!==current?'hidden':'visible';if(!collides)occupied.push({x,y,w,h});
+      label.style.visibility=collides?'hidden':'visible';if(!collides)occupied.push({x,y,w,h});
     }
     for (const l of live.current) { const a = bodies.current.get(l.source), b = bodies.current.get(l.target); if (a && b) pathEls.current.get(l.id)?.setAttribute('d', pathOf(a, b, l.kind)); }
   };
@@ -244,6 +245,7 @@ function Web({ model, focus, returnTo, complete, corner, note }: { model: MapMod
   const home = () => {setPan(0, 0);setZoom(1);};
 
   return <div className="mm scene" ref={root} data-focus={current ? '' : undefined} onKeyDown={key}>
+    <p className="mm-label-hint">Crowded labels may be hidden. Patterns and the selected record take priority; select a shape or use List for full text.</p>
     <div className="mm-stage" ref={stage} tabIndex={0} role="group" aria-label="Memory map. Arrow keys pan, plus and minus zoom, Home resets." onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
       <div className="mm-field">
         <div className="mm-dust" aria-hidden="true"><div className="mm-dust-drift">{DUST.map((d, i) => <i key={i} style={{ left: `${d.x}%`, top: `${d.y}%`, width: d.r * 2, height: d.r * 2, opacity: d.o, animationDelay: `${d.d}s` } as CSSProperties}/>)}</div></div>

@@ -36,3 +36,13 @@ it('provides bounded zoom, keyboard pan and reset without hijacking node keys',a
   expect(stage.style.getPropertyValue('--zoom')).toBe('1');expect(stage.style.getPropertyValue('--px')).toBe('0px');
  }finally{await close();}
 });
+
+it('keeps map limits collapsed and explains hidden label priority without opening inspection',async()=>{
+ const {host,close}=await mount(async()=>new Response(JSON.stringify(reply())));
+ try{
+  expect(host.querySelector<HTMLDetailsElement>('.mm-map-limits')?.open).toBe(false);
+  expect(host.querySelector('.mm-map-limits summary')?.textContent).toBe('Map limits and link meanings');
+  expect(host.querySelector('.mm-label-hint')?.textContent).toContain('Crowded labels may be hidden');
+  expect(host.querySelector('.mm-label-hint')?.textContent).toContain('Patterns and the selected record');
+ }finally{await close();}
+});
