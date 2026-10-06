@@ -51,7 +51,7 @@ const Greeting = ({ text }: { text: string }) => { const match = /^(Good )(\w+)(
 export const isSettingsRoute = (route: Route) => route === 'admin' || ['connections', 'files', 'files/workspace', 'invites', 'day', 'usage', 'account', 'setup', 'settings'].includes(route) || route.startsWith('settings/');
 
 const shortcut: Record<string, string> = { today: 'T', waiting: 'W', memory: 'M', patrol: 'P' };
-export function DashboardNavigation({ route, onNavigate }: { route: Route; onNavigate?: () => void }) {
+export function DashboardNavigation({ route, onNavigate,waitingCount }: { route: Route;waitingCount?:number; onNavigate?: () => void }) {
   const selected = route.startsWith('memory') ? 'memory' : route === 'overview' ? 'today' : route;
   const nav = useRef<HTMLElement>(null);
   // One white pill slides to the chosen page; it follows the link as its icon opens.
@@ -60,13 +60,13 @@ export function DashboardNavigation({ route, onNavigate }: { route: Route; onNav
     const place = () => { const on = el.querySelector<HTMLElement>('a[aria-current="page"]'); if (!on) { el.removeAttribute('data-indicator'); return; } el.style.setProperty('--x', `${on.offsetLeft}px`); el.style.setProperty('--w', `${on.offsetWidth}px`); el.setAttribute('data-indicator', ''); };
     place();
     if (typeof ResizeObserver === 'undefined') return;
-    const watch = new ResizeObserver(place); el.querySelectorAll('a').forEach(a => watch.observe(a));
+    const watch = new ResizeObserver(place); watch.observe(el); el.querySelectorAll('a').forEach(a => watch.observe(a));
     return () => watch.disconnect();
-  }, [selected]);
+  }, [selected, waitingCount]);
   return <nav ref={nav} className="primary-nav" aria-label="Dashboard pages">{routes.map((item) => (
     <a aria-current={selected === item.key ? 'page' : undefined} onClick={onNavigate} key={item.key} href={`#/${item.key}`} title={`${item.label} · G then ${shortcut[item.key]}`}>
       <Icon name={item.key} className="nav-icon"/>
-      <span>{item.label}</span>
+      <span>{item.label}</span>{item.key==='waiting'&&waitingCount!==undefined&&waitingCount>0&&<span className="nav-count" aria-label={`${waitingCount} waiting ${waitingCount===1?'decision':'decisions'}`}>{waitingCount}</span>}
     </a>
   ))}</nav>;
 }
@@ -95,7 +95,7 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
   const nowAt = localMinutes(now, zone) ?? 0;
   const railSummary = [`Now ${clockLabel(now, zone)}.`, ...marks.map(mark => `${mark.label} ${mark.kind === 'done' ? 'sent, as recorded,' : mark.kind === 'next' ? 'next,' : 'on your plan,'} at ${mark.time}.`)].join(' ');
   return <div className="flow" key="today">
-    <div className="page-heading reveal" style={stagger(0)}>{dayLabel(zone, now) && <span className="label">{dayLabel(zone, now)}</span>}<h1><Greeting text={greeting(zone, now)}/></h1></div>
+    <div className="page-heading reveal" style={stagger(0)}>{dayLabel(zone, now) && <span className="label">{dayLabel(zone, now)}</span>}<h1><Greeting text={greeting(zone, now)}/></h1><p>{waiting ? `${waiting} ${waiting===1?'decision is':'decisions are'} waiting for you.` : 'No decisions are waiting.'} {next ? `${next.label} is ${nextDue?'on':'next on'} your recorded plan.` : 'No next card is recorded.'}</p></div>
     <section className="tile rail-tile reveal" style={stagger(1)} aria-label="Your day"><DayRail marks={marks} now={nowAt} summary={railSummary}/></section>
     <section className={`tile focus reveal${waiting > 0 ? ' today-action' : ''}`} style={stagger(2)}>
       <div className="focus-copy">
@@ -180,13 +180,13 @@ export function App() {
     <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
     <header className="topbar"><div className="topbar-inner">
       <a className="brand" href="#/today" aria-label="Waldo dashboard home"><WaldoMark/><span aria-hidden="true">Waldo</span></a>
-      <DashboardNavigation route={route}/>
+      <DashboardNavigation route={route} waitingCount={ready?.waiting.count}/>
       <a className="settings-link" href="#/settings" aria-label="Settings" aria-current={isSettingsRoute(route) ? 'page' : undefined}><Icon name="settings"/></a>
     </div></header>
     <main id="main" tabIndex={-1}>{route === 'admin' ? <><SettingsHead selected="admin" isAdmin={isAdmin}/><AdminPanel state={adminState} onRefresh={refreshAdmin}/></>
       : state.kind !== 'ready' ? <DashboardFeedback state={state} onRetry={() => setRetry((n) => n + 1)}/>
       : <div className="route" key={route.split('/')[0]}><Dashboard data={state.data} route={route} now={now} isAdmin={isAdmin}/></div>}</main>
-    <footer>
+    <footer><p><a href="/console/legacy">Classic console</a> · <a href="#/connections">Connections</a> · <a href="#/files">Files</a> · <a href="#/invites">Invites</a></p>
       {ready && <p><span title={`${exactTime(ready.as_of, ready.timezone)} · ${ready.timezone}`}>Updated {relativeTime(ready.as_of, now)}</span><button type="button" className="refresh" aria-busy={refreshing} disabled={refreshing} onClick={() => setRetry((n) => n + 1)}><Icon name="retry"/>Refresh records</button></p>}
       <p>Recorded activity can include attempts and failures. Check the result before treating work as done.</p>
     </footer>

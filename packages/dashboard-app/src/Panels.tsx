@@ -8,10 +8,12 @@ import {ProfileCards} from './Profile';
 import type { ActivityCursors, ActivityRecord, ControlAction, ControlFields, FilesRecord, ProfileRecord, ProposalReview, SetupRecord, UsageRecord, WaitingRecord } from './controls-model';
 
 type Actions = { busy: boolean; onAction: (action: ControlAction, fields?: ControlFields) => void };
-const parseTime = (value: string | null) => { if (!value) return null; const t = Date.parse(value.includes('T') ? value : value.replace(' ', 'T')); return Number.isNaN(t) ? null : new Date(t); };
-const clock = (d: Date) => new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit' }).format(d);
-const day = (d: Date) => new Intl.DateTimeFormat('en', { weekday: 'short', month: 'short', day: 'numeric' }).format(d);
-const hours = (d: Date) => d.getHours() + d.getMinutes() / 60;
+const parseTime = (value: string | null) => { if (!value) return null; const normalized=value.includes('T')?value:value.replace(' ','T');const timePart=normalized.split('T')[1]??'';if(!timePart.endsWith('Z')&&!timePart.includes('+')&&!timePart.includes('-'))return null;const t = Date.parse(normalized); return Number.isNaN(t) ? null : new Date(t); };
+// Approve needs a time the illustration can place: an explicit offset, or a date-only (all-day) value.
+export const approvable = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) || parseTime(value) !== null;
+const clock = (d: Date) => new Intl.DateTimeFormat('en', { timeZone:'UTC',hour: 'numeric', minute: '2-digit' }).format(d);
+const day = (d: Date) => new Intl.DateTimeFormat('en', { timeZone:'UTC',weekday: 'short', month: 'short', day: 'numeric' }).format(d);
+const hours = (d: Date) => d.getUTCHours() + d.getUTCMinutes() / 60;
 
 // Copies the exact draft words, for reading or pasting elsewhere. It does not send anything.
 function CopyText({ text }: { text: string }) {
@@ -28,10 +30,10 @@ function CalendarReview({ review }: { review: Extract<ProposalReview, { kind: 'c
   return <div className="proposal-full-review review-calendar" title={review.event_id ? `Calendar reference ${review.event_id}` : undefined}>
     <p className="review-sentence"><b>{verb}</b> {review.title ?? 'this event'}{start && <>{review.action === 'move' ? ' to ' : ' on '}<b>{day(start)}, {clock(start)}{end ? `–${clock(end)}` : ''}</b></>}.</p>
     {start && <div className={`slot-day ${review.action}`} aria-hidden="true">
-      <div className="slot-hours">{Array.from({ length: to - from + 1 }, (_, i) => <span key={i} style={{ left: `${(i / (to - from)) * 100}%` }}>{i % 2 === 0 ? clock(new Date(2000, 0, 1, from + i)).replace(':00', '') : ''}</span>)}</div>
+      <div className="slot-hours">{Array.from({ length: to - from + 1 }, (_, i) => <span key={i} style={{ left: `${(i / (to - from)) * 100}%` }}>{i % 2 === 0 ? clock(new Date(Date.UTC(2000, 0, 1, from + i))).replace(':00', '') : ''}</span>)}</div>
       <div className="slot-track"><i className="slot" style={{ left: `${pct(start)}%`, width: `${Math.max(3, (end ? pct(end) : pct(start) + 4) - pct(start))}%` }}><b>{review.title ?? verb}</b></i></div>
     </div>}
-    <p className="review-why"><Icon name="chat"/><span><b>Why:</b> {review.reason}</span></p>
+    <dl className="calendar-exact"><dt>Exact recorded start (including any timezone offset)</dt><dd>{review.start??'Not supplied'}</dd><dt>Exact recorded end (including any timezone offset)</dt><dd>{review.end??'Not supplied'}</dd><dt>Calendar reference</dt><dd>{review.event_id??'Not supplied'}</dd></dl>{((review.start&&!start)||(review.end&&!end))&&<p role="alert">Time or time zone could not be read for the illustration. Review the exact values; ask Waldo if the intended time zone is unclear.</p>}<p className="meta">The illustration is in UTC. Exact recorded values above govern the review; a missing offset is not a verified owner time zone.</p><p className="review-why"><Icon name="chat"/><span><b>Why:</b> {review.reason}</span></p>
   </div>;
 }
 
@@ -53,7 +55,7 @@ export function WaitingControls({ record, busy, onAction }: { record: WaitingRec
   return <>
     <div className="proposal-list">{record.data.proposals.map((item, index) => {
       const send = item.kind === 'email_send' || item.kind === 'message_send';
-      const calendarApprove = item.kind === 'calendar_change' && item.state === 'open' && item.review?.kind === 'calendar_change' && item.actions.includes('approval.approve');
+      const calendarApprove = item.kind === 'calendar_change' && item.state === 'open' && item.review?.kind === 'calendar_change' && item.actions.includes('approval.approve') && (!item.review.start || approvable(item.review.start)) && (!item.review.end || approvable(item.review.end));
       const calendarUndo = item.kind === 'calendar_change' && item.state === 'done' && item.actions.includes('approval.undo');
       const note = item.state === 'review_only' ? 'Too long for a chat card, so there’s no Send it button. Ask Waldo for a shorter version or a draft.'
         : item.state === 'unconfirmed' ? 'Waldo couldn’t confirm the review card was delivered, so this can’t be approved. Check chat, then ask again.'
@@ -81,7 +83,8 @@ export function activityPageCursors(page: ActivityRecord['data']['page'], list: 
   return list === 'trace' ? { trace_before: older ? page.trace_before : null, runs_before: page.runs_applied }
     : { runs_before: older ? page.runs_before : null, trace_before: page.trace_applied };
 }
-const stamp = (value: string) => { const t = Date.parse(value.includes('T') ? value : value.replace(' ', 'T')); return Number.isNaN(t) ? value : new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(t)); };
+const stamp = (value:string) => value; // Backend activity strings are already owner-local; keep them exact.
+
 const took = (ms: number) => ms < 1000 ? 'under a second' : `${(ms / 1000).toFixed(1)} seconds`;
 const kindIcon = (kind: string): IconName => ({ update_card: 'brief', reminder: 'bell', llm_reply: 'chat', joined_path: 'chat', heartbeat: 'patrol', patrol_skip: 'patrol' } as Record<string, IconName>)[kind] ?? 'entry';
 export function ActivityControls({ record, busy, onPage }: { record: ActivityRecord; busy: boolean; onPage: (page: ActivityCursors) => void }) {
@@ -97,21 +100,21 @@ export function ActivityControls({ record, busy, onPage }: { record: ActivityRec
       </div><Terminal className="figure" label="A terminal window, an interactive illustration. Decorative."/></div>
     </section>}
     {steps.length > 0 && <section className="tile chart reveal" style={{ '--i': 1 } as React.CSSProperties} aria-labelledby="steps-title">
-      <div className="chart-head"><h2 id="steps-title">The last request, step by step</h2></div>
+      <div className="chart-head"><h2 id="steps-title">Independently recorded steps</h2></div>
       <Pipeline steps={steps}/>
-      <p className="meta">Observed pipeline steps. Saved permission alone isn’t a successful live tool test.</p>
+      <p className="meta">Latest record for each step across history, not one request or a shared chronology. Saved permission alone isn’t a successful live tool test.</p>
     </section>}
     <div className="tile disclosures reveal" style={{ '--i': 2 } as React.CSSProperties}>
       <h2 className="visually-hidden">Recent recorded activity</h2>
       {trace.map((row, index) => <details key={index} className="disclosure activity-record" open={selected === index} onToggle={event => { const open = event.currentTarget.open; setSelected(current => open ? index : current === index ? null : current); }}>
         <summary title={`Recorded type: ${row.hop}`}><Icon name={kindIcon(row.hop)}/><span className="value">{activityLabel(row.hop)}</span><span className={`access-label${row.ok ? '' : ' failed'}`}>{row.ok ? 'Attempt recorded' : 'Failure recorded'}</span><span className="label time">{stamp(row.time)}</span></summary>
-        <div className="disclosure-body"><p>{row.summary?.trim()?row.summary:missingOutcome}</p><p className="meta">Took {took(row.ms)}</p></div>
+        <div className="disclosure-body"><p className="meta">Recorded type: {row.hop}</p><p>{row.summary?.trim()?row.summary:missingOutcome}</p><p className="meta">Took {took(row.ms)}</p></div>
       </details>)}
       {!trace.length && <p className="empty-line">No activity records on this page.</p>}
       <nav className="table-pager" aria-label="Activity pages"><button disabled={busy || page.trace_applied === null} onClick={() => onPage(activityPageCursors(page, 'trace', false))}>Latest activity</button><button disabled={busy || page.trace_before === null} onClick={() => onPage(activityPageCursors(page, 'trace', true))}>Older activity</button></nav>
     </div>
     <details className="tile fold reveal" style={{ '--i': 3 } as React.CSSProperties}><summary><Icon name="patrol"/>Background checks <span className="count">{runs.length}</span></summary>
-      <div className="activity-record-list">{runs.map(run => <article key={run.id} className="activity-record"><div className="connection-heading"><p className="strong">{activityLabel(run.kind)}</p><span className="access-label">Recorded status: {run.status}</span></div><p>{run.summary?.trim()?run.summary:missingOutcome}</p><p className="meta" title={`Recorded type: ${run.kind}`}>Started {stamp(run.started)} · {run.ended === null ? 'no end recorded' : `ended ${stamp(run.ended)}`}</p></article>)}</div>{!runs.length && <p>No background runs on this page.</p>}
+      <div className="activity-record-list">{runs.map(run => <article key={run.id} className="activity-record"><div className="connection-heading"><p className="strong">{activityLabel(run.kind)}</p><span className="access-label">Recorded status: {run.status}</span></div><p>{run.summary?.trim()?run.summary:missingOutcome}</p><p className="meta">Recorded type: {run.kind}</p><p className="meta">Started {stamp(run.started)} · {run.ended === null ? 'no end recorded' : `ended ${stamp(run.ended)}`}</p></article>)}</div>{!runs.length && <p>No background runs on this page.</p>}
       <nav className="table-pager" aria-label="Background run pages"><button disabled={busy || page.runs_applied === null} onClick={() => onPage(activityPageCursors(page, 'runs', false))}>Latest runs</button><button disabled={busy || page.runs_before === null} onClick={() => onPage(activityPageCursors(page, 'runs', true))}>Older runs</button></nav>
     </details>
     <details className="tile fold reveal" style={{ '--i': 4 } as React.CSSProperties}><summary><Icon name="bell"/>Reminders &amp; notes</summary>
