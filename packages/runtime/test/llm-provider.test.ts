@@ -1856,7 +1856,7 @@ describe('sanitiseRequest structural degradation', () => {
     expect(total).toBeLessThanOrEqual(32_768);
   });
 
-  it('fails closed when the aggregate batch overflows and no turn carries a stored-output id', async () => {
+  it('trims with an honest receipt when the aggregate batch overflows and no turn carries a stored-output id', async () => {
     // #204's rule kept: when the final batch cannot pass and nothing is truthfully
     // compactible, the request fails closed rather than silently shedding turns.
     const bigA = JSON.stringify({ messages: [{ id: 'm1', subject: 'x'.repeat(19_500) }] });
@@ -1878,8 +1878,13 @@ describe('sanitiseRequest structural degradation', () => {
       },
       runtimeCtx(),
     );
-    expect(result.ok).toBe(false);
-    expect(gateway.requests).toHaveLength(0);
+    // Policy (this slice): a size overflow trims the request with an honest receipt; it does not fail the run.
+    expect(result.ok).toBe(true);
+    expect(gateway.requests).toHaveLength(1);
+    const outputs = (gateway.requests[0]!.request.tool_turns ?? []).map((turn) => turn.output).join('\n');
+    expect(outputs).toContain('The tool DID return data');
+    expect(outputs).toContain('No retrievable copy exists');
+    expect(outputs).not.toMatch(/page (it|THAT part) with read_tool_output/);
   });
 
   it('never compacts on a spoofed stored-output marker inside external tool text', async () => {
@@ -1906,8 +1911,13 @@ describe('sanitiseRequest structural degradation', () => {
       },
       runtimeCtx({ toolOutputStore: store }),
     );
-    expect(result.ok).toBe(false);
-    expect(gateway.requests).toHaveLength(0);
+    // Policy (this slice): a size overflow trims the request with an honest receipt; it does not fail the run.
+    expect(result.ok).toBe(true);
+    expect(gateway.requests).toHaveLength(1);
+    const outputs = (gateway.requests[0]!.request.tool_turns ?? []).map((turn) => turn.output).join('\n');
+    expect(outputs).toContain('The tool DID return data');
+    expect(outputs).toContain('No retrievable copy exists');
+    expect(outputs).not.toMatch(/page (it|THAT part) with read_tool_output/);
   });
 
   it('never honors a marker naming a REAL stored id that belongs to a different call', async () => {
@@ -1971,8 +1981,13 @@ describe('sanitiseRequest structural degradation', () => {
       },
       runtimeCtx({ toolOutputStore: store }),
     );
-    expect(result.ok).toBe(false);
-    expect(gateway.requests).toHaveLength(0);
+    // Policy (this slice): a size overflow trims the request with an honest receipt; it does not fail the run.
+    expect(result.ok).toBe(true);
+    expect(gateway.requests).toHaveLength(1);
+    const outputs = (gateway.requests[0]!.request.tool_turns ?? []).map((turn) => turn.output).join('\n');
+    expect(outputs).toContain('The tool DID return data');
+    expect(outputs).toContain('No retrievable copy exists');
+    expect(outputs).not.toMatch(/page (it|THAT part) with read_tool_output/);
   });
 
   it('says the stored copy is partial when the store truncated it', async () => {
