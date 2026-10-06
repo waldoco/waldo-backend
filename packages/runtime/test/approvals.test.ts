@@ -798,4 +798,29 @@ describe('task source card ledger write', () => {
       expect(state.storage.sql.exec<{ kind: string }>('SELECT kind FROM ledger WHERE id = ?', id).one().kind).toBe('task_sources');
     });
   });
+  it.each([true, false])('an approval card is open only once Telegram acknowledged it: blocked=%s', async blocked => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-blocked-card-${blocked}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let n = 0; let ran = 0;
+      const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => (blocked ? undefined : { message_id: 1 }), google: async () => null, newId: () => `blocked-${++n}`, now: () => 1000, timezone: 'UTC', log: () => {},
+        browserSubmit: async () => { ran++; return { status: 'rejected', message: 'fixture', receipt: {} } as never; } });
+      const proposals = [
+        () => desk.proposeBrowserSubmit({ url: 'https://fixture.invalid', action: { selector: '#submit', description: 'Submit' }, binding: { value: 'synthetic' }, steps: [] }),
+        () => desk.proposeSendMessage({ channel: 'telegram', content: 'Synthetic note', idempotency_key: 'k1' }),
+        () => desk.proposeMcpCall({ server: 'github', tool: 'merge_pr', args: { n: 1 } }),
+      ];
+      for (const propose of proposals) {
+        if (blocked) await expect(propose()).rejects.toThrow('Approval card not confirmed');
+        else await propose();
+      }
+      const rows = state.storage.sql.exec<{ id: string; status: string }>("SELECT id, status FROM ledger WHERE kind IN ('browser_submit', 'message_send', 'mcp_call')").toArray();
+      expect(rows).toHaveLength(3);
+      expect(rows.every(row => row.status === (blocked ? 'card_unconfirmed' : 'open'))).toBe(true);
+      if (blocked) {
+        expect(desk.pending(1000)).toEqual([]);
+        for (const row of rows) expect((await desk.decide(row.id, 'a', 'test')).toast).toBe('Already handled.');
+        expect(ran).toBe(0);
+      }
+    });
+  });
 });

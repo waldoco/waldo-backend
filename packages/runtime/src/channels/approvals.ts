@@ -104,6 +104,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const say = (text: string, buttons?: [string, string][]) =>
     deps.call('sendMessage', { chat_id: deps.owner, text, ...(buttons ? { reply_markup: { inline_keyboard: [buttons.map(([label, data]) => ({ text: label, callback_data: data }))] } } : {}) });
 
+  // A card the owner never saw cannot be approved: a blocked send (no message returned) leaves the row unconfirmed and fails the proposal.
+  const sayCard = async (id: string, text: string, buttons?: [string, string][]) => {
+    if ((await say(text, buttons)) == null) throw new Error('Approval card not confirmed');
+    sql.exec("UPDATE ledger SET status = 'open' WHERE id = ? AND status = 'card_unconfirmed'", id);
+  };
+
   const describeBrowser = (p: BrowserSubmitProposal) => {
     const binding = Object.entries(p.binding).map(([k, v]) => `${k}: ${v}`).join(', ');
     return `${p.action.description} on ${p.url}${binding ? ` (${binding})` : ''}`;
@@ -373,8 +379,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     async proposeBrowserSubmit(payload) {
       const id = `p${deps.newId()}`;
       const summary = describeBrowser(payload);
-      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'browser_submit', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
-      await say(`Approve this browser action? ${summary}`, [['Do it', `a:${id}`], ['Not now', `s:${id}`]]);
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'browser_submit', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
+      await sayCard(id, `Approve this browser action? ${summary}`, [['Do it', `a:${id}`], ['Not now', `s:${id}`]]);
       return id;
     },
     async proposeSendEmail(payload) {
@@ -424,18 +430,18 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     async proposeSendMessage(payload) {
       const id = `p${deps.newId()}`;
       const summary = describeMessage(payload);
-      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'message_send', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'message_send', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
       const text = `Send this message on ${payload.channel}?\n\n${reviewMessage(payload)}`;
-      await say(text.length <= REVIEW_BUDGET ? text : unreviewable('Send this message?', summary),
+      await sayCard(id, text.length <= REVIEW_BUDGET ? text : unreviewable('Send this message?', summary),
         text.length <= REVIEW_BUDGET ? [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]]);
       return id;
     },
     async proposeMcpCall(payload) {
       const id = `p${deps.newId()}`;
       const summary = describeMcp(payload);
-      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'mcp_call', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'mcp_call', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
       const text = `Run this MCP tool? ${summary}\n\nArgs:\n${JSON.stringify(payload.args, null, 2)}`;
-      await say(text.length <= REVIEW_BUDGET ? text : unreviewable('Run this MCP tool?', summary),
+      await sayCard(id, text.length <= REVIEW_BUDGET ? text : unreviewable('Run this MCP tool?', summary),
         text.length <= REVIEW_BUDGET ? [['Do it', `a:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]]);
       return id;
     },
@@ -446,8 +452,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       if(p.event_id&&!client)throw new Error('The calendar account is unavailable; no proposal was prepared.');
       const seen = client && p.event_id ? (await client.event(p.event_id)).etag : undefined;
       const stored: Stored = seen ? { ...p, seen_etag: seen } : p;
-      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
-      await say(`Proposed: ${summary}`, [['Do it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
+      await sayCard(id, `Proposed: ${summary}`, [['Do it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
       return id;
     },
     record(kind, summary, payload) {
