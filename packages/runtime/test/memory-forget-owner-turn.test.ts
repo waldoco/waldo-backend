@@ -118,10 +118,11 @@ it('a held claim is reported as held, not stored', async () => {
   });
 });
 
-it('a turn where the writer changed nothing carries no memory receipt', async () => {
+it('a turn where the writer changed nothing carries no memory receipt, and the reply is told it may not claim a save', async () => {
   await session('forget-live-d', async (turn) => {
     await turn('tg-1', 'hello', ops({}));
-    expect(system()).not.toContain('Memory this turn');
+    expect(system()).not.toContain('Memory this turn:');
+    expect(system()).toContain("only if a memory line from the host lists it as stored");
   });
 });
 

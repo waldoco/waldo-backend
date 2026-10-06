@@ -683,11 +683,11 @@ export const createOwnerResponder = (
           await assertCurrent();
           if (control.revision() !== contextSteering) throw new ClosedRunError();
           const skillMetadata = skills && (!binding || request.tools.includes('skills_list')) ? skills.metadata() : '';
-          const canonicalSystem = [canonicalPrompt, OWNER_TASK_SOURCE_PRECEDENCE, sourceNotice, recallNotice, turnNotice, ...(memoryReceipts.length ? [`Memory this turn: ${memoryReceipts.join(' ')}`] : []), skillMetadata, taskContext].filter(Boolean).join('\n\n');
+          const canonicalSystem = [canonicalPrompt, OWNER_TASK_SOURCE_PRECEDENCE, MEMORY_CLAIM_RULE, sourceNotice, recallNotice, turnNotice, ...(memoryReceipts.length ? [`Memory this turn: ${memoryReceipts.join(' ')}`] : []), skillMetadata, taskContext].filter(Boolean).join('\n\n');
           // Owner memory gets the room left in the FINAL system prompt (after the skill wrapper), because the sanitiser drops an oversize one whole.
           const unboundSystem = (): string => {
             const wrapped = skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined);
-            const before = [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), sourceNotice, ...(recallNotice ? [recallNotice] : []), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : [])];
+            const before = [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), MEMORY_CLAIM_RULE, sourceNotice, ...(recallNotice ? [recallNotice] : []), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : [])];
             const afterBase = [...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
             // Owner memory takes its room first; open loops get what the same reserve leaves, and the section names what it left out.
             const room = systemRoom(withOwnerSkillProcedures([...before, ...afterBase].join('\n\n'), wrapped));
@@ -737,6 +737,8 @@ export const createOwnerResponder = (
   // and an ephemeral system notice. The notice rides the system prompt only, never owner history.
   let turnWriting = false;
   let recordedHeard = 0;
+  // The reply may say it saved or remembered something only when the system's own memory line lists it; the model has no other way to know a write landed.
+  const MEMORY_CLAIM_RULE = "Say that you saved or remembered something only if a memory line from the host lists it as stored. Without that line, nothing was written this turn.";
   let turnNotice = '';
   // Code-authored facts about what the memory writer did this turn, so the reply never guesses.
   const memoryReceipts: string[] = [];
