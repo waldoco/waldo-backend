@@ -19,15 +19,30 @@ const MODEL = `${PROVIDER_OF[WALDO_CHAT_MODEL]}/${WALDO_CHAT_MODEL}`;
 // A refused session start says what the provider actually answered, and no more: HTTP status plus a bounded
 // code token and request id when the provider sent one. The body text is untrusted and is never relayed,
 // and the text does not guess at a cause (plan, billing, quota); only the provider's own code can say that.
-const TOKEN = /^[A-Za-z0-9_.-]{1,48}$/;
+const TOKEN = /^[A-Za-z][A-Za-z0-9_.-]{0,31}$/;
+// Reads at most 4 KiB of the body so an oversized provider reply cannot cost memory.
+const boundedText = async (response: Response): Promise<string> => {
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = []; let size = 0;
+  while (size < 4096) {
+    const { done, value } = await reader.read();
+    if (done || !value) break;
+    chunks.push(value); size += value.byteLength;
+  }
+  await reader.cancel().catch(() => undefined);
+  const bytes = new Uint8Array(size); let at = 0;
+  for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.byteLength; }
+  return new TextDecoder().decode(bytes.subarray(0, 4096));
+};
 const refusedStart = async (response: Response): Promise<string> => {
   let code: string | undefined;
   try {
-    const body = JSON.parse((await response.text()).slice(0, 4096)) as { code?: unknown; error?: unknown };
+    const body = JSON.parse(await boundedText(response)) as { code?: unknown; error?: unknown };
     const raw = typeof body.code === 'string' ? body.code : typeof body.error === 'string' ? body.error : (body.error as { code?: unknown } | null)?.code;
     if (typeof raw === 'string' && TOKEN.test(raw)) code = raw;
   } catch { /* no usable body */ }
-  const requestId = response.headers.get('x-request-id') ?? response.headers.get('x-bb-request-id') ?? undefined;
+  const requestId = response.headers.get('x-request-id') || response.headers.get('x-bb-request-id') || undefined;
   const parts = [`HTTP ${response.status}`, ...(code ? [`code ${code}`] : []), ...(requestId && TOKEN.test(requestId) ? [`request ${requestId}`] : [])];
   return `The browser provider refused to start a session (${parts.join(', ')}). This is the provider's answer; it does not say why.`;
 };
