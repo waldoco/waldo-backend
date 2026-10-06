@@ -8,10 +8,10 @@ const context = { authenticatedUserId: 'owner-a', egressAllowlist: ['*'], assert
 const fake = () => {
   const calls: string[] = []; let active = true;
   const page = { mainFrame: () => 'main-frame', setDefaultTimeout() {}, goto: async () => { calls.push('navigate'); return { status: () => 200 }; }, url: () => args.url, title: async () => 'Menu', locator: () => ({ innerText: async () => 'Vegetarian pasta — £12' }) };
-  let routed: ((route: any) => Promise<void>) | undefined;
-  const browser = { newContext: async (options: unknown) => { expect(options).toEqual({ serviceWorkers: 'block' }); return { route: async (_pattern: string, callback: (route: any) => Promise<void>) => { routed = callback; }, newPage: async () => page, close: async () => { calls.push('context.close'); } }; }, newBrowserCDPSession: async () => ({ send: async (method: string) => { calls.push(method); active = false; } }), close: async () => { calls.push('disconnect'); } };
+  let routed: ((route: any) => Promise<void>) | undefined; let socketHandler: ((socket: any) => unknown) | undefined;
+  const browser = { newContext: async (options: unknown) => { expect(options).toEqual({ serviceWorkers: 'block' }); return { routeWebSocket: async (_pattern: unknown, handler: (socket: any) => unknown) => { calls.push('ws.route'); socketHandler = handler; }, route: async (_pattern: string, callback: (route: any) => Promise<void>) => { routed = callback; }, newPage: async () => page, close: async () => { calls.push('context.close'); } }; }, newBrowserCDPSession: async () => ({ send: async (method: string) => { calls.push(method); active = false; } }), close: async () => { calls.push('disconnect'); } };
   const sdk = { acquire: async () => { calls.push('acquire'); return { sessionId: 'private-id' }; }, endpointURLString: () => 'https://fake.host/v1/devtools/browser/private-id', connect: async () => { calls.push('connect'); return browser; }, sessions: async () => active ? [{ sessionId: 'private-id' }] : [] };
-  return { calls, page, sdk, browser, route: async (url: string, method = 'GET', status = 200, location?: string) => {
+  return { calls, page, sdk, browser, socket: async () => { const events: string[] = []; await socketHandler!({ close: async () => { events.push('close'); }, connectToServer: () => { events.push('connect'); } }); return events; }, route: async (url: string, method = 'GET', status = 200, location?: string) => {
     const events: string[] = [];
     await routed!({ request: () => ({ url: () => url, method: () => method, isNavigationRequest: () => Boolean(location), frame: () => 'main-frame' }), abort: async () => { events.push('abort'); }, fetch: async (options: unknown) => { expect(options).toEqual({ maxRedirects: 0, timeout: 10000 }); events.push('fetch'); return { status: () => status, headers: () => location ? { location } : {} }; }, fulfill: async () => { events.push('fulfill'); } });
     return events;
@@ -24,7 +24,9 @@ it('explicit Cloudflare browse_page returns real page text through the existing 
   const result = await handler.handle(browsePageArgsSchema.parse(args), context);
   expect(result).toMatchObject({ ok: true, data: { url: args.url, provider: 'cloudflare_playwright', data: { title: 'Menu', text: 'Vegetarian pasta — £12' } }, source_taint: 'external' });
   expect(JSON.stringify(result)).not.toContain('private-id'); expect(paid).toBe(0);
-  expect(f.calls).toEqual(['acquire', 'connect', 'navigate', 'context.close', 'Browser.close', 'disconnect']);
+  expect(f.calls).toEqual(['acquire', 'connect', 'ws.route', 'navigate', 'context.close', 'Browser.close', 'disconnect']);
+  // A page script cannot open a WebSocket anywhere: context.route only sees HTTP, so sockets are closed before they reach a server.
+  expect(await f.socket()).toEqual(['close']);
 });
 it('does not fall back to paid Browserbase when Cloudflare is unconfigured', async () => {
   let paid = 0;
