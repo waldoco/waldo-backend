@@ -12,7 +12,7 @@ const recorder = () => {
   const api: TelegramOwnerApi = {
     setMessageReaction: async (r) => { calls.push(['react', r]); },
     sendChatAction: async (r) => { calls.push(['typing', r]); },
-    sendMessage: async (r) => { calls.push(['send', r]); },
+    sendMessage: async (r) => { calls.push(['send', r]); return { message_id: 1 }; },
   };
   return { calls, api };
 };
@@ -29,6 +29,14 @@ describe('TelegramOwnerListener', () => {
     expect(calls[0]?.[1]).toEqual({ chat_id: OWNER, message_id: 50, reaction: [{ type: 'emoji', emoji: '👀' }] });
     expect(calls[3]?.[1]).toEqual({ chat_id: OWNER, message_id: 50, reaction: [{ type: 'emoji', emoji: '👌' }] });
     expect(calls[2]?.[1]).toEqual({ chat_id: OWNER, text: 'echo hi' });
+  });
+
+  it('a blocked final send (no message returned) is a failed turn, not an answered one', async () => {
+    const { calls, api } = recorder();
+    const blocked: TelegramOwnerApi = { ...api, sendMessage: async (r) => { calls.push(['send', r]); return undefined; } };
+    const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, api: blocked, respond: async (turn) => `echo ${turn.text}`, saveOffset: async () => undefined });
+    await expect(listener.pollOnce(new TelegramPollingAdapter({ getUpdates: async () => [update(5)] }), 0)).resolves.toEqual(['failed']);
+    expect(calls.some(([kind, r]) => kind === 'react' && JSON.stringify(r).includes('👌'))).toBe(false);
   });
 
   it('ignores every non-owner sender or chat without calling the model or replying', async () => {

@@ -1388,7 +1388,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         chat_id: owner,
         text: 'Tap below to connect your Google account. The link is signed, single-purpose and expires shortly.',
         reply_markup: { inline_keyboard: [[{ text: 'Connect Google', url }]] },
-      }).then(() => (log({ trace, hop: 'oauth_link_sent', ms: 0, ok: true }), true))
+      }).then((sent) => { if (sent === undefined) throw new Error('telegram send blocked'); log({ trace, hop: 'oauth_link_sent', ms: 0, ok: true }); return true; })
         .catch((error: unknown) => (log({ trace, hop: 'oauth_link_sent', ms: 0, ok: false, error: String(error), code: 'send_failed' }), false));
     };
     const storage = this.ctx.storage;

@@ -155,7 +155,9 @@ export class TelegramOwnerListener {
         this.options.log?.({ trace, hop: 'delivery_pending', ms: now() - started, ok: true });
         return 'queued';
       }
-      await time('send', () => sendTelegramFinal(payload => api.sendMessage(payload), { chat_id, ...(rich.text===guardedText ? {text: guardedText} : rich) }));
+      // A blocked send (unlinked or rebound owner) returns no message: the turn did not reach the owner.
+      const delivered = await time('send', () => sendTelegramFinal(payload => api.sendMessage(payload), { chat_id, ...(rich.text===guardedText ? {text: guardedText} : rich) }));
+      if (delivered === undefined) throw new Error('telegram send blocked');
       const chosen = telegramReaction(await choice);
       await react('resolved', chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌');
       this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, text: { input: turn.text, output: text } });
