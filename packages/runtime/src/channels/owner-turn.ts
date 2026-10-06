@@ -738,7 +738,7 @@ export const createOwnerResponder = (
   let turnWriting = false;
   let recordedHeard = 0;
   // The reply may say it saved or remembered something only when the system's own memory line lists it; the model has no other way to know a write landed.
-  const MEMORY_CLAIM_RULE = "Say that you saved or remembered something only if a memory line from the host lists it as stored. With no such line, do not infer that a save succeeded or failed; follow any host failure or uncertain notice.";
+  const MEMORY_CLAIM_RULE = "Say that you just saved or newly stored something only if a memory line from the host lists it as stored; you may still restate what you already know. With no such line, do not infer that a save succeeded or failed; follow any host failure or uncertain notice.";
   let turnNotice = '';
   // Code-authored facts about what the memory writer did this turn, so the reply never guesses.
   const memoryReceipts: string[] = [];
