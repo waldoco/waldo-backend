@@ -294,15 +294,19 @@ const skippedRows = [{ ref: 'episodes:2:text', text: 'a' }, { ref: 'episodes:3:t
 const firstPass = JSON.stringify({ complete: true, reviewed_refs: ['episodes:1:text', 'episodes:2:text', 'episodes:3:text'], spans: [{ ref: 'episodes:1:text', text: 'topic one clause' }] });
 const span = (ref: string) => ({ ref, text: 'topic clause for ' + ref });
 it.each([
-  ['incomplete', { complete: false, reviewed_refs: ['episodes:2:text', 'episodes:3:text'], spans: [span('episodes:2:text')] }],
-  ['missing reviewed refs', { complete: true, reviewed_refs: ['episodes:2:text'], spans: [span('episodes:2:text')] }],
-  ['extra reviewed ref', { complete: true, reviewed_refs: ['episodes:1:text', 'episodes:2:text', 'episodes:3:text'], spans: [span('episodes:2:text')] }],
-  ['span outside the skipped refs', { complete: true, reviewed_refs: ['episodes:2:text', 'episodes:3:text'], spans: [span('episodes:1:text')] }],
-])('second look is dropped whole when %s', (_name, second) => {
-  expect(mergeSecondSpanPass(firstPass, skippedRows, JSON.stringify(second))).toEqual({ selection: firstPass, added: 0 });
+  ['incomplete', 'incomplete', { complete: false, reviewed_refs: ['episodes:2:text', 'episodes:3:text'], spans: [span('episodes:2:text')] }],
+  ['missing reviewed refs', 'refs_mismatch', { complete: true, reviewed_refs: ['episodes:2:text'], spans: [span('episodes:2:text')] }],
+  ['extra reviewed ref', 'refs_mismatch', { complete: true, reviewed_refs: ['episodes:1:text', 'episodes:2:text', 'episodes:3:text'], spans: [span('episodes:2:text')] }],
+  ['span outside the skipped refs', 'span_outside_skipped', { complete: true, reviewed_refs: ['episodes:2:text', 'episodes:3:text'], spans: [span('episodes:1:text')] }],
+])('second look is dropped whole when %s', (_name, expected, second) => {
+  expect(mergeSecondSpanPass(firstPass, skippedRows, JSON.stringify(second))).toEqual({ selection: firstPass, added: 0, dropped: expected });
 });
 it('second look is merged when it is complete, reviewed exactly the skipped refs and spans only them', () => {
   const merged = mergeSecondSpanPass(firstPass, skippedRows, JSON.stringify({ complete: true, reviewed_refs: ['episodes:3:text', 'episodes:2:text'], spans: [span('episodes:2:text')] }));
   expect(merged.added).toBe(1);
   expect((JSON.parse(merged.selection) as { spans: unknown[] }).spans).toHaveLength(2);
+});
+
+it('an unparseable second look (for example a gate fallback text) is dropped with an unparseable reason', () => {
+  expect(mergeSecondSpanPass(firstPass, skippedRows, 'I cannot help with that.')).toEqual({ selection: firstPass, added: 0, dropped: 'unparseable' });
 });

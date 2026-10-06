@@ -1057,7 +1057,7 @@ it('a second look that reports itself incomplete adds no spans: the skipped line
   try { await admittedTurn(name,97101,'What time is my unrelated standup?',ops()); } finally { traceSpy.mockRestore(); }
   const pass = traceLines.filter(line => line.includes('forget_span_pass'));
   expect(pass).toHaveLength(1);
-  expect(pass[0]).toMatch(/spans_returned.{1,6}0/);
+  expect(pass[0]).toMatch(/spans_returned.{1,6}0/); expect(pass[0]).toMatch(/dropped.{1,6}incomplete/); expect(pass[0]).toMatch(/call_threw.{1,4}false/);
   await runInDurableObject(stub(name),(_instance,state)=>{
     expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
   });
