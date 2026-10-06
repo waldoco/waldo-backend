@@ -60,9 +60,9 @@ describe('modern owner controls read', () => {
   });
 
   it('keeps activity summaries narrow and passes independently selected cursors', async () => {
-    const activity = { ...day, view: 'activity', data: { steps: [], last_request: { trace: 'tg-1', at: '2026-10-02 10:00', ok: true, hops: [{ hop: 'llm_reply', ok: true, ms: 5, note: '', raw: 'never-retain' }] }, runs: [], ledger: 'Recorded reminders', page: { trace_before: 10, runs_before: null, trace_applied: 20, runs_applied: 30 }, trace: [{ time: '10:00', hop: 'skip', ok: true, ms: 0, summary: 'Recorded quiet-hour suppression', detail: 'never-retain', error: 'never-retain' }] } };
+    const activity = { ...day, view: 'activity', data: { steps: [], last_request: { trace: 'tg-1', at: '2026-10-02 10:00', ok: true, partial: false, recorded_steps: 1, hops: [{ hop: 'llm_reply', ok: true, ms: 5, note: '', raw: 'never-retain' }] }, runs: [], ledger: 'Recorded reminders', page: { trace_before: 10, runs_before: null, trace_applied: 20, runs_applied: 30 }, trace: [{ time: '10:00', hop: 'skip', ok: true, ms: 0, summary: 'Recorded quiet-hour suppression', detail: 'never-retain', error: 'never-retain' }] } };
     const parsed = readControls(activity, 'activity');
-    expect(parsed.data.last_request).toEqual({ trace: 'tg-1', at: '2026-10-02 10:00', ok: true, hops: [{ hop: 'llm_reply', ok: true, ms: 5, note: '' }] });
+    expect(parsed.data.last_request).toEqual({ trace: 'tg-1', at: '2026-10-02 10:00', ok: true, partial: false, recorded_steps: 1, hops: [{ hop: 'llm_reply', ok: true, ms: 5, note: '' }] });
     expect(() => readControls({ ...activity, data: { ...activity.data, last_request: undefined } }, 'activity')).toThrow();
     expect(readControls({ ...activity, data: { ...activity.data, last_request: null } }, 'activity').data.last_request).toBeNull();
     expect(JSON.stringify(parsed)).not.toContain('never-retain'); expect(parsed.data.trace[0]?.summary).toContain('suppression');

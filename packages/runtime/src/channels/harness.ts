@@ -50,8 +50,12 @@ export const E2E_STEPS: readonly Readonly<{ step: string; hops: readonly string[
 ];
 
 export type E2EStep = Readonly<{ step: string; state: 'ok' | 'failed' | 'unseen'; at: string | null; note: string | null }>;
-// Every recorded hop of the newest chat turn, from that one trace. `ok` is false when any hop failed.
-export type LastRequest = Readonly<{ trace: string; at: string; ok: boolean; hops: readonly Readonly<{ hop: string; ok: boolean; ms: number; note: string }>[] }>;
+// Logged once where the owner turn is admitted. Background work (reminders, cards, update checks) never logs it,
+// so it is what separates "the last request" from a job that also calls the model.
+export const OWNER_REQUEST_HOP = 'owner_request';
+// The newest owner request. `at` is its admission time. `ok` and `recorded_steps` come from a durable per-request
+// tally, so they stay true after the bounded trace pruned steps; `partial` means `hops` holds fewer than recorded_steps.
+export type LastRequest = Readonly<{ trace: string; at: string; ok: boolean; partial: boolean; recorded_steps: number; hops: readonly Readonly<{ hop: string; ok: boolean; ms: number; note: string }>[] }>;
 export type TraceRow = Readonly<{ time: string; trace: string; hop: string; ok: boolean; ms: number; note: string }>;
 
 export const traceBook = (sql: Sql, keep = 500) => {
@@ -64,8 +68,15 @@ export const traceBook = (sql: Sql, keep = 500) => {
   for (const column of ['model TEXT', 'input_tokens INTEGER', 'output_tokens INTEGER', 'cached_tokens INTEGER', 'usd REAL', 'system_bytes INTEGER', 'request_bytes INTEGER', 'owner TEXT']) {
     try { sql.exec(`ALTER TABLE trace_log ADD COLUMN ${column}`); } catch { /* column already exists */ }
   }
+  sql.exec('CREATE TABLE IF NOT EXISTS owner_request_last (id INTEGER PRIMARY KEY CHECK (id = 1), trace TEXT NOT NULL, at INTEGER NOT NULL, ok INTEGER NOT NULL, steps INTEGER NOT NULL)');
   return {
     record(entry: TurnLogEntry, at: number): void {
+      const open = sql.exec<{ trace: string }>('SELECT trace FROM owner_request_last WHERE id = 1').toArray()[0];
+      if (entry.hop === OWNER_REQUEST_HOP && open?.trace !== entry.trace) {
+        sql.exec('INSERT OR REPLACE INTO owner_request_last (id, trace, at, ok, steps) VALUES (1, ?, ?, ?, 1)', entry.trace, at, entry.ok ? 1 : 0);
+      } else if (open?.trace === entry.trace) {
+        sql.exec('UPDATE owner_request_last SET ok = ok AND ?, steps = steps + 1 WHERE id = 1', entry.ok ? 1 : 0);
+      }
       const cost = entry.usage ? modelCost(entry.usage) : null;
       sql.exec('INSERT INTO trace_log (at, trace, hop, ok, ms, note, model, input_tokens, output_tokens, cached_tokens, usd, system_bytes, request_bytes, owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         at, entry.trace, entry.hop, entry.ok ? 1 : 0, Math.round(entry.ms), (entry.guard ?? entry.error ?? entry.detail ?? '').slice(0, 200),
@@ -125,13 +136,12 @@ export const traceBook = (sql: Sql, keep = 500) => {
         return { step, state: row.ok ? 'ok' : 'failed', at: localIso(row.at, timezone).slice(0, 16).replace('T', ' '), note: row.note || null };
       });
     },
-    // The newest chat turn is the newest trace that reached the reply model call (llm_reply is logged for failures too).
     lastRequest(timezone: string): LastRequest | null {
-      const head = sql.exec<{ trace: string; at: number }>("SELECT trace, at FROM trace_log WHERE hop = 'llm_reply' ORDER BY id DESC LIMIT 1").toArray()[0];
+      const head = sql.exec<{ trace: string; at: number; ok: number; steps: number }>('SELECT trace, at, ok, steps FROM owner_request_last WHERE id = 1').toArray()[0];
       if (!head) return null;
       const hops = sql.exec<{ hop: string; ok: number; ms: number; note: string | null }>('SELECT hop, ok, ms, note FROM trace_log WHERE trace = ? ORDER BY id ASC', head.trace).toArray()
         .map((row) => ({ hop: row.hop, ok: row.ok === 1, ms: row.ms, note: row.note ?? '' }));
-      return { trace: head.trace, at: localIso(head.at, timezone).slice(0, 16).replace('T', ' '), ok: hops.every((row) => row.ok), hops };
+      return { trace: head.trace, at: localIso(head.at, timezone).slice(0, 16).replace('T', ' '), ok: head.ok === 1, partial: hops.length < head.steps, recorded_steps: head.steps, hops };
     },
     checklist(timezone: string): string {
       return this.steps(timezone).map(({ step, state, at, note }) => state === 'unseen' ? `[ ] ${step}: not seen`

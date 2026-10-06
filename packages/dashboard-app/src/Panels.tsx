@@ -101,9 +101,9 @@ export function ActivityControls({ record, busy, onPage }: { record: ActivityRec
       </div><Terminal className="figure" label="A terminal window, an interactive illustration. Decorative."/></div>
     </section>}
     <section className="tile chart reveal" style={{ '--i': 1 } as React.CSSProperties} aria-labelledby="request-title">
-      <div className="chart-head"><h2 id="request-title">The last request, step by step</h2>{lastRequest && <span className={`access-label${lastRequest.ok ? '' : ' failed'}`}>{lastRequest.ok ? 'Recorded' : 'Failure recorded in this request'}</span>}</div>
-      {lastRequest ? <><Pipeline steps={lastRequest.hops.map(hop => ({ step: activityLabel(hop.hop), state: hop.ok ? 'ok' as const : 'failed' as const }))}/>
-        <p className="meta">Every step recorded for one chat request, started {stamp(lastRequest.at)}. Steps from other requests are not mixed in.</p></>
+      <div className="chart-head"><h2 id="request-title">The last request, step by step</h2>{lastRequest && <span className={`access-label${lastRequest.ok ? '' : ' failed'}`}>{lastRequest.ok ? (lastRequest.partial ? 'Recorded, no failure among all steps' : 'Recorded') : 'Failure recorded in this request'}</span>}</div>
+      {lastRequest ? <><Pipeline steps={lastRequest.hops.map(hop => ({ step: activityLabel(hop.hop), state: hop.ok ? 'ok' as const : 'failed' as const, note: [`${hop.ms} ms`, hop.note].filter(Boolean).join(' · ') }))}/>
+        <p className="meta">{lastRequest.partial ? `Some earlier steps of this request were cleared to keep the log short, so ${lastRequest.hops.length} of ${lastRequest.recorded_steps} recorded steps are shown. The outcome above counts all of them.` : 'Every step recorded for one chat request.'} Started {stamp(lastRequest.at)}. Steps from other requests are not mixed in.</p></>
         : <p>No chat request recorded yet.</p>}
     </section>
     {steps.length > 0 && <section className="tile chart reveal" style={{ '--i': 1 } as React.CSSProperties} aria-labelledby="steps-title">
