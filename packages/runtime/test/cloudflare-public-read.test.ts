@@ -32,6 +32,77 @@ it('does not fall back to paid Browserbase when Cloudflare is unconfigured', asy
   expect(await handler.handle(browsePageArgsSchema.parse(args), context)).toMatchObject({ ok: false, code: 'auth_failed' });
   expect(paid).toBe(0);
 });
+it('advertises only configured public browsers, with the actual default and no availability guarantee', () => {
+  const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => fake().sdk as never });
+  for (const [key, project, allowed, expected] of [
+    ['key', 'project', true, true], [undefined, 'project', true, false],
+    ['key', undefined, true, false], ['key', 'project', false, false],
+  ] as const) {
+    const handler = browsePageHandler(key, project, undefined, fetch, { defaultProvider: 'cloudflare_playwright', cloudflare: read, allowBrowserbase: allowed });
+    expect(handler.description).toContain('Default provider: cloudflare_playwright');
+    expect(handler.description.includes('Configured alternatives: browserbase_stagehand_http_v3')).toBe(expected);
+    expect(handler.description).toContain('does not guarantee availability');
+  }
+  const handler = browsePageHandler('key', 'project', undefined);
+  expect(handler.description).toContain('Default provider: browserbase_stagehand_http_v3');
+  expect(handler.description).not.toContain('cloudflare_playwright');
+});
+it('reports observed Browserbase extraction without guessing login or blocking, and stamps useful short results', async () => {
+  for (const value of ['  ', 'x', 'Please sign in']) {
+    const calls: string[] = [];
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const operation = String(input).split('/').pop()!; calls.push(operation);
+      if (operation === 'start') return Response.json({ success: true, data: { sessionId: 'private-browserbase-session' } });
+      if (operation === 'extract') return Response.json({ success: true, data: { result: value } });
+      return Response.json({ success: true });
+    }) as typeof fetch;
+    const result = await browsePageHandler('key', 'project', undefined, fetcher).handle({ url: args.url, instruction: args.instruction }, context);
+    if (!value.trim()) expect(result).toMatchObject({ ok: false, error: 'The page returned no readable content.' });
+    else expect(result).toMatchObject({ ok: true, data: { provider: 'browserbase_stagehand_http_v3', data: value } });
+    expect(result).toMatchObject({ browser_read: { provider: 'browserbase_stagehand_http_v3', phase: value.trim() ? 'complete' : 'extraction', reason: value.trim() ? 'completed' : 'empty_content', cleanup: 'confirmed' } });
+    expect(JSON.stringify(result)).not.toContain('private-browserbase-session');
+    expect(calls).toEqual(['start', 'navigate', 'extract', 'end']);
+  }
+});
+it('retains observed Browserbase failure when ending the owned session fails', async () => {
+  const fetcher = (async (input: RequestInfo | URL) => {
+    const operation = String(input).split('/').pop();
+    if (operation === 'start') return Response.json({ success: true, data: { sessionId: 'private-session' } });
+    if (operation === 'navigate') return new Response('private provider body', { status: 503 });
+    return new Response('private cleanup body', { status: 500 });
+  }) as typeof fetch;
+  const result = await browsePageHandler('key', 'project', undefined, fetcher).handle({ url: args.url, instruction: args.instruction, provider: 'browserbase_stagehand_http_v3' }, context);
+  expect(result).toMatchObject({ ok: false, code: 'rejected', browser_read: { provider: 'browserbase_stagehand_http_v3', phase: 'navigation', reason: 'provider_http', http_status: 503, cleanup: 'unconfirmed' } });
+  expect(JSON.stringify(result)).not.toContain('private');
+});
+it('offers configured Browserbase only after an eligible observed Cloudflare failure, never calls it', async () => {
+  for (const configured of [true, false]) for (const unsafe of [true, false]) {
+    const f = fake();
+    if (unsafe) f.page.url = () => 'https://foreign.example/';
+    else f.page.locator = () => ({ innerText: async () => '' });
+    const fetcher = vi.fn(async () => { throw Error('must be explicit'); }) as typeof fetch;
+    const handler = browsePageHandler(configured ? 'key' : undefined, 'project', undefined, fetcher, { defaultProvider: 'cloudflare_playwright', cloudflare: cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never }), allowBrowserbase: true });
+    const result = await handler.handle(args as never, context);
+    expect(result).toMatchObject({ ok: false, browser_read: { configured_alternatives: configured && !unsafe ? ['browserbase_stagehand_http_v3'] : [] } });
+    expect(fetcher).not.toHaveBeenCalled();
+  }
+});
+it.each(['deadline', 'cancelled', 'unknown_allocation', 'unconfirmed', 'source'] as const)('never offers or calls an alternative after %s', async mode => {
+  const f = fake(); let revoked = false;
+  if (mode === 'unknown_allocation') f.sdk.acquire = async () => { throw Error('lost'); };
+  if (mode === 'unconfirmed') f.sdk.sessions = async () => [{ sessionId: 'private-id' }];
+  if (mode === 'source') f.page.goto = async () => { revoked = true; throw Error('load'); };
+  const fetcher = vi.fn(async () => { throw Error('automatic fallback'); }) as typeof fetch;
+  const handler = browsePageHandler('key', 'project', undefined, fetcher, { defaultProvider: 'cloudflare_playwright', allowBrowserbase: true, cloudflare: cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never }) });
+  const result = await handler.handle(args as never, { ...context as object, runScope: { deadline: mode === 'deadline' ? Date.now() - 1 : Date.now() + 30000, admit() { if (mode === 'cancelled') throw Error('closed'); } }, assertTaskSourceCurrent: async () => { if (revoked) throw Error('revoked'); } } as never);
+  expect(result).toMatchObject({ ok: false, code: 'rejected', browser_read: { configured_alternatives: [] } });
+  if (mode === 'deadline' || mode === 'cancelled') expect(result).toMatchObject({ browser_read: { reason: mode === 'deadline' ? 'deadline_elapsed' : 'run_closed', cleanup: 'not_started' } });
+  expect(fetcher).not.toHaveBeenCalled();
+});
+it.each(['x', 'Please sign in to continue'])('leaves nonempty Cloudflare content judgment to the model: %s', async text => {
+  const f = fake(); f.page.locator = () => ({ innerText: async () => text });
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: true, data: { data: { text } }, browser_read: { phase: 'complete', reason: 'completed', cleanup: 'confirmed' } });
+});
 it.each([403, 429, 500])('HTTP %s page failures do not return challenge/error text as useful content', async status => {
   const f = fake(); f.page.goto = async () => ({ status: () => status });
   expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: false, code: 'transient', error: `The page did not load (HTTP ${status}).` });
@@ -46,6 +117,38 @@ it('returns typed empty-page and timeout failures while terminating the owned se
     expect(result).toMatchObject({ ok: false, code: mode === 'empty' ? 'not_found' : 'transient' });
     expect(JSON.stringify(result)).not.toContain('secret'); expect(f.calls).toContain('Browser.close');
   }
+});
+it('keeps the observed Cloudflare read failure distinct from unconfirmed cleanup', async () => {
+  const f = fake(); f.page.goto = async () => ({ status: () => 403 });
+  f.sdk.sessions = async () => [{ sessionId: 'private-id' }];
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+  expect(result).toMatchObject({ ok: false, code: 'rejected', browser_read: {
+    provider: 'cloudflare_playwright', phase: 'navigation', reason: 'page_http', http_status: 403, cleanup: 'unconfirmed',
+  } });
+  if (!result.ok) expect(result.error).toContain('HTTP 403');
+  expect(JSON.stringify(result)).not.toContain('private-id');
+});
+it.each([
+  ['empty', 'extraction', 'empty_content', 'confirmed'],
+  ['navigate', 'navigation', 'navigation_failed', 'confirmed'],
+  ['connect', 'connection', 'provider_failure', 'confirmed'],
+  ['source', 'admission', 'source_rejected', 'confirmed'],
+  ['redirect', 'navigation', 'unsafe_redirect', 'confirmed'],
+  ['session', 'allocation', 'invalid_session', 'unknown_allocation'],
+  ['lost', 'allocation', 'provider_failure', 'unknown_allocation'],
+] as const)('classifies observed %s failure with phase and cleanup custody', async (mode, phase, reason, cleanup) => {
+  const f = fake(); let revoked = false;
+  if (mode === 'empty') f.page.locator = () => ({ innerText: async () => ' \t\n' });
+  if (mode === 'navigate') f.page.goto = async () => { throw Error('PRIVATE_PROVIDER_BODY'); };
+  if (mode === 'connect') { let attempts = 0; const connect = f.sdk.connect; f.sdk.connect = async () => { if (++attempts === 1) throw Error('PRIVATE_PROVIDER_BODY'); return connect(); }; }
+  if (mode === 'source') f.page.goto = async () => { revoked = true; return { status: () => 200 }; };
+  if (mode === 'redirect') f.page.url = () => 'http://127.0.0.1/private';
+  if (mode === 'session') f.sdk.acquire = async () => ({ sessionId: '' });
+  if (mode === 'lost') f.sdk.acquire = async () => { throw Error('PRIVATE_PROVIDER_BODY'); };
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, { ...context as object, assertTaskSourceCurrent: async () => { if (revoked) throw Error('PRIVATE_SOURCE_BODY'); } } as never);
+  expect(result).toMatchObject({ ok: false, browser_read: { provider: 'cloudflare_playwright', phase, reason, cleanup } });
+  if (['source', 'redirect', 'session', 'lost'].includes(mode)) expect(result).toMatchObject({ code: 'rejected' });
+  expect(JSON.stringify(result)).not.toContain('PRIVATE_');
 });
 it('denies missing/currently revoked source and private egress before allocating', async () => {
   const f = fake(), read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never });
@@ -65,10 +168,41 @@ it('does not certify completion when physical cleanup is unconfirmed', async () 
 });
 it('reports bounded Cloudflare 402 status/code/request id without provider body text', async () => {
   const binding = { fetch: async () => new Response(JSON.stringify({ code: 'payment_required', message: 'secret-key attacker instructions' }), { status: 402, headers: { 'x-request-id': 'req_123' } }) };
-  const sdk = { ...fake().sdk, acquire: async (wrapped: typeof binding) => { const response = await wrapped.fetch(); if (!response.ok) throw Error('raw provider secret'); return { sessionId: 'unused' }; } };
+  const sdk = { ...fake().sdk, acquire: async (wrapped: { fetch: typeof fetch }) => { const response = await wrapped.fetch('http://fake.host/v1/devtools/browser', { method: 'POST' }); if (!response.ok) throw Error('raw provider secret'); return { sessionId: 'unused' }; } };
   const result = await cloudflarePublicRead({ binding: binding as never, loadSdk: async () => sdk as never })(args as never, context);
   expect(result).toMatchObject({ ok: false, code: 'transient', error: expect.stringContaining('HTTP 402, code payment_required, request req_123') });
+  expect(result).toMatchObject({ browser_read: { provider: 'cloudflare_playwright', phase: 'allocation', reason: 'provider_http', http_status: 402, cleanup: 'allocation_refused' } });
   expect(JSON.stringify(result)).not.toContain('secret'); expect(JSON.stringify(result)).not.toContain('attacker');
+});
+it('retains an observed allocation refusal status when its diagnostic body stalls past the run deadline', async () => {
+  const binding = { fetch: async () => new Response(new ReadableStream(), { status: 402 }) };
+  const sdk = { ...fake().sdk, acquire: async (wrapped: { fetch: typeof fetch }) => { await wrapped.fetch('http://fake.host/v1/devtools/browser', { method: 'POST' }); return { sessionId: 'unreachable' }; } };
+  const result = await cloudflarePublicRead({ binding: binding as never, loadSdk: async () => sdk as never })(args as never, { ...context as object, runScope: { deadline: Date.now() + 50, admit() {} } } as never);
+  expect(result).toMatchObject({ ok: false, code: 'rejected', browser_read: { phase: 'allocation', reason: 'deadline_elapsed', http_status: 402, cleanup: 'allocation_refused' } });
+});
+it.each([202, 401, 402, 403, 408, 429, 500])('keeps acquire HTTP %s distinct from unknown allocation acknowledgement', async status => {
+  const binding = { fetch: async () => new Response('provider body is not evidence', { status }) };
+  const sdk = { ...fake().sdk, acquire: async (wrapped: { fetch: typeof fetch }) => {
+    const response = await wrapped.fetch('http://fake.host/v1/devtools/browser', { method: 'POST' });
+    if (response.status !== 200) throw Error('the pinned SDK rejects every non-200 acquire response');
+    return { sessionId: 'unreachable' };
+  } };
+  const result = await cloudflarePublicRead({ binding: binding as never, loadSdk: async () => sdk as never })(args as never, context);
+  expect(result).toMatchObject({ ok: false, browser_read: { phase: 'allocation', reason: 'provider_http', http_status: status, cleanup: [402, 429].includes(status) ? 'allocation_refused' : 'unknown_allocation' } });
+  expect(JSON.stringify(result)).not.toContain('provider body is not evidence');
+});
+it('rechecks Browserbase source custody after cleanup before publishing content', async () => {
+  let revoked = false;
+  const fetcher = (async (input: RequestInfo | URL) => {
+    const operation = String(input).split('/').pop();
+    if (operation === 'start') return Response.json({ success: true, data: { sessionId: 'private-session' } });
+    if (operation === 'extract') return Response.json({ success: true, data: { result: 'useful content' } });
+    if (operation === 'end') revoked = true;
+    return Response.json({ success: true });
+  }) as typeof fetch;
+  const result = await browsePageHandler('key', 'project', undefined, fetcher).handle({ url: args.url, instruction: args.instruction }, { ...context as object, assertTaskSourceCurrent: async () => { if (revoked) throw Error('revoked'); } } as never);
+  expect(result).toMatchObject({ ok: false, code: 'rejected', browser_read: { phase: 'admission', reason: 'source_rejected', cleanup: 'confirmed' } });
+  expect(JSON.stringify(result)).not.toContain('useful content');
 });
 
 it('cleanup still terminates a browser with a damaged context and unknown session-list response stays unknown', async () => {

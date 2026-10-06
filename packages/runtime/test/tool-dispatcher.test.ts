@@ -1,6 +1,10 @@
 import {
   TOOL_PERMISSIONS,
   buildSessionState,
+  browsePageArgsSchema,
+  type ToolResult,
+  type BrowserReadDiagnostic,
+  type TrustedToolEffect,
   executeActionArgsSchema,
   executeCodeArgsSchema,
   getCrsArgsSchema,
@@ -25,11 +29,13 @@ import {
   dispatchTool,
   formatToolDefinitions,
   parseToolCalls,
+  reconcileTrustedToolEffect,
   type ToolDispatcherContext,
   type RuntimeToolCall,
 } from '../src/tools/dispatcher';
 import type { HookRegistry } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
+import { inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
 
 const canaryTokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
 
@@ -54,6 +60,289 @@ function dispatcherContext(trigger: TriggerType): ToolDispatcherContext {
     sanitise,
   };
 }
+
+describe('browser-read dispatcher diagnostics', () => {
+  const diagnostic: BrowserReadDiagnostic = {
+    provider: 'cloudflare_playwright', phase: 'navigation', reason: 'page_http',
+    cleanup: 'confirmed', http_status: 403,
+    configured_alternatives: ['browserbase_stagehand_http_v3'],
+  };
+  const call: RuntimeToolCall = {
+    id: 'browser-read', name: 'browse_page',
+    args: { url: 'https://example.com', instruction: 'Read the public page' },
+  };
+  const effect: TrustedToolEffect = {
+    idempotency_key: 'idk_44444444444444444444444444444444',
+    request_digest: '4'.repeat(64), operation: 'reconcile',
+  };
+  const browserContext = () => ({
+    ...dispatcherContext('user_message'), egressAllowlist: ['example.com'],
+  });
+  const handlerFor = (result: unknown): ToolHandler<unknown, unknown, ToolDispatcherContext> => ({
+    name: 'browse_page', description: 'Read a public page', schema: browsePageArgsSchema,
+    trigger_allowlist: triggerAllowlistFor('browse_page'), autonomy_gated: false,
+    idempotentOnKey: true,
+    async handle() { return result as ToolResult<unknown>; },
+    async executeOrReconcile() { return result as ToolResult<unknown>; },
+    async reconcileTrustedEffect() { return result as ToolResult<unknown>; },
+  });
+
+  it.each(['dispatch', 'reconcile'] as const)('preserves diagnostics on %s success and failure', async (path) => {
+    for (const result of [
+      { ok: true, data: { text: 'Public content' }, source_taint: 'external', browser_read: diagnostic },
+      { ok: true, data: { text: 'Public content' }, source_taint: 'external', browser_read: diagnostic,
+        card: { kind: 'context_card', card_id: 'browser-card', data: { source_refs: ['public-page'] } } },
+      { ok: false, error: 'Page not available', code: 'transient', source_taint: 'external', browser_read: diagnostic },
+    ]) {
+      const handler = handlerFor(result);
+      const actual = path === 'dispatch'
+        ? await dispatchTool(call, browserContext(), { handlers: [handler] })
+        : await reconcileTrustedToolEffect({ callRef: call.id, tool: call.name, ctx: browserContext(), effect, handlers: [handler] });
+      expect(actual).toMatchObject({ ...result, call_id: call.id, tool: 'browse_page' });
+    }
+  });
+
+  const postResult = (result: unknown): HookRegistry<ToolDispatcherContext> => [{
+    name: 'browser_result_fixture', event: 'PostToolUse', priority: 100,
+    async handle(payload) {
+      return payload.event === 'PostToolUse'
+        ? { ok: true, payload: { ...payload, result } }
+        : { ok: true };
+    },
+  }];
+  const dispatchPath = (
+    path: 'dispatch' | 'reconcile', result: unknown,
+    options: { extraHooks?: HookRegistry<ToolDispatcherContext>; maxResultJsonChars?: number } = {},
+  ) => path === 'dispatch'
+    ? dispatchTool(call, browserContext(), { handlers: [handlerFor(result)], ...options })
+    : reconcileTrustedToolEffect({
+      callRef: call.id, tool: call.name, ctx: browserContext(), effect,
+      handlers: [handlerFor(result)], ...options,
+    });
+
+  it.each(['dispatch', 'reconcile'] as const)('preserves the validated post-hook diagnostic in %s', async (path) => {
+    const original = { ok: true, data: 'Public content', source_taint: 'external', browser_read: diagnostic };
+    const changed = { ...original, browser_read: {
+      provider: 'browserbase_stagehand_http_v3', phase: 'complete', reason: 'completed', cleanup: 'confirmed',
+    } };
+    expect(await dispatchPath(path, original, { extraHooks: postResult(changed) })).toMatchObject(changed);
+  });
+
+  it.each(['dispatch', 'reconcile'] as const)('rejects malformed and forged diagnostics before and after hooks in %s', async (path) => {
+    for (const result of [
+      { ok: true, data: 'Public content', source_taint: 'external' },
+      { ok: false, error: 'Unavailable', code: 'transient', source_taint: 'external' },
+    ]) {
+      for (const browserRead of [
+        { ...diagnostic, session_id: 'private-marker' },
+        { ...diagnostic, url: 'https://private-marker.test' },
+        { ...diagnostic, phase: 'private-marker' },
+        { ...diagnostic, http_status: 600 },
+        { ...diagnostic, configured_alternatives: ['cloudflare_playwright'] },
+        { ...diagnostic, provider: 'browserbase_stagehand_http_v3', configured_alternatives: [], fallback_from: 'cloudflare_playwright' },
+        { ...diagnostic, fallback_from: undefined },
+        null, 'private-marker',
+      ]) {
+        const forged = { ...result, browser_read: browserRead };
+        const initial = await dispatchPath(path, forged);
+        expect(initial).toMatchObject({ ok: false, reason: 'invalid_handler_result' });
+        expect(initial).not.toHaveProperty('browser_read');
+        expect(JSON.stringify(initial)).not.toContain('private-marker');
+        const final = await dispatchPath(path, result, { extraHooks: postResult(forged) });
+        expect(final.ok).toBe(false);
+        if (!final.ok) expect(['invalid_tool_result', 'sanitise_denied']).toContain(final.reason);
+        expect(final).not.toHaveProperty('browser_read');
+        expect(JSON.stringify(final)).not.toContain('private-marker');
+      }
+    }
+  });
+
+  it.each(['get_crs', 'web_search'] as const)('rejects browser metadata on %s before and after hooks', async (name) => {
+    for (const ok of [true, false]) {
+      const result = { ...(ok ? { ok: true, data: 'Content' } : { ok: false, error: 'Unavailable', code: 'transient' }), source_taint: name === 'web_search' ? 'external' : null };
+      const handler = { ...handlerFor(result), name, schema: name === 'get_crs' ? getCrsArgsSchema : webSearchArgsSchema, trigger_allowlist: triggerAllowlistFor(name) };
+      const toolCall = { id: 'non-browser', name, args: name === 'get_crs' ? {} : { query: 'public page' } };
+      const forged = { ...result, browser_read: diagnostic };
+      const first = await dispatchTool(toolCall, dispatcherContext('user_message'), { handlers: [{ ...handler, handle: handlerFor(forged).handle }] });
+      expect(first).toMatchObject({ ok: false, reason: 'invalid_handler_result' });
+      const final = await dispatchTool(toolCall, dispatcherContext('user_message'), { handlers: [handler], extraHooks: postResult(forged) });
+      expect(final).toMatchObject({ ok: false, reason: 'invalid_tool_result' });
+    }
+  });
+
+  it.each([
+    { fallback_from: 'cloudflare_playwright' }, { session_id: 'private-marker' },
+    { owner_id: 'private-marker' }, { browser_read: diagnostic },
+  ])('rejects model-supplied browser authority before handler I/O %j', async (extra) => {
+    let handled = false;
+    const handler = { ...handlerFor({ ok: true, data: 'Content', source_taint: 'external' }),
+      async handle(): Promise<ToolResult<unknown>> {
+        handled = true;
+        return { ok: true, data: 'Content', source_taint: 'external' };
+      },
+    };
+    const result = await dispatchTool({ ...call, args: { ...(call.args as Record<string, unknown>), ...extra } }, browserContext(), { handlers: [handler] });
+    expect(result).toMatchObject({ ok: false, reason: 'invalid_args' });
+    expect(handled).toBe(false);
+  });
+
+  it('keeps source taint mandatory on browser results carrying diagnostics', async () => {
+    for (const sourceTaint of [null, undefined]) {
+      for (const result of [
+        { ok: true, data: 'Content' },
+        { ok: false, error: 'Unavailable', code: 'transient' },
+      ]) {
+        expect(await dispatchPath('dispatch', { ...result, source_taint: sourceTaint, browser_read: diagnostic }))
+          .toMatchObject({ ok: false, reason: 'invalid_handler_result' });
+      }
+    }
+  });
+
+  it.each(['dispatch', 'reconcile'] as const)('retains allocation uncertainty when %s output sanitisation rejects provider text', async (path) => {
+    const browserRead: BrowserReadDiagnostic = {
+      provider: 'cloudflare_playwright', phase: 'allocation', reason: 'provider_failure',
+      cleanup: 'unknown_allocation',
+    };
+    for (const result of [
+      { ok: false, error: `private-marker ${canaryTokens[0]}`, code: 'transient', source_taint: 'external', browser_read: browserRead },
+      { ok: true, data: `private-marker ${canaryTokens[0]}`, source_taint: 'external', browser_read: browserRead },
+    ]) {
+      const actual = await dispatchPath(path, result);
+      expect(actual).toMatchObject({ ok: false, reason: 'sanitise_denied', browser_read: browserRead });
+      expect(JSON.stringify(actual)).not.toContain('private-marker');
+      expect(JSON.stringify(actual)).not.toContain(canaryTokens[0]);
+      expect(actual.browser_read).not.toHaveProperty('fallback_from');
+    }
+  });
+
+  it.each(['dispatch', 'reconcile'] as const)('retains original allocation uncertainty when %s post-hook result is invalid', async (path) => {
+    const browserRead: BrowserReadDiagnostic = {
+      provider: 'cloudflare_playwright', phase: 'cleanup', reason: 'cleanup_unconfirmed',
+      cleanup: 'unconfirmed',
+    };
+    const original = { ok: false, error: 'Cleanup unavailable', code: 'transient', source_taint: 'external', browser_read: browserRead };
+    for (const invalid of [
+      { ...original, browser_read: { ...diagnostic, session_id: 'private-marker' } },
+      { ...original, code: 'private-marker' },
+      { ...original, extra: 'private-marker' },
+      null,
+    ]) {
+      const actual = await dispatchPath(path, original, { extraHooks: postResult(invalid) });
+      expect(actual).toMatchObject({ ok: false, reason: invalid === null ? 'sanitise_denied' : 'invalid_tool_result', browser_read: browserRead });
+      expect(JSON.stringify(actual)).not.toContain('private-marker');
+    }
+  });
+
+  it.each(['dispatch', 'reconcile'] as const)('retains allocation uncertainty when %s post-hook changes tool identity', async (path) => {
+    const browserRead: BrowserReadDiagnostic = {
+      provider: 'cloudflare_playwright', phase: 'allocation', reason: 'provider_failure',
+      cleanup: 'unknown_allocation',
+    };
+    const original = { ok: false, error: 'Allocation unavailable', code: 'transient', source_taint: 'external', browser_read: browserRead };
+    const extraHooks: HookRegistry<ToolDispatcherContext> = [{
+      name: 'browser_identity_fixture', event: 'PostToolUse', priority: 100,
+      async handle(payload) {
+        return payload.event === 'PostToolUse'
+          ? { ok: true, payload: { ...payload, tool: 'get_crs' } }
+          : { ok: true };
+      },
+    }];
+    const actual = await dispatchPath(path, original, { extraHooks });
+    expect(actual).toMatchObject({ ok: false, reason: 'invalid_tool_result', browser_read: browserRead });
+  });
+
+  it.each(['dispatch', 'reconcile'] as const)('keeps %s cleanup custody when hooks remove, replace, or mutate valid diagnostics', async (path) => {
+    for (const cleanup of ['unknown_allocation', 'unconfirmed'] as const) {
+      const browserRead: BrowserReadDiagnostic = {
+        provider: 'cloudflare_playwright', phase: 'cleanup', reason: 'cleanup_unconfirmed', cleanup,
+      };
+      const original = { ok: false, error: 'Cleanup unavailable', code: 'transient', source_taint: 'external', browser_read: browserRead };
+      const replacements = [
+        { ok: true, data: 'Public content', source_taint: 'external' },
+        { ok: false, error: 'Page unavailable', code: 'transient', source_taint: 'external', browser_read: diagnostic },
+        { ok: true, data: 'Public content', source_taint: 'external', browser_read: {
+          provider: 'browserbase_stagehand_http_v3', phase: 'complete', reason: 'completed', cleanup: 'confirmed',
+        } },
+      ];
+      for (const replacement of replacements) {
+        const actual = await dispatchPath(path, original, { extraHooks: postResult(replacement) });
+        expect(actual).toMatchObject({ ok: replacement.ok, browser_read: browserRead });
+      }
+      const mutatingHook: HookRegistry<ToolDispatcherContext> = [{
+        name: 'browser_mutation_fixture', event: 'PostToolUse', priority: 100,
+        async handle(payload) {
+          if (payload.event === 'PostToolUse') {
+            (payload.result as { browser_read: BrowserReadDiagnostic }).browser_read.cleanup = 'confirmed';
+          }
+          return { ok: true };
+        },
+      }];
+      expect(await dispatchPath(path, original, { extraHooks: mutatingHook }))
+        .toMatchObject({ browser_read: browserRead });
+    }
+  });
+
+  it.each(['dispatch', 'reconcile'] as const)('retains %s cleanup custody when a post-hook throws', async (path) => {
+    const browserRead: BrowserReadDiagnostic = {
+      provider: 'cloudflare_playwright', phase: 'allocation', reason: 'provider_failure', cleanup: 'unknown_allocation',
+    };
+    const original = { ok: false, error: 'Allocation unavailable', code: 'transient', source_taint: 'external', browser_read: browserRead };
+    const extraHooks: HookRegistry<ToolDispatcherContext> = [{
+      name: 'browser_throw_fixture', event: 'PostToolUse', priority: 100,
+      async handle() { throw new Error(`private-marker ${canaryTokens[0]}`); },
+    }];
+    const actual = await dispatchPath(path, original, { extraHooks });
+    expect(actual).toMatchObject({ ok: false, reason: 'hook_halt', browser_read: browserRead });
+    expect(JSON.stringify(actual)).not.toContain('private-marker');
+    expect(JSON.stringify(actual)).not.toContain(canaryTokens[0]);
+  });
+
+  it.each(['dispatch', 'reconcile'] as const)('retains %s cleanup custody when a post-hook times out', async (path) => {
+    const browserRead: BrowserReadDiagnostic = {
+      provider: 'cloudflare_playwright', phase: 'cleanup', reason: 'cleanup_unconfirmed', cleanup: 'unconfirmed',
+    };
+    const original = { ok: false, error: 'Cleanup unavailable', code: 'transient', source_taint: 'external', browser_read: browserRead };
+    const extraHooks: HookRegistry<ToolDispatcherContext> = [{
+      name: 'browser_timeout_fixture', event: 'PostToolUse', priority: 100, timeout_ms: 5,
+      async handle() { return new Promise<never>(() => {}); },
+    }];
+    const actual = await dispatchPath(path, original, { extraHooks });
+    expect(actual).toMatchObject({ ok: false, reason: 'hook_halt', browser_read: browserRead });
+  });
+
+  it.each(['dispatch', 'reconcile'] as const)('retains diagnostic and taint when %s error text is bounded', async (path) => {
+    const result = { ok: false, error: 'x'.repeat(700), code: 'transient', source_taint: 'external', browser_read: diagnostic };
+    expect(await dispatchPath(path, result)).toMatchObject({
+      ...result, error: 'tool returned oversized error', reason: 'result_oversize',
+    });
+  });
+
+  it.each(['dispatch', 'reconcile'] as const)('retains diagnostics on %s result-size rejection', async (path) => {
+    const result = { ok: true, data: 'x'.repeat(2_000), source_taint: 'external', browser_read: diagnostic };
+    expect(await dispatchPath(path, result, { maxResultJsonChars: 1_000 })).toMatchObject({
+      ok: false, code: 'oversize', reason: 'result_oversize', browser_read: diagnostic,
+    });
+  });
+
+  it.each(['before-hooks', 'after-hooks'] as const)('preserves diagnostics through offload %s', async (stage) => {
+    const store = inMemoryToolOutputStore();
+    const result = { ok: true, data: 'x'.repeat(stage === 'before-hooks' ? 20_000 : 10), source_taint: 'external', browser_read: diagnostic };
+    const large = { ...result, data: 'x'.repeat(20_000) };
+    const actual = await dispatchTool(call, browserContext(), {
+      handlers: [handlerFor(result)], offload: store, maxResultJsonChars: 10_000,
+      ...(stage === 'after-hooks' ? { extraHooks: postResult(large) } : {}),
+    });
+    expect(actual).toMatchObject({ ok: true, source_taint: 'external', browser_read: diagnostic, data: { stored_output: 'to-1' } });
+    expect(store.read('to-1', 0, 25_000)?.text).toBe(JSON.stringify(large.data));
+  });
+
+  it('retains validated diagnostics when the full-output offload guard rejects content', async () => {
+    const result = { ok: true, data: `${'x'.repeat(20_000)} ${canaryTokens[0]}`, source_taint: 'external', browser_read: diagnostic };
+    const actual = await dispatchTool(call, browserContext(), { handlers: [handlerFor(result)], offload: inMemoryToolOutputStore(), maxResultJsonChars: 10_000 });
+    expect(actual).toMatchObject({ ok: false, reason: 'sanitise_denied', browser_read: diagnostic });
+    expect(JSON.stringify(actual)).not.toContain(canaryTokens[0]);
+  });
+});
 
 describe('ToolDispatcher', () => {
   it('fails closed before handler I/O when a trusted effect has no reconciliation contract', async () => {

@@ -42,6 +42,68 @@ const baseCard = {
   data: { source_refs: ['calendar:evt-01'] },
 };
 
+describe('browser-read result metadata', () => {
+  const diagnostic = {
+    provider: 'cloudflare_playwright', phase: 'navigation', reason: 'page_http',
+    cleanup: 'confirmed', http_status: 403,
+    configured_alternatives: ['browserbase_stagehand_http_v3'],
+  };
+
+  it('preserves bounded diagnostics on both result arms without changing legacy codes', () => {
+    for (const schema of [resultSchema, externalSchema]) {
+      for (const result of [baseOk, baseErr]) {
+        const input = {
+          ...result, source_taint: schema === externalSchema ? 'external' : null,
+          browser_read: diagnostic,
+        };
+        expect(schema.safeParse(input)).toMatchObject({ success: true, data: input });
+      }
+    }
+  });
+
+  it.each([
+    { provider: 'untrusted-provider' },
+    { phase: 'private phase' },
+    { reason: 'private failure' },
+    { cleanup: 'private cleanup' },
+    { http_status: 99 }, { http_status: 600 }, { http_status: 200.5 },
+    { configured_alternatives: ['cloudflare_playwright'] },
+    { configured_alternatives: ['browserbase_stagehand_http_v3', 'browserbase_stagehand_http_v3'] },
+    { configured_alternatives: ['unknown'] },
+    { fallback_from: 'cloudflare_playwright' },
+    { session_id: 'private-marker' }, { url: 'https://private-marker.test' },
+    { error: 'private-marker' }, { owner_id: 'private-marker' },
+  ])('rejects malformed or content-bearing browser metadata %j', (override) => {
+    for (const schema of [resultSchema, externalSchema]) {
+      for (const result of [baseOk, baseErr]) {
+        expect(schema.safeParse({
+          ...result, source_taint: schema === externalSchema ? 'external' : null,
+          browser_read: { ...diagnostic, ...override },
+        }).success).toBe(false);
+      }
+    }
+  });
+
+  it('accepts a confirmed allocation refusal without claiming a session was cleaned up', () => {
+    const input = { ...baseErr, browser_read: {
+      provider: 'cloudflare_playwright', phase: 'allocation', reason: 'provider_http',
+      cleanup: 'allocation_refused', http_status: 429,
+    } };
+    expect(resultSchema.safeParse(input)).toMatchObject({ success: true, data: input });
+  });
+
+  it('accepts host provenance only for the browserbase destination', () => {
+    const input = { ...baseOk, browser_read: {
+      provider: 'browserbase_stagehand_http_v3', phase: 'complete', reason: 'completed',
+      cleanup: 'confirmed', fallback_from: 'cloudflare_playwright',
+    } };
+    expect(resultSchema.safeParse(input)).toMatchObject({ success: true, data: input });
+    expect(resultSchema.safeParse({ ...input, browser_read: {
+      ...input.browser_read, fallback_from: 'browserbase_stagehand_http_v3',
+    } }).success).toBe(false);
+  });
+});
+
 describe('toolResultSchema', () => {
   it('accepts an internal success stamped with null taint', () => {
     expect(resultSchema.safeParse(baseOk).success).toBe(true);

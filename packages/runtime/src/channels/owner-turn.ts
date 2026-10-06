@@ -14,6 +14,7 @@ import {
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
+import { browserReadTraceCode } from '../observability/browser-read-trace';
 import { runToolLoop, type LoopExit } from '../conversation/tool-loop';
 import { receiptLine } from '../hooks/receipt-line';
 import type { LoopEventLike } from '../hooks/claim-hook';
@@ -608,7 +609,7 @@ export const createOwnerResponder = (
           },
           onTool: (event) => {
             if (forgottenTexts.size) offloadStore?.clear();
-            log({ trace, hop: `subagent_tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: forgetJsonText(event.call.arguments), output: forgetJsonText(event.output, 'tool_result') } });
+            log({ trace, hop: `subagent_tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...((event.browser_read || event.code) ? { code: browserReadTraceCode(event.browser_read, event.code, event.reason) ?? [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: forgetJsonText(event.call.arguments), output: forgetJsonText(event.output, 'tool_result') } });
           },
         });
           await assertChildSource();
@@ -709,7 +710,7 @@ export const createOwnerResponder = (
           turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, ...(event.code ? { code: event.code } : {}) });
           privateRunScope?.admit();
           if (forgottenTexts.size) offloadStore?.clear();
-          log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: forgetJsonText(event.call.arguments), output: forgetJsonText(event.output, 'tool_result') } });
+          log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...((event.browser_read || event.code) ? { code: browserReadTraceCode(event.browser_read, event.code, event.reason) ?? [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: forgetJsonText(event.call.arguments), output: forgetJsonText(event.output, 'tool_result') } });
           privateRunScope?.admit();
           pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: 'external', summary: forgetJsonText(event.output, 'tool_result') });
         },

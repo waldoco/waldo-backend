@@ -3,6 +3,7 @@ import { errorCodeSchema, type ErrorCode } from '../core/error';
 import { triggerTypeSchema, type TriggerType } from '../core/trigger';
 import { isExternalSourceTaint, sourceTaintSchema, type SourceTaint } from '../memory/sanitise';
 import { waldoCardSchema, type WaldoCard } from '../ui/card';
+import { browserReadDiagnosticSchema, type BrowserReadDiagnostic } from './browser-read';
 import { connectIntentSchema, type ConnectIntent } from './connect-intent';
 import { TOOL_PERMISSIONS, type ToolName } from './permissions';
 
@@ -17,16 +18,17 @@ export const toolResultSchema = <Data extends z.ZodType>(dataSchema: Data) =>
       ok: z.literal(true),
       data: dataSchema,
       card: waldoCardSchema.optional(),
+      browser_read: browserReadDiagnosticSchema.optional(),
       source_taint: z.null(),
     }),
-    z.strictObject({ ok: z.literal(false), error: z.string().min(1), code: errorCodeSchema, source_taint: sourceTaintSchema.optional(), connect: connectIntentSchema.optional() }),
+    z.strictObject({ ok: z.literal(false), error: z.string().min(1), code: errorCodeSchema, source_taint: sourceTaintSchema.optional(), browser_read: browserReadDiagnosticSchema.optional(), connect: connectIntentSchema.optional() }),
   ]);
 
 export type ToolResult<T> =
-  | { ok: true; data: T; source_taint: SourceTaint; card?: WaldoCard }
+  | { ok: true; data: T; source_taint: SourceTaint; card?: WaldoCard; browser_read?: BrowserReadDiagnostic }
   // connect (CONNECT_FLOW_DESIGN 4.4): a typed auth intent the responder turns into the channel's
   // connect affordance. Never a URL - the model only ever sees fixed words.
-  | { ok: false; error: string; code: ErrorCode; source_taint?: SourceTaint; connect?: ConnectIntent };
+  | { ok: false; error: string; code: ErrorCode; source_taint?: SourceTaint; connect?: ConnectIntent; browser_read?: BrowserReadDiagnostic };
 
 // The trusted RunLoop V2 path provides this content-free capability only after it has committed
 // a durable effect intent. A handler that cannot reconcile a retry on this key must not be used
@@ -69,6 +71,7 @@ export const externalToolResultSchema = <Data extends z.ZodType>(dataSchema: Dat
       ok: z.literal(true),
       data: dataSchema,
       card: waldoCardSchema.optional(),
+      browser_read: browserReadDiagnosticSchema.optional(),
       source_taint: sourceTaintSchema.refine(isExternalSourceTaint, {
         error: "external-origin results are stamped 'external'; a null stamp launders taint",
       }),
@@ -78,6 +81,7 @@ export const externalToolResultSchema = <Data extends z.ZodType>(dataSchema: Dat
       error: z.string().min(1),
       code: errorCodeSchema,
       source_taint: z.literal('external'),
+      browser_read: browserReadDiagnosticSchema.optional(),
       connect: connectIntentSchema.optional(),
     }),
   ]);

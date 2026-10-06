@@ -3,6 +3,7 @@ import { docProviderSchema, docReadResultSchema } from '../../adapters/doc';
 import { iso8601Schema } from '../../core/error';
 import { hallTypeSchema } from '../../memory/hall';
 import { sourceTaintSchema } from '../../memory/sanitise';
+import { browsePageProviderSchema } from '../browser-read';
 
 // Model-supplied argument shapes for the read-cluster tools (ADR-0008/0021 surface). The
 // dispatcher validates args at the PreToolUse Zod gate (ADR-0032) before any handler runs,
@@ -185,7 +186,7 @@ export type WebSearchArgs = z.infer<typeof webSearchArgsSchema>;
 // B-tool-1: read-only browser. One shot: open the page in a real browser, extract, done.
 // No act/observe here - bounded actions are a later slice with the approval gate.
 export const browsePageArgsSchema = z.strictObject({
-  provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional(),
+  provider: browsePageProviderSchema.optional(),
   url: z.url().max(2000),
   instruction: z.string().min(1).max(1000),
 });

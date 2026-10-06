@@ -1,4 +1,5 @@
 import { sanitiseCheckSchema, sanitiseFailureReasonSchema } from '@waldo/contracts';
+import { gateBrowserReadTraceCode } from './browser-read-trace';
 import type { TurnLogEntry } from '../channels/telegram-listener';
 
 // The sink boundary validates the guard diagnostic itself: only a finite check:reason enum
@@ -49,9 +50,12 @@ const gateWithoutCapture = (entry: TurnLogEntry): TurnLogEntry => {
       : (typeof entry.code === 'string' && HEALTH_READ.test(entry.code) ? entry.code : undefined);
     return { ...entry, detail, code: detail, error: undefined, text: undefined, guard: undefined };
   }
+  const code = entry.hop === 'tool_browse_page' || entry.hop === 'subagent_tool_browse_page'
+    ? gateBrowserReadTraceCode(entry.code) : entry.code;
   return {
     ...entry,
-    detail: SAFE_DETAIL_HOPS.has(entry.hop) ? entry.detail : entry.code,
+    code,
+    detail: SAFE_DETAIL_HOPS.has(entry.hop) ? entry.detail : code,
     error: undefined,
     // The guard diagnostic is enum-only and validated HERE at the gate, not trusted from the
     // producer: an invalid value is dropped before any sink sees it.

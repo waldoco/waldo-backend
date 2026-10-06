@@ -1,5 +1,5 @@
 import { guardArtifactLinks, receiptUrl } from './artifact-link-guard';
-import { toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn } from '@waldo/contracts';
+import { browsePageArgsSchema, browserReadDiagnosticSchema, toolNameSchema, toolParameters, type BrowserReadDiagnostic, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn } from '@waldo/contracts';
 import { dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import type { ToolOutputStore } from './tool-output-store';
 
@@ -24,7 +24,7 @@ export type ToolLoopStep = (
   turns: readonly LLMToolTurn[],
 ) => Promise<Readonly<{ text: string; tool_calls?: readonly LLMToolCall[]; output_items?: readonly Record<string, unknown>[] }>>;
 
-export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; code?: string; reason?: string; guard?: string; taint: 'external' | null }>;
+export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; code?: string; reason?: string; guard?: string; browser_read?: BrowserReadDiagnostic; taint: 'external' | null }>;
 
 export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']): LLMTool[] =>
   handlers.map((handler) => ({
@@ -64,6 +64,12 @@ export async function runToolLoop(input: Readonly<{
   const turns: LLMToolTurn[] = [];
   const seen = new Map<string, Awaited<ReturnType<typeof dispatch>>>();
   const offered = new Set<string>();
+  // Invocation-local evidence only: another model round must observe a validated failure
+  // before its explicit alternate-provider request can carry host provenance.
+  const browserFailures = new Map<string, number>();
+  // A possibly live remote allocation must not be multiplied by another browser start.
+  // This fence belongs only to this loop; ordinary non-browser work remains available.
+  let browserCleanupUncertain = false;
   // Delivery URLs returned by successful tool receipts this loop; the final reply may show no other artifact link.
   const receiptUrls = new Set<string>();
   // A landed mutation opens a new read epoch. Mutation replay keys survive resets,
@@ -95,15 +101,18 @@ export async function runToolLoop(input: Readonly<{
       const started = Date.now();
       const key = `${call.name}\u0000${call.arguments}`;
       const previous = seen.get(key);
+      const browserStartBlocked = browserCleanupUncertain && call.name === 'browse_page';
       // Preserve settled nonretryable failures and mutation failures verbatim.
       // Replaying them performs no I/O; transient reads may retry within the budget.
-      const result = previous
+      let result = previous
         ? previous.ok
           ? { ok: false, error: 'Same call already made this turn; use its result.', code: 'repeat_refusal' as const }
           : previous
         : !offer
           ? { ok: false, error: 'Tool handler unavailable.', code: 'not_found' as const, reason: 'handler_unavailable' }
-          : await dispatch(call, input);
+          : browserStartBlocked
+            ? { ok: false, error: 'A browser session may still be live; no new browser session was started.', code: 'forbidden' as const, reason: 'browser_cleanup_unconfirmed' }
+            : await dispatch(call, input);
       input.ctx.runScope?.admit();
       if (!result.ok && result.connect) {
         const offerKey = `${result.connect.service}:${result.connect.reason}`;
@@ -120,6 +129,28 @@ export async function runToolLoop(input: Readonly<{
         && 'reason' in result && result.reason === 'tool_result_error';
       if (mutation || !retryableRead) {
         seen.set(key, result);
+      }
+      if (!previous && offer && !browserStartBlocked && call.name === 'browse_page') {
+        const request = browserRequest(call);
+        const parsed = browserReadDiagnosticSchema.safeParse(result.browser_read);
+        if (request && parsed.success) {
+          const diagnostic = parsed.data;
+          if (diagnostic.cleanup === 'unconfirmed' || diagnostic.cleanup === 'unknown_allocation') {
+            browserCleanupUncertain = true;
+            browserFailures.clear();
+          }
+          if (diagnostic.provider === 'cloudflare_playwright') {
+            if (!result.ok && result.reason === 'tool_result_error' && browserFallbackEligible(diagnostic)) {
+              browserFailures.set(request.url, round);
+            } else browserFailures.delete(request.url);
+          }
+          if (browserFallbackDenied(diagnostic)) browserFailures.delete(request.url);
+          if (request.provider === 'browserbase_stagehand_http_v3'
+            && diagnostic.provider === 'browserbase_stagehand_http_v3'
+            && (browserFailures.get(request.url) ?? Infinity) < round) {
+            result = { ...result, browser_read: { ...diagnostic, fallback_from: 'cloudflare_playwright' } };
+          }
+        }
       }
       const receipt = receiptUrl(call.name, result);
       if (receipt !== null) receiptUrls.add(receipt);
@@ -167,6 +198,7 @@ export async function runToolLoop(input: Readonly<{
         ...(typed?.code ? { code: typed.code } : {}),
         ...(typed?.reason ? { reason: typed.reason } : {}),
         ...(typed?.guard ? { guard: typed.guard } : {}),
+        ...(result.browser_read ? { browser_read: result.browser_read } : {}),
       });
     }
   }
@@ -175,7 +207,7 @@ export async function runToolLoop(input: Readonly<{
 async function dispatch(
   call: LLMToolCall,
   input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext; offload?: ToolOutputStore }>,
-): Promise<Readonly<{ ok: boolean; data?: unknown; error?: string; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent }>> {
+): Promise<Readonly<{ ok: boolean; data?: unknown; error?: string; code?: string; reason?: string; guard?: string; browser_read?: BrowserReadDiagnostic; source_taint?: 'external' | null; connect?: ConnectIntent }>> {
   const name = toolNameSchema.safeParse(call.name);
   if (!name.success) return { ok: false, error: `Unknown tool ${call.name}.` };
   let args: unknown;
@@ -188,7 +220,8 @@ async function dispatch(
   // The untrusted marker crosses the model boundary on BOTH arms: a successful external result
   // keeps source_taint 'external' in the JSON the model reads, so provider text never presents
   // as internal truth (security review 2026-09-26); the failure arm keeps it for the same reason.
-  if (result.ok) return { ok: true, data: result.data, ...(result.source_taint ? { source_taint: result.source_taint } : {}) };
+  // Keep the bounded diagnostic ahead of page content so output capping cannot erase it.
+  if (result.ok) return { ok: true, ...(result.browser_read ? { browser_read: result.browser_read } : {}), data: result.data, ...(result.source_taint ? { source_taint: result.source_taint } : {}) };
   // Keep the dispatcher's typed code/reason so spans carry the machine-readable failure, not
   // just the human-facing message.
   const typed = result as { code?: string; reason?: string };
@@ -201,5 +234,22 @@ async function dispatch(
     ...(result.guard ? { guard: `${result.guard.check}:${result.guard.reason}` } : {}),
     ...(result.source_taint ? { source_taint: result.source_taint } : {}),
     ...(result.connect ? { connect: result.connect } : {}),
+    ...(result.browser_read ? { browser_read: result.browser_read } : {}),
   };
 }
+
+const browserRequest = (call: LLMToolCall) => {
+  try {
+    const parsed = browsePageArgsSchema.safeParse(JSON.parse(call.arguments));
+    return parsed.success ? parsed.data : undefined;
+  } catch { return undefined; }
+};
+
+const browserFallbackEligible = (diagnostic: BrowserReadDiagnostic): boolean =>
+  ['confirmed', 'not_started', 'allocation_refused'].includes(diagnostic.cleanup)
+  && ['provider_http', 'provider_failure', 'navigation_failed', 'page_http', 'empty_content', 'provider_unconfigured'].includes(diagnostic.reason)
+  && diagnostic.configured_alternatives?.includes('browserbase_stagehand_http_v3') === true;
+
+const browserFallbackDenied = (diagnostic: BrowserReadDiagnostic): boolean =>
+  ['unsafe_redirect', 'source_rejected', 'run_closed', 'deadline_elapsed'].includes(diagnostic.reason)
+  || ['unconfirmed', 'unknown_allocation'].includes(diagnostic.cleanup);

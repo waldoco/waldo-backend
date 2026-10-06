@@ -77,6 +77,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Both canonical migration lists stay in sync statically: `guard-migration-fixture-sync.mjs` compares them in gates.sh, because the SQL fixture itself only runs Mac-side and its drift is invisible in sandbox gates.
 
 ### Failure paths
+- Public browser diagnostics retain observed provider phase/status separately from cleanup certainty through strict result validation, post-hook rejection and capture-off trace projection. Unknown allocation or unconfirmed cleanup prevents another public-browser start in the same tool loop; only a new explicit model call after an earlier-round, exact-URL, eligible result may carry fallback provenance. Prove sanitizer denial, metadata removal/replacement, oversized output and concurrent/new-turn controls with fake providers.
 - Browser effects return typed rejected, acknowledged-unverified or uncertain outcomes. Only authoritative validated receipts can prove completion; response loss after act starts is uncertain and cannot be blind-retried.
 - Every external call (model, Telegram, Google) has a timeout, and its failure path sends the owner something true or nothing, never a broken half-state. Best-effort UX calls (reactions, typing indicators) are bounded too and fail soft; they never gate the work they precede.
 - A turn that fails still records what happened in the trace.
@@ -544,3 +545,10 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] Redirect checks must precede every followed target, including prohibited ports/credentials. Playwright route.continue does not intercept every redirect hop; test actual route callbacks and finite egress before following.
 - [ ] The ordinary registered two-argument ownerDO must deliver page evidence through the real public-read handler. Node fakes cannot prove Worker native-object compatibility; canonical admit/deadline controls must survive hook context projection.
 - [ ] Browser allocation IDs require actual string validation before custody or connection; regex coercion of missing/null values cannot yield a completed read or skip cleanup.
+
+### Public browser failure custody
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Post-tool rejection or rewritten metadata erased an uncertain browser allocation and permitted another start; browser trace projection also erased the dispatcher rejection reason | tool-dispatcher.test.ts and browser-read-routing.test.ts preserve snapshotted uncertainty through sanitization, mutation and malformed results; browser-read-trace.test.ts preserves both diagnostics in actual responder and capture-off sinks | Existing public-read tool and one invocation-local no-reallocation fence; no global session registry, new provider authority or automatic fallback |
+| A stalled refusal body raced the enclosing deadline and changed the terminal classification | cloudflare-public-read.test.ts retains observed HTTP status while elapsed work deadlines remain rejected | Exact acquire refusal remains distinct from unknown allocation; no quota or billing inference |

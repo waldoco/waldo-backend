@@ -8,6 +8,8 @@ import {
   handlerAllowlistMatchesAcl,
   sessionToolAllowed,
   connectIntentSchema,
+  browserReadDiagnosticSchema,
+  type BrowserReadDiagnostic,
   sourceTaintSchema,
   trustedToolEffectReceiptUnavailableSchema,
   toolNameSchema,
@@ -91,6 +93,7 @@ export type DispatchToolResult = (
   // RunLoopDO atomically writes its bounded checkpoint/receipt; a thrown adapter call leaves the
   // durable intent pending for reconciliation instead.
   trusted_effect?: TrustedToolEffect;
+  browser_read?: BrowserReadDiagnostic;
 };
 
 export type GuardDiagnostic = Readonly<{ check: SanitiseCheck; reason: SanitiseFailureReason }>;
@@ -322,6 +325,11 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     ), settledTrustedEffect);
   }
 
+  // Keep an independent content-free receipt: hooks may rewrite/reject content, but
+  // cannot prove a possibly allocated browser session was cleaned up.
+  const browserReadCustody = parsedHandlerResult.browser_read === undefined
+    ? undefined : browserReadDiagnosticSchema.parse(parsedHandlerResult.browser_read);
+
   // Bound before sanitise: the PostToolUse sanitiser denies oversized payloads outright, which
   // killed large legitimate reads before the offload store could shrink them. Offload the full
   // untrusted data first; the reduced head still flows through every PostToolUse hook.
@@ -330,7 +338,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     const full = JSON.stringify(parsedHandlerResult.data);
     if (full.length > (options.maxResultJsonChars ?? DEFAULT_MAX_RESULT_JSON_CHARS)) {
       ctx.runScope?.admit();
-      const offloaded = offloadResult(call.id, tool.data, full, ctx, options.offload);
+      const offloaded = offloadResult(call.id, tool.data, full, ctx, options.offload, parsedHandlerResult.browser_read);
       if (!offloaded.ok) return withTrustedEffect(offloaded.result, settledTrustedEffect);
       effectiveHandlerResult = { ...parsedHandlerResult, data: offloaded.data };
     }
@@ -357,6 +365,10 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
         'tool result failed validation',
         'transient',
         'invalid_tool_result',
+        undefined,
+        undefined,
+        undefined,
+        browserReadCustody,
       ), settledTrustedEffect);
     }
     postToolPayload = nextPayload;
@@ -365,11 +377,11 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     // exception may be a storage/programming fault after the adapter I/O boundary: leave the
     // intent unreceipted so RunLoopDO can reconcile it rather than invent a terminal receipt.
     if (settledTrustedEffect !== undefined && !(error instanceof HookHaltError)) throw error;
-    return withTrustedEffect(hookFailure(call.id, tool.data, error), settledTrustedEffect);
+    return withTrustedEffect(hookFailure(call.id, tool.data, error, browserReadCustody), settledTrustedEffect);
   }
 
   ctx.runScope?.admit();
-  const finalResult = parseToolResult(postToolPayload.result, tool.data);
+  const finalResult = preserveBrowserReadCustody(parseToolResult(postToolPayload.result, tool.data), browserReadCustody);
   if (finalResult === null) {
     return withTrustedEffect(failDispatch(
       call.id,
@@ -377,6 +389,10 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       'tool result failed validation',
       'transient',
       'invalid_tool_result',
+      undefined,
+      undefined,
+      undefined,
+      browserReadCustody,
     ), settledTrustedEffect);
   }
 
@@ -387,7 +403,12 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
         tool.data,
         'tool returned oversized error',
         finalResult.code,
-        'tool_result_error',
+        // A transport-size rejection is not evidence of a provider failure for fallback.
+        finalResult.browser_read === undefined ? 'tool_result_error' : 'result_oversize',
+        finalResult.source_taint,
+        finalResult.connect,
+        undefined,
+        finalResult.browser_read,
       ), settledTrustedEffect);
     }
 
@@ -399,6 +420,8 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       'tool_result_error',
       finalResult.source_taint,
       finalResult.connect,
+      undefined,
+      finalResult.browser_read,
     ), settledTrustedEffect);
   }
 
@@ -410,6 +433,10 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       'tool result failed validation',
       'transient',
       'invalid_tool_result',
+      undefined,
+      undefined,
+      undefined,
+      browserReadCustody,
     ), settledTrustedEffect);
   }
 
@@ -417,7 +444,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     if (options.offload !== undefined) {
       const full = JSON.stringify(finalResult.data);
       ctx.runScope?.admit();
-      const offloaded = offloadResult(call.id, tool.data, full, ctx, options.offload);
+      const offloaded = offloadResult(call.id, tool.data, full, ctx, options.offload, finalResult.browser_read);
       if (!offloaded.ok) return withTrustedEffect(offloaded.result, settledTrustedEffect);
       return withTrustedEffect({
         ok: true,
@@ -425,6 +452,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
         tool: tool.data,
         data: offloaded.data,
         source_taint: finalResult.source_taint,
+        ...(finalResult.browser_read === undefined ? {} : { browser_read: finalResult.browser_read }),
       }, settledTrustedEffect);
     }
     return withTrustedEffect(failDispatch(
@@ -433,6 +461,10 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       'tool result exceeded bound',
       'oversize',
       'result_oversize',
+      undefined,
+      undefined,
+      undefined,
+      finalResult.browser_read,
     ), settledTrustedEffect);
   }
 
@@ -444,6 +476,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
           tool: tool.data,
           data: finalResult.data,
           source_taint: finalResult.source_taint,
+          ...(finalResult.browser_read === undefined ? {} : { browser_read: finalResult.browser_read }),
         }
       : {
           ok: true,
@@ -451,6 +484,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
           tool: tool.data,
           data: finalResult.data,
           source_taint: finalResult.source_taint,
+          ...(finalResult.browser_read === undefined ? {} : { browser_read: finalResult.browser_read }),
           card: finalResult.card,
         },
     settledTrustedEffect,
@@ -542,6 +576,8 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
       'invalid_handler_result',
     ), input.effect);
   }
+  const browserReadCustody = parsed.browser_read === undefined
+    ? undefined : browserReadDiagnosticSchema.parse(parsed.browser_read);
   let postToolPayload: PostToolUsePayload = {
     event: 'PostToolUse',
     tool: tool.data,
@@ -564,15 +600,19 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
         'tool result failed validation',
         'transient',
         'invalid_tool_result',
+        undefined,
+        undefined,
+        undefined,
+        browserReadCustody,
       ), input.effect);
     }
     postToolPayload = nextPayload;
   } catch (error) {
     if (!(error instanceof HookHaltError)) throw error;
-    return withTrustedEffect(hookFailure(input.callRef, tool.data, error), input.effect);
+    return withTrustedEffect(hookFailure(input.callRef, tool.data, error, browserReadCustody), input.effect);
   }
   input.ctx.runScope?.admit();
-  const finalResult = parseToolResult(postToolPayload.result, tool.data);
+  const finalResult = preserveBrowserReadCustody(parseToolResult(postToolPayload.result, tool.data), browserReadCustody);
   if (finalResult === null) {
     return withTrustedEffect(failDispatch(
       input.callRef,
@@ -580,6 +620,10 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
       'tool result failed validation',
       'transient',
       'invalid_tool_result',
+      undefined,
+      undefined,
+      undefined,
+      browserReadCustody,
     ), input.effect);
   }
   if (!finalResult.ok) {
@@ -589,7 +633,12 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
         tool.data,
         'tool returned oversized error',
         finalResult.code,
-        'tool_result_error',
+        // A transport-size rejection is not evidence of a provider failure for fallback.
+        finalResult.browser_read === undefined ? 'tool_result_error' : 'result_oversize',
+        finalResult.source_taint,
+        finalResult.connect,
+        undefined,
+        finalResult.browser_read,
       ), input.effect);
     }
     return withTrustedEffect(failDispatch(
@@ -599,6 +648,9 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
       finalResult.code,
       'tool_result_error',
       finalResult.source_taint,
+      finalResult.connect,
+      undefined,
+      finalResult.browser_read,
     ), input.effect);
   }
   const size = jsonCharLength(finalResult, true);
@@ -609,6 +661,10 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
       'tool result failed validation',
       'transient',
       'invalid_tool_result',
+      undefined,
+      undefined,
+      undefined,
+      browserReadCustody,
     ), input.effect);
   }
   if (size > (input.maxResultJsonChars ?? DEFAULT_MAX_RESULT_JSON_CHARS)) {
@@ -618,6 +674,10 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
       'tool result exceeded bound',
       'oversize',
       'result_oversize',
+      undefined,
+      undefined,
+      undefined,
+      finalResult.browser_read,
     ), input.effect);
   }
   return withTrustedEffect(
@@ -628,6 +688,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
           tool: tool.data,
           data: finalResult.data,
           source_taint: finalResult.source_taint,
+          ...(finalResult.browser_read === undefined ? {} : { browser_read: finalResult.browser_read }),
         }
       : {
           ok: true,
@@ -635,6 +696,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
           tool: tool.data,
           data: finalResult.data,
           source_taint: finalResult.source_taint,
+          ...(finalResult.browser_read === undefined ? {} : { browser_read: finalResult.browser_read }),
           card: finalResult.card,
         },
     input.effect,
@@ -835,11 +897,16 @@ async function runTerminalHooks<Ctx extends ToolDispatcherContext>(
   });
 }
 
-function hookFailure(callId: string, tool: ToolName, error: unknown): DispatchToolResult {
+function hookFailure(
+  callId: string,
+  tool: ToolName,
+  error: unknown,
+  browserRead?: BrowserReadDiagnostic,
+): DispatchToolResult {
   if (error instanceof HookHaltError) {
-    return failDispatch(callId, tool, error.clientMessage, error.code, reasonFromHook(error.hook));
+    return failDispatch(callId, tool, error.clientMessage, error.code, reasonFromHook(error.hook), undefined, undefined, undefined, browserRead);
   }
-  return failDispatch(callId, tool, 'tool hook failed', 'transient', 'hook_halt');
+  return failDispatch(callId, tool, 'tool hook failed', 'transient', 'hook_halt', undefined, undefined, undefined, browserRead);
 }
 
 function failParse(error: string, repaired: false): FailedToolCallParse<false>;
@@ -863,6 +930,7 @@ const offloadResult = (
   full: string,
   ctx: ToolDispatcherContext,
   store: ToolOutputStore,
+  browserRead?: BrowserReadDiagnostic,
 ): OffloadedResult => {
   const guarded = guardForOffload({
     payload: full,
@@ -884,6 +952,7 @@ const offloadResult = (
         undefined,
         undefined,
         { check: guarded.check, reason: guarded.reason },
+        browserRead,
       ),
     };
   }
@@ -906,10 +975,12 @@ function failDispatch(
   sourceTaint?: SourceTaint,
   connect?: ConnectIntent,
   guard?: GuardDiagnostic,
+  browserRead?: BrowserReadDiagnostic,
 ): DispatchToolResult {
   const extra = {
     ...(connect === undefined ? {} : { connect }),
     ...(guard === undefined ? {} : { guard }),
+    ...(browserRead === undefined ? {} : { browser_read: browserRead }),
   };
   return sourceTaint === 'external'
     ? { ok: false, call_id: callId, tool, error, code, reason, source_taint: 'external', ...extra }
@@ -956,18 +1027,43 @@ function reasonFromHook(hook: string): ToolDispatchErrorReason {
   }
 }
 
-type ParsedToolResult =
+type ParsedToolResult = (
   | { ok: true; data: unknown; source_taint: SourceTaint; card?: WaldoCard }
-  | { ok: false; error: string; code: ErrorCode; source_taint?: 'external'; connect?: ConnectIntent };
+  | { ok: false; error: string; code: ErrorCode; source_taint?: 'external'; connect?: ConnectIntent }
+) & { browser_read?: BrowserReadDiagnostic };
+
+function preserveBrowserReadCustody(
+  result: ParsedToolResult | null,
+  custody: BrowserReadDiagnostic | undefined,
+): ParsedToolResult | null {
+  if (
+    result !== null && custody !== undefined &&
+    (custody.cleanup === 'unknown_allocation' || custody.cleanup === 'unconfirmed')
+  ) {
+    return { ...result, browser_read: custody };
+  }
+  return result;
+}
 
 function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | null {
   if (!isRecord(value) || typeof value.ok !== 'boolean') {
     return null;
   }
 
+  let browserRead: BrowserReadDiagnostic | undefined;
+  if (Object.prototype.hasOwnProperty.call(value, 'browser_read')) {
+    if (tool !== 'browse_page') return null;
+    const parsed = browserReadDiagnosticSchema.safeParse(value.browser_read);
+    // Only the host loop knows the actual prior round; a provider or post-hook cannot
+    // invent fallback provenance, even when its remaining diagnostic is well formed.
+    if (!parsed.success || parsed.data.fallback_from !== undefined || Object.prototype.hasOwnProperty.call(value.browser_read, 'fallback_from')) return null;
+    browserRead = parsed.data;
+  }
+  const browserMetadata = browserRead === undefined ? {} : { browser_read: browserRead };
+
   if (value.ok) {
     if (
-      !hasOnlyKeys(value, ['ok', 'data', 'card', 'source_taint']) ||
+      !hasOnlyKeys(value, ['ok', 'data', 'card', 'source_taint', 'browser_read']) ||
       !Object.prototype.hasOwnProperty.call(value, 'data')
     ) {
       return null;
@@ -977,12 +1073,12 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
     const expectsExternal = EXTERNAL_ORIGIN_TOOLS.includes(tool);
     if (expectsExternal !== (sourceTaint.data === 'external')) return null;
     if (!Object.prototype.hasOwnProperty.call(value, 'card')) {
-      return { ok: true, data: value.data, source_taint: sourceTaint.data };
+      return { ok: true, data: value.data, source_taint: sourceTaint.data, ...browserMetadata };
     }
 
     const card = waldoCardSchema.safeParse(value.card);
     return card.success
-      ? { ok: true, data: value.data, source_taint: sourceTaint.data, card: card.data }
+      ? { ok: true, data: value.data, source_taint: sourceTaint.data, card: card.data, ...browserMetadata }
       : null;
   }
 
@@ -990,7 +1086,7 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
   if (
     !hasOnlyKeys(
       value,
-      expectsExternal || value.source_taint === null ? ['ok', 'error', 'code', 'source_taint', 'connect'] : ['ok', 'error', 'code', 'connect'],
+      expectsExternal || value.source_taint === null ? ['ok', 'error', 'code', 'source_taint', 'connect', 'browser_read'] : ['ok', 'error', 'code', 'connect', 'browser_read'],
     )
   ) {
     return null;
@@ -1012,9 +1108,10 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
       code: code.data,
       source_taint: 'external',
       ...(connect?.success ? { connect: connect.data } : {}),
+      ...browserMetadata,
     };
   }
-  return { ok: false, error: value.error, code: code.data, ...(connect?.success ? { connect: connect.data } : {}) };
+  return { ok: false, error: value.error, code: code.data, ...(connect?.success ? { connect: connect.data } : {}), ...browserMetadata };
 }
 
 function hasOnlyKeys(value: Readonly<Record<string, unknown>>, allowed: readonly string[]): boolean {

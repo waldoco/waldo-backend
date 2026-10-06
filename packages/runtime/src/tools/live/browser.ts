@@ -1,6 +1,6 @@
 import {
   PROVIDER_OF, TOOL_PERMISSIONS, triggerTypeSchema, browseActArgsSchema, browsePageArgsSchema, WALDO_CHAT_MODEL,
-  type ToolHandler, type ToolName, type BrowsePageArgs, type BrowseActArgs,
+  type ToolHandler, type ToolName, type ToolResult, type ErrorCode, type BrowserReadDiagnostic, type BrowsePageArgs, type BrowseActArgs,
 } from '@waldo/contracts';
 import type { CloudflarePageReader } from '../../channels/cloudflare-public-read';
 import type { ToolDispatcherContext } from '../dispatcher';
@@ -94,60 +94,113 @@ const recheckPages = async (
 
 export type BrowserPageProviders = Readonly<{ defaultProvider: 'cloudflare_playwright' | 'browserbase_stagehand_http_v3'; cloudflare?: CloudflarePageReader; allowBrowserbase: boolean }>;
 
+const publicBrowserDescription = (apiKey: string | undefined, projectId: string | undefined, providers: BrowserPageProviders): string => {
+  const configured = [
+    ...(providers.cloudflare ? ['cloudflare_playwright'] : []),
+    ...(providers.allowBrowserbase && apiKey && projectId ? ['browserbase_stagehand_http_v3'] : []),
+  ];
+  const alternatives = configured.filter(provider => provider !== providers.defaultProvider);
+  return `Open a public web page in a real browser and read information from it. Use when web_search snippets are not enough. Default provider: ${providers.defaultProvider}${configured.includes(providers.defaultProvider) ? '' : ' (not configured)'}. Configured alternatives: ${alternatives.join(', ') || 'none'}. Configuration does not guarantee availability or quota. Choosing another provider requires a new explicit tool call; no automatic fallback. Read-only: it never clicks, fills or submits.`;
+};
+
 export const browsePageHandler = (
   apiKey: string | undefined,
   projectId: string | undefined,
   modelApiKey: string | undefined,
   fetcher: typeof fetch = fetch,
   providers: BrowserPageProviders = { defaultProvider: 'browserbase_stagehand_http_v3', allowBrowserbase: true },
-): ToolHandler<BrowsePageArgs, Readonly<{ url: string; data: unknown }>, ToolDispatcherContext> => ({
+): ToolHandler<BrowsePageArgs, Readonly<{ url: string; provider: BrowserPageProviders['defaultProvider']; data: unknown }>, ToolDispatcherContext> => ({
   name: 'browse_page',
-  description: 'Select cloudflare_playwright or browserbase_stagehand_http_v3 to open a public web page in a real browser and read information from it. Use when web_search snippets are not enough - the page is dynamic or needs reading in full. Read-only: it never clicks, fills or submits.',
+  description: publicBrowserDescription(apiKey, projectId, providers),
   schema: browsePageArgsSchema,
   trigger_allowlist: allowlist('browse_page'),
   autonomy_gated: false,
   async handle({ url, instruction, provider }: BrowsePageArgs, ctx) {
     const selected = provider ?? providers.defaultProvider;
     if (selected === 'cloudflare_playwright') {
-      if (!providers.cloudflare) return { ok: false, code: 'auth_failed', error: 'The selected Cloudflare browser is not configured.', source_taint: 'external' };
-      return providers.cloudflare({ url, instruction, provider: selected }, ctx);
+      const result = providers.cloudflare
+        ? await providers.cloudflare({ url, instruction, provider: selected }, ctx)
+        : { ok: false as const, code: 'auth_failed' as const, error: 'The selected Cloudflare browser is not configured.', source_taint: 'external' as const, browser_read: { provider: selected, phase: 'configuration' as const, reason: 'provider_unconfigured' as const, cleanup: 'not_started' as const } };
+      if (result.ok || !result.browser_read) return result;
+      const diagnostic = result.browser_read;
+      let closed: BrowserReadDiagnostic['reason'] | undefined;
+      if (!ctx.authenticatedUserId || !ctx.assertTaskSourceCurrent) closed = 'source_rejected';
+      if ((ctx.runScope?.deadline ?? Infinity) <= Date.now()) closed = 'deadline_elapsed';
+      try { ctx.runScope?.admit(); } catch { closed ??= 'run_closed'; }
+      try { await ctx.assertTaskSourceCurrent?.(); } catch { closed ??= 'source_rejected'; }
+      try { ctx.runScope?.admit(); } catch { closed ??= 'run_closed'; }
+      if ((ctx.runScope?.deadline ?? Infinity) <= Date.now()) closed = 'deadline_elapsed';
+      if (closed) return { ...result, code: 'rejected', browser_read: { ...diagnostic, phase: 'admission', reason: closed, configured_alternatives: [] } };
+      const eligible = ['not_started', 'allocation_refused', 'confirmed'].includes(diagnostic.cleanup)
+        && ['provider_unconfigured', 'provider_http', 'provider_failure', 'navigation_failed', 'page_http', 'empty_content'].includes(diagnostic.reason);
+      return { ...result, browser_read: { ...diagnostic, configured_alternatives: eligible && providers.allowBrowserbase && apiKey && projectId ? ['browserbase_stagehand_http_v3'] : [] } };
     }
-    if (!providers.allowBrowserbase) return { ok: false, code: 'rejected', error: 'The selected Browserbase provider is not enabled by this host.', source_taint: 'external' };
-    if (!apiKey || !projectId) return { ok: false, code: 'auth_failed', error: 'Browsing is not set up on this Waldo yet.', source_taint: 'external' };
+    let phase: BrowserReadDiagnostic['phase'] = 'configuration';
+    let cleanup: BrowserReadDiagnostic['cleanup'] = 'not_started';
+    const failed = (code: ErrorCode, error: string, reason: BrowserReadDiagnostic['reason'], http_status?: number): ToolResult<never> => ({ ok: false, code, error, source_taint: 'external', browser_read: { provider: selected, phase, reason, cleanup, ...(http_status === undefined ? {} : { http_status }) } });
+    if (!providers.allowBrowserbase) return failed('rejected', 'The selected Browserbase provider is not enabled by this host.', 'provider_disabled');
+    if (!apiKey || !projectId) return failed('auth_failed', 'Browsing is not set up on this Waldo yet.', 'provider_unconfigured');
     const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json', ...(modelApiKey ? { 'x-model-api-key': modelApiKey } : {}) };
+    let admissionFailure: BrowserReadDiagnostic['reason'] | undefined;
+    const admit = async () => {
+      const run = () => { try { ctx?.runScope?.admit(); } catch (cause) { admissionFailure = (ctx.runScope?.deadline ?? Infinity) <= Date.now() ? 'deadline_elapsed' : 'run_closed'; throw cause; } };
+      run();
+      try { await ctx?.assertTaskSourceCurrent?.(); } catch (cause) { admissionFailure = 'source_rejected'; throw cause; }
+      run();
+    };
     const call = async (path: string, body: object) => {
-      await ctx?.assertTaskSourceCurrent?.();
+      await admit();
+      if (path === '/v1/sessions/start') cleanup = 'unknown_allocation';
       return fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
     };
     let session: string | null = null;
-    const end = () => (session ? fetcher(`${BASE}/v1/sessions/${session}/end`, { method: 'POST', headers, body: '{}' }).catch(() => undefined) : Promise.resolve());
-    try {
+    const read = async (): Promise<ToolResult<{ url: string; provider: typeof selected; data: unknown }>> => {
+      phase = 'allocation';
       const started = await call('/v1/sessions/start', { modelName: MODEL, verbose: 0 });
-      if (started.status === 401 || started.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${started.status}) - it needs replacing.`, source_taint: 'external' };
-      if (!started.ok) return { ok: false, code: 'transient', error: await refusedStart(started), source_taint: 'external' };
+      if ([401, 402, 403, 429].includes(started.status)) cleanup = 'allocation_refused';
+      if (started.status === 401 || started.status === 403) return failed('auth_failed', `The browser key was rejected (HTTP ${started.status}) - it needs replacing.`, 'provider_http', started.status);
+      if (!started.ok) return failed('transient', await refusedStart(started), 'provider_http', started.status);
       const startBody = (await started.json()) as { success?: boolean; data?: { sessionId?: string } };
-      session = startBody.data?.sessionId ?? null;
-      if (!startBody.success || !session) return { ok: false, code: 'transient', error: 'Browser session start returned no session.', source_taint: 'external' };
-
+      const id = startBody.data?.sessionId;
+      if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(id)) return failed('rejected', 'Browser session start returned no valid session identity.', 'invalid_session');
+      session = id; cleanup = 'unconfirmed';
+      if (!startBody.success) return failed('transient', 'Browser session start was not acknowledged.', 'provider_failure');
+      phase = 'navigation';
       const navigated = await call(`/v1/sessions/${session}/navigate`, { url });
-      if (!navigated.ok) return { ok: false, code: 'transient', error: `The page did not load (HTTP ${navigated.status})`, source_taint: 'external' };
-      if (!(await navigationSucceeded(navigated))) return { ok: false, code: 'transient', error: 'The page did not load (the browser reported the navigation failed).', source_taint: 'external' };
+      if (!navigated.ok) return failed('transient', `The page did not load (HTTP ${navigated.status})`, 'provider_http', navigated.status);
+      if (!(await navigationSucceeded(navigated))) return failed('transient', 'The page did not load (the browser reported the navigation failed).', 'navigation_failed');
 
+      phase = 'extraction';
       const model = modelApiKey ? { modelName: MODEL, apiKey: modelApiKey } : MODEL;
       const extracted = await call(`/v1/sessions/${session}/extract`, { instruction, options: { model, timeout: 30000 } });
-      if (extracted.status === 401 || extracted.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${extracted.status}) - it needs replacing.`, source_taint: 'external' };
-      if (!extracted.ok) return { ok: false, code: 'transient', error: `Extraction failed (HTTP ${extracted.status})`, source_taint: 'external' };
+      if (extracted.status === 401 || extracted.status === 403) return failed('auth_failed', `The browser key was rejected (HTTP ${extracted.status}) - it needs replacing.`, 'provider_http', extracted.status);
+      if (!extracted.ok) return failed('transient', `Extraction failed (HTTP ${extracted.status})`, 'provider_http', extracted.status);
       const extractBody = (await extracted.json()) as { success?: boolean; data?: { result?: unknown } };
-      if (!extractBody.success) return { ok: false, code: 'transient', error: 'Extraction was rejected by the browser service.', source_taint: 'external' };
+      if (!extractBody.success) return failed('transient', 'Extraction was rejected by the browser service.', 'provider_failure');
       const result = extractBody.data?.result ?? null;
       // An empty extraction is a failed read, not an answer: say so, so the model tries another source instead of reporting a blank as a finding.
-      if (isEmptyExtraction(result)) return { ok: false, code: 'not_found', error: 'The page loaded but returned nothing readable (blocked, empty or needs a login). Try another source or page.', source_taint: 'external' };
-      return { ok: true, data: { url, data: result }, source_taint: 'external' };
+      if (isEmptyExtraction(result)) return failed('not_found', 'The page returned no readable content.', 'empty_content');
+      return { ok: true, data: { url, provider: selected, data: result }, source_taint: 'external', browser_read: { provider: selected, phase: 'complete', reason: 'completed', cleanup } };
+    };
+    let result: Awaited<ReturnType<typeof read>>;
+    try { result = await read();
     } catch {
-      return { ok: false, code: 'transient', error: 'The browser request failed. No provider diagnostic was returned.', source_taint: 'external' };
-    } finally {
-      await end();
+      if (admissionFailure) phase = 'admission';
+      result = failed(admissionFailure ? 'rejected' : 'transient', admissionFailure ? 'The browser run or source permission is no longer current.' : 'The browser request failed. No provider diagnostic was returned.', admissionFailure ?? 'provider_failure');
     }
+    // Ending is cleanup, independent of revoked source permission.
+    if (session) {
+      try {
+        const ended = await fetcher(`${BASE}/v1/sessions/${session}/end`, { method: 'POST', headers, body: '{}', signal: AbortSignal.timeout(10000) });
+        cleanup = ended.ok && await navigationSucceeded(ended) ? 'confirmed' : 'unconfirmed';
+      } catch { cleanup = 'unconfirmed'; }
+    }
+    if (['unconfirmed', 'unknown_allocation'].includes(cleanup)) return { ...failed('rejected', `${result.ok ? '' : `${result.error} `}The Browserbase cleanup is unconfirmed. No browser read is reported as complete.`, result.ok ? 'cleanup_unconfirmed' : result.browser_read!.reason, result.browser_read?.http_status), browser_read: { ...result.browser_read!, ...(result.ok ? { phase: 'cleanup' as const, reason: 'cleanup_unconfirmed' as const } : {}), cleanup } };
+    if (result.ok) {
+      try { await admit(); }
+      catch { phase = 'admission'; return failed('rejected', 'The browser run or source permission is no longer current.', admissionFailure!); }
+    }
+    return { ...result, browser_read: { ...result.browser_read!, cleanup } };
   },
 });
 

@@ -197,6 +197,17 @@ describe('executeActionArgs', () => {
 });
 
 describe('browsePageArgs', () => {
+  it.each([
+    { fallback_from: 'cloudflare_playwright' },
+    { browser_read: { provider: 'cloudflare_playwright' } },
+    { session_id: 'private-marker' }, { owner_id: 'private-marker' },
+    { connection_id: 'private-marker' }, { fallback: true },
+  ])('rejects model-supplied browser authority %j', (extra) => {
+    expect(browsePageArgsSchema.safeParse({
+      url: 'https://example.com', instruction: 'read', ...extra,
+    }).success).toBe(false);
+  });
+
   it('accepts only explicitly supported browser providers without authority or session arguments', () => {
     for (const provider of ['cloudflare_playwright', 'browserbase_stagehand_http_v3']) expect(browsePageArgsSchema.parse({ url: 'https://example.com', instruction: 'read', provider })).toMatchObject({ provider });
     for (const extra of [{ provider: 'auto' }, { provider: 'cloudflare_playwright', session_id: 'foreign' }, { provider: 'cloudflare_playwright', owner_id: 'foreign' }, { provider: 'cloudflare_playwright', allow_hosts: ['*'] }]) expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'read', ...extra }).success).toBe(false);
