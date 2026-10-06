@@ -60,9 +60,9 @@ export function DashboardNavigation({ route, onNavigate,waitingCount }: { route:
     const place = () => { const on = el.querySelector<HTMLElement>('a[aria-current="page"]'); if (!on) { el.removeAttribute('data-indicator'); return; } el.style.setProperty('--x', `${on.offsetLeft}px`); el.style.setProperty('--w', `${on.offsetWidth}px`); el.setAttribute('data-indicator', ''); };
     place();
     if (typeof ResizeObserver === 'undefined') return;
-    const watch = new ResizeObserver(place); el.querySelectorAll('a').forEach(a => watch.observe(a));
+    const watch = new ResizeObserver(place); watch.observe(el); el.querySelectorAll('a').forEach(a => watch.observe(a));
     return () => watch.disconnect();
-  }, [selected]);
+  }, [selected, waitingCount]);
   return <nav ref={nav} className="primary-nav" aria-label="Dashboard pages">{routes.map((item) => (
     <a aria-current={selected === item.key ? 'page' : undefined} onClick={onNavigate} key={item.key} href={`#/${item.key}`} title={`${item.label} · G then ${shortcut[item.key]}`}>
       <Icon name={item.key} className="nav-icon"/>
