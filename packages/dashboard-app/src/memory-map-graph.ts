@@ -3,12 +3,13 @@ import type { Claim, Interpretation } from './memory-model';
 // Which nodes and links the Memory map shows, from the saved Spots and patterns this read returned. The rule is
 // the landing's (after andrewtrousdale.com): Waldo in the middle with a first ring round him, and choosing a node
 // narrows the web to the way back to Waldo, that node, what it is made of, and what turns up with it (greyer).
-// Every link is a saved support relation; nothing is laid out or joined by hand.
+// Support edges come from saved membership. Root spokes are layout only; dotted pattern edges
+// are derived shared-support context, never a stored association.
 
 export const ROOT = 'waldo';
 export type Shape = 'root' | 'hexagon' | 'circle' | 'square' | 'triangle';
 export type GNode = { id: string; shape: Shape; title: string; summary: string; number?: number; connected?: boolean };
-export type GLink = { id: string; source: string; target: string; kind: 'angled' | 'solid' | 'dashed' | 'dotted'; distance: number };
+export type GLink = { id: string; source: string; target: string; kind: 'angled' | 'solid' | 'dashed' | 'dotted'; distance: number; relation: 'layout' | 'saved-support' | 'shared-support' };
 
 /** A Spot's shape says where it came from: you said it, you confirmed it, or he inferred it. */
 export const SOURCE: Record<string, { name: string; shape: Shape }> = {
@@ -20,6 +21,8 @@ const sourceOf = (spot: Claim) => SOURCE[spot.source] ?? { name: 'Saved', shape:
 
 export type MapModel = {
   patterns: Interpretation[];
+  returnedPatterns: number;
+  allPatterns: Interpretation[];
   spots: Map<string, Claim>;
   spotsOf: Map<string, string[]>;
   patternsOf: Map<string, string[]>;
@@ -38,12 +41,12 @@ export function buildModel(patterns: Interpretation[], spots: Claim[]): MapModel
     spotsOf.set(pattern.id, present);
     for (const id of present) patternsOf.set(id, [...(patternsOf.get(id) ?? []), pattern.id]);
   }
-  return { patterns: shown, spots: byId, spotsOf, patternsOf, number: new Map(shown.map((p, i) => [p.id, i + 1])) };
+  return { allPatterns: patterns, returnedPatterns: patterns.length, patterns: shown, spots: byId, spotsOf, patternsOf, number: new Map(shown.map((p, i) => [p.id, i + 1])) };
 }
 
 export const patternNode = (model: MapModel, pattern: Interpretation, connected = false): GNode => {
   const count = model.spotsOf.get(pattern.id)?.length ?? 0;
-  return { id: pattern.id, shape: 'hexagon', title: pattern.label, summary: `${count} ${count === 1 ? 'Spot' : 'Spots'}${pattern.stored_status === 'active' ? '' : ' · ' + pattern.stored_status}`, number: model.number.get(pattern.id), connected };
+  return { id: pattern.id, shape: 'hexagon', title: pattern.label, summary: `${count} returned ${count === 1 ? 'Spot' : 'Spots'}${pattern.stored_status === 'active' ? '' : ' · ' + pattern.stored_status}`, number: model.number.get(pattern.id), connected };
 };
 export const spotNode = (spot: Claim, connected = false): GNode => {
   const source = sourceOf(spot);
@@ -63,9 +66,9 @@ export function visible(model: MapModel, current: string | null, focus: Focus = 
   const nodes = new Map<string, GNode>([[ROOT, rootNode(model)]]);
   const links: GLink[] = [];
   const add = (node: GNode) => { if (!nodes.has(node.id)) nodes.set(node.id, node); };
-  const spoke = (pattern: Interpretation) => { add(patternNode(model, pattern)); links.push({ id: `${ROOT}>${pattern.id}`, source: ROOT, target: pattern.id, kind: 'angled', distance: SPOKE }); };
-  const leg = (parent: string, spot: Claim) => { add(spotNode(spot)); links.push({ id: `${parent}>${spot.id}`, source: parent, target: spot.id, kind: spot.source === 'inferred' ? 'dashed' : 'solid', distance: LEG }); };
-  const dotted = (a: string, node: GNode) => { add(node); links.push({ id: `${a}~${node.id}`, source: a, target: node.id, kind: 'dotted', distance: FAR }); };
+  const spoke = (pattern: Interpretation) => { add(patternNode(model, pattern)); links.push({ id: `${ROOT}>${pattern.id}`, source: ROOT, target: pattern.id, kind: 'angled', distance: SPOKE, relation: 'layout' }); };
+  const leg = (parent: string, spot: Claim) => { add(spotNode(spot)); links.push({ id: `${parent}>${spot.id}`, source: parent, target: spot.id, kind: spot.source === 'inferred' ? 'dashed' : 'solid', distance: LEG, relation: parent === ROOT ? 'layout' : 'saved-support' }); };
+  const dotted = (a: string, node: GNode) => { add(node); links.push({ id: `${a}~${node.id}`, source: a, target: node.id, kind: 'dotted', distance: FAR, relation: a === ROOT ? 'layout' : model.spots.has(a) ? 'saved-support' : 'shared-support' }); };
   const pattern = current ? model.patterns.find(p => p.id === current) : undefined;
   const spot = current ? model.spots.get(current) : undefined;
 

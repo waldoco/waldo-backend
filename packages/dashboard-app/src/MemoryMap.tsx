@@ -45,9 +45,9 @@ function Panel({ model, current, returnTo, onPick, onClose }: { model: MapModel;
     <div className="mm-page-top"><p className="mm-type"><Glyph shape={node.shape} number={node.number} size={15}/>{pattern ? 'Pattern' : 'Spot'}</p>
       <button type="button" className="mm-close" onClick={onClose} aria-label="Back to the whole map"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg></button></div>
     <h3 className="mm-page-title">{node.title}</h3>
-    {pattern && <><p className="mm-sub">Built from {links.length} {links.length === 1 ? 'Spot' : 'Spots'} · {relativeTime(pattern.recorded_active_at)}</p><p className="mm-text">{pattern.summary}</p><p className="mm-note">A pattern is his tentative reading of your Spots, not a fact.</p></>}
-    {spot && <><p className="mm-sub">{SOURCE[spot.source]?.name ?? 'Saved'} · {relativeTime(spot.recorded_at)}</p>{spot.evidence.text && <p className="mm-text">{spot.evidence.text}</p>}<p className="mm-note">His note on why he saved it. Not proof that it’s true.</p></>}
-    {links.length > 0 && <div className="mm-tab"><p className="mm-tab-title">{pattern ? 'Made of' : 'Part of'}</p>
+    {pattern && <><p className="mm-sub">{links.length} returned of {pattern.support.claim_ids.length} saved supporting {links.length === 1 ? 'Spot' : 'Spots'} · {relativeTime(pattern.recorded_active_at)}</p><p className="mm-text">{pattern.summary}</p><p className="mm-sub">Stored status: {pattern.stored_status} · {pattern.support.unavailable_count} supports withheld/unavailable · {pattern.support.claim_ids.length-links.length} saved support IDs absent from these returned pages</p><p className="mm-note">A pattern is his tentative reading of your Spots, not a fact.</p></>}
+    {spot && <><p className="mm-sub">{SOURCE[spot.source]?.name ?? 'Saved'} · {relativeTime(spot.recorded_at)}</p><p className="mm-sub">Origin: {spot.origin} · Status: {spot.status}</p>{spot.evidence.text && <p className="mm-text">{spot.evidence.text}</p>}<p className="mm-note">His note on why he saved it. Not proof that it’s true.</p></>}
+    {links.length > 0 && <div className="mm-tab"><p className="mm-tab-title">{pattern ? 'Returned supporting Spots' : 'Saved support membership, returned patterns'}</p>
       <ul className="mm-list">{links.map(n => <li key={n.id}><button type="button" onClick={() => onPick(n.id)}><Glyph shape={n.shape} number={n.number} size={16}/><span><b>{n.title}</b><i>{typeOf(n)}</i></span></button></li>)}</ul></div>}
     <a className="button-link mm-open" href={memoryItemLink(pattern ? 'constellation' : 'spots', current, returnTo)}>{pattern ? 'Open pattern' : 'Open Spot'} <span aria-hidden="true">→</span></a>
   </div>;
@@ -77,24 +77,27 @@ const pathOf = (a: SimNode, b: SimNode, kind: GLink['kind']) => {
 /** Deterministic dust: the same sky on every visit. */
 const DUST = (() => { let h = 2463534242; const next = () => (h ^= h << 13, h ^= h >>> 17, h ^= h << 5, (h >>> 0) / 4294967296); return Array.from({ length: 260 }, () => ({ x: next() * 100, y: next() * 100, r: next() < 0.12 ? 1.6 : 0.9, o: 0.12 + next() * 0.4, d: next() * 6 })); })();
 
-type MapProps = { focus: Focus; patterns?: Interpretation[]; spots?: Claim[]; returnTo?: MemoryListDestination; corner?: ReactNode; note?: ReactNode };
-export function MemoryMap({ focus, patterns, spots, returnTo, corner, note }: MapProps) {
-  const [fetched, setFetched] = useState<(Claim | Interpretation)[] | null>(null);
+type MapProps = { read: MemoryPage; focus: Focus; patterns?: Interpretation[]; spots?: Claim[]; returnTo?: MemoryListDestination; corner?: ReactNode; note?: ReactNode };
+export function MemoryMap({ focus, patterns, spots, returnTo, corner, note, read }: MapProps) {
+  const [fetched, setFetched] = useState<MemoryPage | null>(null);
+  const [error,setError]=useState<string|null>(null),[retry,setRetry]=useState(0);
   // Whichever side the page did not read is read here: Spots for the constellations, patterns for the Spots.
   useEffect(() => {
-    const abort = new AbortController();
+    const abort = new AbortController();setFetched(null);setError(null);
     fetchMemory(new URLSearchParams({ view: patterns ? 'claims' : 'interpretations', limit: '25' }), abort.signal)
-      .then(data => { if (!abort.signal.aborted) setFetched((data as MemoryPage).items); })
-      .catch(() => { if (!abort.signal.aborted) setFetched([]); });
+      .then(data => { if (!abort.signal.aborted) setFetched(data as MemoryPage); })
+      .catch(e => { if (!abort.signal.aborted) setError(e instanceof Error?e.message:'Read failed'); });
     return () => abort.abort();
-  }, [!!patterns]);
-  const model = useMemo(() => buildModel(patterns ?? (fetched ?? []).filter((item): item is Interpretation => !('text' in item)), spots ?? (fetched ?? []).filter((item): item is Claim => 'text' in item)), [patterns, spots, fetched]);
+  }, [!!patterns,retry]);
+  const model = useMemo(() => buildModel(patterns ?? (fetched?.items ?? []).filter((item): item is Interpretation => !('text' in item)), spots ?? (fetched?.items ?? []).filter((item): item is Claim => 'text' in item)), [patterns, spots, fetched]);
   // The page turns to night while the map is open, and back when it closes.
   useEffect(() => { setScene(true); return () => setScene(false); }, []);
-  return <Web model={model} focus={focus} returnTo={returnTo} loaded={fetched !== null} corner={corner} note={note}/>;
+  const complete=read.state==='available'&&read.complete&&!!fetched&&fetched.state==='available'&&fetched.complete&&read.page.total===read.page.returned&&fetched.page.total===fetched.page.returned;
+  const status=<div className="mm-read-status" role="status"><p>Map of two returned pages, not all Memory. {read.page.returned} of {read.page.total} {patterns?'patterns':'Spots'} on the main page.</p>{error?<p>Other page unavailable: {error} <button onClick={()=>setRetry(n=>n+1)}>Retry other page</button></p>:fetched?<p>Other page: {fetched.page.returned} of {fetched.page.total} {patterns?'Spots':'patterns'} · {fetched.state}, {fetched.complete?'complete read':'incomplete read'} · {fetched.unavailable_claim_count} claims withheld.</p>:<p>Loading other page…</p>}<p>Map limits: 30 Spots in Spots view, 12 patterns, 14 supports per focused pattern, 2 per overview pattern, 6 loose Spots. Root spokes are layout only (any line style). Solid/dashed edges between records are saved support membership. Dotted Spot-pattern edges are also saved support; dotted pattern-pattern edges are shared support derived here, not saved associations or proof.</p></div>;
+  return <>{status}<Web model={model} focus={focus} returnTo={returnTo} complete={complete} corner={corner} note={note}/></>;
 }
 
-function Web({ model, focus, returnTo, loaded, corner, note }: { model: MapModel; focus: Focus; returnTo?: MemoryListDestination; loaded: boolean; corner?: ReactNode; note?: ReactNode }) {
+function Web({ model, focus, returnTo, complete, corner, note }: { model: MapModel; focus: Focus; returnTo?: MemoryListDestination; complete: boolean; corner?: ReactNode; note?: ReactNode }) {
   const root = useRef<HTMLDivElement>(null), stage = useRef<HTMLDivElement>(null), world = useRef<HTMLDivElement>(null), panel = useRef<HTMLElement>(null);
   const paintRef = useRef<() => void>(() => {});
   const [sim] = useState(() => new ForceSim(() => paintRef.current()));
@@ -102,16 +105,25 @@ function Web({ model, focus, returnTo, loaded, corner, note }: { model: MapModel
   const drag = useRef<{ node: SimNode; x: number; y: number; ox: number; oy: number; moved: boolean } | null>(null);
   const pan = useRef({ x: 0, y: 0 }), panning = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
   const live = useRef<GLink[]>([]);
+  const zoom=useRef(1);
   const motion = useRef(true);
   const [current, setCurrent] = useState<string | null>(null);
   const [size, setSize] = useState<'wide' | 'mid' | 'small'>('wide');
   const graph = useMemo(() => visible(model, current, focus), [model, current, focus]);
 
   const paint = () => {
-    for (const n of sim.nodes) nodeEls.current.get(n.id)?.style.setProperty('transform', `translate(${n.x.toFixed(1)}px,${n.y.toFixed(1)}px)`);
+    const occupied:{x:number;y:number;w:number;h:number}[]=[];
+    for (const n of [...sim.nodes].sort((a,b)=>Number(b.id===current)-Number(a.id===current))) {
+      const el=nodeEls.current.get(n.id);if(!el)continue;
+      el.style.setProperty('transform', `translate(${n.x.toFixed(1)}px,${n.y.toFixed(1)}px)`);
+      const label=el.querySelector<HTMLElement>('.mm-label');if(!label)continue;
+      const w=150,h=52,x=n.x-w/2,y=n.y+17;
+      const collides=occupied.some(r=>x<r.x+r.w&&x+w>r.x&&y<r.y+r.h&&y+h>r.y);
+      label.style.visibility=collides&&n.id!==current?'hidden':'visible';if(!collides)occupied.push({x,y,w,h});
+    }
     for (const l of live.current) { const a = bodies.current.get(l.source), b = bodies.current.get(l.target); if (a && b) pathEls.current.get(l.id)?.setAttribute('d', pathOf(a, b, l.kind)); }
   };
-  const setPan = (x: number, y: number) => { pan.current = { x, y }; stage.current?.style.setProperty('--px', `${x}px`); stage.current?.style.setProperty('--py', `${y}px`); };
+  const setPan = (x: number, y: number) => { x=Math.max(-600,Math.min(600,x));y=Math.max(-400,Math.min(400,y));pan.current = { x, y }; stage.current?.style.setProperty('--px', `${x}px`); stage.current?.style.setProperty('--py', `${y}px`); };
   useLayoutEffect(() => { paintRef.current = paint; });
   useEffect(() => () => sim.stop(), [sim]);
 
@@ -119,7 +131,7 @@ function Web({ model, focus, returnTo, loaded, corner, note }: { model: MapModel
   function fit() {
     const el = world.current; if (!el) return;
     sim.setCentre(freeWidth() / 2, el.clientHeight / 2);
-    sim.setBounds(el.clientWidth, el.clientHeight, 36);
+    sim.setBounds(freeWidth(), el.clientHeight, 85);
     if (root.current?.dataset.ready !== undefined && motion.current) sim.restart(Math.max(sim.alpha, 0.3));
   }
 
@@ -142,7 +154,7 @@ function Web({ model, focus, returnTo, loaded, corner, note }: { model: MapModel
     sim.setParams(params);
     live.current = graph.links;
     const free = freeWidth(), h = el.clientHeight;
-    sim.setCentre(free / 2, h / 2); sim.setBounds(el.clientWidth, h, 36);
+    sim.setCentre(free / 2, h / 2); sim.setBounds(free, h, 85);
     // nodes already on the map keep their place; new ones start beside what they hang on, fanned away from Waldo
     const parentOf = new Map<string, GLink>();
     for (const l of graph.links) if (!parentOf.has(l.target)) parentOf.set(l.target, l);
@@ -205,7 +217,7 @@ function Web({ model, focus, returnTo, loaded, corner, note }: { model: MapModel
     const body = bodies.current.get(el.dataset.id ?? ''); if (!body || !world.current) return;
     const r = world.current.getBoundingClientRect();
     el.setPointerCapture?.(e.pointerId);
-    drag.current = { node: body, x: e.clientX, y: e.clientY, ox: e.clientX - r.left - body.x, oy: e.clientY - r.top - body.y, moved: false };
+    drag.current = { node: body, x: e.clientX, y: e.clientY, ox: (e.clientX - r.left)/zoom.current - body.x, oy: (e.clientY - r.top)/zoom.current - body.y, moved: false };
     body.fx = body.x; body.fy = body.y;
     sim.alphaTarget(0.3).restart();
   };
@@ -215,35 +227,45 @@ function Web({ model, focus, returnTo, loaded, corner, note }: { model: MapModel
     const d = drag.current, worldEl = world.current; if (!d || !worldEl) return;
     if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) d.moved = true;
     const r = worldEl.getBoundingClientRect();
-    d.node.fx = e.clientX - r.left - d.ox; d.node.fy = e.clientY - r.top - d.oy;
+    d.node.fx = (e.clientX - r.left)/zoom.current - d.ox; d.node.fy = (e.clientY - r.top)/zoom.current - d.oy;
     if (!motion.current) paint();
   };
   const up = () => { if (panning.current) { panning.current = null; if (stage.current) delete stage.current.dataset.panning; return; } const d = drag.current; drag.current = null; if (!d) return; d.node.fx = null; d.node.fy = null; sim.alphaTarget(0); if (!d.moved) choose(d.node.id); };
-  const key = (e: KeyboardEvent<HTMLDivElement>) => { if (e.key === 'Escape' && current) back(); };
-  const home = () => setPan(0, 0);
+  const setZoom=(value:number)=>{zoom.current=Math.max(.5,Math.min(2,value));stage.current?.style.setProperty('--zoom',String(zoom.current));};
+  const key = (e: KeyboardEvent<HTMLDivElement>) => {
+    if(e.key==='Escape'&&current)back();
+    if(e.target!==stage.current)return;
+    const deltas:Record<string,[number,number]>={ArrowLeft:[40,0],ArrowRight:[-40,0],ArrowUp:[0,40],ArrowDown:[0,-40]};
+    if(deltas[e.key]){e.preventDefault();const [x,y]=deltas[e.key]!;setPan(pan.current.x+x,pan.current.y+y);}
+    if(e.key==='+'||e.key==='='){e.preventDefault();setZoom(zoom.current+.1);}
+    if(e.key==='-'){e.preventDefault();setZoom(zoom.current-.1);}
+    if(e.key==='Home'){e.preventDefault();home();}
+  };
+  const home = () => {setPan(0, 0);setZoom(1);};
 
   return <div className="mm scene" ref={root} data-focus={current ? '' : undefined} onKeyDown={key}>
-    <div className="mm-stage" ref={stage} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
+    <div className="mm-stage" ref={stage} tabIndex={0} role="group" aria-label="Memory map. Arrow keys pan, plus and minus zoom, Home resets." onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
       <div className="mm-field">
         <div className="mm-dust" aria-hidden="true"><div className="mm-dust-drift">{DUST.map((d, i) => <i key={i} style={{ left: `${d.x}%`, top: `${d.y}%`, width: d.r * 2, height: d.r * 2, opacity: d.o, animationDelay: `${d.d}s` } as CSSProperties}/>)}</div></div>
         <div className="mm-world" ref={world}>
           <svg className="mm-links" aria-hidden="true">{graph.links.map((l, i) => <path key={l.id} ref={el => void (el ? pathEls.current.set(l.id, el) : pathEls.current.delete(l.id))} className={`mm-link mm-link--${l.kind}`} style={{ '--ed': `${i * 40}ms` } as CSSProperties}/>)}</svg>
           <div className="mm-nodes" role="group" aria-label="A map of what Waldo has saved. Drag a node and the rest follow; drag the empty space to look around. Choose one to read about it.">
             {graph.nodes.map((n, i) => <div key={n.id} ref={el => void (el ? nodeEls.current.set(n.id, el) : nodeEls.current.delete(n.id))} className="mm-node" data-id={n.id} data-shape={n.shape} data-current={n.id === current ? '' : undefined} data-connected={n.connected ? '' : undefined} style={{ '--ed': `${i * 50}ms` } as CSSProperties}>
-              <button type="button" className="mm-hit" aria-label={`${n.title}, ${typeOf(n).toLowerCase()}`} aria-pressed={n.id === current} onClick={e => { if (e.detail === 0) choose(n.id); }}><Glyph shape={n.shape} number={n.number} current={n.id === current}/></button>
+              <button type="button" className="mm-hit" aria-label={`${n.title}, ${typeOf(n).toLowerCase()}`} aria-pressed={n.id === current} onFocus={()=>{setPan(0,0);setZoom(1);}} onClick={e => { if (e.detail === 0) choose(n.id); }}><Glyph shape={n.shape} number={n.number} current={n.id === current}/></button>
               <span className="mm-label"><b>{n.title}</b><i>{n.summary}</i></span>
             </div>)}
           </div>
         </div>
       </div>
       {corner && <div className="mm-corner">{corner}</div>}
-      <div className="mm-note">{note}<button type="button" className="quiet" onClick={home}>Recentre</button></div>
-      {loaded && model.patterns.length === 0 && model.spots.size === 0 && <p className="mm-empty">Nothing saved yet. As he notices things, they’ll appear here.</p>}
+      <div className="mm-note">{note}<button type="button" className="quiet" aria-label="Zoom out" onClick={()=>setZoom(zoom.current-.1)}>−</button><button type="button" className="quiet" aria-label="Zoom in" onClick={()=>setZoom(zoom.current+.1)}>+</button><button type="button" className="quiet" onClick={home}>Recentre</button></div>
+      {complete && model.patterns.length === 0 && model.spots.size === 0 && <p className="mm-empty">Nothing saved yet. As he notices things, they’ll appear here.</p>}
       <ul className="mm-legend" aria-label="What the shapes mean">
         <li><Glyph shape="hexagon" size={13}/>Pattern</li><li><Glyph shape="circle" size={13}/>You said</li><li><Glyph shape="square" size={13}/>You confirmed</li><li><Glyph shape="triangle" size={13}/>He inferred</li>
       </ul>
       <aside className="mm-panel" ref={panel} data-open={current ? '' : undefined} aria-live="polite" aria-label="About the one you chose"><Panel model={model} current={current} returnTo={returnTo} onPick={choose} onClose={back}/></aside>
     </div>
+    <details className="mm-inspect"><summary>Inspect returned map records ({model.returnedPatterns} patterns, {model.spots.size} Spots)</summary><p>Showing {graph.nodes.length-1} records on the map. Overlapping labels are hidden; all returned records remain available below or in List.</p><ul>{[...model.allPatterns.map(p=>({id:p.id,title:p.label,view:'constellation' as const})),...[...model.spots.values()].map(s=>({id:s.id,title:s.text,view:'spots' as const}))].map(n=><li key={n.id}><a href={memoryItemLink(n.view,n.id,returnTo)}>{n.title}</a></li>)}</ul><p>{model.returnedPatterns-model.patterns.length} returned patterns omitted by the map cap. All are inspectable above or in List.</p></details>
     <div className="mm-sheet" data-open={current ? '' : undefined}><div className="mm-sheet-in"><Panel model={model} current={current} returnTo={returnTo} onPick={choose} onClose={back}/></div></div>
   </div>;
 }
