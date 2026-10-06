@@ -11,9 +11,9 @@ type Actions = { busy: boolean; onAction: (action: ControlAction, fields?: Contr
 const parseTime = (value: string | null) => { if (!value) return null; const normalized=value.includes('T')?value:value.replace(' ','T');const timePart=normalized.split('T')[1]??'';if(!timePart.endsWith('Z')&&!timePart.includes('+')&&!timePart.includes('-'))return null;const t = Date.parse(normalized); return Number.isNaN(t) ? null : new Date(t); };
 // Approve needs a time the illustration can place: an explicit offset, or a date-only (all-day) value.
 export const approvable = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) || parseTime(value) !== null;
-const clock = (d: Date) => new Intl.DateTimeFormat('en', { timeZone:'UTC',hour: 'numeric', minute: '2-digit' }).format(d);
-const day = (d: Date) => new Intl.DateTimeFormat('en', { timeZone:'UTC',weekday: 'short', month: 'short', day: 'numeric' }).format(d);
-const hours = (d: Date) => d.getUTCHours() + d.getUTCMinutes() / 60;
+const clock = (d: Date, zone = 'UTC') => new Intl.DateTimeFormat('en', { timeZone: zone, hour: 'numeric', minute: '2-digit' }).format(d);
+const day = (d: Date, zone = 'UTC') => new Intl.DateTimeFormat('en', { timeZone: zone, weekday: 'short', month: 'short', day: 'numeric' }).format(d);
+const hours = (d: Date, zone = 'UTC') => { const parts = new Intl.DateTimeFormat('en', { timeZone: zone, hour: 'numeric', minute: 'numeric', hourCycle: 'h23' }).formatToParts(d); return Number(parts.find(x => x.type === 'hour')!.value) + Number(parts.find(x => x.type === 'minute')!.value) / 60; };
 
 // Copies the exact draft words, for reading or pasting elsewhere. It does not send anything.
 function CopyText({ text }: { text: string }) {
@@ -22,28 +22,29 @@ function CopyText({ text }: { text: string }) {
 }
 
 /** The change as one sentence, and the slot drawn on that day's hours. */
-function CalendarReview({ review }: { review: Extract<ProposalReview, { kind: 'calendar_change' }> }) {
+function CalendarReview({ review, timezone }: { review: Extract<ProposalReview, { kind: 'calendar_change' }>; timezone: string | null }) {
+  const zone = timezone ?? 'UTC';
   const start = parseTime(review.start), end = parseTime(review.end);
   const verb = { create: 'Add', move: 'Move', cancel: 'Cancel' }[review.action];
-  const from = start ? Math.max(0, Math.floor(hours(start)) - 2) : 0, to = start ? Math.min(24, Math.ceil(end ? hours(end) : hours(start) + 1) + 2) : 0;
-  const pct = (d: Date) => ((hours(d) - from) / (to - from)) * 100;
+  const from = start ? Math.max(0, Math.floor(hours(start, zone)) - 2) : 0, to = start ? Math.min(24, Math.ceil(end ? hours(end, zone) : hours(start, zone) + 1) + 2) : 0;
+  const pct = (d: Date) => ((hours(d, zone) - from) / (to - from)) * 100;
   return <div className="proposal-full-review review-calendar" title={review.event_id ? `Calendar reference ${review.event_id}` : undefined}>
-    <p className="review-sentence"><b>{verb}</b> {review.title ?? 'this event'}{start && <>{review.action === 'move' ? ' to ' : ' on '}<b>{day(start)}, {clock(start)}{end ? `–${clock(end)}` : ''}</b></>}.</p>
+    <p className="review-sentence"><b>{verb}</b> {review.title ?? 'this event'}{start && <>{review.action === 'move' ? ' to ' : ' on '}<b>{day(start, zone)}, {clock(start, zone)}{end ? `–${clock(end, zone)}` : ''}</b></>}.</p>
     {start && <div className={`slot-day ${review.action}`} aria-hidden="true">
-      <div className="slot-hours">{Array.from({ length: to - from + 1 }, (_, i) => <span key={i} style={{ left: `${(i / (to - from)) * 100}%` }}>{i % 2 === 0 ? clock(new Date(Date.UTC(2000, 0, 1, from + i))).replace(':00', '') : ''}</span>)}</div>
+      <div className="slot-hours">{Array.from({ length: to - from + 1 }, (_, i) => <span key={i} style={{ left: `${(i / (to - from)) * 100}%` }}>{i % 2 === 0 ? clock(new Date(Date.UTC(2000, 0, 1, from + i)), 'UTC').replace(':00', '') : ''}</span>)}</div>
       <div className="slot-track"><i className="slot" style={{ left: `${pct(start)}%`, width: `${Math.max(3, (end ? pct(end) : pct(start) + 4) - pct(start))}%` }}><b>{review.title ?? verb}</b></i></div>
     </div>}
-    <dl className="calendar-exact"><dt>Exact recorded start (including any timezone offset)</dt><dd>{review.start??'Not supplied'}</dd><dt>Exact recorded end (including any timezone offset)</dt><dd>{review.end??'Not supplied'}</dd><dt>Calendar reference</dt><dd>{review.event_id??'Not supplied'}</dd></dl>{((review.start&&!start)||(review.end&&!end))&&<p role="alert">Time or time zone could not be read for the illustration. Review the exact values; ask Waldo if the intended time zone is unclear.</p>}<p className="meta">The illustration is in UTC. Exact recorded values above govern the review; a missing offset is not a verified owner time zone.</p><p className="review-why"><Icon name="chat"/><span><b>Why:</b> {review.reason}</span></p>
+    <dl className="calendar-exact"><dt>Exact recorded start (including any timezone offset)</dt><dd>{review.start??'Not supplied'}</dd><dt>Exact recorded end (including any timezone offset)</dt><dd>{review.end??'Not supplied'}</dd><dt>Calendar reference</dt><dd>{review.event_id??'Not supplied'}</dd></dl>{((review.start&&!start)||(review.end&&!end))&&<p role="alert">Time or time zone could not be read for the illustration. Review the exact values; ask Waldo if the intended time zone is unclear.</p>}<p className="meta">{timezone ? `The illustration is in ${timezone}, your Waldo time zone.` : 'The illustration is in UTC.'} Exact recorded values above govern the review; a missing offset is not a verified owner time zone.</p><p className="review-why"><Icon name="chat"/><span><b>Why:</b> {review.reason}</span></p>
   </div>;
 }
 
-function Review({ review }: { review: ProposalReview }) {
+function Review({ review, timezone }: { review: ProposalReview; timezone: string | null }) {
   if (review.kind === 'email_send') {
     const people = (label: string, list: string[]) => list.length > 0 && <div className="letter-row"><span className="label">{label}</span>{list.map(address => <span className="person" key={address}><i aria-hidden="true">{address.charAt(0).toUpperCase()}</i>{address}</span>)}</div>;
     return <div className="proposal-full-review letter">{people('To', review.to)}{people('Cc', review.cc)}{people('Bcc', review.bcc)}<p className="letter-subject">{review.subject}</p><pre className="owner-record-text letter-body">{review.body}</pre><CopyText text={review.body}/></div>;
   }
   if (review.kind === 'message_send') return <div className="proposal-full-review chat-preview"><span className="channel">{review.channel.toLowerCase() === 'telegram' ? <Logo name="telegram"/> : <Icon name="paperplane"/>}To your {review.channel} chat</span><p className="bubble">{review.content}</p><CopyText text={review.content}/></div>;
-  return <CalendarReview review={review}/>;
+  return <CalendarReview review={review} timezone={timezone}/>;
 }
 
 const KindMark = ({ item }: { item: WaitingRecord['data']['proposals'][number] }) =>
@@ -64,7 +65,7 @@ export function WaitingControls({ record, busy, onAction }: { record: WaitingRec
       return <details name="proposals" open={index === first} className="tile disclosure proposal-detail reveal" style={{ '--i': index } as React.CSSProperties} key={item.id}>
         <summary><span className="kind"><KindMark item={item}/></span><span className="value proposal-summary">{item.summary}</span><span className={`access-label${item.state === 'open' ? ' needs' : ''}`}>{item.state === 'open' ? 'Needs you' : item.state === 'review_only' ? 'Too long to approve' : item.state === 'unconfirmed' ? 'Card unconfirmed' : 'Decision recorded'}</span></summary>
         <div className="disclosure-body">
-          {item.review ? <Review review={item.review}/> : <p>Full details aren’t available for this one. Ask Waldo to show them before you decide.</p>}
+          {item.review ? <Review review={item.review} timezone={record.data.timezone}/> : <p>Full details aren’t available for this one. Ask Waldo to show them before you decide.</p>}
           {note && <p className="meta">{note}</p>}
           <div className="control-actions">
             {calendarApprove && <button className="primary" disabled={busy} onClick={() => onAction('approval.approve', { id: item.id })}>Approve this calendar change</button>}
