@@ -40,3 +40,17 @@ describe('selectedForgetResult names why a selection was rejected (no content)',
     expect(selectedForgetResult(topic, snap(sources), bad, snap(sources))).toEqual({ reason: 'span_not_in_source_or_no_topic' });
   });
 });
+
+describe('ordinary chat punctuation does not hold a forget', () => {
+  const rows = [{ ref: 'episodes:20', text: 'Waldo: I can’t confirm that ZEBRA-COBALT was saved – it stays here' }];
+  const span = { ref: 'episodes:20', text: 'I can’t confirm that ZEBRA-COBALT was saved' };
+  it('accepts a span and a row that carry a curly apostrophe and a dash', () => {
+    expect(selectedForgetResult(topic, snap(rows), pick([span], ['episodes:20']), snap(rows))).toEqual({ texts: [span.text] });
+    expect(selectedForgetResult(topic, snap(rows), pick([], ['episodes:20']), snap(rows))).toEqual({ reason: 'row_without_span:episodes' });
+  });
+  it('still refuses hidden format characters in a span', () => {
+    const hidden = [{ ref: 'episodes:21', text: 'keep ZEBRA-COBALT\u200b hidden here' }];
+    const raw = pick([{ ref: 'episodes:21', text: 'keep ZEBRA-COBALT\u200b hidden here' }], ['episodes:21']);
+    expect(selectedForgetResult(topic, snap(hidden), raw, snap(hidden))).toEqual({ reason: 'span_text_rule' });
+  });
+});
