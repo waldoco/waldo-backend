@@ -118,10 +118,12 @@ it('a held claim is reported as held, not stored', async () => {
   });
 });
 
-it('a turn where the writer changed nothing carries no memory receipt', async () => {
+it('a turn where the writer changed nothing carries no memory receipt, and the reply is told it may not claim a save', async () => {
   await session('forget-live-d', async (turn) => {
     await turn('tg-1', 'hello', ops({}));
     expect(system()).not.toContain('Memory this turn');
+    expect(system()).toContain("only if a memory line from the host lists it as stored; you may still restate what you already know");
+    expect(system()).not.toContain('nothing was written');
   });
 });
 
@@ -214,6 +216,8 @@ it('a failure after the writer applied ops yields the uncertain notice and no su
     await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1] }));
     const sys = system();
     expect(sys).toContain('only partly stored');
+    expect(sys).not.toContain('nothing was written');
+    expect(sys).toContain('follow any host failure or uncertain notice');
     expect(sys).not.toContain('Memory this turn');
   }, async () => { throw new Error('kv down'); });
 });
