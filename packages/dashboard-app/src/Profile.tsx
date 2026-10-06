@@ -4,7 +4,7 @@ import { type CSSProperties, useState } from 'react';
 // the stack behind says how many facts the section holds.
 export function ProfileCards({ sections }: { sections: { title: string; lines: string[] }[] }) {
   const stacks = sections.map(section => ({ title: section.title, facts: section.lines.filter(line => line.trim()) })).filter(stack => stack.facts.length);
-  return <ul className="pstacks">{stacks.map((stack, index) => <Stack key={`${stack.title}:${index}`} index={index} {...stack}/>)}</ul>;
+  return <><details className="tile profile-inspect"><summary>Show all saved context</summary>{stacks.map((stack,index)=><section key={index}><h2>{stack.title}</h2><ul>{stack.facts.map((fact,i)=><li key={i}>{fact}</li>)}</ul></section>)}</details><ul className="pstacks">{stacks.map((stack, index) => <Stack key={`${stack.title}:${index}`} index={index} {...stack}/>)}</ul></>;
 }
 
 function Stack({ title, facts, index }: { title: string; facts: string[]; index: number }) {

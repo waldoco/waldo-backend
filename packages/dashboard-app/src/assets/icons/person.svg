@@ -1,1 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18.2216 18.2301" role="img" aria-label="person.crop.square.fill"><path fill="currentColor" fill-rule="nonzero" d="M3.2022 18.2301 L15.0194 18.2301 C17.1331 18.2301 18.2216 17.138 18.2216 15.0554 L18.2216 3.1766 C18.2216 1.0922 17.1331 0 15.0194 0 L3.2022 0 C1.097 0 0 1.0885 0 3.1766 L0 15.0554 C0 17.1417 1.097 18.2301 3.2022 18.2301 Z M2.7558 16.4122 C3.5453 14.0749 6.0719 12.4154 9.1169 12.4154 C12.162 12.4154 14.6885 14.0749 15.4713 16.4122 Z M9.1151 10.823 C7.2507 10.8144 5.8005 9.2624 5.7919 7.1982 C5.7834 5.2527 7.2569 3.6383 9.1151 3.6383 C10.9647 3.6383 12.4296 5.2527 12.4296 7.1982 C12.4296 9.2624 10.9708 10.8401 9.1151 10.823 Z"/></svg>
+<!-- @license lucide-static v1.52.0 - ISC -->
+<svg
+  class="lucide lucide-user"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+  <circle cx="12" cy="7" r="4" />
+</svg>

@@ -29,8 +29,7 @@ import gmail from './assets/logos/gmail.svg?inline';
 import googleCalendar from './assets/logos/google-calendar.svg?inline';
 import telegram from './assets/logos/telegram.svg?inline';
 
-// SF Symbols from Waldo's icon set (Waldo-App/assets/sf, waldo-landing). Drawn as masks so each
-// glyph takes the colour of the text around it.
+// Lucide static 1.52.0, ISC / Feather-derived MIT. Notices in assets/icons/LICENSE.txt.
 const glyphs = { today, waiting, memory, patrol, settings, brief, spot, calendar, calendarClock, envelope, paperplane, checklist, close, entry, warning, person, bell, check, pending, retry, chevron, arrow, chat, sun, moon, graph };
 export type IconName = keyof typeof glyphs;
 export const Icon = ({ name, className }: { name: IconName; className?: string }) =>

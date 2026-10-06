@@ -54,16 +54,16 @@ export function PulseStrip({ items, selected, onSelect }: { items: PulseItem[]; 
   return <div className="pulse" role="group" aria-label="Recent attempts, oldest to newest. Bar height is recorded duration.">
     {[...items].reverse().map((item, index) => {
       const source = items.length - 1 - index;
-      return <button key={source} type="button" className={`pulse-bar${item.ok ? '' : ' failed'}`} aria-pressed={selected === source} aria-label={`${item.label}, ${item.ok ? 'attempt recorded' : 'failure recorded'}, ${item.ms} ms, ${item.time}`} style={{ '--h': `${pulseHeight(item.ms)}px`, '--i': index } as CSSProperties} onClick={() => onSelect(source)}><i/></button>;
+      return <button key={source} type="button" className={`pulse-bar${item.ok ? '' : ' failed'}`} aria-pressed={selected === source} title={`${item.label}, ${item.ms} ms, ${item.time}`} aria-label={`${item.label}, ${item.ok ? 'attempt recorded' : 'failure recorded'}, ${item.ms} ms, ${item.time}`} style={{ '--h': `${pulseHeight(item.ms)}px`, '--i': index } as CSSProperties} onClick={() => onSelect(source)}><i/></button>;
     })}
   </div>;
 }
 
-export type PipelineStep = { step: string; state: 'ok' | 'failed' | 'unseen' };
+export type PipelineStep = { step: string; state: 'ok' | 'failed' | 'unseen';at?:string|null;note?:string|null };
 export function Pipeline({ steps }: { steps: PipelineStep[] }) {
   return <ol className="pipeline" aria-label="Recorded steps">{steps.map((item, index) => <li key={index} className={item.state} style={{ '--i': index } as CSSProperties}>
     <span className="node" aria-hidden="true">{item.state === 'ok' ? <svg viewBox="0 0 16 16"><path d="m4 8.5 2.8 2.7L12 5.5"/></svg> : item.state === 'failed' ? <svg viewBox="0 0 16 16"><path d="m5 5 6 6m0-6-6 6"/></svg> : null}</span>
-    <span className="step-name">{item.step}</span><span className="visually-hidden">{item.state === 'ok' ? 'Successful step recorded' : item.state === 'failed' ? 'Failure recorded' : 'Not seen yet'}</span>
+    <span className="step-name">{item.step}</span>{item.at&&<time className="meta">{item.at}</time>}{item.note&&<p className="meta">{item.note}</p>}<span className="visually-hidden">{item.state === 'ok' ? 'Successful step recorded' : item.state === 'failed' ? 'Failure recorded' : 'Not seen yet'}</span>
   </li>)}</ol>;
 }
 

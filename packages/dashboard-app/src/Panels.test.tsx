@@ -90,3 +90,17 @@ it('uses honest labels with raw types inspectable, without inventing missing out
  expect(html).toContain('No outcome summary recorded.');expect(html).toContain('<details');expect(html).toContain('unknown_hop');
  expect(html).not.toMatch(/<span class="value">(update_card|joined_path|llm_reply|unknown_hop)<\/span>/);
 });
+it('retains exact calendar timestamps, reference and invalid values in visible review',()=>{
+ const proposal=waiting.data.proposals[0]!;
+ const record:WaitingRecord={...waiting,data:{proposals:[{...proposal,review:{kind:'calendar_change',action:'move',title:'Review',event_id:'exact-ref',start:'2026-10-06T23:30:00+05:30',end:'invalid-end',reason:'Requested'}}]}};
+ const html=renderToStaticMarkup(<WaitingControls record={record} busy={false} onAction={noop}/>);
+ expect(html).toContain('2026-10-06T23:30:00+05:30');expect(html).toContain('invalid-end');expect(html).toContain('exact-ref');expect(html).toContain('Time or time zone could not be read');
+});
+it('does not offer calendar approval when a recorded time is invalid',()=>{
+ const proposal=waiting.data.proposals[0]!;
+ for(const start of ['invalid']){
+ const record:WaitingRecord={...waiting,data:{proposals:[{...proposal,review:{kind:'calendar_change',action:'move',title:'Review',event_id:'ref',start,end:null,reason:'Requested'}}]}};
+ const html=renderToStaticMarkup(<WaitingControls record={record} busy={false} onAction={noop}/>);
+ expect(html).toContain(start);expect(html).not.toContain('Approve this calendar change');
+ }
+});
