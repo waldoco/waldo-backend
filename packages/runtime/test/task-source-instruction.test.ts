@@ -53,3 +53,21 @@ it('an explicit owner exclusion still holds: a retained mail-only limit refuses 
   expect(taskSourceAllowed(kept.snapshot, { name: 'query_calendar' })).toBe(false);
   expect(taskSourceAllowed(kept.snapshot, { name: 'search_communication' })).toBe(true);
 }));
+
+// Recall after a named-URL task (staging trace tg-904958308): the classifier returned [web] for a named page, which narrowed the owner's memory away. The model decides; the instruction must tell it local is a default source unless excluded.
+it('the classifier is told the owner\'s own memory stays in a new task unless excluded', () => {
+  expect(TASK_SOURCE_INSTRUCTION).toContain('include local in sources unless the owner excluded it');
+});
+it('a new task that lists local with web keeps memory readable; an exclusive list does not', () => custody('url-memory', async (sql, scope) => {
+  const text = 'Use browse_page to read https://example.com and tell me its title.';
+  const cap = createTaskSourceScope(sql, 'owner', scope, async () => {}, { inputRef: 'in-5', text }, defaultsFor([{ id: 'g' }] as never));
+  const opened = await cap.classify(JSON.stringify({ decision: 'new', sources: ['local', 'web'], evidence: text }), 'in-5', text);
+  expect(taskSourceAllowed(opened.snapshot, { name: 'read_owner_context' })).toBe(true);
+}));
+it('an explicit exclusive new task keeps memory out', () => custody('url-excl', async (sql, scope) => {
+  const text = 'Begin a new workspace task using workspace only.';
+  const cap = createTaskSourceScope(sql, 'owner', scope, async () => {}, { inputRef: 'in-7', text }, defaultsFor([{ id: 'g' }] as never));
+  await cap.classify(JSON.stringify({ decision: 'restrict', sources: [] }), 'prev');
+  const opened = await cap.classify(JSON.stringify({ decision: 'new', sources: ['workspace'], evidence: text }), 'in-7', text);
+  expect(taskSourceAllowed(opened.snapshot, { name: 'read_owner_context' })).toBe(false);
+}));
