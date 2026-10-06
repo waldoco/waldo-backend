@@ -44,6 +44,8 @@ const fakeScheduler = () => {
     read: (id: string) => armed.find((row) => row.id === id),
     async cancel(id: string) {
       cancelled.push(id);
+      const at = armed.findIndex((row) => row.id === id);
+      if (at >= 0) armed.splice(at, 1); // persists like the real Scheduler: a cancelled entry is gone
     },
   };
 };
@@ -184,5 +186,6 @@ describe('standing order tools', () => {
     await expect(book.set({ scope: 'Summarize my day', trigger: 'daily', at: '21:00', gate: 'act_and_report', escalation: 'message_owner' })).rejects.toThrow('alarm registration rejected');
     expect(book.list()).toHaveLength(0);
     expect(base.cancelled).toEqual(['order:daily2']);
+    expect(base.armed).toHaveLength(0); // no orphan recurring schedule is left armed
   });
 });
