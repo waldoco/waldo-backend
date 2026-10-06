@@ -164,6 +164,20 @@ it(`adversarial ordinary quoted steer is absent after successful raw topic cover
   expect(JSON.stringify(provider.input)).not.toContain(topic);
 });
 }
+it('a held topic does not blank recall of unrelated facts', async () => {
+  const name = 'held-topic-only-recall';
+  const topic = 'MEM-B-20261006-HELD';
+  const fact = `${topic} preference: synthetic held origami`;
+  await admittedTurn(name, 201, `${fact}. ${KEEP}.`, ops({ add: [add(fact), add(KEEP)] }));
+  seen.selectorThrows = true;
+  await admittedTurn(name, 202, `Forget only ${topic}. Keep my unrelated preference.`, ops({ forget_topic: topic }));
+  await runInDurableObject(stub(name), (_instance, state) => { expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]); });
+  await admittedTurn(name, 203, 'What unrelated preference remains?', ops());
+  expect(request()).toContain(KEEP);
+  expect(request()).not.toContain(fact);
+  expect(request()).not.toContain(topic);
+  seen.selectorThrows = false;
+});
 it('recovers incomplete topic forgetting on an ordinary turn after restart by redacting the exact retained forget instruction', async () => {
   const name = 'forget-request-recovery';
   const topic = 'MEM-B-20261004-CERULEAN';
@@ -340,7 +354,7 @@ it.each(['rejected', 'unavailable'])('preserves valid explicit-ID deletion when 
   expect(request()).toContain('removed 1 claim');
   expect(request()).toContain('incomplete');
   expect(request()).not.toContain(FORGET);
-  expect(request()).not.toContain(KEEP);
+  expect(request()).toContain(KEEP);
   await evictDurableObject(stub(name));
   await turn(name, 3, 'Read the current synthetic request only.', ops());
   expect(request()).toContain('Read the current synthetic request only.');
@@ -789,7 +803,7 @@ it.each(['literal','unicode','capped unicode'])('topic-only %s forgetting verifi
   expect(JSON.stringify(await kv.load())).toContain(TOPIC); expect(JSON.stringify(await ledger.recent())).toContain('cobalt paper workshop');
   memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work)); args[2] = memory;
   responder = createOwnerResponder(...args); seen.writer = ops(); await direct('t3','What remains relevant?',false);
-  expect(request()).not.toContain(TOPIC); expect(request()).not.toContain(KEEP);
+  expect(request()).not.toContain(TOPIC); expect(request()).toContain(KEEP);
   expect(JSON.stringify(await seen.toolSuppliers.at(-1)!())).not.toContain('cobalt paper workshop');
   expect(JSON.stringify(await seen.toolSuppliers.at(-1)!())).not.toContain(KEEP);
   expect(memory.incompleteTopics()).toEqual([TOPIC]);
@@ -803,7 +817,7 @@ it.each(['literal','unicode','capped unicode'])('topic-only %s forgetting verifi
     expect(JSON.stringify(await ledger.recent())).toContain('cobalt paper workshop');
     expect(request()).toContain('incomplete');
     expect(request()).not.toContain(FACT);
-    expect(request()).not.toContain(KEEP);
+    expect(request()).toContain(KEEP);
   } else {
     expect(memory.incompleteTopics()).toEqual([]);
     expect(JSON.stringify(await kv.load())).not.toContain(FACT);
@@ -866,7 +880,7 @@ it.each(['bare marker', 'Unicode topic'])('preserves %s originals and incomplete
     seen.writer = ops(); await direct('t3', 'Use this current request only.', false);
     expect(memory.incompleteTopics()).toEqual([TOPIC]);
     expect(JSON.stringify(await kv.load())).toContain(TOPIC);
-    expect(request()).not.toContain(TOPIC); expect(request()).not.toContain(KEEP);
+    expect(request()).not.toContain(TOPIC); expect(request()).toContain(KEEP);
     expect(request()).toContain('Use this current request only.');
   });
 });
@@ -1109,7 +1123,7 @@ for (const [mode, reason] of [
     await admittedTurn(name, 98001, 'What time is my unrelated standup?', ops());
     expect(request()).toContain(`reason class: ${reason}`);
     expect(request()).toContain('Recall is temporarily limited');
-    expect(request()).not.toContain(standup);
+    expect(request()).toContain(standup);
     if (mode === 'inventory-unsupported') expect(seen.selectorCalls).toHaveLength(0);
     else {
       expect(seen.selectorCalls).toHaveLength(mode === 'throws' ? 2 : 1);
@@ -1141,7 +1155,7 @@ it('healthy ordinary retry restores standup from durable owner memory with a hos
   const instruction = `Forget only ${topic}.`;
   await admittedTurn(name, 99001, instruction, ops({ forget_topic: topic }));
   expect(request()).toContain('reason class: selector_unavailable');
-  expect(request()).not.toContain(standup);
+  expect(request()).toContain(standup);
   await evictDurableObject(stub(name));
   seen.selectorThrows = false; seen.selectedTexts = [fact, instruction];
   await admittedTurn(name, 99002, 'What time is my standup?', ops());
@@ -1215,7 +1229,7 @@ it('65 distinct sources resume after a failed provider and reconstruction withou
   await admittedTurn(name,110001,'What time is my standup?',ops());
   expect(request()).toContain('reason class: selector_unavailable');
   expect(request()).toContain('did not raise forgetting');expect(request()).not.toContain('Say this one reason');
-  expect(request()).not.toContain(standup);
+  expect(request()).toContain(standup);
   await evictDurableObject(stub(name));
   seen.selectorThrows=false;seen.selectedTexts=facts;seen.selectorOutputMessage=true;
   seen.selectorCalls.length=0;
@@ -1224,7 +1238,7 @@ it('65 distinct sources resume after a failed provider and reconstruction withou
   expect(request()).toContain('reason class: batch_pending');
   expect(request()).toContain("did not raise forgetting");
   expect(request()).not.toContain('verified exact cleanup targets were removed from inspected retained copies');
-  expect(request()).not.toContain(standup);
+  expect(request()).toContain(standup);
   await runInDurableObject(stub(name),(_instance,state)=>{
     const memory=claimStore(state.storage.sql); expect(memory.incompleteTopics()).toEqual([topic]);
     expect(memory.topicCoverage(topic)).toBe(1); expect(memory.pendingTopics()).toEqual([]);
@@ -1271,14 +1285,14 @@ it('129 distinct sources make bounded progress across three reconstructed owner 
       expect(memory.incompleteTopics()).toEqual(step<2?[topic]:[]);
       expect(memory.pendingTopics()).toEqual([]);
     });
-    if(step<2){expect(request()).toContain('reason class: batch_pending');expect(request()).not.toContain(standup);}
+    if(step<2){expect(request()).toContain('reason class: batch_pending');expect(request()).toContain(standup);}
     else {expect(request()).toContain(standup);expect(request()).not.toContain('Recall is temporarily limited');}
   }
 });
 it('65 duplicate copies require durable partial custody then complete empty readback',async()=>{
   const name='memory-batches-duplicates';const {topic,standup}=await pendingBatchFixture(name,65,true);
   await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
-  expect(request()).toContain('reason class: batch_pending');expect(request()).not.toContain(standup);
+  expect(request()).toContain('reason class: batch_pending');expect(request()).toContain(standup);
   await runInDurableObject(stub(name),(_instance,state)=>{
     const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([topic]);
     expect(memory.forgetSources(topic)).toEqual({sources:[],incomplete:false});
@@ -1300,7 +1314,7 @@ for(const change of ['first-page','off-page'] as const){
       };
     });
     await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
-    expect(request()).not.toContain(standup);
+    expect(request()).toContain(standup);
     expect(request()).toContain(`reason class: ${change==='first-page'?'selection_rejected':'batch_pending'}`);
     await runInDurableObject(stub(name),(_instance,state)=>{
       const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([topic]);
@@ -1325,7 +1339,7 @@ it('failed retained cleanup retains exact batch custody and resumes after recons
   });
   await evictDurableObject(stub(name));seen.selectorCalls.length=0;
   await admittedTurn(name,120002,'Continue my pending cleanup.',ops());
-  expect(seen.selectorCalls).toHaveLength(0);expect(request()).toContain('reason class: cleanup_pending');expect(request()).not.toContain(standup);
+  expect(seen.selectorCalls).toHaveLength(0);expect(request()).toContain('reason class: cleanup_pending');expect(request()).toContain(standup);
   seen.failCleanup=false;await evictDurableObject(stub(name));
   await admittedTurn(name,120003,'What time is my standup?',ops());
   await runInDurableObject(stub(name),(_instance,state)=>{
@@ -1344,7 +1358,7 @@ it('final independent readback rejects a new source arriving after selector auth
     const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([topic]);
     expect(memory.topicCoverage(topic)).toBe(2);expect(memory.forgetSources(topic).sources.map(row=>row.text)).toEqual([late]);
   });
-  expect(request()).toContain('Recall is temporarily limited');expect(request()).not.toContain(standup);
+  expect(request()).toContain('Recall is temporarily limited');expect(request()).toContain(standup);
   seen.selectedTexts.push(late);await evictDurableObject(stub(name));
   await admittedTurn(name,120002,'What time is my standup?',ops());
   expect(request()).toContain(standup);
@@ -1372,7 +1386,7 @@ for(const action of ['explicit-forget','new-add'] as const){
     expect(request()).toContain('reason class: batch_pending');
     expect(request()).not.toContain('verified exact cleanup targets were removed from inspected retained copies');
     expect(request()).toContain('requested topic cleanup is pending');
-    expect(request()).not.toContain(standup);
+    expect(request()).toContain(standup);
     await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]));
     await evictDurableObject(stub(name));
     await admittedTurn(name,120002,'Finish the pending cleanup.',ops());
@@ -1411,7 +1425,7 @@ it('batched conversation and retained ledger copies reach full readback without 
         expect((await toolOutputLedger(state.storage).forgetSources(topic)).sources).toEqual([]);
       }
     });
-    if(step<2)expect(request()).not.toContain(standup);else expect(request()).toContain(standup);
+    if(step<2)expect(request()).toContain(standup);else expect(request()).toContain(standup);
   }
 });
 
@@ -1426,7 +1440,7 @@ it('200 distinct sources complete across four bounded reconstructed turns',async
       expect(memory.forgetSourceBatch(topic).sources).toHaveLength(Math.max(0,Math.min(64,remaining)));
       expect(memory.pendingTopics()).toEqual([]);expect(memory.incompleteTopics()).toEqual(step<3?[topic]:[]);
     });
-    if(step<3){expect(request()).toContain('reason class: batch_pending');expect(request()).not.toContain(standup);}
+    if(step<3){expect(request()).toContain('reason class: batch_pending');expect(request()).toContain(standup);}
     else {expect(request()).toContain(standup);expect(request()).not.toContain('Recall is temporarily limited');}
   }
 });
@@ -1447,7 +1461,7 @@ it('an inventory over 8 KiB completes through byte-bounded pages instead of a pe
     const body=seen.selectorCalls[0] as {input:string};const supplied=JSON.parse(body.input.slice(body.input.indexOf('{')));
     expect(new TextEncoder().encode(JSON.stringify(supplied)).byteLength).toBeLessThanOrEqual(8192);
     await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual(step===0?[topic]:[]));
-    if(step===0){expect(request()).toContain('reason class: batch_pending');expect(request()).not.toContain(standup);}
+    if(step===0){expect(request()).toContain('reason class: batch_pending');expect(request()).toContain(standup);}
     else expect(request()).toContain(standup);
   }
 });
@@ -1458,7 +1472,7 @@ it('a stale page cannot erase a newly changed unrelated clause in the same sourc
     seen.onSelector=()=>{seen.onSelector=undefined;state.storage.sql.exec('UPDATE episodes SET text = ? WHERE entry_id = ?',`${facts[0]}. ${keep}.`,'b0');};
   });
   await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
-  expect(request()).toContain('reason class: selection_rejected');expect(request()).not.toContain(standup);
+  expect(request()).toContain('reason class: selection_rejected');expect(request()).toContain(standup);
   await runInDurableObject(stub(name),(_instance,state)=>expect(episodeIndex(state.storage.sql).get('3')?.text).toBe(`${facts[0]}. ${keep}.`));
   for(let retry=0;retry<2;retry++){await evictDurableObject(stub(name));await admittedTurn(name,120002+retry,'Finish the pending cleanup.',ops());}
   await runInDurableObject(stub(name),(_instance,state)=>{
