@@ -22,12 +22,12 @@ const calendar = (events: (from?: string) => Promise<never[]>) => googleHandlers
   clock,
 ).find((handler) => handler.name === 'query_calendar')!;
 const read = { name: 'query_calendar', arguments: '{}' };
-async function journey(handlers: Handlers, calls: readonly Omit<LLMToolCall, 'call_id'>[], maxSteps = 10) {
+async function journey(handlers: Handlers, calls: readonly Omit<LLMToolCall, 'call_id'>[], maxSteps = 10, ctx = context()) {
   const events: ToolLoopEvent[] = [];
   let exit: LoopExit | undefined;
   let round = 0;
   await runToolLoop({
-    handlers, ctx: context(), maxSteps, onTool: (event) => events.push(event), onSettle: (value) => { exit = value; },
+    handlers, ctx, maxSteps, onTool: (event) => events.push(event), onSettle: (value) => { exit = value; },
     step: async (tools) => tools && round < calls.length
       ? { text: '', tool_calls: [{ ...calls[round++]!, call_id: `call-${round}` }] }
       : { text: 'synthetic closing' },
@@ -36,6 +36,91 @@ async function journey(handlers: Handlers, calls: readonly Omit<LLMToolCall, 'ca
 }
 
 describe('bounded tool-loop read recovery', () => {
+  it('caches deterministic handler ACL drift despite its transient code', async () => {
+    let checks = 0;
+    let attempts = 0;
+    const handler = calendar(async () => { attempts++; return []; });
+    Object.defineProperty(handler, 'trigger_allowlist', { get: () => { checks++; return []; } });
+    const { events } = await journey([handler], [read, read, read]);
+    expect(checks).toBe(1);
+    expect(attempts).toBe(0);
+    expect(events.every((event) => event.code === 'transient' && event.reason === 'handler_acl_drift')).toBe(true);
+    expect(events[1]?.output).toContain('no new tool execution');
+  });
+
+  it('caches identical bad arguments without rerunning validation hooks', async () => {
+    let validations = 0;
+    let attempts = 0;
+    const handler = calendar(async () => { attempts++; return []; });
+    Object.defineProperty(handler, 'trigger_allowlist', {
+      get: () => { validations++; return triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('query_calendar')); },
+    });
+    const bad = { ...read, arguments: '{"limit":"invalid"}' };
+    const { events } = await journey([handler], [bad, bad, bad]);
+    expect(validations).toBe(1);
+    expect(attempts).toBe(0);
+    expect(events.every((event) => event.reason === 'invalid_args')).toBe(true);
+    expect(events[1]?.output).toContain('no new tool execution');
+  });
+
+  it('caches deterministic invalid post-hook results despite their transient code', async () => {
+    let attempts = 0;
+    const handler = calendar(async () => { attempts++; return []; });
+    const ctx = context();
+    ctx.sanitise = async (input) => {
+      const result = await sanitise(input);
+      return result.ok && input.source_taint === 'external'
+        ? { ...result, payload: { ok: true, data: [] } }
+        : result;
+    };
+    const { events } = await journey([handler], [read, read, read], 10, ctx);
+    expect(attempts).toBe(1);
+    expect(events.every((event) => event.code === 'transient' && event.reason === 'invalid_tool_result')).toBe(true);
+    expect(events[1]?.output).toContain('no new tool execution');
+  });
+
+  it('caches a sanitiser hook halt despite its transient code', async () => {
+    let validations = 0;
+    let attempts = 0;
+    const handler = calendar(async () => { attempts++; return []; });
+    const ctx = context();
+    ctx.sanitise = async () => { validations++; throw Error('synthetic hook failure'); };
+    const { events } = await journey([handler], [read, read, read], 10, ctx);
+    expect(validations).toBe(1);
+    expect(attempts).toBe(0);
+    expect(events.every((event) => event.code === 'transient' && event.reason === 'sanitise_denied')).toBe(true);
+    expect(events[1]?.output).toContain('no new tool execution');
+  });
+
+  it('caches an unknown hook failure rather than assuming it can recover', async () => {
+    let hookAttempts = 0;
+    let attempts = 0;
+    const handler = calendar(async () => { attempts++; return []; });
+    const ctx = context();
+    Object.defineProperty(ctx, 'syntheticHookState', { value: new Proxy({}, {
+      ownKeys: () => { hookAttempts++; throw Error('synthetic hook context failure'); },
+    }) });
+    const { events } = await journey([handler], [read, read, read], 10, ctx);
+    expect(hookAttempts).toBe(1);
+    expect(attempts).toBe(0);
+    expect(events.every((event) => event.code === 'transient' && event.reason === 'hook_halt')).toBe(true);
+    expect(events[1]?.output).toContain('no new tool execution');
+  });
+
+  it.each(['throw', 'invalid result'])('conservatively caches an unknown handler outcome: %s', async (outcome) => {
+    let attempts = 0;
+    const handler = calendar(async () => []);
+    handler.handle = async () => {
+      attempts++;
+      if (outcome === 'throw') throw Error('synthetic unknown failure');
+      return { unexpected: true } as never;
+    };
+    const { events } = await journey([handler], [read, read, read]);
+    expect(attempts).toBe(1);
+    expect(events.every((event) => event.code === 'transient' && event.reason === (outcome === 'throw' ? 'handler_failed' : 'invalid_handler_result'))).toBe(true);
+    expect(events[1]?.output).toContain('no new tool execution');
+  });
+
   it('recovers an identical transient Calendar read and keeps the actual error', async () => {
     let attempts = 0;
     const handler = calendar(async () => { if (++attempts === 1) throw Error('synthetic provider timeout'); return []; });

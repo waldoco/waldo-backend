@@ -114,7 +114,11 @@ export async function runToolLoop(input: Readonly<{
         }
       }
       const mutation = mutationTools.has(call.name as never);
-      if (mutation || result.ok || result.code !== 'transient') {
+      // Only a typed adapter failure explicitly classified transient permits recovery.
+      // Validation, hook halts and unexpected handler throws are not evidence of retryability.
+      const retryableRead = !result.ok && result.code === 'transient'
+        && 'reason' in result && result.reason === 'tool_result_error';
+      if (mutation || !retryableRead) {
         seen.set(key, result);
       }
       const receipt = receiptUrl(call.name, result);
