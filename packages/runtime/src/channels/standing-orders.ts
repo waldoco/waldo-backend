@@ -55,8 +55,11 @@ export const standingOrderBook = (sql: Sql, scheduler: Scheduler, clock: OwnerCl
             recurrence: { type: 'daily_local', time: args.at, timezone: clock.timezone },
           });
         } catch (error) {
-          // An active order with no armed schedule would look set and never run.
+          // An active order with no armed schedule would look set and never run, and schedule() writes its
+          // armed row before re-arming the alarm, so a late failure can leave that row behind: cancel it too
+          // (idempotent; its own failure must not hide the original one).
           sql.exec('DELETE FROM standing_orders WHERE id = ?', id);
+          await scheduler.cancel(id).catch(() => undefined);
           throw error;
         }
       }

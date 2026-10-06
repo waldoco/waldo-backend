@@ -169,4 +169,20 @@ describe('standing order tools', () => {
     await expect(book.set({ scope: 'Summarize my day', trigger: 'daily', at: '21:00', gate: 'act_and_report', escalation: 'message_owner' })).rejects.toThrow('scheduler unavailable');
     expect(book.list()).toHaveLength(0);
   });
+
+  it('E4: a scheduler that stored the armed row and then failed to re-arm is cancelled too, so no orphan recurring schedule remains', async () => {
+    const sql = fakeSql();
+    const base = fakeScheduler();
+    const scheduler = {
+      ...base,
+      async schedule(input: { id: string; kind: string; dueAt: number; occurrenceAt: number; recurrence?: unknown }) {
+        await base.schedule(input); // row stored first, as the real Scheduler does
+        throw new Error('alarm registration rejected');
+      },
+    };
+    const book = standingOrderBook(sql as never, scheduler as never, clock, () => 'daily2');
+    await expect(book.set({ scope: 'Summarize my day', trigger: 'daily', at: '21:00', gate: 'act_and_report', escalation: 'message_owner' })).rejects.toThrow('alarm registration rejected');
+    expect(book.list()).toHaveLength(0);
+    expect(base.cancelled).toEqual(['order:daily2']);
+  });
 });
