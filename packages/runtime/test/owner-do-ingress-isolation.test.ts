@@ -92,6 +92,17 @@ const worldNote = (state: { storage: { sql: { exec(q: string): { toArray(): unkn
   const runs = state.storage.sql.exec("SELECT schedule_id, fired_at, outcome FROM schedule_runs WHERE schedule_id LIKE 'card:%' OR schedule_id = 'heartbeat-tick' ORDER BY fired_at DESC LIMIT 8").toArray();
   return `runs=${JSON.stringify(runs)} finals=${JSON.stringify(finals.map(r => [r.trace, r.status, r.attempts, r.settled, r.createdAt, r.dueAt]))} inbox=${JSON.stringify(inbox.map(r => [r.updateId, r.state, r.reason]))} now=${Date.now()} schedule=${JSON.stringify(armed)} outbox=${JSON.stringify(outbox.map(item => [item.method, item.body.chat_id]))}`;
 };
+// A turn is done when the owner inbox holds nothing admitted or claimed. One alarm() call can find a platform alarm already running and return before this
+// update's turn has run (the scheduler fires on the wall clock), so drive it again until the inbox drains instead of reading effects right after a single pass.
+const drained = (subject: number) => vi.waitFor(async () => {
+  const open = await runInDurableObject(doStub(subject), async (instance, state) => {
+    const rows = state.storage.kv.get<{ state: string }[]>('telegram_owner_inbox_v1'); if (!rows) throw new Error('inbox key unreadable');
+    const pending = rows.some(row => row.state === 'admitted' || row.state === 'claimed');
+    if (pending) await instance.alarm();
+    return pending;
+  });
+  expect(open).toBe(false);
+}, { timeout: 8000, interval: 50 });
 const send = async (subject: number, text: string, updateId: number, replyTo?: Record<string, unknown>) => {
   const pending: Promise<unknown>[] = [];
   const response = await handleTelegramWebhook(new Request('https://fixture.invalid/telegram/webhook', {
@@ -106,6 +117,7 @@ const send = async (subject: number, text: string, updateId: number, replyTo?: R
     state.storage.kv.put('telegram_final_outbox_v1', rows);
     await instance.alarm();
   });
+  await drained(subject);
   return response;
 };
 const callback = async (subject: number, from: number, data: string, updateId: number) => {
@@ -116,6 +128,7 @@ const callback = async (subject: number, from: number, data: string, updateId: n
   }), env, (work) => pending.push(work), directory);
   await Promise.all(pending);
   await runInDurableObject(doStub(subject), async instance => { await instance.alarm(); });
+  await drained(subject);
   return response;
 };
 const doStub = (subject: number) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(route(subject).doName)) as DurableObjectStub<TelegramOwnerDO>;
