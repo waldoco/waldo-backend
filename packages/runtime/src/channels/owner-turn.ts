@@ -2,7 +2,7 @@ import { OWNER_REQUEST_HOP } from './harness';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { TASK_SOURCE_INSTRUCTION, TASK_SOURCE_SCHEMA, taskSourceAllowed, taskSourceRequired, taskSourcePrompt, type OwnerTaskSourceScope, type TaskSourceSnapshot, type TaskSourceFamily } from './task-source-scope';
-import { asciiLiteralIncludes, forgetSnapshot, forgetSourceBatch, selectedForgetResult, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, SELECTIVE_FORGET_SPAN_INSTRUCTION, mergeSecondSpanPass, unspannedEpisodeRows, type ForgetSource } from '../memory/selective-forget';
+import { asciiLiteralIncludes, isPlainForgetText, forgetSnapshot, forgetSourceBatch, selectedForgetResult, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, SELECTIVE_FORGET_SPAN_INSTRUCTION, mergeSecondSpanPass, unspannedEpisodeRows, type ForgetSource } from '../memory/selective-forget';
 import { ownerForgetTopic, hasForgetIntent } from '../memory/claims';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
@@ -935,7 +935,7 @@ export const createOwnerResponder = (
           raw = JSON.stringify({ ...ops, forget_topic: null });
         }
         // Trace-only: counts by saved store and the longest source, never row text, so a held forget can be read from the trace alone.
-        if (forgetWhy.startsWith('selection_rejected')) { const byTable = new Map<string, number>(); for (const row of supplied.sources) { const table = row.ref.split(':')[0]!; byTable.set(table, (byTable.get(table) ?? 0) + 1); } forgetRows = `held_rows ${[...byTable].map(([table, n]) => `${table}:${n}`).join(' ')} longest:${Math.max(0, ...supplied.sources.map(row => row.text.length))} over_limit:${supplied.sources.filter(row => row.text.length > 4096).length}`; }
+        if (forgetWhy.startsWith('selection_rejected')) { const byTable = new Map<string, number>(); for (const row of supplied.sources) { const table = row.ref.split(':')[0]!; byTable.set(table, (byTable.get(table) ?? 0) + 1); } forgetRows = `held_rows ${[...byTable].map(([table, n]) => `${table}:${n}`).join(' ')} longest:${Math.max(0, ...supplied.sources.map(row => row.text.length))} over_limit:${supplied.sources.filter(row => row.text.length > 4096).length} non_plain:${supplied.sources.filter(row => !isPlainForgetText(row.text)).length}`; }
         if (forgetWhy) {
           const reasonClass = forgetWhy.split('(')[0]!;
           const reasonMeaning: Record<string, string> = { sources_incomplete: 'some saved copies could not be fully read', selector_unavailable: 'the span check could not run', fresh_incomplete: 'a recheck after the span check was incomplete', selection_rejected: 'the checked spans did not cover every copy', batch_pending: 'a bounded batch was checked but cleanup is not yet complete', cleanup_pending: 'earlier exact cleanup still needs verified readback', preserved_store: `these saved stores are kept as they are and still mention it, so they need the owner's decision: ${[...new Set(forgetHeld)].join(', ')}` };

@@ -311,7 +311,7 @@ it('an incomplete forget names the gate that held in the memory hop, with counts
     const hop = seen.logs.filter(entry => (entry as { hop: string }).hop === 'memory').at(-1) as { detail: string };
     expect(hop.detail).toMatch(/forget_incomplete selection_rejected\(\d+ sources; [a-z_:]+\)/);
     // Counts by saved store and the longest source, so a held forget can be read from the trace alone.
-    expect(hop.detail).toMatch(/; held_rows episodes:1 request:1 longest:\d+ over_limit:0/);
+    expect(hop.detail).toMatch(/; held_rows episodes:1 request:1 longest:\d+ over_limit:0 non_plain:0/);
     expect(hop.detail).not.toContain(topic);
     expect(JSON.stringify(seen.logs)).not.toContain('cobalt paper');
     expect(JSON.stringify(seen.logs)).not.toContain('Keep tea');
