@@ -548,7 +548,10 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 
 ### Public browser failure custody
 
+- Changes to public browser result fields or cleanup semantics run the existing Browserbase `browse-page.test.ts` suite as well as Cloudflare and new routing suites. Update exact contract expectations without reverting uncertainty fences or weakening receipt assertions; retain benign false/zero/partial-content controls.
+
 | Failure | Regression | Boundary |
 | --- | --- | --- |
 | Post-tool rejection or rewritten metadata erased an uncertain browser allocation and permitted another start; browser trace projection also erased the dispatcher rejection reason | tool-dispatcher.test.ts and browser-read-routing.test.ts preserve snapshotted uncertainty through sanitization, mutation and malformed results; browser-read-trace.test.ts preserves both diagnostics in actual responder and capture-off sinks | Existing public-read tool and one invocation-local no-reallocation fence; no global session registry, new provider authority or automatic fallback |
 | A stalled refusal body raced the enclosing deadline and changed the terminal classification | cloudflare-public-read.test.ts retains observed HTTP status while elapsed work deadlines remain rejected | Exact acquire refusal remains distinct from unknown allocation; no quota or billing inference |
+| New routing suites passed while the existing Browserbase suite still asserted superseded provider, cleanup and empty-result behavior | browse-page.test.ts reproduces the eight CI failures, then asserts exact metadata/custody and adversarial malformed-session/cleanup outcomes | Test-only alignment with the reviewed contract; no weakening of production behavior or live-provider acceptance claim |

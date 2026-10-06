@@ -8,7 +8,7 @@ type Op = 'start' | 'navigate' | 'extract' | 'end';
 const opOf = (url: string): Op =>
   url.includes('/start') ? 'start' : url.includes('/navigate') ? 'navigate' : url.includes('/extract') ? 'extract' : 'end';
 
-const stagehand = (overrides: Partial<Record<Op, Response>> = {}) => {
+const stagehand = (overrides: Partial<Record<Op, Response | Error>> = {}) => {
   const calls: { op: Op; path: string; headers: Record<string, string>; body: Record<string, unknown> }[] = [];
   const ok: Record<Op, () => Response> = {
     start: () => new Response(JSON.stringify({ success: true, data: { sessionId: 'sess-1', available: true } })),
@@ -19,7 +19,9 @@ const stagehand = (overrides: Partial<Record<Op, Response>> = {}) => {
   const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const op = opOf(String(input));
     calls.push({ op, path: new URL(String(input)).pathname, headers: (init?.headers ?? {}) as Record<string, string>, body: JSON.parse(String(init?.body ?? '{}')) });
-    return overrides[op] ?? ok[op]();
+    const override = overrides[op];
+    if (override instanceof Error) throw override;
+    return override ?? ok[op]();
   }) as typeof fetch;
   return { calls, fetcher };
 };
@@ -32,7 +34,8 @@ describe('browse_page', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.source_taint).toBe('external');
-    expect(result.data).toEqual({ url: 'https://example.com', data: { title: 'Example' } });
+    expect(result.data).toEqual({ url: 'https://example.com', provider: 'browserbase_stagehand_http_v3', data: { title: 'Example' } });
+    expect(result.browser_read).toEqual({ provider: 'browserbase_stagehand_http_v3', phase: 'complete', reason: 'completed', cleanup: 'confirmed' });
     expect(calls.map((c) => c.op)).toEqual(['start', 'navigate', 'extract', 'end']);
     expect(calls[0]!.path).toBe('/v1/sessions/start');
     expect(calls[2]!.path).toBe('/v1/sessions/sess-1/extract');
@@ -85,13 +88,29 @@ describe('browse_page', () => {
     expect(calls.map((c) => c.op)).toEqual(['start']);
   });
 
-  it('start succeeds but returns no session: transient, and end is not called without a session', async () => {
+  it('start returns no usable session identity: rejected with unknown allocation, without guessing an end target', async () => {
     const { calls, fetcher } = stagehand({ start: new Response(JSON.stringify({ success: false, data: {} })) });
     const result = await browsePageHandler('k', 'p', undefined, fetcher).handle(args, ctx);
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.code).toBe('transient');
+    expect(result.code).toBe('rejected');
+    expect(result.browser_read).toEqual({ provider: 'browserbase_stagehand_http_v3', phase: 'allocation', reason: 'invalid_session', cleanup: 'unknown_allocation' });
     expect(calls.map((c) => c.op)).toEqual(['start']);
+  });
+
+  it.each([[undefined], [null], [123], [{}], [''], ['../foreign'], ['x'.repeat(129)]])('a successful start with malformed session identity %j never navigates or guesses a cleanup target', async sessionId => {
+    const { calls, fetcher } = stagehand({ start: Response.json({ success: true, data: { sessionId } }) });
+    const result = await browsePageHandler('k', 'p', undefined, fetcher).handle(args, ctx);
+    expect(result).toEqual({ ok: false, code: 'rejected', error: 'Browser session start returned no valid session identity. The Browserbase cleanup is unconfirmed. No browser read is reported as complete.', source_taint: 'external', browser_read: { provider: 'browserbase_stagehand_http_v3', phase: 'allocation', reason: 'invalid_session', cleanup: 'unknown_allocation' } });
+    expect(calls.map((c) => c.op)).toEqual(['start']);
+  });
+
+  it('retains a valid session identity for cleanup when start is not acknowledged', async () => {
+    const { calls, fetcher } = stagehand({ start: Response.json({ success: false, data: { sessionId: 'sess-1' } }) });
+    const result = await browsePageHandler('k', 'p', undefined, fetcher).handle(args, ctx);
+    expect(result).toEqual({ ok: false, code: 'transient', error: 'Browser session start was not acknowledged.', source_taint: 'external', browser_read: { provider: 'browserbase_stagehand_http_v3', phase: 'allocation', reason: 'provider_failure', cleanup: 'confirmed' } });
+    expect(calls.map((c) => c.op)).toEqual(['start', 'end']);
+    expect(calls[1]!.path).toBe('/v1/sessions/sess-1/end');
   });
 
   it('navigate or extract failure maps to transient and the session is still ended', async () => {
@@ -121,10 +140,23 @@ describe('browse_page', () => {
     expect(calls[calls.length - 1]!.op).toBe('end');
   });
 
-  it('a failing end call never masks a successful extraction', async () => {
-    const { fetcher } = stagehand({ end: new Response('err', { status: 500 }) });
+  it('a failing end call cannot certify a completed read and suppresses extracted content', async () => {
+    const { calls, fetcher } = stagehand({ end: new Response('err', { status: 500 }) });
     const result = await browsePageHandler('k', 'p', undefined, fetcher).handle(args, ctx);
-    expect(result.ok).toBe(true);
+    expect(result).toEqual({ ok: false, code: 'rejected', error: 'The Browserbase cleanup is unconfirmed. No browser read is reported as complete.', source_taint: 'external', browser_read: { provider: 'browserbase_stagehand_http_v3', phase: 'cleanup', reason: 'cleanup_unconfirmed', cleanup: 'unconfirmed' } });
+    expect(calls.map((c) => c.op)).toEqual(['start', 'navigate', 'extract', 'end']);
+  });
+
+  it.each(['http', 'false', 'missing', 'malformed', 'throw'] as const)('unconfirmed %s cleanup preserves the observed read failure and never retries', async mode => {
+    const end = mode === 'throw' ? Error('cleanup-body-secret')
+      : mode === 'http' ? new Response('cleanup-body-secret', { status: 500 })
+      : mode === 'malformed' ? new Response('cleanup-body-secret')
+      : Response.json({ ...(mode === 'false' ? { success: false } : {}), message: 'cleanup-body-secret' });
+    const { calls, fetcher } = stagehand({ navigate: new Response('navigation-body-secret', { status: 502 }), end });
+    const result = await browsePageHandler('k', 'p', undefined, fetcher).handle(args, ctx);
+    expect(result).toEqual({ ok: false, code: 'rejected', error: 'The page did not load (HTTP 502) The Browserbase cleanup is unconfirmed. No browser read is reported as complete.', source_taint: 'external', browser_read: { provider: 'browserbase_stagehand_http_v3', phase: 'navigation', reason: 'provider_http', http_status: 502, cleanup: 'unconfirmed' } });
+    expect(calls.map((c) => c.op)).toEqual(['start', 'navigate', 'end']);
+    expect(JSON.stringify(result)).not.toContain('body-secret');
   });
 
   it('the model passed to extract comes from the roster, never a literal', async () => {
@@ -163,19 +195,18 @@ describe('browse_page', () => {
     const { fetcher } = stagehand({ extract: new Response(JSON.stringify({ success: true, data: { result, actionId: 'a2' } })) });
     const out = await browsePageHandler('bb-key', 'bb-proj', 'model-key', fetcher).handle(args, ctx);
     expect(out.ok).toBe(false);
-    if (!out.ok) { expect(out.code).toBe('not_found'); expect(out.error).toMatch(/another source/); }
+    expect(out).toEqual({ ok: false, code: 'not_found', error: 'The page returned no readable content.', source_taint: 'external', browser_read: { provider: 'browserbase_stagehand_http_v3', phase: 'extraction', reason: 'empty_content', cleanup: 'confirmed' } });
   });
 
   it.each([[0], [false], ['none'], [{ found: false }]])('a real but falsy answer (%j) stays ok', async (result) => {
     const { fetcher } = stagehand({ extract: new Response(JSON.stringify({ success: true, data: { result, actionId: 'a2' } })) });
     const out = await browsePageHandler('bb-key', 'bb-proj', 'model-key', fetcher).handle(args, ctx);
-    expect(out.ok).toBe(true);
+    expect(out).toEqual({ ok: true, data: { url: args.url, provider: 'browserbase_stagehand_http_v3', data: result }, source_taint: 'external', browser_read: { provider: 'browserbase_stagehand_http_v3', phase: 'complete', reason: 'completed', cleanup: 'confirmed' } });
   });
 
   it('a partly filled extraction is still ok', async () => {
     const { fetcher } = stagehand({ extract: new Response(JSON.stringify({ success: true, data: { result: { price: null, title: 'Bose QC' }, actionId: 'a2' } })) });
     const out = await browsePageHandler('bb-key', 'bb-proj', 'model-key', fetcher).handle(args, ctx);
-    expect(out.ok).toBe(true);
+    expect(out).toEqual({ ok: true, data: { url: args.url, provider: 'browserbase_stagehand_http_v3', data: { price: null, title: 'Bose QC' } }, source_taint: 'external', browser_read: { provider: 'browserbase_stagehand_http_v3', phase: 'complete', reason: 'completed', cleanup: 'confirmed' } });
   });
 });
-

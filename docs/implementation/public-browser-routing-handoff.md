@@ -50,3 +50,11 @@ Independent review reproduced two defects, both repaired with adversarial regres
 - [Stagehand end-session contract](https://docs.stagehand.dev/v3/api-reference/python/end-a-browser-session): ending terminates the session and releases resources, acknowledged by HTTP200/success:true
 
 Rollback is a source revert of this bounded change. No persistence migration, dependency, provider credential, paid plan, deployment configuration or access grant changed.
+
+## Published-head contract regression repair
+
+Draft PR #881 published the unchanged reviewed `c19cd1c4` head. [CI run 37498916312](https://github.com/waldoco/waldo-backend/actions/runs/37498916312) passed five jobs; runtime shard 3 failed eight assertions in the existing `browse-page.test.ts` suite. The same eight failures were reproduced in the local Workers pool before editing.
+
+They expected the former data shape without a provider stamp, retryable missing-session allocation, completed reads despite failed cleanup, and five variants of the former empty-result wording. Those expectations conflicted with the reviewed result and cleanup-custody contract. The repair changes tests only: exact receipt/diagnostic assertions replace the stale expectations, malformed identities remain start-only, failed cleanup retains the original HTTP failure without raw bodies, and false/zero/partly-filled data remain useful successful reads. Production behavior is unchanged.
+
+The full expanded browse-page suite passes 36 tests in Workers. Affected contracts, dispatcher, loop, trace, egress and ordinary owner-DO verification are rerun for this test correction. Hosted CI must verify the updated PR head; no unchanged-run retry or CI-success claim is implied. The separate unresolved WebSocket transport boundary is not changed by this correction.
