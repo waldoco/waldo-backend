@@ -458,9 +458,13 @@ export const createOwnerResponder = (
   const promptClaim = <T extends { text: string; evidence: string; source_ref?: string | null }>(claim: T): T => ({ ...claim, text: forgetText(claim.text), evidence: forgetText(claim.evidence), source_ref: claim.source_ref ? forgetText(claim.source_ref) : claim.source_ref });
   // A node is derived from its supporting claims: one built on a withheld claim is withheld too (fail closed on unreadable support), and so is every edge touching it.
   const promptNodes = () => {
-    const withheld = new Set(memory!.allClaims()
+    const all = memory!.allClaims();
+    const known = new Set(all.map(claim => claim.id));
+    const withheld = new Set(all
       .filter(claim => holdsHeldTopic(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)).map(claim => claim.id));
-    const supportHeld = (raw: string): boolean => { try { const spots: unknown = JSON.parse(raw); return !Array.isArray(spots) || spots.some(id => typeof id !== 'number' || withheld.has(id)); } catch { return true; } };
+    // While a topic is held, support naming a claim that does not exist has unknown provenance, so it fails closed like unreadable support.
+    const holding = holdsAnyHeldTopic();
+    const supportHeld = (raw: string): boolean => { try { const spots: unknown = JSON.parse(raw); return !Array.isArray(spots) || spots.some(id => typeof id !== 'number' || withheld.has(id) || (holding && !known.has(id))); } catch { return true; } };
     return memory!.nodes().filter(node => !holdsHeldTopic(...structuredStrings(node)) && !supportHeld(node.supporting_spots));
   };
   const promptMemory = (): ClaimStore | undefined => memory && ({

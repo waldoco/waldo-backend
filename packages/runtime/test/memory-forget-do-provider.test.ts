@@ -2981,6 +2981,25 @@ it('a graph node supported only by a dismissed held claim is withheld from the w
     expect(sent).not.toContain('DISMISSEDSUPPORT-PATTERN'); expect(sent).not.toContain('DISMISSEDEDGE-RELATION');
   });
 });
+it('a graph node citing a claim id that does not exist is withheld during a hold and kept otherwise', async () => {
+  await runInDurableObject(stub('held-graph-missing-id'), async (_instance, state) => {
+    const topic = 'Independent cobalt workshop';
+    const memory = claimStore(state.storage.sql); const at = new Date().toISOString();
+    memory.add({ kind: 'preference', text: 'Likes a quiet reading desk in the morning', evidence: 'Reading preference', origin: 'owner', source: 'stated', source_ref: 'owner, graph-fixture' }, at);
+    const reading = memory.claims()[0]!.id;
+    const node = (label: string, spots: number[]) => memory.saveNode({ id: null, domain: 'work rhythm', label, summary: `${label} summary`, strength: 0.8, status: 'active', supporting_spots: spots }, at);
+    node('GHOSTSUPPORT-PATTERN', [reading, 999999]); node('READINGONLY-PATTERN', [reading]);
+    const writerSees = async (trace: string) => {
+      seen.writerInputs.length = 0;
+      await createOwnerResponder('fixture', undefined, memory).respond({ traceId: trace, conversationRef: 'owner', surface: 'telegram', text: 'What patterns do you see in my routine?', memoryWrites: true }, (_h, w) => w());
+      return seen.writerInputs.join('\n');
+    };
+    expect(await writerSees('ghost-no-hold')).toContain('GHOSTSUPPORT-PATTERN');
+    memory.beginTopicCoverage(topic, at); seen.selectorThrows = true;
+    const held = await writerSees('ghost-hold');
+    expect(held).toContain('READINGONLY-PATTERN'); expect(held).not.toContain('GHOSTSUPPORT-PATTERN');
+  });
+});
 it('an owner-context claim whose id cannot be read back is dropped, not kept', async () => {
   await runInDurableObject(stub('held-claim-unknown-id'), async (_instance, state) => {
     const topic = 'Independent cobalt workshop';
