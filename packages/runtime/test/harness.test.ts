@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { WALDO_CHAT_MODEL } from '@waldo/contracts';
-import { parseHarnessCommand, traceBook } from '../src/channels/harness';
+import { OWNER_REQUEST_HOP, parseHarnessCommand, traceBook } from '../src/channels/harness';
 
 let sequence = 0;
 const withSql = <T>(fn: (sql: SqlStorage) => T) =>
@@ -19,6 +19,56 @@ describe('owner harness', () => {
     expect(parseHarnessCommand('/langfuse')).toEqual({ kind: 'langfuse' });
     expect(parseHarnessCommand('fire the brief please')).toBeNull();
     expect(parseHarnessCommand(undefined)).toBeNull();
+  });
+
+  it('shows the newest owner request, not a background job that also calls the model', async () => {
+    await withSql((sql) => {
+      const book = traceBook(sql, 50);
+      const at = Date.parse('2026-09-23T04:30:00Z');
+      book.record({ trace: 'tg-812', hop: OWNER_REQUEST_HOP, ms: 0, ok: true }, at);
+      book.record({ trace: 'tg-812', hop: 'llm_reply', ms: 2140, ok: true }, at + 3_000);
+      book.record({ trace: 'card:brief:2', hop: 'llm_reply', ms: 900, ok: true }, at + 60_000);
+      book.record({ trace: 'card:brief:2', hop: 'day_card', ms: 10, ok: true }, at + 61_000);
+      expect(book.lastRequest('UTC')).toEqual({ trace: 'tg-812', at: '2026-09-23 04:30', ok: true, partial: false, recorded_steps: 2,
+        hops: [{ hop: OWNER_REQUEST_HOP, ok: true, ms: 0, note: '' }, { hop: 'llm_reply', ok: true, ms: 2140, note: '' }] });
+    });
+  });
+
+  it('does not skip a newer owner request that failed before the model was called', async () => {
+    await withSql((sql) => {
+      const book = traceBook(sql, 50);
+      const at = Date.parse('2026-09-23T04:30:00Z');
+      book.record({ trace: 'tg-1', hop: OWNER_REQUEST_HOP, ms: 0, ok: true }, at);
+      book.record({ trace: 'tg-1', hop: 'llm_reply', ms: 800, ok: true }, at);
+      book.record({ trace: 'tg-2', hop: OWNER_REQUEST_HOP, ms: 0, ok: true }, at + 60_000);
+      book.record({ trace: 'tg-2', hop: 'health_context', ms: 5, ok: false, error: 'read failed' }, at + 61_000);
+      const last = book.lastRequest('UTC');
+      expect(last?.trace).toBe('tg-2');
+      expect(last?.ok).toBe(false);
+      expect(last?.hops.map((hop) => hop.hop)).toEqual([OWNER_REQUEST_HOP, 'health_context']);
+    });
+  });
+
+  it('keeps the whole-request outcome after the bounded trace pruned its steps', async () => {
+    await withSql((sql) => {
+      const book = traceBook(sql, 3);
+      const at = Date.parse('2026-09-23T04:30:00Z');
+      book.record({ trace: 'tg-1', hop: OWNER_REQUEST_HOP, ms: 0, ok: true }, at);
+      book.record({ trace: 'tg-1', hop: 'memory', ms: 400, ok: false, error: 'bad json' }, at);
+      book.record({ trace: 'tg-1', hop: 'llm_reply', ms: 900, ok: true }, at);
+      for (let n = 0; n < 4; n += 1) book.record({ trace: `r-${n}`, hop: 'reminder', ms: 1, ok: true }, at + 1_000 * n);
+      const last = book.lastRequest('UTC');
+      expect(last).toMatchObject({ trace: 'tg-1', at: '2026-09-23 04:30', ok: false, partial: true, recorded_steps: 3, hops: [] });
+    });
+  });
+
+  it('has no last request before any owner request was admitted', async () => {
+    await withSql((sql) => {
+      const book = traceBook(sql, 5);
+      book.record({ trace: 'r-9', hop: 'reminder', ms: 10, ok: true }, 1);
+      book.record({ trace: 'card:brief:2', hop: 'llm_reply', ms: 10, ok: true }, 2);
+      expect(book.lastRequest('UTC')).toBeNull();
+    });
   });
 
   it('keeps a bounded trace and marks E2E steps from their latest hop', async () => {

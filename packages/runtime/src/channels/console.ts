@@ -1,7 +1,7 @@
 import type { ApprovalItem, ApprovalReview } from './approvals';
 import type { Claim, ConstellationEdge, ConstellationNode, profile } from '../memory/claims';
 import type { Proactivity } from './loops';
-import type { E2EStep, TraceRow } from './harness';
+import type { E2EStep, LastRequest, TraceRow } from './harness';
 import type { StoredFile } from './files';
 import { localIso } from './reminders';
 
@@ -174,6 +174,7 @@ export type ConsoleView = Readonly<{
   proactivity: Proactivity;
   files: readonly StoredFile[];
   steps: readonly E2EStep[];
+  lastRequest: LastRequest | null;
   trace: readonly TraceRow[];
   // A5b: recent background runs (delegate children, fires, beats) with their trace hops.
   runs: readonly Readonly<{ id: string; kind: string; status: string; summary: string | null; parent_id: string | null; started: string; ended: string | null }>[];

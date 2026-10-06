@@ -89,7 +89,7 @@ const stamp = (value:string) => value; // Backend activity strings are already o
 const took = (ms: number) => ms < 1000 ? 'under a second' : `${(ms / 1000).toFixed(1)} seconds`;
 const kindIcon = (kind: string): IconName => ({ update_card: 'brief', reminder: 'bell', llm_reply: 'chat', joined_path: 'chat', heartbeat: 'patrol', patrol_skip: 'patrol' } as Record<string, IconName>)[kind] ?? 'entry';
 export function ActivityControls({ record, busy, onPage }: { record: ActivityRecord; busy: boolean; onPage: (page: ActivityCursors) => void }) {
-  const { trace, runs, steps, page, ledger } = record.data;
+  const { trace, runs, steps, page, ledger, last_request: lastRequest } = record.data;
   const firstFailure = trace.findIndex(row => !row.ok);
   const [selected, setSelected] = useState<number | null>(trace.length ? (firstFailure >= 0 ? firstFailure : 0) : null);
   return <>
@@ -100,10 +100,16 @@ export function ActivityControls({ record, busy, onPage }: { record: ActivityRec
       <div className="chart-axis" aria-hidden="true"><span>Older</span><span>Latest</span></div>
       </div><Terminal className="figure" label="A terminal window, an interactive illustration. Decorative."/></div>
     </section>}
+    <section className="tile chart reveal" style={{ '--i': 1 } as React.CSSProperties} aria-labelledby="request-title">
+      <div className="chart-head"><h2 id="request-title">The last request, step by step</h2>{lastRequest && <span className={`access-label${lastRequest.ok ? '' : ' failed'}`}>{lastRequest.ok ? (lastRequest.partial ? 'Recorded, no failure among all steps' : 'Recorded') : 'Failure recorded in this request'}</span>}</div>
+      {lastRequest ? <><Pipeline steps={lastRequest.hops.map(hop => ({ step: activityLabel(hop.hop), state: hop.ok ? 'ok' as const : 'failed' as const, note: [`${hop.ms} ms`, hop.note].filter(Boolean).join(' · ') }))}/>
+        <p className="meta">{lastRequest.partial ? `Some earlier steps of this request were cleared to keep the log short, so ${lastRequest.hops.length} of ${lastRequest.recorded_steps} recorded steps are shown. The outcome above counts all of them.` : 'Every step recorded for one chat request.'} Started {stamp(lastRequest.at)}. Steps from other requests are not mixed in.</p></>
+        : <p>No chat request recorded yet.</p>}
+    </section>
     {steps.length > 0 && <section className="tile chart reveal" style={{ '--i': 1 } as React.CSSProperties} aria-labelledby="steps-title">
-      <div className="chart-head"><h2 id="steps-title">Independently recorded steps</h2></div>
+      <div className="chart-head"><h2 id="steps-title">Background jobs, last ran</h2></div>
       <Pipeline steps={steps}/>
-      <p className="meta">Latest record for each step across history, not one request or a shared chronology. Saved permission alone isn’t a successful live tool test.</p>
+      <p className="meta">Latest record per scheduled or background job, each from its own run. Saved permission alone isn’t a successful live tool test.</p>
     </section>}
     <div className="tile disclosures reveal" style={{ '--i': 2 } as React.CSSProperties}>
       <h2 className="visually-hidden">Recent recorded activity</h2>

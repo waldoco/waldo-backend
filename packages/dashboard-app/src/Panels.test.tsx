@@ -14,7 +14,7 @@ const waiting: WaitingRecord = { ...base, view: 'waiting', data: { timezone: nul
 ] } };
 const activity: ActivityRecord = { ...base, view: 'activity', data: {
   trace: [{ time: '10:00', hop: 'patrol_skip', ok: true, ms: 0, summary: 'Suppressed during quiet hours' }, { time: '11:00', hop: 'tool_attempt', ok: false, ms: 15, summary: '<script>failure</script>' }],
-  runs: [{ id: 'run1', kind: 'reminder', status: 'running', started: '10-02 11:00', ended: null, summary: null }], steps: [{ step: 'Google read', state: 'unseen', at: null, note: null }],
+  runs: [{ id: 'run1', kind: 'reminder', status: 'running', started: '10-02 11:00', ended: null, summary: null }], steps: [{ step: 'Google read', state: 'unseen', at: null, note: null }], last_request: { at: '2026-10-02 11:00', ok: false, partial: false, recorded_steps: 2, hops: [{ hop: 'llm_reply', ok: true, ms: 2140, note: '' }, { hop: 'memory', ok: false, ms: 20, note: 'bad json' }] },
   page: { trace_before: 11, runs_before: 22, trace_applied: 33, runs_applied: 44 }, ledger: '<script>reminder text</script>',
 } };
 
@@ -33,6 +33,20 @@ describe('full waiting proposal review', () => {
     const unknown = renderToStaticMarkup(<WaitingControls record={waiting} busy={false} onAction={noop}/>);
     expect(unknown).toContain('8:00 AM–9:00 AM');
     expect(unknown).toContain('The illustration is in UTC');
+  });
+
+  it('shows the last chat request from its own trace, apart from background jobs', () => {
+    const html = renderToStaticMarkup(<ActivityControls record={activity} busy={false} onPage={noop}/>);
+    expect(html).toContain('The last request, step by step');
+    expect(html).toContain('Failure recorded in this request');
+    expect(html).toContain('Background jobs, last ran');
+    expect(html.indexOf('The last request, step by step')).toBeLessThan(html.indexOf('Background jobs, last ran'));
+    expect(html).toContain('2140 ms'); expect(html).toContain('bad json'); expect(html).toContain('Memory update'); expect(html).toContain('Started 2026-10-02 11:00');
+    expect(html).not.toContain('Some earlier steps');
+    const cut = renderToStaticMarkup(<ActivityControls record={{ ...activity, data: { ...activity.data, last_request: { ...activity.data.last_request!, ok: true, partial: true, recorded_steps: 6, hops: [{ hop: 'llm_reply', ok: true, ms: 5, note: '' }] } } }} busy={false} onPage={noop}/>);
+    expect(cut).toContain('Some earlier steps'); expect(cut).toContain('1 of 6'); expect(cut).not.toContain('Every step recorded');
+    const none = renderToStaticMarkup(<ActivityControls record={{ ...activity, data: { ...activity.data, last_request: null } }} busy={false} onPage={noop}/>);
+    expect(none).toContain('No chat request recorded yet.');
   });
 
   it('renders exact reviewed words and recipients, eligible calendar decisions, and chat-only sends', () => {
