@@ -1,15 +1,1 @@
-<!-- @license lucide-static v1.52.0 - ISC -->
-<svg
-  class="lucide lucide-message-circle"
-  xmlns="http://www.w3.org/2000/svg"
-  width="24"
-  height="24"
-  viewBox="0 0 24 24"
-  fill="none"
-  stroke="currentColor"
-  stroke-width="2"
-  stroke-linecap="round"
-  stroke-linejoin="round"
->
-  <path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719" />
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="6.246 36.697 52.997 52.997"><g transform="scale(0.0488,-0.0488) translate(0,-1950)"><path d="M420 145C440 145 453 154 475 175L654 337H989C1134 337 1214 418 1214 563V940C1214 1083 1134 1165 989 1165H353C208 1165 128 1084 128 940V563C128 418 208 337 353 337H377V194C377 164 393 145 420 145Z" fill="currentColor"/></g></svg>

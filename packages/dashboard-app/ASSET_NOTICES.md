@@ -1,9 +1,7 @@
 # Dashboard asset notices
 
-UI glyphs in src/assets/icons are copied from lucide-static 1.52.0. ISC and Feather-derived MIT licence text and copyright are retained in src/assets/icons/LICENSE.txt. They replace the previously unconfirmed SF Symbols exports. No Lucide runtime dependency is introduced.
+Original product icons (SF Symbols exports from Waldo's icon set) and Mottle.ttf are retained as in #858 at the owner's direction. His October 6, 2026 WhatsApp message at 2:23 PM says: "hey no issues with that we should go with what suyash set the original it's for our brand". This records the decision to retain the assets, not licence clearance. Redistributable web rights for those assets remain unverified. No SF Pro font binary is shipped; body type uses the platform system stack.
 
 Decorative React figures are @lucasmarkes/hairline 0.3.0 (MIT, Copyright 2026 Lucas Marques). The package licence applies and must remain with distributed copies. This change does not alter the figures.
-
-Mottle.ttf is removed because a redistributable webfont licence has not been verified. The greeting and calendar serif use Georgia/system fallback. No SF Pro font binary is shipped; body type uses the user's platform system stack.
 
 Waldo and connector brand marks remain project/vendor identifiers. This notice does not claim independent clearance of trademark or brand-use terms.

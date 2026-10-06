@@ -1,3 +1,10 @@
+@font-face {
+  font-family:Mottle;
+  src:url('./assets/Mottle.ttf?inline') format('truetype');
+  font-weight:400 900;
+  font-style:normal;
+  font-display:swap;
+}
 /* Waldo's product UI (waldo-landing "What you see of it"): Linear made round in Waldo's colours.
    SF Pro in two weights, 0.5px hairlines, white cards on the warm canvas, no shadows or gradients,
    ink for the one primary action, green and red only for done and failed. */
@@ -23,7 +30,7 @@
   --r-inner:12px;
   --ease:cubic-bezier(.22,1,.36,1);
   --spring:cubic-bezier(.34,1.4,.64,1);
-  --serif:Georgia,serif;
+  --serif:Mottle,Georgia,serif;
   font-family:var(--font);
   font-synthesis:none;
   color:var(--ink);
@@ -601,4 +608,3 @@ footer .refresh:disabled { opacity:1; }
 .tree .disclosure>summary .value{flex-basis:calc(100% - 72px)}
 @media(max-width:600px){.activity-record>summary{flex-wrap:wrap}.activity-record>summary .time{flex-basis:100%;margin-left:28px}.tree .disclosure>summary .access-label{margin-left:12px}.primary-nav a{position:relative}.primary-nav .nav-count{position:absolute;right:8px;top:2px}}
 @media(max-width:640px){.primary-nav{position:fixed}.primary-nav[data-indicator]::before{display:none}.activity-record>summary .time{display:block}}
-
