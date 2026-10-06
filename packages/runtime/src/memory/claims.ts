@@ -412,6 +412,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     PRIMARY KEY (from_id, to_id, relation))`);
   return {
     claims: (status = 'active') => sql.exec<Claim>('SELECT * FROM claims WHERE status = ? ORDER BY last_seen_at DESC, id DESC', status).toArray(),
+    // Every row whatever its status (active, promoted, superseded, purging, dismissed): the forget guard must not depend on a list of statuses.
+    allClaims: () => sql.exec<Claim>('SELECT * FROM claims').toArray(),
     recall(query: string, limit = 8): Claim[] {
       // Literal terms only, no FTS operators from the owner or a quoted outside source.
       // Requiring a concrete term avoids a nearest-neighbor guess on generic questions.

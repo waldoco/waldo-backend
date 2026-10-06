@@ -2962,6 +2962,25 @@ it('graph nodes and edges built on a held claim are withheld from the prompt, un
     expect(sent).toContain('KEPTEDGE-RELATION');
   });
 });
+it('a graph node supported only by a dismissed held claim is withheld from the writer prompt', async () => {
+  await runInDurableObject(stub('held-graph-dismissed'), async (_instance, state) => {
+    const topic = 'Independent cobalt workshop';
+    const memory = claimStore(state.storage.sql); const at = new Date().toISOString();
+    memory.add({ kind: 'preference', text: 'Enjoys folding paper at 09:10 UTC', evidence: 'Folding paper preference', origin: 'owner', source: 'stated', source_ref: 'owner, graph-fixture', aliases: [topic] }, at);
+    memory.add({ kind: 'preference', text: 'Likes a quiet reading desk in the morning', evidence: 'Reading preference', origin: 'owner', source: 'stated', source_ref: 'owner, graph-fixture' }, at);
+    const [held, reading] = memory.claims().sort((a, b) => a.id - b.id).map(claim => claim.id);
+    memory.setStatus(held!, 'dismissed');
+    const node = (label: string, spots: number[]) => memory.saveNode({ id: null, domain: 'work rhythm', label, summary: `${label} summary`, strength: 0.8, status: 'active', supporting_spots: spots }, at);
+    const dismissedNode = node('DISMISSEDSUPPORT-PATTERN', [held!]); const readingNode = node('READINGONLY-PATTERN', [reading!]);
+    memory.saveEdge({ from_id: dismissedNode, to_id: readingNode, relation: 'DISMISSEDEDGE-RELATION', strength: 0.7, evidence_count: 2 });
+    memory.beginTopicCoverage(topic, at); seen.selectorThrows = true;
+    const responder = createOwnerResponder('fixture', undefined, memory);
+    await responder.respond({ traceId: 'held-graph-dismissed', conversationRef: 'owner', surface: 'telegram', text: 'What patterns do you see in my routine?', memoryWrites: true }, (_h, w) => w());
+    const sent = seen.writerInputs.join('\n');
+    expect(sent).toContain('READINGONLY-PATTERN');
+    expect(sent).not.toContain('DISMISSEDSUPPORT-PATTERN'); expect(sent).not.toContain('DISMISSEDEDGE-RELATION');
+  });
+});
 it('an owner-context claim whose id cannot be read back is dropped, not kept', async () => {
   await runInDurableObject(stub('held-claim-unknown-id'), async (_instance, state) => {
     const topic = 'Independent cobalt workshop';

@@ -458,7 +458,7 @@ export const createOwnerResponder = (
   const promptClaim = <T extends { text: string; evidence: string; source_ref?: string | null }>(claim: T): T => ({ ...claim, text: forgetText(claim.text), evidence: forgetText(claim.evidence), source_ref: claim.source_ref ? forgetText(claim.source_ref) : claim.source_ref });
   // A node is derived from its supporting claims: one built on a withheld claim is withheld too (fail closed on unreadable support), and so is every edge touching it.
   const promptNodes = () => {
-    const withheld = new Set([...memory!.claims(), ...memory!.claims('promoted'), ...memory!.claims('superseded'), ...memory!.claims('purging')]
+    const withheld = new Set(memory!.allClaims()
       .filter(claim => holdsHeldTopic(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)).map(claim => claim.id));
     const supportHeld = (raw: string): boolean => { try { const spots: unknown = JSON.parse(raw); return !Array.isArray(spots) || spots.some(id => typeof id !== 'number' || withheld.has(id)); } catch { return true; } };
     return memory!.nodes().filter(node => !holdsHeldTopic(...structuredStrings(node)) && !supportHeld(node.supporting_spots));
