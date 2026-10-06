@@ -1379,6 +1379,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const routedCall: typeof call = (method, request) =>
       probeCapture.current === null ? call(method, request) : probeCapture.current.record(method, request);
     const api = createTelegramOwnerApi(routedCall);
+    // A blocked send (unlinked or rebound owner) returns no message. A producer must not record that as sent, completed or folded.
+    const sentOrThrow = async (sending: Promise<unknown>) => { if ((await sending) === undefined) throw new Error('telegram send blocked'); };
     // The trace names the attempt by its nonce prefix; the signed URL itself is never logged.
     const deliverConnectLink = async (url: string): Promise<boolean> => {
       const trace = url.includes('/c/') ? 'connect:deliver' : `oauth:${(new URL(url).searchParams.get('state') ?? '').split('.').at(-2)?.slice(0, 8) ?? 'unknown'}`;
@@ -1612,7 +1614,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       // rerouting silently.
       sendMessage: async (proposal) => {
         if (proposal.channel !== channel) throw new Error(`this Waldo's channel is ${channel}, not ${proposal.channel}`);
-        await routedCall('sendMessage', { chat_id: owner, text: proposal.content });
+        await sentOrThrow(routedCall('sendMessage', { chat_id: owner, text: proposal.content }));
       },
       // Approved MCP calls run post-approval, outside any turn. The result is external content:
       // the owner gets a bounded line, and it never re-enters model context.
@@ -1703,7 +1705,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         // as a direct message - fixed copy, no model involvement, and the send is never logged
         // with the artifact text (kinds + sender only; the code itself touches no store).
         const lines = artifacts.map((artifact) => artifact.kind === 'otp' ? `Code: ${artifact.value}` : `Link: ${artifact.value}`);
-        await api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` });
+        await sentOrThrow(api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` }));
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
       }), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browserTaskHandler({ legacy: browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
@@ -1880,7 +1882,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           log({ trace, hop: 'delivery_pending', ms: Date.now() - started, ok: true });
           return 'delivery_pending' as const;
         }
-        await time('send', () => api.sendMessage({ chat_id: owner, text }));
+        await time('send', async () => sentOrThrow(api.sendMessage({ chat_id: owner, text })));
         book.fired(entry);
         runs.finish(run.id, 'completed', 'reminder sent');
         log({ trace, hop: 'reminder', ms: Date.now() - started, ok: true, text: { input: note, output: text } });
@@ -1892,8 +1894,6 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       } finally { turnReceiptUrls.delete(trace); }
     };
-    // A blocked send (unlinked or rebound owner) returns no message. A producer must not record that as sent, completed or folded.
-    const sentOrThrow = async (sending: Promise<unknown>) => { if ((await sending) === undefined) throw new Error('telegram send blocked'); };
     // A7: a daily standing-order fire runs the same machine-turn path as a reminder. The gate
     // text inside the fire message carries the confirm_first semantics; escalation decides who
     // hears about a failure (copy names no model or provider).
@@ -2169,8 +2169,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (reply && reply !== SKIP_UPDATE) text = reply;
           updates.judgedMail(pendingMail);
         }
-        if (text) { if (id === null) id = updates.record(day, now, [], text); else updates.pushed(id, text); }
-        if (text) await routedCall('sendMessage', { chat_id: owner, text, reply_markup: { inline_keyboard: [[{ text: 'Useful', callback_data: `fb:${id}:u` }, { text: 'Not useful', callback_data: `fb:${id}:n` }]] } });
+        if (text) {
+          if (id === null) id = updates.record(day, now, [], null);
+          await sentOrThrow(routedCall('sendMessage', { chat_id: owner, text, reply_markup: { inline_keyboard: [[{ text: 'Useful', callback_data: `fb:${id}:u` }, { text: 'Not useful', callback_data: `fb:${id}:n` }]] } }));
+          updates.pushed(id, text);
+        }
         await reviewMailFollowup({ loops, now, timezone: clock.timezone, allowed: sourceFollowups && canSend && analysisChanges.length === 0,
           ledger, prompt: said => responder.prompt(`${trace}:mail-followup`, owner, said, async (_hop, work) => work(), ['get_context', 'read_owner_context', 'search_episodes']),
           enqueue: async (text, mailFollowup) => {

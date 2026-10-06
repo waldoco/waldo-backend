@@ -30,8 +30,8 @@ vi.mock('../src/channels/telegram-turn', async load => {
 });
 const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
 
-it.each(['card', 'order'])('a blocked send is not recorded as delivered: %s', async kind => {
-  const name = `blocked-send-${kind}`;
+it.each([['card', true], ['order', true], ['card', false], ['order', false]] as const)('background send settlement: %s, blocked=%s', async (kind, blocked) => {
+  const name = `blocked-send-${kind}-${blocked}`;
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const originalNow = Date.now;
     const at = Date.parse('2026-10-03T08:05:00Z');
@@ -41,16 +41,16 @@ it.each(['card', 'order'])('a blocked send is not recorded as delivered: %s', as
       state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
       await owner.alarm();
       state.storage.sql.exec('DELETE FROM schedule');
-      fixture.sends = 0; fixture.blocked = true;
+      fixture.sends = 0; fixture.blocked = blocked;
       const scheduler = new Scheduler(state.storage.sql, state.storage, { now: () => at, newRunId: () => 'r', newOutboxId: () => 'o', sha256Hex: async () => 's' });
       if (kind === 'card') await scheduler.schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: at - 300_000, dueAt: at - 300_000 });
       else await standingOrderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date(at - 6 * 3600_000) }, () => 'fixture')
         .set({ scope: 'Synthetic daily check', trigger: 'daily', at: '08:00', gate: 'notify_only', escalation: 'none' } as never);
       state.storage.kv.put('owner_alarm_last_v1', 0);
-      await owner.alarm().catch(() => undefined);
+      await owner.alarm();
       expect(fixture.sends).toBeGreaterThan(0);
-      if (kind === 'card') expect(dayPlanBook(state.storage.sql).read('2026-10-03').find(row => row.card === 'card:brief')?.sent).toBe(false);
-      else expect(state.storage.sql.exec("SELECT status FROM background_runs WHERE kind = 'standing_order'").toArray()).toEqual([{ status: 'failed' }]);
+      if (kind === 'card') expect(dayPlanBook(state.storage.sql).read('2026-10-03').find(row => row.card === 'card:brief')?.sent).toBe(!blocked);
+      else expect(state.storage.sql.exec("SELECT status FROM background_runs WHERE kind = 'standing_order'").toArray()).toEqual([{ status: blocked ? 'failed' : 'completed' }]);
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
 });
