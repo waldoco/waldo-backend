@@ -378,3 +378,24 @@ it('a held forget leaves the unrelated conversation history in place and drops o
     expect(sent).toContain('What did I say my locker code word was?');
   }, undefined, undefined, sql => episodeIndex(sql).add('hist-src', 'owner', `${topic} likes cobalt paper`, 1));
 });
+
+it('held history also drops a topic split across two turns and a quote of the withheld claim in other case and spacing', async () => {
+  const topic = 'HIST2-757-TOPIC';
+  const cannotVouch = JSON.stringify({ spans: [], reviewed_refs: [], complete: false });
+  await session('held-history-variants', async (turn, store) => {
+    await turn('tg-v1', 'Remember the code word is KESTREL-77.', ops({}));
+    await turn('tg-v2', 'note: hist2-757-', ops({}));
+    await turn('tg-v3', 'topic changes on friday', ops({}));
+    await turn('tg-v4', `the   ${topic.toLowerCase()} LIKES   cobalt paper`, ops({}));
+    seen.writerOps.push(ops({ forget_topic: topic }));
+    await turn('tg-v5', `Forget only ${topic}.`, cannotVouch);
+    expect(store.incompleteTopics()).toEqual([topic]);
+    seen.writerOps.push(ops({}));
+    await turn('tg-v6', 'What was the code word?', cannotVouch);
+    const sent = (JSON.parse(seen.replyInputs.at(-1)!) as { input: string }).input;
+    expect(sent).toContain('KESTREL-77');
+    expect(sent).not.toMatch(/hist2-757/i);
+    expect(sent).not.toContain('changes on friday');
+    expect(sent).not.toMatch(/likes\s+cobalt paper/i);
+  }, undefined, undefined, sql => episodeIndex(sql).add('hist2-src', 'owner', `${topic} likes cobalt paper`, 1));
+});

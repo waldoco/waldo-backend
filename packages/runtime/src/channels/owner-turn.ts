@@ -468,14 +468,27 @@ export const createOwnerResponder = (
     return memory!.nodes().filter(node => !holdsHeldTopic(...structuredStrings(node)) && !supportHeld(node.supporting_spots));
   };
   // History under a hold: the conversation stays, minus entries that carry a held topic and entries that quote the text a withheld claim was saved from (the topic's fact under another name).
-  // The current request is always kept. If the claims cannot be read, only the current request is sent.
+  // Quotes match ignoring case and spacing. A topic or quote split across two neighbouring entries is caught by also testing each adjacent pair joined. The current request is always kept.
+  // If the claims cannot be read, only the current request is sent. Known gap, same as the other filters: paraphrases. History here is plain role/content turns, so no tool-call pairs are split.
   const heldHistory = <M extends { content: unknown }>(messages: readonly M[]): M[] => {
+    const flat = (value: string) => value.toLowerCase().replace(/\s+/g, ' ').trim();
     let quoted: string[];
     try {
       quoted = memory!.allClaims().filter(claim => holdsHeldTopic(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases))
-        .flatMap(claim => [claim.text, claim.evidence]).map(value => value.trim()).filter(value => value.length >= 12);
-    } catch { return messages.slice(-1); }
-    return messages.filter((message, index) => index === messages.length - 1 || !(holdsHeldTopic(...structuredStrings(message)) || structuredStrings(message).some(text => quoted.some(quote => text.includes(quote)))));
+        .flatMap(claim => [claim.text, claim.evidence]).map(flat).filter(value => value.length > 0);
+    } catch {
+      log({ trace: traceId, hop: 'context_window', ms: 0, ok: false, detail: 'held history: claims unreadable, current request only' });
+      return messages.slice(-1);
+    }
+    const texts = messages.map(message => structuredStrings(message.content).join('\n'));
+    const bad = (text: string) => holdsHeldTopic(text, flat(text)) || quoted.some(quote => flat(text).includes(quote));
+    const alone = texts.map(bad);
+    // Neighbours are the next two entries: turns alternate owner and assistant, so a split owner message sits two apart.
+    const joined = (i: number, j: number) => j < texts.length && !alone[i] && !alone[j] && (bad(`${texts[i]}${texts[j]}`) || bad(`${texts[i]} ${texts[j]}`));
+    const drop = texts.map((_, i) => alone[i] || [1, 2].some(gap => joined(i, i + gap) || (i - gap >= 0 && joined(i - gap, i))));
+    const kept = messages.filter((_, index) => index === messages.length - 1 || !drop[index]);
+    log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `held history kept ${kept.length} dropped ${messages.length - kept.length}` });
+    return kept;
   };
   const promptMemory = (): ClaimStore | undefined => memory && ({
     ...memory,
