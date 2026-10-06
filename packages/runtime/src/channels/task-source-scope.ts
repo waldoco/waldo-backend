@@ -108,7 +108,9 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
         && !(instruction.quotedRanges ?? []).some(range => !Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end)
           || range.start < 0 || range.end < range.start || range.end > instruction.text.length
           || start < range.end && start + evidence.length > range.start);
-      if (ownerTransition && (decision.decision === 'close' || ['new', 'change'].includes(decision.decision))) {
+      // A supplied-data-only task or an explicit owner narrowing stays until the owner confirms widening it. When the task already reads connected sources, the owner's own words (evidence anchored in the fresh message) can add another; grants still bound every read.
+      const readdsNarrowed = decision.sources.some(source => source !== 'workspace' && source !== 'web' && !previous.sources.includes(source)) && (decision.decision === 'change' && isNarrowed() || previous.ready && previous.sources.length === 0);
+      if (ownerTransition && (decision.decision === 'close' || ['new', 'change'].includes(decision.decision) && !readdsNarrowed)) {
         // Semantic planning within existing authority, never a connector grant/ACL mutation.
         // CAS clears obsolete cards; the new task boundary prevents prior-task referent reuse.
         const closing = decision.decision === 'close';

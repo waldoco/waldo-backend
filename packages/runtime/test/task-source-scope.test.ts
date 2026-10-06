@@ -436,7 +436,7 @@ it('assertSame lets an unready default-read admission through, and still rejects
 
 it('a pending owner confirmation turns the unready defaults off: nothing is read around the card', () => run('task-pending-no-defaults', async (sql, scope) => {
   const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, { inputRef: 'r1', text: 'read my mail' }, ['web', 'mail']);
-  const proposed = (await cap.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'read my mail' }), 'r1', 'read my mail')).snapshot;
+  const proposed = (await cap.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'check my diary' }), 'r1', 'read my mail')).snapshot;
   expect(sql.exec<{ pending_json: string | null }>('SELECT pending_json FROM owner_task_source_scope').one().pending_json).not.toBeNull();
   expect(taskSourceAllowed(proposed, { name: 'web_search' })).toBe(false);
   expect(taskSourceAllowed(proposed, { name: 'search_communication', requires_connector: true })).toBe(false);
@@ -444,7 +444,7 @@ it('a pending owner confirmation turns the unready defaults off: nothing is read
 
 it('after a pending card, a later malformed or uncertain miss still gets no defaults while the card is pending; an autonomy-gated tool never rides a default', () => run('task-pending-then-miss', async (sql, scope) => {
   const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, { inputRef: 'r1', text: 'read my mail' }, ['web', 'mail']);
-  await cap.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'read my mail' }), 'r1', 'read my mail');
+  await cap.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'check my diary' }), 'r1', 'read my mail');
   expect(sql.exec<{ pending_json: string | null }>('SELECT pending_json FROM owner_task_source_scope').one().pending_json).not.toBeNull();
   const after = await cap.current();
   expect(after.defaults).toBeUndefined();
@@ -456,7 +456,7 @@ it('after a pending card, a later malformed or uncertain miss still gets no defa
 
 it('a default-read admission taken before a card is published cannot run after the card exists (same revision)', () => run('task-pending-assertsame', async (sql, scope) => {
   const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, { inputRef: 'r1', text: 'read my mail' }, ['web', 'mail']);
-  const proposed = await cap.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'read my mail' }), 'r1', 'read my mail');
+  const proposed = await cap.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'check my diary' }), 'r1', 'read my mail');
   expect(proposed.proposal).toBeDefined();
   const latest = await cap.current();
   // The admission another turn took between the revision bump and the card write: same revision, defaults on.
@@ -472,7 +472,7 @@ it('real interleaving: a second turn admits with defaults while classify is susp
   const revisionNow = () => sql.exec<{ revision: number }>('SELECT revision FROM owner_task_source_scope').one().revision;
   const first = createTaskSourceScope(sql, 'owner-one', scope, async () => { if (!paused && revisionNow() > 1) { paused = true; atBump(); await gate; } }, { inputRef: 'r1', text: 'read my mail' }, ['web', 'mail']);
   const second = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, undefined, ['web', 'mail']);
-  const classifying = first.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'read my mail' }), 'r1', 'read my mail');
+  const classifying = first.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'check my diary' }), 'r1', 'read my mail');
   await reached;
   const admitted = await second.current();
   expect(admitted.defaults).toEqual(['web', 'mail']);
@@ -507,7 +507,7 @@ it('the own lists stay usable on an unready task and while an owner confirmation
   const cap = createTaskSourceScope(sql, 'owner-lists-two', scope, async () => {}, { inputRef: 'r1', text: 'read my mail' }, ['web', 'mail']);
   const unready = (await cap.classify('not json')).snapshot;
   expect(unready.ready).toBe(false);
-  const proposed = (await cap.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'read my mail' }), 'r1', 'read my mail')).snapshot;
+  const proposed = (await cap.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'check my diary' }), 'r1', 'read my mail')).snapshot;
   expect(sql.exec<{ pending_json: string | null }>('SELECT pending_json FROM owner_task_source_scope').one().pending_json).not.toBeNull();
   for (const snapshot of [unready, proposed]) {
     expect(taskSourceAllowed(snapshot, { name: 'list_reminders' })).toBe(true);
@@ -525,3 +525,13 @@ it('the clock/date read needs no source family: it works on a mail+calendar task
   expect(taskSourceAllowed(settled([]), handler('get_context'))).toBe(true);
   expect(taskSourceAllowed(settled(['mail', 'calendar']), handler('read_memory'))).toBe(false);
 });
+
+it('an owner-worded non-default family (mcp) commits directly with no card; grants stay the fence', () => run('owner-mcp-direct', async (sql, scope) => {
+  const text = 'Anything important from GitHub or Dependabot this week?';
+  const cap = createTaskSourceScope(sql, 'owner', scope, async () => {}, { inputRef: 'in-1', text });
+  const result = await cap.classify(JSON.stringify({ decision: 'new', sources: ['mail', 'mcp'], evidence: text }), 'in-1', text);
+  expect(result.outcome).toBe('owner_transition');
+  expect(result.proposal).toBeUndefined();
+  expect(result.snapshot.ready).toBe(true);
+  expect(result.snapshot.sources).toEqual(expect.arrayContaining(['mail', 'mcp']));
+}));

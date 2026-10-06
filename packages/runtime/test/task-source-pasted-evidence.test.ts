@@ -64,7 +64,7 @@ it('legacy close cards cannot reactivate baseline families or later retain', () 
 it('an initial external-source proposal stays inactive across model continuation until the visible owner decision', () => run('baseline-pending', async (sql, scope) => {
   const text = 'Read mail for this task.';
   const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, { inputRef: 'current', text });
-  const next = await cap.classify(JSON.stringify({ decision: 'new', sources: ['mail'], evidence: text }), 'current', text);
+  const next = await cap.classify(JSON.stringify({ decision: 'new', sources: ['mail'], evidence: 'read my diary' }), 'current', text);
   expect(next.proposal).toBeDefined(); expect(next.snapshot.ready).toBe(false);
   const restricted = await cap.classify(JSON.stringify({ decision: 'restrict', sources: ['mail'], evidence: null }));
   expect(restricted.snapshot).toEqual(next.snapshot);
