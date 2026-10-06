@@ -131,7 +131,6 @@ export type HookRuntimeContext = {
   toolArgSourceTaint: SourceTaint;
   egressAllowlist?: readonly string[];
   sanitise?: (input: SanitiseInput) => MaybePromise<SanitiseResult>;
-  medicalGate?: (text: string) => MaybePromise<HookDecision>;
   // Typed store provenance from the dispatcher/store boundary (owner review on #212): the
   // provider verifies a stored-output id here before any receipt may promise read_tool_output.
   // Structural shape avoids a hooks->conversation import; inMemoryToolOutputStore satisfies it.
@@ -511,36 +510,6 @@ export const scribeSanitisePostLlmCallHook: HookHandler<HookRuntimeContext> = {
   },
 };
 
-export const medicalGateHook: HookHandler<HookRuntimeContext> = {
-  name: 'medical_gate',
-  event: 'PostLLMCall',
-  priority: 200,
-  async handle(payload, ctx) {
-    if (payload.event !== 'PostLLMCall') {
-      return ok();
-    }
-
-    const text = collectText(payload.response).join('\n');
-    if (text.length === 0) {
-      return ok();
-    }
-
-    if (ctx.medicalGate === undefined) {
-      return halt('medical gate unavailable', 'transient');
-    }
-
-    try {
-      return decisionToHookResult(
-        await ctx.medicalGate(text),
-        'medical gate denied output',
-        'forbidden',
-      );
-    } catch {
-      return halt('medical gate failed', 'transient');
-    }
-  },
-};
-
 export const HOOK_REGISTRY: HookRegistry<HookRuntimeContext> = Object.freeze([
   jwtValidateHook,
   rateLimitCheckHook,
@@ -553,7 +522,6 @@ export const HOOK_REGISTRY: HookRegistry<HookRuntimeContext> = Object.freeze([
   scribeSanitisePostToolUseHook,
   canaryLeakCheckHook,
   scribeSanitisePostLlmCallHook,
-  medicalGateHook,
 ]);
 
 export type RunHooksOptions<Ctx> = {

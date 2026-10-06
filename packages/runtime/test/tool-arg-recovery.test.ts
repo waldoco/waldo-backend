@@ -11,7 +11,6 @@ const ctx = (): HookRuntimeContext => ({
   sourceTaint: null,
   toolArgSourceTaint: null,
   sanitise: ({ payload, source_taint }) => ({ ok: true, payload, source_taint, redactions: [] }),
-  medicalGate: () => true,
 });
 
 describe('Tool-arg typed recovery', () => {

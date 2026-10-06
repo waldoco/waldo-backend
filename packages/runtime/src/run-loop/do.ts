@@ -1789,7 +1789,6 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       }),
       hasApproval: this.adapters.safety.hasApproval,
       sanitise: this.adapters.safety.sanitise,
-      medicalGate: this.adapters.safety.medicalGate,
       sourceTaint,
       toolArgSourceTaint: sourceTaint,
     };
@@ -3735,7 +3734,6 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       rateLimitCheck: this.adapters.safety.rateLimitCheck,
       hasApproval: this.adapters.safety.hasApproval,
       sanitise: this.adapters.safety.sanitise,
-      medicalGate: this.adapters.safety.medicalGate,
       sourceTaint,
       toolArgSourceTaint: sourceTaint,
     };

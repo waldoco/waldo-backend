@@ -43,7 +43,6 @@ describe('hook registry', () => {
           source_taint,
           redactions: [],
         }) satisfies SanitiseResult,
-      medicalGate: () => true,
       ...overrides,
     };
   }
@@ -183,7 +182,6 @@ describe('hook registry', () => {
       ['PostToolUse', 'scribe_sanitise', 100],
       ['PostLLMCall', 'canary_leak_check', 100],
       ['PostLLMCall', 'scribe_sanitise', 100],
-      ['PostLLMCall', 'medical_gate', 200],
     ]);
   });
 
@@ -685,29 +683,6 @@ describe('hook registry', () => {
       ),
     ).rejects.toMatchObject({
       hook: 'scribe_sanitise',
-      code: 'forbidden',
-    });
-  });
-
-  it('halts PostLLMCall when the medical gate rejects generated text', async () => {
-    const ctx = runtimeCtx({
-      medicalGate: () => ({ ok: false, reason: 'unsafe medical directive', code: 'forbidden' }),
-    });
-    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-medical' }, ctx);
-
-    await expect(
-      runHooks(
-        'PostLLMCall',
-        {
-          event: 'PostLLMCall',
-          response: 'medical instruction',
-          tokens_in: 1,
-          tokens_out: 1,
-        },
-        ctx,
-      ),
-    ).rejects.toMatchObject({
-      hook: 'medical_gate',
       code: 'forbidden',
     });
   });

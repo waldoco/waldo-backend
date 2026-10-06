@@ -22,7 +22,6 @@ import type { HookRuntimeContext } from '../src/hooks/registry';
 import { RuntimeLLMProvider, type LLMGatewayAdapter } from '../src/llm/provider';
 import { createRuntimePromptBuilder, type RuntimePromptContext } from '../src/prompt/reasons';
 import { RecallSecurityHalt } from '../src/recall/gateway';
-import { evaluateMedicalClaim } from '../src/scribe/medical-gate';
 import { sanitise } from '../src/scribe/sanitiser';
 import type { ResolvedSkillBudget } from '../src/skills/budget';
 
@@ -118,7 +117,6 @@ function hookContext(): HookRuntimeContext {
     sourceTaint: null,
     toolArgSourceTaint: null,
     sanitise,
-    medicalGate: evaluateMedicalClaim,
   };
 }
 

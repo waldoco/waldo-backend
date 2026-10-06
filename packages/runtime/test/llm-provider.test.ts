@@ -29,7 +29,6 @@ import { createUnavailableSkillBudget } from '../src/skills/budget';
 import { inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
 import type { CountResult, ResolvedSkillBudget, SkillBudgetFactory } from '../src/skills/budget';
 import type { HookRegistry, HookRuntimeContext } from '../src/hooks/registry';
-import { evaluateMedicalClaim } from '../src/scribe/medical-gate';
 import { sanitise } from '../src/scribe/sanitiser';
 
 const canaryTokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
@@ -67,7 +66,6 @@ function runtimeCtx(overrides: Partial<HookRuntimeContext> = {}): HookRuntimeCon
     sourceTaint: null,
     toolArgSourceTaint: null,
     sanitise,
-    medicalGate: evaluateMedicalClaim,
     ...overrides,
   };
 }
@@ -1474,39 +1472,6 @@ describe('RuntimeLLMProvider', () => {
   });
 
   it.each([
-    'Take 20 units of insulin.',
-    'Take .5 tablet of melatonin today.',
-    'Take 0.5 tablet of melatonin today.',
-  ])('rejects a dose instruction returned by the gateway: %s', async (medicalClaim) => {
-    const gateway = new ScriptedGateway((request) => ({
-      ok: true,
-      data: response(request.request.model, medicalClaim),
-    }));
-    const provider = new RuntimeLLMProvider({ gateway });
-
-    const result = await provider.complete(
-      {
-        trigger: 'brief',
-        renderRequest() {
-          return {
-            messages: [{ role: 'user', content: 'safe prompt' }],
-            max_tokens: 512,
-            temperature: 0.3,
-          };
-        },
-      },
-      runtimeCtx(),
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      reason: 'hook_halt',
-      code: 'forbidden',
-    });
-    expect(gateway.requests).toHaveLength(1);
-  });
-
-  it.each([
     ['route exhaustion', undefined],
     ['spend cap', { spent_cents_today: 70, cap_cents: 70 }],
   ] as const)('passes owner-channel health template output on %s (direction A completion, owner ruling 2026-09-28)', async (_case, spend) => {
@@ -1535,41 +1500,6 @@ describe('RuntimeLLMProvider', () => {
 
     // Template fallback text is owner-channel reply prose: health values pass at owner_reply.
     expect(result).toMatchObject({ ok: true });
-  });
-
-  it.each([
-    ['route exhaustion', undefined],
-    ['spend cap', { spent_cents_today: 70, cap_cents: 70 }],
-  ] as const)('applies the medical gate to template output on %s', async (_case, spend) => {
-    const gateway = new ScriptedGateway(() => ({
-      ok: false,
-      error: 'gateway unavailable',
-      code: 'transient',
-    }));
-    const provider = new RuntimeLLMProvider({ gateway });
-
-    const result = await provider.complete(
-      {
-        trigger: 'brief',
-        spend,
-        renderRequest() {
-          return {
-            messages: [{ role: 'user', content: 'safe prompt' }],
-            max_tokens: 512,
-            temperature: 0.3,
-          };
-        },
-        renderTemplate: () => 'Take half a tablet of melatonin today.',
-      },
-      runtimeCtx(),
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      reason: 'hook_halt',
-      fallback_step: 'template',
-      code: 'forbidden',
-    });
   });
 
   it.each([

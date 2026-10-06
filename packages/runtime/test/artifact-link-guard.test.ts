@@ -12,7 +12,7 @@ const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
 const ctx = {
   authenticatedUserId: 'owner-1', trigger: 'user_message' as const, canaryTokens: CANARIES,
   sourceTaint: null, toolArgSourceTaint: null,
-  sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
+  sanitise: adapters.safety.sanitise,
   session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: 0 }),
 };
 const allow = (name: string) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name as never));

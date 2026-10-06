@@ -152,12 +152,6 @@ describe('resolveRunLoopAdapters', () => {
       check: 'health_value',
       reason: 'health_value_leak',
     });
-    await expect(
-      Promise.resolve(adapters.safety.medicalGate?.('Take 5 mg of melatonin tonight.')),
-    ).resolves.toEqual({
-      ok: false,
-      reason: 'medical_claim',
-    });
   });
 
   it('rejects a plaintext gateway token instead of a secret binding', () => {

@@ -11,7 +11,7 @@ const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
 const ctx = {
   authenticatedUserId: 'owner-1', trigger: 'user_message' as const, canaryTokens: CANARIES,
   sourceTaint: null, toolArgSourceTaint: null,
-  sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
+  sanitise: adapters.safety.sanitise,
   session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: 0 }),
 };
 const handlers = [getContextHandler({ timezone: 'Asia/Kolkata', now: () => new Date('2026-09-23T08:20:00Z') })];
