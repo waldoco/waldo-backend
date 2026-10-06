@@ -119,6 +119,17 @@ describe('bounded tool-loop read recovery', () => {
     expect(events.every((event) => event.error === 'synthetic receipt unavailable')).toBe(true);
   });
 
+  it('does not deny an executed read when the model omits its final answer', async () => {
+    let attempts = 0;
+    let steps = 0;
+    const handler = calendar(async () => { attempts++; return []; });
+    const text = await runToolLoop({ handlers: [handler], ctx: context(), maxSteps: 3,
+      step: async () => ++steps === 1 ? { text: '', tool_calls: [{ ...read, call_id: 'call' }] } : { text: '' },
+    });
+    expect(attempts).toBe(1);
+    expect(text).toBe('');
+  });
+
   it('gives an initially empty tool ceiling one bounded refusal and closing step', async () => {
     let steps = 0;
     let observed = '';

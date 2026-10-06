@@ -88,7 +88,9 @@ export async function runToolLoop(input: Readonly<{
     input.ctx.runScope?.admit();
     if (response.tool_calls === undefined || (!offer && !repairEmptyCeiling)) {
       input.onSettle?.(exit);
-      return guardArtifactLinks(response.text || (exit === 'budget_exhausted' ? 'Tool budget exhausted; no further tools were run.' : 'No tools are available this turn; no tool calls were executed.'), receiptUrls);
+      return guardArtifactLinks(response.text || (exit === 'budget_exhausted'
+        ? 'Tool budget exhausted; no further tools were run.'
+        : tools.length === 0 ? 'No tools are available this turn; no tool calls were executed.' : ''), receiptUrls);
     }
     let firstCall = true;
     for (const call of response.tool_calls) {
