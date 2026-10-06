@@ -269,7 +269,7 @@ it('keeps partial or mismatched request coverage pending across restart and repe
     seen.selectedText = fact; seen.selectedTexts = [...selection];
     const before = seen.selectorInputs.length;
     await admittedTurn(name, id, 'Read unrelated preference only; do not change forgetting scope.', ops());
-    expect(seen.selectorInputs).toHaveLength(before + 1);
+    expect(seen.selectorInputs).toHaveLength(before + (id === 203 ? 2 : 1)); // 203: the chat line the first pass left without a span gets one second look
     expect(request()).toContain('Recall is temporarily limited');
     expect(request()).not.toContain('verified exact cleanup targets were removed');
     await runInDurableObject(stub(name), async (_instance, state) => {
@@ -1005,7 +1005,7 @@ it('the registered DO export_artifact tool returns an owner link with a full-uui
 });
 
 
-it('a 33-ref inventory of chat lines completes: lines the selector omits are purged whole', async () => {
+it('a 33-ref inventory of chat lines completes: the line the first pass omits gets a second model look for its span', async () => {
   const name='memory-diagnosis-capacity-33';
   const topic='SYNTH-CAP';
   const fact=`${topic} note`;
@@ -1020,16 +1020,18 @@ it('a 33-ref inventory of chat lines completes: lines the selector omits are pur
   const traceLines: string[] = [];
   const traceSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { traceLines.push(args.map(String).join(' ')); });
   try { await admittedTurn(name,97001,'What time is my unrelated standup?',ops()); } finally { traceSpy.mockRestore(); }
-  const whole = traceLines.filter(line => line.includes('forget_whole_rows'));
-  expect(whole).toHaveLength(1);
-  expect(whole[0]).toMatch(/lines_purged_whole.{1,6}\d+/);
-  expect(whole[0]).not.toContain(topic);
-  const call=seen.selectorCalls.at(-1) as {input:string;text:{format:{schema:{properties:{spans:{maxItems:number}}}}}};
+  expect(traceLines.some(line => line.includes('forget_whole_rows'))).toBe(false);
+  const pass = traceLines.filter(line => line.includes('forget_span_pass'));
+  expect(pass).toHaveLength(1);
+  expect(pass[0]).toMatch(/lines_rechecked.{1,6}1/);
+  expect(pass[0]).not.toContain(topic);
+  expect(seen.selectorCalls).toHaveLength(2);
+  const call=seen.selectorCalls[0] as {input:string;text:{format:{schema:{properties:{spans:{maxItems:number}}}}}};
   const snapshot=JSON.parse(call.input.slice(call.input.indexOf('{'))) as {topic:string;sources:{ref:string;text:string}[]};
   expect(snapshot.sources).toHaveLength(33);
   expect(snapshot.sources.every(row=>row.text.includes(topic))).toBe(true);
   expect(call.text.format.schema.properties.spans.maxItems).toBe(64);
-  // Policy (slice D): every episodes line the selector left without a span is purged as one whole line, so the topic completes and recall is not held.
+  // The second look returned the span for the line the first pass left out, so the topic completes without purging a line whole.
   await runInDurableObject(stub(name),(_instance,state)=>{
     expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
     expect(claimStore(state.storage.sql).claims().some(row=>row.text===standup)).toBe(true);

@@ -2,7 +2,7 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { episodeIndex } from '../src/channels/episodes';
 import { textFingerprint, claimStore, turnMemoryPrompt } from '../src/memory/claims';
-import { forgetSnapshot, forgetSourceBatch, selectedForgetResult, selectedForgetTexts, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA } from '../src/memory/selective-forget';
+import { forgetSnapshot, forgetSourceBatch, selectedForgetResult, selectedForgetTexts, unspannedEpisodeRows, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA } from '../src/memory/selective-forget';
 import { conversationForgetSources } from '../src/channels/conversation-store';
 
 // Real owner-local SQL and retrieval. This is a desired-behaviour regression,
@@ -187,7 +187,7 @@ for (const count of [32,33,64]) {
       expect(store.pendingTopics()).toHaveLength(count);
       expect(SELECTIVE_FORGET_SCHEMA.properties.spans.maxItems).toBe(64);
       expect(SELECTIVE_FORGET_SCHEMA.properties.reviewed_refs.maxItems).toBe(64);
-      expect(selectedForgetTexts(topic,snapshot,JSON.stringify({spans:rows.slice(1),reviewed_refs:rows.map(row=>row.ref),complete:true}),snapshot)).toHaveLength(count);
+      expect(selectedForgetTexts(topic,snapshot,JSON.stringify({spans:rows.slice(1),reviewed_refs:rows.map(row=>row.ref),complete:true}),snapshot)).toBeNull();
     });
   });
 }
@@ -280,10 +280,11 @@ it.each([['non-ascii letters','ZEBRA-COBALT 東京'],['emoji','ZEBRA-COBALT 🙂
   expect(selectedForgetResult(topic, snapshot, raw, snapshot)).toEqual({ reason: 'row_without_span:episodes' });
 });
 
-it('reports how many unspanned episodes lines were purged whole, as a count only', () => {
+it('an unspanned episodes line with other words is held for the second look, never purged whole', () => {
   const topic = 'ZEBRA-COBALT';
   const rows = [{ ref: 'episodes:1:text', text: 'ZEBRA-COBALT is the code word' }, { ref: 'episodes:2:text', text: 'ZEBRA-COBALT again with other words' }];
   const snapshot = forgetSnapshot(topic, rows);
   const raw = JSON.stringify({ spans: [], reviewed_refs: rows.map(row => row.ref), complete: true });
-  expect(selectedForgetResult(topic, snapshot, raw, snapshot)).toMatchObject({ wholeRows: 2 });
+  expect(selectedForgetResult(topic, snapshot, raw, snapshot)).toEqual({ reason: 'row_without_span:episodes' });
+  expect(unspannedEpisodeRows(snapshot, raw).map(row => row.ref)).toEqual(rows.map(row => row.ref));
 });
