@@ -460,6 +460,12 @@ describe('real owner-DO ingress in a sealed test world', () => {
     // 37447417419, 37454186492), and the model adapter gives every model call the same text, so counting answers or the outbox is not stable.
     // A replay of this update would act on this update's own message again: it reacts to message_id === update for the same chat.
     const reactionsToUpdate = () => outbox.filter(item => item.method === 'setMessageReaction' && item.body.chat_id === 81101 && item.body.message_id === update).length;
+    // The turn's last reaction is posted by the final outbox's settle step, which sets settled=true only after the reaction call returns.
+    // Count only once that record is settled, or the reaction can land between the count and the replay and look like a duplicate.
+    await vi.waitFor(async () => {
+      const finals = await runInDurableObject(doStub(81101), async (_instance, state) => state.storage.kv.get<{ settled?: boolean; reaction?: { message_id: number } }[]>('telegram_final_outbox_v1') ?? []);
+      expect(finals.some(record => record.reaction?.message_id === update && record.settled === true)).toBe(true);
+    }, { timeout: 4000 });
     const before = reactionsToUpdate();
     expect(before).toBeGreaterThan(0);
     expect((await send(81101, 'My private fixture is cedar.', update)).status).toBe(200);
