@@ -521,8 +521,13 @@ export const createOwnerResponder = (
             if (handler.name === 'search_episodes' && holdsAnyHeldTopic()) {
               const data = (result as { data?: { hits?: ReadonlyArray<{ ref?: string }> } }).data;
               if (Array.isArray(data?.hits)) {
-                const rows = await Promise.all(data.hits.map(async hit => typeof hit.ref === 'string' ? ((await handler.handle({ ref: hit.ref }, sourceContext)) as { data?: unknown }).data ?? null : hit));
-                const hits = data.hits.filter((_hit, index) => !holdsHeldTopic(...structuredStrings(rows[index])));
+                // Fail closed: a hit with no string ref, or whose source row cannot be read back, is dropped.
+                const rows = await Promise.all(data.hits.map(async hit => {
+                  if (typeof hit.ref !== 'string') return undefined;
+                  const row = (await handler.handle({ ref: hit.ref }, sourceContext)) as { data?: { episode?: unknown } };
+                  return row.data?.episode ?? undefined;
+                }));
+                const hits = data.hits.filter((_hit, index) => rows[index] !== undefined && !holdsHeldTopic(...structuredStrings(rows[index])));
                 result = { ...(result as object), data: { ...data, hits } } as typeof result;
               }
             }

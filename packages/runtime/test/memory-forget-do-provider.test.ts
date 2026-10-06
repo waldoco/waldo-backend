@@ -2859,8 +2859,7 @@ it('REVIEW862 mixed result preserves unrelated rows', async () => {
     const args: Parameters<typeof createOwnerResponder> = ['fixture', kv, memory];
     args[11] = async () => { throw new Error('fixture retained cleanup unavailable'); };
     const episodes = episodeIndex(state.storage.sql);
-    args[5] = [{ ...(await import('../src/tools/live/search-episodes')).searchEpisodesHandler(episodes),
-      handle: async () => ({ok:true,data:{hits:[{text:TOPIC+' workshop'},{text:'Unrelated workshop preference: amber bookmarks'}]},source_taint:'external'}) } as never];
+    args[5] = [(await import('../src/tools/live/search-episodes')).searchEpisodesHandler(episodes)];
     const responder = createOwnerResponder(...args);
     const direct = (id: string, text: string) => responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text, memoryWrites: false }, (_hop, work) => work());
     seen.writer = ops(); await direct('a1', TOPIC);
@@ -2878,6 +2877,51 @@ it('REVIEW862 mixed result preserves unrelated rows', async () => {
     expect(JSON.stringify(output)).toContain('amber bookmarks');
     expect(JSON.stringify(output)).not.toContain(TOPIC);
   });
+});
+it('a search hit whose source row cannot be read back is dropped, not kept', async () => {
+  await runInDurableObject(stub('review862-failclosed'), async (_instance, state) => {
+    const TOPIC = 'Synthetic cobalt paper workshop';
+    const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const kv = durableConversationStore(state.storage);
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', kv, memory];
+    args[11] = async () => { throw new Error('fixture retained cleanup unavailable'); };
+    const episodes = episodeIndex(state.storage.sql);
+    const real = (await import('../src/tools/live/search-episodes')).searchEpisodesHandler(episodes);
+    args[5] = [{ ...real, handle: async (input: { ref?: string }, ctx: never) => input.ref === undefined
+      ? { ok: true, data: { hits: [{ ref: '999', entry_id: 'ghost', speaker: 'owner', at: null, snippet: 'Synthetic [cobalt] paper workshop ghost' }, { ref: 'x', entry_id: 'noref' }] }, source_taint: 'external' }
+      : real.handle(input as never, ctx) } as never];
+    const responder = createOwnerResponder(...args);
+    const direct = (id: string, text: string) => responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text, memoryWrites: false }, (_hop, work) => work());
+    seen.writer = ops(); await direct('a1', TOPIC);
+    seen.selectorThrows = true; seen.writer = ops({ forget_topic: TOPIC });
+    await responder.respond({ traceId: 'forget-a1', conversationRef: 'owner', surface: 'telegram', text: `Forget only ${TOPIC}.` }, (_hop, work) => work());
+    expect(memory.incompleteTopics()).toContain(TOPIC);
+    let round = 0;
+    seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'review862-ghost', name: 'search_episodes', arguments: JSON.stringify({ query: 'ghost', limit: 10 }) }] : [];
+    await direct('a2', 'Read retained ghost material.');
+    const provider = seen.requests.at(-1) as { input: Array<{ type: string; call_id?: string; output?: string }> };
+    const output = provider.input.find(item => item.type === 'function_call_output' && item.call_id === 'review862-ghost')!.output!;
+    expect(JSON.parse(output)).toMatchObject({ ok: true, data: { hits: [] } });
+    expect(output).not.toContain('cobalt');
+  });
+});
+it('read_owner_context with a held claim returns the unrelated claims and not the held one', async () => {
+  const name = 'held-claim-owner-context';
+  const topic = 'MEM-B-20261006-CTXHELD';
+  const fact = `${topic} preference: synthetic held origami at the reading desk`;
+  await admittedTurn(name, 231, `${fact}. ${KEEP}.`, ops({ add: [add(fact), add(KEEP)] }));
+  seen.selectorThrows = true;
+  await admittedTurn(name, 232, `Forget only ${topic}. Keep my unrelated preference.`, ops({ forget_topic: topic }));
+  await runInDurableObject(stub(name), (_instance, state) => { expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]); });
+  let round = 0;
+  seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'fixture-held-claim', name: 'read_owner_context', arguments: JSON.stringify({ topic: 'reading desk', limit: 10 }) }] : [];
+  await admittedTurn(name, 233, 'Recall my reading desk preferences.', ops());
+  const provider = seen.requests.at(-1) as { input: Array<{ type: string; call_id?: string; output?: string }> };
+  const out = provider.input.find(item => item.type === 'function_call_output' && item.call_id === 'fixture-held-claim')!.output!;
+  expect(JSON.parse(out)).toMatchObject({ ok: true });
+  expect(out).toContain(KEEP);
+  expect(out).not.toContain(topic);
+  seen.selectorThrows = false;
 });
 it('REVIEW862 highlighted episode snippets cannot conceal a held topic', async () => {
   await runInDurableObject(stub('review862-snippet-tool'), async (_instance, state) => {
