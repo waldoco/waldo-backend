@@ -9,6 +9,8 @@ import type { ActivityCursors, ActivityRecord, ControlAction, ControlFields, Fil
 
 type Actions = { busy: boolean; onAction: (action: ControlAction, fields?: ControlFields) => void };
 const parseTime = (value: string | null) => { if (!value) return null; const normalized=value.includes('T')?value:value.replace(' ','T');const timePart=normalized.split('T')[1]??'';if(!timePart.endsWith('Z')&&!timePart.includes('+')&&!timePart.includes('-'))return null;const t = Date.parse(normalized); return Number.isNaN(t) ? null : new Date(t); };
+// Approve needs a time the illustration can place: an explicit offset, or a date-only (all-day) value.
+export const approvable = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) || parseTime(value) !== null;
 const clock = (d: Date) => new Intl.DateTimeFormat('en', { timeZone:'UTC',hour: 'numeric', minute: '2-digit' }).format(d);
 const day = (d: Date) => new Intl.DateTimeFormat('en', { timeZone:'UTC',weekday: 'short', month: 'short', day: 'numeric' }).format(d);
 const hours = (d: Date) => d.getUTCHours() + d.getUTCMinutes() / 60;
@@ -53,7 +55,7 @@ export function WaitingControls({ record, busy, onAction }: { record: WaitingRec
   return <>
     <div className="proposal-list">{record.data.proposals.map((item, index) => {
       const send = item.kind === 'email_send' || item.kind === 'message_send';
-      const calendarApprove = item.kind === 'calendar_change' && item.state === 'open' && item.review?.kind === 'calendar_change' && item.actions.includes('approval.approve') && (!item.review.start || Number.isFinite(Date.parse(item.review.start))) && (!item.review.end || Number.isFinite(Date.parse(item.review.end)));
+      const calendarApprove = item.kind === 'calendar_change' && item.state === 'open' && item.review?.kind === 'calendar_change' && item.actions.includes('approval.approve') && (!item.review.start || approvable(item.review.start)) && (!item.review.end || approvable(item.review.end));
       const calendarUndo = item.kind === 'calendar_change' && item.state === 'done' && item.actions.includes('approval.undo');
       const note = item.state === 'review_only' ? 'Too long for a chat card, so there’s no Send it button. Ask Waldo for a shorter version or a draft.'
         : item.state === 'unconfirmed' ? 'Waldo couldn’t confirm the review card was delivered, so this can’t be approved. Check chat, then ask again.'

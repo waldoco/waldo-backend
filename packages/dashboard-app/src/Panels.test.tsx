@@ -98,7 +98,7 @@ it('retains exact calendar timestamps, reference and invalid values in visible r
 });
 it('does not offer calendar approval when a recorded time is invalid',()=>{
  const proposal=waiting.data.proposals[0]!;
- for(const start of ['invalid']){
+ for(const start of ['invalid','2026-10-06T23:30:00']){
  const record:WaitingRecord={...waiting,data:{proposals:[{...proposal,review:{kind:'calendar_change',action:'move',title:'Review',event_id:'ref',start,end:null,reason:'Requested'}}]}};
  const html=renderToStaticMarkup(<WaitingControls record={record} busy={false} onAction={noop}/>);
  expect(html).toContain(start);expect(html).not.toContain('Approve this calendar change');
