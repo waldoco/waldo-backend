@@ -265,11 +265,11 @@ it('keeps partial or mismatched request coverage pending across restart and repe
   expect(request()).toContain('Recall is temporarily limited');
   expect(request()).not.toContain('verified exact cleanup targets were removed');
   await evictDurableObject(stub(name));
-  for (const [id, selection] of [[203, [`Forget only MEM-B-OTHER.`]], [204, [instruction]]] as const) {
+  for (const [id, selection, passes] of [[203, [`Forget only MEM-B-OTHER.`], 2], [204, [instruction], 1]] as const) {
     seen.selectedText = fact; seen.selectedTexts = [...selection];
     const before = seen.selectorInputs.length;
     await admittedTurn(name, id, 'Read unrelated preference only; do not change forgetting scope.', ops());
-    expect(seen.selectorInputs).toHaveLength(before + 1);
+    expect(seen.selectorInputs).toHaveLength(before + passes); // passes is 2 when the first pass leaves a chat line without a span (one second look), else 1
     expect(request()).toContain('Recall is temporarily limited');
     expect(request()).not.toContain('verified exact cleanup targets were removed');
     await runInDurableObject(stub(name), async (_instance, state) => {
@@ -1005,7 +1005,7 @@ it('the registered DO export_artifact tool returns an owner link with a full-uui
 });
 
 
-it('a complete 33-ref inventory stays limited when the selector omits the last ref', async () => {
+it('a 33-ref inventory of chat lines completes: the line the first pass omits gets a second model look for its span', async () => {
   const name='memory-diagnosis-capacity-33';
   const topic='SYNTH-CAP';
   const fact=`${topic} note`;
@@ -1017,35 +1017,34 @@ it('a complete 33-ref inventory stays limited when the selector omits the last r
   });
   await evictDurableObject(stub(name));
   seen.selectedText=fact; seen.selectorMode='capped';
-  await admittedTurn(name,97001,'What time is my unrelated standup?',ops());
-  const call=seen.selectorCalls.at(-1) as {input:string;text:{format:{schema:{properties:{spans:{maxItems:number}}}}}};
+  const traceLines: string[] = [];
+  const traceSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { traceLines.push(args.map(String).join(' ')); });
+  try { await admittedTurn(name,97001,'What time is my unrelated standup?',ops()); } finally { traceSpy.mockRestore(); }
+  expect(traceLines.some(line => line.includes('forget_whole_rows'))).toBe(false);
+  const pass = traceLines.filter(line => line.includes('forget_span_pass'));
+  expect(pass).toHaveLength(1);
+  expect(pass[0]).toMatch(/lines_rechecked.{1,6}1/);
+  expect(pass[0]).not.toContain(topic);
+  expect(seen.selectorCalls).toHaveLength(2);
+  const call=seen.selectorCalls[0] as {input:string;text:{format:{schema:{properties:{spans:{maxItems:number}}}}}};
   const snapshot=JSON.parse(call.input.slice(call.input.indexOf('{'))) as {topic:string;sources:{ref:string;text:string}[]};
   expect(snapshot.sources).toHaveLength(33);
   expect(snapshot.sources.every(row=>row.text.includes(topic))).toBe(true);
   expect(call.text.format.schema.properties.spans.maxItems).toBe(64);
+  // The second look returned the span for the line the first pass left out, so the topic completes without purging a line whole.
   await runInDurableObject(stub(name),(_instance,state)=>{
-    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([]);
     expect(claimStore(state.storage.sql).claims().some(row=>row.text===standup)).toBe(true);
-    expect(claimStore(state.storage.sql).forgetSources(topic).sources).toHaveLength(33);
   });
-  expect(request()).not.toContain(standup);
-  expect(request()).toContain('Recall is temporarily limited');
-  expect(request()).toContain('reason class: selection_rejected');
-  await evictDurableObject(stub(name));
-  await admittedTurn(name,97002,'Recall my standup again.',ops());
-  expect(request()).toContain('reason class: selection_rejected');
-  expect(request()).toContain('did not raise forgetting');
-  await admittedTurn(name,97003,`Forget only ${topic}.`,ops({forget_topic:topic}));
-  expect(request()).toContain('Say this one reason');expect(request()).not.toContain('did not raise forgetting');
-  expect(request()).not.toContain(standup);
-  await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]));
+  expect(request()).not.toContain('Recall is temporarily limited');
+  expect(request()).not.toContain('reason class: selection_rejected');
 });
 
 // Each case uses the registered Wrangler DO. Mutations in onSelector model an
 // inventory change while the provider is awaited; no private responder is supplied.
 for (const [mode, reason] of [
   ['throws', 'selector_unavailable'], ['empty', 'selector_unavailable'],
-  ['invalid', 'selection_rejected'], ['missing-ref', 'selection_rejected'],
+  ['invalid', 'selection_rejected'],
   ['inventory-unsupported', 'sources_incomplete'],
   ['fresh-unsupported', 'fresh_incomplete'], ['fresh-change', 'selection_rejected'],
 ] as const) {
@@ -1083,7 +1082,7 @@ for (const [mode, reason] of [
     });
     seen.selectedText = fact;
     seen.selectorThrows = mode === 'throws';
-    if (mode === 'empty' || mode === 'invalid' || mode === 'missing-ref') seen.selectorMode = mode;
+    if (mode === 'empty' || mode === 'invalid') seen.selectorMode = mode;
     await admittedTurn(name, 98001, 'What time is my unrelated standup?', ops());
     expect(request()).toContain(`reason class: ${reason}`);
     expect(request()).toContain('Recall is temporarily limited');

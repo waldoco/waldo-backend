@@ -1,7 +1,7 @@
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { TASK_SOURCE_INSTRUCTION, TASK_SOURCE_SCHEMA, taskSourceAllowed, taskSourceRequired, taskSourcePrompt, type OwnerTaskSourceScope, type TaskSourceSnapshot, type TaskSourceFamily } from './task-source-scope';
-import { asciiLiteralIncludes, forgetSnapshot, forgetSourceBatch, selectedForgetResult, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, type ForgetSource } from '../memory/selective-forget';
+import { asciiLiteralIncludes, forgetSnapshot, forgetSourceBatch, selectedForgetResult, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, SELECTIVE_FORGET_SPAN_INSTRUCTION, unspannedEpisodeRows, type ForgetSource } from '../memory/selective-forget';
 import { ownerForgetTopic, hasForgetIntent } from '../memory/claims';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
@@ -828,6 +828,19 @@ export const createOwnerResponder = (
             selection = supplied.sources.length === 0 ? '' : await ask(id, 'forget_source', SELECTIVE_FORGET_INSTRUCTION, JSON.stringify({ topic, sources: supplied.sources }), { name: 'forget_source_spans', schema: SELECTIVE_FORGET_SCHEMA }, undefined, undefined, undefined, memoryModel);
           } catch (error) { if (error instanceof ClosedRunError) throw error; }
         }
+        if (selection) {
+          const skipped = unspannedEpisodeRows(supplied, selection);
+          if (skipped.length) {
+            let asked = 0;
+            try {
+              const second = await ask(id, 'forget_source', SELECTIVE_FORGET_SPAN_INSTRUCTION, JSON.stringify({ topic, sources: skipped }), { name: 'forget_source_spans', schema: SELECTIVE_FORGET_SCHEMA }, undefined, undefined, undefined, memoryModel);
+              const merged = JSON.parse(selection) as { spans: unknown[] };
+              const extra = (JSON.parse(second) as { spans?: unknown[] }).spans;
+              if (Array.isArray(extra) && Array.isArray(merged.spans)) { asked = extra.length; selection = JSON.stringify({ ...merged, spans: [...merged.spans, ...extra] }); }
+            } catch (error) { if (error instanceof ClosedRunError) throw error; }
+            log({ trace: id, hop: 'forget_span_pass', ms: 0, ok: true, detail: JSON.stringify({ lines_rechecked: skipped.length, spans_returned: asked }) });
+          }
+        }
         await assertCurrent();
         if (selection !== null) await gather();
         await assertCurrent();
@@ -836,7 +849,7 @@ export const createOwnerResponder = (
         const fresh = requestFresh === null ? null : { ...requestFresh, incomplete: requestFresh.incomplete || retainedFresh!.incomplete };
         const emptyRecovery = !supplied.incomplete && !supplied.more && supplied.sources.length === 0 && fresh !== null && !fresh.incomplete && !fresh.more && fresh.sources.length === 0;
         let rejectedBy = '';
-        let texts: readonly string[] | null = selection === null || fresh === null || supplied.more !== fresh.more ? null : emptyRecovery ? [] : (() => { const picked = selectedForgetResult(topic, supplied, selection, fresh); if ('texts' in picked) return picked.texts; rejectedBy = picked.reason; return null; })();
+        let texts: readonly string[] | null = selection === null || fresh === null || supplied.more !== fresh.more ? null : emptyRecovery ? [] : (() => { const picked = selectedForgetResult(topic, supplied, selection, fresh); if ('texts' in picked) { return picked.texts; } rejectedBy = picked.reason; return null; })();
         // The unsaved request is absent from durable readback. Prove its exact
         // retention projection is clean too; a single span cannot cover a mixed row.
         const complete = !supplied.more && fresh !== null && !fresh.more;

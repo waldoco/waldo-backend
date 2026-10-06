@@ -17,6 +17,16 @@ describe('selectedForgetResult names why a selection was rejected (no content)',
     expect(selectedForgetResult(topic, snap(sources), raw, snap(sources))).toEqual({ reason: 'row_without_span:conversation' });
     expect(selectedForgetTexts(topic, snap(sources), raw, snap(sources))).toBeNull();
   });
+  it('holds a reviewed chat line (episodes) that got no span, never purging it whole', () => {
+    const rows = [{ ref: 'episodes:12', text: 'Standup moved; also ZEBRA-COBALT is the new vendor code' }, { ref: 'loop:l1:title', text: 'follow up on the ZEBRA-COBALT quote' }];
+    const refs = rows.map(r => r.ref);
+    const loopSpan = { ref: 'loop:l1:title', text: 'follow up on the ZEBRA-COBALT quote' };
+    expect(selectedForgetResult(topic, snap(rows), pick([loopSpan], refs), snap(rows))).toEqual({ reason: 'row_without_span:episodes' });
+    expect(selectedForgetResult(topic, snap(rows), pick([loopSpan, { ref: 'episodes:12', text: 'also ZEBRA-COBALT is the new vendor code' }], refs), snap(rows))).toEqual({ texts: ['also ZEBRA-COBALT is the new vendor code', 'follow up on the ZEBRA-COBALT quote'].sort((a, b) => b.length - a.length) });
+    expect(selectedForgetResult(topic, snap(rows), pick([{ ref: 'episodes:12', text: 'also ZEBRA-COBALT is the new vendor code' }], refs), snap(rows))).toEqual({ reason: 'row_without_span:loop' });
+    const long = [{ ref: 'episodes:13', text: `ZEBRA-COBALT ${'x'.repeat(4100)}` }];
+    expect(selectedForgetResult(topic, snap(long), pick([], ['episodes:13']), snap(long))).toEqual({ reason: 'row_without_span:episodes' });
+  });
   it('names a topic-only row (a span of just the topic can never be selected)', () => {
     const only = [{ ref: 'note:n1', text: 'ZEBRA-COBALT' }];
     const raw = pick([{ ref: 'note:n1', text: 'ZEBRA-COBALT' }], ['note:n1']);
