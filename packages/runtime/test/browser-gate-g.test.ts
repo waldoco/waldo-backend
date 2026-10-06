@@ -1,3 +1,5 @@
+// SCOPE: these tests use a fake request broker (SOURCE layer). They prove the gate holds writes and aborts requests it sees.
+// They do NOT prove the live browser has no other egress (WebSocket, fetch, EventSource, WebRTC, raw network). That needs S0.
 import { describe, expect, it } from 'vitest';
 import { browserGate } from '../src/channels/browser-gate';
 import type { BrowserGateCommand } from '../src/channels/browser-gate-types';
