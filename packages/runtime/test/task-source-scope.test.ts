@@ -516,3 +516,12 @@ it('the own lists stay usable on an unready task and while an owner confirmation
   expect(taskSourceAllowed(proposed, { name: 'read_memory' }), 'retained memory stays off behind the card').toBe(false);
   expect(taskSourceAllowed(proposed, { name: 'web_search' }), 'sources stay off behind the card').toBe(false);
 }));
+
+it('the clock/date read needs no source family: it works on a mail+calendar task and a supplied-data-only task, while retained memory stays gated', () => {
+  const settled = (sources: readonly string[]) => ({ ready: true, sources, revision: 1 }) as unknown as Parameters<typeof taskSourceAllowed>[0];
+  const handler = (name: string) => ({ name }) as unknown as Parameters<typeof taskSourceAllowed>[1];
+  expect(taskSourceRequired(handler('get_context'))).toBe(false);
+  expect(taskSourceAllowed(settled(['mail', 'calendar']), handler('get_context'))).toBe(true);
+  expect(taskSourceAllowed(settled([]), handler('get_context'))).toBe(true);
+  expect(taskSourceAllowed(settled(['mail', 'calendar']), handler('read_memory'))).toBe(false);
+});
