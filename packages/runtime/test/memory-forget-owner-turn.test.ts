@@ -123,6 +123,7 @@ it('a turn where the writer changed nothing carries no memory receipt, and the r
     await turn('tg-1', 'hello', ops({}));
     expect(system()).not.toContain('Memory this turn:');
     expect(system()).toContain("only if a memory line from the host lists it as stored");
+    expect(system()).not.toContain('nothing was written');
   });
 });
 
@@ -215,6 +216,7 @@ it('a failure after the writer applied ops yields the uncertain notice and no su
     await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1] }));
     const sys = system();
     expect(sys).toContain('only partly stored');
+    expect(sys).not.toContain('nothing was written');
     expect(sys).not.toContain('Memory this turn');
   }, async () => { throw new Error('kv down'); });
 });
