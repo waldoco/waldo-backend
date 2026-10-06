@@ -455,15 +455,12 @@ describe('real owner-DO ingress in a sealed test world', () => {
       expect(own.every(input => input.prompt_cache_key === `waldo:prn_10000000000000000000${String(subject).padStart(12, '0')}`)).toBe(true);
     }
     expect(outbox.every((item) => item.method === 'setWebhook' || [81101, 81102].includes(Number(item.body.chat_id)))).toBe(true);
-    // The DO's scheduler runs on the wall clock: cards, the heartbeat and the event sweep fall due at :00/:30 IST marks, so a CI run
-    // that crosses one adds a reply here (caught at 13:59:38 IST with the midday card due at 14:00). Pin the clock for the duplicate send only.
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-10-06T05:07:00.000Z'));
-    const before = outbox.length;
-    const outboxBefore = JSON.stringify(outbox.map(item => [item.method, item.body.chat_id]));
+    // The DO's scheduler runs on the wall clock: a card or heartbeat fired by the sends above can deliver its own messages after
+    // this point (CI runs 37440852158, 37447417419). Count only what a re-sent reply would add: reactions and the model answer.
+    const repliesTo = () => outbox.filter(item => item.method === 'setMessageReaction' || (item.method === 'sendMessage' && item.body.text === 'Synthetic answer from the model adapter.')).length;
+    const before = repliesTo();
     expect((await send(81101, 'My private fixture is cedar.', update)).status).toBe(200);
-    const worldAfter = await runInDurableObject(doStub(81101), async (_instance, state) => worldNote(state));
-    expect(outbox.length, `before=${outboxBefore} ${worldAfter}`).toBe(before); // duplicate ingress cannot re-send effects
+    expect(repliesTo()).toBe(before); // duplicate ingress cannot re-send effects
     await runInDurableObject(doStub(81101), async (_instance, state) => {
       expect(state.storage.kv.get('telegram_subject')).toBe('81101');
     });
