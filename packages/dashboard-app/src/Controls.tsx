@@ -96,6 +96,8 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
       <p className="meta">Google asks for its usual scopes together and lets you pick the account. Mail sends still need your exact approval in chat.</p>
     </section>}
     {section!=='connections'&&<section className="tile reveal" style={{ '--i': 1 } as React.CSSProperties}><div className="chart-head"><h2>Console sessions</h2></div><p>{sessions.count} active {sessions.count === 1 ? 'browser session' : 'browser sessions'} recorded. This session is valid until {sessions.until}.</p>
+      <ul className="session-list">{sessions.items.map((item, index) => <li key={index}><span className="strong">{item.current ? 'This browser' : 'Another browser'}</span> · Signed in {item.signed_in}, valid until {item.until}</li>)}</ul>
+      <p className="meta">Device names are not recorded, only when each browser signed in. Signing out of one browser isn’t offered here.</p>
       <div className="control-actions"><button disabled={busy} onClick={() => onAction('session.signout')}>Sign out of this browser</button>{sessions.count > 1 && <button disabled={busy} onClick={() => { if (window.confirm('Sign out of every browser?')) onAction('session.signout.all'); }}>Sign out everywhere</button>}</div>
     </section>}
   </>;

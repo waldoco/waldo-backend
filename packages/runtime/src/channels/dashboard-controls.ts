@@ -41,7 +41,7 @@ const projections = {
       accounts: view.google.accounts.map((account) => ({ id: account.id, email: account.email, calendar: account.calendar, mail: account.mail, tasks: account.tasks, health: account.error ? 'needs_reconnect' as const : 'access_granted' as const })),
     },
     telegram: { linked: view.telegram.linked, unlinkAvailable: view.telegram.unlinkAvailable },
-    sessions: { until: view.sessionUntil, count: view.sessionCount },
+    sessions: { until: view.sessionUntil, count: view.sessionCount, items: view.sessions.map((row) => ({ signed_in: row.signed_in, until: row.until, current: row.current })) },
   }),
   waiting: (view: ConsoleView) => ({
     proposals: view.approvals.map((item) => {

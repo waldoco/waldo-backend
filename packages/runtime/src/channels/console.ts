@@ -3,6 +3,7 @@ import type { Claim, ConstellationEdge, ConstellationNode, profile } from '../me
 import type { Proactivity } from './loops';
 import type { E2EStep, TraceRow } from './harness';
 import type { StoredFile } from './files';
+import { localIso } from './reminders';
 
 export const CONSOLE_PATH = '/console';
 export const CONSOLE_ACTION_PATH = `${CONSOLE_PATH}/action`;
@@ -17,6 +18,16 @@ const SESSION_MS = 12 * 60 * 60_000;
 type Store = Readonly<{ get<T>(key: string): Promise<T | undefined>; put(key: string, value: unknown): Promise<void>; delete(key: string): Promise<boolean> }>;
 type Grant = Readonly<{ token: string; expires: number }>;
 export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: number }>;
+
+// One row per live browser session. The store keeps only an expiry that each sign-in resets to now + SESSION_MS, so
+// signed_in is the latest sign-in on that browser; no device name or last-seen time is recorded. Tokens never leave this function.
+export type ConsoleSessionRow = Readonly<{ signed_in: string; until: string; current: boolean }>;
+export const consoleSessionRows = (sessions: readonly ConsoleSession[], current: ConsoleSession, timezone: string): readonly ConsoleSessionRow[] =>
+  [...sessions].sort((a, b) => b.expires - a.expires).map((session) => ({
+    signed_in: localIso(session.expires - SESSION_MS, timezone).slice(0, 16).replace('T', ' '),
+    until: localIso(session.expires, timezone).slice(0, 16).replace('T', ' '),
+    current: session.token === current.token,
+  }));
 
 const randomToken = () => [...crypto.getRandomValues(new Uint8Array(32))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
@@ -143,6 +154,7 @@ export type ConsoleView = Readonly<{
   now: string;
   sessionUntil: string;
   sessionCount: number;
+  sessions: readonly ConsoleSessionRow[];
   approvals: readonly ApprovalItem[];
   usage: readonly Readonly<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>[];
   csrf: string;

@@ -39,6 +39,12 @@ describe('narrow controls read projection', () => {
     expect(JSON.stringify(result)).not.toContain('verified');
   });
 
+  it('lists console sessions without credentials beside the count', () => {
+    const sessions = [{ signed_in: '2026-10-06 03:30', until: '2026-10-06 15:30', current: false }, { signed_in: '2026-10-05 15:30', until: '2026-10-06 03:30', current: true }];
+    const result = projectControls({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 2, sessions }, 'connections');
+    expect(result.data.sessions).toEqual({ until: SAMPLE_CONSOLE_VIEW.sessionUntil, count: 2, items: sessions });
+  });
+
   it('preserves exact safe proposal reviews and existing action eligibility', () => {
     const calendar = SAMPLE_CONSOLE_VIEW.approvals[0]!;
     const email: ApprovalItem = { id: 'email', kind: 'email_send', summary: 'Send proposal', state: 'open', undoable: false, review: { kind: 'email_send', to: ['to@test.invalid'], cc: [], bcc: [], subject: '<script>hostile</script>', body: 'Exact reviewed words' } };

@@ -11,7 +11,7 @@ export type DayRecord = Base<'day', {
 export type ConnectionsRecord = Base<'connections', {
   google: { connectAvailable: boolean; accounts: { id: string; email: string; calendar: boolean; mail: boolean; tasks: boolean; health: 'access_granted' | 'needs_reconnect' }[] };
   telegram: { linked: boolean; unlinkAvailable: boolean };
-  sessions: { until: string; count: number };
+  sessions: { until: string; count: number; items: { signed_in: string; until: string; current: boolean }[] };
 }>;
 export type ProposalReview = { kind: 'email_send'; to: string[]; cc: string[]; bcc: string[]; subject: string; body: string }
   | { kind: 'message_send'; channel: string; content: string }
@@ -72,11 +72,11 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
     } } as Records[V];
   }
   if (expected === 'connections') {
-    if (!obj(data.google) || typeof data.google.connectAvailable !== 'boolean' || !Array.isArray(data.google.accounts) || !data.google.accounts.every(account => obj(account) && string(account.id) && string(account.email) && ['calendar', 'mail', 'tasks'].every(key => typeof account[key] === 'boolean') && ['access_granted', 'needs_reconnect'].includes(String(account.health))) || !obj(data.telegram) || typeof data.telegram.linked !== 'boolean' || typeof data.telegram.unlinkAvailable !== 'boolean' || !obj(data.sessions) || !string(data.sessions.until) || !Number.isSafeInteger(data.sessions.count) || Number(data.sessions.count) < 1) throw shapeError();
+    if (!obj(data.google) || typeof data.google.connectAvailable !== 'boolean' || !Array.isArray(data.google.accounts) || !data.google.accounts.every(account => obj(account) && string(account.id) && string(account.email) && ['calendar', 'mail', 'tasks'].every(key => typeof account[key] === 'boolean') && ['access_granted', 'needs_reconnect'].includes(String(account.health))) || !obj(data.telegram) || typeof data.telegram.linked !== 'boolean' || typeof data.telegram.unlinkAvailable !== 'boolean' || !obj(data.sessions) || !string(data.sessions.until) || !Number.isSafeInteger(data.sessions.count) || Number(data.sessions.count) < 1 || !Array.isArray(data.sessions.items) || !data.sessions.items.every(item => obj(item) && string(item.signed_in) && string(item.until) && typeof item.current === 'boolean')) throw shapeError();
     return { ...base, view: 'connections', data: {
     google: { connectAvailable: data.google.connectAvailable, accounts: data.google.accounts.map(account => ({ id: account.id, email: account.email, calendar: account.calendar, mail: account.mail, tasks: account.tasks, health: account.health })) },
     telegram: { linked: data.telegram.linked, unlinkAvailable: data.telegram.unlinkAvailable },
-    sessions: { until: data.sessions.until, count: data.sessions.count },
+    sessions: { until: data.sessions.until, count: data.sessions.count, items: (data.sessions.items as { signed_in: string; until: string; current: boolean }[]).map(item => ({ signed_in: item.signed_in, until: item.until, current: item.current })) },
     } } as Records[V];
   }
   if (expected === 'waiting') {
