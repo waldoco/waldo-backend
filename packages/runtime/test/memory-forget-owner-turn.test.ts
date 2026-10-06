@@ -399,3 +399,22 @@ it('held history also drops a topic split across two turns and a quote of the wi
     expect(sent).not.toMatch(/likes\s+cobalt paper/i);
   }, undefined, undefined, sql => episodeIndex(sql).add('hist2-src', 'owner', `${topic} likes cobalt paper`, 1));
 });
+
+it('held history drops a topic split over three owner turns', async () => {
+  const topic = 'abcdefghij-757';
+  const cannotVouch = JSON.stringify({ spans: [], reviewed_refs: [], complete: false });
+  await session('held-history-three', async (turn, store) => {
+    await turn('tg-t1', 'Remember the code word is OSPREY-31.', ops({}));
+    await turn('tg-t2', 'note: abcd', ops({}));
+    await turn('tg-t3', 'efgh', ops({}));
+    await turn('tg-t4', 'ij-757 is sensitive', ops({}));
+    seen.writerOps.push(ops({ forget_topic: topic }));
+    await turn('tg-t5', `Forget only ${topic}.`, cannotVouch);
+    expect(store.incompleteTopics()).toEqual([topic]);
+    seen.writerOps.push(ops({}));
+    await turn('tg-t6', 'What was the code word?', cannotVouch);
+    const sent = (JSON.parse(seen.replyInputs.at(-1)!) as { input: string }).input;
+    expect(sent).toContain('OSPREY-31');
+    for (const piece of ['note: abcd', 'efgh', 'ij-757 is sensitive']) expect(sent).not.toContain(piece);
+  }, undefined, undefined, sql => episodeIndex(sql).add('hist3-src', 'owner', `${topic} likes cobalt paper`, 1));
+});
