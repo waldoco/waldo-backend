@@ -119,6 +119,46 @@ describe('bounded tool-loop read recovery', () => {
     expect(events.every((event) => event.error === 'synthetic receipt unavailable')).toBe(true);
   });
 
+  it('gives an initially empty tool ceiling one bounded refusal and closing step', async () => {
+    let steps = 0;
+    let observed = '';
+    const text = await runToolLoop({ handlers: [], ctx: context(), maxSteps: 2,
+      step: async (tools, turns) => {
+        expect(tools).toBeUndefined();
+        steps++;
+        if (steps === 1) return { text: '', tool_calls: [{ name: 'delegate_task', arguments: '{"task":"synthetic"}', call_id: 'call' }] };
+        observed = turns[0]?.output ?? '';
+        return { text: 'synthetic closing' };
+      },
+    });
+    expect(steps).toBe(2);
+    expect(observed).toContain('handler_unavailable');
+    expect(text).toBe('synthetic closing');
+  });
+
+  it('bounds repeated illegal requests under an empty ceiling without executing them', async () => {
+    let steps = 0;
+    const budget = { remaining: 3 };
+    const text = await runToolLoop({ handlers: [], ctx: context(), maxSteps: 10, budget,
+      step: async () => { steps++; return { text: '', tool_calls: [{ name: 'delegate_task', arguments: '{}', call_id: 'call' }] }; },
+    });
+    expect(steps).toBe(2);
+    expect(budget.remaining).toBe(2);
+    expect(text).toContain('No tools are available');
+  });
+
+  it.each([0, 1])('does not replenish exhausted shared budget under an empty ceiling (remaining %s)', async (remaining) => {
+    let steps = 0;
+    let exit: LoopExit | undefined;
+    const budget = { remaining };
+    await runToolLoop({ handlers: [], ctx: context(), maxSteps: 10, budget, onSettle: (value) => { exit = value; },
+      step: async () => { steps++; return { text: '', tool_calls: [{ name: 'delegate_task', arguments: '{}', call_id: 'call' }] }; },
+    });
+    expect(steps).toBe(remaining === 0 ? 1 : 2);
+    expect(budget.remaining).toBe(0);
+    expect(exit).toBe('budget_exhausted');
+  });
+
   it('rejects calls returned after the local budget is exhausted', async () => {
     let attempts = 0;
     let exit: LoopExit | undefined;

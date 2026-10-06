@@ -74,18 +74,21 @@ export async function runToolLoop(input: Readonly<{
   const mutationTools = new Set(input.handlers.filter((h) => h.autonomy_gated || h.mutates_state).map((h) => h.name));
   let exit: LoopExit = 'completed';
   for (let round = 0; ; round += 1) {
-    const offer = tools.length > 0 && round < input.maxSteps
-      && (input.budget === undefined || input.budget.remaining > 0);
-    if (!offer && tools.length > 0 && exit === 'completed') {
+    const roundsAvailable = round < input.maxSteps && (input.budget === undefined || input.budget.remaining > 0);
+    const offer = tools.length > 0 && roundsAvailable;
+    // An initially empty authority ceiling can reject an illegal request once and
+    // give the model a final closing step. This consumes a round and performs no I/O.
+    const repairEmptyCeiling = tools.length === 0 && round === 0 && roundsAvailable;
+    if (!roundsAvailable && exit === 'completed') {
       exit = 'budget_exhausted';
     }
-    if (offer && input.budget !== undefined) input.budget.remaining -= 1;
+    if ((offer || repairEmptyCeiling) && input.budget !== undefined) input.budget.remaining -= 1;
     input.ctx.runScope?.admit();
     const response = await input.step(offer ? tools : undefined, turns);
     input.ctx.runScope?.admit();
-    if (response.tool_calls === undefined || !offer) {
+    if (response.tool_calls === undefined || (!offer && !repairEmptyCeiling)) {
       input.onSettle?.(exit);
-      return guardArtifactLinks(response.text || (exit === 'budget_exhausted' ? 'Tool budget exhausted; no further tools were run.' : ''), receiptUrls);
+      return guardArtifactLinks(response.text || (exit === 'budget_exhausted' ? 'Tool budget exhausted; no further tools were run.' : 'No tools are available this turn; no tool calls were executed.'), receiptUrls);
     }
     let firstCall = true;
     for (const call of response.tool_calls) {
@@ -99,7 +102,9 @@ export async function runToolLoop(input: Readonly<{
         ? previous.ok
           ? { ok: false, error: 'Same call already made this turn; use its result.', code: 'repeat_refusal' as const }
           : previous
-        : await dispatch(call, input);
+        : !offer
+          ? { ok: false, error: 'Tool handler unavailable.', code: 'not_found' as const, reason: 'handler_unavailable' }
+          : await dispatch(call, input);
       input.ctx.runScope?.admit();
       if (!result.ok && result.connect) {
         const offerKey = `${result.connect.service}:${result.connect.reason}`;
