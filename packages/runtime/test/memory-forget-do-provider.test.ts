@@ -2940,6 +2940,21 @@ it('a claim whose only held-topic text is an alias is withheld from the prompt a
     expect(request()).not.toContain('Enjoys folding paper at 09:10 UTC');
   });
 });
+it('an owner-context claim whose id cannot be read back is dropped, not kept', async () => {
+  await runInDurableObject(stub('held-claim-unknown-id'), async (_instance, state) => {
+    const topic = 'Independent cobalt workshop';
+    const real = claimStore(state.storage.sql);
+    real.beginTopicCoverage(topic, new Date().toISOString()); seen.selectorThrows = true;
+    const ghost = { id: 9999, kind: 'preference', text: 'ghost claim', source: 'stated', evidence: 'ghost', origin: 'owner', status: 'active', created_at: 'x', last_seen_at: 'x', seen_count: 1, valid_to: null, source_ref: null };
+    const memory = { ...real, recall: () => [ghost] } as typeof real;
+    const responder = createOwnerResponder('fixture', undefined, memory); let round = 0;
+    seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'unknown-id', name: 'read_owner_context', arguments: '{"topic":"x","limit":10}' }] : [];
+    await responder.respond({ traceId: 'unknown-id', conversationRef: 'owner', surface: 'telegram', text: 'Read context', memoryWrites: false }, (_h, w) => w());
+    const provider = seen.requests.at(-1) as { input: Array<{ call_id?: string; output?: string }> };
+    const receipt = JSON.parse(provider.input.find(x => x.call_id === 'unknown-id' && x.output !== undefined)!.output!);
+    expect(receipt).toMatchObject({ ok: true, data: { claims: [], complete: false, withheld_items: 1 } });
+  });
+});
 it('REVIEW862 highlighted episode snippets cannot conceal a held topic', async () => {
   await runInDurableObject(stub('review862-snippet-tool'), async (_instance, state) => {
     const TOPIC = 'Synthetic cobalt paper workshop';

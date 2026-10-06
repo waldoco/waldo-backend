@@ -538,7 +538,7 @@ export const createOwnerResponder = (
               const data = (result as { data?: { claims?: ReadonlyArray<{ id?: number }> } }).data;
               if (Array.isArray(data?.claims)) {
                 const aliasesById = new Map([...memory!.claims(), ...memory!.claims('promoted')].map(claim => [claim.id, (claim as { aliases?: string | null }).aliases] as const));
-                const claims = data.claims.filter(claim => !holdsHeldTopic(aliasesById.get(claim.id as number)));
+                const claims = data.claims.filter(claim => typeof claim.id === 'number' && aliasesById.has(claim.id) && !holdsHeldTopic(aliasesById.get(claim.id)));
                 tally.dropped += data.claims.length - claims.length;
                 result = { ...(result as object), data: { ...data, claims } } as typeof result;
               }
