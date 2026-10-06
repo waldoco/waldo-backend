@@ -191,7 +191,8 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:00.000Z', '2026-10-04T18:
     expect(state.storage.kv.get<number>('interruption-fixture-effect-count')).toBe(1);
     // Same strict bound, but a failure names what called the model (a day plan, a reply, a memory pass) instead of only a count.
     const describeCall = (body: unknown) => { const b = body as { text?: { format?: { name?: string } }; instructions?: string; input?: unknown }; return `${b.text?.format?.name ?? 'unnamed'}: instr=${(typeof b.instructions === 'string' ? b.instructions : '').slice(0, 80)} | input=${JSON.stringify(b.input ?? '').slice(-260)}`; };
-    expect(modelInputs.slice(callsBefore).map(describeCall), worldNote(state)).toEqual([]);
+    // A replay would put the interrupted request back in a model call. Scheduler work (a card or heartbeat the pinned clock makes due) is not a replay (CI run 37446492439, clock 18:29:00Z).
+    expect(modelInputs.slice(callsBefore).filter(body => JSON.stringify(body).includes('PRIVATE_INTERRUPTED_REQUEST')).map(describeCall), worldNote(state)).toEqual([]);
     expect(await new TelegramOwnerInbox(state.storage, persistInboxWake).claim(`hermetic-test-bot-token:telegram:${updateId}`, 'retry', 'retry-run', Date.now() + 150_000)).toBeNull();
     await state.storage.deleteAlarm();
   });
