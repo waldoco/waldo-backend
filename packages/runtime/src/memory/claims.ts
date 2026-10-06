@@ -526,9 +526,43 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     // leaves the search index, backups, and frozen legacy tables (redacted, preserving
     // unrelated content), constellation nodes stop quoting it and stop referencing its id,
     // and a barrier blocks re-admission. Fresh-state verification reports what survived.
+    // Derived update cards for one forgotten text: only the leaves that carry the topic are blanked. `tie` is true for a forgotten topic (the hold and this pass share cardCarriesTopic).
+    purgeUpdateCards(text: string, tie: boolean): void {
+      const ci = (value: string) => ciRedact(value, text, FORGOTTEN);
+      for (const row of sql.exec<{ id: number; changes: string; text: string | null }>('SELECT id, changes, text FROM update_cards').toArray()) {
+        const redactedText = row.text === null ? null : ci(row.text);
+        // A malformed row is redacted as plain text and never aborts the other rows.
+        const parsed = parsedJson(row.changes);
+        const duplicated = parsed !== undefined && hasDuplicateKeys(row.changes);
+        const redactedChanges = parsed === undefined
+          ? ci(row.changes)
+          : duplicated ? redactRawJsonValues(row.changes, ci)
+          : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
+        // Only a card that redaction changed, or one whose duplicate keys hide bytes from the decoded view, is rewritten; every other card keeps its stored bytes.
+        const changed = parsed === undefined || duplicated ? redactedChanges !== row.changes : redactedChanges !== JSON.stringify(parsed);
+        // A card that still carries the topic after redaction (split across values or keys, or broken by a NUL) cannot be proven clean by the per-value pass.
+        // update_cards rows record no source and siblings of a matching fragment may be unrelated, so only the leaves that carry the topic's pieces are blanked
+        // (values, and keys renamed unless they are schema keys). Join keys, other leaves, the summary text when clean and the send state stay. Same predicate as the hold.
+        const changesTied = tie && cardCarriesTopic(redactedChanges, null, text);
+        // Blank what the redaction left, not the original: leaves the literal pass already cleaned (and unrelated text sharing them) stay as they are.
+        const cleaned = parsed === undefined ? undefined : parsedJson(redactedChanges);
+        const textTied = tie && redactedText !== null && cardCarriesTopic('[]', redactedText, text);
+        if (changesTied || textTied) {
+          const nextChanges = !changesTied ? redactedChanges : parsed === undefined ? JSON.stringify(FORGOTTEN) : JSON.stringify(blankCardPieces(cleaned ?? parsed, text));
+          sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', nextChanges, textTied ? FORGOTTEN : redactedText, row.id);
+          continue;
+        }
+        if (changed || redactedText !== row.text) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', changed ? redactedChanges : row.changes, redactedText, row.id);
+      }
+    },
     purge(ids: readonly number[], at: string, topics: readonly string[] = []): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } } {
-      if (topics.some(topic => sql.exec('SELECT 1 FROM topic_purge_pending WHERE fingerprint = ? AND coverage_incomplete != 0', textFingerprint(topic.trim())).toArray().length)) {
-        return { ready: false, remaining: { selected_source_coverage: 1 }, texts: [], failed: [], receipt: { deleted: {}, redacted: {}, terminalised: {} } };
+      const uncovered = topics.map(topic => topic.trim()).filter(topic => sql.exec('SELECT 1 FROM topic_purge_pending WHERE fingerprint = ? AND coverage_incomplete != 0', textFingerprint(topic)).toArray().length);
+      if (uncovered.length) {
+        // A derived update card carrying the topic holds the forget and its only exit is this purge, while the span selector (which authorises coverage) cannot run under that hold.
+        // So derived cards alone are blanked now, with the same predicate as the hold; every other store waits for the selector. The pending row is already durable (custody first).
+        const failed: string[] = [];
+        if (tableExists(sql, 'update_cards')) for (const topic of uncovered) { try { this.purgeUpdateCards(topic, true); } catch { failed.push('update_cards'); } }
+        return { ready: false, remaining: { selected_source_coverage: 1 }, texts: [], failed: [...new Set(failed)], receipt: { deleted: {}, redacted: {}, terminalised: {} } };
       }
       const forgotten = ids.length
         ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
@@ -630,33 +664,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         // Derived text the model reads back (unfolded update cards, day-plan reasons). Rows and
         // their send state stay; only the forgotten text is rewritten. Card changes are JSON, so
         // they are redacted per parsed value, not by raw substring (JSON escapes quotes).
-        if (hasCards) attempt('update_cards', () => {
-          for (const row of sql.exec<{ id: number; changes: string; text: string | null }>('SELECT id, changes, text FROM update_cards').toArray()) {
-            const redactedText = row.text === null ? null : ci(row.text);
-            // A malformed row is redacted as plain text and never aborts the other rows.
-            const parsed = parsedJson(row.changes);
-            const duplicated = parsed !== undefined && hasDuplicateKeys(row.changes);
-            const redactedChanges = parsed === undefined
-              ? ci(row.changes)
-              : duplicated ? redactRawJsonValues(row.changes, ci)
-              : JSON.stringify(parsed, (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
-            // Only a card that redaction changed, or one whose duplicate keys hide bytes from the decoded view, is rewritten; every other card keeps its stored bytes.
-            const changed = parsed === undefined || duplicated ? redactedChanges !== row.changes : redactedChanges !== JSON.stringify(parsed);
-            // A card that still carries the topic after redaction (split across values or keys, or broken by a NUL) cannot be proven clean by the per-value pass.
-            // update_cards rows record no source and siblings of a matching fragment may be unrelated, so only the leaves that carry the topic's pieces are blanked
-            // (values, and keys renamed unless they are schema keys). Join keys, other leaves, the summary text when clean and the send state stay. Same predicate as the hold.
-            const changesTied = topics.length > 0 && cardCarriesTopic(redactedChanges, null, text);
-            // Blank what the redaction left, not the original: leaves the literal pass already cleaned (and unrelated text sharing them) stay as they are.
-            const cleaned = parsed === undefined ? undefined : parsedJson(redactedChanges);
-            const textTied = topics.length > 0 && redactedText !== null && cardCarriesTopic('[]', redactedText, text);
-            if (changesTied || textTied) {
-              const nextChanges = !changesTied ? redactedChanges : parsed === undefined ? JSON.stringify(FORGOTTEN) : JSON.stringify(blankCardPieces(cleaned ?? parsed, text));
-              sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', nextChanges, textTied ? FORGOTTEN : redactedText, row.id);
-              continue;
-            }
-            if (changed || redactedText !== row.text) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', changed ? redactedChanges : row.changes, redactedText, row.id);
-          }
-        });
+        if (hasCards) attempt('update_cards', () => this.purgeUpdateCards(text, topics.length > 0));
         for (const [table, columns] of LITERAL_REDACTED_STORES) attempt(table, () => {
           if (!tableExists(sql, table)) return;
           for (const column of columns) {
