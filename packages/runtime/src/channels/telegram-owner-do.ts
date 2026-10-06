@@ -45,7 +45,7 @@ import { proactiveEnabled } from './proactive-gate';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
 import { CONSOLE_INVITES_PATH, renderMemberInvites } from './console-invites';
 import { newInviteCode, inviteLink } from '../identity/invite-code';
-import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, consoleMayApprove, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
+import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, consoleMayApprove, consoleSessionRows, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
@@ -2265,7 +2265,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const pins = plans.pins();
         return {
           release: this.env.WALDO_RELEASE ?? 'unknown', timezone: clock.timezone, now: localIso(now, clock.timezone).slice(0, 16).replace('T', ' '),
-          sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), sessionCount: (await consoleAccess(this.ctx.storage).list()).length, approvals: desk.pending(Date.now()), usage: traces.usageRows(), csrf: session.csrf, notice,
+          sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), sessionCount: (await consoleAccess(this.ctx.storage).list()).length, sessions: consoleSessionRows(await consoleAccess(this.ctx.storage).list(), session, clock.timezone), approvals: desk.pending(Date.now()), usage: traces.usageRows(), csrf: session.csrf, notice,
           google: { accounts: linked, connectAvailable: google.configured() },
           telegram: { linked: telegramLinked(identity), unlinkAvailable: consoleAuth(this.env) !== null && identity.get<string>('do_name') !== undefined },
           profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)), forgettingSpots: memory.claims('purging'),
