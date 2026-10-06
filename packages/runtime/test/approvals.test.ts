@@ -808,19 +808,34 @@ describe('task source card ledger write', () => {
         () => desk.proposeBrowserSubmit({ url: 'https://fixture.invalid', action: { selector: '#submit', description: 'Submit' }, binding: { value: 'synthetic' }, steps: [] }),
         () => desk.proposeSendMessage({ channel: 'telegram', content: 'Synthetic note', idempotency_key: 'k1' }),
         () => desk.proposeMcpCall({ server: 'github', tool: 'merge_pr', args: { n: 1 } }),
+        () => desk.propose({ action: 'create', title: 'Walk', start: iso('2026-09-24T07:00:00+05:30'), end: iso('2026-09-24T07:30:00+05:30'), reason: 'morning slot' }),
       ];
       for (const propose of proposals) {
         if (blocked) await expect(propose()).rejects.toThrow('Approval card not confirmed');
         else await propose();
       }
-      const rows = state.storage.sql.exec<{ id: string; status: string }>("SELECT id, status FROM ledger WHERE kind IN ('browser_submit', 'message_send', 'mcp_call')").toArray();
-      expect(rows).toHaveLength(3);
+      const rows = state.storage.sql.exec<{ id: string; status: string }>("SELECT id, status FROM ledger WHERE kind IN ('browser_submit', 'message_send', 'mcp_call', 'calendar_change')").toArray();
+      expect(rows).toHaveLength(4);
       expect(rows.every(row => row.status === (blocked ? 'card_unconfirmed' : 'open'))).toBe(true);
       if (blocked) {
         expect(desk.pending(1000)).toEqual([]);
         for (const row of rows) expect((await desk.decide(row.id, 'a', 'test')).toast).toBe('Already handled.');
         expect(ran).toBe(0);
+        expect(desk.ledger([]).match(/review card delivery unconfirmed; cannot approve/g)).toHaveLength(4);
       }
+    });
+  });
+  it('a tap on an unconfirmed non-email card says nothing was done, and does not mention email', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-blocked-card-tap'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let n = 0; let blocked = true; const said: string[] = [];
+      const desk = approvalDesk(state.storage.sql, { owner: 42, google: async () => null, newId: () => `tap-${++n}`, now: () => 1000, timezone: 'UTC', log: () => {},
+        call: async (method: string, body: object) => { if (method === 'sendMessage') { said.push(String((body as { text?: string }).text)); return blocked ? undefined : { message_id: 1 }; } return {}; } });
+      const id = await desk.proposeSendMessage({ channel: 'telegram', content: 'Synthetic note', idempotency_key: 'k2' }).catch(() => 'ptap-1');
+      blocked = false; said.length = 0;
+      await desk.callback({ id: 'cb1', from: { id: 42 }, data: `a:${id}` } as never, 'trace');
+      expect(said.join(' ')).toContain('Nothing was done');
+      expect(said.join(' ')).not.toMatch(/email/i);
     });
   });
 });

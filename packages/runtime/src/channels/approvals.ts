@@ -503,15 +503,18 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const out = await decide(id, action as 'a' | 's' | 'e' | 'u', trace);
       // An uncertain card may have reached the owner before a channel timeout. It has
       // no valid send approval until reconciled, so tell the owner what to do next.
-      const reported = out.toast === 'Already handled.' && row(id)?.status === 'card_unconfirmed'
-        ? { toast: 'Review not confirmed', message: 'That review card was not confirmed, so I cannot use its Send it instruction. No email was sent. Check this chat and ask for a fresh proposal if you still want the email.' }
+      const unconfirmedRow = out.toast === 'Already handled.' ? row(id) : undefined;
+      const reported = unconfirmedRow?.status === 'card_unconfirmed'
+        ? { toast: 'Review not confirmed', message: unconfirmedRow.kind === 'email_send'
+          ? 'That review card was not confirmed, so I cannot use its Send it instruction. No email was sent. Check this chat and ask for a fresh proposal if you still want the email.'
+          : 'That approval card was not confirmed, so I cannot use its button. Nothing was done. Check this chat and ask for a fresh proposal if you still want it.' }
         : out;
       await answer(reported.toast);
       await say(reported.message, action === 'a' && out.toast === 'Done' && out.message.includes('Undo is available') ? [['Undo', `u:${id}`]] : undefined);
     },
     ledger(reminders) {
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();
-      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
+      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'browser_submit', 'message_send', 'mcp_call', 'calendar_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
       const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'review_only' ORDER BY created_at").toArray();
       const done = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status NOT IN ('open', 'changing', 'card_unconfirmed', 'review_only') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
       const lines = [
