@@ -539,3 +539,8 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 | Failure | Regression | Boundary |
 | --- | --- | --- |
 | Google token 503/temporarily_unavailable became 401 and failing health | connector-proxy-entry.test.ts signed native/Drive/MCP refresh matrix and same-connection recovery; google-token-refresh.test.ts local bearer health | Scoped credentials and intent_pending custody unchanged; no provider retry or account widening |
+
+- [ ] Public browser adapters must exercise the installed SDK serializer with wrapped bindings; name lookup can reject wrappers despite passing fake SDK tests. Connect the exact retained ID, never silently allocate a replacement.
+- [ ] Redirect checks must precede every followed target, including prohibited ports/credentials. Playwright route.continue does not intercept every redirect hop; test actual route callbacks and finite egress before following.
+- [ ] The ordinary registered two-argument ownerDO must deliver page evidence through the real public-read handler. Node fakes cannot prove Worker native-object compatibility; canonical admit/deadline controls must survive hook context projection.
+- [ ] Browser allocation IDs require actual string validation before custody or connection; regex coercion of missing/null values cannot yield a completed read or skip cleanup.

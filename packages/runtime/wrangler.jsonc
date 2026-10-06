@@ -69,6 +69,9 @@
     // guard-wrangler-local-bindings.mjs asserts this block mirrors the top level.
     "staging": {
       "name": "waldo-runtime-staging",
+      "main": "src/staging-browser.ts",
+      "compatibility_flags": ["nodejs_compat"],
+      "browser": { "binding": "BROWSER" },
       "observability": {
         "enabled": true,
         "logs": { "enabled": true, "invocation_logs": false },
