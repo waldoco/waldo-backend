@@ -16,6 +16,22 @@ const MODEL = `${PROVIDER_OF[WALDO_CHAT_MODEL]}/${WALDO_CHAT_MODEL}`;
 
 // Provider failure bodies are untrusted and may echo credentials or page instructions.
 // Return the known operation and HTTP status only; never relay provider diagnostics.
+// A refused session start says what the provider actually answered, and no more: HTTP status plus a bounded
+// code token and request id when the provider sent one. The body text is untrusted and is never relayed,
+// and the text does not guess at a cause (plan, billing, quota); only the provider's own code can say that.
+const TOKEN = /^[A-Za-z0-9_.-]{1,48}$/;
+const refusedStart = async (response: Response): Promise<string> => {
+  let code: string | undefined;
+  try {
+    const body = JSON.parse((await response.text()).slice(0, 4096)) as { code?: unknown; error?: unknown };
+    const raw = typeof body.code === 'string' ? body.code : typeof body.error === 'string' ? body.error : (body.error as { code?: unknown } | null)?.code;
+    if (typeof raw === 'string' && TOKEN.test(raw)) code = raw;
+  } catch { /* no usable body */ }
+  const requestId = response.headers.get('x-request-id') ?? response.headers.get('x-bb-request-id') ?? undefined;
+  const parts = [`HTTP ${response.status}`, ...(code ? [`code ${code}`] : []), ...(requestId && TOKEN.test(requestId) ? [`request ${requestId}`] : [])];
+  return `The browser provider refused to start a session (${parts.join(', ')}). This is the provider's answer; it does not say why.`;
+};
+
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 
 const isEmptyExtraction = (value: unknown): boolean =>
@@ -83,7 +99,7 @@ export const browsePageHandler = (
     try {
       const started = await call('/v1/sessions/start', { modelName: MODEL, verbose: 0 });
       if (started.status === 401 || started.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${started.status}) - it needs replacing.`, source_taint: 'external' };
-      if (!started.ok) return { ok: false, code: 'transient', error: `Browser session start failed (HTTP ${started.status})`, source_taint: 'external' };
+      if (!started.ok) return { ok: false, code: 'transient', error: await refusedStart(started), source_taint: 'external' };
       const startBody = (await started.json()) as { success?: boolean; data?: { sessionId?: string } };
       session = startBody.data?.sessionId ?? null;
       if (!startBody.success || !session) return { ok: false, code: 'transient', error: 'Browser session start returned no session.', source_taint: 'external' };
@@ -174,7 +190,7 @@ export const browseActHandler = (
     try {
       const started = await call('/v1/sessions/start', { modelName: MODEL, verbose: 0 });
       if (started.status === 401 || started.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${started.status}) - it needs replacing.`, source_taint: 'external' };
-      if (!started.ok) return { ok: false, code: 'transient', error: `Browser session start failed (HTTP ${started.status})`, source_taint: 'external' };
+      if (!started.ok) return { ok: false, code: 'transient', error: await refusedStart(started), source_taint: 'external' };
       const startBody = (await started.json()) as { success?: boolean; data?: { sessionId?: string } };
       session = startBody.data?.sessionId ?? null;
       if (!startBody.success || !session) return { ok: false, code: 'transient', error: 'Browser session start returned no session.', source_taint: 'external' };
