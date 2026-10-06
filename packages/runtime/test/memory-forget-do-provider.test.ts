@@ -21,7 +21,7 @@ import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 
 // Real registered two-argument owner DO and its fenced inbox/listener/responder path.
 // Only the model SDK and Telegram transport are scripted. No live provider or source service.
-const seen = vi.hoisted(() => ({ writer: '{}', requests: [] as unknown[], fetches: [] as string[], replyText: 'Recorded fixture response.', reasoning: undefined as string | undefined, toolSuppliers: [] as (() => Promise<readonly import('../src/context-composer/types').ContextFragment[]>)[], offloads: [] as import('../src/conversation/tool-output-store').ToolOutputStore[], selectorThrows: false, selectedText: undefined as string | undefined, selectedTexts: [] as string[], selectorInputs: [] as string[], selectorCalls: [] as unknown[], failCleanup: false, onCleanup: undefined as undefined | (() => void), selectorOutputMessage: false, selectorMode: 'normal' as 'normal' | 'empty' | 'invalid' | 'missing-ref' | 'capped' | 'second-incomplete', onSelector: undefined as undefined | (() => void), onReply: undefined as undefined | (() => unknown[] | undefined | Promise<unknown[] | undefined>) }));
+const seen = vi.hoisted(() => ({ writer: '{}', requests: [] as unknown[], writerInputs: [] as string[], fetches: [] as string[], replyText: 'Recorded fixture response.', reasoning: undefined as string | undefined, toolSuppliers: [] as (() => Promise<readonly import('../src/context-composer/types').ContextFragment[]>)[], offloads: [] as import('../src/conversation/tool-output-store').ToolOutputStore[], selectorThrows: false, selectedText: undefined as string | undefined, selectedTexts: [] as string[], selectorInputs: [] as string[], selectorCalls: [] as unknown[], failCleanup: false, onCleanup: undefined as undefined | (() => void), selectorOutputMessage: false, selectorMode: 'normal' as 'normal' | 'empty' | 'invalid' | 'missing-ref' | 'capped' | 'second-incomplete', onSelector: undefined as undefined | (() => void), onReply: undefined as undefined | (() => unknown[] | undefined | Promise<unknown[] | undefined>) }));
 vi.mock('../src/run-loop/adapters', async load => {
  const actual = await load<typeof import('../src/run-loop/adapters')>();
  return { ...actual, resolveRunLoopAdapters: (...args: Parameters<typeof actual.resolveRunLoopAdapters>) => {
@@ -50,6 +50,7 @@ vi.mock('../src/channels/telegram-api', async (load) => ({
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
   const name = (body as { text?: { format?: { name?: string } } }).text?.format?.name;
   if (!name) seen.requests.push(body);
+  if (name === 'claim_ops') seen.writerInputs.push(String((body as { input?: unknown }).input));
   const output = !name ? await seen.onReply?.() ?? [] : [];
   let selection = '{}';
   if (name === 'forget_source_spans') {
@@ -89,7 +90,7 @@ const turn = async (name: string, id: number, text: string, writer: string) => {
   });
 };
 beforeEach(() => {
-  seen.failCleanup = false; seen.onCleanup = undefined; seen.selectorOutputMessage = false; seen.selectorMode = 'normal'; seen.onSelector = undefined; seen.selectorCalls.length = 0; seen.selectedTexts.length = 0; seen.selectorInputs.length = 0; seen.requests.length = 0; seen.fetches.length = 0; seen.toolSuppliers.length = 0; seen.offloads.length = 0; seen.onReply = undefined; seen.selectedText = undefined; seen.selectorThrows = false; seen.replyText = 'Recorded fixture response.'; seen.reasoning = undefined;
+  seen.failCleanup = false; seen.onCleanup = undefined; seen.selectorOutputMessage = false; seen.selectorMode = 'normal'; seen.onSelector = undefined; seen.selectorCalls.length = 0; seen.writerInputs.length = 0; seen.selectedTexts.length = 0; seen.selectorInputs.length = 0; seen.requests.length = 0; seen.fetches.length = 0; seen.toolSuppliers.length = 0; seen.offloads.length = 0; seen.onReply = undefined; seen.selectedText = undefined; seen.selectorThrows = false; seen.replyText = 'Recorded fixture response.'; seen.reasoning = undefined;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => { seen.fetches.push(String(input)); throw new Error('unmocked network is forbidden'); });
 });
 afterEach(() => { vi.unstubAllGlobals(); expect(seen.fetches).toEqual([]); });
@@ -2938,6 +2939,46 @@ it('a claim whose only held-topic text is an alias is withheld from the prompt a
     expect(memory.incompleteTopics()).toContain(topic);
     expect(receipt).toMatchObject({ ok: true, data: { claims: [], complete: false, withheld_items: 1 } });
     expect(request()).not.toContain('Enjoys folding paper at 09:10 UTC');
+  });
+});
+it('graph nodes and edges built on a held claim are withheld from the prompt, unrelated graph stays', async () => {
+  await runInDurableObject(stub('held-graph-support'), async (_instance, state) => {
+    const topic = 'Independent cobalt workshop';
+    const memory = claimStore(state.storage.sql); const at = new Date().toISOString();
+    memory.add({ kind: 'preference', text: 'Enjoys folding paper at 09:10 UTC', evidence: 'Folding paper preference', origin: 'owner', source: 'stated', source_ref: 'owner, graph-fixture', aliases: [topic] }, at);
+    memory.add({ kind: 'preference', text: 'Likes a quiet reading desk in the morning', evidence: 'Reading preference', origin: 'owner', source: 'stated', source_ref: 'owner, graph-fixture' }, at);
+    memory.add({ kind: 'preference', text: 'Likes walking after lunch', evidence: 'Walking preference', origin: 'owner', source: 'stated', source_ref: 'owner, graph-fixture' }, at);
+    const [held, reading, walking] = memory.claims().sort((a, b) => a.id - b.id).map(claim => claim.id);
+    const node = (label: string, spots: number[]) => memory.saveNode({ id: null, domain: 'work rhythm', label, summary: `${label} summary`, strength: 0.8, status: 'active', supporting_spots: spots }, at);
+    const mixed = node('MIXEDSUPPORT-PATTERN', [held!, reading!]); const readingNode = node('READINGONLY-PATTERN', [reading!]); const walkingNode = node('WALKINGONLY-PATTERN', [walking!]);
+    memory.saveEdge({ from_id: mixed, to_id: readingNode, relation: 'MIXEDEDGE-RELATION', strength: 0.7, evidence_count: 2 });
+    memory.saveEdge({ from_id: readingNode, to_id: walkingNode, relation: 'KEPTEDGE-RELATION', strength: 0.7, evidence_count: 2 });
+    memory.beginTopicCoverage(topic, at); seen.selectorThrows = true;
+    const responder = createOwnerResponder('fixture', undefined, memory);
+    await responder.respond({ traceId: 'held-graph', conversationRef: 'owner', surface: 'telegram', text: 'What patterns do you see in my routine?', memoryWrites: true }, (_h, w) => w());
+    const sent = seen.writerInputs.join('\n');
+    expect(sent).toContain('READINGONLY-PATTERN'); // the writer ran and sees the unrelated graph
+    expect(sent).not.toContain('MIXEDSUPPORT-PATTERN'); expect(sent).not.toContain('MIXEDEDGE-RELATION');
+    expect(sent).toContain('KEPTEDGE-RELATION');
+  });
+});
+it('a graph node supported only by a dismissed held claim is withheld from the writer prompt', async () => {
+  await runInDurableObject(stub('held-graph-dismissed'), async (_instance, state) => {
+    const topic = 'Independent cobalt workshop';
+    const memory = claimStore(state.storage.sql); const at = new Date().toISOString();
+    memory.add({ kind: 'preference', text: 'Enjoys folding paper at 09:10 UTC', evidence: 'Folding paper preference', origin: 'owner', source: 'stated', source_ref: 'owner, graph-fixture', aliases: [topic] }, at);
+    memory.add({ kind: 'preference', text: 'Likes a quiet reading desk in the morning', evidence: 'Reading preference', origin: 'owner', source: 'stated', source_ref: 'owner, graph-fixture' }, at);
+    const [held, reading] = memory.claims().sort((a, b) => a.id - b.id).map(claim => claim.id);
+    memory.setStatus(held!, 'dismissed');
+    const node = (label: string, spots: number[]) => memory.saveNode({ id: null, domain: 'work rhythm', label, summary: `${label} summary`, strength: 0.8, status: 'active', supporting_spots: spots }, at);
+    const dismissedNode = node('DISMISSEDSUPPORT-PATTERN', [held!]); const readingNode = node('READINGONLY-PATTERN', [reading!]);
+    memory.saveEdge({ from_id: dismissedNode, to_id: readingNode, relation: 'DISMISSEDEDGE-RELATION', strength: 0.7, evidence_count: 2 });
+    memory.beginTopicCoverage(topic, at); seen.selectorThrows = true;
+    const responder = createOwnerResponder('fixture', undefined, memory);
+    await responder.respond({ traceId: 'held-graph-dismissed', conversationRef: 'owner', surface: 'telegram', text: 'What patterns do you see in my routine?', memoryWrites: true }, (_h, w) => w());
+    const sent = seen.writerInputs.join('\n');
+    expect(sent).toContain('READINGONLY-PATTERN');
+    expect(sent).not.toContain('DISMISSEDSUPPORT-PATTERN'); expect(sent).not.toContain('DISMISSEDEDGE-RELATION');
   });
 });
 it('an owner-context claim whose id cannot be read back is dropped, not kept', async () => {
