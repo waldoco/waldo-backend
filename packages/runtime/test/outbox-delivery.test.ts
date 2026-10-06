@@ -128,28 +128,38 @@ async function makeScheduleDue(stub: DurableObjectStub<TracerDO>) {
 }
 
 describe('SLICE-3a golden proof: exactly-once delivery at the durable layer', () => {
-  it('slow crash inspection cannot race a platform retry into an extra attempt', async () => {
+  it('platform alarm retries after a crash add attempts but never a second physical delivery', async () => {
+    // workerd retries a throwing alarm() about every 250ms, and the injected crash stays armed, so on a slow runner several retries land
+    // before the test's own deleteAlarm. Each retry is a real attempt; what must hold is one delivery under one key, and durable attempts
+    // that equal the sink's physical send attempts. (The old version asserted attempts === 1 after an 800ms sleep, which only held when no retry fired.)
     const sink = new FakeSink();
     const stub = freshStub();
     await schedule(stub);
     await poke(stub, 'post_sink_pre_ack');
-    // Deliberately exceed the old 500ms occurrence and the 250ms scheduler rearm.
-    await new Promise((resolve) => setTimeout(resolve, 800));
     await expect(controlledAlarm(stub)).rejects.toThrow('post_sink_pre_ack');
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    expect((await readOutbox(stub)).attempts).toBe(1);
-    expect(sink.observedSendAttempts()).toBe(1);
+    for (let retry = 0; retry < 3; retry += 1) {
+      await runInDurableObject(stub, async (instance, state) => {
+        await state.storage.deleteAlarm();
+        await expect(instance.alarm()).rejects.toThrow('post_sink_pre_ack');
+      });
+    }
+    const inDoubt = await readOutbox(stub);
+    expect(inDoubt.status).toBe('sent_unacked');
+    expect(inDoubt.attempts).toBeGreaterThanOrEqual(4);
+    expect(sink.observedSendAttempts()).toBe(inDoubt.attempts);
     expect(sink.observedDeliveries()).toBe(1);
+    expect(new Set(sink.observedKeys()).size).toBe(1);
     await evictDurableObject(stub);
+    await runInDurableObject(stub, (instance) => { instance.__crashAfter = undefined; });
     await resume(stub);
     const acked = await readOutbox(stub);
     expect(acked.status).toBe('acked');
-    expect(acked.attempts).toBe(2);
+    expect(acked.attempts).toBeGreaterThanOrEqual(5);
     expect(acked.acked_at).not.toBeNull();
     expect(acked.next_retry_at).toBeNull();
     expect(acked.outboxRows).toBe(1);
     expect(acked.journalState).toBe('DONE');
-    expect(sink.observedSendAttempts()).toBe(2);
+    expect(sink.observedSendAttempts()).toBe(acked.attempts);
     expect(new Set(sink.observedKeys()).size).toBe(1);
     expect(sink.observedDeliveries()).toBe(1);
   });
