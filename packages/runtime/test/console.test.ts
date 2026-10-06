@@ -1,6 +1,6 @@
 import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
-import { consoleAccess, signInPage, parseConsoleAction, consoleMayApprove, renderConsole, sessionCookie } from '../src/channels/console';
+import { consoleAccess, consoleSessionRows, signInPage, parseConsoleAction, consoleMayApprove, renderConsole, sessionCookie } from '../src/channels/console';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
 
 const memoryStore = () => {
@@ -16,6 +16,22 @@ const formOf = (fields: Record<string, string>) => {
   for (const [key, value] of Object.entries(fields)) form.set(key, value);
   return form;
 };
+
+describe('console session rows', () => {
+  const at = Date.parse('2026-10-06T00:00:00Z');
+  const sessions = [
+    { token: 'secret-token-a', csrf: 'secret-csrf-a', expires: at + 3 * 3_600_000 },
+    { token: 'secret-token-b', csrf: 'secret-csrf-b', expires: at + 10 * 3_600_000 },
+  ];
+  it('lists newest sign-in first, marks this browser, and carries no credentials', () => {
+    const rows = consoleSessionRows(sessions, sessions[0]!, 'Asia/Kolkata');
+    expect(rows).toEqual([
+      { signed_in: '2026-10-06 03:30', until: '2026-10-06 15:30', current: false },
+      { signed_in: '2026-10-05 20:30', until: '2026-10-06 08:30', current: true },
+    ]);
+    expect(JSON.stringify(rows)).not.toContain('secret');
+  });
+});
 
 describe('owner console', () => {
   it('opening a link only shows a sign-in button, so link previews cannot spend the token', async () => {

@@ -4,7 +4,7 @@ import {DashboardNavigation,resolveRoute} from './App';
 import {SettingsNavigation} from './Settings';
 import type {ConnectionsRecord} from './controls-model';
 import {ConnectionsControls} from './Controls';
-const connection:ConnectionsRecord={version:1,view:'connections',state:'available',csrf:'fixture',revision:'fixture',data:{google:{connectAvailable:true,accounts:[]},telegram:{linked:false,unlinkAvailable:true},sessions:{count:2,until:'2026-10-04T09:00:00Z'}}};
+const connection:ConnectionsRecord={version:1,view:'connections',state:'available',csrf:'fixture',revision:'fixture',data:{google:{connectAvailable:true,accounts:[]},telegram:{linked:false,unlinkAvailable:true},sessions:{count:2,until:'2026-10-04T09:00:00Z',items:[{signed_in:'2026-10-02 00:00',until:'2026-10-04T09:00:00Z',current:true}]}}};
 describe('simplified console shell',()=>{
  it('groups day, sessions, usage, account and setup under Settings instead of repeating sidebar destinations',()=>{
   const html=renderToStaticMarkup(<DashboardNavigation route="settings/sessions"/>);

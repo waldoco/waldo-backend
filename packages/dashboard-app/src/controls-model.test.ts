@@ -3,7 +3,7 @@ import { SignInRequired } from './model';
 import { allowedControlNavigation, fetchControls, readActionResult, readControls, submitControl } from './controls-model';
 
 const day = { version: 1, view: 'day', state: 'available', csrf: 'c'.repeat(64), revision: 'a'.repeat(64), data: { date: '2026-10-02', timezone: 'Asia/Kolkata', cards: [{ id: 'card:brief', name: 'The Brief', defaultTime: '08:00', time: null, sent: false, pin: '08:30', reason: 'Pinned by you' }], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' } } };
-const connections = { ...day, view: 'connections', data: { google: { connectAvailable: true, accounts: [{ id: 'g1', email: 'owner@test.invalid', calendar: true, mail: false, tasks: true, health: 'access_granted' }] }, telegram: { linked: true, unlinkAvailable: true }, sessions: { count: 1, until: '2026-10-02 07:30' } } };
+const connections = { ...day, view: 'connections', data: { google: { connectAvailable: true, accounts: [{ id: 'g1', email: 'owner@test.invalid', calendar: true, mail: false, tasks: true, health: 'access_granted' }] }, telegram: { linked: true, unlinkAvailable: true }, sessions: { count: 1, until: '2026-10-02 07:30', items: [{ signed_in: '2026-10-01 19:30', until: '2026-10-02 07:30', current: true }] } } };
 afterEach(() => vi.unstubAllGlobals());
 
 describe('modern owner controls read', () => {
@@ -11,7 +11,10 @@ describe('modern owner controls read', () => {
     expect(readControls({ ...day, session_token: 'never-retain', data: { ...day.data, cards: [{ ...day.data.cards[0], secret: 'never-retain' }], other_memory: 'never-retain' } }, 'day')).toEqual(day);
     expect(readControls({ ...connections, data: { ...connections.data, google: { ...connections.data.google, accounts: [{ ...connections.data.google.accounts[0], refresh_token: 'never-retain' }] } } }, 'connections')).toEqual(connections);
     for (const value of [{ ...day, view: 'connections' }, { ...day, revision: 'unknown' }, { ...day, state: 'unavailable' }, { ...day, csrf: '' }, { ...day, data: { ...day.data, cards: [{ ...day.data.cards[0], sent: 'true' }] } }, { ...day, data: { ...day.data, proactivity: { ...day.data.proactivity, volume: 'very-high' } } }]) expect(() => readControls(value, 'day')).toThrow('unsupported');
-    expect(() => readControls({ ...connections, data: { ...connections.data, sessions: { count: 0, until: 'today' } } }, 'connections')).toThrow();
+    expect(() => readControls({ ...connections, data: { ...connections.data, sessions: { count: 0, until: 'today', items: [] } } }, 'connections')).toThrow();
+    expect(() => readControls({ ...connections, data: { ...connections.data, sessions: { count: 1, until: 'today' } } }, 'connections')).toThrow();
+    expect(readControls(connections, 'connections').data.sessions.items).toEqual([{ signed_in: '2026-10-01 19:30', until: '2026-10-02 07:30', current: true }]);
+    expect(JSON.stringify(readControls({ ...connections, data: { ...connections.data, sessions: { ...connections.data.sessions, items: [{ ...connections.data.sessions.items[0], token: 'never-retain' }] } } }, 'connections'))).not.toContain('never-retain');
   });
 
   it('uses the fixed same-origin read and keeps signed-out, failed and malformed distinct', async () => {

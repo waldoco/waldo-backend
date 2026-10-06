@@ -10,7 +10,7 @@ const day: DayRecord = { version: 1, view: 'day', state: 'available', csrf: 'c'.
 const connections: ConnectionsRecord = { version: 1, view: 'connections', state: 'available', csrf: 'c'.repeat(64), revision: 'a'.repeat(64), data: { google: { connectAvailable: true, accounts: [
   { id: 'g1', email: '<script>@test.invalid', calendar: true, mail: false, tasks: true, health: 'access_granted' },
   { id: 'g2', email: 'work@test.invalid', calendar: false, mail: true, tasks: false, health: 'needs_reconnect' },
-] }, telegram: { linked: false, unlinkAvailable: true }, sessions: { count: 1, until: '2026-10-02 07:30' } } };
+] }, telegram: { linked: false, unlinkAvailable: true }, sessions: { count: 1, until: '2026-10-02 07:30', items: [{ signed_in: '2026-10-01 19:30', until: '2026-10-02 07:30', current: true }] } } };
 const noop = () => {};
 
 describe('modern day controls', () => {
@@ -45,8 +45,10 @@ describe('modern account controls', () => {
     expect(html).toContain('Link a Telegram account'); expect(html).not.toContain('Unlink Telegram');
     expect(html).toContain('Sign out of this browser'); expect(html).not.toContain('Sign out everywhere');
     expect(html).not.toContain('/console/connections');
-    const multiple = renderToStaticMarkup(<ConnectionsControls record={{ ...connections, data: { ...connections.data, telegram: { linked: true, unlinkAvailable: true }, sessions: { count: 2, until: connections.data.sessions.until } } }} busy={false} onAction={noop}/>);
+    const multiple = renderToStaticMarkup(<ConnectionsControls record={{ ...connections, data: { ...connections.data, telegram: { linked: true, unlinkAvailable: true }, sessions: { count: 2, until: connections.data.sessions.until, items: [{ signed_in: '2026-10-02 06:00', until: '2026-10-02 18:00', current: false }, { signed_in: '2026-10-01 19:30', until: '2026-10-02 07:30', current: true }] } } }} busy={false} onAction={noop}/>);
     expect(multiple).toContain('Unlink Telegram'); expect(multiple).toContain('Sign out everywhere');
+    expect(multiple).toContain('Signed in 2026-10-02 06:00'); expect(multiple).toContain('Signed in 2026-10-01 19:30'); expect(multiple).toContain('This browser');
+    expect(multiple).toContain('Device names are not recorded');
   });
 
   it('does not offer unavailable connect or unlink actions and honestly shows absent accounts', () => {
