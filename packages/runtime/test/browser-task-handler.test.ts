@@ -82,3 +82,23 @@ it('projects closed-command snapshots as text and refs and refuses a declared-se
   expect(await handler.handle(args, context)).toMatchObject({ ok: false, code: 'rejected' });
   expect(cards).toBe(0);
 });
+
+it.each(['desk', 'source'] as const)('closes an unpublished native hold when %s admission/publication fails', async failure => {
+  const { browserTaskContinuity } = await import('../src/channels/browser-task-continuity');
+  const { syntheticCommandAdapter } = await import('../src/channels/browser-synthetic-commands');
+  let row: unknown = null, alive = false, posts = 0, closes = 0;
+  const driver = syntheticCommandAdapter({ origin: 'https://fixture.example', pageUrl: 'https://fixture.example/form', runId: 'run', submitRef: '#submit', transport: {
+    start: async () => { alive = true; return 'fake-id'; },
+    observe: async () => ({ url: 'https://fixture.example/form', text: 'Form', elements: [{ ref: 'value', tag: 'input', type: 'text', field: 'value', inForm: true }, { ref: '#submit', tag: 'button', type: 'submit', inForm: true }], form: { action: 'https://fixture.example/submit', method: 'POST', values: { value: 'synthetic' } } }),
+    execute: async (_id, command) => { if (command.operation === 'click') posts++; },
+    close: async () => { closes++; alive = false; }, absent: async () => !alive, verify: async () => null,
+  } });
+  const host = browserTaskContinuity({ enabled: true, ownerId: 'owner-a', taskId: 'run', manifestDigest: `sha256:${'a'.repeat(64)}`, driver, now: () => 100, newId: () => crypto.randomUUID(), admit: async () => 'grant',
+    store: { exclusive: work => work(), load: async () => row, save: async value => { row = value; } },
+  });
+  const handler = browserTaskHandler({ legacy: browseActHandler(undefined, undefined, undefined), host: async () => host, propose: async () => { throw Error('desk unavailable'); } });
+  let sourceChecks = 0;
+  const guardedContext = { authenticatedUserId: 'owner-a', assertTaskSourceCurrent: async () => { if (failure === 'source' && ++sourceChecks > 2) throw Error('source revoked'); } } as never;
+  expect(await handler.handle(browseActArgsSchema.parse({ url: host.pageUrl, task: 'read', command: { operation: 'click', element_ref: '#submit', intent: 'read' } }), guardedContext)).toMatchObject({ ok: false });
+  expect(posts).toBe(0); expect(closes).toBe(1); expect(alive).toBe(false); expect(row).toMatchObject({ phase: 'closed', session: { state: 'ended' } });
+});

@@ -20,6 +20,7 @@ export function browserTaskHandler(options: Readonly<{
     description: 'Browse a public page. Controlled synthetic commands are goto, click, type, scroll, read and wait with observed element refs. Native submit and Enter stop for owner approval. inspect, fill, prepare_submit, verify and cancel remain supported. Final submit always needs the owner approval desk; typed commands never fall back to a fresh browser.',
     async handle(args, context) {
       if (!args.command) return options.legacy.handle(args, context);
+      let unpublishedNativeHost: BrowserTaskHost | undefined;
       try {
         const source = context.assertTaskSourceCurrent;
         if (args.command.operation !== 'cancel') { if (!source) return rejected('Current task source admission is unavailable.'); await source(); }
@@ -30,7 +31,9 @@ export function browserTaskHandler(options: Readonly<{
         const command = args.command;
         let commandProposal: Awaited<ReturnType<BrowserTaskHost['propose']>> | undefined;
         if (['goto', 'click', 'type', 'scroll', 'read', 'wait'].includes(command.operation)) {
-          const result = await host.command(owner, command); await source!();
+          const result = await host.command(owner, command);
+          if (result.held && !result.reason) unpublishedNativeHost = host;
+          await source!();
           if (!result.held) return { ok: true, data: { url: result.snapshot.url, text: result.snapshot.text, elements: result.snapshot.elements }, source_taint: 'external' };
           if (result.reason) return rejected(result.reason === 'page_write_blocked' ? 'page_write_blocked: An unapproved page write was blocked. No approval card was created.' : 'declared_send_unsupported: Held without acting. This send is outside the controlled form submission, so no approval card was created.');
           commandProposal = result.proposal;
@@ -51,10 +54,13 @@ export function browserTaskHandler(options: Readonly<{
         await source!();
         const payload: BrowserSubmitProposal = { request: prepared.request, approvalExpiresAt: prepared.approvalExpiresAt, url: prepared.url, action: { selector: prepared.actionRef, method: 'click', description: 'Submit the prepared public form' }, binding: prepared.binding, steps: [], continuation: { version: 1, taskRef: host.taskRef, proposalId: prepared.id, scopeDigest: prepared.scopeDigest } };
         let proposalId: string;
-        try { proposalId = await options.propose(payload, context); await source!(); }
-        catch (cause) { if (commandProposal) await host.cancel(owner); throw cause; }
+        proposalId = await options.propose(payload, context); await source!();
+        unpublishedNativeHost = undefined;
         return { ok: true, data: { url: prepared.url, stopped: 'approval_pending', proposal_id: proposalId, binding: prepared.binding }, source_taint: 'external' };
-      } catch { return rejected('The browser task could not be observed or updated. Inspect its current state before trying again.'); }
+      } catch {
+        if (unpublishedNativeHost) { try { await unpublishedNativeHost.cancel(context.authenticatedUserId); } catch { /* Cleanup remains fenced and unresolved. */ } }
+        return rejected('The browser task could not be observed or updated. Inspect its current state before trying again.');
+      }
     },
   };
 }

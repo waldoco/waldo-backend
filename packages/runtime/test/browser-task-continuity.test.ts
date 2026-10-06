@@ -265,3 +265,21 @@ it('closes an exhausted synthetic approval hold instead of retaining a terminal 
   expect(f.counts()).toMatchObject({ submits: 0, ends: 1 });
   expect(f.row()).toMatchObject({ phase: 'closed', session: { state: 'ended' } });
 });
+it('repeated synthetic read commands retain the original session and approval deadline', async () => {
+  const f = fixture(), driver = { ...f.driver, command: async (_id: string, command: { operation: string }) => ({ held: command.operation === 'click', nativeSubmit: true }) };
+  const task = browserTaskContinuity({ ...f.options, driver });
+  const held = await task.command('owner-a', { operation: 'click', element_ref: 'submit' });
+  expect(held.held).toBe(true); const deadline = f.row().session.expiresAt;
+  for (const time of [10000, 20000]) { f.setTime(time); await task.command('owner-a', { operation: 'read' }); expect(f.row().session.expiresAt).toBe(deadline); }
+  await task.finishRun('owner-a'); expect(f.counts().ends).toBe(0);
+  f.setTime(deadline); await task.finishRun('owner-a'); expect(f.row().phase).toBe('closed');
+});
+it('failed synthetic proposal persistence closes the physical session rather than leaving an unpublished hold', async () => {
+  const f = fixture(), save = f.options.store.save;
+  let failed = false;
+  const task = browserTaskContinuity({ ...f.options, driver: { ...f.driver, command: async () => ({ held: true as const, nativeSubmit: true }) },
+    store: { ...f.options.store, save: async record => { if (!failed && record.phase === 'approval_pending') { failed = true; throw Error('proposal save failed'); } await save(record); } },
+  });
+  await expect(task.command('owner-a', { operation: 'click', element_ref: 'submit' })).rejects.toThrow('proposal save failed');
+  expect(f.counts()).toMatchObject({ submits: 0, ends: 1 }); expect(f.row().phase).toBe('closed');
+});

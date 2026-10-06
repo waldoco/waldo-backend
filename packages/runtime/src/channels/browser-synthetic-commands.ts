@@ -44,11 +44,14 @@ export function syntheticCommandAdapter(options: Readonly<{ origin: string; page
     permit = undefined; // One approved request, including concurrent page requests.
     return true;
   };
-  const isSubmitter = (element: SyntheticObservation['elements'][number]) => element.inForm && (element.tag === 'button' && (!element.type || element.type === 'submit') || element.tag === 'input' && ['submit', 'image'].includes(element.type ?? ''));
+  const isSubmitControl = (element: SyntheticObservation['elements'][number]) => element.tag === 'button' && (!element.type || element.type === 'submit') || element.tag === 'input' && ['submit', 'image'].includes(element.type ?? '');
+  const isSubmitter = (element: SyntheticObservation['elements'][number]) => element.inForm && isSubmitControl(element);
   const observe = async (id: string) => {
     const state = structuredClone(await transport.observe(id));
-    const submitters = state.elements.filter(isSubmitter);
-    if (submitters.length !== 1 || submitters[0]!.ref !== options.submitRef || state.url !== options.pageUrl || !sameSite(state.form.action) || state.form.method !== 'POST'
+    // DOM nesting alone cannot exclude a form=id association. Unknown external
+    // submit controls are outside this first fixture and rejected before effects.
+    const submitters = state.elements.filter(isSubmitControl);
+    if (submitters.length !== 1 || !submitters[0]!.inForm || submitters[0]!.ref !== options.submitRef || state.url !== options.pageUrl || !sameSite(state.form.action) || state.form.method !== 'POST'
       || !state.elements.length || state.elements.length > 32 || new Set(state.elements.map(element => element.ref)).size !== state.elements.length
       || Object.keys(state.form.values).length > 24 || !Object.keys(state.form.values).length
       || Object.entries(state.form.values).some(([key, value]) => !key || ['__proto__', 'constructor', 'prototype'].includes(key) || typeof value !== 'string' || value.length > 1000)

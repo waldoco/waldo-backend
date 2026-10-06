@@ -35,7 +35,7 @@ function sources(admission: OwnerMessageAdmission): ContextComposerDependencies 
 let sequence = 880000;
 async function browserProof(work: (h: {
   send(text: string): Promise<void>; approve(id: string, owner?: number): Promise<void>; deny(id: string): Promise<void>; readOnly(): void; submits(): number; present(): boolean; reload(): void; foreign(): void; stale(): void;
-  reloadAbsent(): void; failCleanup(): void; alarm(): Promise<void>; replyOnly(): void; pauseCleanup(): (() => void) & { reached: Promise<void> }; state: DurableObjectState; requests: LLMRequest[]; pauseInspect(): (() => void) & { reached: Promise<void> }; pauseLookup(): (() => void) & { reached: Promise<void> }; starts(): number; ends(): number; inspections(): number;
+  reloadAbsent(): void; failCleanup(): void; failFinishRunOnce(): void; alarm(): Promise<void>; replyOnly(): void; pauseCleanup(): (() => void) & { reached: Promise<void> }; state: DurableObjectState; requests: LLMRequest[]; pauseInspect(): (() => void) & { reached: Promise<void> }; pauseLookup(): (() => void) & { reached: Promise<void> }; starts(): number; ends(): number; inspections(): number;
 }) => Promise<void>, mode: 'enabled' | 'absent' | 'disabled' | 'factory_failed' | 'legacy_factory_failed' | 'journey' = 'enabled', ownerId = '10000000-0000-0000-0000-000000000001') {
   const subject = 81101, doName = `browser-do-proof-${++sequence}`;
   const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(doName));
@@ -99,8 +99,13 @@ async function browserProof(work: (h: {
     };
     const send = (text: string) => sendUpdate({ message: { message_id: sequence + 1, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text } }, text);
     const decide = (id: string, action: 'a' | 's', owner = subject) => sendUpdate({ callback_query: { id: `synthetic-callback-${sequence + 1}`, from: { id: owner }, data: `${action}:${id}`, message: { message_id: 1, chat: { id: subject, type: 'private' } } } }, '', owner === subject ? 200 : 403);
+    const failFinishRunOnce = () => {
+      const task = (instance as unknown as { browserTasks: { finishRun(): Promise<void> } }).browserTasks;
+      const original = task.finishRun;
+      task.finishRun = async () => { task.finishRun = original; throw Error('synthetic finishRun storage failure'); };
+    };
     const pause = (kind: 'inspect' | 'lookup') => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const slot = { enter, wait: new Promise<void>(resolve => { resume = resolve; }) }; if (kind === 'inspect') inspectPause = slot; else lookupPause = slot; return Object.assign(resume, { reached }); };
-    try { await work({ approve: (id, owner) => decide(id, 'a', owner), deny: id => decide(id, 's'), readOnly: () => { journeyCommands.splice(0, journeyCommands.length, { operation: 'read' }); }, submits: () => submits, present: () => present, pauseInspect: () => pause('inspect'), pauseLookup: () => pause('lookup'), send, state, requests, reloadAbsent: () => { instance = new TelegramOwnerDO(state, privateEnv, { mode: 'canonical', host }); }, failCleanup: () => { cleanupFails = true; }, alarm: () => instance.alarm(), replyOnly: () => { replyOnly = true; }, pauseCleanup: () => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const wait = new Promise<void>(resolve => { resume = resolve; }); endPause = { enter, wait }; return Object.assign(resume, { reached }); }, starts: () => starts, ends: () => ends, inspections: () => inspections, reload: () => { instance = construct(); }, foreign: () => { directory = { ...directory, owner_id: '10000000-0000-0000-0000-000000000002' }; }, stale: () => { directory = { ...directory, admission_revision: '9007199254740995' }; } }); }
+    try { await work({ failFinishRunOnce, approve: (id, owner) => decide(id, 'a', owner), deny: id => decide(id, 's'), readOnly: () => { journeyCommands.splice(0, journeyCommands.length, { operation: 'read' }); }, submits: () => submits, present: () => present, pauseInspect: () => pause('inspect'), pauseLookup: () => pause('lookup'), send, state, requests, reloadAbsent: () => { instance = new TelegramOwnerDO(state, privateEnv, { mode: 'canonical', host }); }, failCleanup: () => { cleanupFails = true; }, alarm: () => instance.alarm(), replyOnly: () => { replyOnly = true; }, pauseCleanup: () => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const wait = new Promise<void>(resolve => { resume = resolve; }); endPause = { enter, wait }; return Object.assign(resume, { reached }); }, starts: () => starts, ends: () => ends, inspections: () => inspections, reload: () => { instance = construct(); }, foreign: () => { directory = { ...directory, owner_id: '10000000-0000-0000-0000-000000000002' }; }, stale: () => { directory = { ...directory, admission_revision: '9007199254740995' }; } }); }
     finally { legacyModel.enabled = false; await state.storage.deleteAlarm(); noFetch.mockRestore(); }
   });
 }
@@ -350,5 +355,19 @@ it('actual synthetic approval expiry closes via the existing owner alarm and lat
     for (let n = 0; n < 30 && h.present(); n++) await new Promise(resolve => setTimeout(resolve, 5));
     expect(h.ends()).toBe(1); expect(h.present()).toBe(false);
     h.reload(); await h.approve(id); expect(h.submits()).toBe(0);
+  }, 'journey');
+});
+it('owner result survives finishRun failure while unresolved browser state stays fenced and logged', async () => {
+  await browserProof(async h => {
+    const logs = vi.spyOn(console, 'log');
+    try {
+      h.readOnly(); h.failFinishRunOnce();
+      await expect(h.send('Read the form and reply.')).resolves.toBeUndefined();
+      const entries = logs.mock.calls.flatMap(([value]) => { try { return [JSON.parse(String(value))]; } catch { return []; } });
+      expect(entries.some(entry => entry.hop === 'respond' && entry.ok === true)).toBe(true);
+      expect(entries).toContainEqual(expect.objectContaining({ hop: 'browser_cleanup', code: 'browser_cleanup_unresolved', ok: false }));
+      expect(h.submits()).toBe(0);
+      expect(await h.state.storage.get('browser_owner_task_revoked_v1')).toBe((await h.state.storage.get<import('@waldo/contracts').BrowserTaskCheckpoint>(BROWSER_TASK_KEY))!.taskId);
+    } finally { logs.mockRestore(); }
   }, 'journey');
 });

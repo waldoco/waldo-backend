@@ -194,7 +194,11 @@ export function browserTaskContinuity(options: Readonly<{
         if (!outcome.held && ['type', 'click', 'goto'].includes(command.operation)) await save({ ...counted, phase: 'active', proposal: null });
         return outcome;
       });
-      return result.held && result.nativeSubmit === false ? { held: true as const, reason: result.reason ?? 'declared_send_unsupported' as const } : result.held ? { held: true as const, proposal: await this.propose(authenticatedOwner) } : { held: false as const, snapshot: await this.inspect(authenticatedOwner) };
+      const proposeWithCleanup = async () => {
+        try { return await this.propose(authenticatedOwner); }
+        catch (cause) { await options.store.exclusive(() => cleanupAfterFailure(cause)); throw cause; }
+      };
+      return result.held && result.nativeSubmit === false ? { held: true as const, reason: result.reason ?? 'declared_send_unsupported' as const } : result.held ? { held: true as const, proposal: await proposeWithCleanup() } : { held: false as const, snapshot: await this.inspect(authenticatedOwner) };
     },
     async cancel(authenticatedOwner: string) { identity(authenticatedOwner); return options.store.exclusive(async () => end(await get())); },
     async reconcile(authenticatedOwner: string): Promise<BrowserSubmitOutcome> { identity(authenticatedOwner); return options.store.exclusive(async () => readback(await get())); },

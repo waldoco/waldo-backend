@@ -1243,7 +1243,16 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const parsed = await new TelegramPollingAdapter({ getUpdates: async () => [update] }, 0).poll(0);
       for (const inbound of parsed.accepted) { scope?.admit(); await listener.handle({ ...inbound, ...(scope ? { runScope: scope } : {}) }); }
     } else await listener.pollOnce(new TelegramPollingAdapter({ getUpdates: async () => [update] }, offset), 0);
-    } finally { await this.browserTasks.finishRun(); }
+    } finally {
+      try { await this.browserTasks.finishRun(); }
+      catch {
+        // Cleanup uncertainty cannot replace an already completed owner outcome.
+        // Keep the checkpoint and fence further actions; maintenance owns retry.
+        try { await this.browserTasks.revoke(); } catch { /* storage uncertainty remains unresolved */ }
+        const failure: TurnLogEntry = { trace: `${channel}-browser-cleanup`, hop: 'browser_cleanup', ms: 0, ok: false, code: 'browser_cleanup_unresolved', error: 'Browser cleanup failed; session absence remains unconfirmed.' };
+        try { log(failure); } catch { console.error(JSON.stringify(failure)); }
+      }
+    }
   }
 
   private async runHarness(command: NonNullable<ReturnType<typeof parseHarnessCommand>>, updateId: number): Promise<string> {

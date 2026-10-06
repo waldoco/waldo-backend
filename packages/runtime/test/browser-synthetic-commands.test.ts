@@ -167,3 +167,18 @@ it('reports an unsolicited blocked page write as a hold without a substituted su
   expect(writes).toBe(0); expect(cards).toBe(0);
   await gate.finishRun('owner'); expect(row).toMatchObject({ phase: 'closed' });
 });
+it('rejects ambiguous external submit controls before effects rather than trusting DOM nesting alone', async () => {
+  const f = fixture(), state = f.state();
+  f.set({ ...state, elements: [...state.elements, { ref: 'external-form-submit', tag: 'button', type: 'submit', inForm: false }] });
+  const id = await f.driver.start(600000);
+  await expect(f.driver.inspect(id)).rejects.toThrow('synthetic state rejected');
+  expect(f.effects()).toBe(0);
+});
+
+it('rejects a configured submitter whose form association is unsupported', async () => {
+  const f = fixture(), state = f.state();
+  f.set({ ...state, elements: state.elements.map(element => element.ref === '#submit' ? { ...element, inForm: false } : element) });
+  const id = await f.driver.start(600000);
+  await expect(f.driver.inspect(id)).rejects.toThrow('synthetic state rejected');
+  expect(f.effects()).toBe(0);
+});
