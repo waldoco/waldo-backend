@@ -75,7 +75,9 @@ describe('narrow controls read projection', () => {
   it('separates the last chat request from scheduled jobs in activity', () => {
     const lastRequest = { trace: 'tg-812', at: '2026-09-23 22:40', ok: false, partial: true, recorded_steps: 5, hops: [{ hop: 'llm_reply', ok: true, ms: 2140, note: '' }, { hop: 'memory', ok: false, ms: 20, note: 'bad json' }] };
     const result = projectControls({ ...SAMPLE_CONSOLE_VIEW, lastRequest }, 'activity');
-    expect(result.data.last_request).toEqual(lastRequest);
+    const { trace: _trace, ...visible } = lastRequest;
+    expect(result.data.last_request).toEqual(visible);
+    expect(JSON.stringify(result.data.last_request)).not.toContain('tg-812');
     expect(result.data.steps.map((step) => step.step)).not.toContain('Chat reply');
     expect(result.data.steps.map((step) => step.step)).not.toContain('Memory update');
     expect(result.data.steps.map((step) => step.step)).toContain('Reminder fired');

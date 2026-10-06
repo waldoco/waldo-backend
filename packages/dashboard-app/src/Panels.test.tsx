@@ -14,7 +14,7 @@ const waiting: WaitingRecord = { ...base, view: 'waiting', data: { timezone: nul
 ] } };
 const activity: ActivityRecord = { ...base, view: 'activity', data: {
   trace: [{ time: '10:00', hop: 'patrol_skip', ok: true, ms: 0, summary: 'Suppressed during quiet hours' }, { time: '11:00', hop: 'tool_attempt', ok: false, ms: 15, summary: '<script>failure</script>' }],
-  runs: [{ id: 'run1', kind: 'reminder', status: 'running', started: '10-02 11:00', ended: null, summary: null }], steps: [{ step: 'Google read', state: 'unseen', at: null, note: null }], last_request: { trace: 'tg-812', at: '2026-10-02 11:00', ok: false, partial: false, recorded_steps: 2, hops: [{ hop: 'llm_reply', ok: true, ms: 2140, note: '' }, { hop: 'memory', ok: false, ms: 20, note: 'bad json' }] },
+  runs: [{ id: 'run1', kind: 'reminder', status: 'running', started: '10-02 11:00', ended: null, summary: null }], steps: [{ step: 'Google read', state: 'unseen', at: null, note: null }], last_request: { at: '2026-10-02 11:00', ok: false, partial: false, recorded_steps: 2, hops: [{ hop: 'llm_reply', ok: true, ms: 2140, note: '' }, { hop: 'memory', ok: false, ms: 20, note: 'bad json' }] },
   page: { trace_before: 11, runs_before: 22, trace_applied: 33, runs_applied: 44 }, ledger: '<script>reminder text</script>',
 } };
 
