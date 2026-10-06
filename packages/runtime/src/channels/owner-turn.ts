@@ -1,3 +1,4 @@
+import { OWNER_REQUEST_HOP } from './harness';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { TASK_SOURCE_INSTRUCTION, TASK_SOURCE_SCHEMA, taskSourceAllowed, taskSourceRequired, taskSourcePrompt, type OwnerTaskSourceScope, type TaskSourceSnapshot, type TaskSourceFamily } from './task-source-scope';
@@ -983,6 +984,7 @@ export const createOwnerResponder = (
       await restored();
       const id = turn.traceId;
       traceId = id;
+      log({ trace: id, hop: OWNER_REQUEST_HOP, ms: 0, ok: true });
       interactiveSource = true;
       sourceAdmissionCalls = 0;
       forgetBatchesRemaining = MAX_TOOL_ROUNDS;
