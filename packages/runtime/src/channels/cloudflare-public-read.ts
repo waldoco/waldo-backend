@@ -72,6 +72,8 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
       browser = await bounded(connect);
       await admit();
       privateContext = await bounded(() => browser!.newContext({ serviceWorkers: 'block' }));
+      // route() sees HTTP only. A page script could otherwise open a WebSocket to any host, so every socket is closed before it connects to a server.
+      await bounded(() => privateContext!.routeWebSocket(() => true, socket => { void socket.close(); }));
       await bounded(() => privateContext!.route('**/*', async route => {
         try {
           await admit();
