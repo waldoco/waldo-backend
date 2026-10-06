@@ -49,6 +49,7 @@ export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
     step('Fetch update card', null), step('Pre-event brief', '2026-09-23 09:50', 'google not connected', 'failed'), step('Nightly memory', '2026-09-23 03:00', '12 turns; MEMORY_CORE'),
     step('Constellation promotion', '2026-09-23 03:00', 'nodes2 edges1 promoted1'),
   ],
+  lastRequest: null,
   trace: [
     { time: '22:40', trace: 'tg-812', hop: 'llm_reply', ok: true, ms: 2140, note: '' },
     { time: '22:40', trace: 'tg-812', hop: 'memory', ok: true, ms: 1320, note: '+1 held0 seen1 confirmed0 dismissed0 forgot0' },

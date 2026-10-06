@@ -72,6 +72,16 @@ describe('narrow controls read projection', () => {
     expect(result.data.proposals[0]?.review).toMatchObject({ kind: 'calendar_change', event_id: 'gym-1' });
   });
 
+  it('separates the last chat request from scheduled jobs in activity', () => {
+    const lastRequest = { trace: 'tg-812', at: '2026-09-23 22:40', ok: false, hops: [{ hop: 'llm_reply', ok: true, ms: 2140, note: '' }, { hop: 'memory', ok: false, ms: 20, note: 'bad json' }] };
+    const result = projectControls({ ...SAMPLE_CONSOLE_VIEW, lastRequest }, 'activity');
+    expect(result.data.last_request).toEqual(lastRequest);
+    expect(result.data.steps.map((step) => step.step)).not.toContain('Chat reply');
+    expect(result.data.steps.map((step) => step.step)).not.toContain('Memory update');
+    expect(result.data.steps.map((step) => step.step)).toContain('Reminder fired');
+    expect(projectControls({ ...SAMPLE_CONSOLE_VIEW, lastRequest: null }, 'activity').data.last_request).toBeNull();
+  });
+
   it('projects recorded activity summaries and pagination without raw trace fields', () => {
     const source = { ...SAMPLE_CONSOLE_VIEW, trace: [{ time: '12:00', trace: 'private-source-id', hop: 'tool_attempt', ok: false, ms: 20, note: 'Recorded failure', detail: 'secret-detail', error: 'secret-error' }], page: { trace_before: 10, runs_before: 5, trace_applied: 20, runs_applied: null } };
     const result = projectControls(source, 'activity');

@@ -34,21 +34,24 @@ export const parseHarnessCommand = (text: string | undefined): HarnessCommand | 
   return null;
 };
 
-// Each E2E step names the log hops that prove it ran.
-export const E2E_STEPS: readonly Readonly<{ step: string; hops: readonly string[] }>[] = [
-  { step: 'Chat reply', hops: ['llm_reply'] },
-  { step: 'Memory update', hops: ['memory'] },
-  { step: 'Memory migration', hops: ['memory_backup', 'memory_migration'] },
-  { step: 'Reminder fired', hops: ['reminder'] },
-  { step: 'Day plan', hops: ['day_plan'] },
-  { step: 'Brief / midday / close card', hops: ['day_card'] },
-  { step: 'Fetch update card', hops: ['update_card'] },
-  { step: 'Pre-event brief', hops: ['brief_sweep'] },
-  { step: 'Nightly memory', hops: ['nightly_memory'] },
-  { step: 'Constellation promotion', hops: ['constellation'] },
+// Each E2E step names the log hops that prove it ran. A 'request' step happens inside one chat turn's
+// trace; a 'job' step comes from a scheduled or background run and never shares a trace with a chat turn.
+export const E2E_STEPS: readonly Readonly<{ step: string; hops: readonly string[]; scope: 'request' | 'job' }>[] = [
+  { step: 'Chat reply', hops: ['llm_reply'], scope: 'request' },
+  { step: 'Memory update', hops: ['memory'], scope: 'request' },
+  { step: 'Memory migration', hops: ['memory_backup', 'memory_migration'], scope: 'job' },
+  { step: 'Reminder fired', hops: ['reminder'], scope: 'job' },
+  { step: 'Day plan', hops: ['day_plan'], scope: 'job' },
+  { step: 'Brief / midday / close card', hops: ['day_card'], scope: 'job' },
+  { step: 'Fetch update card', hops: ['update_card'], scope: 'job' },
+  { step: 'Pre-event brief', hops: ['brief_sweep'], scope: 'job' },
+  { step: 'Nightly memory', hops: ['nightly_memory'], scope: 'job' },
+  { step: 'Constellation promotion', hops: ['constellation'], scope: 'job' },
 ];
 
 export type E2EStep = Readonly<{ step: string; state: 'ok' | 'failed' | 'unseen'; at: string | null; note: string | null }>;
+// Every recorded hop of the newest chat turn, from that one trace. `ok` is false when any hop failed.
+export type LastRequest = Readonly<{ trace: string; at: string; ok: boolean; hops: readonly Readonly<{ hop: string; ok: boolean; ms: number; note: string }>[] }>;
 export type TraceRow = Readonly<{ time: string; trace: string; hop: string; ok: boolean; ms: number; note: string }>;
 
 export const traceBook = (sql: Sql, keep = 500) => {
@@ -121,6 +124,14 @@ export const traceBook = (sql: Sql, keep = 500) => {
         if (!row) return { step, state: 'unseen', at: null, note: null };
         return { step, state: row.ok ? 'ok' : 'failed', at: localIso(row.at, timezone).slice(0, 16).replace('T', ' '), note: row.note || null };
       });
+    },
+    // The newest chat turn is the newest trace that reached the reply model call (llm_reply is logged for failures too).
+    lastRequest(timezone: string): LastRequest | null {
+      const head = sql.exec<{ trace: string; at: number }>("SELECT trace, at FROM trace_log WHERE hop = 'llm_reply' ORDER BY id DESC LIMIT 1").toArray()[0];
+      if (!head) return null;
+      const hops = sql.exec<{ hop: string; ok: number; ms: number; note: string | null }>('SELECT hop, ok, ms, note FROM trace_log WHERE trace = ? ORDER BY id ASC', head.trace).toArray()
+        .map((row) => ({ hop: row.hop, ok: row.ok === 1, ms: row.ms, note: row.note ?? '' }));
+      return { trace: head.trace, at: localIso(head.at, timezone).slice(0, 16).replace('T', ' '), ok: hops.every((row) => row.ok), hops };
     },
     checklist(timezone: string): string {
       return this.steps(timezone).map(({ step, state, at, note }) => state === 'unseen' ? `[ ] ${step}: not seen`

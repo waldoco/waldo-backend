@@ -1,5 +1,6 @@
 import type { ApprovalReview } from './approvals';
 import { consoleMayApprove, type ConsoleView } from './console';
+import { E2E_STEPS } from './harness';
 
 export const CONTROLS_PATH = '/console/dashboard/api/v1/controls';
 export const CONTROLS_VIEWS = ['day', 'connections', 'waiting', 'activity', 'profile', 'setup', 'usage', 'files'] as const;
@@ -57,7 +58,9 @@ const projections = {
     }),
   }),
   activity: (view: ConsoleView) => ({
-    steps: view.steps.map((step) => ({ step: step.step, state: step.state, at: step.at, note: step.note })),
+    // steps are scheduled and background jobs only; the request pipeline is last_request, read from one trace.
+    steps: view.steps.filter((step) => E2E_STEPS.some((known) => known.step === step.step && known.scope === 'job')).map((step) => ({ step: step.step, state: step.state, at: step.at, note: step.note })),
+    last_request: view.lastRequest ? { trace: view.lastRequest.trace, at: view.lastRequest.at, ok: view.lastRequest.ok, hops: view.lastRequest.hops.map((hop) => ({ hop: hop.hop, ok: hop.ok, ms: hop.ms, note: hop.note })) } : null,
     trace: [...view.trace].reverse().map((row) => ({ time: row.time, hop: row.hop, ok: row.ok, ms: row.ms, summary: row.note || null })),
     runs: view.runs.map((run) => ({ id: run.id, kind: run.kind, status: run.status, summary: run.summary, started: run.started, ended: run.ended })),
     page: { trace_before: view.page?.trace_before ?? null, runs_before: view.page?.runs_before ?? null, trace_applied: view.page?.trace_applied ?? null, runs_applied: view.page?.runs_applied ?? null },

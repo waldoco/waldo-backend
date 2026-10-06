@@ -21,6 +21,28 @@ describe('owner harness', () => {
     expect(parseHarnessCommand(undefined)).toBeNull();
   });
 
+  it('reads the last request from one trace, not the newest row per step', async () => {
+    await withSql((sql) => {
+      const book = traceBook(sql, 50);
+      const at = Date.parse('2026-09-23T04:30:00Z');
+      book.record({ trace: 'tg-1', hop: 'llm_reply', ms: 900, ok: true }, at);
+      book.record({ trace: 'tg-1', hop: 'memory', ms: 400, ok: true }, at);
+      book.record({ trace: 'tg-2', hop: 'llm_reply', ms: 800, ok: false, error: 'model timeout' }, at + 60_000);
+      book.record({ trace: 'r-9', hop: 'reminder', ms: 10, ok: true }, at + 120_000);
+      const last = book.lastRequest('UTC');
+      expect(last).toEqual({ trace: 'tg-2', at: '2026-09-23 04:31', ok: false, hops: [{ hop: 'llm_reply', ok: false, ms: 800, note: 'model timeout' }] });
+      expect(traceBook(sql, 50).steps('UTC').find((step) => step.step === 'Memory update')?.state).toBe('ok');
+    });
+  });
+
+  it('has no last request before any chat reply was attempted', async () => {
+    await withSql((sql) => {
+      const book = traceBook(sql, 5);
+      book.record({ trace: 'r-9', hop: 'reminder', ms: 10, ok: true }, 1);
+      expect(book.lastRequest('UTC')).toBeNull();
+    });
+  });
+
   it('keeps a bounded trace and marks E2E steps from their latest hop', async () => {
     await withSql((sql) => {
       const book = traceBook(sql, 3);
