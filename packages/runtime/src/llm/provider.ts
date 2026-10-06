@@ -1532,6 +1532,7 @@ async function sanitiseRequest(
       ? 'external'
       : sourceTaint.data;
     const COMPACT_HEAD = 4_000;
+    const omittedTurns = new Set<number>();
     let batch = await sanitiseValue(kept, 'internal_context', batchTaint);
     while (!batch.ok && batch.error.reason === 'scribe:oversize') {
       // Compact the largest oversized turn. A verified stored-output id earns a retrieval promise in the receipt; without one the receipt says no copy exists. Never fail the run while a turn can still be trimmed.
@@ -1540,7 +1541,21 @@ async function sanitiseRequest(
         if (kept[i]!.output.length <= COMPACT_HEAD + 512) continue;
         if (pick === -1 || kept[i]!.output.length > kept[pick]!.output.length) pick = i;
       }
-      if (pick === -1) break;
+      if (pick === -1) {
+        // Many small turns that only overflow together: no single head can be trimmed, so the largest
+        // remaining turn becomes the existing omission receipt (it states the tool DID return N chars).
+        for (let i = 0; i < kept.length; i += 1) {
+          if (omittedTurns.has(i)) continue;
+          if (pick === -1 || kept[i]!.output.length > kept[pick]!.output.length) pick = i;
+        }
+        if (pick === -1) break;
+        const receipted = await omissionReceipt(kept[pick]!, 'scribe:oversize');
+        if (!receipted.ok) return { ok: false, error: receipted.error, scribeDestination: 'internal_context' };
+        kept[pick] = receipted.value;
+        omittedTurns.add(pick);
+        batch = await sanitiseValue(kept, 'internal_context', batchTaint);
+        continue;
+      }
       const compactedStore = storedReceiptOf(kept[pick]!);
       const compacted: LLMToolTurn = {
         ...kept[pick]!,

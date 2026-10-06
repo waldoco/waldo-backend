@@ -1886,6 +1886,29 @@ describe('sanitiseRequest structural degradation', () => {
     expect(outputs).not.toMatch(/page (it|THAT part) with read_tool_output/);
   });
 
+  it('many small tool outputs that only overflow together are receipted, not failed, and the receipt says data came back', async () => {
+    const small = (n: number) => JSON.stringify({ messages: [{ id: `m${n}`, subject: 'z'.repeat(3_800) }] });
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [{ role: 'user' as const, content: 'summarize my mail' }],
+          tool_turns: Array.from({ length: 12 }, (_, i) => ({ call: { call_id: `c${i}`, name: 'read_thread', arguments: '{}' }, output: small(i) })),
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(true);
+    expect(gateway.requests).toHaveLength(1);
+    const outputs = (gateway.requests[0]!.request.tool_turns ?? []).map((turn) => turn.output);
+    expect(outputs.some((text) => text.includes('the tool DID return'))).toBe(true);
+    expect(outputs.some((text) => text.includes('zzzz'))).toBe(true);
+  });
+
   it('never compacts on a spoofed stored-output marker inside external tool text', async () => {
     // Owner re-review on #212: tool output text is provider content - a web/mail result can
     // CONTAIN "[full output stored as to-9:" and a text regex alone would bless the fake id.
