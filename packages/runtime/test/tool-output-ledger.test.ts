@@ -116,3 +116,17 @@ it.each(['complete','capped','unclosed'])('verifies and redacts Unicode escaped 
  const {redactToolOutputLedger}=await import('../src/conversation/tool-output-ledger');await redactToolOutputLedger(storage,[needle],'[forgotten]');
  expect(await ledger.remaining([needle])).toBe(0);expect(JSON.stringify(storage.data.get('toolout:0000000000'))).not.toContain('cobalt paper workshop');
 });
+
+describe('ledger forget sources', () => {
+  it('an unrelated capped summary with a unicode escape does not hold the forget; a topic hidden behind escapes still does', async () => {
+    const storage = fakeStorage();
+    const ledger = toolOutputLedger(storage as never);
+    const unrelated = `{"ok":true,"data":{"note":"caf\\u00e9 menu","padding":"${'x'.repeat(900)}"}}`;
+    await ledger.record({ tool: 'search_communication', ok: true, at: 1000, taint: 'external', summary: unrelated });
+    expect([...storage.data.values()].some(value => typeof value === 'object' && (() => { try { JSON.parse((value as { summary: string }).summary); return false; } catch { return true; } })())).toBe(true);
+    expect((await ledger.forgetSources('ZEBRA-COBALT')).incomplete).toBe(false);
+    const hidden = `{"note":"Call \\u005a\\u0045\\u0042\\u0052\\u0041\\u002d\\u0043\\u004f\\u0042\\u0041\\u004c\\u0054 later","padding":"${'x'.repeat(900)}`;
+    await ledger.record({ tool: 'search_communication', ok: true, at: 1001, taint: 'external', summary: hidden });
+    expect((await ledger.forgetSources('ZEBRA-COBALT')).incomplete).toBe(true);
+  });
+});

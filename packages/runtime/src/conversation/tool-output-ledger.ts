@@ -81,7 +81,7 @@ const ledgerSourcesFromRows = (topic: string, rows: Iterable<[string, ToolOutput
         add(name); decoded(child);
       }
     };
-    try { decoded(JSON.parse(row.summary)); } catch { if (/\\u/i.test(row.summary)) incomplete = true; }
+    try { decoded(JSON.parse(row.summary)); } catch { /* A capped or otherwise unparseable summary is held only when its decoded text hides the topic (the safety line below); an unrelated \\u escape no longer holds every forget. */ if (hidesTopic(row.summary, topic)) incomplete = true; }
     // Shared safety line. A row whose decoded text carries the topic goes to the selector and its redaction re-serialises the row; any other row with a hiding escape (or the topic in a NUL-bearing string) cannot be proven clean from a parse, so it is held.
     if (sources.length === before && (hidesTopic(row.summary, topic) || (row.summary.includes('\0') && carriesTopic(row.summary, topic)))) incomplete = true;
   }
