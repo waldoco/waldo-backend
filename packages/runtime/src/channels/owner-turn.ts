@@ -831,13 +831,13 @@ export const createOwnerResponder = (
         if (selection) {
           const skipped = unspannedEpisodeRows(supplied, selection);
           if (skipped.length) {
-            let asked = 0;
+            let asked = 0; let dropped = 'none'; let threw = false;
             try {
               const second = await ask(id, 'forget_source', SELECTIVE_FORGET_SPAN_INSTRUCTION, JSON.stringify({ topic, sources: skipped }), { name: 'forget_source_spans', schema: SELECTIVE_FORGET_SCHEMA }, undefined, undefined, undefined, memoryModel);
               const merged = mergeSecondSpanPass(selection, skipped, second);
-              asked = merged.added; selection = merged.selection;
-            } catch (error) { if (error instanceof ClosedRunError) throw error; }
-            log({ trace: id, hop: 'forget_span_pass', ms: 0, ok: true, detail: JSON.stringify({ lines_rechecked: skipped.length, spans_returned: asked }) });
+              asked = merged.added; selection = merged.selection; dropped = merged.dropped ?? 'none';
+            } catch (error) { if (error instanceof ClosedRunError) throw error; threw = true; }
+            log({ trace: id, hop: 'forget_span_pass', ms: 0, ok: true, detail: JSON.stringify({ lines_rechecked: skipped.length, spans_returned: asked, dropped, call_threw: threw }) });
           }
         }
         await assertCurrent();
