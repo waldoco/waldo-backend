@@ -11,7 +11,7 @@ export function browserGate(options: BrowserGateOptions): BrowserGate {
     async command(owner, command) {
       identity(owner);
       const result = await host.command(owner, command);
-      if (!result.held) return result;
+      if (!result.held) return { held: false, snapshot: { url: result.snapshot.url, text: result.snapshot.text ?? '', elements: (result.snapshot.elements ?? []).map(({ ref }) => ({ ref })) } };
       if (result.reason) return { held: true, reason: result.reason };
       try {
         const approvalRef = await options.approvals.create(result.proposal);

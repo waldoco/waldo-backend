@@ -85,6 +85,8 @@ it('existing task and approval ledger bridge rejects foreign owner, binds actual
   await expect(gate.command('foreign', { operation: 'read' })).rejects.toThrow('unavailable');
   expect(f.effects()).toBe(0);
   const read = await gate.command('owner', { operation: 'read' }); expect(read.held).toBe(false);
+  if (read.held) throw Error('expected read');
+  expect(Object.keys(read.snapshot).sort()).toEqual(['elements', 'text', 'url']);
   const held = await gate.command('owner', { operation: 'click', element_ref: '#submit', intent: 'read' });
   expect(held.held).toBe(true); expect(created).toMatchObject({ request: { url: 'https://fixture.example/submit', method: 'POST', fields: ['value'] }, binding: { value: 'synthetic' }, approvalExpiresAt: 600100 });
   expect(created!.actionDigest).toBe(await fixtureDigest({ url: created!.url, actionRef: '#submit', method: 'click', request: created!.request, binding: created!.binding }));

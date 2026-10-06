@@ -1,7 +1,7 @@
 import type { BrowserTaskProposal, BrowserTaskCheckpoint } from '@waldo/contracts';
 import type { BrowserTaskDriver, BrowserTaskStore } from './browser-task-continuity';
 import type { BrowserSubmitOutcome } from '../tools/live/browser';
-import type { FixtureObservation, BrowserSourceGuard } from './public-fixture-browser';
+import type { BrowserSourceGuard } from './public-fixture-browser';
 export type BrowserGateCommand =
   | { operation: 'goto'; url: string; intent?: 'read' | 'send' }
   | { operation: 'click'; element_ref: string; intent?: 'read' | 'send' }
@@ -24,7 +24,7 @@ export type BrowserGateDriverPort = Readonly<{
 export type BrowserGateSessionDriver = BrowserTaskDriver & Readonly<{
   command(id: string, command: BrowserGateCommand, stateDigest: string, before: BrowserSourceGuard, source?: BrowserSourceGuard, assertCurrent?: () => void): Promise<{ held: boolean; nativeSubmit?: boolean }>;
 }>;
-export type BrowserGateCommandResult = { held: true; proposal: BrowserTaskProposal; approvalRef: string } | { held: true; reason: 'declared_send_unsupported' } | { held: false; snapshot: FixtureObservation };
+export type BrowserGateCommandResult = { held: true; proposal: BrowserTaskProposal; approvalRef: string } | { held: true; reason: 'declared_send_unsupported' } | { held: false; snapshot: Readonly<{ url: string; text: string; elements: readonly Readonly<{ ref: string }>[] }> };
 export type BrowserGate = Readonly<{
   command(owner: string, command: BrowserGateCommand): Promise<BrowserGateCommandResult>;
   approve(owner: string, proposalId: string, approvalRef: string): Promise<BrowserSubmitOutcome>;
