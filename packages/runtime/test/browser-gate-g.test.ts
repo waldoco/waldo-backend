@@ -163,11 +163,17 @@ describe('browser gate: seam delta from the 11:55 review', () => {
     heldOf(await t.gate.command(OWNER, click('send-submit')));
     expect(t.site.requests.filter((r) => r.method !== 'GET')).toEqual([]);
   });
-  it('G18 an approval that expires between the check and the execute does not post', async () => {
+  it('G18 an approval that expires between the check and the execute does not post, is never retried, and never reports success', async () => {
     const t = setup();
     const held = heldOf(await t.gate.command(OWNER, click('send-submit')));
     t.site.beforeEffect(() => { t.clock.now += 11 * 60 * 1000; });   // the clock passes expiry inside the final await
-    await refusedApproval(t.gate.approve(OWNER, held.proposal.id, held.approvalRef));
+    let outcome: { status?: string } | null = null; let error: Error | null = null;
+    try { outcome = await t.gate.approve(OWNER, held.proposal.id, held.approvalRef) as { status?: string }; } catch (e) { error = e as Error; }
+    if (error) expect(error.message).not.toMatch(/not implemented/);
+    // 'rejected' claims nothing happened; 'uncertain' is the honest state once a durable submit intent exists. Success states are never allowed.
+    else expect(['rejected', 'uncertain']).toContain(outcome?.status);
+    expect(t.site.posts()).toEqual([]);
+    await refusedApproval(t.gate.approve(OWNER, held.proposal.id, held.approvalRef));   // no retry with the same approval
     expect(t.site.posts()).toEqual([]);
   });
 });
