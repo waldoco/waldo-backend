@@ -356,3 +356,25 @@ it('bounded batch progress logs its count without topic text and tells the owner
     expect(system()).not.toContain('verified exact cleanup targets were removed');
   },undefined,undefined,sql=>facts.forEach((fact,i)=>episodeIndex(sql).add(`batch-${i}`,'owner',fact,i)));
 });
+
+// Layer: owner-turn fixture. While a forget is held, Waldo used to see only the last message, so a stuck forget wiped the whole conversation every turn.
+// Now only history entries that carry the held topic are left out; the rest of the conversation stays. Not covered: staging or a live model.
+it('a held forget leaves the unrelated conversation history in place and drops only the entry carrying the topic', async () => {
+  const topic = 'HIST-757-TOPIC';
+  const cannotVouch = JSON.stringify({ spans: [], reviewed_refs: [], complete: false });
+  await session('held-keeps-history', async (turn, store) => {
+    await turn('tg-h1', 'My locker code word is MARIGOLD-4271.', ops({}));
+    await turn('tg-h2', `The ${topic} plan changed to Friday.`, ops({}));
+    seen.writerOps.push(ops({ forget_topic: topic }));
+    await turn('tg-h3', `Forget only ${topic}.`, cannotVouch);
+    expect(store.incompleteTopics()).toEqual([topic]);
+    // Each later turn retries the held topic; the selector still cannot vouch, so the hold stays.
+    seen.writerOps.push(ops({}));
+    await turn('tg-h4', 'What did I say my locker code word was?', cannotVouch);
+    expect(store.incompleteTopics()).toEqual([topic]);
+    const sent = (JSON.parse(seen.replyInputs.at(-1)!) as { input: string }).input;
+    expect(sent).toContain('MARIGOLD-4271');
+    expect(sent).not.toContain('plan changed to Friday');
+    expect(sent).toContain('What did I say my locker code word was?');
+  }, undefined, undefined, sql => episodeIndex(sql).add('hist-src', 'owner', `${topic} likes cobalt paper`, 1));
+});

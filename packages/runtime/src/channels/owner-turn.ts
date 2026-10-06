@@ -467,6 +467,16 @@ export const createOwnerResponder = (
     const supportHeld = (raw: string): boolean => { try { const spots: unknown = JSON.parse(raw); return !Array.isArray(spots) || spots.some(id => typeof id !== 'number' || withheld.has(id) || (holding && !known.has(id))); } catch { return true; } };
     return memory!.nodes().filter(node => !holdsHeldTopic(...structuredStrings(node)) && !supportHeld(node.supporting_spots));
   };
+  // History under a hold: the conversation stays, minus entries that carry a held topic and entries that quote the text a withheld claim was saved from (the topic's fact under another name).
+  // The current request is always kept. If the claims cannot be read, only the current request is sent.
+  const heldHistory = <M extends { content: unknown }>(messages: readonly M[]): M[] => {
+    let quoted: string[];
+    try {
+      quoted = memory!.allClaims().filter(claim => holdsHeldTopic(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases))
+        .flatMap(claim => [claim.text, claim.evidence]).map(value => value.trim()).filter(value => value.length >= 12);
+    } catch { return messages.slice(-1); }
+    return messages.filter((message, index) => index === messages.length - 1 || !(holdsHeldTopic(...structuredStrings(message)) || structuredStrings(message).some(text => quoted.some(quote => text.includes(quote)))));
+  };
   const promptMemory = (): ClaimStore | undefined => memory && ({
     ...memory,
     nodes: () => promptNodes(),
@@ -636,7 +646,7 @@ export const createOwnerResponder = (
             canonicalPrompt = composition.prompt;
             composedSourceRevision = sourceSnapshot?.revision;
           }
-          const entries = forgettingState?.incompleteTopics().length ? [...request.messages.slice(-1)] : interactiveSource && requireTaskScope && !sourceFamilyAvailable('local') ? [...taskHistoryMessages(tree, trace, sourceSnapshot?.startRef ?? trace)] : [...request.messages];
+          const entries = forgettingState?.incompleteTopics().length ? heldHistory(request.messages) : interactiveSource && requireTaskScope && !sourceFamilyAvailable('local') ? [...taskHistoryMessages(tree, trace, sourceSnapshot?.startRef ?? trace)] : [...request.messages];
           const ownerCurrentText = (entries[entries.length - 1]?.content ?? '') + added;
           if (turnReplyContext) entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + '\n\n' + turnReplyContext };
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
