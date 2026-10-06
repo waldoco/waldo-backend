@@ -265,11 +265,11 @@ it('keeps partial or mismatched request coverage pending across restart and repe
   expect(request()).toContain('Recall is temporarily limited');
   expect(request()).not.toContain('verified exact cleanup targets were removed');
   await evictDurableObject(stub(name));
-  for (const [id, selection] of [[203, [`Forget only MEM-B-OTHER.`]], [204, [instruction]]] as const) {
+  for (const [id, selection, passes] of [[203, [`Forget only MEM-B-OTHER.`], 2], [204, [instruction], 1]] as const) {
     seen.selectedText = fact; seen.selectedTexts = [...selection];
     const before = seen.selectorInputs.length;
     await admittedTurn(name, id, 'Read unrelated preference only; do not change forgetting scope.', ops());
-    expect(seen.selectorInputs).toHaveLength(before + (id === 203 ? 2 : 1)); // 203: the chat line the first pass left without a span gets one second look
+    expect(seen.selectorInputs).toHaveLength(before + passes); // passes is 2 when the first pass leaves a chat line without a span (one second look), else 1
     expect(request()).toContain('Recall is temporarily limited');
     expect(request()).not.toContain('verified exact cleanup targets were removed');
     await runInDurableObject(stub(name), async (_instance, state) => {

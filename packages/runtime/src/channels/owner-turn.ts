@@ -849,7 +849,7 @@ export const createOwnerResponder = (
         const fresh = requestFresh === null ? null : { ...requestFresh, incomplete: requestFresh.incomplete || retainedFresh!.incomplete };
         const emptyRecovery = !supplied.incomplete && !supplied.more && supplied.sources.length === 0 && fresh !== null && !fresh.incomplete && !fresh.more && fresh.sources.length === 0;
         let rejectedBy = '';
-                let texts: readonly string[] | null = selection === null || fresh === null || supplied.more !== fresh.more ? null : emptyRecovery ? [] : (() => { const picked = selectedForgetResult(topic, supplied, selection, fresh); if ('texts' in picked) { return picked.texts; } rejectedBy = picked.reason; return null; })();
+        let texts: readonly string[] | null = selection === null || fresh === null || supplied.more !== fresh.more ? null : emptyRecovery ? [] : (() => { const picked = selectedForgetResult(topic, supplied, selection, fresh); if ('texts' in picked) { return picked.texts; } rejectedBy = picked.reason; return null; })();
         // The unsaved request is absent from durable readback. Prove its exact
         // retention projection is clean too; a single span cannot cover a mixed row.
         const complete = !supplied.more && fresh !== null && !fresh.more;
