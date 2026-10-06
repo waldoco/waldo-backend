@@ -322,8 +322,9 @@ it('the reply instructions carry the reason class of an incomplete forget, witho
     expect(system()).toContain('reason class: selection_rejected)');
     expect(system()).not.toMatch(/reason class: [a-z_]+\(/);
     expect(system()).not.toContain(topic);
-    expect(system()).toContain('the checked spans did not cover every copy');
-    expect(system()).not.toContain('some saved copies could not be fully read');
+    expect(system()).toContain('Hidden from Waldo\'s memory and recall. Stored copies remain until cleanup.');
+    expect(system()).not.toContain('did not cover every copy');
+    expect(system()).not.toContain('could not be fully read');
   }, undefined, undefined, sql => episodeIndex(sql).add('why4-src', 'owner', fact, 1));
 });
 it('a selector that cannot run is named selector_unavailable, and omitted coverage in a source batch is named selection_rejected', async () => {
@@ -351,7 +352,7 @@ it('bounded batch progress logs its count without topic text and tells the owner
     expect(store.topicCoverage(topic)).toBe(1);
     const hop=seen.logs.filter(entry=>(entry as {hop:string}).hop==='memory').at(-1) as {detail:string};
     expect(hop.detail).toContain('forget_incomplete batch_pending(64)');expect(hop.detail).not.toContain(topic);
-    expect(system()).toContain('reason class: batch_pending)');expect(system()).toContain('a bounded batch was checked');
+    expect(system()).toContain('reason class: batch_pending)');expect(system()).toContain('Stored copies remain until cleanup.');
     expect(system()).not.toContain('some saved copies could not be fully read');
     expect(system()).not.toContain('verified exact cleanup targets were removed');
   },undefined,undefined,sql=>facts.forEach((fact,i)=>episodeIndex(sql).add(`batch-${i}`,'owner',fact,i)));
