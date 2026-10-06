@@ -17,6 +17,6 @@ test('only GET, redirects refused, errors reveal status not body',async()=>{
 });
 test('auth absent cannot make request',async()=>await assert.rejects(readHistory('','togdshayyxycitzckpqv',()=>{throw Error('should not call');}),/auth_missing/));
 test('oversize history rejected',async()=>await assert.rejects(readHistory('fictional-token','togdshayyxycitzckpqv',async()=>new Response(' '.repeat(128*1024+1))),/history_oversize/));
-test('real committed manifest has digests and41 entries',()=>{const m=localManifest(new URL('../supabase/migrations/',import.meta.url));assert.equal(m.length,41);assert.equal(m.at(-1).version,'20261004190110');assert.equal(m.at(-1).sha256,'84878306387b8064a841215ed32c78b098ec8d2e569728e81f3d2616a3c1086d');assert.ok(m.every(x=>/^[a-f0-9]{64}$/.test(x.sha256)&&x.byteLength>0));});
+test('real committed manifest has digests and42 entries',()=>{const m=localManifest(new URL('../supabase/migrations/',import.meta.url));assert.equal(m.length,42);assert.equal(m.at(-1).version,'20261004190110');assert.equal(m.at(-1).sha256,'84878306387b8064a841215ed32c78b098ec8d2e569728e81f3d2616a3c1086d');assert.ok(m.every(x=>/^[a-f0-9]{64}$/.test(x.sha256)&&x.byteLength>0));});
 
 test('malformed provider content does not leak in parse error',async()=>await assert.rejects(readHistory('fictional-token','togdshayyxycitzckpqv',async()=>new Response('do-not-print-this-value')),/history_json/));
