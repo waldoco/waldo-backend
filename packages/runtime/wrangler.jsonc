@@ -71,7 +71,7 @@
       "name": "waldo-runtime-staging",
       "main": "src/staging-browser.ts",
       "compatibility_flags": ["nodejs_compat"],
-      "browser": { "binding": "BROWSER" },
+      // No "browser" binding here on purpose: staging browser reads stay OFF until the S0 network-block test passes (guard-wrangler-local-bindings.mjs enforces it).
       "observability": {
         "enabled": true,
         "logs": { "enabled": true, "invocation_logs": false },
