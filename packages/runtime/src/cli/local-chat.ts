@@ -162,7 +162,6 @@ async function runOpenAIChat(
     sourceTaint: null,
     toolArgSourceTaint: null,
     sanitise: safety.sanitise,
-    medicalGate: safety.medicalGate,
   });
   if (!result.ok) {
     return Object.freeze({

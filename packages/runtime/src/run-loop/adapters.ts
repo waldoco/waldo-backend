@@ -30,7 +30,6 @@ import type {
   TrustedGatewayAdapterResult,
   TrustedGatewayExecution,
 } from '../llm/provider';
-import { evaluateMedicalClaim } from '../scribe/medical-gate';
 import { sanitise } from '../scribe/sanitiser';
 import { productionDeps, type Deps } from '../seams/deps';
 import type { ResolvedSkillBudget } from '../skills/budget';
@@ -70,7 +69,7 @@ export type RunLoopEnv = {
 
 export type RunLoopSafetyCallbacks = Pick<
   HookRuntimeContext,
-  'rateLimitCheck' | 'hasApproval' | 'sanitise' | 'medicalGate'
+  'rateLimitCheck' | 'hasApproval' | 'sanitise'
 >;
 
 export type RunLoopSpendReader = {
@@ -719,7 +718,6 @@ function localPermissiveSafety(): RunLoopSafetyCallbacks {
     rateLimitCheck: () => true,
     hasApproval: () => true,
     sanitise,
-    medicalGate: evaluateMedicalClaim,
   };
 }
 
@@ -728,6 +726,5 @@ function failClosedSafety(): RunLoopSafetyCallbacks {
     rateLimitCheck: () => ({ ok: false, reason: 'rate limit check unconfigured', code: 'transient' }),
     hasApproval: () => false,
     sanitise,
-    medicalGate: evaluateMedicalClaim,
   };
 }

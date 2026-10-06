@@ -39,7 +39,7 @@ const model: JoinedConversationModel = {
       authenticatedUserId: ownerId, trigger: 'user_message',
       canaryTokens: ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'],
       sourceTaint: null, toolArgSourceTaint: null,
-      sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
+      sanitise: adapters.safety.sanitise,
     });
     if (!result.ok) throw new Error(`live model failed: ${result.code} ${JSON.stringify((result as { error?: unknown }).error ?? null).slice(0, 300)}`);
     return result.response.text;

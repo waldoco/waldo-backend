@@ -26,7 +26,7 @@ import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath, taskHistoryMessages } from '../conversation/joined-path';
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
-import { CLINICAL_REDIRECT, OWNER_TASK_SOURCE_PRECEDENCE, messagingSystemPrompt, ownerClockLine, withOwnerSkillProcedures, OWNER_SKILL_SAFEGUARDS } from '../prompt/messaging-behavior';
+import { OWNER_TASK_SOURCE_PRECEDENCE, messagingSystemPrompt, ownerClockLine, withOwnerSkillProcedures, OWNER_SKILL_SAFEGUARDS } from '../prompt/messaging-behavior';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { FORGOTTEN, applyClaimOps, type ClaimOutcome, applyPromotion, CLAIM_OPS_SCHEMA, exchangeInput, MEMORY_INSTRUCTION, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
@@ -83,10 +83,6 @@ export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTER
 const newSessionCanaryTokens = (): string[] =>
   Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
 const MAX_TOOL_ROUNDS = 25;
-const CLINICAL_FALLBACK = {
-  text: "I can't advise on that one. A doctor or pharmacist can. If this is an emergency or you feel unsafe, call your local emergency number now.",
-  input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, latency_ms: 0,
-};
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
@@ -209,7 +205,7 @@ export const createOwnerResponder = (
     authenticatedUserId: skills?.admission?.invocation.verified_authority.principal_ref ?? ownerId, trigger: 'user_message' as const, canaryTokens: CANARIES,
     sourceTaint: null, toolArgSourceTaint: null, egressAllowlist,
     hasApproval: ownerToolApproval,
-    sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
+    sanitise: adapters.safety.sanitise,
     // Typed store provenance for the provider's retrieval receipts (owner review on #212).
     ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
   };
@@ -243,7 +239,7 @@ export const createOwnerResponder = (
     try { return await work(); } finally { clearForgotten(); }
   };
   let expectedProcedure: string | undefined;
-  const complete = async (trace: string, purpose: string, system: string, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, clinicalRetried = false) => {
+  const complete = async (trace: string, purpose: string, system: string, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName) => {
     await assertCurrent();
     if (forgetUnsafe) throw new Error('forget context sanitisation failed');
     refreshPendingRedaction();
@@ -302,13 +298,6 @@ export const createOwnerResponder = (
       shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength },
       ...(metadataOnly ? {} : { text: { input, output: response!.text || JSON.stringify(response!.tool_calls), ...(reasoning ? { reasoning: forgetText(reasoning) } : {}) } }),
     });
-    if (!result.ok && result.halted_by === 'medical_gate' && !clinicalRetried) {
-      const redirected = system.endsWith(OWNER_SKILL_SAFEGUARDS)
-        ? `${system.slice(0, -OWNER_SKILL_SAFEGUARDS.length)}${CLINICAL_REDIRECT}\n\n${OWNER_SKILL_SAFEGUARDS}`
-        : `${system}\n\n${CLINICAL_REDIRECT}`;
-      return complete(trace, `${purpose}_redirect`, redirected, content, format, attachments, tools, turns, modelOverride, true);
-    }
-    if (!result.ok && result.halted_by === 'medical_gate') return { ...CLINICAL_FALLBACK, model };
     if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.destination, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);
     return response!;
   };

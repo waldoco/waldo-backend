@@ -24,13 +24,13 @@ describe('run-local responder fence',()=>{
  });
  it('tool loop refuses dispatch returned by a model after closure',async()=>{
   const f=scope();const handler=getContextHandler({timezone:'UTC',now:()=>new Date()});const handle=vi.fn(handler.handle);const a=resolveRunLoopAdapters({WALDO_ENV:'local'});const canaries=['0123456789abcdef','fedcba9876543210','0011223344556677'];
-  await expect(runToolLoop({handlers:[{...handler,handle}],maxSteps:2,ctx:{authenticatedUserId:'owner',trigger:'user_message',sourceTaint:null,toolArgSourceTaint:null,canaryTokens:canaries,sanitise:a.safety.sanitise,medicalGate:a.safety.medicalGate,session:buildSessionState({trigger:'user_message',canary_tokens:canaries,started_at:0}),runScope:f.capability},step:async()=>{f.close();return {text:'',tool_calls:[{call_id:'late',name:'get_context',arguments:'{}'}]};}})).rejects.toBeInstanceOf(ClosedRunError);expect(handle).not.toHaveBeenCalled();
+  await expect(runToolLoop({handlers:[{...handler,handle}],maxSteps:2,ctx:{authenticatedUserId:'owner',trigger:'user_message',sourceTaint:null,toolArgSourceTaint:null,canaryTokens:canaries,sanitise:a.safety.sanitise,session:buildSessionState({trigger:'user_message',canary_tokens:canaries,started_at:0}),runScope:f.capability},step:async()=>{f.close();return {text:'',tool_calls:[{call_id:'late',name:'get_context',arguments:'{}'}]};}})).rejects.toBeInstanceOf(ClosedRunError);expect(handle).not.toHaveBeenCalled();
  });
 });
 it('dispatcher rejects a paused post-close result before offload or PostToolUse publication',async()=>{
  const {dispatchTool}=await import('../src/tools/dispatcher');const {inMemoryToolOutputStore}=await import('../src/conversation/tool-output-store');const f=scope();const a=resolveRunLoopAdapters({WALDO_ENV:'local'});const canaries=['0123456789abcdef','fedcba9876543210','0011223344556677'];
  const store=inMemoryToolOutputStore();const put=vi.spyOn(store,'put');const handler=getContextHandler({timezone:'UTC',now:()=>new Date()});const post=vi.fn();
- const ctx={authenticatedUserId:'owner',trigger:'user_message' as const,sourceTaint:null,toolArgSourceTaint:null,canaryTokens:canaries,sanitise:a.safety.sanitise,medicalGate:a.safety.medicalGate,session:buildSessionState({trigger:'user_message',canary_tokens:canaries,started_at:0}),runScope:f.capability};
+ const ctx={authenticatedUserId:'owner',trigger:'user_message' as const,sourceTaint:null,toolArgSourceTaint:null,canaryTokens:canaries,sanitise:a.safety.sanitise,session:buildSessionState({trigger:'user_message',canary_tokens:canaries,started_at:0}),runScope:f.capability};
  await expect(dispatchTool({id:'paused',name:'get_context',args:{}},ctx,{handlers:[{...handler,handle:async()=>{f.close();return {ok:true,data:{huge:'x'.repeat(25000)},source_taint:null};}}],offload:store,extraHooks:[{event:'PostToolUse',name:'capture',priority:1,run:post}] as never})).rejects.toBeInstanceOf(ClosedRunError);expect(put).not.toHaveBeenCalled();expect(post).not.toHaveBeenCalled();
 });
 it('paused forget-history read cannot rewrite the replacement history after close',async()=>{
