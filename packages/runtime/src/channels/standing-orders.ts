@@ -69,10 +69,12 @@ export const standingOrderBook = (sql: Sql, scheduler: Scheduler, clock: OwnerCl
     byId: (id) => sql.exec<StandingOrder>('SELECT * FROM standing_orders WHERE id = ?', id).toArray()[0] ?? null,
     async cancel(id) {
       const known = scheduler.read(id)?.kind === 'standing_order';
-      if (known) await scheduler.cancel(id);
-      // A DELETE returns no rows, so whether the order existed is read before removing it.
+      // A DELETE returns no rows, so whether the order existed is read before removing it. The order row goes
+      // first: if the scheduler cancel then fails (rearm), the owner's order is already gone instead of left
+      // behind as an order that never fires.
       const existed = sql.exec('SELECT id FROM standing_orders WHERE id = ?', id).toArray().length > 0;
       sql.exec('DELETE FROM standing_orders WHERE id = ?', id);
+      if (known) await scheduler.cancel(id);
       return existed || known;
     },
   };

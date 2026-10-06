@@ -188,4 +188,15 @@ describe('standing order tools', () => {
     expect(base.cancelled).toEqual(['order:daily2']);
     expect(base.armed).toHaveLength(0); // no orphan recurring schedule is left armed
   });
+
+  it('cancel removes the order row even when the scheduler cancel then fails, and the failure still surfaces', async () => {
+    const sql = fakeSql();
+    const base = fakeScheduler();
+    const book = standingOrderBook(sql as never, base as never, clock, () => 'daily3');
+    await book.set({ scope: 'Summarize my day', trigger: 'daily', at: '21:00', gate: 'act_and_report', escalation: 'message_owner' });
+    const failing = { ...base, async cancel() { throw new Error('rearm rejected'); } };
+    const failingBook = standingOrderBook(sql as never, failing as never, clock, () => 'unused');
+    await expect(failingBook.cancel('order:daily3')).rejects.toThrow('rearm rejected');
+    expect(failingBook.byId('order:daily3')).toBeNull();
+  });
 });
