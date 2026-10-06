@@ -35,7 +35,6 @@ export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherCont
 
 // The model judges progress within hard round/shared budgets and run-scope fences.
 // Settled exact calls stay deduped; read-only transient failures get bounded recovery.
-export const READ_ATTEMPT_LIMIT = 3;
 export const WARN_WINDOW_ROUNDS = 5;
 
 // 'completed' means the model closed while resources remained. 'budget_exhausted'
@@ -64,13 +63,11 @@ export async function runToolLoop(input: Readonly<{
   const tools = toolDefinitions(input.handlers);
   const turns: LLMToolTurn[] = [];
   const seen = new Map<string, Awaited<ReturnType<typeof dispatch>>>();
-  const readAttempts = new Map<string, number>();
   const offered = new Set<string>();
   // Delivery URLs returned by successful tool receipts this loop; the final reply may show no other artifact link.
   const receiptUrls = new Set<string>();
-  // A landed mutation opens a new read epoch. Mutation replay keys and transient
-  // attempt counts survive epoch resets, so a state change cannot re-fire a write
-  // or replenish an identical read's recovery allowance.
+  // A landed mutation opens a new read epoch. Mutation replay keys survive resets,
+  // so a state change cannot re-fire a write. Recovery shares the finite round budget.
   const mutationTools = new Set(input.handlers.filter((h) => h.autonomy_gated || h.mutates_state).map((h) => h.name));
   let exit: LoopExit = 'completed';
   for (let round = 0; ; round += 1) {
@@ -98,8 +95,8 @@ export async function runToolLoop(input: Readonly<{
       const started = Date.now();
       const key = `${call.name}\u0000${call.arguments}`;
       const previous = seen.get(key);
-      // Preserve settled failures verbatim, including auth errors and the last
-      // transient error at the recovery cap. Replaying them performs no I/O.
+      // Preserve settled nonretryable failures and mutation failures verbatim.
+      // Replaying them performs no I/O; transient reads may retry within the budget.
       const result = previous
         ? previous.ok
           ? { ok: false, error: 'Same call already made this turn; use its result.', code: 'repeat_refusal' as const }
@@ -117,17 +114,14 @@ export async function runToolLoop(input: Readonly<{
         }
       }
       const mutation = mutationTools.has(call.name as never);
-      if (!previous && !mutation) readAttempts.set(key, (readAttempts.get(key) ?? 0) + 1);
-      if (mutation || result.ok || result.code !== 'transient' || (readAttempts.get(key) ?? 0) >= READ_ATTEMPT_LIMIT) {
+      if (mutation || result.ok || result.code !== 'transient') {
         seen.set(key, result);
       }
       const receipt = receiptUrl(call.name, result);
       if (receipt !== null) receiptUrls.add(receipt);
       if (result.ok && mutationTools.has(call.name as never)) {
-        for (const [seenKey, settled] of seen) {
-          const exhaustedRead = !settled.ok && settled.code === 'transient'
-            && (readAttempts.get(seenKey) ?? 0) >= READ_ATTEMPT_LIMIT;
-          if (!mutationTools.has(seenKey.slice(0, seenKey.indexOf('\u0000')) as never) && !exhaustedRead) seen.delete(seenKey);
+        for (const seenKey of seen.keys()) {
+          if (!mutationTools.has(seenKey.slice(0, seenKey.indexOf('\u0000')) as never)) seen.delete(seenKey);
         }
       }
       // Turn taint accumulation (ADR-0049): a result stamped external taints the rest of the

@@ -21,42 +21,30 @@ Sources:
 - https://docs.openclaw.ai/tools/loop-detection
 - https://github.com/openclaw/openclaw/pull/97485
 
-## What the field agrees on
+## Design principles
 
 - The model decides when it's done.
 - A cap is a safety budget, not a plan.
-- The real protection is detecting loops and no progress.
+- Finite resource budgets bound repeated work; usefulness is a model judgment.
 - When the budget runs out, the agent should still answer with what it has.
 
-## Waldo's choice
+## Waldo's current controls
 
 Code: `packages/runtime/src/conversation/tool-loop.ts`.
 
-- A turn runs until the model answers.
-- **Safety budget: 25 rounds per chat turn.** This is well above any chat task we have, and far below Hermes' 500. Hermes runs long coding tasks locally. Waldo answers in a Telegram chat, so long work belongs in scheduled or background runs (slice 2 onward), not in one reply.
-- **Repeat refusal:** an identical call (same tool, same arguments) is refused with a note to use the earlier result.
-- **No-progress stop:** after 3 rounds in a row where every call failed, tools are withdrawn.
-- **Always ends in words:** once the budget or the no-progress stop withdraws tools, the model gets one more call with no tools and must answer with what it has. This matches Hermes' summary at 100%.
-- Every call is still dispatched through the ACL, argument validation, taint gate and autonomy gate, and traced as its own Langfuse span.
+- A turn runs until the model answers or its hard resources are exhausted. The owner chat caller supplies a 25-round local/shared budget; children spend the same shared object. The loop accepts the caller's `maxSteps`, so a child can have a smaller local cap.
+- **Transient read recovery:** an identical non-mutating read that returns `code: transient` may dispatch again while round/shared budget and run authority remain. There is no additional per-read attempt cap. Every retry passes the dispatcher again and returns its actual typed outcome.
+- **Settled exact-call protection:** successful identical reads are refused with the earlier-result notice; nonretryable failures are returned from cache with an explicit no-new-execution notice. Exact mutation calls are never re-executed, including after a transient or ambiguous failure. A successful mutation opens a new read epoch without clearing mutation replay protection.
+- **Distinct identities:** dates, UUIDs, target IDs, cursors and revisions retain their bytes. Empty or repeated-looking results do not establish semantic no-progress. Failure counts never withdraw unrelated healthy tools.
+- **Hard exhaustion:** the local/shared round cap withdraws tools. The model receives a final no-tools closing step; tool calls returned by that step cannot dispatch. `onSettle` reports `budget_exhausted` instead of completion. If the model returns no closing text, the loop supplies an honest exhaustion notice.
+- **Empty authority ceiling:** when the handler set starts empty and budget remains, an illegal call receives one refusal-only round and one closing step. The refusal consumes shared round budget and performs no handler I/O. Repeated illegal requests cannot continue the loop or extend an exhausted budget.
+- **Run fences:** `runScope.admit()` checks remain before and after model/handler awaits. Deadline, cancellation and closed-run authority can stop recovery despite remaining rounds. Provider token enforcement remains outside this loop and is unchanged.
+- Dispatch still enforces authentication, ACLs, argument schemas, taint and approval gates. Output caps and final artifact-receipt guards remain in place.
 
-## Warn-first and no-progress guards (2026-09-26, harness parity review)
+## Warn-first budget notices
 
-Two guards join the cap and the failure withdrawal, chosen after comparing loop discipline
-across mature open harnesses (Hermes agent, OpenClaw, LangGraph, OpenHands):
+`WARN_WINDOW_ROUNDS = 5`. For local caps larger than that window, results carry the smaller of remaining local/shared rounds once it enters the final five rounds. The last result explicitly says the budget is exhausted. Tiny local fixture caps remain notice-free, but retain the same hard stop.
 
-- WARN_WINDOW_ROUNDS = 5 (warn-first): results delivered once the remaining budget enters the
-  last five rounds carry a `[budget: N tool rounds left this turn - wrap up and answer now]`
-  notice, so the model closes in words before tools are withdrawn instead of hitting a silent
-  hard stop. Precedent: Hermes injects budget warnings as ephemeral prompt layers; OpenClaw
-  warns before it blocks.
-- NO_PROGRESS_LIMIT = 3 (semantic no-progress): the same (tool, args, result) triple with only
-  volatile spans (ISO timestamps, uuid-shaped ids, 20+ char token runs such as cursors/request
-  ids) differing is counted across the turn; at three repeats the stabilized (tool, args) pair
-  is refused pre-dispatch until a successful mutation lands - autonomy-gated or a desk-routed
-  state mutation (mutates_state, the live handler class) - which opens a new state epoch and
-  clears the block. Small integers (page numbers, amounts)
-  survive stabilization, so legit pagination never trips it. Precedent: OpenClaw hashes tool
-  outcomes with volatile fields stripped for its rolling-history detectors.
+The former three-failed-round withdrawal and semantic no-progress normalization are removed. They could block distinct Calendar windows or a healthy recovery tool while budget remained. Read recovery uses the existing finite budgets rather than a replacement three-attempt rule.
 
-Kept as-is: TOOL_LOOP_MAX_ROUNDS (25, per chat turn - the same default LangGraph ships per graph
-execution) and FAILED_ROUNDS_LIMIT (3).
+`LoopExit` retains `withdrawn` for compatibility with the existing subagent consumer. This implementation emits `completed` when the model closes with resources available, or `budget_exhausted` when the hard round cap is reached; failures alone do not emit `withdrawn`. Neither exit certifies that the owner's task is complete: callers must preserve actual tool outcomes and partial-answer uncertainty.

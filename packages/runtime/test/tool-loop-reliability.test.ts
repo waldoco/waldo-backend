@@ -46,17 +46,26 @@ describe('bounded tool-loop read recovery', () => {
     expect(exit).toBe('completed');
   });
 
-  it('bounds identical transient read attempts and retains the last actual failure', async () => {
+  it('bounds identical transient reads by the hard round budget and keeps each actual error', async () => {
     let attempts = 0;
     const handler = calendar(async () => { throw Error(`synthetic timeout ${++attempts}`); });
-    const { events } = await journey([handler], Array.from({ length: 8 }, () => read));
-    expect(attempts).toBe(3);
-    expect(events).toHaveLength(8);
-    expect(events.slice(2).every((event) => event.code === 'transient' && event.error === 'synthetic timeout 3')).toBe(true);
-    expect(events[3]?.output).toContain('cached failure from this turn; no new tool execution');
+    const { events, exit } = await journey([handler], Array.from({ length: 8 }, () => read), 5);
+    expect(attempts).toBe(5);
+    expect(events).toHaveLength(5);
+    expect(events.map((event) => event.error)).toEqual([1, 2, 3, 4, 5].map((n) => `synthetic timeout ${n}`));
+    expect(exit).toBe('budget_exhausted');
   });
 
-  it('does not replenish transient attempts after a landed mutation', async () => {
+  it('recovers on the fourth identical read when the hard budget still permits it', async () => {
+    let attempts = 0;
+    const handler = calendar(async () => { if (++attempts <= 3) throw Error(`synthetic timeout ${attempts}`); return []; });
+    const { events, exit } = await journey([handler], [read, read, read, read], 5);
+    expect(attempts).toBe(4);
+    expect(events[3]?.ok).toBe(true);
+    expect(exit).toBe('completed');
+  });
+
+  it('a landed mutation cannot replenish the hard recovery budget', async () => {
     let attempts = 0;
     const handler = calendar(async () => { throw Error(`synthetic timeout ${++attempts}`); });
     const mutation = {
@@ -65,9 +74,11 @@ describe('bounded tool-loop read recovery', () => {
       autonomy_gated: false, mutates_state: true as const,
       handle: async () => ({ ok: true as const, data: { changed: true }, source_taint: null }),
     };
-    const { events } = await journey([handler, mutation], [read, read, read, { name: 'get_context', arguments: '{}' }, read]);
+    const { events, exit } = await journey([handler, mutation], [read, read, read, { name: 'get_context', arguments: '{}' }, read], 4);
     expect(attempts).toBe(3);
-    expect(events[4]).toMatchObject({ code: 'transient', error: 'synthetic timeout 3' });
+    expect(events).toHaveLength(4);
+    expect(events[3]?.ok).toBe(true);
+    expect(exit).toBe('budget_exhausted');
   });
 
   it('does not retry identical nonretryable auth errors and retains their cause', async () => {
