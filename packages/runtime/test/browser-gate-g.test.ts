@@ -183,6 +183,15 @@ describe('browser gate: request permit (fake request broker, not live firewall p
   });
 });
 
+describe('browser gate: Enter as a separate command', () => {
+  it('G21b type a value, then Enter as its own command: the Enter is held and nothing posts', async () => {
+    const t = setup();
+    expect((await t.gate.command(OWNER, { operation: 'type', element_ref: 'name', value: 'Ada' })).held).toBe(false);
+    heldOf(await t.gate.command(OWNER, { operation: 'type', element_ref: 'name', key: 'Enter' }));
+    expect(t.site.posts()).toEqual([]);
+  });
+});
+
 describe('browser gate: session lifecycle', () => {
   it('G14 finishing the run closes the session and reads back absence; a time limit stops the loop with an error', async () => {
     const t = setup();
