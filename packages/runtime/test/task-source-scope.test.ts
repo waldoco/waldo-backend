@@ -500,9 +500,7 @@ it('the owner\'s own reminder and standing-order lists need no retained-memory s
     expect(taskSourceRequired({ name }), `${name} is not a source read`).toBe(false);
     expect(taskSourceAllowed(web, { name }), `${name} on a task without local`).toBe(true);
   }
-  expect(taskSourceAllowed(web, { name: 'read_memory' }), 'the owner own saved context is readable on any settled task with a source').toBe(true);
-  const none = (await createTaskSourceScope(sql, 'owner-lists-none', scope, async () => {}, undefined, []).classify(decision('restrict', []))).snapshot;
-  expect(taskSourceAllowed(none, { name: 'read_memory' }), 'supplied-data-only still withholds it').toBe(false);
+  expect(taskSourceAllowed(web, { name: 'read_memory' }), 'retained memory still needs local').toBe(false);
 }));
 
 it('the own lists stay usable on an unready task and while an owner confirmation card is pending; retained memory and sources do not', () => run('task-own-lists-pending', async (sql, scope) => {
@@ -519,10 +517,11 @@ it('the own lists stay usable on an unready task and while an owner confirmation
   expect(taskSourceAllowed(proposed, { name: 'web_search' }), 'sources stay off behind the card').toBe(false);
 }));
 
-it('a settled task naming mail and calendar still reads the owner\'s own saved context; supplied-only does not', () => {
+it('the clock/date read needs no source family: it works on a mail+calendar task and a supplied-data-only task, while retained memory stays gated', () => {
   const settled = (sources: readonly string[]) => ({ ready: true, sources, revision: 1 }) as unknown as Parameters<typeof taskSourceAllowed>[0];
-  const getContext = { name: 'get_context' } as unknown as Parameters<typeof taskSourceAllowed>[1];
-  expect(taskSourceAllowed(settled(['mail', 'calendar']), getContext)).toBe(true);
-  expect(taskSourceAllowed(settled([]), getContext)).toBe(false);
-  expect(taskSourceAllowed(settled(['mail']), { name: 'query_calendar' } as unknown as Parameters<typeof taskSourceAllowed>[1])).toBe(false);
+  const handler = (name: string) => ({ name }) as unknown as Parameters<typeof taskSourceAllowed>[1];
+  expect(taskSourceRequired(handler('get_context'))).toBe(false);
+  expect(taskSourceAllowed(settled(['mail', 'calendar']), handler('get_context'))).toBe(true);
+  expect(taskSourceAllowed(settled([]), handler('get_context'))).toBe(true);
+  expect(taskSourceAllowed(settled(['mail', 'calendar']), handler('read_memory'))).toBe(false);
 });
