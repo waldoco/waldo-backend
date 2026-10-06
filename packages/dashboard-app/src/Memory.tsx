@@ -53,7 +53,7 @@ export function MemoryList({data,onNext,onRestart,returnTo,initialView,view:show
  <nav className="memory-pagination" aria-label="Memory list pages"><button onClick={onRestart}>First page</button><button disabled={!data.page.next_cursor} onClick={onNext}>Next page</button></nav></>;
  if(view==='graph'){
   const note=<><span>{data.page.returned} of {data.page.total} {patterns?'patterns':'Spots'} on this page</span>{data.page.next_cursor&&<button type="button" className="quiet" onClick={onNext}>Next page</button>}{(!data.complete||data.state!=='available')&&<button type="button" className="quiet" onClick={onRestart}>Refresh list</button>}</>;
-  return <><MemoryReadNotice data={data}/><MemoryMap key={data.view} focus={patterns?'patterns':'spots'} {...(patterns?{patterns:data.items.filter((item):item is Interpretation=>!('text' in item))}:{spots})} returnTo={returnTo} corner={<ViewToggle value={view} onChange={setView} calendar={!patterns}/>} note={note}/></>;
+  return <><MemoryReadNotice data={data}/><MemoryMap key={data.view} focus={patterns?'patterns':'spots'} read={data} {...(patterns?{patterns:data.items.filter((item):item is Interpretation=>!('text' in item))}:{spots})} returnTo={returnTo} corner={<ViewToggle value={view} onChange={setView} calendar={!patterns}/>} note={note}/></>;
  }
  return <><MemoryReadNotice data={data}/>{list}</>;
 }

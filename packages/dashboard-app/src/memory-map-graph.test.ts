@@ -26,3 +26,14 @@ it('hangs a chosen Spot on its first pattern and greys the others it supports', 
   expect(visible(model, 'c').nodes.map(n => [n.id, !!n.connected])).toEqual([[ROOT, false], ['p1', false], ['c', false], ['p2', true]]);
   expect(visible(model, 'loose').links.map(l => l.source)).toEqual([ROOT]);
 });
+it('distinguishes layout spokes, saved membership, and derived shared-support context',()=>{
+ const links=visible(model,'p1').links;
+ expect(links.find(l=>l.source===ROOT)?.relation).toBe('layout');
+ expect(links.find(l=>l.target==='a')?.relation).toBe('saved-support');
+ expect(links.find(l=>l.target==='p2')?.relation).toBe('shared-support');
+ expect(visible(model,'c').links.find(l=>l.target==='p2')?.relation).toBe('saved-support');
+});
+it('retains every returned pattern for inspection despite the visual cap',()=>{
+ const capped=buildModel(Array.from({length:16},(_,i)=>pattern('p'+i,[])),[]);
+ expect(capped.patterns).toHaveLength(12);expect(capped.allPatterns).toHaveLength(16);expect(capped.returnedPatterns).toBe(16);
+});
