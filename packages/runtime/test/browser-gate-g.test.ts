@@ -66,12 +66,24 @@ describe('browser gate: what runs and what holds', () => {
     expect(t.site.blockedWrites()).toHaveLength(1); // the write was attempted and aborted by the host
     expect(result.held).toBe(true);
   });
-  it('G7 the approval card comes from host-observed facts, not the model text', async () => {
+  it('G7 the approval card comes from host-observed facts; a model-supplied description is refused outright', async () => {
     const t = setup();
     await t.gate.command(OWNER, { operation: 'type', element_ref: 'name', value: 'Ada' });
-    const held = heldOf(await t.gate.command(OWNER, { ...click('send-submit'), description: 'just reading, nothing sent' } as unknown as BrowserGateCommand));
-    expect(JSON.stringify(held.proposal)).toContain('site.example/submit');
-    expect(JSON.stringify(held.proposal)).not.toContain('just reading');
+    const held = heldOf(await t.gate.command(OWNER, click('send-submit')));
+    expect(JSON.stringify(held.proposal)).toContain('site.example/submit');   // action from the observed form
+    expect(JSON.stringify(held.proposal)).toContain('name');                  // binding from observed values
+    const u = setup();
+    await refused(u.gate.command(OWNER, { ...click('send-submit'), description: 'just reading, nothing sent' } as unknown as BrowserGateCommand));
+    expect(u.site.requests.filter((r) => r.method !== 'GET')).toEqual([]);
+    expect(u.approvals.open.size).toBe(0);
+  });
+});
+
+describe('browser gate: empty values', () => {
+  it('G2b a form with an empty non-secret field still holds with a bound digest', async () => {
+    const t = setup();
+    const held = heldOf(await t.gate.command(OWNER, click('send-submit')));   // the fixture form starts with name=''
+    expect(held.proposal.actionDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 });
 
@@ -161,17 +173,20 @@ describe('browser gate: seam delta from the 11:55 review', () => {
 });
 
 describe('browser gate: request permit (fake request broker, not live firewall proof)', () => {
-  it('G19 one approval permits exactly one matching request', async () => {
+  it('G19 one approval permits exactly one request: the approved POST goes out once and a replay of the approval posts nothing', async () => {
     const t = setup();
     const held = heldOf(await t.gate.command(OWNER, click('send-submit')));
-        await t.gate.approve(OWNER, held.proposal.id, held.approvalRef);
+    const outcome = await t.gate.approve(OWNER, held.proposal.id, held.approvalRef);
+    expect((outcome as { status: string }).status).not.toBe('rejected');
     expect(t.site.posts()).toHaveLength(1);
-    heldOf(await t.gate.command(OWNER, click('send-submit')));        // the same request again needs a new approval
+    expect(t.site.posts()[0]!.body).toContain('name=');                  // the exact observed body, not a URL-only allow
+    await refusedApproval(t.gate.approve(OWNER, held.proposal.id, held.approvalRef));   // replay
     expect(t.site.posts()).toHaveLength(1);
   });
   it('G20 a redirect from an allowed GET to a write target is aborted', async () => {
     const t = setup();
-    t.site.redirectGotoTo(`${t.site.origin}/api/side-effect`);
+    await t.gate.command(OWNER, { operation: 'read' });                  // session and initial navigation first
+    t.site.redirectGotoTo(`${t.site.origin}/api/side-effect`);          // from here on a goto hops to a write target
     await t.gate.command(OWNER, { operation: 'goto', url: t.site.pageUrl }).catch(() => undefined);
     expect(t.site.blockedWrites()).toHaveLength(1);   // the redirect hop was attempted and refused by the host
     expect(t.site.posts()).toEqual([]);
