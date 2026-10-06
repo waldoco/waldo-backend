@@ -306,3 +306,31 @@ it('second look is merged when it is complete, reviewed exactly the skipped refs
   expect(merged.added).toBe(1);
   expect((JSON.parse(merged.selection) as { spans: unknown[] }).spans).toHaveLength(2);
 });
+
+// A retained claim keeps the owner's whole message as its evidence quote, so that quote can carry a topic the owner asked to forget about another claim.
+// The first pass may rightly give that row no span, but the row then needs the same second look episodes get, or one retained claim holds the forget for good.
+it('a claim evidence quote the first pass left without a span gets the second look, and the forget completes when that look spans it', () => {
+  const topic = 'oolong tea';
+  const rows = [
+    { ref: 'claims:1:text', text: 'Zed Quill likes oolong tea' },
+    { ref: 'claims:1:evidence', text: 'owner, tg-4: "Zed Quill keeps bees, and Zed Quill also likes oolong tea"' },
+    { ref: 'claims:2:evidence', text: 'owner, tg-4: "Zed Quill keeps bees, and Zed Quill also likes oolong tea"' },
+  ];
+  const snapshot = forgetSnapshot(topic, rows);
+  const first = JSON.stringify({ spans: [{ ref: 'claims:1:text', text: 'Zed Quill likes oolong tea' }, { ref: 'claims:1:evidence', text: 'Zed Quill also likes oolong tea' }], reviewed_refs: rows.map(row => row.ref), complete: true });
+  expect(selectedForgetResult(topic, snapshot, first, snapshot)).toEqual({ reason: 'row_without_span:claims' });
+  const skipped = unspannedEpisodeRows(snapshot, first);
+  expect(skipped.map(row => row.ref)).toEqual(['claims:2:evidence']);
+  const second = JSON.stringify({ spans: [{ ref: 'claims:2:evidence', text: 'Zed Quill also likes oolong tea' }], reviewed_refs: ['claims:2:evidence'], complete: true });
+  const merged = mergeSecondSpanPass(first, skipped, second);
+  expect(selectedForgetResult(topic, snapshot, merged.selection, snapshot)).toMatchObject({ texts: expect.arrayContaining(['Zed Quill also likes oolong tea']) });
+});
+
+it('a claim text row with no span still holds the forget, and is not sent to the second look', () => {
+  const topic = 'oolong tea';
+  const rows = [{ ref: 'claims:1:text', text: 'Zed Quill likes oolong tea' }];
+  const snapshot = forgetSnapshot(topic, rows);
+  const raw = JSON.stringify({ spans: [], reviewed_refs: ['claims:1:text'], complete: true });
+  expect(selectedForgetResult(topic, snapshot, raw, snapshot)).toEqual({ reason: 'row_without_span:claims' });
+  expect(unspannedEpisodeRows(snapshot, raw)).toEqual([]);
+});
