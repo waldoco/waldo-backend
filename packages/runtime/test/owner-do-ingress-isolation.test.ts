@@ -84,6 +84,11 @@ const traceIdentities = new Map<number, NonNullable<OwnerRoute['traceIdentity']>
 const route = (subject: number): OwnerRoute => ({ doName: `hermetic-owner-${subject}`, subject: String(subject), timezone: 'Asia/Kolkata',
   ...(traceIdentities.has(subject) ? { traceIdentity: traceIdentities.get(subject) } : {}) });
 const directory: OwnerDirectory = { byPresence: async (provider, subject) => provider === 'telegram' && ['81101', '81102', '81103', '81104'].includes(subject) ? route(Number(subject)) : null, redeem: async () => null };
+// On failure, name what is armed and what was sent (ids, kinds, methods; no message text) so a timing flake explains itself.
+const worldNote = (state: { storage: { sql: { exec(q: string): { toArray(): unknown[] } } } }) => {
+  const armed = state.storage.sql.exec("SELECT id, kind, status, due_at FROM schedule").toArray();
+  return `now=${Date.now()} schedule=${JSON.stringify(armed)} outbox=${JSON.stringify(outbox.map(item => [item.method, item.body.chat_id]))}`;
+};
 const send = async (subject: number, text: string, updateId: number, replyTo?: Record<string, unknown>) => {
   const pending: Promise<unknown>[] = [];
   const response = await handleTelegramWebhook(new Request('https://fixture.invalid/telegram/webhook', {
@@ -182,7 +187,7 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:59.999Z', '2026-10-04T18:
     expect(state.storage.kv.get<number>('interruption-fixture-effect-count')).toBe(1);
     // Same strict bound, but a failure names what called the model (a day plan, a reply, a memory pass) instead of only a count.
     const describeCall = (body: unknown) => { const b = body as { text?: { format?: { name?: string } }; instructions?: string; input?: unknown }; return `${b.text?.format?.name ?? 'unnamed'}: instr=${(typeof b.instructions === 'string' ? b.instructions : '').slice(0, 80)} | input=${JSON.stringify(b.input ?? '').slice(-260)}`; };
-    expect(modelInputs.slice(callsBefore).map(describeCall)).toEqual([]);
+    expect(modelInputs.slice(callsBefore).map(describeCall), worldNote(state)).toEqual([]);
     expect(await new TelegramOwnerInbox(state.storage, persistInboxWake).claim(`hermetic-test-bot-token:telegram:${updateId}`, 'retry', 'retry-run', Date.now() + 150_000)).toBeNull();
     await state.storage.deleteAlarm();
   });
@@ -447,8 +452,10 @@ describe('real owner-DO ingress in a sealed test world', () => {
     }
     expect(outbox.every((item) => item.method === 'setWebhook' || [81101, 81102].includes(Number(item.body.chat_id)))).toBe(true);
     const before = outbox.length;
+    const outboxBefore = JSON.stringify(outbox.map(item => [item.method, item.body.chat_id]));
     expect((await send(81101, 'My private fixture is cedar.', update)).status).toBe(200);
-    expect(outbox.length).toBe(before); // duplicate ingress cannot re-send effects
+    const worldAfter = await runInDurableObject(doStub(81101), async (_instance, state) => worldNote(state));
+    expect(outbox.length, `before=${outboxBefore} ${worldAfter}`).toBe(before); // duplicate ingress cannot re-send effects
     await runInDurableObject(doStub(81101), async (_instance, state) => {
       expect(state.storage.kv.get('telegram_subject')).toBe('81101');
     });
