@@ -1892,6 +1892,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       } finally { turnReceiptUrls.delete(trace); }
     };
+    // A blocked send (unlinked or rebound owner) returns no message. A producer must not record that as sent, completed or folded.
+    const sentOrThrow = async (sending: Promise<unknown>) => { if ((await sending) === undefined) throw new Error('telegram send blocked'); };
     // A7: a daily standing-order fire runs the same machine-turn path as a reminder. The gate
     // text inside the fire message carries the confirm_first semantics; escalation decides who
     // hears about a failure (copy names no model or provider).
@@ -1913,7 +1915,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             throw error;
           }
         })).trim();
-        if (text) await api.sendMessage({ chat_id: owner, text });
+        if (text) await sentOrThrow(api.sendMessage({ chat_id: owner, text }));
         runs.finish(run.id, 'completed', order.gate === 'confirm_first' ? 'confirm-first order asked' : 'order reported');
         log({ trace, hop: 'standing_order', ms: Date.now() - started, ok: true, detail: order.gate, text: { input: order.scope, output: text } });
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'standing_order' });
@@ -2135,7 +2137,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const sent = await briefBook.sweep(await google.client(), Date.now(), async (id, event, said) => {
           const at = Date.now();
           const text = (await responder.prompt(id, owner, said, async (hop, work) => work())).trim();
-          if (text) await api.sendMessage({ chat_id: owner, text });
+          if (text) await sentOrThrow(api.sendMessage({ chat_id: owner, text }));
           log({ trace: id, hop: 'event_brief', ms: Date.now() - at, ok: true, detail: event.id, text: { input: said, output: text } });
         });
         if (sent) log({ trace, hop: 'brief_sweep', ms: Date.now() - started, ok: true, detail: `${sent} sent` });
@@ -2213,7 +2215,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         const text = (await responder.prompt(trace, owner, said, async (hop, work) => work())).trim();
         const skipped = !text || isSkip(text);
-        if (!skipped) await api.sendMessage({ chat_id: owner, text });
+        if (!skipped) await sentOrThrow(api.sendMessage({ chat_id: owner, text }));
         plans.sent(localIso(entry.occurrence_at, clock.timezone).slice(0, 10), card.id);
         updates.fold(now);
         log({ trace, hop: 'day_card', ms: Date.now() - started, ok: true, detail: skipped ? `${card.id} skipped` : card.id, text: { input: said, output: text } });
