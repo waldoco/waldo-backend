@@ -164,6 +164,20 @@ it(`adversarial ordinary quoted steer is absent after successful raw topic cover
   expect(JSON.stringify(provider.input)).not.toContain(topic);
 });
 }
+it('a held topic does not blank recall of unrelated facts', async () => {
+  const name = 'held-topic-only-recall';
+  const topic = 'MEM-B-20261006-HELD';
+  const fact = `${topic} preference: synthetic held origami`;
+  await admittedTurn(name, 201, `${fact}. ${KEEP}.`, ops({ add: [add(fact), add(KEEP)] }));
+  seen.selectorThrows = true;
+  await admittedTurn(name, 202, `Forget only ${topic}. Keep my unrelated preference.`, ops({ forget_topic: topic }));
+  await runInDurableObject(stub(name), (_instance, state) => { expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]); });
+  await admittedTurn(name, 203, 'What unrelated preference remains?', ops());
+  expect(request()).toContain(KEEP);
+  expect(request()).not.toContain(fact);
+  expect(request()).not.toContain(topic);
+  seen.selectorThrows = false;
+});
 it('recovers incomplete topic forgetting on an ordinary turn after restart by redacting the exact retained forget instruction', async () => {
   const name = 'forget-request-recovery';
   const topic = 'MEM-B-20261004-CERULEAN';
@@ -340,7 +354,7 @@ it.each(['rejected', 'unavailable'])('preserves valid explicit-ID deletion when 
   expect(request()).toContain('removed 1 claim');
   expect(request()).toContain('incomplete');
   expect(request()).not.toContain(FORGET);
-  expect(request()).not.toContain(KEEP);
+  expect(request()).toContain(KEEP);
   await evictDurableObject(stub(name));
   await turn(name, 3, 'Read the current synthetic request only.', ops());
   expect(request()).toContain('Read the current synthetic request only.');
@@ -789,7 +803,7 @@ it.each(['literal','unicode','capped unicode'])('topic-only %s forgetting verifi
   expect(JSON.stringify(await kv.load())).toContain(TOPIC); expect(JSON.stringify(await ledger.recent())).toContain('cobalt paper workshop');
   memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work)); args[2] = memory;
   responder = createOwnerResponder(...args); seen.writer = ops(); await direct('t3','What remains relevant?',false);
-  expect(request()).not.toContain(TOPIC); expect(request()).not.toContain(KEEP);
+  expect(request()).not.toContain(TOPIC); expect(request()).toContain(KEEP);
   expect(JSON.stringify(await seen.toolSuppliers.at(-1)!())).not.toContain('cobalt paper workshop');
   expect(JSON.stringify(await seen.toolSuppliers.at(-1)!())).not.toContain(KEEP);
   expect(memory.incompleteTopics()).toEqual([TOPIC]);
@@ -803,7 +817,7 @@ it.each(['literal','unicode','capped unicode'])('topic-only %s forgetting verifi
     expect(JSON.stringify(await ledger.recent())).toContain('cobalt paper workshop');
     expect(request()).toContain('incomplete');
     expect(request()).not.toContain(FACT);
-    expect(request()).not.toContain(KEEP);
+    expect(request()).toContain(KEEP);
   } else {
     expect(memory.incompleteTopics()).toEqual([]);
     expect(JSON.stringify(await kv.load())).not.toContain(FACT);
@@ -866,7 +880,7 @@ it.each(['bare marker', 'Unicode topic'])('preserves %s originals and incomplete
     seen.writer = ops(); await direct('t3', 'Use this current request only.', false);
     expect(memory.incompleteTopics()).toEqual([TOPIC]);
     expect(JSON.stringify(await kv.load())).toContain(TOPIC);
-    expect(request()).not.toContain(TOPIC); expect(request()).not.toContain(KEEP);
+    expect(request()).not.toContain(TOPIC); expect(request()).toContain(KEEP);
     expect(request()).toContain('Use this current request only.');
   });
 });
@@ -1109,7 +1123,8 @@ for (const [mode, reason] of [
     await admittedTurn(name, 98001, 'What time is my unrelated standup?', ops());
     expect(request()).toContain(`reason class: ${reason}`);
     expect(request()).toContain('Recall is temporarily limited');
-    expect(request()).not.toContain(standup);
+    // A claim whose alias names the held topic is that topic's fact under another name, so it is withheld; every other standup stays.
+    if (mode === 'inventory-unsupported' || mode === 'fresh-unsupported') expect(request()).not.toContain(standup); else expect(request()).toContain(standup);
     if (mode === 'inventory-unsupported') expect(seen.selectorCalls).toHaveLength(0);
     else {
       expect(seen.selectorCalls).toHaveLength(mode === 'throws' ? 2 : 1);
@@ -1141,7 +1156,7 @@ it('healthy ordinary retry restores standup from durable owner memory with a hos
   const instruction = `Forget only ${topic}.`;
   await admittedTurn(name, 99001, instruction, ops({ forget_topic: topic }));
   expect(request()).toContain('reason class: selector_unavailable');
-  expect(request()).not.toContain(standup);
+  expect(request()).toContain(standup);
   await evictDurableObject(stub(name));
   seen.selectorThrows = false; seen.selectedTexts = [fact, instruction];
   await admittedTurn(name, 99002, 'What time is my standup?', ops());
@@ -1215,7 +1230,7 @@ it('65 distinct sources resume after a failed provider and reconstruction withou
   await admittedTurn(name,110001,'What time is my standup?',ops());
   expect(request()).toContain('reason class: selector_unavailable');
   expect(request()).toContain('did not raise forgetting');expect(request()).not.toContain('Say this one reason');
-  expect(request()).not.toContain(standup);
+  expect(request()).toContain(standup);
   await evictDurableObject(stub(name));
   seen.selectorThrows=false;seen.selectedTexts=facts;seen.selectorOutputMessage=true;
   seen.selectorCalls.length=0;
@@ -1224,7 +1239,7 @@ it('65 distinct sources resume after a failed provider and reconstruction withou
   expect(request()).toContain('reason class: batch_pending');
   expect(request()).toContain("did not raise forgetting");
   expect(request()).not.toContain('verified exact cleanup targets were removed from inspected retained copies');
-  expect(request()).not.toContain(standup);
+  expect(request()).toContain(standup);
   await runInDurableObject(stub(name),(_instance,state)=>{
     const memory=claimStore(state.storage.sql); expect(memory.incompleteTopics()).toEqual([topic]);
     expect(memory.topicCoverage(topic)).toBe(1); expect(memory.pendingTopics()).toEqual([]);
@@ -1271,14 +1286,14 @@ it('129 distinct sources make bounded progress across three reconstructed owner 
       expect(memory.incompleteTopics()).toEqual(step<2?[topic]:[]);
       expect(memory.pendingTopics()).toEqual([]);
     });
-    if(step<2){expect(request()).toContain('reason class: batch_pending');expect(request()).not.toContain(standup);}
+    if(step<2){expect(request()).toContain('reason class: batch_pending');expect(request()).toContain(standup);}
     else {expect(request()).toContain(standup);expect(request()).not.toContain('Recall is temporarily limited');}
   }
 });
 it('65 duplicate copies require durable partial custody then complete empty readback',async()=>{
   const name='memory-batches-duplicates';const {topic,standup}=await pendingBatchFixture(name,65,true);
   await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
-  expect(request()).toContain('reason class: batch_pending');expect(request()).not.toContain(standup);
+  expect(request()).toContain('reason class: batch_pending');expect(request()).toContain(standup);
   await runInDurableObject(stub(name),(_instance,state)=>{
     const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([topic]);
     expect(memory.forgetSources(topic)).toEqual({sources:[],incomplete:false});
@@ -1300,7 +1315,7 @@ for(const change of ['first-page','off-page'] as const){
       };
     });
     await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
-    expect(request()).not.toContain(standup);
+    expect(request()).toContain(standup);
     expect(request()).toContain(`reason class: ${change==='first-page'?'selection_rejected':'batch_pending'}`);
     await runInDurableObject(stub(name),(_instance,state)=>{
       const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([topic]);
@@ -1325,7 +1340,7 @@ it('failed retained cleanup retains exact batch custody and resumes after recons
   });
   await evictDurableObject(stub(name));seen.selectorCalls.length=0;
   await admittedTurn(name,120002,'Continue my pending cleanup.',ops());
-  expect(seen.selectorCalls).toHaveLength(0);expect(request()).toContain('reason class: cleanup_pending');expect(request()).not.toContain(standup);
+  expect(seen.selectorCalls).toHaveLength(0);expect(request()).toContain('reason class: cleanup_pending');expect(request()).toContain(standup);
   seen.failCleanup=false;await evictDurableObject(stub(name));
   await admittedTurn(name,120003,'What time is my standup?',ops());
   await runInDurableObject(stub(name),(_instance,state)=>{
@@ -1344,7 +1359,7 @@ it('final independent readback rejects a new source arriving after selector auth
     const memory=claimStore(state.storage.sql);expect(memory.incompleteTopics()).toEqual([topic]);
     expect(memory.topicCoverage(topic)).toBe(2);expect(memory.forgetSources(topic).sources.map(row=>row.text)).toEqual([late]);
   });
-  expect(request()).toContain('Recall is temporarily limited');expect(request()).not.toContain(standup);
+  expect(request()).toContain('Recall is temporarily limited');expect(request()).toContain(standup);
   seen.selectedTexts.push(late);await evictDurableObject(stub(name));
   await admittedTurn(name,120002,'What time is my standup?',ops());
   expect(request()).toContain(standup);
@@ -1372,7 +1387,7 @@ for(const action of ['explicit-forget','new-add'] as const){
     expect(request()).toContain('reason class: batch_pending');
     expect(request()).not.toContain('verified exact cleanup targets were removed from inspected retained copies');
     expect(request()).toContain('requested topic cleanup is pending');
-    expect(request()).not.toContain(standup);
+    expect(request()).toContain(standup);
     await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]));
     await evictDurableObject(stub(name));
     await admittedTurn(name,120002,'Finish the pending cleanup.',ops());
@@ -1411,7 +1426,7 @@ it('batched conversation and retained ledger copies reach full readback without 
         expect((await toolOutputLedger(state.storage).forgetSources(topic)).sources).toEqual([]);
       }
     });
-    if(step<2)expect(request()).not.toContain(standup);else expect(request()).toContain(standup);
+    if(step<2)expect(request()).toContain(standup);else expect(request()).toContain(standup);
   }
 });
 
@@ -1426,7 +1441,7 @@ it('200 distinct sources complete across four bounded reconstructed turns',async
       expect(memory.forgetSourceBatch(topic).sources).toHaveLength(Math.max(0,Math.min(64,remaining)));
       expect(memory.pendingTopics()).toEqual([]);expect(memory.incompleteTopics()).toEqual(step<3?[topic]:[]);
     });
-    if(step<3){expect(request()).toContain('reason class: batch_pending');expect(request()).not.toContain(standup);}
+    if(step<3){expect(request()).toContain('reason class: batch_pending');expect(request()).toContain(standup);}
     else {expect(request()).toContain(standup);expect(request()).not.toContain('Recall is temporarily limited');}
   }
 });
@@ -1447,7 +1462,7 @@ it('an inventory over 8 KiB completes through byte-bounded pages instead of a pe
     const body=seen.selectorCalls[0] as {input:string};const supplied=JSON.parse(body.input.slice(body.input.indexOf('{')));
     expect(new TextEncoder().encode(JSON.stringify(supplied)).byteLength).toBeLessThanOrEqual(8192);
     await runInDurableObject(stub(name),(_instance,state)=>expect(claimStore(state.storage.sql).incompleteTopics()).toEqual(step===0?[topic]:[]));
-    if(step===0){expect(request()).toContain('reason class: batch_pending');expect(request()).not.toContain(standup);}
+    if(step===0){expect(request()).toContain('reason class: batch_pending');expect(request()).toContain(standup);}
     else expect(request()).toContain(standup);
   }
 });
@@ -1458,7 +1473,7 @@ it('a stale page cannot erase a newly changed unrelated clause in the same sourc
     seen.onSelector=()=>{seen.onSelector=undefined;state.storage.sql.exec('UPDATE episodes SET text = ? WHERE entry_id = ?',`${facts[0]}. ${keep}.`,'b0');};
   });
   await admittedTurn(name,120001,'Continue my pending cleanup.',ops());
-  expect(request()).toContain('reason class: selection_rejected');expect(request()).not.toContain(standup);
+  expect(request()).toContain('reason class: selection_rejected');expect(request()).toContain(standup);
   await runInDurableObject(stub(name),(_instance,state)=>expect(episodeIndex(state.storage.sql).get('3')?.text).toBe(`${facts[0]}. ${keep}.`));
   for(let retry=0;retry<2;retry++){await evictDurableObject(stub(name));await admittedTurn(name,120002+retry,'Finish the pending cleanup.',ops());}
   await runInDurableObject(stub(name),(_instance,state)=>{
@@ -2809,4 +2824,161 @@ it.each(['', '\0'])('ROUND4 empty separator collateral %j',async gap=>{
  const after=JSON.parse(sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes);console.log('ROUND4-SPACE',JSON.stringify({gap,after}));
  state.storage.deleteAlarm();expect(store.forgetSources(topic,true).incomplete).toBe(false);expect(after[0]).toBe(items[0]);expect(after[4]).toBe(items[4]);
  });
+});
+
+it('REVIEW862 serialized retained results cannot conceal a held topic', async () => {
+  await runInDurableObject(stub('review862-encoded-tool'), async (_instance, state) => {
+    const TOPIC = 'Synthetic cobalt paper workshop';
+    const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const kv = durableConversationStore(state.storage);
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', kv, memory];
+    args[11] = async () => { throw new Error('fixture retained cleanup unavailable'); };
+    const episodes = episodeIndex(state.storage.sql);
+    args[5] = [(await import('../src/tools/live/search-episodes')).searchEpisodesHandler(episodes)];
+    const responder = createOwnerResponder(...args);
+    const direct = (id: string, text: string) => responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text, memoryWrites: false }, (_hop, work) => work());
+    seen.writer = ops(); await direct('a1', TOPIC);
+    episodes.add('encoded-row','owner','\\u0053ynthetic cobalt paper workshop meets at 09:10 UTC',Date.now());
+    seen.selectorThrows = true; seen.writer = ops({forget_topic: TOPIC});
+    await responder.respond({traceId:'forget-a1',conversationRef:'owner',surface:'telegram',text:`Forget only ${TOPIC}.`},(_hop,work)=>work());
+    expect(memory.incompleteTopics()).toContain(TOPIC);
+    const ref = String(state.storage.sql.exec<{ref:number}>("SELECT rowid AS ref FROM episodes WHERE entry_id='encoded-row'").one().ref);
+    expect(episodes.get(ref)?.text).toContain('\\u0053ynthetic');
+    let round = 0;
+    seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'review862-encoded', name: 'search_episodes', arguments: JSON.stringify({ref}) }] : [];
+    await direct('a2', 'Read retained workshop material.');
+    const provider = seen.requests.at(-1) as { input: Array<{type:string;call_id?:string;output?:string}> };
+    const output = JSON.parse(provider.input.find(item => item.type === 'function_call_output' && item.call_id === 'review862-encoded')!.output!);
+    console.log('REVIEW862 receipt',JSON.stringify(output)); expect(output).toMatchObject({ok:false,code:'transient'});
+  });
+});
+it('REVIEW862 mixed result preserves unrelated rows', async () => {
+  await runInDurableObject(stub('review862-mixed-tool'), async (_instance, state) => {
+    const TOPIC = 'Synthetic cobalt paper workshop';
+    const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const kv = durableConversationStore(state.storage);
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', kv, memory];
+    args[11] = async () => { throw new Error('fixture retained cleanup unavailable'); };
+    const episodes = episodeIndex(state.storage.sql);
+    args[5] = [(await import('../src/tools/live/search-episodes')).searchEpisodesHandler(episodes)];
+    const responder = createOwnerResponder(...args);
+    const direct = (id: string, text: string) => responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text, memoryWrites: false }, (_hop, work) => work());
+    seen.writer = ops(); await direct('a1', TOPIC);
+    seen.selectorThrows = true; seen.writer = ops({forget_topic: TOPIC});
+    await responder.respond({traceId:'forget-a1',conversationRef:'owner',surface:'telegram',text:`Forget only ${TOPIC}.`},(_hop,work)=>work());
+    expect(memory.incompleteTopics()).toContain(TOPIC);
+    episodes.add('held-row','owner',TOPIC+' workshop',Date.now());
+    episodes.add('clean-row','owner','Unrelated workshop preference: amber bookmarks',Date.now());
+    let round = 0;
+    seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'review862-encoded', name: 'search_episodes', arguments: JSON.stringify({query:'workshop',limit:10}) }] : [];
+    await direct('a2', 'Read retained workshop material.');
+    const provider = seen.requests.at(-1) as { input: Array<{type:string;call_id?:string;output?:string}> };
+    const output = JSON.parse(provider.input.find(item => item.type === 'function_call_output' && item.call_id === 'review862-encoded')!.output!);
+    console.log('REVIEW862 mixed receipt',JSON.stringify(output)); expect(output).toMatchObject({ok:true});
+    expect(JSON.stringify(output)).toContain('amber bookmarks');
+    expect(JSON.stringify(output)).not.toContain(TOPIC);
+  });
+});
+it('a search hit whose source row cannot be read back is dropped, not kept', async () => {
+  await runInDurableObject(stub('review862-failclosed'), async (_instance, state) => {
+    const TOPIC = 'Synthetic cobalt paper workshop';
+    const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const kv = durableConversationStore(state.storage);
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', kv, memory];
+    args[11] = async () => { throw new Error('fixture retained cleanup unavailable'); };
+    const episodes = episodeIndex(state.storage.sql);
+    const real = (await import('../src/tools/live/search-episodes')).searchEpisodesHandler(episodes);
+    args[5] = [{ ...real, handle: async (input: { ref?: string }, ctx: never) => input.ref === undefined
+      ? { ok: true, data: { hits: [{ ref: '999', entry_id: 'ghost', speaker: 'owner', at: null, snippet: 'Synthetic [cobalt] paper workshop ghost' }, { ref: 'x', entry_id: 'noref' }] }, source_taint: 'external' }
+      : real.handle(input as never, ctx) } as never];
+    const responder = createOwnerResponder(...args);
+    const direct = (id: string, text: string) => responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text, memoryWrites: false }, (_hop, work) => work());
+    seen.writer = ops(); await direct('a1', TOPIC);
+    seen.selectorThrows = true; seen.writer = ops({ forget_topic: TOPIC });
+    await responder.respond({ traceId: 'forget-a1', conversationRef: 'owner', surface: 'telegram', text: `Forget only ${TOPIC}.` }, (_hop, work) => work());
+    expect(memory.incompleteTopics()).toContain(TOPIC);
+    let round = 0;
+    seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'review862-ghost', name: 'search_episodes', arguments: JSON.stringify({ query: 'ghost', limit: 10 }) }] : [];
+    await direct('a2', 'Read retained ghost material.');
+    const provider = seen.requests.at(-1) as { input: Array<{ type: string; call_id?: string; output?: string }> };
+    const output = provider.input.find(item => item.type === 'function_call_output' && item.call_id === 'review862-ghost')!.output!;
+    expect(JSON.parse(output)).toMatchObject({ ok: true, data: { hits: [], withheld_items: 2 } });
+    expect(output).not.toContain('cobalt');
+  });
+});
+it('read_owner_context with a held claim returns the unrelated claims and not the held one', async () => {
+  const name = 'held-claim-owner-context';
+  const topic = 'MEM-B-20261006-CTXHELD';
+  const fact = `${topic} preference: synthetic held origami at the reading desk`;
+  await admittedTurn(name, 231, `${fact}. ${KEEP}.`, ops({ add: [add(fact), add(KEEP)] }));
+  seen.selectorThrows = true;
+  await admittedTurn(name, 232, `Forget only ${topic}. Keep my unrelated preference.`, ops({ forget_topic: topic }));
+  await runInDurableObject(stub(name), (_instance, state) => { expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]); });
+  let round = 0;
+  seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'fixture-held-claim', name: 'read_owner_context', arguments: JSON.stringify({ topic: 'reading desk', limit: 10 }) }] : [];
+  await admittedTurn(name, 233, 'Recall my reading desk preferences.', ops());
+  const provider = seen.requests.at(-1) as { input: Array<{ type: string; call_id?: string; output?: string }> };
+  const out = provider.input.find(item => item.type === 'function_call_output' && item.call_id === 'fixture-held-claim')!.output!;
+  expect(JSON.parse(out)).toMatchObject({ ok: true });
+  expect(out).toContain(KEEP);
+  expect(out).not.toContain(topic);
+  seen.selectorThrows = false;
+});
+it('a claim whose only held-topic text is an alias is withheld from the prompt and owner context', async () => {
+  await runInDurableObject(stub('held-alias-only'), async (_instance, state) => {
+    const topic = 'Independent cobalt workshop';
+    const memory = claimStore(state.storage.sql);
+    memory.add({ kind: 'preference', text: 'Enjoys folding paper at 09:10 UTC', evidence: 'Folding paper preference', origin: 'owner', source: 'stated', source_ref: 'owner, alias-fixture', aliases: [topic] }, new Date().toISOString());
+    memory.beginTopicCoverage(topic, new Date().toISOString()); seen.selectorThrows = true;
+    const responder = createOwnerResponder('fixture', undefined, memory); let round = 0;
+    seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'alias-only', name: 'read_owner_context', arguments: '{"topic":"folding","limit":10}' }] : [];
+    await responder.respond({ traceId: 'alias-only', conversationRef: 'owner', surface: 'telegram', text: 'What folding paper preference?', memoryWrites: false }, (_h, w) => w());
+    const provider = seen.requests.at(-1) as { input: Array<{ call_id?: string; output?: string }> };
+    const receipt = JSON.parse(provider.input.find(x => x.call_id === 'alias-only' && x.output !== undefined)!.output!);
+    expect(memory.incompleteTopics()).toContain(topic);
+    expect(receipt).toMatchObject({ ok: true, data: { claims: [], complete: false, withheld_items: 1 } });
+    expect(request()).not.toContain('Enjoys folding paper at 09:10 UTC');
+  });
+});
+it('an owner-context claim whose id cannot be read back is dropped, not kept', async () => {
+  await runInDurableObject(stub('held-claim-unknown-id'), async (_instance, state) => {
+    const topic = 'Independent cobalt workshop';
+    const real = claimStore(state.storage.sql);
+    real.beginTopicCoverage(topic, new Date().toISOString()); seen.selectorThrows = true;
+    const ghost = { id: 9999, kind: 'preference', text: 'ghost claim', source: 'stated', evidence: 'ghost', origin: 'owner', status: 'active', created_at: 'x', last_seen_at: 'x', seen_count: 1, valid_to: null, source_ref: null };
+    const memory = { ...real, recall: () => [ghost] } as typeof real;
+    const responder = createOwnerResponder('fixture', undefined, memory); let round = 0;
+    seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'unknown-id', name: 'read_owner_context', arguments: '{"topic":"x","limit":10}' }] : [];
+    await responder.respond({ traceId: 'unknown-id', conversationRef: 'owner', surface: 'telegram', text: 'Read context', memoryWrites: false }, (_h, w) => w());
+    const provider = seen.requests.at(-1) as { input: Array<{ call_id?: string; output?: string }> };
+    const receipt = JSON.parse(provider.input.find(x => x.call_id === 'unknown-id' && x.output !== undefined)!.output!);
+    expect(receipt).toMatchObject({ ok: true, data: { claims: [], complete: false, withheld_items: 1 } });
+  });
+});
+it('REVIEW862 highlighted episode snippets cannot conceal a held topic', async () => {
+  await runInDurableObject(stub('review862-snippet-tool'), async (_instance, state) => {
+    const TOPIC = 'Synthetic cobalt paper workshop';
+    const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const kv = durableConversationStore(state.storage);
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', kv, memory];
+    args[11] = async () => { throw new Error('fixture retained cleanup unavailable'); };
+    const episodes = episodeIndex(state.storage.sql);
+    args[5] = [(await import('../src/tools/live/search-episodes')).searchEpisodesHandler(episodes)];
+    const responder = createOwnerResponder(...args);
+    const direct = (id: string, text: string) => responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text, memoryWrites: false }, (_hop, work) => work());
+    seen.writer = ops(); await direct('a1', TOPIC);
+    seen.selectorThrows = true; seen.writer = ops({forget_topic: TOPIC});
+    await responder.respond({traceId:'forget-a1',conversationRef:'owner',surface:'telegram',text:`Forget only ${TOPIC}.`},(_hop,work)=>work());
+    expect(memory.incompleteTopics()).toContain(TOPIC);
+    episodes.add('held-row','owner',TOPIC+' workshop',Date.now());
+    episodes.add('clean-row','owner','Unrelated workshop preference: amber bookmarks',Date.now());
+    let round = 0;
+    seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'review862-encoded', name: 'search_episodes', arguments: JSON.stringify({query:'workshop',limit:10}) }] : [];
+    await direct('a2', 'Read retained workshop material.');
+    const provider = seen.requests.at(-1) as { input: Array<{type:string;call_id?:string;output?:string}> };
+    const output = JSON.parse(provider.input.find(item => item.type === 'function_call_output' && item.call_id === 'review862-encoded')!.output!);
+    console.log('REVIEW862 snippet receipt',JSON.stringify(output));
+    expect(JSON.stringify(output)).not.toContain('cobalt paper');
+    expect(JSON.stringify(output)).toContain('amber bookmarks');
+  });
 });

@@ -428,12 +428,40 @@ export const createOwnerResponder = (
   let pending: readonly LLMAttachment[] | undefined;
   // F1 receipt: the window observer fires only when history was actually dropped (content-free).
   const pathObservers = { onWindow: (stats: { kept: number; dropped: number; estimated_tokens: number; budget_tokens: number }) => { if (stats.dropped > 0) log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `kept ${stats.kept} dropped ${stats.dropped} ~${stats.estimated_tokens}/${stats.budget_tokens} tokens` }); } };
+  // A held topic withholds only the rows that carry it (same guard the forget proof uses); other recall stays available.
+  // Every string in a structured result (keys and values), unserialised: JSON.stringify would double a stored backslash and hide an escaped topic from hidesTopic.
+  const structuredStrings = (value: unknown, depth = 0): string[] => {
+    if (typeof value === 'string') return [value];
+    if (value === null || typeof value !== 'object' || depth > 64) return [];
+    return Object.entries(value).flatMap(([key, child]) => [key, ...structuredStrings(child, depth + 1)]);
+  };
+  const holdsAnyHeldTopic = (): boolean => (forgettingState?.incompleteTopics() ?? []).length > 0;
+  const holdsHeldTopic = (...values: readonly (string | null | undefined)[]): boolean => {
+    const held = forgettingState?.incompleteTopics() ?? [];
+    return values.some(value => typeof value === 'string' && held.some(topic => carriesTopic(value, topic) || hidesTopic(value, topic)));
+  };
+  // Retained reads drop only the list items that carry a held topic. A held string or key outside a list withholds the whole read (undefined).
+  const withholdHeldItems = <T,>(value: T, tally: { dropped: number }, depth = 0): T | undefined => {
+    if (typeof value === 'string') return holdsHeldTopic(value) ? undefined : value;
+    if (value === null || typeof value !== 'object') return value;
+    if (depth > 64) return undefined;
+    if (Array.isArray(value)) { const kept = value.filter(item => !holdsHeldTopic(...structuredStrings(item))); tally.dropped += value.length - kept.length; return kept.map(item => withholdHeldItems(item, tally, depth + 1)) as T; }
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (holdsHeldTopic(key)) return undefined;
+      const kept = withholdHeldItems(child, tally, depth + 1);
+      if (kept === undefined && child !== undefined) return undefined;
+      out[key] = kept;
+    }
+    return out as T;
+  };
+  const promptClaim = <T extends { text: string; evidence: string; source_ref?: string | null }>(claim: T): T => ({ ...claim, text: forgetText(claim.text), evidence: forgetText(claim.evidence), source_ref: claim.source_ref ? forgetText(claim.source_ref) : claim.source_ref });
   const promptMemory = (): ClaimStore | undefined => memory && ({
     ...memory,
-    nodes: () => memory!.incompleteTopics().length ? [] : memory!.nodes(),
-    edges: () => memory!.incompleteTopics().length ? [] : memory!.edges(),
-    claims: status => memory!.incompleteTopics().length ? [] : memory!.claims(status).map(claim => ({ ...claim, text: forgetText(claim.text), evidence: forgetText(claim.evidence), source_ref: claim.source_ref ? forgetText(claim.source_ref) : claim.source_ref })),
-    recall: (query, limit) => memory!.incompleteTopics().length ? [] : memory!.recall(query, limit).map(claim => ({ ...claim, text: forgetText(claim.text), evidence: forgetText(claim.evidence), source_ref: claim.source_ref ? forgetText(claim.source_ref) : claim.source_ref })),
+    nodes: () => memory!.nodes().filter(node => !holdsHeldTopic(...structuredStrings(node))),
+    edges: () => memory!.edges().filter(edge => !holdsHeldTopic(...structuredStrings(edge))),
+    claims: status => memory!.claims(status).filter(claim => !holdsHeldTopic(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)).map(promptClaim),
+    recall: (query, limit) => memory!.recall(query, limit).filter(claim => !holdsHeldTopic(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)).map(promptClaim),
   });
   const consumeRound = async () => {
     const added = await control.roundAsync();
@@ -477,7 +505,6 @@ export const createOwnerResponder = (
             await sourceScope.assertSame(admittedSource);
           }
           const retainedRead = ['read_owner_context', 'read_memory', 'search_episodes', 'read_tool_output'].includes(handler.name);
-          if (retainedRead && forgettingState?.incompleteTopics().length) return { ok: false, code: 'transient', error: 'Recall is temporarily limited while requested forgetting coverage is incomplete.', source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
           if (backgroundToolNames !== undefined && handler.name === 'open_loop' && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
             return { ok: false, code: 'invalid_args', error: 'Background mail follow-up requires an observed source_ref.', source_taint: null };
           }
@@ -486,10 +513,43 @@ export const createOwnerResponder = (
             if (control.revision() !== admittedSteering) throw new Error('Owner steering changed the task');
             await sourceScope!.assertSame(admittedSource);
           } } : ctx;
-          const result = await handler.handle(args, sourceContext); await assertCurrent();
+          let result = await handler.handle(args, sourceContext); await assertCurrent();
           await sourceContext.assertTaskSourceCurrent?.();
           if (interactiveSource && requireTaskScope && sourceRead && admittedSource) await sourceScope!.assertSame(admittedSource);
-          if (retainedRead && forgettingState?.incompleteTopics().length) return { ok: false, code: 'transient', error: 'Recall is temporarily limited while requested forgetting coverage is incomplete.', source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
+          if (retainedRead) {
+            const tally = { dropped: 0 };
+            // A search hit is a highlighted snippet that can split the topic; judge the stored source row it points at (the tool's own ref read).
+            if (handler.name === 'search_episodes' && holdsAnyHeldTopic()) {
+              const data = (result as { data?: { hits?: ReadonlyArray<{ ref?: string }> } }).data;
+              if (Array.isArray(data?.hits)) {
+                // Fail closed: a hit with no string ref, or whose source row cannot be read back, is dropped.
+                const rows = await Promise.all(data.hits.map(async hit => {
+                  if (typeof hit.ref !== 'string') return undefined;
+                  const row = (await handler.handle({ ref: hit.ref }, sourceContext)) as { data?: { episode?: unknown } };
+                  return row.data?.episode ?? undefined;
+                }));
+                const hits = data.hits.filter((_hit, index) => rows[index] !== undefined && !holdsHeldTopic(...structuredStrings(rows[index])));
+                tally.dropped += data.hits.length - hits.length;
+                result = { ...(result as object), data: { ...data, hits } } as typeof result;
+              }
+            }
+            // read_owner_context strips aliases from its claims; a held topic can live only in an alias, so read them back by claim id.
+            if (handler.name === 'read_owner_context' && holdsAnyHeldTopic()) {
+              const data = (result as { data?: { claims?: ReadonlyArray<{ id?: number }> } }).data;
+              if (Array.isArray(data?.claims)) {
+                const aliasesById = new Map([...memory!.claims(), ...memory!.claims('promoted')].map(claim => [claim.id, (claim as { aliases?: string | null }).aliases] as const));
+                const claims = data.claims.filter(claim => typeof claim.id === 'number' && aliasesById.has(claim.id) && !holdsHeldTopic(aliasesById.get(claim.id)));
+                tally.dropped += data.claims.length - claims.length;
+                result = { ...(result as object), data: { ...data, claims } } as typeof result;
+              }
+            }
+            const kept = withholdHeldItems(result, tally);
+            if (kept === undefined) return { ok: false, code: 'transient', error: 'This read touches a topic whose forgetting is still incomplete, so it is withheld.', source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
+            // Say so when items were withheld: a filtered list must not read as a complete retrieval.
+            const body = kept as { data?: Record<string, unknown> };
+            if (tally.dropped > 0 && body.data !== null && typeof body.data === 'object') return { ...body, data: { ...body.data, ...(typeof body.data.complete === 'boolean' ? { complete: false } : {}), withheld_items: tally.dropped } } as typeof result;
+            return kept;
+          }
           return result;
         } };
       });
