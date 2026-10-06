@@ -288,3 +288,21 @@ it('an unspanned episodes line with other words is held for the second look, nev
   expect(selectedForgetResult(topic, snapshot, raw, snapshot)).toEqual({ reason: 'row_without_span:episodes' });
   expect(unspannedEpisodeRows(snapshot, raw).map(row => row.ref)).toEqual(rows.map(row => row.ref));
 });
+
+import { mergeSecondSpanPass } from '../src/memory/selective-forget';
+const skippedRows = [{ ref: 'episodes:2:text', text: 'a' }, { ref: 'episodes:3:text', text: 'b' }];
+const firstPass = JSON.stringify({ complete: true, reviewed_refs: ['episodes:1:text', 'episodes:2:text', 'episodes:3:text'], spans: [{ ref: 'episodes:1:text', text: 'topic one clause' }] });
+const span = (ref: string) => ({ ref, text: 'topic clause for ' + ref });
+it.each([
+  ['incomplete', { complete: false, reviewed_refs: ['episodes:2:text', 'episodes:3:text'], spans: [span('episodes:2:text')] }],
+  ['missing reviewed refs', { complete: true, reviewed_refs: ['episodes:2:text'], spans: [span('episodes:2:text')] }],
+  ['extra reviewed ref', { complete: true, reviewed_refs: ['episodes:1:text', 'episodes:2:text', 'episodes:3:text'], spans: [span('episodes:2:text')] }],
+  ['span outside the skipped refs', { complete: true, reviewed_refs: ['episodes:2:text', 'episodes:3:text'], spans: [span('episodes:1:text')] }],
+])('second look is dropped whole when %s', (_name, second) => {
+  expect(mergeSecondSpanPass(firstPass, skippedRows, JSON.stringify(second))).toEqual({ selection: firstPass, added: 0 });
+});
+it('second look is merged when it is complete, reviewed exactly the skipped refs and spans only them', () => {
+  const merged = mergeSecondSpanPass(firstPass, skippedRows, JSON.stringify({ complete: true, reviewed_refs: ['episodes:3:text', 'episodes:2:text'], spans: [span('episodes:2:text')] }));
+  expect(merged.added).toBe(1);
+  expect((JSON.parse(merged.selection) as { spans: unknown[] }).spans).toHaveLength(2);
+});

@@ -108,3 +108,16 @@ export const unspannedEpisodeRows = (snapshot: ForgetSnapshot, raw: string): rea
   const spanned = new Set(value.spans.map((entry: { ref?: unknown }) => entry?.ref));
   return snapshot.sources.filter(row => row.ref.split(':')[0] === 'episodes' && !spanned.has(row.ref));
 };
+
+// Adds the second look's spans only when that look reported itself complete, reviewed exactly the skipped refs, and
+// spans only those refs. Otherwise the second look is dropped whole: the skipped lines stay unspanned and the forget holds.
+export const mergeSecondSpanPass = (first: string, skipped: readonly ForgetSource[], second: string): Readonly<{ selection: string; added: number }> => {
+  const unchanged = { selection: first, added: 0 };
+  let a: { spans?: unknown }; let b: { spans?: unknown; reviewed_refs?: unknown; complete?: unknown };
+  try { a = JSON.parse(first) as typeof a; b = JSON.parse(second) as typeof b; } catch { return unchanged; }
+  if (!a || !b || !Array.isArray(a.spans) || !Array.isArray(b.spans) || b.complete !== true || !Array.isArray(b.reviewed_refs)) return unchanged;
+  const want = new Set(skipped.map(row => row.ref));
+  if (b.reviewed_refs.length !== want.size || new Set(b.reviewed_refs).size !== want.size || b.reviewed_refs.some(ref => typeof ref !== 'string' || !want.has(ref))) return unchanged;
+  if (b.spans.some((entry: { ref?: unknown }) => !entry || typeof entry.ref !== 'string' || !want.has(entry.ref))) return unchanged;
+  return { selection: JSON.stringify({ ...a, spans: [...a.spans, ...b.spans] }), added: b.spans.length };
+};

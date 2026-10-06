@@ -1,7 +1,7 @@
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { TASK_SOURCE_INSTRUCTION, TASK_SOURCE_SCHEMA, taskSourceAllowed, taskSourceRequired, taskSourcePrompt, type OwnerTaskSourceScope, type TaskSourceSnapshot, type TaskSourceFamily } from './task-source-scope';
-import { asciiLiteralIncludes, forgetSnapshot, forgetSourceBatch, selectedForgetResult, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, SELECTIVE_FORGET_SPAN_INSTRUCTION, unspannedEpisodeRows, type ForgetSource } from '../memory/selective-forget';
+import { asciiLiteralIncludes, forgetSnapshot, forgetSourceBatch, selectedForgetResult, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, SELECTIVE_FORGET_SPAN_INSTRUCTION, mergeSecondSpanPass, unspannedEpisodeRows, type ForgetSource } from '../memory/selective-forget';
 import { ownerForgetTopic, hasForgetIntent } from '../memory/claims';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
@@ -834,9 +834,8 @@ export const createOwnerResponder = (
             let asked = 0;
             try {
               const second = await ask(id, 'forget_source', SELECTIVE_FORGET_SPAN_INSTRUCTION, JSON.stringify({ topic, sources: skipped }), { name: 'forget_source_spans', schema: SELECTIVE_FORGET_SCHEMA }, undefined, undefined, undefined, memoryModel);
-              const merged = JSON.parse(selection) as { spans: unknown[] };
-              const extra = (JSON.parse(second) as { spans?: unknown[] }).spans;
-              if (Array.isArray(extra) && Array.isArray(merged.spans)) { asked = extra.length; selection = JSON.stringify({ ...merged, spans: [...merged.spans, ...extra] }); }
+              const merged = mergeSecondSpanPass(selection, skipped, second);
+              asked = merged.added; selection = merged.selection;
             } catch (error) { if (error instanceof ClosedRunError) throw error; }
             log({ trace: id, hop: 'forget_span_pass', ms: 0, ok: true, detail: JSON.stringify({ lines_rechecked: skipped.length, spans_returned: asked }) });
           }

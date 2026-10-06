@@ -21,7 +21,7 @@ import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 
 // Real registered two-argument owner DO and its fenced inbox/listener/responder path.
 // Only the model SDK and Telegram transport are scripted. No live provider or source service.
-const seen = vi.hoisted(() => ({ writer: '{}', requests: [] as unknown[], fetches: [] as string[], replyText: 'Recorded fixture response.', reasoning: undefined as string | undefined, toolSuppliers: [] as (() => Promise<readonly import('../src/context-composer/types').ContextFragment[]>)[], offloads: [] as import('../src/conversation/tool-output-store').ToolOutputStore[], selectorThrows: false, selectedText: undefined as string | undefined, selectedTexts: [] as string[], selectorInputs: [] as string[], selectorCalls: [] as unknown[], failCleanup: false, onCleanup: undefined as undefined | (() => void), selectorOutputMessage: false, selectorMode: 'normal' as 'normal' | 'empty' | 'invalid' | 'missing-ref' | 'capped', onSelector: undefined as undefined | (() => void), onReply: undefined as undefined | (() => unknown[] | undefined | Promise<unknown[] | undefined>) }));
+const seen = vi.hoisted(() => ({ writer: '{}', requests: [] as unknown[], fetches: [] as string[], replyText: 'Recorded fixture response.', reasoning: undefined as string | undefined, toolSuppliers: [] as (() => Promise<readonly import('../src/context-composer/types').ContextFragment[]>)[], offloads: [] as import('../src/conversation/tool-output-store').ToolOutputStore[], selectorThrows: false, selectedText: undefined as string | undefined, selectedTexts: [] as string[], selectorInputs: [] as string[], selectorCalls: [] as unknown[], failCleanup: false, onCleanup: undefined as undefined | (() => void), selectorOutputMessage: false, selectorMode: 'normal' as 'normal' | 'empty' | 'invalid' | 'missing-ref' | 'capped' | 'second-incomplete', onSelector: undefined as undefined | (() => void), onReply: undefined as undefined | (() => unknown[] | undefined | Promise<unknown[] | undefined>) }));
 vi.mock('../src/run-loop/adapters', async load => {
  const actual = await load<typeof import('../src/run-loop/adapters')>();
  return { ...actual, resolveRunLoopAdapters: (...args: Parameters<typeof actual.resolveRunLoopAdapters>) => {
@@ -60,7 +60,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
     seen.onSelector?.();
     const texts = [...seen.selectedTexts, ...(seen.selectedText ? [seen.selectedText] : [])];
     const spans = supplied.sources.flatMap(row => texts.filter(text => row.text.includes(text)).map(text => ({ ref: row.ref, text })));
-    selection = seen.selectorMode === 'empty' ? '' : seen.selectorMode === 'invalid' ? '{invalid' : JSON.stringify({ complete: !!texts.length, reviewed_refs: supplied.sources.map(row => row.ref), spans: seen.selectorMode === 'missing-ref' ? spans.slice(1) : seen.selectorMode === 'capped' ? spans.slice(0, 32) : spans });
+    selection = seen.selectorMode === 'second-incomplete' && seen.selectorCalls.length > 1 ? JSON.stringify({ complete: false, reviewed_refs: [], spans }) : seen.selectorMode === 'empty' ? '' : seen.selectorMode === 'invalid' ? '{invalid' : JSON.stringify({ complete: !!texts.length, reviewed_refs: supplied.sources.map(row => row.ref), spans: seen.selectorMode === 'missing-ref' ? spans.slice(1) : seen.selectorMode === 'capped' || seen.selectorMode === 'second-incomplete' ? spans.slice(0, 32) : spans });
   }
   if (name === 'forget_source_spans' && seen.selectorOutputMessage) output.push({type:'message',id:'fixture-selector',role:'assistant',status:'completed',content:[{type:'output_text',text:selection,annotations:[]}]});
   if (!name && seen.reasoning) output.push({ type: 'reasoning', summary: [{ type: 'summary_text', text: seen.reasoning }] });
@@ -1038,6 +1038,29 @@ it('a 33-ref inventory of chat lines completes: the line the first pass omits ge
   });
   expect(request()).not.toContain('Recall is temporarily limited');
   expect(request()).not.toContain('reason class: selection_rejected');
+});
+
+it('a second look that reports itself incomplete adds no spans: the skipped line stays unproved and the topic holds', async () => {
+  const name='memory-second-look-incomplete';
+  const topic='SYNTH-CAP';
+  const fact=`${topic} note`;
+  const standup='Synthetic standup starts at 09:10 UTC';
+  await admittedTurn(name,97100,standup,ops({add:[add(standup)]}));
+  await runInDurableObject(stub(name),async(_instance,state)=>{
+    claimStore(state.storage.sql).beginTopicCoverage(topic,new Date().toISOString());
+    for(let i=0;i<33;i++)episodeIndex(state.storage.sql).add(`c${i}`,'owner',fact,Date.now());
+  });
+  await evictDurableObject(stub(name));
+  seen.selectedText=fact; seen.selectorMode='second-incomplete';
+  const traceLines: string[] = [];
+  const traceSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { traceLines.push(args.map(String).join(' ')); });
+  try { await admittedTurn(name,97101,'What time is my unrelated standup?',ops()); } finally { traceSpy.mockRestore(); }
+  const pass = traceLines.filter(line => line.includes('forget_span_pass'));
+  expect(pass).toHaveLength(1);
+  expect(pass[0]).toMatch(/spans_returned.{1,6}0/);
+  await runInDurableObject(stub(name),(_instance,state)=>{
+    expect(claimStore(state.storage.sql).incompleteTopics()).toEqual([topic]);
+  });
 });
 
 // Each case uses the registered Wrangler DO. Mutations in onSelector model an
