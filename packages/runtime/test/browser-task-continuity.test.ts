@@ -229,3 +229,39 @@ it('malformed authoritative driver receipts remain uncertain without physical re
   expect(await host.reconcile('owner-a')).toMatchObject({ status: 'uncertain' });
   expect(f.row().receipt).toBeNull(); expect(f.row().phase).toBe('unknown'); expect(f.counts().submits).toBe(1);
 });
+it('synthetic approval hold has one fixed provider-bounded expiry and survives run end until expiry', async () => {
+  const f = fixture();
+  const driver = { ...f.driver, command: async () => ({ held: true as const }) };
+  const task = browserTaskContinuity({ ...f.options, driver });
+  await task.read('owner-a');
+  expect(f.row().session.expiresAt).toBe(600100);
+  const first = await task.propose('owner-a');
+  f.setTime(20000); await task.propose('owner-a');
+  expect(f.row().session.expiresAt).toBe(600100);
+  await task.finishRun('owner-a'); expect(f.counts().ends).toBe(0);
+  f.setTime(600100); await task.finishRun('owner-a');
+  expect(f.row().phase).toBe('closed'); expect(f.counts().ends).toBe(1);
+  expect(await task.submit('owner-a', first.id, 'late')).toMatchObject({ status: 'rejected' });
+});
+it('synthetic denial permits a read and closes at run end, while cleanup uncertainty blocks allocation', async () => {
+  const f = fixture(), driver = { ...f.driver, command: async () => ({ held: true as const }) };
+  const task = browserTaskContinuity({ ...f.options, driver });
+  await task.read('owner-a'); const proposal = await task.propose('owner-a');
+  await task.deny('owner-a', proposal.id);
+  expect(await task.inspect('owner-a')).toMatchObject({ binding: { value: 'synthetic initial' } });
+  driver.end = async () => { throw Error('close failed'); };
+  await task.finishRun('owner-a'); expect(f.row().phase).toBe('cleanup_pending');
+  await expect(task.read('owner-a')).rejects.toThrow(); expect(f.counts().starts).toBe(1);
+});
+it('closes an exhausted synthetic approval hold instead of retaining a terminal rejection', async () => {
+  const f = fixture();
+  const driver = { ...f.driver, command: async (_id: string, command: { operation: string }) => ({ held: command.operation === 'click', nativeSubmit: true }) };
+  const task = browserTaskContinuity({ ...f.options, driver });
+  const held = await task.command('owner-a', { operation: 'click', element_ref: 'submit' });
+  if (!held.held || !('proposal' in held) || !held.proposal) throw Error('expected native hold');
+  for (let index = 0; index < 4; index++) await task.command('owner-a', { operation: 'read' });
+  expect(await task.submit('owner-a', held.proposal.id, 'approval')).toMatchObject({ status: 'rejected' });
+  await task.finishRun('owner-a');
+  expect(f.counts()).toMatchObject({ submits: 0, ends: 1 });
+  expect(f.row()).toMatchObject({ phase: 'closed', session: { state: 'ended' } });
+});

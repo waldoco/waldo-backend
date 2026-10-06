@@ -90,8 +90,9 @@ export function browserOwnerHost(options: Readonly<{
       start: async lifetime => { await source?.(); return config.driver.start(lifetime, source); },
       navigate: async id => { await source?.(); const value = await config.driver.navigate(id, source); await source?.(); return value; },
       inspect: async id => { await source?.(); const value = await config.driver.inspect(id, source); await source?.(); return value; },
-      fill: async (id, field, value, digest, before) => { await source?.(); return config.driver.fill(id, field, value, digest, async () => { await before(); await source?.(); }, source); },
-      submit: async (id, digest, before) => { await submitSource(); return config.driver.submit(id, digest, async () => { await before(); await submitSource(); }, submitSource, assertSubmitApproval); },
+      fill: async (id, field, value, digest, before, _source, assertCurrent) => { await source?.(); return config.driver.fill(id, field, value, digest, async () => { await before(); await source?.(); }, source, assertCurrent); },
+      submit: async (id, digest, before, _source, assertCurrent) => { await submitSource(); return config.driver.submit(id, digest, async () => { await before(); await submitSource(); }, submitSource, () => { assertCurrent?.(); assertSubmitApproval(); }); },
+      command: config.driver.command ? async (id, command, digest, before, _source, assertCurrent) => { await source?.(); const result = await config.driver.command!(id, command, digest, async () => { await before(); await source?.(); }, source, assertCurrent); await source?.(); return result; } : undefined,
       verify: async digest => { await source?.(); const value = await config.driver.verify(digest, source); await source?.(); return value; },
       end: async id => {
       const previous = await options.storage.get<CleanupState>(BROWSER_TASK_CLEANUP_KEY);
@@ -132,6 +133,10 @@ export function browserOwnerHost(options: Readonly<{
     // This fence is independent of the browser mutex and provider awaits.
     async revoke() {
       if (config) await options.storage.put(REVOKED_KEY, config.driver.runId);
+    },
+    async finishRun() {
+      const task = make();
+      if (task && await options.storage.get(BROWSER_TASK_KEY)) await task.finishRun(principal);
     },
     async stop() {
       if (!config) return;

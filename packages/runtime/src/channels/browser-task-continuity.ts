@@ -2,6 +2,7 @@ import {
   BrowserSessionBoundary, browserTaskCheckpointSchema, browserTaskProposalSchema, browserTaskReceiptSchema,
   type BrowserTaskCheckpoint, type BrowserTaskProposal, type BrowserTaskReceipt, type BrowserTaskContinuation, type BrowserCommand, type BrowserSession,
 } from '@waldo/contracts';
+import { parseSyntheticCommand, type SyntheticCommand } from './browser-synthetic-commands';
 import type { BrowserSubmitOutcome } from '../tools/live/browser';
 import { fixtureDigest, type FixtureObservation, type BrowserSourceGuard } from './public-fixture-browser';
 
@@ -15,10 +16,11 @@ export type BrowserTaskDriver = Readonly<{
   provider: BrowserSession['provider']; origin: string; pageUrl: string; runId: string; submitRef: string;
   start(lifetimeMs: number, source?: BrowserSourceGuard): Promise<string>; navigate(id: string, source?: BrowserSourceGuard): Promise<unknown>;
   inspect(id: string, source?: BrowserSourceGuard): Promise<FixtureObservation>;
-  fill(id: string, field: string, value: string, stateDigest: string, before: () => Promise<void>, source?: BrowserSourceGuard): Promise<unknown>;
+  fill(id: string, field: string, value: string, stateDigest: string, before: () => Promise<void>, source?: BrowserSourceGuard, assertCurrent?: () => void): Promise<unknown>;
   submit(id: string, stateDigest: string, before: () => Promise<void>, source?: BrowserSourceGuard, assertApproval?: () => void): Promise<unknown>;
   verify(bindingDigest: string, source?: BrowserSourceGuard): Promise<Readonly<{ id: string; observed_at: string; source: BrowserTaskReceipt['source']; binding_digest: string }> | null>;
   end(id: string): Promise<void>;
+  command?(id: string, command: SyntheticCommand, stateDigest: string, before: BrowserSourceGuard, source?: BrowserSourceGuard, assertCurrent?: () => void): Promise<{ held: boolean; nativeSubmit?: boolean }>;
 }>;
 type Driver = BrowserTaskDriver;
 type Evidence = Readonly<{ actionDigest?: string; bindingDigest?: string; stateDigest?: string; proposalId?: string; approvalRef?: string }>;
@@ -31,6 +33,7 @@ export function browserTaskContinuity(options: Readonly<{
   if (!/^sha256:[0-9a-f]{64}$/.test(options.manifestDigest) || options.taskId !== options.driver.runId || !options.ownerId) throw Error('browser task manifest rejected');
   const identity = (authenticatedOwner: string) => { if (authenticatedOwner !== options.ownerId) throw Error('browser task unavailable'); };
   const owner = (authenticatedOwner: string) => { identity(authenticatedOwner); if (!options.enabled) throw Error('browser task unavailable'); };
+  const assertCurrent = (record: BrowserTaskCheckpoint) => { if (!options.enabled || record.session.expiresAt <= options.now()) throw Error('browser task expired or revoked'); };
   const save = (record: BrowserTaskCheckpoint) => options.store.save(browserTaskCheckpointSchema.parse(record));
   const get = async () => {
     const record = browserTaskCheckpointSchema.parse(await options.store.load());
@@ -81,6 +84,7 @@ export function browserTaskContinuity(options: Readonly<{
     boundary.put(options.ownerId, record.session);
     return await boundary.dispatch(options.ownerId, { ownerId: options.ownerId, sessionId: record.session.id, generation: record.session.generation, capabilityManifestDigest: options.manifestDigest, idempotencyKey: (await fixtureDigest(options.newId())).slice(7), expiresAt: record.session.expiresAt, operation, ...body }) as T;
   };
+  const actionDigest = (url: string, actionRef: string, request: FixtureObservation['action'], binding: BrowserTaskProposal['binding']) => fixtureDigest({ url, actionRef, method: 'click', ...(request ? { request, binding } : {}) });
   const scopeDigest = (record: BrowserTaskCheckpoint) => fixtureDigest({ owner: options.ownerId, task: options.taskId, manifest: options.manifestDigest, origin: record.origin, session: record.session.id, providerSession: record.session.providerSessionId, generation: record.session.generation });
   const observation = async (record: BrowserTaskCheckpoint) => {
     await grant(record, 'extract');
@@ -150,13 +154,48 @@ export function browserTaskContinuity(options: Readonly<{
         const snapshot = await observation(record), actionDigest = await fixtureDigest({ field, value });
         const currentGrant = await grant(record, 'act', { actionDigest, stateDigest: snapshot.stateDigest });
         const counted = { ...record, phase: 'active' as const, proposal: null, steps: record.steps + 1 }; await save(counted);
-        await cleanupOnFailure(() => issue(counted, 'act', { actionRef: field, actionDigest, approvalRef: currentGrant }, () => options.driver.fill(record.session.providerSessionId, field, value, snapshot.stateDigest, async () => { await grant(counted, 'act', { actionDigest, stateDigest: snapshot.stateDigest }); })));
+        await cleanupOnFailure(() => issue(counted, 'act', { actionRef: field, actionDigest, approvalRef: currentGrant }, () => options.driver.fill(record.session.providerSessionId, field, value, snapshot.stateDigest, async () => { await grant(counted, 'act', { actionDigest, stateDigest: snapshot.stateDigest }); }, undefined, () => assertCurrent(counted))));
         return observation(counted);
       });
     },
-    async validateProposal(authenticatedOwner: string, reference: BrowserTaskContinuation, payload: { url: string; action: { selector: string; method?: string; arguments?: string[] }; binding: Readonly<Record<string, string>> }) { identity(authenticatedOwner); return options.store.exclusive(async () => { const record = await get(), proposal = record.proposal; return proposal !== null && proposal.id === reference.proposalId && proposal.scopeDigest === reference.scopeDigest && proposal.scopeDigest === await scopeDigest(record) && reference.taskRef === options.taskId && payload.url === proposal.url && payload.action.selector === proposal.actionRef && payload.action.method === 'click' && (payload.action.arguments?.length ?? 0) === 0 && await fixtureDigest(Object.entries(payload.binding).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) === proposal.bindingDigest; }); },
+    async validateProposal(authenticatedOwner: string, reference: BrowserTaskContinuation, payload: { url: string; action: { selector: string; method?: string; arguments?: string[] }; binding: Readonly<Record<string, string>>; request?: FixtureObservation['action']; approvalExpiresAt?: number }) { identity(authenticatedOwner); return options.store.exclusive(async () => { const record = await get(), proposal = record.proposal; return proposal !== null && proposal.id === reference.proposalId && proposal.scopeDigest === reference.scopeDigest && proposal.scopeDigest === await scopeDigest(record) && reference.taskRef === options.taskId && payload.url === proposal.url && JSON.stringify(payload.request) === JSON.stringify(proposal.request) && payload.approvalExpiresAt === proposal.approvalExpiresAt && payload.action.selector === proposal.actionRef && payload.action.method === 'click' && (payload.action.arguments?.length ?? 0) === 0 && await fixtureDigest(Object.entries(payload.binding).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) === proposal.bindingDigest; }); },
     async validateReceipt(authenticatedOwner: string, proposalId: string, receipt: unknown) { identity(authenticatedOwner); return options.store.exclusive(async () => { const record = await get(); return record.proposal?.id === proposalId && record.receipt !== null && browserTaskReceiptSchema.safeParse(receipt).success && await fixtureDigest(record.receipt) === await fixtureDigest(browserTaskReceiptSchema.parse(receipt)); }); },
-    async read(authenticatedOwner: string) { owner(authenticatedOwner); return this.open(authenticatedOwner, 60000, true); },
+    async read(authenticatedOwner: string) { owner(authenticatedOwner); return this.open(authenticatedOwner, options.driver.command ? 600000 : 60000, true); },
+    async finishRun(authenticatedOwner: string) {
+      identity(authenticatedOwner);
+      if (!options.driver.command) return;
+      return options.store.exclusive(async () => {
+        if (await options.store.load() === null) return;
+        const record = await get();
+        if (record.phase === 'approval_pending' && record.steps < 5 && record.session.expiresAt > options.now()) return;
+        await end(record);
+      });
+    },
+    async deny(authenticatedOwner: string, proposalId: string) {
+      identity(authenticatedOwner);
+      return options.store.exclusive(async () => {
+        const record = await get();
+        if (record.phase !== 'approval_pending' || record.proposal?.id !== proposalId) return;
+        await save({ ...record, phase: 'active', proposal: null });
+      });
+    },
+    async command(authenticatedOwner: string, input: unknown) {
+      owner(authenticatedOwner);
+      const command = parseSyntheticCommand(input);
+      if (!options.driver.command) throw Error('Synthetic commands are unavailable.');
+      if (command.operation === 'goto' && command.url !== options.driver.pageUrl) throw Error('browser task destination rejected');
+      await this.read(authenticatedOwner);
+      const result = await options.store.exclusive(async () => {
+        const record = await get();
+        if (!['active', 'approval_pending'].includes(record.phase) || record.steps >= 5) throw Error('browser task command bound exceeded');
+        const snapshot = await observation(record);
+        const counted = { ...record, steps: record.steps + 1 }; await save(counted);
+        const outcome = await cleanupOnFailure(() => options.driver.command!(record.session.providerSessionId, command, snapshot.stateDigest, async () => { await grant(counted, 'act', { stateDigest: snapshot.stateDigest }); }, undefined, () => assertCurrent(counted)));
+        if (!outcome.held && ['type', 'click', 'goto'].includes(command.operation)) await save({ ...counted, phase: 'active', proposal: null });
+        return outcome;
+      });
+      return result.held && result.nativeSubmit === false ? { held: true as const, reason: 'declared_send_unsupported' as const } : result.held ? { held: true as const, proposal: await this.propose(authenticatedOwner) } : { held: false as const, snapshot: await this.inspect(authenticatedOwner) };
+    },
     async cancel(authenticatedOwner: string) { identity(authenticatedOwner); return options.store.exclusive(async () => end(await get())); },
     async reconcile(authenticatedOwner: string): Promise<BrowserSubmitOutcome> { identity(authenticatedOwner); return options.store.exclusive(async () => readback(await get())); },
     async submit(authenticatedOwner: string, proposalId: string, approvalRef: string): Promise<BrowserSubmitOutcome> {
@@ -167,23 +206,26 @@ export function browserTaskContinuity(options: Readonly<{
         if (proposal.scopeDigest !== await scopeDigest(record)) return { status: 'rejected', message: 'The browser session changed. Observe and approve a new task.' };
         const prior = known(record); if (prior) return prior;
         if (['submitting', 'unknown'].includes(record.phase) || record.submissionAttempted) return uncertain();
-        if (record.phase !== 'approval_pending' || record.steps >= 5) return { status: 'rejected', message: 'The browser task is no longer available for submit.' };
+        if (record.phase !== 'approval_pending' || record.steps >= 5) {
+          if (options.driver.command && record.phase === 'approval_pending') await end(record);
+          return { status: 'rejected', message: 'The browser task is no longer available for submit.' };
+        }
         if (proposal.scopeDigest !== await scopeDigest(record)) return { status: 'rejected', message: 'The browser session changed. Observe and approve a new task.' };
-        const actionDigest = await fixtureDigest({ url: proposal.url, actionRef: proposal.actionRef, method: 'click' });
+        const digest = await actionDigest(proposal.url, proposal.actionRef, proposal.request, proposal.binding);
         const approvedFacts = await fixtureDigest(Object.entries(proposal.binding).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
-        if (proposal.url !== options.driver.pageUrl || proposal.actionRef !== options.driver.submitRef || actionDigest !== proposal.actionDigest || approvedFacts !== proposal.bindingDigest) return { status: 'rejected', message: 'The approval no longer matches its exact target and facts.' };
+        if (proposal.url !== options.driver.pageUrl || proposal.actionRef !== options.driver.submitRef || digest !== proposal.actionDigest || approvedFacts !== proposal.bindingDigest) return { status: 'rejected', message: 'The approval no longer matches its exact target and facts.' };
         let snapshot: Awaited<ReturnType<Driver['inspect']>>;
         try { snapshot = await observation(record); } catch { return { status: 'rejected', message: 'The browser task expired or could not be observed. Prepare and approve a new task.' }; }
-        if (snapshot.url !== proposal.url || snapshot.stateDigest !== proposal.stateDigest || await fixtureDigest(Object.entries(snapshot.binding).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) !== proposal.bindingDigest) {
+        if (JSON.stringify(snapshot.action) !== JSON.stringify(proposal.request) || snapshot.url !== proposal.url || snapshot.stateDigest !== proposal.stateDigest || await fixtureDigest(Object.entries(snapshot.binding).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) !== proposal.bindingDigest) {
           await save({ ...record, phase: 'active', proposal: null });
           return { status: 'rejected', message: 'The form changed. Observe and approve its current state again.' };
         }
-        const evidence = { proposalId, approvalRef, actionDigest, bindingDigest: proposal.bindingDigest, stateDigest: proposal.stateDigest };
+        const evidence = { proposalId, approvalRef, actionDigest: digest, bindingDigest: proposal.bindingDigest, stateDigest: proposal.stateDigest };
         let approvedGrant: string;
         try { approvedGrant = await grant(record, 'act', evidence); } catch { return { status: 'rejected', message: 'The browser approval expired or was revoked.' }; }
         const intent = { ...record, submissionAttempted: true, phase: 'submitting' as const, steps: record.steps + 1 };
         await save(intent); // Before physical click, even if the next response is lost.
-        try { await issue(intent, 'act', { actionRef: proposal.actionRef, actionDigest, approvalRef: approvedGrant }, () => options.driver.submit(record.session.providerSessionId, proposal.stateDigest, async () => { await grant(intent, 'act', evidence); })); } catch { /* in doubt, never repeat act */ }
+        try { await issue(intent, 'act', { actionRef: proposal.actionRef, actionDigest: digest, approvalRef: approvedGrant }, () => options.driver.submit(record.session.providerSessionId, proposal.stateDigest, async () => { await grant(intent, 'act', evidence); }, undefined, () => assertCurrent(intent))); } catch { /* in doubt, never repeat act */ }
         const latest = await get();
         if (!['submitting', 'unknown'].includes(latest.phase)) return uncertain();
         return readback(latest);
@@ -196,7 +238,7 @@ export function browserTaskContinuity(options: Readonly<{
         if (!['active', 'approval_pending'].includes(record.phase) || record.steps >= 5) throw Error('browser task proposal unavailable');
         const snapshot = await observation(record);
         const actionRef = options.driver.submitRef;
-        const proposal = browserTaskProposalSchema.parse({ id: options.newId(), url: snapshot.url, actionRef, scopeDigest: await scopeDigest(record), actionDigest: await fixtureDigest({ url: snapshot.url, actionRef, method: 'click' }), stateDigest: snapshot.stateDigest, bindingDigest: await fixtureDigest(Object.entries(snapshot.binding).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)), binding: snapshot.binding });
+        const proposal = browserTaskProposalSchema.parse({ id: options.newId(), url: snapshot.url, actionRef, scopeDigest: await scopeDigest(record), actionDigest: await actionDigest(snapshot.url, actionRef, snapshot.action, snapshot.binding), request: snapshot.action, approvalExpiresAt: record.session.expiresAt, stateDigest: snapshot.stateDigest, bindingDigest: await fixtureDigest(Object.entries(snapshot.binding).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)), binding: snapshot.binding });
         await save({ ...record, phase: 'approval_pending', proposal });
         return proposal;
       });

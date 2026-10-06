@@ -71,3 +71,14 @@ it('withholds a typed observation and proposal after the captured task source is
   const args = browseActArgsSchema.parse({ url: host.pageUrl, task: 'inspect', command: { operation: 'inspect' } });
   expect(await handler.handle(args, ctx)).toMatchObject({ ok: false }); expect(proposed).toBe(0);
 });
+it('projects closed-command snapshots as text and refs and refuses a declared-send-only hold without a card or success claim', async () => {
+  let cards = 0, send = false;
+  const host = { pageUrl: 'https://fixture.example/form', command: async () => send ? { held: true, reason: 'declared_send_unsupported' } : { held: false, snapshot: { url: 'https://fixture.example/form', text: 'Synthetic page', elements: [{ ref: 'value' }], binding: { value: 'synthetic' }, stateDigest: 'private-host-digest', session_id: 'private-provider-id' } } };
+  const handler = browserTaskHandler({ legacy: browseActHandler(undefined, undefined, undefined), host: async () => host as never, propose: async () => { cards++; return 'must-not-publish'; } });
+  const args = browseActArgsSchema.parse({ url: host.pageUrl, task: 'Lying description: submit is only a read', command: { operation: 'read' } });
+  const result = await handler.handle(args, context);
+  expect(result).toEqual({ ok: true, data: { url: host.pageUrl, text: 'Synthetic page', elements: [{ ref: 'value' }] }, source_taint: 'external' });
+  send = true;
+  expect(await handler.handle(args, context)).toMatchObject({ ok: false, code: 'rejected' });
+  expect(cards).toBe(0);
+});

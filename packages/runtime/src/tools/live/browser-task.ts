@@ -17,7 +17,7 @@ export function browserTaskHandler(options: Readonly<{
 }>): ToolHandler<BrowseActArgs, unknown, ToolDispatcherContext> {
   return {
     ...options.legacy, schema: browseActArgsSchema,
-    description: 'Browse a public page. Configured typed commands use observed field refs: inspect, fill, prepare_submit, verify or cancel. Final submit always needs the owner approval desk; typed commands never fall back to a fresh browser.',
+    description: 'Browse a public page. Controlled synthetic commands are goto, click, type, scroll, read and wait with observed element refs. Native submit and Enter stop for owner approval. inspect, fill, prepare_submit, verify and cancel remain supported. Final submit always needs the owner approval desk; typed commands never fall back to a fresh browser.',
     async handle(args, context) {
       if (!args.command) return options.legacy.handle(args, context);
       try {
@@ -28,6 +28,13 @@ export function browserTaskHandler(options: Readonly<{
         if (!host || args.url !== host.pageUrl) return rejected('No configured current browser task matches that page.');
         const owner = context.authenticatedUserId;
         const command = args.command;
+        let commandProposal: Awaited<ReturnType<BrowserTaskHost['propose']>> | undefined;
+        if (['goto', 'click', 'type', 'scroll', 'read', 'wait'].includes(command.operation)) {
+          const result = await host.command(owner, command); await source!();
+          if (!result.held) return { ok: true, data: { url: result.snapshot.url, text: result.snapshot.text, elements: result.snapshot.elements }, source_taint: 'external' };
+          if (result.reason) return rejected('declared_send_unsupported: Held without acting. This send is outside the controlled form submission, so no approval card was created.');
+          commandProposal = result.proposal;
+        }
         if (command.operation === 'inspect') {
           const snapshot = await host.read(owner);
           await source!();
@@ -40,11 +47,12 @@ export function browserTaskHandler(options: Readonly<{
           return { ok: true, data: await host.cancel(owner), source_taint: 'external' };
         }
         if (command.operation === 'verify') { const data = await host.reconcile(owner); await source!(); return { ok: true, data, source_taint: 'external' }; }
-        const prepared = await host.propose(owner);
+        const prepared = commandProposal ?? await host.propose(owner);
         await source!();
-        const payload: BrowserSubmitProposal = { url: prepared.url, action: { selector: prepared.actionRef, method: 'click', description: 'Submit the prepared public form' }, binding: prepared.binding, steps: [], continuation: { version: 1, taskRef: host.taskRef, proposalId: prepared.id, scopeDigest: prepared.scopeDigest } };
-        const proposalId = await options.propose(payload, context);
-        await source!();
+        const payload: BrowserSubmitProposal = { request: prepared.request, approvalExpiresAt: prepared.approvalExpiresAt, url: prepared.url, action: { selector: prepared.actionRef, method: 'click', description: 'Submit the prepared public form' }, binding: prepared.binding, steps: [], continuation: { version: 1, taskRef: host.taskRef, proposalId: prepared.id, scopeDigest: prepared.scopeDigest } };
+        let proposalId: string;
+        try { proposalId = await options.propose(payload, context); await source!(); }
+        catch (cause) { if (commandProposal) await host.cancel(owner); throw cause; }
         return { ok: true, data: { url: prepared.url, stopped: 'approval_pending', proposal_id: proposalId, binding: prepared.binding }, source_taint: 'external' };
       } catch { return rejected('The browser task could not be observed or updated. Inspect its current state before trying again.'); }
     },
@@ -52,18 +60,22 @@ export function browserTaskHandler(options: Readonly<{
 }
 export function browserTaskApprovalBridge(options: Readonly<{
   ownerId: string | (() => string);
-  host(payload: BrowserSubmitProposal): Promise<BrowserTaskHost | null>;
+  host(payload: BrowserSubmitProposal, operation?: 'deny'): Promise<BrowserTaskHost | null>;
 }>) {
   const ownerId = () => typeof options.ownerId === 'function' ? options.ownerId() : options.ownerId;
-  const resolve = async (payload: BrowserSubmitProposal) => {
+  const resolve = async (payload: BrowserSubmitProposal, operation?: 'deny') => {
     const reference = browserTaskContinuationSchema.safeParse(payload.continuation);
     if (!reference.success) return null;
     let host: BrowserTaskHost | null;
-    try { host = await options.host(payload); } catch { return null; }
+    try { host = await options.host(payload, operation); } catch { return null; }
     if (!host || host.taskRef !== reference.data.taskRef || host.pageUrl !== payload.url) return null;
     return { host, reference: reference.data };
   };
   return {
+    async deny(payload: BrowserSubmitProposal): Promise<void> {
+      const resolved = await resolve(payload, 'deny');
+      if (resolved && await resolved.host.validateProposal(ownerId(), resolved.reference, payload)) await resolved.host.deny(ownerId(), resolved.reference.proposalId);
+    },
     async submit(payload: BrowserSubmitProposal, approvalRef?: string): Promise<BrowserSubmitOutcome> {
       const resolved = await resolve(payload);
       if (!resolved || !approvalRef) return { status: 'rejected', message: 'The prepared browser task or current owner approval is unavailable.' };
