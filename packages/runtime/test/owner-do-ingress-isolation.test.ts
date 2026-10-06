@@ -503,7 +503,7 @@ describe('real owner-DO ingress in a sealed test world', () => {
     });
     const update = 800000 + ++sequence * 10;
     const text = 'Read the fixture inbox for a new mail task.';
-    taskDecision = { decision: 'new', sources: ['mail'], evidence: text };
+    taskDecision = { decision: 'new', sources: ['mail'], evidence: 'read my diary' };
     await send(81102, text, update);
     const card = outbox.find(item => item.method === 'sendMessage' && String(item.body.text).includes('Start a new task with read access only to: mail'))!;
     expect(card).toBeDefined(); expect(sourceWorld.accessLog('b@example.invalid')).toEqual([]);
