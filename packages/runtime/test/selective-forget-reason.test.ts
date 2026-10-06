@@ -48,9 +48,9 @@ describe('ordinary chat punctuation does not hold a forget', () => {
     expect(selectedForgetResult(topic, snap(rows), pick([span], ['episodes:20']), snap(rows))).toEqual({ texts: [span.text] });
     expect(selectedForgetResult(topic, snap(rows), pick([], ['episodes:20']), snap(rows))).toEqual({ reason: 'row_without_span:episodes' });
   });
-  it('still refuses hidden format characters in a span', () => {
-    const hidden = [{ ref: 'episodes:21', text: 'keep ZEBRA-COBALT\u200b hidden here' }];
-    const raw = pick([{ ref: 'episodes:21', text: 'keep ZEBRA-COBALT\u200b hidden here' }], ['episodes:21']);
+  it('still refuses control characters in a span', () => {
+    const hidden = [{ ref: 'episodes:21', text: 'keep ZEBRA-COBALT\u0000 hidden here' }];
+    const raw = pick([{ ref: 'episodes:21', text: 'keep ZEBRA-COBALT\u0000 hidden here' }], ['episodes:21']);
     expect(selectedForgetResult(topic, snap(hidden), raw, snap(hidden))).toEqual({ reason: 'span_text_rule' });
   });
 });
