@@ -456,12 +456,14 @@ describe('real owner-DO ingress in a sealed test world', () => {
       expect(own.every(input => input.prompt_cache_key === `waldo:prn_10000000000000000000${String(subject).padStart(12, '0')}`)).toBe(true);
     }
     expect(outbox.every((item) => item.method === 'setWebhook' || [81101, 81102].includes(Number(item.body.chat_id)))).toBe(true);
-    // The DO's scheduler runs on the wall clock: a card or heartbeat fired by the sends above can deliver its own messages after
-    // this point (CI runs 37440852158, 37447417419). Count only what a re-sent reply would add: reactions and the model answer.
-    const repliesTo = () => outbox.filter(item => item.method === 'setMessageReaction' || (item.method === 'sendMessage' && item.body.text === 'Synthetic answer from the model adapter.')).length;
-    const before = repliesTo();
+    // The DO's scheduler runs on the wall clock: a card or heartbeat can send its own message after the sends above (CI runs 37440852158,
+    // 37447417419, 37454186492), and the model adapter gives every model call the same text, so counting answers or the outbox is not stable.
+    // A replay of this update would act on this update's own message again: it reacts to message_id === update for the same chat.
+    const reactionsToUpdate = () => outbox.filter(item => item.method === 'setMessageReaction' && item.body.chat_id === 81101 && item.body.message_id === update).length;
+    const before = reactionsToUpdate();
+    expect(before).toBeGreaterThan(0);
     expect((await send(81101, 'My private fixture is cedar.', update)).status).toBe(200);
-    expect(repliesTo()).toBe(before); // duplicate ingress cannot re-send effects
+    expect(reactionsToUpdate()).toBe(before); // duplicate ingress cannot act on the message again
     await runInDurableObject(doStub(81101), async (_instance, state) => {
       expect(state.storage.kv.get('telegram_subject')).toBe('81101');
     });
