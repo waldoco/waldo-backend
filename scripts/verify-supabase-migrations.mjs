@@ -40,6 +40,7 @@ const expectedMigrations = [
   '20260930134308_waldo_health_context_access_hardening.sql',
   '20261002120000_waldo_owner_admission_revision.sql',
   '20261002170021_waldo_optional_phone_signup.sql',
+  '20261003000000_waldo_router_signed_fail_closed.sql',
   '20261004030000_browser_owner_binding.sql',
   '20261004190110_owner_trace_identity.sql',
 ];
