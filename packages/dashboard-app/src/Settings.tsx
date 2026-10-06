@@ -1,6 +1,23 @@
 import { ControlsPanel } from './Controls';
 import { OwnerControlsPanel } from './OwnerControls';
 export type SettingsSection = 'day' | 'sessions' | 'usage' | 'account' | 'setup';
-const sections = [{key:'day',label:'Day & notifications'},{key:'sessions',label:'Sessions'},{key:'usage',label:'Usage'},{key:'account',label:'Account & privacy'},{key:'setup',label:'Setup'}] as const;
-export function SettingsNavigation({selected}:{selected:SettingsSection}) {return <nav className="settings-tabs" aria-label="Settings sections">{sections.map(item=><a key={item.key} aria-current={selected===item.key?'page':undefined} href={`#/settings/${item.key}`}>{item.label}</a>)}</nav>;}
-export function SettingsPanel({section}:{section:SettingsSection}) {return <><div className="page-heading"><h1>Settings.</h1></div><SettingsNavigation selected={section}/>{section==='account'?<OwnerControlsPanel view="account" embedded/>:<ControlsPanel key={section} view={section==='sessions'?'connections':section} embedded section={section==='sessions'?'sessions':undefined}/>}</>;}
+export type SettingsTab = 'day' | 'connections' | 'files' | 'usage' | 'account' | 'invites' | 'admin';
+const tabs: { key: SettingsTab; label: string; href: string }[] = [
+  { key: 'day', label: 'Your day', href: '#/settings/day' }, { key: 'connections', label: 'Connections', href: '#/connections' },
+  { key: 'files', label: 'Files', href: '#/files' }, { key: 'usage', label: 'Usage', href: '#/settings/usage' },
+  { key: 'account', label: 'Account', href: '#/settings/account' }, { key: 'invites', label: 'Invites', href: '#/invites' },
+];
+export const settingsTab = (section: SettingsSection): SettingsTab | null => section === 'sessions' ? 'account' : section === 'setup' ? null : section;
+export function SettingsNavigation({ selected, isAdmin = false }: { selected: SettingsTab | null; isAdmin?: boolean }) {
+  const items = isAdmin ? [...tabs, { key: 'admin' as const, label: 'Invite management', href: '#/admin' }] : tabs;
+  return <nav className="segmented" aria-label="Settings sections">{items.map(item => <a key={item.key} aria-current={selected === item.key ? 'page' : undefined} href={item.href}>{item.label}</a>)}</nav>;
+}
+export function SettingsHead({ selected, isAdmin = false }: { selected: SettingsTab | null; isAdmin?: boolean }) {
+  return <><div className="page-heading"><h1>Settings.</h1></div><SettingsNavigation selected={selected} isAdmin={isAdmin}/></>;
+}
+export function SettingsPanel({ section, isAdmin = false }: { section: SettingsSection; isAdmin?: boolean }) {
+  return <><SettingsHead selected={settingsTab(section)} isAdmin={isAdmin}/>
+    {section === 'account' || section === 'sessions' ? <><OwnerControlsPanel view="account" embedded/><ControlsPanel key="sessions" view="connections" embedded section="sessions"/></>
+      : <ControlsPanel key={section} view={section} embedded/>}
+    <p className="caption"><a href="/console/legacy">Open the classic console <span aria-hidden="true">↗</span></a></p></>;
+}

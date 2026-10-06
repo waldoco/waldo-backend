@@ -1,11 +1,13 @@
 import { describe,it,expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { DashboardNavigation, resolveRoute } from './App';
+import { SettingsNavigation } from './Settings';
 import { quota,pageRows,inviteStatus } from './admin-model';
 describe('restricted admin presentation',()=>{
  it('does not advertise admin to non-admin and selects restricted entry only when backed',()=>{
   expect(renderToStaticMarkup(<DashboardNavigation route="today"/>)).not.toContain('#/admin');
-  const html=renderToStaticMarkup(<DashboardNavigation route="admin" isAdmin/>);
+  expect(renderToStaticMarkup(<SettingsNavigation selected="day"/>)).not.toContain('#/admin');
+  const html=renderToStaticMarkup(<SettingsNavigation selected="admin" isAdmin/>);
   expect(html).toContain('href="#/admin"');expect(html).toContain('aria-current="page"');expect(resolveRoute('admin')).toBe('admin');
  });
  it('counts every issued code and clamps only remaining quota',()=>{
