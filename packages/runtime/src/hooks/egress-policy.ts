@@ -31,7 +31,7 @@ export const EGRESS_TARGET_PATHS: Readonly<
   // Browser tools fetch owner-named URLs; declaring the path puts them under the non-global
   // address blocks below (the conformance test pins the declaration to the arg schema).
   browse_page: [{ kind: 'url', path: ['url'] }],
-  browse_act: [{ kind: 'url', path: ['url'] }],
+  browse_act: [{ kind: 'url', path: ['url'] }, { kind: 'url', path: ['command', 'url'] }],
 });
 
 // Deploy config feeds the hook: WALDO_EGRESS_ALLOWLIST is a comma-separated host list. Empty or

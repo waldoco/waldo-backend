@@ -194,13 +194,21 @@ export type BrowsePageArgs = z.infer<typeof browsePageArgsSchema>;
 // B-tool-2: bounded in-page actions. observe-before-act seam, capped steps, deterministic
 // stop before anything irreversible-looking (submit/pay/send/book...) - those need the
 // approval gate, which is B-tool-3, not model judgment.
+const browserCommandIntent = z.enum(['read', 'send']).optional();
 export const browserTaskCommandSchema = z.discriminatedUnion('operation', [
+  z.strictObject({ operation: z.literal('goto'), url: z.url().max(2000), intent: browserCommandIntent }),
+  z.strictObject({ operation: z.literal('click'), element_ref: z.string().min(1).max(80), intent: browserCommandIntent }),
+  z.strictObject({ operation: z.literal('type'), element_ref: z.string().min(1).max(80), value: z.string().min(1).max(1000).optional(), key: z.literal('Enter').optional(), intent: browserCommandIntent }).refine(value => (value.value !== undefined) !== (value.key !== undefined), 'Type needs exactly a value or Enter'),
+  z.strictObject({ operation: z.literal('scroll'), delta: z.int().min(-2000).max(2000), intent: browserCommandIntent }),
+  z.strictObject({ operation: z.literal('read'), intent: browserCommandIntent }),
+  z.strictObject({ operation: z.literal('wait'), milliseconds: z.int().min(0).max(1000), intent: browserCommandIntent }),
   z.strictObject({ operation: z.literal('inspect') }),
   z.strictObject({ operation: z.literal('fill'), field_ref: z.string().min(1).max(80), value: z.string().min(1).max(1000) }),
   z.strictObject({ operation: z.literal('prepare_submit') }),
   z.strictObject({ operation: z.literal('verify') }),
   z.strictObject({ operation: z.literal('cancel') }),
 ]);
+export type BrowserTaskCommand = z.infer<typeof browserTaskCommandSchema>;
 export const browseActArgsSchema = z.strictObject({
   url: z.url().max(2000),
   task: z.string().min(1).max(1000),

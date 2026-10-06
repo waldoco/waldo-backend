@@ -84,8 +84,9 @@ export class BrowserSessionBoundary {
   }
 }
 
-const taskFactsSchema = z.record(z.string().min(1).max(80), z.string().min(1).max(1000)).refine(value => Object.keys(value).length > 0 && Object.keys(value).length <= 24 && Object.keys(value).every(key => !['__proto__', 'constructor', 'prototype'].includes(key)));
-export const browserTaskProposalSchema = z.strictObject({ id: z.string().min(1).max(200), url: publicUrlSchema, actionRef: z.string().min(1).max(300), actionDigest: digestSchema, scopeDigest: digestSchema, stateDigest: digestSchema, bindingDigest: digestSchema, binding: taskFactsSchema });
+const taskFactsSchema = z.record(z.string().min(1).max(80), z.string().max(1000)).refine(value => Object.keys(value).length > 0 && Object.keys(value).length <= 24 && Object.keys(value).every(key => !['__proto__', 'constructor', 'prototype'].includes(key)));
+export const browserTaskRequestSchema = z.strictObject({ url: publicUrlSchema, method: z.literal('POST'), fields: z.array(z.string().min(1).max(80)).min(1).max(24) });
+export const browserTaskProposalSchema = z.strictObject({ id: z.string().min(1).max(200), url: publicUrlSchema, actionRef: z.string().min(1).max(300), actionDigest: digestSchema, scopeDigest: digestSchema, stateDigest: digestSchema, bindingDigest: digestSchema, binding: taskFactsSchema, request: browserTaskRequestSchema.optional(), approvalExpiresAt: z.int().nonnegative().optional() }).refine(proposal => proposal.request !== undefined || Object.values(proposal.binding).every(value => value.length > 0), { message: 'Legacy browser facts must be nonempty', path: ['binding'] });
 export type BrowserTaskProposal = z.infer<typeof browserTaskProposalSchema>;
 export const browserTaskReceiptSchema = z.strictObject({ id: z.string().min(1).max(100), observed_at: iso8601Schema, source: z.enum(['controlled_fixture', 'provider']), action_digest: digestSchema, binding_digest: digestSchema });
 export type BrowserTaskReceipt = z.infer<typeof browserTaskReceiptSchema>;

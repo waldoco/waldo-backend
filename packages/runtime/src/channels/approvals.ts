@@ -30,6 +30,8 @@ export type BrowserSubmitProposal = Readonly<{
   binding: Readonly<Record<string, string>>;
   steps: readonly string[];
   continuation?: BrowserTaskContinuation;
+  request?: Readonly<{ url: string; method: 'POST'; fields: readonly string[] }>;
+  approvalExpiresAt?: number;
 }>;
 const BROWSER_SUBMIT_TTL_MS = 30 * 60_000;
 
@@ -82,6 +84,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   reviewUrl?: () => Promise<string | null>;
   log(entry: TurnLogEntry): void;
   browserSubmit?: (proposal: BrowserSubmitProposal, approvalRef?: string) => Promise<BrowserSubmitOutcome>;
+  browserDeny?: (proposal: BrowserSubmitProposal) => Promise<void>;
   browserReceiptVerified?: (proposal: BrowserSubmitProposal, receipt: Extract<BrowserSubmitOutcome, { status: 'verified_with_receipt' }>['receipt']) => Promise<boolean>;
   sendMessage?: (proposal: MessageSendProposal) => Promise<void>;
   // Returns a bounded owner-facing outcome line (the result is external content).
@@ -112,7 +115,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
 
   const describeBrowser = (p: BrowserSubmitProposal) => {
     const binding = Object.entries(p.binding).map(([k, v]) => `${k}: ${v}`).join(', ');
-    return `${p.action.description} on ${p.url}${binding ? ` (${binding})` : ''}`;
+    return `${p.action.description} on ${p.url}${p.request ? ` via ${p.request.method} ${p.request.url}` : ''}${binding ? ` (${binding})` : ''}`;
   };
   const describeEmail = (p: EmailSendProposal) => `Send email to ${p.to.join(', ')}: "${p.subject}"`;
   const describeMessage = (p: MessageSendProposal) => `Send this on ${p.channel}: "${p.content.length > 120 ? `${p.content.slice(0, 117)}...` : p.content}"`;
@@ -147,6 +150,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const alreadySent = (key: string, selfId: string) =>
     sql.exec<{ id: string }>("SELECT id FROM ledger WHERE kind = 'message_send' AND status = 'done' AND id != ? AND json_extract(payload_json, '$.idempotency_key') = ? LIMIT 1", selfId, key).toArray().length > 0;
   const expired = (entry: LedgerRow, p: Stored) =>
+    (entry.kind === 'browser_submit' && (p as unknown as BrowserSubmitProposal).approvalExpiresAt !== undefined && (!Number.isSafeInteger((p as unknown as BrowserSubmitProposal).approvalExpiresAt) || deps.now() >= (p as unknown as BrowserSubmitProposal).approvalExpiresAt!)) ||
     deps.now() - entry.created_at > (entry.kind === 'browser_submit' ? BROWSER_SUBMIT_TTL_MS : PROPOSAL_TTL_MS) || (entry.kind !== 'browser_submit' && p.start !== undefined && Date.parse(p.start) <= deps.now());
   const apply = async (client: GoogleClient, p: Stored): Promise<Undo | null | 'stale'> => {
     if (p.action === 'create') {
@@ -199,6 +203,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         out = { toast: 'This proposal expired', message: `That proposal expired, so nothing happened: ${describeAny(entry)}. Ask me again if you still want it.` };
       } else if (action === 's') {
         setStatus(id, 'skipped');
+        if (entry.kind === 'browser_submit') await deps.browserDeny?.(JSON.parse(entry.payload_json) as BrowserSubmitProposal);
         out = { toast: 'Not now', message: 'Left it. Nothing changed.' };
       } else if (action === 'e') {
         setStatus(id, 'changing');

@@ -11,7 +11,7 @@ export type CloudflareBrowserSdkLoader = () => Promise<Sdk>;
 export type BrowserSourceGuard = () => Promise<void>;
 const admitted: BrowserSourceGuard = async () => {};
 export type FixtureState = Readonly<{ url: string; values: Record<string, string>; target: string; method: string; disabled: boolean }>;
-export type FixtureObservation = Readonly<{ url: string; stateDigest: string; binding: Readonly<Record<string, string>> }>;
+export type FixtureObservation = Readonly<{ url: string; stateDigest: string; binding: Readonly<Record<string, string>>; text?: string; elements?: readonly Readonly<{ ref: string }>[]; action?: Readonly<{ url: string; method: 'POST'; fields: readonly string[] }> }>;
 export const fixtureDigest = async (value: unknown) => `sha256:${[...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value))))].map(x => x.toString(16).padStart(2, '0')).join('')}`;
 
 // This function is trusted host code evaluated against a configured synthetic

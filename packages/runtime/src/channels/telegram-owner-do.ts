@@ -1181,6 +1181,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       log({ trace: `${channel}-unlinked`, hop: 'turn', ms: 0, ok: false, detail: `dropped: ${channel} not linked for this owner` });
       return;
     }
+    try {
     const offsetKey = channel === 'whatsapp' ? 'wa_offset' : 'offset';
     const offset = durable ? 0 : (await this.ctx.storage.get<number>(offsetKey)) ?? 0;
     const raw = update as RawUpdate;
@@ -1242,6 +1243,16 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const parsed = await new TelegramPollingAdapter({ getUpdates: async () => [update] }, 0).poll(0);
       for (const inbound of parsed.accepted) { scope?.admit(); await listener.handle({ ...inbound, ...(scope ? { runScope: scope } : {}) }); }
     } else await listener.pollOnce(new TelegramPollingAdapter({ getUpdates: async () => [update] }, offset), 0);
+    } finally {
+      try { await this.browserTasks.finishRun(); }
+      catch {
+        // Cleanup uncertainty cannot replace an already completed owner outcome.
+        // Keep the checkpoint and fence further actions; maintenance owns retry.
+        try { await this.browserTasks.revoke(); } catch { /* storage uncertainty remains unresolved */ }
+        const failure: TurnLogEntry = { trace: `${channel}-browser-cleanup`, hop: 'browser_cleanup', ms: 0, ok: false, code: 'browser_cleanup_unresolved', error: 'Browser cleanup failed; session absence remains unconfirmed.' };
+        try { log(failure); } catch { console.error(JSON.stringify(failure)); }
+      }
+    }
   }
 
   private async runHarness(command: NonNullable<ReturnType<typeof parseHarnessCommand>>, updateId: number): Promise<string> {
@@ -1587,8 +1598,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       return `telegram:${this.ctx.id.toString()}:${boundOwner}`;
     };
     const browserSources = browserTaskSourceCustody(storage.sql, storage.kv);
-    const browserApproval = browserTaskApprovalBridge({ ownerId: () => this.browserTasks.principal, host: async payload => {
-      await this.browserReady; const source = browserSources.guard(payload); await source();
+    const browserApproval = browserTaskApprovalBridge({ ownerId: () => this.browserTasks.principal, host: async (payload, operation) => {
+      await this.browserReady;
+      if (operation === 'deny') return this.browserTasks.resolve(this.browserTasks.principal);
+      const source = browserSources.guard(payload); await source();
       return this.browserTasks.resolve(this.browserTasks.principal, source);
     } });
     const desk = approvalDesk(storage.sql, {
@@ -1610,6 +1623,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       browserSubmit: (proposal, approval) => proposal.continuation ? browserApproval.submit(proposal, approval) : executeBrowserSubmit(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, proposal),
       browserReceiptVerified: browserApproval.receiptVerified,
+      browserDeny: browserApproval.deny,
       // Approved sends go out this Waldo's own channel chat, verbatim, through the same routed
       // call the cards use. A proposal naming another channel fails honestly instead of
       // rerouting silently.

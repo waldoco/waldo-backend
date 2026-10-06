@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { EGRESS_TARGET_PATHS } from '../src/hooks/egress-policy';
+import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, evaluateDeclaredEgress } from '../src/hooks/egress-policy';
+import { buildSessionState, browseActArgsSchema, type BrowseActArgs, type ToolHandler } from '@waldo/contracts';
+import { dispatchTool, type ToolDispatcherContext } from '../src/tools/dispatcher';
+import { sanitise } from '../src/scribe/sanitiser';
 import { TOOL_ARG_SCHEMAS } from '../src/hooks/registry';
 
 type JsonSchema = Record<string, unknown>;
@@ -83,20 +86,71 @@ function undeclaredUriPaths(
   );
 }
 
-function schemaAtPath(schema: unknown, path: readonly string[]): unknown {
-  if (path.length === 0) return schema;
-  if (!isRecord(schema) || '$ref' in schema || '$dynamicRef' in schema) {
-    throw new Error('target-path conformance does not support referenced schemas');
-  }
-
+function schemasAtPath(schema: unknown, path: readonly string[]): JsonSchema[] {
+  if (!isRecord(schema)) return [];
+  if ('$ref' in schema || '$dynamicRef' in schema) throw new Error('target-path conformance does not support referenced schemas');
+  if (path.length === 0) return [schema];
   const [segment, ...rest] = path;
-  if (segment === '*') return schemaAtPath(schema.items, rest);
-
-  const properties = schema.properties;
-  return isRecord(properties) ? schemaAtPath(properties[segment ?? ''], rest) : undefined;
+  const direct = segment === '*' ? schema.items : isRecord(schema.properties) ? schema.properties[segment ?? ''] : undefined;
+  return [
+    ...schemasAtPath(direct, rest),
+    ...['allOf', 'anyOf', 'oneOf'].flatMap(key => Array.isArray(schema[key]) ? schema[key].flatMap(branch => schemasAtPath(branch, path)) : []),
+  ];
 }
 
 describe('egress URL schema conformance', () => {
+  it('blocks a nested goto destination before handler or provider IO, with an allowed positive control', async () => {
+    let handled = 0, issued = 0;
+    const provider = async () => { issued++; };
+    const handler: ToolHandler<BrowseActArgs, { observed: boolean }, ToolDispatcherContext> = {
+      name: 'browse_act', description: 'Read controlled synthetic state', schema: browseActArgsSchema,
+      trigger_allowlist: ['user_message'], autonomy_gated: false,
+      async handle() { handled++; await provider(); return { ok: true, data: { observed: true }, source_taint: 'external' }; },
+    };
+    const invoke = (url: string, allowlist = ['example.org']) => dispatchTool({ id: crypto.randomUUID(), name: 'browse_act', args: {
+      url: 'https://forms.example.org/form', task: 'Read the synthetic form', command: { operation: 'goto', url },
+    } }, {
+      authenticatedUserId: 'synthetic-owner', trigger: 'user_message',
+      session: buildSessionState({ trigger: 'user_message', canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'], started_at: 1700000000000 }),
+      now: () => 1700000000000, rateLimitCheck: () => true, hasApproval: () => true,
+      sourceTaint: null, toolArgSourceTaint: null, sanitise, egressAllowlist: allowlist,
+    }, { handlers: [handler] });
+    for (const url of ['http://127.0.0.1/', 'http://169.254.169.254/', 'https://offsite.example.net/form']) {
+      expect(await invoke(url)).toMatchObject({ ok: false, code: 'forbidden' });
+      expect(handled).toBe(0); expect(issued).toBe(0);
+    }
+    expect(await invoke('https://forms.example.org/form', [OPEN_PUBLIC, '-forms.example.org'])).toMatchObject({ ok: false, code: 'forbidden' });
+    expect(handled).toBe(0); expect(issued).toBe(0);
+    expect(await invoke('https://forms.example.org/form')).toMatchObject({ ok: true });
+    expect(handled).toBe(1); expect(issued).toBe(1);
+  });
+
+  it('finds union URI paths without vacuous target checks', () => {
+    for (const union of ['anyOf', 'oneOf']) {
+      const schema = { properties: { command: { [union]: [
+        { properties: { url: { type: 'string', format: 'uri' } } },
+        { properties: { operation: { type: 'string' } } },
+      ] } } };
+      expect(uriPaths(schema)).toEqual(['command.url']);
+      expect(undeclaredUriPaths({ example: uriPaths(schema) }, {})).toEqual(['example.command.url']);
+      expect(schemasAtPath(schema, ['command', 'url'])).toEqual([{ type: 'string', format: 'uri' }]);
+      expect(schemasAtPath(schema, ['command', 'absent'])).toEqual([]);
+    }
+  });
+
+  it('applies public, private, blocklist and strict policies to nested destinations', () => {
+    const paths = EGRESS_TARGET_PATHS.browse_act!;
+    const args = (command: unknown) => ({ url: 'https://forms.example.org/form', command });
+    const evaluate = (command: unknown, allowlist = [OPEN_PUBLIC], openPublic = true) => evaluateDeclaredEgress(args(command), paths, allowlist, { openPublic });
+    expect(evaluate({ url: 'https://other.example.net/' })).toEqual({ ok: true });
+    for (const url of ['http://127.0.0.1/', 'http://169.254.169.254/']) expect(evaluate({ url })).toEqual({ ok: false, reason: 'blocked_host' });
+    expect(evaluate({ url: 'https://blocked.example.net/' }, [OPEN_PUBLIC, '-example.net'])).toEqual({ ok: false, reason: 'blocked_host' });
+    expect(evaluate('invalid')).toEqual({ ok: false, reason: 'malformed_target' });
+    expect(evaluate({ url: 'https://offsite.example.net/' }, ['example.org'], false)).toEqual({ ok: false, reason: 'host_not_allowlisted' });
+    expect(evaluate({ url: 'https://forms.example.org/' }, ['example.org'], false)).toEqual({ ok: true });
+    expect(evaluate(undefined, ['example.org'], false)).toEqual({ ok: true });
+  });
+
   it('requires each registered URI argument path to be explicitly declared', () => {
     const declared = declaredUriPaths();
     const registered = registeredUriPaths();
@@ -132,8 +186,9 @@ describe('egress URL schema conformance', () => {
       expect(schema).toBeDefined();
 
       for (const path of paths ?? []) {
-        const target = schemaAtPath(schema?.toJSONSchema(), path.path);
-        expect(isRecord(target) && target.type === 'string').toBe(true);
+        const targets = schemasAtPath(schema?.toJSONSchema(), path.path);
+        expect(targets.length).toBeGreaterThan(0);
+        expect(targets.every(target => target.type === 'string')).toBe(true);
       }
     }
   });

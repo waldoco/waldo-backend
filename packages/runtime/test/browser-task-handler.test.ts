@@ -71,3 +71,34 @@ it('withholds a typed observation and proposal after the captured task source is
   const args = browseActArgsSchema.parse({ url: host.pageUrl, task: 'inspect', command: { operation: 'inspect' } });
   expect(await handler.handle(args, ctx)).toMatchObject({ ok: false }); expect(proposed).toBe(0);
 });
+it('projects closed-command snapshots as text and refs and refuses a declared-send-only hold without a card or success claim', async () => {
+  let cards = 0, send = false;
+  const host = { pageUrl: 'https://fixture.example/form', command: async () => send ? { held: true, reason: 'declared_send_unsupported' } : { held: false, snapshot: { url: 'https://fixture.example/form', text: 'Synthetic page', elements: [{ ref: 'value' }], binding: { value: 'synthetic' }, stateDigest: 'private-host-digest', session_id: 'private-provider-id' } } };
+  const handler = browserTaskHandler({ legacy: browseActHandler(undefined, undefined, undefined), host: async () => host as never, propose: async () => { cards++; return 'must-not-publish'; } });
+  const args = browseActArgsSchema.parse({ url: host.pageUrl, task: 'Lying description: submit is only a read', command: { operation: 'read' } });
+  const result = await handler.handle(args, context);
+  expect(result).toEqual({ ok: true, data: { url: host.pageUrl, text: 'Synthetic page', elements: [{ ref: 'value' }] }, source_taint: 'external' });
+  send = true;
+  expect(await handler.handle(args, context)).toMatchObject({ ok: false, code: 'rejected' });
+  expect(cards).toBe(0);
+});
+
+it.each(['desk', 'source'] as const)('closes an unpublished native hold when %s admission/publication fails', async failure => {
+  const { browserTaskContinuity } = await import('../src/channels/browser-task-continuity');
+  const { syntheticCommandAdapter } = await import('../src/channels/browser-synthetic-commands');
+  let row: unknown = null, alive = false, posts = 0, closes = 0;
+  const driver = syntheticCommandAdapter({ origin: 'https://fixture.example', pageUrl: 'https://fixture.example/form', runId: 'run', submitRef: '#submit', transport: {
+    start: async () => { alive = true; return 'fake-id'; },
+    observe: async () => ({ url: 'https://fixture.example/form', text: 'Form', elements: [{ ref: 'value', tag: 'input', type: 'text', field: 'value', inForm: true }, { ref: '#submit', tag: 'button', type: 'submit', inForm: true }], form: { action: 'https://fixture.example/submit', method: 'POST', values: { value: 'synthetic' } } }),
+    execute: async (_id, command) => { if (command.operation === 'click') posts++; },
+    close: async () => { closes++; alive = false; }, absent: async () => !alive, verify: async () => null,
+  } });
+  const host = browserTaskContinuity({ enabled: true, ownerId: 'owner-a', taskId: 'run', manifestDigest: `sha256:${'a'.repeat(64)}`, driver, now: () => 100, newId: () => crypto.randomUUID(), admit: async () => 'grant',
+    store: { exclusive: work => work(), load: async () => row, save: async value => { row = value; } },
+  });
+  const handler = browserTaskHandler({ legacy: browseActHandler(undefined, undefined, undefined), host: async () => host, propose: async () => { throw Error('desk unavailable'); } });
+  let sourceChecks = 0;
+  const guardedContext = { authenticatedUserId: 'owner-a', assertTaskSourceCurrent: async () => { if (failure === 'source' && ++sourceChecks > 2) throw Error('source revoked'); } } as never;
+  expect(await handler.handle(browseActArgsSchema.parse({ url: host.pageUrl, task: 'read', command: { operation: 'click', element_ref: '#submit', intent: 'read' } }), guardedContext)).toMatchObject({ ok: false });
+  expect(posts).toBe(0); expect(closes).toBe(1); expect(alive).toBe(false); expect(row).toMatchObject({ phase: 'closed', session: { state: 'ended' } });
+});
