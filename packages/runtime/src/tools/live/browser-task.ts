@@ -32,7 +32,7 @@ export function browserTaskHandler(options: Readonly<{
         if (['goto', 'click', 'type', 'scroll', 'read', 'wait'].includes(command.operation)) {
           const result = await host.command(owner, command); await source!();
           if (!result.held) return { ok: true, data: { url: result.snapshot.url, text: result.snapshot.text, elements: result.snapshot.elements }, source_taint: 'external' };
-          if (result.reason) return rejected('declared_send_unsupported: Held without acting. This send is outside the controlled form submission, so no approval card was created.');
+          if (result.reason) return rejected(result.reason === 'page_write_blocked' ? 'page_write_blocked: An unapproved page write was blocked. No approval card was created.' : 'declared_send_unsupported: Held without acting. This send is outside the controlled form submission, so no approval card was created.');
           commandProposal = result.proposal;
         }
         if (command.operation === 'inspect') {

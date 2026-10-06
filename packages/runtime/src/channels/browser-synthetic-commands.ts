@@ -31,14 +31,16 @@ export function syntheticCommandAdapter(options: Readonly<{ origin: string; page
   const sameSite = (raw: string) => { try { const url = new URL(raw); return url.protocol === 'https:' && url.origin === options.origin && !url.username && !url.password; } catch { return false; } };
   if (!sameSite(options.pageUrl) || new URL(options.origin).origin !== options.origin) throw Error('synthetic site rejected');
   let permit: { action: string; body: string; assertApproval?: () => void } | undefined;
+  let blockedWrites = 0;
   const allowRequest = (request: SyntheticRequest) => {
-    if (!sameSite(request.url)) return false;
+    const denied = () => { if (!['GET', 'HEAD'].includes(request.method)) blockedWrites++; return false; };
+    if (!sameSite(request.url)) return denied();
     if (request.method === 'GET' || request.method === 'HEAD') return true;
     const current = permit;
-    if (!current || request.method !== 'POST' || request.url !== current.action) return false;
-    try { current.assertApproval?.(); } catch { return false; }
+    if (!current || request.method !== 'POST' || request.url !== current.action) return denied();
+    try { current.assertApproval?.(); } catch { return denied(); }
     const actual = [...new URLSearchParams(request.body ?? '')].sort(([a], [b]) => a.localeCompare(b));
-    if (JSON.stringify(actual) !== current.body) return false;
+    if (JSON.stringify(actual) !== current.body) return denied();
     permit = undefined; // One approved request, including concurrent page requests.
     return true;
   };
@@ -50,7 +52,7 @@ export function syntheticCommandAdapter(options: Readonly<{ origin: string; page
       || !state.elements.length || state.elements.length > 32 || new Set(state.elements.map(element => element.ref)).size !== state.elements.length
       || Object.keys(state.form.values).length > 24 || !Object.keys(state.form.values).length
       || Object.entries(state.form.values).some(([key, value]) => !key || ['__proto__', 'constructor', 'prototype'].includes(key) || typeof value !== 'string' || value.length > 1000)
-      || state.elements.some(element => element.tag === 'input' && (element.type === 'password' || element.type === 'hidden' || !element.field || !Object.hasOwn(state.form.values, element.field)))) throw Error('synthetic state rejected');
+      || state.elements.some(element => element.tag === 'input' && (element.type === 'password' || element.type === 'hidden' || !isSubmitter(element) && (!element.field || !Object.hasOwn(state.form.values, element.field))))) throw Error('synthetic state rejected');
     return state;
   };
   const checked = async (id: string, digest: string) => { const state = await observe(id); if (await fixtureDigest(state) !== digest) throw Error('synthetic state changed'); return state; };
@@ -82,7 +84,9 @@ export function syntheticCommandAdapter(options: Readonly<{ origin: string; page
         || command.operation === 'type' && command.key === 'Enter' && element?.inForm;
       if (submit) return { held: true as const, nativeSubmit: true };
       if (command.intent === 'send') return { held: true as const, nativeSubmit: false };
+      const beforeBlocked = blockedWrites;
       await effect(id, command, digest, before, assertCurrent);
+      if (blockedWrites > beforeBlocked) return { held: true as const, nativeSubmit: false, reason: 'page_write_blocked' as const };
       return { held: false as const };
     },
     async fill(id: string, field: string, value: string, digest: string, before: BrowserSourceGuard, source?: BrowserSourceGuard, assertCurrent?: () => void) {

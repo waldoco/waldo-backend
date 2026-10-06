@@ -20,7 +20,7 @@ export type BrowserTaskDriver = Readonly<{
   submit(id: string, stateDigest: string, before: () => Promise<void>, source?: BrowserSourceGuard, assertApproval?: () => void): Promise<unknown>;
   verify(bindingDigest: string, source?: BrowserSourceGuard): Promise<Readonly<{ id: string; observed_at: string; source: BrowserTaskReceipt['source']; binding_digest: string }> | null>;
   end(id: string): Promise<void>;
-  command?(id: string, command: SyntheticCommand, stateDigest: string, before: BrowserSourceGuard, source?: BrowserSourceGuard, assertCurrent?: () => void): Promise<{ held: boolean; nativeSubmit?: boolean }>;
+  command?(id: string, command: SyntheticCommand, stateDigest: string, before: BrowserSourceGuard, source?: BrowserSourceGuard, assertCurrent?: () => void): Promise<{ held: boolean; nativeSubmit?: boolean; reason?: 'page_write_blocked' }>;
 }>;
 type Driver = BrowserTaskDriver;
 type Evidence = Readonly<{ actionDigest?: string; bindingDigest?: string; stateDigest?: string; proposalId?: string; approvalRef?: string }>;
@@ -194,7 +194,7 @@ export function browserTaskContinuity(options: Readonly<{
         if (!outcome.held && ['type', 'click', 'goto'].includes(command.operation)) await save({ ...counted, phase: 'active', proposal: null });
         return outcome;
       });
-      return result.held && result.nativeSubmit === false ? { held: true as const, reason: 'declared_send_unsupported' as const } : result.held ? { held: true as const, proposal: await this.propose(authenticatedOwner) } : { held: false as const, snapshot: await this.inspect(authenticatedOwner) };
+      return result.held && result.nativeSubmit === false ? { held: true as const, reason: result.reason ?? 'declared_send_unsupported' as const } : result.held ? { held: true as const, proposal: await this.propose(authenticatedOwner) } : { held: false as const, snapshot: await this.inspect(authenticatedOwner) };
     },
     async cancel(authenticatedOwner: string) { identity(authenticatedOwner); return options.store.exclusive(async () => end(await get())); },
     async reconcile(authenticatedOwner: string): Promise<BrowserSubmitOutcome> { identity(authenticatedOwner); return options.store.exclusive(async () => readback(await get())); },

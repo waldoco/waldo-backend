@@ -99,7 +99,7 @@ it('existing task and approval ledger bridge rejects foreign owner, binds actual
 });
 it.each(['submit', 'image'])('native input type=%s is held before DOM effects regardless of declared read', async type => {
   const f = fixture(), state = f.state();
-  f.set({ ...state, elements: state.elements.map(element => element.ref === '#submit' ? { ...element, tag: 'input', type, field: 'value' } : element) });
+  f.set({ ...state, elements: state.elements.map(element => element.ref === '#submit' ? { ...element, tag: 'input', type } : element) });
   const id = await f.driver.start(600000), snapshot = await f.driver.inspect(id);
   expect(await f.driver.command(id, { operation: 'click', element_ref: '#submit', intent: 'read' }, snapshot.stateDigest, async () => {})).toMatchObject({ held: true });
   expect(f.effects()).toBe(0);
@@ -141,4 +141,29 @@ it('rejects a second or changed native submitter rather than substituting the co
   const id = await f.driver.start(600000);
   await expect(f.driver.inspect(id)).rejects.toThrow('synthetic state rejected');
   expect(f.effects()).toBe(0);
+});
+it('binds empty nonsecret form values to a native approval hold', async () => {
+  const { browserGate } = await import('../src/channels/browser-gate');
+  const f = fixture(), state = f.state(); f.set({ ...state, form: { ...state.form, values: { value: '' } } });
+  let row: unknown = null;
+  const gate = browserGate({ enabled: true, ownerId: 'owner', manifestDigest: `sha256:${'a'.repeat(64)}`, driver: f.driver, now: () => 100, newId: () => crypto.randomUUID(), admit: async () => 'grant',
+    store: { exclusive: work => work(), load: async () => row, save: async value => { row = value; } }, approvals: { create: async () => 'ledger', consume: async () => true },
+  });
+  const result = await gate.command('owner', { operation: 'click', element_ref: '#submit' });
+  expect(result).toMatchObject({ held: true, proposal: { binding: { value: '' }, request: { method: 'POST', fields: ['value'] } } });
+  expect(f.effects()).toBe(1); // Initial navigation only; no submit effect.
+});
+it('reports an unsolicited blocked page write as a hold without a substituted submit proposal', async () => {
+  const { browserGate } = await import('../src/channels/browser-gate');
+  let policy!: (request: { url: string; method: string; body?: string }) => boolean, row: unknown = null, writes = 0, cards = 0;
+  const driver = syntheticCommandAdapter({ origin: 'https://fixture.example', pageUrl: facts().url, runId: 'run-one', submitRef: '#submit', transport: {
+    start: async (_ttl, gate) => { policy = gate; return 'id'; }, observe: async () => facts(), close: async () => {}, absent: async () => true, verify: async () => null,
+    execute: async (_id, command, _digest, before, assertCurrent) => { await before(); assertCurrent?.(); if (command.operation === 'click' && policy({ url: 'https://fixture.example/script', method: 'POST', body: '{}' })) writes++; },
+  } });
+  const gate = browserGate({ enabled: true, ownerId: 'owner', manifestDigest: `sha256:${'a'.repeat(64)}`, driver, now: () => 100, newId: () => crypto.randomUUID(), admit: async () => 'grant',
+    store: { exclusive: work => work(), load: async () => row, save: async value => { row = value; } }, approvals: { create: async () => { cards++; return 'ledger'; }, consume: async () => true },
+  });
+  expect(await gate.command('owner', { operation: 'click', element_ref: 'plain' })).toEqual({ held: true, reason: 'page_write_blocked' });
+  expect(writes).toBe(0); expect(cards).toBe(0);
+  await gate.finishRun('owner'); expect(row).toMatchObject({ phase: 'closed' });
 });

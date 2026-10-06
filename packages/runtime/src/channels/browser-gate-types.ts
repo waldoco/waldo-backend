@@ -22,9 +22,9 @@ export type BrowserGateDriverPort = Readonly<{
   verify(bindingDigest: string): ReturnType<BrowserTaskDriver['verify']>;
 }>;
 export type BrowserGateSessionDriver = BrowserTaskDriver & Readonly<{
-  command(id: string, command: BrowserGateCommand, stateDigest: string, before: BrowserSourceGuard, source?: BrowserSourceGuard, assertCurrent?: () => void): Promise<{ held: boolean; nativeSubmit?: boolean }>;
+  command(id: string, command: BrowserGateCommand, stateDigest: string, before: BrowserSourceGuard, source?: BrowserSourceGuard, assertCurrent?: () => void): Promise<{ held: boolean; nativeSubmit?: boolean; reason?: 'page_write_blocked' }>;
 }>;
-export type BrowserGateCommandResult = { held: true; proposal: BrowserTaskProposal; approvalRef: string } | { held: true; reason: 'declared_send_unsupported' } | { held: false; snapshot: Readonly<{ url: string; text: string; elements: readonly Readonly<{ ref: string }>[] }> };
+export type BrowserGateCommandResult = { held: true; proposal: BrowserTaskProposal; approvalRef: string } | { held: true; reason: 'declared_send_unsupported' | 'page_write_blocked' } | { held: false; snapshot: Readonly<{ url: string; text: string; elements: readonly Readonly<{ ref: string }>[] }> };
 export type BrowserGate = Readonly<{
   command(owner: string, command: BrowserGateCommand): Promise<BrowserGateCommandResult>;
   approve(owner: string, proposalId: string, approvalRef: string): Promise<BrowserSubmitOutcome>;
