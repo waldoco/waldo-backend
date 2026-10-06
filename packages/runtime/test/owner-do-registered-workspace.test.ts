@@ -540,7 +540,7 @@ it('fresh authenticated new workspace task proceeds after strict pasted-only fol
     expect(result.newWrite!.ok).toBe(true); expect(result.newRead!.ok).toBe(true);
     expect(result.newRead!.data.text).toBe(BYTES);
     const current = h.state.storage.sql.exec<{ task_id: string; sources_json: string; start_ref: string }>('SELECT task_id, sources_json, start_ref FROM owner_task_source_scope').one();
-    expect(current.task_id).not.toBe(prior); expect(JSON.parse(current.sources_json)).toEqual(['local', 'workspace']);
+    expect(current.task_id).not.toBe(prior); expect(JSON.parse(current.sources_json)).toEqual(['workspace']);
     expect(current.start_ref).toMatch(/^tg-/);
     expect(h.puts).toHaveLength(1);
   });
