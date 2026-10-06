@@ -152,6 +152,29 @@ describe('browser gate: seam delta from the 11:55 review', () => {
   });
 });
 
+describe('browser gate: request permit (fake request broker, not live firewall proof)', () => {
+  it('G19 one approval permits exactly one matching request', async () => {
+    const t = setup();
+    const held = heldOf(await t.gate.command(OWNER, click('send-submit')));
+    t.site.setAllow((r) => r.method === 'GET' || r.url === `${t.site.origin}/submit`);
+    await t.gate.approve(OWNER, held.proposal.id, held.approvalRef);
+    expect(t.site.posts()).toHaveLength(1);
+    heldOf(await t.gate.command(OWNER, click('send-submit')));        // the same request again needs a new approval
+    expect(t.site.posts()).toHaveLength(1);
+  });
+  it('G20 a redirect from an allowed GET to a write target is aborted', async () => {
+    const t = setup();
+    t.site.addRedirect(`${t.site.origin}/feedback`, `${t.site.origin}/api/side-effect`);
+    await t.gate.command(OWNER, { operation: 'goto', url: `${t.site.origin}/feedback` }).catch(() => undefined);
+    expect(t.site.posts()).toEqual([]);
+  });
+  it('G21 Enter in a text field is a native submit and is held', async () => {
+    const t = setup();
+    heldOf(await t.gate.command(OWNER, { operation: 'type', element_ref: 'name', value: 'x', key: 'Enter' } as BrowserGateCommand));
+    expect(t.site.posts()).toEqual([]);
+  });
+});
+
 describe('browser gate: session lifecycle', () => {
   it('G14 finishing the run closes the session and reads back absence; a time limit stops the loop with an error', async () => {
     const t = setup();

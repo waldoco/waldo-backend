@@ -24,6 +24,7 @@ export const fakeSite = () => {
     [`${ORIGIN}/feedback`]: [],
     [`${ORIGIN}/items/delete?id=1`]: [],
   };
+  const redirects: Record<string, string> = {};
   let before: (() => void) | undefined;
   const send = (method: string, target: string, body?: string) => {
     if (method !== 'GET') before?.();
@@ -38,11 +39,12 @@ export const fakeSite = () => {
     blockedWrites: () => requests.filter((r) => r.method !== 'GET' && r.blocked),
     gets: () => requests.filter((r) => r.method === 'GET'),
     addElement: (e: El) => { pages[url] = [...(pages[url] ?? []), e]; },
+    addRedirect: (from: string, to: string) => { redirects[from] = to; },
     beforeEffect: (fn: () => void) => { before = fn; },
     setAllow: (fn: typeof allow) => { allow = fn; },
     observe: (): BrowserGateObservation => ({ url, text: 'synthetic page', elements: pages[url] ?? [], form: { action: `${ORIGIN}/submit`, method: 'POST', values: { ...values } } }),
     apply(command: BrowserGateCommand): void {
-      if (command.operation === 'goto') { if (send('GET', command.url)) url = command.url; return; }
+      if (command.operation === 'goto') { if (!send('GET', command.url)) return; const hop = redirects[command.url]; if (hop) { send('POST', hop, '{}'); return; } url = command.url; return; }
       if (command.operation === 'type') {
         const e = el(command.element_ref); if (!e?.field || e.type === 'password') throw Error('field not typeable');
         if (command.value !== undefined) values[e.field] = command.value;
