@@ -143,9 +143,11 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:59.999Z', '2026-10-04T18:
     await runtime.serial(async () => undefined);
     // With the clock pinned, mark that day's cards as already sent so the alarm has no day plan to make.
     // Without this the planner model call returns once the pinned instant is past IST midnight (observed at 18:30:00.001Z).
-    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+    // The clock can tick past IST midnight while the test runs (the 18:29:59.999Z case sits 1 ms before it), so mark both that day and the next.
+    const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' });
+    const days = [dayFmt.format(new Date()), dayFmt.format(new Date(Date.now() + 86_400_000))];
     const { DAY_CARDS } = await import('../src/prompt/day-cards');
-    for (const card of DAY_CARDS) state.storage.sql.exec('INSERT OR REPLACE INTO day_plan (day, card, time, reason, sent) VALUES (?, ?, ?, ?, 1)', today, card.id, '12:00', 'test fixture');
+    for (const day of days) for (const card of DAY_CARDS) state.storage.sql.exec('INSERT OR REPLACE INTO day_plan (day, card, time, reason, sent) VALUES (?, ?, ?, ?, 1)', day, card.id, '12:00', 'test fixture');
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
     await inbox.admit({ bot: 'hermetic-test-bot-token', subject: String(subject), doName: route(subject).doName }, updateId, 'PRIVATE_INTERRUPTED_REQUEST');
     await inbox.claim(`hermetic-test-bot-token:telegram:${updateId}`, 'interrupted-attempt', 'interrupted-run', Date.now() + 150_000);
