@@ -1,7 +1,7 @@
 type Sql = Pick<SqlStorage, 'exec'>;
 import { carriesTopic, hidesTopic } from './forget-guard';
 import type { ForgetSource, ForgetBatch, ForgetHeldBy } from './selective-forget';
-import { asciiLiteralIncludes, MAX_FORGET_SOURCES } from './selective-forget';
+import { asciiLiteralIncludes, isPlainForgetText, MAX_FORGET_SOURCES } from './selective-forget';
 
 export const CLAIM_KINDS = ['fact', 'preference', 'routine', 'goal', 'followup', 'health', 'event', 'pattern', 'observation'] as const;
 export const CLAIM_SOURCES = ['stated', 'confirmed', 'inferred'] as const;
@@ -938,7 +938,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     },
     authoriseTopicCoverage(topic: string, selected: readonly string[], at: string, complete = true): void {
       topic = topic.trim();
-      if (!selected.length || selected.length > MAX_FORGET_SOURCES || /[^\x20-\x7e]/.test(topic) || selected.some(text => text.length < 12 || text.length > 4096 || /[^\x20-\x7e]/.test(text) || !asciiLiteralIncludes(text, topic) || text.trim().toLowerCase() === topic.toLowerCase())) throw new Error('selected topic scope');
+      if (!selected.length || selected.length > MAX_FORGET_SOURCES || /[^\x20-\x7e]/.test(topic) || selected.some(text => text.length < 12 || text.length > 4096 || !isPlainForgetText(text) || !asciiLiteralIncludes(text, topic) || text.trim().toLowerCase() === topic.toLowerCase())) throw new Error('selected topic scope');
       const texts = [...new Set([...this.pendingTopics(), ...selected])];
       const existing = sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending').toArray().map(row => row.topic);
       const aggregate = [...new Set([...existing, ...texts])];
