@@ -2,6 +2,7 @@ import {
   PROVIDER_OF, TOOL_PERMISSIONS, triggerTypeSchema, browseActArgsSchema, browsePageArgsSchema, WALDO_CHAT_MODEL,
   type ToolHandler, type ToolName, type BrowsePageArgs, type BrowseActArgs,
 } from '@waldo/contracts';
+import type { CloudflarePageReader } from '../../channels/cloudflare-public-read';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { BrowserSubmitProposal } from '../../channels/approvals';
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, evaluateDeclaredEgress } from '../../hooks/egress-policy';
@@ -91,18 +92,27 @@ const recheckPages = async (
   return { ok: true };
 };
 
+export type BrowserPageProviders = Readonly<{ defaultProvider: 'cloudflare_playwright' | 'browserbase_stagehand_http_v3'; cloudflare?: CloudflarePageReader; allowBrowserbase: boolean }>;
+
 export const browsePageHandler = (
   apiKey: string | undefined,
   projectId: string | undefined,
   modelApiKey: string | undefined,
   fetcher: typeof fetch = fetch,
+  providers: BrowserPageProviders = { defaultProvider: 'browserbase_stagehand_http_v3', allowBrowserbase: true },
 ): ToolHandler<BrowsePageArgs, Readonly<{ url: string; data: unknown }>, ToolDispatcherContext> => ({
   name: 'browse_page',
-  description: 'Open a public web page in a real browser and extract information from it. Use when web_search snippets are not enough - the page is dynamic or needs reading in full. Read-only: it never clicks, fills or submits.',
+  description: 'Select cloudflare_playwright or browserbase_stagehand_http_v3 to open a public web page in a real browser and read information from it. Use when web_search snippets are not enough - the page is dynamic or needs reading in full. Read-only: it never clicks, fills or submits.',
   schema: browsePageArgsSchema,
   trigger_allowlist: allowlist('browse_page'),
   autonomy_gated: false,
-  async handle({ url, instruction }: BrowsePageArgs, ctx) {
+  async handle({ url, instruction, provider }: BrowsePageArgs, ctx) {
+    const selected = provider ?? providers.defaultProvider;
+    if (selected === 'cloudflare_playwright') {
+      if (!providers.cloudflare) return { ok: false, code: 'auth_failed', error: 'The selected Cloudflare browser is not configured.', source_taint: 'external' };
+      return providers.cloudflare({ url, instruction, provider: selected }, ctx);
+    }
+    if (!providers.allowBrowserbase) return { ok: false, code: 'rejected', error: 'The selected Browserbase provider is not enabled by this host.', source_taint: 'external' };
     if (!apiKey || !projectId) return { ok: false, code: 'auth_failed', error: 'Browsing is not set up on this Waldo yet.', source_taint: 'external' };
     const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json', ...(modelApiKey ? { 'x-model-api-key': modelApiKey } : {}) };
     const call = async (path: string, body: object) => {
