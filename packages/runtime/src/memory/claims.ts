@@ -921,10 +921,12 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         // Fail closed: a row whose text matches the topic prefilter holds the forget. Verification cannot release it, because a topic split across values or broken by a NUL is not provable clean.
         // The exit is the purge, which blanks such rows (see the update_cards pass above).
         // update_cards is checked card by card with the shared exact test (it also catches splits and NULs inside the first characters); other stores keep the prefilter.
-        const cardHold = table === 'update_cards' && available.includes('changes')
-          ? sql.exec<Record<string, SqlStorageValue>>(`SELECT ${available.join(', ')} FROM update_cards`).toArray().some(row => cardCarriesTopic(row.changes, available.includes('text') ? row.text : null, topic))
-          : null;
-        if (available.length && (cardHold ?? sql.exec(`SELECT 1 FROM ${table} WHERE ${projectionPredicate(available)} LIMIT 1`, ...available.flatMap(() => [like, like, like])).toArray().length > 0)) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'projection', rows: 1 }); }
+        // The count is every row that holds, so /heldrows shows how large the backlog is. Holding is still any one row.
+        const heldRows = !available.length ? 0
+          : table === 'update_cards' && available.includes('changes')
+            ? sql.exec<Record<string, SqlStorageValue>>(`SELECT ${available.join(', ')} FROM update_cards`).toArray().filter(row => cardCarriesTopic(row.changes, available.includes('text') ? row.text : null, topic)).length
+            : Number(sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table} WHERE ${projectionPredicate(available)}`, ...available.flatMap(() => [like, like, like])).one().n);
+        if (heldRows > 0) { incomplete = true; held.push(table); heldBy.push({ table, rule: 'projection', rows: heldRows }); }
         if (available.length && !held.includes(table)) {
           guard(table, available, true);
         }
