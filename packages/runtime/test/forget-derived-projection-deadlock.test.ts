@@ -29,7 +29,7 @@ it('a derived update card holding an incomplete forget is blanked by the purge, 
   });
 });
 
-it('the early purge removes no claims and keeps the topic pending and incomplete, async () => {
+it('the early purge removes no claims and keeps the topic pending and incomplete', async () => {
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('derived-projection-episodes')), (_i, state) => {
     const sql = state.storage.sql;
     const store = claimStore(sql);
