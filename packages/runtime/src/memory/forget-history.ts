@@ -16,7 +16,7 @@ export const splitDrops = (texts: readonly string[], roles: readonly unknown[], 
       }
     }
   };
-  const every = texts.map((_, i) => i);
+  const every = texts.map((_, i) => i).filter(i => texts[i]!.length > 0);
   for (const gap of ['', ' ']) {
     sweep(every, gap);
     for (const role of new Set(roles)) sweep(every.filter(i => roles[i] === role), gap);

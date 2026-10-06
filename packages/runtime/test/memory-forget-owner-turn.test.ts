@@ -430,3 +430,8 @@ it('held history split detection is linear: 2000 entries in milliseconds, and it
   expect(drop.filter(Boolean).length).toBe(2);
   expect(drop[1000] && drop[1002]).toBe(true);
 });
+
+it('held history split detection skips empty entries so a spaced topic still matches across them', () => {
+  const drop = splitDrops(['project', '', 'falcon plan'], ['user', 'assistant', 'user'], ['project falcon'], [false, false, false]);
+  expect(drop).toEqual([true, false, true]);
+});
