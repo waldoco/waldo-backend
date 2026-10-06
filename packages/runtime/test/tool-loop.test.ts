@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildSessionState, getContextArgsSchema, sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type LLMTool, type LLMToolTurn } from '@waldo/contracts';
-import { capToolOutput, NO_PROGRESS_LIMIT, runToolLoop, TOOL_OUTPUT_LIMIT, WARN_WINDOW_ROUNDS } from '../src/conversation/tool-loop';
+import { capToolOutput, runToolLoop, TOOL_OUTPUT_LIMIT, WARN_WINDOW_ROUNDS } from '../src/conversation/tool-loop';
 import { googleHandlers } from '../src/tools/live/google';
 import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
 import { getContextHandler } from '../src/tools/live/get-context';
@@ -47,11 +47,11 @@ describe('runToolLoop', () => {
     expect(JSON.parse(outputs[1]!)).toMatchObject({ ok: false });
   });
 
-  it('withdraws tools after three rounds in a row where every call failed', async () => {
+  it('keeps tools offered after failed rounds until the hard budget ends', async () => {
     const offered: boolean[] = [];
     let n = 0;
     const text = await runToolLoop({
-      handlers, ctx, maxSteps: 25,
+      handlers, ctx, maxSteps: 5,
       step: async (tools) => {
         offered.push(tools !== undefined);
         n += 1;
@@ -59,7 +59,7 @@ describe('runToolLoop', () => {
       },
     });
     expect(text).toBe('Could not do that.');
-    expect(offered).toEqual([true, true, true, false]);
+    expect(offered).toEqual([true, true, true, true, true, false]);
   });
 
   it('reports an unknown tool to the model instead of throwing', async () => {
@@ -109,8 +109,8 @@ describe('reasoning passback', () => {
   it('threads response output items into the next round first turn', async () => {
     const seenTurns: Array<readonly unknown[]> = [];
     const text = await runToolLoop({
-      handlers: [],
-      ctx: {} as never,
+      handlers,
+      ctx,
       maxSteps: 3,
       step: async (_tools, turns) => {
         seenTurns.push(turns);
@@ -171,7 +171,7 @@ describe('runToolLoop connect intents', () => {
   });
 });
 
-describe('warn-first budget notice and semantic no-progress', () => {
+describe('warn-first budget notice and distinct read identities', () => {
   const okFetcher = async (): Promise<Response> =>
     Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } });
 
@@ -196,7 +196,7 @@ describe('warn-first budget notice and semantic no-progress', () => {
     expect(lastDelivered[lastDelivered.length - 1]).toContain('[budget: tool budget exhausted this turn');
   });
 
-  it('refuses a call whose stabilized (tool, args, result) triple repeats NO_PROGRESS_LIMIT times, pre-dispatch', async () => {
+  it('dispatches distinct cursor searches through the full hard budget', async () => {
     let fetched = 0;
     const volatileFetcher = async (): Promise<Response> => {
       fetched += 1;
@@ -214,13 +214,12 @@ describe('warn-first budget notice and semantic no-progress', () => {
       },
     });
     expect(text).toBe('stopped.');
-    expect(fetched).toBe(NO_PROGRESS_LIMIT);
-    expect(outputs[outputs.length - 1]).toContain('No progress');
+    expect(fetched).toBe(25);
+    expect(outputs.every((output) => !output.includes('no_progress'))).toBe(true);
   });
 
   it('never blocks distinct long natural-language queries that return identical empty results', async () => {
-    // Long pure-alphabetic words are ordinary search terms, not volatile tokens; stabilization
-    // must preserve them, so three different queries with the same empty outcome stay callable.
+    // Empty outcomes do not establish that distinct searches are useless.
     let fetched = 0;
     const web = webSearchHandler('test-key', async (): Promise<Response> => { fetched += 1; return Response.json({ web: { results: [] } }); });
     const queries = [
@@ -246,7 +245,7 @@ describe('warn-first budget notice and semantic no-progress', () => {
     expect(outputs.every((o) => !o.includes('No progress'))).toBe(true);
   });
 
-  it('does not flag calls whose small-integer args genuinely differ (pagination survives stabilization)', async () => {
+  it('dispatches distinct page searches', async () => {
     let fetched = 0;
     const web = webSearchHandler('test-key', async (): Promise<Response> => { fetched += 1; return okFetcher(); });
     let n = 0;
@@ -262,8 +261,8 @@ describe('warn-first budget notice and semantic no-progress', () => {
   });
 });
 
-describe('refusals never feed the failure streak', () => {
-  it('refusal-only rounds neither withdraw tools nor reset a genuine failure streak', async () => {
+describe('refusals preserve remaining tool availability', () => {
+  it('keeps tools available across refusal and failed rounds', async () => {
     let n = 0;
     const offered: boolean[] = [];
     const text = await runToolLoop({
@@ -272,9 +271,7 @@ describe('refusals never feed the failure streak', () => {
         offered.push(tools !== undefined);
         n += 1;
         if (!tools) return { text: 'closed.' };
-        // rounds 1-2: same identical call (2nd is refused); round 3: unknown tool (genuine
-        // failure); rounds 4-5: refusals again. If refusals fed the streak, tools would be
-        // withdrawn by round 4-5.
+        // Mix exact refusals with a failed tool call; resources remain available.
         if (n <= 2) return { text: '', tool_calls: [call] };
         if (n === 3) return { text: '', tool_calls: [{ call_id: 'x3', name: 'launch_rocket', arguments: '{"limit":1}' }] };
         if (n <= 6) return { text: '', tool_calls: [call] };
@@ -282,15 +279,13 @@ describe('refusals never feed the failure streak', () => {
       },
     });
     expect(text).toBe('closed.');
-    // Tools were still offered after two refusal rounds + one genuine failure + three more
-    // refusal rounds: the streak only reached 1, never FAILED_ROUNDS_LIMIT, so the loop never
-    // withdrew tools before the model chose to close.
+    // The model can close while the hard budget still has rounds available.
     expect(offered).toEqual([true, true, true, true, true, true, true]);
   });
 });
 
-describe('mutation-resets-streak (Hermes progress evidence)', () => {
-  it('a successful mutation clears no-progress tracking, so a repeated read is a new experiment', async () => {
+describe('mutation read epochs and replay protection', () => {
+  it('distinct read targets remain callable across a successful mutation', async () => {
     let searched = 0;
     const web = webSearchHandler('test-key', async (): Promise<Response> => {
       searched += 1;
@@ -319,10 +314,7 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
       step: async (tools) => {
         n += 1;
         if (!tools) return { text: 'done.' };
-        // 3 searches differing only in a volatile cursor token: exact-dup never fires, but the
-        // stabilized triple repeats, so the pair is blocked after the 3rd result. Then a
-        // successful mutation lands - new state, new experiment - and the SAME search must
-        // dispatch again instead of refusing.
+        // Distinct cursors remain distinct before and after the state mutation.
         if (n <= 3) return { text: '', tool_calls: [{ call_id: `s${n}`, name: 'web_search', arguments: `{"query":"status cursor-token-${n}-abcdefgh"}` }] };
         if (n === 4) return { text: '', tool_calls: [{ call_id: 'm1', name: 'get_context', arguments: '{}' }] };
         if (n === 5) return { text: '', tool_calls: [{ call_id: 's4', name: 'web_search', arguments: '{"query":"status cursor-token-9-abcdefgh"}' }] };
@@ -444,7 +436,7 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
     expect(outputs[1]).toContain('Same call already made this turn');
   });
 
-  it('without an intervening mutation the 4th repeat is refused (control)', async () => {
+  it('distinct cursor reads remain callable without a mutation', async () => {
     let searched = 0;
     const web = webSearchHandler('test-key', async (): Promise<Response> => {
       searched += 1;
@@ -460,8 +452,8 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
         return tools && n <= 4 ? { text: '', tool_calls: [{ call_id: `s${n}`, name: 'web_search', arguments: `{"query":"status cursor-token-${n}-abcdefgh"}` }] } : { text: 'done.' };
       },
     });
-    expect(searched).toBe(3);
-    expect(outputs[outputs.length - 1]).toContain('No progress');
+    expect(searched).toBe(4);
+    expect(outputs.every((output) => !output.includes('no_progress'))).toBe(true);
   });
 });
 describe('turn taint accumulation (Codex #224 hold)', () => {
