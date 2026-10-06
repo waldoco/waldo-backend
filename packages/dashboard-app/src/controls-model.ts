@@ -16,7 +16,7 @@ export type ConnectionsRecord = Base<'connections', {
 export type ProposalReview = { kind: 'email_send'; to: string[]; cc: string[]; bcc: string[]; subject: string; body: string }
   | { kind: 'message_send'; channel: string; content: string }
   | { kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string };
-export type WaitingRecord = Base<'waiting', { proposals: { id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; review: ProposalReview | null; actions: ('approval.approve' | 'approval.skip' | 'approval.undo')[] }[] }>;
+export type WaitingRecord = Base<'waiting', { timezone: string | null; proposals: { id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; review: ProposalReview | null; actions: ('approval.approve' | 'approval.skip' | 'approval.undo')[] }[] }>;
 export type ActivityCursors = { trace_before?: number | null; runs_before?: number | null };
 export type ActivityRecord = Base<'activity', {
   steps: { step: string; state: 'ok' | 'failed' | 'unseen'; at: string | null; note: string | null }[];
@@ -58,6 +58,7 @@ function readProposalReview(value: unknown): ProposalReview | null {
   throw shapeError();
 }
 
+const validZone = (zone: string) => { try { new Intl.DateTimeFormat('en', { timeZone: zone }); return true; } catch { return false; } };
 export function readControls<V extends ControlsView>(value: unknown, expected: V): Records[V] {
   if (!obj(value) || value.version !== 1 || value.view !== expected || value.state !== 'available' || !string(value.csrf) || !value.csrf || !string(value.revision) || !/^[a-f0-9]{64}$/.test(value.revision) || !obj(value.data)) throw shapeError();
   const data = value.data;
@@ -81,13 +82,15 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
   }
   if (expected === 'waiting') {
     if (!Array.isArray(data.proposals)) throw shapeError();
+    // An absent or unreadable zone is carried as null; the panel then says its illustration is in UTC.
+    const timezone = string(data.timezone) && validZone(data.timezone) ? data.timezone : null;
     const proposals = data.proposals.map(item => {
       if (!obj(item) || !string(item.id) || !string(item.kind) || !string(item.summary) || !['open', 'done', 'unconfirmed', 'review_only'].includes(String(item.state)) || !strings(item.actions) || !item.actions.every(action => ['approval.approve', 'approval.skip', 'approval.undo'].includes(action))) throw shapeError();
       const review = readProposalReview(item.review);
       if (review && review.kind !== item.kind || item.actions.includes('approval.approve') && (item.kind !== 'calendar_change' || item.state !== 'open' || review?.kind !== 'calendar_change') || item.actions.includes('approval.undo') && (item.kind !== 'calendar_change' || item.state !== 'done')) throw shapeError();
       return { id: item.id, kind: item.kind, summary: item.summary, state: item.state, review, actions: [...item.actions] };
     });
-    return { ...base, view: 'waiting', data: { proposals } } as Records[V];
+    return { ...base, view: 'waiting', data: { timezone, proposals } } as Records[V];
   }
   if (expected === 'activity') {
     if (!Array.isArray(data.steps) || !data.steps.every(row => obj(row) && string(row.step) && ['ok', 'failed', 'unseen'].includes(String(row.state)) && optionalString(row.at) && optionalString(row.note)) || !Array.isArray(data.trace) || !data.trace.every(row => obj(row) && string(row.time) && string(row.hop) && typeof row.ok === 'boolean' && finite(row.ms) && optionalString(row.summary)) || !Array.isArray(data.runs) || !data.runs.every(row => obj(row) && string(row.id) && string(row.kind) && string(row.status) && optionalString(row.summary) && string(row.started) && optionalString(row.ended)) || !obj(data.page) || ![data.page.trace_before, data.page.runs_before, data.page.trace_applied, data.page.runs_applied].every(cursor) || !string(data.ledger)) throw shapeError();

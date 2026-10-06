@@ -5,7 +5,7 @@ import type { ActivityRecord, FilesRecord, ProfileRecord, SetupRecord, UsageReco
 
 const base = { version: 1 as const, state: 'available' as const, csrf: 'c'.repeat(64), revision: 'a'.repeat(64) };
 const noop = () => {};
-const waiting: WaitingRecord = { ...base, view: 'waiting', data: { proposals: [
+const waiting: WaitingRecord = { ...base, view: 'waiting', data: { timezone: null, proposals: [
   { id: 'calendar', kind: 'calendar_change', summary: 'Move event', state: 'open', actions: ['approval.approve', 'approval.skip'], review: { kind: 'calendar_change', action: 'move', title: 'Gym', event_id: 'gym-1', start: '2026-10-02T08:00Z', end: '2026-10-02T09:00Z', reason: 'Requested move' } },
   { id: 'email', kind: 'email_send', summary: 'Send email', state: 'open', actions: ['approval.skip'], review: { kind: 'email_send', to: ['to@test.invalid'], cc: ['cc@test.invalid'], bcc: ['bcc@test.invalid'], subject: '<script>subject</script>', body: '<script>full email body</script>' } },
   { id: 'message', kind: 'message_send', summary: 'Send message', state: 'unconfirmed', actions: [], review: { kind: 'message_send', channel: 'telegram', content: 'Exact message words' } },
@@ -19,6 +19,22 @@ const activity: ActivityRecord = { ...base, view: 'activity', data: {
 } };
 
 describe('full waiting proposal review', () => {
+  it('draws the calendar illustration in the owner zone when it is known, and keeps the exact values', () => {
+    const kolkata = renderToStaticMarkup(<WaitingControls record={{ ...waiting, data: { ...waiting.data, timezone: 'Asia/Kolkata' } }} busy={false} onAction={noop}/>);
+    expect(kolkata).toContain('Fri, Oct 2, 1:30 PM–2:30 PM');
+    expect(kolkata).toContain('The illustration is in Asia/Kolkata');
+    expect(kolkata).toContain('2026-10-02T08:00Z');
+    expect(kolkata).toContain('Approve this calendar change');
+    const west = renderToStaticMarkup(<WaitingControls record={{ ...waiting, data: { ...waiting.data, timezone: 'America/Los_Angeles' } }} busy={false} onAction={noop}/>);
+    expect(west).toContain('1:00 AM–2:00 AM');
+  });
+
+  it('keeps the disclosed UTC illustration when no owner zone is known', () => {
+    const unknown = renderToStaticMarkup(<WaitingControls record={waiting} busy={false} onAction={noop}/>);
+    expect(unknown).toContain('8:00 AM–9:00 AM');
+    expect(unknown).toContain('The illustration is in UTC');
+  });
+
   it('renders exact reviewed words and recipients, eligible calendar decisions, and chat-only sends', () => {
     const html = renderToStaticMarkup(<WaitingControls record={waiting} busy={false} onAction={noop}/>);
     expect(html).toContain('to@test.invalid'); expect(html).toContain('cc@test.invalid'); expect(html).toContain('bcc@test.invalid');
@@ -32,7 +48,7 @@ describe('full waiting proposal review', () => {
 
   it('never renders generic email approval even with erroneous action metadata and blocks pending decisions', () => {
     const email = waiting.data.proposals[1]!;
-    const html = renderToStaticMarkup(<WaitingControls record={{ ...waiting, data: { proposals: [{ ...email, actions: ['approval.approve', 'approval.undo'] }] } }} busy onAction={noop}/>);
+    const html = renderToStaticMarkup(<WaitingControls record={{ ...waiting, data: { timezone: null, proposals: [{ ...email, actions: ['approval.approve', 'approval.undo'] }] } }} busy onAction={noop}/>);
     expect(html).not.toMatch(/<button[^>]*>Approve/); expect(html).not.toContain('Undo calendar');
     const pending = renderToStaticMarkup(<WaitingControls record={waiting} busy onAction={noop}/>);
     expect(pending).toContain('disabled=""'); expect(pending).not.toContain('/console/waiting');
@@ -92,14 +108,14 @@ it('uses honest labels with raw types inspectable, without inventing missing out
 });
 it('retains exact calendar timestamps, reference and invalid values in visible review',()=>{
  const proposal=waiting.data.proposals[0]!;
- const record:WaitingRecord={...waiting,data:{proposals:[{...proposal,review:{kind:'calendar_change',action:'move',title:'Review',event_id:'exact-ref',start:'2026-10-06T23:30:00+05:30',end:'invalid-end',reason:'Requested'}}]}};
+ const record:WaitingRecord={...waiting,data:{timezone:null,proposals:[{...proposal,review:{kind:'calendar_change',action:'move',title:'Review',event_id:'exact-ref',start:'2026-10-06T23:30:00+05:30',end:'invalid-end',reason:'Requested'}}]}};
  const html=renderToStaticMarkup(<WaitingControls record={record} busy={false} onAction={noop}/>);
  expect(html).toContain('2026-10-06T23:30:00+05:30');expect(html).toContain('invalid-end');expect(html).toContain('exact-ref');expect(html).toContain('Time or time zone could not be read');
 });
 it('does not offer calendar approval when a recorded time is invalid',()=>{
  const proposal=waiting.data.proposals[0]!;
  for(const start of ['invalid','2026-10-06T23:30:00']){
- const record:WaitingRecord={...waiting,data:{proposals:[{...proposal,review:{kind:'calendar_change',action:'move',title:'Review',event_id:'ref',start,end:null,reason:'Requested'}}]}};
+ const record:WaitingRecord={...waiting,data:{timezone:null,proposals:[{...proposal,review:{kind:'calendar_change',action:'move',title:'Review',event_id:'ref',start,end:null,reason:'Requested'}}]}};
  const html=renderToStaticMarkup(<WaitingControls record={record} busy={false} onAction={noop}/>);
  expect(html).toContain(start);expect(html).not.toContain('Approve this calendar change');
  }

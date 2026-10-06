@@ -44,6 +44,8 @@ const projections = {
     sessions: { until: view.sessionUntil, count: view.sessionCount, items: view.sessions.map((row) => ({ signed_in: row.signed_in, until: row.until, current: row.current })) },
   }),
   waiting: (view: ConsoleView) => ({
+    // Proposal times are instants; the console draws them in this owner zone when it can read it.
+    timezone: view.timezone,
     proposals: view.approvals.map((item) => {
       const review = item.review?.kind === item.kind ? safeReview(item.review) : null;
       const canApprove = consoleMayApprove(item) && review !== null;

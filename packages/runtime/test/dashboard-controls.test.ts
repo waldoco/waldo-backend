@@ -60,6 +60,11 @@ describe('narrow controls read projection', () => {
     expect(result.data.proposals[6]?.review).toBeNull();
   });
 
+  it('names the owner zone beside the proposals so times can be drawn in it', () => {
+    const result = projectControls({ ...SAMPLE_CONSOLE_VIEW, timezone: 'America/Los_Angeles', approvals: [SAMPLE_CONSOLE_VIEW.approvals[0]!] }, 'waiting');
+    expect(result.data.timezone).toBe('America/Los_Angeles');
+  });
+
   it('whitelists review fields rather than copying stored payload or extensions', () => {
     const review = { ...SAMPLE_CONSOLE_VIEW.approvals[0]!.review!, raw: 'secret-mime', payload_json: 'secret-json' };
     const result = projectControls({ ...SAMPLE_CONSOLE_VIEW, approvals: [{ ...SAMPLE_CONSOLE_VIEW.approvals[0]!, review }] }, 'waiting');

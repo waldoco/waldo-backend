@@ -50,6 +50,9 @@ describe('modern owner controls read', () => {
     const value = { ...day, view: 'waiting', data: { proposals: [proposal] } };
     const parsed = readControls(value, 'waiting');
     expect(parsed.data.proposals[0]?.review).toMatchObject({ body: 'Exact words' }); expect(JSON.stringify(parsed)).not.toContain('never-retain');
+    expect(parsed.data.timezone).toBeNull();
+    expect(readControls({ ...value, data: { timezone: 'Asia/Kolkata', proposals: [proposal] } }, 'waiting').data.timezone).toBe('Asia/Kolkata');
+    expect(readControls({ ...value, data: { timezone: 'Not/AZone', proposals: [proposal] } }, 'waiting').data.timezone).toBeNull();
     expect(() => readControls({ ...value, data: { proposals: [{ ...proposal, actions: ['approval.approve'] }] } }, 'waiting')).toThrow();
     expect(() => readControls({ ...value, data: { proposals: [{ ...proposal, state: 'done', actions: ['approval.undo'] }] } }, 'waiting')).toThrow();
     expect(() => readControls({ ...value, data: { proposals: [{ ...proposal, review: { kind: 'message_send', channel: 'telegram', content: 'Other review' } }] } }, 'waiting')).toThrow();
