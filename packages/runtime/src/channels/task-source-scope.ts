@@ -108,8 +108,7 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
         && !(instruction.quotedRanges ?? []).some(range => !Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end)
           || range.start < 0 || range.end < range.start || range.end > instruction.text.length
           || start < range.end && start + evidence.length > range.start);
-      const addsRetainedSource = decision.sources.some(source => source !== 'workspace' && source !== 'web' && !(defaultSources.includes(source) && (decision.decision === 'new' || !isNarrowed())) && (!previous.ready || !previous.sources.includes(source)));
-      if (ownerTransition && (decision.decision === 'close' || ['new', 'change'].includes(decision.decision) && !addsRetainedSource)) {
+      if (ownerTransition && (decision.decision === 'close' || ['new', 'change'].includes(decision.decision))) {
         // Semantic planning within existing authority, never a connector grant/ACL mutation.
         // CAS clears obsolete cards; the new task boundary prevents prior-task referent reuse.
         const closing = decision.decision === 'close';
