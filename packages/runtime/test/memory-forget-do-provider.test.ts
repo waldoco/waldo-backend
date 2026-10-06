@@ -1123,7 +1123,8 @@ for (const [mode, reason] of [
     await admittedTurn(name, 98001, 'What time is my unrelated standup?', ops());
     expect(request()).toContain(`reason class: ${reason}`);
     expect(request()).toContain('Recall is temporarily limited');
-    expect(request()).toContain(standup);
+    // A claim whose alias names the held topic is that topic's fact under another name, so it is withheld; every other standup stays.
+    if (mode === 'inventory-unsupported' || mode === 'fresh-unsupported') expect(request()).not.toContain(standup); else expect(request()).toContain(standup);
     if (mode === 'inventory-unsupported') expect(seen.selectorCalls).toHaveLength(0);
     else {
       expect(seen.selectorCalls).toHaveLength(mode === 'throws' ? 2 : 1);
@@ -2922,6 +2923,22 @@ it('read_owner_context with a held claim returns the unrelated claims and not th
   expect(out).toContain(KEEP);
   expect(out).not.toContain(topic);
   seen.selectorThrows = false;
+});
+it('a claim whose only held-topic text is an alias is withheld from the prompt and owner context', async () => {
+  await runInDurableObject(stub('held-alias-only'), async (_instance, state) => {
+    const topic = 'Independent cobalt workshop';
+    const memory = claimStore(state.storage.sql);
+    memory.add({ kind: 'preference', text: 'Enjoys folding paper at 09:10 UTC', evidence: 'Folding paper preference', origin: 'owner', source: 'stated', source_ref: 'owner, alias-fixture', aliases: [topic] }, new Date().toISOString());
+    memory.beginTopicCoverage(topic, new Date().toISOString()); seen.selectorThrows = true;
+    const responder = createOwnerResponder('fixture', undefined, memory); let round = 0;
+    seen.onReply = () => ++round === 1 ? [{ type: 'function_call', call_id: 'alias-only', name: 'read_owner_context', arguments: '{"topic":"folding","limit":10}' }] : [];
+    await responder.respond({ traceId: 'alias-only', conversationRef: 'owner', surface: 'telegram', text: 'What folding paper preference?', memoryWrites: false }, (_h, w) => w());
+    const provider = seen.requests.at(-1) as { input: Array<{ call_id?: string; output?: string }> };
+    const receipt = JSON.parse(provider.input.find(x => x.call_id === 'alias-only' && x.output !== undefined)!.output!);
+    expect(memory.incompleteTopics()).toContain(topic);
+    expect(receipt).toMatchObject({ ok: true, data: { claims: [], complete: false, withheld_items: 1 } });
+    expect(request()).not.toContain('Enjoys folding paper at 09:10 UTC');
+  });
 });
 it('REVIEW862 highlighted episode snippets cannot conceal a held topic', async () => {
   await runInDurableObject(stub('review862-snippet-tool'), async (_instance, state) => {

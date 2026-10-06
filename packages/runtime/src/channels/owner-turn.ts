@@ -460,8 +460,8 @@ export const createOwnerResponder = (
     ...memory,
     nodes: () => memory!.nodes().filter(node => !holdsHeldTopic(...structuredStrings(node))),
     edges: () => memory!.edges().filter(edge => !holdsHeldTopic(...structuredStrings(edge))),
-    claims: status => memory!.claims(status).filter(claim => !holdsHeldTopic(claim.text, claim.evidence, claim.source_ref)).map(promptClaim),
-    recall: (query, limit) => memory!.recall(query, limit).filter(claim => !holdsHeldTopic(claim.text, claim.evidence, claim.source_ref)).map(promptClaim),
+    claims: status => memory!.claims(status).filter(claim => !holdsHeldTopic(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)).map(promptClaim),
+    recall: (query, limit) => memory!.recall(query, limit).filter(claim => !holdsHeldTopic(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)).map(promptClaim),
   });
   const consumeRound = async () => {
     const added = await control.roundAsync();
@@ -531,6 +531,16 @@ export const createOwnerResponder = (
                 const hits = data.hits.filter((_hit, index) => rows[index] !== undefined && !holdsHeldTopic(...structuredStrings(rows[index])));
                 tally.dropped += data.hits.length - hits.length;
                 result = { ...(result as object), data: { ...data, hits } } as typeof result;
+              }
+            }
+            // read_owner_context strips aliases from its claims; a held topic can live only in an alias, so read them back by claim id.
+            if (handler.name === 'read_owner_context' && holdsAnyHeldTopic()) {
+              const data = (result as { data?: { claims?: ReadonlyArray<{ id?: number }> } }).data;
+              if (Array.isArray(data?.claims)) {
+                const aliasesById = new Map([...memory!.claims(), ...memory!.claims('promoted')].map(claim => [claim.id, (claim as { aliases?: string | null }).aliases] as const));
+                const claims = data.claims.filter(claim => !holdsHeldTopic(aliasesById.get(claim.id as number)));
+                tally.dropped += data.claims.length - claims.length;
+                result = { ...(result as object), data: { ...data, claims } } as typeof result;
               }
             }
             const kept = withholdHeldItems(result, tally);
