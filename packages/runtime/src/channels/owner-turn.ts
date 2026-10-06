@@ -1,4 +1,5 @@
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
+import { splitDrops } from '../memory/forget-history';
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { TASK_SOURCE_INSTRUCTION, TASK_SOURCE_SCHEMA, taskSourceAllowed, taskSourceRequired, taskSourcePrompt, type OwnerTaskSourceScope, type TaskSourceSnapshot, type TaskSourceFamily } from './task-source-scope';
 import { asciiLiteralIncludes, forgetSnapshot, forgetSourceBatch, selectedForgetResult, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, SELECTIVE_FORGET_SPAN_INSTRUCTION, mergeSecondSpanPass, unspannedEpisodeRows, type ForgetSource } from '../memory/selective-forget';
@@ -483,25 +484,7 @@ export const createOwnerResponder = (
     const texts = messages.map(message => structuredStrings(message.content).join('\n'));
     const bad = (text: string) => holdsHeldTopic(text, flat(text)) || quoted.some(quote => flat(text).includes(quote));
     const alone = texts.map(bad);
-    // A topic or quote can be split over any number of turns. Test every contiguous run of entries, both across all entries and across one role's entries alone
-    // (an owner message split over turns has assistant replies between its pieces), and drop every entry of a run whose join carries it. Runs that already hold a bad entry add nothing.
-    const drop = alone.slice();
-    const runBad = (indices: number[], from: number, to: number) => {
-      const parts = indices.slice(from, to + 1).map(i => texts[i]!);
-      return bad(parts.join('')) || bad(parts.join(' '));
-    };
-    const sweep = (indices: number[]) => {
-      for (let from = 0; from < indices.length; from++) {
-        for (let to = from + 1; to < indices.length; to++) {
-          if (alone[indices[to]!] || alone[indices[from]!]) break;
-          // Minimal runs only: both ends are needed, so an unrelated neighbour is not dragged in.
-          if (runBad(indices, from, to) && !runBad(indices, from + 1, to) && !runBad(indices, from, to - 1)) for (let k = from; k <= to; k++) drop[indices[k]!] = true;
-        }
-      }
-    };
-    const everyIndex = texts.map((_, i) => i);
-    sweep(everyIndex);
-    for (const role of new Set(messages.map(message => (message as { role?: unknown }).role))) sweep(everyIndex.filter(i => (messages[i] as { role?: unknown }).role === role));
+    const drop = splitDrops(texts.map(flat), messages.map(message => (message as { role?: unknown }).role), [...(forgettingState?.incompleteTopics() ?? []).map(flat), ...quoted], alone);
     const kept = messages.filter((_, index) => index === messages.length - 1 || !drop[index]);
     log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `held history kept ${kept.length} dropped ${messages.length - kept.length}` });
     return kept;

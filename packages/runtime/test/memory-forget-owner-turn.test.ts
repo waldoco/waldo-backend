@@ -1,3 +1,4 @@
+import { splitDrops } from '../src/memory/forget-history';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 
@@ -417,4 +418,15 @@ it('held history drops a topic split over three owner turns', async () => {
     expect(sent).toContain('OSPREY-31');
     for (const piece of ['note: abcd', 'efgh', 'ij-757 is sensitive']) expect(sent).not.toContain(piece);
   }, undefined, undefined, sql => episodeIndex(sql).add('hist3-src', 'owner', `${topic} likes cobalt paper`, 1));
+});
+
+it('held history split detection is linear: 2000 entries in milliseconds, and it finds a topic split over entries', () => {
+  const texts = Array.from({ length: 2000 }, (_, i) => `entry ${i} ${'x'.repeat(200)}`);
+  texts[1000] = 'note abcd'; texts[1002] = 'efgh';
+  const roles = texts.map((_, i) => (i % 2 ? 'assistant' : 'user'));
+  const started = Date.now();
+  const drop = splitDrops(texts, roles, ['abcdefgh'], texts.map(() => false));
+  expect(Date.now() - started).toBeLessThan(1000);
+  expect(drop.filter(Boolean).length).toBe(2);
+  expect(drop[1000] && drop[1002]).toBe(true);
 });
