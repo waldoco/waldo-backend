@@ -48,11 +48,17 @@ export const standingOrderBook = (sql: Sql, scheduler: Scheduler, clock: OwnerCl
         const now = clock.now().getTime();
         const today = localIso(now, clock.timezone).slice(0, 10);
         const due = nextAfter(localToEpoch(`${today}T${args.at}`, clock.timezone), now);
-        await scheduler.schedule({
-          id, kind: 'standing_order' as ScheduleKind, payloadRefs: { order_id: id },
-          occurrenceAt: due, dueAt: due,
-          recurrence: { type: 'daily_local', time: args.at, timezone: clock.timezone },
-        });
+        try {
+          await scheduler.schedule({
+            id, kind: 'standing_order' as ScheduleKind, payloadRefs: { order_id: id },
+            occurrenceAt: due, dueAt: due,
+            recurrence: { type: 'daily_local', time: args.at, timezone: clock.timezone },
+          });
+        } catch (error) {
+          // An active order with no armed schedule would look set and never run.
+          sql.exec('DELETE FROM standing_orders WHERE id = ?', id);
+          throw error;
+        }
       }
       return { id, scope: args.scope, trigger: args.trigger, at: args.at ?? null, gate: args.gate, escalation: args.escalation, created_at: clock.now().getTime() };
     },
@@ -61,7 +67,10 @@ export const standingOrderBook = (sql: Sql, scheduler: Scheduler, clock: OwnerCl
     async cancel(id) {
       const known = scheduler.read(id)?.kind === 'standing_order';
       if (known) await scheduler.cancel(id);
-      return sql.exec('DELETE FROM standing_orders WHERE id = ?', id).toArray().length > 0 || known;
+      // A DELETE returns no rows, so whether the order existed is read before removing it.
+      const existed = sql.exec('SELECT id FROM standing_orders WHERE id = ?', id).toArray().length > 0;
+      sql.exec('DELETE FROM standing_orders WHERE id = ?', id);
+      return existed || known;
     },
   };
 };

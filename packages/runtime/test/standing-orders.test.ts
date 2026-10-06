@@ -14,7 +14,7 @@ const fakeSql = () => {
         rows.set(id, { id, scope, trigger, at, gate, escalation, created_at });
         return { toArray: () => [] };
       }
-      if (query.startsWith('SELECT * FROM standing_orders WHERE id')) {
+      if (query.startsWith('SELECT * FROM standing_orders WHERE id') || query.startsWith('SELECT id FROM standing_orders WHERE id')) {
         const row = rows.get(args[0] as string);
         return { toArray: () => (row ? [row] : []) };
       }
@@ -22,8 +22,9 @@ const fakeSql = () => {
         return { toArray: () => [...rows.values()].sort((a, b) => a.created_at - b.created_at) };
       }
       if (query.startsWith('DELETE FROM standing_orders')) {
-        const had = rows.delete(args[0] as string);
-        return { toArray: () => (had ? [{ id: args[0] }] : []) };
+        // Faithful to SQLite: a DELETE without RETURNING yields no rows whether or not it removed one.
+        rows.delete(args[0] as string);
+        return { toArray: () => [] };
       }
       throw new Error(`unexpected query: ${query}`);
     },
@@ -149,5 +150,23 @@ describe('standing order tools', () => {
 
   it('returns a readable error for a daily order without a time', async () => {
     expect(await set!.handle({ scope: 'x', trigger: 'daily', gate: 'act_and_report', escalation: 'message_owner' } as never)).toMatchObject({ ok: false, code: 'invalid_args', error: 'a daily standing order needs its local HH:MM time' });
+  });
+
+  it('E3: cancelling an every-turn order the scheduler does not know still reports it removed; an unknown id reports false', async () => {
+    const sql = fakeSql();
+    const scheduler = fakeScheduler();
+    const book = standingOrderBook(sql as never, scheduler as never, clock, () => 'every1');
+    await book.set({ scope: 'Keep replies short', trigger: 'every_turn', gate: 'act_and_report', escalation: 'message_owner' });
+    expect(await book.cancel('order:every1')).toBe(true);
+    expect(book.byId('order:every1')).toBeNull();
+    expect(await book.cancel('order:every1')).toBe(false);
+  });
+
+  it('E4: a failed scheduler arm leaves no active daily order behind and the failure still surfaces', async () => {
+    const sql = fakeSql();
+    const scheduler = { ...fakeScheduler(), async schedule() { throw new Error('scheduler unavailable'); } };
+    const book = standingOrderBook(sql as never, scheduler as never, clock, () => 'daily1');
+    await expect(book.set({ scope: 'Summarize my day', trigger: 'daily', at: '21:00', gate: 'act_and_report', escalation: 'message_owner' })).rejects.toThrow('scheduler unavailable');
+    expect(book.list()).toHaveLength(0);
   });
 });
