@@ -838,6 +838,7 @@ export const createOwnerResponder = (
       let coveredTopic: string | undefined;
       // Why a forget stayed incomplete, as a code and counts only (never topic or source text), so a staging trace can say which gate held.
       let forgetWhy = '';
+      let forgetRows = '';
       // One bounded retry per record, from stored custody rather than this turn.
       const raisedTopic = ownerForgetTopic(raw, owner);
       const topic = raisedTopic ?? writerStore.incompleteTopics()[0] ?? null;
@@ -928,6 +929,8 @@ export const createOwnerResponder = (
           const ops = JSON.parse(raw);
           raw = JSON.stringify({ ...ops, forget_topic: null });
         }
+        // Trace-only: counts by saved store and the longest source, never row text, so a held forget can be read from the trace alone.
+        if (forgetWhy.startsWith('selection_rejected')) { const byTable = new Map<string, number>(); for (const row of supplied.sources) { const table = row.ref.split(':')[0]!; byTable.set(table, (byTable.get(table) ?? 0) + 1); } forgetRows = `held_rows ${[...byTable].map(([table, n]) => `${table}:${n}`).join(' ')} longest:${Math.max(0, ...supplied.sources.map(row => row.text.length))} over_limit:${supplied.sources.filter(row => row.text.length > 4096).length}`; }
         if (forgetWhy) {
           const reasonClass = forgetWhy.split('(')[0]!;
           const reasonMeaning: Record<string, string> = { sources_incomplete: 'some saved copies could not be fully read', selector_unavailable: 'the span check could not run', fresh_incomplete: 'a recheck after the span check was incomplete', selection_rejected: 'the checked spans did not cover every copy', batch_pending: 'a bounded batch was checked but cleanup is not yet complete', cleanup_pending: 'earlier exact cleanup still needs verified readback', preserved_store: `these saved stores are kept as they are and still mention it, so they need the owner's decision: ${[...new Set(forgetHeld)].join(', ')}` };
@@ -945,7 +948,7 @@ export const createOwnerResponder = (
       const settled = conv?.settled ?? true;
       // The receipt is emitted only now, after redaction and settle, so it can state what is true.
       const interrupted = writerStore.sweepInterruptedSettles(new Date(started - 10 * 60 * 1000).toISOString());
-      log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}${conv.failed ? ' verification incomplete' : ''}` : ''}${interrupted ? ` interrupted${interrupted}` : ''}${forgetWhy ? `; forget_incomplete ${forgetWhy}` : ''}` });
+      log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}${conv.failed ? ' verification incomplete' : ''}` : ''}${interrupted ? ` interrupted${interrupted}` : ''}${forgetWhy ? `; forget_incomplete ${forgetWhy}${forgetRows ? `; ${forgetRows}` : ''}` : ''}` });
       // Emitted last, after redaction, settle and logging: an error above returns 'uncertain' with no receipt.
       const o = outcome as ClaimOutcome | undefined;
       const topicUnverified = topic !== null && writerStore.incompleteTopics().includes(topic);
