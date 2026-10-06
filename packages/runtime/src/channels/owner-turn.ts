@@ -1,4 +1,5 @@
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
+import { splitDrops } from '../memory/forget-history';
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { TASK_SOURCE_INSTRUCTION, TASK_SOURCE_SCHEMA, taskSourceAllowed, taskSourceRequired, taskSourcePrompt, type OwnerTaskSourceScope, type TaskSourceSnapshot, type TaskSourceFamily } from './task-source-scope';
 import { asciiLiteralIncludes, forgetSnapshot, forgetSourceBatch, selectedForgetResult, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, SELECTIVE_FORGET_SPAN_INSTRUCTION, mergeSecondSpanPass, unspannedEpisodeRows, type ForgetSource } from '../memory/selective-forget';
@@ -467,6 +468,27 @@ export const createOwnerResponder = (
     const supportHeld = (raw: string): boolean => { try { const spots: unknown = JSON.parse(raw); return !Array.isArray(spots) || spots.some(id => typeof id !== 'number' || withheld.has(id) || (holding && !known.has(id))); } catch { return true; } };
     return memory!.nodes().filter(node => !holdsHeldTopic(...structuredStrings(node)) && !supportHeld(node.supporting_spots));
   };
+  // History under a hold: the conversation stays, minus entries that carry a held topic and entries that quote the text a withheld claim was saved from (the topic's fact under another name).
+  // Quotes match ignoring case and spacing. A topic or quote split across two neighbouring entries is caught by also testing each adjacent pair joined. The current request is always kept.
+  // If the claims cannot be read, only the current request is sent. Known gap, same as the other filters: paraphrases. History here is plain role/content turns, so no tool-call pairs are split.
+  const heldHistory = <M extends { content: unknown }>(messages: readonly M[]): M[] => {
+    const flat = (value: string) => value.toLowerCase().replace(/\s+/g, ' ').trim();
+    let quoted: string[];
+    try {
+      quoted = memory!.allClaims().filter(claim => holdsHeldTopic(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases))
+        .flatMap(claim => [claim.text, claim.evidence]).map(flat).filter(value => value.length > 0);
+    } catch {
+      log({ trace: traceId, hop: 'context_window', ms: 0, ok: false, detail: 'held history: claims unreadable, current request only' });
+      return messages.slice(-1);
+    }
+    const texts = messages.map(message => structuredStrings(message.content).join('\n'));
+    const bad = (text: string) => holdsHeldTopic(text, flat(text)) || quoted.some(quote => flat(text).includes(quote));
+    const alone = texts.map(bad);
+    const drop = splitDrops(texts.map(flat), messages.map(message => (message as { role?: unknown }).role), [...(forgettingState?.incompleteTopics() ?? []).map(flat), ...quoted], alone);
+    const kept = messages.filter((_, index) => index === messages.length - 1 || !drop[index]);
+    log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `held history kept ${kept.length} dropped ${messages.length - kept.length}` });
+    return kept;
+  };
   const promptMemory = (): ClaimStore | undefined => memory && ({
     ...memory,
     nodes: () => promptNodes(),
@@ -636,7 +658,7 @@ export const createOwnerResponder = (
             canonicalPrompt = composition.prompt;
             composedSourceRevision = sourceSnapshot?.revision;
           }
-          const entries = forgettingState?.incompleteTopics().length ? [...request.messages.slice(-1)] : interactiveSource && requireTaskScope && !sourceFamilyAvailable('local') ? [...taskHistoryMessages(tree, trace, sourceSnapshot?.startRef ?? trace)] : [...request.messages];
+          const entries = forgettingState?.incompleteTopics().length ? heldHistory(request.messages) : interactiveSource && requireTaskScope && !sourceFamilyAvailable('local') ? [...taskHistoryMessages(tree, trace, sourceSnapshot?.startRef ?? trace)] : [...request.messages];
           const ownerCurrentText = (entries[entries.length - 1]?.content ?? '') + added;
           if (turnReplyContext) entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + '\n\n' + turnReplyContext };
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };

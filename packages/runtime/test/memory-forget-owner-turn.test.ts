@@ -1,3 +1,4 @@
+import { splitDrops } from '../src/memory/forget-history';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 
@@ -355,4 +356,82 @@ it('bounded batch progress logs its count without topic text and tells the owner
     expect(system()).not.toContain('some saved copies could not be fully read');
     expect(system()).not.toContain('verified exact cleanup targets were removed');
   },undefined,undefined,sql=>facts.forEach((fact,i)=>episodeIndex(sql).add(`batch-${i}`,'owner',fact,i)));
+});
+
+// Layer: owner-turn fixture. While a forget is held, Waldo used to see only the last message, so a stuck forget wiped the whole conversation every turn.
+// Now only history entries that carry the held topic are left out; the rest of the conversation stays. Not covered: staging or a live model.
+it('a held forget leaves the unrelated conversation history in place and drops only the entry carrying the topic', async () => {
+  const topic = 'HIST-757-TOPIC';
+  const cannotVouch = JSON.stringify({ spans: [], reviewed_refs: [], complete: false });
+  await session('held-keeps-history', async (turn, store) => {
+    await turn('tg-h1', 'My locker code word is MARIGOLD-4271.', ops({}));
+    await turn('tg-h2', `The ${topic} plan changed to Friday.`, ops({}));
+    seen.writerOps.push(ops({ forget_topic: topic }));
+    await turn('tg-h3', `Forget only ${topic}.`, cannotVouch);
+    expect(store.incompleteTopics()).toEqual([topic]);
+    // Each later turn retries the held topic; the selector still cannot vouch, so the hold stays.
+    seen.writerOps.push(ops({}));
+    await turn('tg-h4', 'What did I say my locker code word was?', cannotVouch);
+    expect(store.incompleteTopics()).toEqual([topic]);
+    const sent = (JSON.parse(seen.replyInputs.at(-1)!) as { input: string }).input;
+    expect(sent).toContain('MARIGOLD-4271');
+    expect(sent).not.toContain('plan changed to Friday');
+    expect(sent).toContain('What did I say my locker code word was?');
+  }, undefined, undefined, sql => episodeIndex(sql).add('hist-src', 'owner', `${topic} likes cobalt paper`, 1));
+});
+
+it('held history also drops a topic split across two turns and a quote of the withheld claim in other case and spacing', async () => {
+  const topic = 'HIST2-757-TOPIC';
+  const cannotVouch = JSON.stringify({ spans: [], reviewed_refs: [], complete: false });
+  await session('held-history-variants', async (turn, store) => {
+    await turn('tg-v1', 'Remember the code word is KESTREL-77.', ops({}));
+    await turn('tg-v2', 'note: hist2-757-', ops({}));
+    await turn('tg-v3', 'topic changes on friday', ops({}));
+    await turn('tg-v4', `the   ${topic.toLowerCase()} LIKES   cobalt paper`, ops({}));
+    seen.writerOps.push(ops({ forget_topic: topic }));
+    await turn('tg-v5', `Forget only ${topic}.`, cannotVouch);
+    expect(store.incompleteTopics()).toEqual([topic]);
+    seen.writerOps.push(ops({}));
+    await turn('tg-v6', 'What was the code word?', cannotVouch);
+    const sent = (JSON.parse(seen.replyInputs.at(-1)!) as { input: string }).input;
+    expect(sent).toContain('KESTREL-77');
+    expect(sent).not.toMatch(/hist2-757/i);
+    expect(sent).not.toContain('changes on friday');
+    expect(sent).not.toMatch(/likes\s+cobalt paper/i);
+  }, undefined, undefined, sql => episodeIndex(sql).add('hist2-src', 'owner', `${topic} likes cobalt paper`, 1));
+});
+
+it('held history drops a topic split over three owner turns', async () => {
+  const topic = 'abcdefghij-757';
+  const cannotVouch = JSON.stringify({ spans: [], reviewed_refs: [], complete: false });
+  await session('held-history-three', async (turn, store) => {
+    await turn('tg-t1', 'Remember the code word is OSPREY-31.', ops({}));
+    await turn('tg-t2', 'note: abcd', ops({}));
+    await turn('tg-t3', 'efgh', ops({}));
+    await turn('tg-t4', 'ij-757 is sensitive', ops({}));
+    seen.writerOps.push(ops({ forget_topic: topic }));
+    await turn('tg-t5', `Forget only ${topic}.`, cannotVouch);
+    expect(store.incompleteTopics()).toEqual([topic]);
+    seen.writerOps.push(ops({}));
+    await turn('tg-t6', 'What was the code word?', cannotVouch);
+    const sent = (JSON.parse(seen.replyInputs.at(-1)!) as { input: string }).input;
+    expect(sent).toContain('OSPREY-31');
+    for (const piece of ['note: abcd', 'efgh', 'ij-757 is sensitive']) expect(sent).not.toContain(piece);
+  }, undefined, undefined, sql => episodeIndex(sql).add('hist3-src', 'owner', `${topic} likes cobalt paper`, 1));
+});
+
+it('held history split detection is linear: 2000 entries in milliseconds, and it finds a topic split over entries', () => {
+  const texts = Array.from({ length: 2000 }, (_, i) => `entry ${i} ${'x'.repeat(200)}`);
+  texts[1000] = 'note abcd'; texts[1002] = 'efgh';
+  const roles = texts.map((_, i) => (i % 2 ? 'assistant' : 'user'));
+  const started = Date.now();
+  const drop = splitDrops(texts, roles, ['abcdefgh'], texts.map(() => false));
+  expect(Date.now() - started).toBeLessThan(1000);
+  expect(drop.filter(Boolean).length).toBe(2);
+  expect(drop[1000] && drop[1002]).toBe(true);
+});
+
+it('held history split detection skips empty entries so a spaced topic still matches across them', () => {
+  const drop = splitDrops(['project', '', 'falcon plan'], ['user', 'assistant', 'user'], ['project falcon'], [false, false, false]);
+  expect(drop).toEqual([true, false, true]);
 });
