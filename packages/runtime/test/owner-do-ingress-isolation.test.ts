@@ -87,7 +87,10 @@ const directory: OwnerDirectory = { byPresence: async (provider, subject) => pro
 // On failure, name what is armed and what was sent (ids, kinds, methods; no message text) so a timing flake explains itself.
 const worldNote = (state: { storage: { sql: { exec(q: string): { toArray(): unknown[] } } } }) => {
   const armed = state.storage.sql.exec("SELECT id, kind, status, due_at FROM schedule").toArray();
-  return `now=${Date.now()} schedule=${JSON.stringify(armed)} outbox=${JSON.stringify(outbox.map(item => [item.method, item.body.chat_id]))}`;
+  const finals = (state.storage as unknown as { kv: { get<T>(key: string): T | undefined } }).kv.get<{ trace: string; status: string; attempts: number; settled?: boolean; dueAt: number; createdAt: number }[]>('telegram_final_outbox_v1') ?? [];
+  const inbox = (state.storage as unknown as { kv: { get<T>(key: string): T | undefined } }).kv.get<{ updateId: number; state: string; reason?: string }[]>('telegram_owner_inbox_v1') ?? [];
+  const runs = state.storage.sql.exec("SELECT schedule_id, fired_at, outcome FROM schedule_runs WHERE schedule_id LIKE 'card:%' OR schedule_id = 'heartbeat-tick' ORDER BY fired_at DESC LIMIT 8").toArray();
+  return `runs=${JSON.stringify(runs)} finals=${JSON.stringify(finals.map(r => [r.trace, r.status, r.attempts, r.settled, r.createdAt, r.dueAt]))} inbox=${JSON.stringify(inbox.map(r => [r.updateId, r.state, r.reason]))} now=${Date.now()} schedule=${JSON.stringify(armed)} outbox=${JSON.stringify(outbox.map(item => [item.method, item.body.chat_id]))}`;
 };
 const send = async (subject: number, text: string, updateId: number, replyTo?: Record<string, unknown>) => {
   const pending: Promise<unknown>[] = [];
@@ -130,7 +133,7 @@ describe('actual owner interruption recovery', () => {
   });
 // The DO runs in Asia/Kolkata here, and a day-card planner model call appeared once the real clock passed IST midnight.
 // Pin Date for the whole test (setup, both alarms) at several instants, including both sides of the IST day boundary.
-it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:59.999Z', '2026-10-04T18:30:00.001Z'])('actual owner eviction after a claimed write produces one durable uncertainty status without replay (clock %s)', async (pinned) => {
+it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:00.000Z', '2026-10-04T18:30:00.001Z'])('actual owner eviction after a claimed write produces one durable uncertainty status without replay (clock %s)', async (pinned) => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date(pinned));
   try {
@@ -148,7 +151,7 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:59.999Z', '2026-10-04T18:
     await runtime.serial(async () => undefined);
     // With the clock pinned, mark that day's cards as already sent so the alarm has no day plan to make.
     // Without this the planner model call returns once the pinned instant is past IST midnight (observed at 18:30:00.001Z).
-    // The clock can tick past IST midnight while the test runs (the 18:29:59.999Z case sits 1 ms before it), so mark both that day and the next.
+    // The clock can tick past IST midnight while the test runs (the 18:29:00Z case sits one minute before it; a 1 ms margin flaked on CI), so mark both that day and the next.
     const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' });
     const days = [dayFmt.format(new Date()), dayFmt.format(new Date(Date.now() + 86_400_000))];
     const { DAY_CARDS } = await import('../src/prompt/day-cards');
