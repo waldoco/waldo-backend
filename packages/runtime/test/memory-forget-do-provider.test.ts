@@ -2901,7 +2901,7 @@ it('a search hit whose source row cannot be read back is dropped, not kept', asy
     await direct('a2', 'Read retained ghost material.');
     const provider = seen.requests.at(-1) as { input: Array<{ type: string; call_id?: string; output?: string }> };
     const output = provider.input.find(item => item.type === 'function_call_output' && item.call_id === 'review862-ghost')!.output!;
-    expect(JSON.parse(output)).toMatchObject({ ok: true, data: { hits: [] } });
+    expect(JSON.parse(output)).toMatchObject({ ok: true, data: { hits: [], withheld_items: 2 } });
     expect(output).not.toContain('cobalt');
   });
 });

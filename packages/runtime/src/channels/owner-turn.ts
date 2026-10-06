@@ -441,15 +441,15 @@ export const createOwnerResponder = (
     return values.some(value => typeof value === 'string' && held.some(topic => carriesTopic(value, topic) || hidesTopic(value, topic)));
   };
   // Retained reads drop only the list items that carry a held topic. A held string or key outside a list withholds the whole read (undefined).
-  const withholdHeldItems = <T,>(value: T, depth = 0): T | undefined => {
+  const withholdHeldItems = <T,>(value: T, tally: { dropped: number }, depth = 0): T | undefined => {
     if (typeof value === 'string') return holdsHeldTopic(value) ? undefined : value;
     if (value === null || typeof value !== 'object') return value;
     if (depth > 64) return undefined;
-    if (Array.isArray(value)) return value.filter(item => !holdsHeldTopic(...structuredStrings(item))).map(item => withholdHeldItems(item, depth + 1)) as T;
+    if (Array.isArray(value)) { const kept = value.filter(item => !holdsHeldTopic(...structuredStrings(item))); tally.dropped += value.length - kept.length; return kept.map(item => withholdHeldItems(item, tally, depth + 1)) as T; }
     const out: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(value)) {
       if (holdsHeldTopic(key)) return undefined;
-      const kept = withholdHeldItems(child, depth + 1);
+      const kept = withholdHeldItems(child, tally, depth + 1);
       if (kept === undefined && child !== undefined) return undefined;
       out[key] = kept;
     }
@@ -517,6 +517,7 @@ export const createOwnerResponder = (
           await sourceContext.assertTaskSourceCurrent?.();
           if (interactiveSource && requireTaskScope && sourceRead && admittedSource) await sourceScope!.assertSame(admittedSource);
           if (retainedRead) {
+            const tally = { dropped: 0 };
             // A search hit is a highlighted snippet that can split the topic; judge the stored source row it points at (the tool's own ref read).
             if (handler.name === 'search_episodes' && holdsAnyHeldTopic()) {
               const data = (result as { data?: { hits?: ReadonlyArray<{ ref?: string }> } }).data;
@@ -528,11 +529,15 @@ export const createOwnerResponder = (
                   return row.data?.episode ?? undefined;
                 }));
                 const hits = data.hits.filter((_hit, index) => rows[index] !== undefined && !holdsHeldTopic(...structuredStrings(rows[index])));
+                tally.dropped += data.hits.length - hits.length;
                 result = { ...(result as object), data: { ...data, hits } } as typeof result;
               }
             }
-            const kept = withholdHeldItems(result);
+            const kept = withholdHeldItems(result, tally);
             if (kept === undefined) return { ok: false, code: 'transient', error: 'This read touches a topic whose forgetting is still incomplete, so it is withheld.', source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
+            // Say so when items were withheld: a filtered list must not read as a complete retrieval.
+            const body = kept as { data?: Record<string, unknown> };
+            if (tally.dropped > 0 && body.data !== null && typeof body.data === 'object') return { ...body, data: { ...body.data, ...(typeof body.data.complete === 'boolean' ? { complete: false } : {}), withheld_items: tally.dropped } } as typeof result;
             return kept;
           }
           return result;
