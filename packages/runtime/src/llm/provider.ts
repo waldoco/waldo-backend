@@ -1534,20 +1534,21 @@ async function sanitiseRequest(
     const COMPACT_HEAD = 4_000;
     let batch = await sanitiseValue(kept, 'internal_context', batchTaint);
     while (!batch.ok && batch.error.reason === 'scribe:oversize') {
-      // Compact the largest turn that carries a verified stored-output id.
+      // Compact the largest oversized turn. A verified stored-output id earns a retrieval promise in the receipt; without one the receipt says no copy exists. Never fail the run while a turn can still be trimmed.
       let pick = -1;
       for (let i = 0; i < kept.length; i += 1) {
-        if (storedReceiptOf(kept[i]!) === null) continue;
         if (kept[i]!.output.length <= COMPACT_HEAD + 512) continue;
         if (pick === -1 || kept[i]!.output.length > kept[pick]!.output.length) pick = i;
       }
       if (pick === -1) break;
-      const compactedStore = storedReceiptOf(kept[pick]!)!;
+      const compactedStore = storedReceiptOf(kept[pick]!);
       const compacted: LLMToolTurn = {
         ...kept[pick]!,
         output:
           `${kept[pick]!.output.slice(0, COMPACT_HEAD)}\n[waldo: this tool output was reduced by the scribe to fit the request budget; showing ${COMPACT_HEAD} characters. The tool DID return data - do not report it as empty. ` +
-          (compactedStore.truncated
+          (compactedStore === null
+            ? retrievalClause(null)
+            : compactedStore.truncated
             ? `A partial guarded copy is stored as ${compactedStore.id} (first ${compactedStore.stored_chars} of ${compactedStore.original_chars} characters); page THAT part with read_tool_output - the tail was never stored and is NOT retrievable.]`
             : `The guarded output is stored as ${compactedStore.id}; page it with read_tool_output, or ask to narrow the request.]`),
       };
