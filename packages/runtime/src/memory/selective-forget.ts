@@ -104,13 +104,15 @@ export const selectedForgetTexts = (topic: string, snapshot: ForgetSnapshot, raw
   return 'texts' in result ? result.texts : null;
 };
 
-// Episodes lines the first pass reviewed but gave no span. They go back to the model once; nothing here chooses text.
+// A claim keeps the owner's whole message as its evidence and source quote, so those columns can carry a topic that was asked about another claim. They get the same second look as episodes lines; a claim's own text does not (a claim that states the topic must be spanned, or the forget holds).
+const secondLookRow = (ref: string) => { const [table, , column] = ref.split(':'); return table === 'episodes' || (table === 'claims' && (column === 'evidence' || column === 'source_ref')); };
+// Episodes lines and claim quotes the first pass reviewed but gave no span. They go back to the model once; nothing here chooses text.
 export const unspannedEpisodeRows = (snapshot: ForgetSnapshot, raw: string): readonly ForgetSource[] => {
   let value: { spans?: unknown } | null;
   try { value = JSON.parse(raw) as { spans?: unknown }; } catch { return []; }
   if (!value || !Array.isArray(value.spans)) return [];
   const spanned = new Set(value.spans.map((entry: { ref?: unknown }) => entry?.ref));
-  return snapshot.sources.filter(row => row.ref.split(':')[0] === 'episodes' && !spanned.has(row.ref));
+  return snapshot.sources.filter(row => secondLookRow(row.ref) && !spanned.has(row.ref));
 };
 
 // Adds the second look's spans only when that look reported itself complete, reviewed exactly the skipped refs, and
