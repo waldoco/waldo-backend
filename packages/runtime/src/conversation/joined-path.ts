@@ -57,7 +57,10 @@ export class JoinedConversationPath {
     if (existing) return existing;
 
     request.runScope?.admit();
-    this.tree.append({ ...request.userEntry, role: 'user' });
+    const original = { ...request.userEntry, role: 'user' as const };
+    const retained = this.tree.get(original.id);
+    if (retained && JSON.stringify(retained) !== JSON.stringify(original)) throw Error('conversation original input conflict');
+    if (!retained) this.tree.append(original);
     const composition = await this.composer.compose(request.invocation, request.context);
     if (!composition.ok) throw new Error(`conversation context failed: ${composition.failure.code}`);
     // F1: bound the model input before the call - the full ancestor path grows without limit

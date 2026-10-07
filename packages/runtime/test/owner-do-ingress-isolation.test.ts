@@ -67,6 +67,7 @@ vi.mock('../src/run-loop/do',async load=>{
 
 const outbox: { method: string; body: Record<string, unknown> }[] = [];
 const modelInputs: unknown[] = [];
+let onCommonOriginalBeforeClassify:(()=>Promise<void>)|undefined;
 let commonWorkspaceJourney=false;let commonRealHostJourney=false;
 let onFixtureReply: (() => Promise<void>) | undefined;
 const unexpectedFetches: string[] = [];
@@ -102,6 +103,7 @@ vi.mock('openai', () => ({
     responses = { create: async (body: unknown) => {
       modelInputs.push(body);
       const name = (body as { text?: { format?: { name?: string } } }).text?.format?.name;
+      if(name==='task_source_scope'&&onCommonOriginalBeforeClassify){const check=onCommonOriginalBeforeClassify;onCommonOriginalBeforeClassify=undefined;await check();}
       if (!name && onFixtureReply) { const hook = onFixtureReply; onFixtureReply = undefined; await hook(); }
       if(!name&&commonRealHostJourney&&JSON.stringify(body).includes('Approval delivery: native_buttons')){
        const items=Array.isArray((body as any).input)?(body as any).input:[];
@@ -1337,13 +1339,15 @@ it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid').ea
  if(stopDuringAcquire)commonBrowserFixture.onAcquire=async()=>{reachedAcquire();await acquireGate;};
 
  try{
+  let checkedOriginal=false;
+  onCommonOriginalBeforeClassify=()=>runInDurableObject(doStub(subject),async(_instance,state)=>{const prefix='canonical-owner-v1:prn_10000000000000000000000000081106:ten_10000000000000000000000000081106:';const entries=[...state.storage.kv.list<any>({prefix:prefix+'conv:'})].map(([,row])=>row);expect(entries).toHaveLength(1);expect(entries[0]).toMatchObject({id:'tg-998001',role:'user',modelPayload:'Prepare a real private note from supplied material.'});expect(state.storage.kv.get<any>(prefix+'witness:tg-998001')?.entry).toEqual(entries[0]);expect(state.storage.kv.get(prefix+'conv-leaf')).toBeUndefined();checkedOriginal=true;});
   const pendingSend=send(subject,'Prepare a real private note from supplied material.',998001);
   if(stopDuringAcquire){
    await acquireReached;
    const response=await doStub(subject).fetch('https://telegram-owner/enqueue',{method:'POST',headers:{'x-waldo-inbox-secret':'hermetic-test-webhook-secret','x-waldo-telegram-subject':String(subject),'x-waldo-do-name':route(subject).doName},body:JSON.stringify({update_id:998004,message:{message_id:998004,from:{id:subject,is_bot:false},chat:{id:subject,type:'private'},text:'/stop'}})});
    expect(response.status).toBe(200);releaseAcquire();
   }
-  await pendingSend;
+  await pendingSend;expect(checkedOriginal).toBe(true);
   if(stopDuringAcquire){
    await vi.waitFor(()=>expect(commonBrowserFixture.ends).toBe(1));expect(commonBrowserFixture.allocations).toBe(1);
    await runInDurableObject(doStub(subject),async(_instance,state)=>{

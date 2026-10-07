@@ -813,7 +813,7 @@ export const createOwnerResponder = (
         ...(privateRunScope ? { runScope: privateRunScope } : {}),
         authenticatedOwnerId: ownerId, invocation,
         context: { ...(binding?.admission.snapshot ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null },
-        userEntry: { id, ownerId, chatId: conversationRef, parentId: parentId !== null && tree.get(parentId)?.chatId === conversationRef ? parentId : null, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' } },
+        userEntry: tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: parentId !== null && tree.get(parentId)?.chatId === conversationRef ? parentId : null, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' }, role:'user' },
         assistantEntryId: `${id}-reply`,
         ...(interactiveSource && requireTaskScope && !sourceFamilyAvailable('local') ? { historyStartRef: sourceSnapshot?.startRef ?? id } : {}),
       })).finally(() => { ownerTurnActive = false; backgroundToolNames = undefined; control.end(); });
@@ -1013,6 +1013,11 @@ export const createOwnerResponder = (
       classifiedHeard = 0;
       sourceTurnBudget = undefined;
       try {
+        if (binding?.execution && privateRunScope && store?.persistOwnerInput && !turn.attachment && !turn.mediaNote) {
+          const existing = tree.get(id);
+          if (existing && (existing.role !== 'user' || existing.modelPayload !== turn.text || existing.appPayload !== turn.text || existing.chatId !== turn.conversationRef || existing.surface !== turn.surface)) throw Error('canonical original owner input conflict');
+          await store.persistOwnerInput(existing ?? { id, ownerId, chatId:turn.conversationRef, parentId:parentId !== null && tree.get(parentId)?.chatId === turn.conversationRef ? parentId:null, threadAnchorId:null, surface:turn.surface, modelPayload:turn.text, appPayload:turn.text, modelProjection:{mode:'include'}, role:'user' }, privateRunScope);
+        }
         await admitTaskSource(turn.text);
         const media = turn.attachment || turn.mediaNote ? { attachment: turn.attachment, note: turn.mediaNote } : undefined;
         pending = ownerTurnAttachments(turn);
