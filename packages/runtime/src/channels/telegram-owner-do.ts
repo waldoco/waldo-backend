@@ -1,3 +1,4 @@
+import {commonOwnerHost} from './common-owner-host';
 import {maintainCommonBrowsers,COMMON_BROWSER_DUE,commonBrowserHost,type CommonBrowserConfiguration} from './common-browser-host';
 import {signCommonExecutionRequest} from '../identity/common-execution-request';
 import { signCommonTaskSourceRequest } from '../identity/common-task-source-request';
@@ -218,8 +219,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, preparation?: TelegramOwnerPreparation, browserConfiguration?: BrowserOwnerConfiguration, browserTrial?: BrowserTrialPreparation) {
     super(ctx, env);
     if (preparation !== undefined && (!preparation || preparation.mode !== 'canonical')) throw new Error('invalid owner preparation mode');
-    this.canonicalPreparation = preparation !== undefined;
-    this.ownerHost = preparation?.host;
+    this.ownerHost = preparation?.host ?? (preparation===undefined?commonOwnerHost(env,ctx.storage,ctx.id.toString()):undefined);
+    this.canonicalPreparation = preparation !== undefined || this.ownerHost!==undefined;
     this.browserTrial = browserTrial;
     const makeBrowserHost = this.makeBrowserHost = (config?: BrowserOwnerConfiguration) => browserOwnerHost({ storage: ctx.storage, config, now: Date.now, newId: () => crypto.randomUUID(),
       physical: () => { const doName = ctx.storage.kv.get<string>('do_name'); return { doName, subject: ctx.storage.kv.get<string>('telegram_subject'), matches: Boolean(doName && env.TELEGRAM_OWNER_DO && env.TELEGRAM_OWNER_DO.idFromName(doName).toString() === ctx.id.toString() && ctx.storage.kv.get<boolean>('telegram_unlinked') !== true) }; },
@@ -321,7 +322,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const prior=this.ctx.storage.kv.get<Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>>(frozenKey);
         request=prior??{operation:'begin',source,binding:{...binding,contextProjectionRef:composition.checkpoint.context_ref,contextProjectionDigest:composition.evidence.prompt_digest},
           // This executor admits private workspace tools and explicitly registered read-only browser custody. Other effects remain held here.
-          tools:composition.evidence.tool_acl.filter(tool=>['workspace_list','workspace_read','workspace_search','workspace_write','workspace_render',...(host.browser?['browse_page']:[])].includes(tool)),
+          tools:composition.evidence.tool_acl.filter(tool=>['get_context','workspace_list','workspace_read','workspace_search','workspace_write','workspace_render',...(host.browser?['browse_page']:[])].includes(tool)),
           maxProviderTurns,maxDurationMs:Math.max(1,Math.min(600000,scope.deadline-Date.now()))};
         if(prior && (JSON.stringify(prior.source)!==JSON.stringify(source) || prior.binding.contextProjectionRef!==composition.checkpoint.context_ref || prior.binding.contextProjectionDigest!==composition.evidence.prompt_digest))throw Error('common execution frozen context changed');
         scope.commit(()=>this.ctx.storage.kv.put(frozenKey,request));

@@ -18,7 +18,8 @@ vi.mock('../src/channels/telegram-owner-do', async load => {
   const { OpenAIResponsesAdapter } = await import('../src/llm/openai');
   return { ...original, TelegramOwnerDO: class extends original.TelegramOwnerDO {
     constructor(state: DurableObjectState, bindings: typeof env) {
-      const subject = [81101, 81102, 81103, 81104, 81105].find(value => bindings.TELEGRAM_OWNER_DO!.idFromName(`hermetic-owner-${value}`).toString() === state.id.toString());
+      const subject = [81101, 81102, 81103, 81104, 81105,81106].find(value => bindings.TELEGRAM_OWNER_DO!.idFromName(`hermetic-owner-${value}`).toString() === state.id.toString());
+      if(subject===81106){super(state,bindings);return;}
       const host = subject === undefined ? undefined : admittedOwnerHost(`hermetic-owner-${subject}`, String(subject),
         new OpenAIResponsesAdapter({ apiKey: bindings.OPENAI_API_KEY }), subject===81105&&(bindings as typeof env & {COMMON_OWNER_TASKS?:string}).COMMON_OWNER_TASKS==='1'?['workspace_write','workspace_list','workspace_read','browse_page']:['get_communication', 'propose_calendar_change']);
       const digest=`sha256:${'d'.repeat(64)}`;
@@ -46,7 +47,7 @@ vi.mock('../src/run-loop/do',async load=>{
 
 const outbox: { method: string; body: Record<string, unknown> }[] = [];
 const modelInputs: unknown[] = [];
-let commonWorkspaceJourney=false;
+let commonWorkspaceJourney=false;let commonRealHostJourney=false;
 let onFixtureReply: (() => Promise<void>) | undefined;
 const unexpectedFetches: string[] = [];
 let sourceWorld: IsolatedSourceWorld | null = null;
@@ -82,6 +83,14 @@ vi.mock('openai', () => ({
       modelInputs.push(body);
       const name = (body as { text?: { format?: { name?: string } } }).text?.format?.name;
       if (!name && onFixtureReply) { const hook = onFixtureReply; onFixtureReply = undefined; await hook(); }
+      if(!name&&commonRealHostJourney&&JSON.stringify(body).includes('Approval delivery: native_buttons')){
+       const items=Array.isArray((body as any).input)?(body as any).input:[];
+       const result=(id:string)=>{const row=items.find((item:any)=>item.type==='function_call_output'&&item.call_id===id);return row?JSON.parse(row.output):undefined;};
+       const listed=result('real-list'),written=result('real-write'),read=result('real-read');
+       const revised=JSON.stringify(body).includes('Shorten the real private note');
+       const call=!listed?{name:'workspace_list',arguments:'{}',call_id:'real-list'}:!written?{name:'workspace_write',arguments:JSON.stringify({path:'real-note.md',text:revised?'Short owner note.':'Private owner note from real host.',mime:'text/markdown',expected_revision:revised?listed.data.files[0].revision:0}),call_id:'real-write'}:!read?{name:'workspace_read',arguments:JSON.stringify({file_id:written.data.file_id,revision:written.data.revision}),call_id:'real-read'}:undefined;
+       return {id:`real-host-${modelInputs.length}`,output_text:call?'':'Private note saved and read back.',output:call?[{type:'function_call',...call}]:[],usage:{input_tokens:1,output_tokens:1,input_tokens_details:{cached_tokens:0}}};
+      }
       if(!name&&commonWorkspaceJourney&&JSON.stringify(body).includes('Approval delivery: native_buttons')){
         const nativeInput=(body as {input?:unknown}).input;const items=Array.isArray(nativeInput)?nativeInput:[];
         const result=(id:string)=>{const row=items.find((item:any)=>item.type==='function_call_output'&&item.call_id===id) as {output:string}|undefined;return row?JSON.parse(row.output):undefined;};
@@ -117,7 +126,7 @@ let sequence = 0;
 const traceIdentities = new Map<number, NonNullable<OwnerRoute['traceIdentity']>>();
 const route = (subject: number): OwnerRoute => ({ doName: `hermetic-owner-${subject}`, subject: String(subject), timezone: 'Asia/Kolkata',
   ...(traceIdentities.has(subject) ? { traceIdentity: traceIdentities.get(subject) } : {}) });
-const directory: OwnerDirectory = { byPresence: async (provider, subject) => provider === 'telegram' && ['81101', '81102', '81103', '81104', '81105'].includes(subject) ? route(Number(subject)) : null, redeem: async () => null };
+const directory: OwnerDirectory = { byPresence: async (provider, subject) => provider === 'telegram' && ['81101', '81102', '81103', '81104', '81105','81106'].includes(subject) ? route(Number(subject)) : null, redeem: async () => null };
 // On failure, name what is armed and what was sent (ids, kinds, methods; no message text) so a timing flake explains itself.
 const worldNote = (state: { storage: { sql: { exec(q: string): { toArray(): unknown[] } } } }) => {
   const armed = state.storage.sql.exec("SELECT id, kind, status, due_at FROM schedule").toArray();
@@ -1283,4 +1292,36 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
     await runInDurableObject(doStub(81105),async(_instance,state)=>{await state.storage.deleteAlarm();});
     await runInDurableObject(root,async(_instance,state)=>{await state.storage.deleteAlarm();});
   }
+});
+
+it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid')('two-argument registered owner host reaches canonical workspace across physical reconstruction',async()=>{
+ const subject=81106,authUser='30000000-0000-0000-0000-000000000006';
+ const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(authUser)))].map(b=>b.toString(16).padStart(2,'0')).join('');
+ const {responsibilityOwnerRootName}=await import('../src/index');
+ const root=env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName(await responsibilityOwnerRootName(`owner_${hash}`)));
+ vi.stubGlobal('fetch',async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const args=JSON.parse(String(init?.body));
+  if(String(input)==='https://common-source.fixture.invalid/rest/v1/rpc/common_owner_authority')return Response.json({owner_id:'10000000-0000-0000-0000-000000081106',auth_user_id:authUser,presence_id:'20000000-0000-0000-0000-000000081106',do_name:'hermetic-owner-81106',provider:'telegram',subject:'81106',state_version:0,admission_revision:'9007199254740993'});
+  if(String(input)==='https://common-source.fixture.invalid/rest/v1/rpc/workspace_owner_binding')return Response.json({owner_id:'10000000-0000-0000-0000-000000081106',environment:args.p_environment,namespace:args.p_namespace,do_name:args.p_do_name,do_id:args.p_do_id,state_version:0,mapping_version:1});
+  throw Error('unexpected real-host synthetic fetch');
+ });
+ commonRealHostJourney=true;taskDecision={decision:'retain',sources:[]};
+ try{
+  await send(subject,'Prepare a real private note from supplied material.',998001);
+  await runInDurableObject(root,(_instance,state)=>expect(state.storage.sql.exec('SELECT state FROM execution_attempts').one().state).toBe('settled'));
+  await evictDurableObject(doStub(subject));await evictDurableObject(root);
+  await send(subject,'Shorten the real private note without changing sources.',998002);
+  await runInDurableObject(root,(_instance,state)=>{
+   expect(state.storage.sql.exec('SELECT id FROM outcomes').toArray()).toHaveLength(1);
+   expect(state.storage.sql.exec('SELECT state FROM execution_attempts').toArray()).toEqual([{state:'settled'},{state:'settled'}]);
+   expect(state.storage.sql.exec('SELECT id FROM planning_execution_requests').toArray()).toHaveLength(2);
+  });
+  await runInDurableObject(doStub(subject),async(_instance,state)=>{
+   const manifest=JSON.parse(state.storage.sql.exec<{state_json:string}>('SELECT state_json FROM workspace_manifest').one().state_json) as import('@waldo/workspace').WorkspaceState;
+   expect(manifest.files[0]?.revision).toBe(2);expect(manifest.operations.filter(op=>op.status==='committed')).toHaveLength(2);
+   const {workspaceOwnerHost}=await import('../src/channels/workspace-host');const store=await workspaceOwnerHost(env,state.storage,state.id.toString(),'hermetic-owner-81106');
+   expect(new TextDecoder().decode((await store.export(manifest.files[0]!.file_id,2)).bytes)).toBe('Short owner note.');
+   expect([...state.storage.kv.list({prefix:'canonical-owner-v1:'})].length).toBeGreaterThan(0);
+  });
+ }finally{commonRealHostJourney=false;vi.unstubAllGlobals();}
 });
