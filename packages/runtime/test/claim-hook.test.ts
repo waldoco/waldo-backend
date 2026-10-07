@@ -44,6 +44,12 @@ describe('turn claim evaluation (advisory)', () => {
     expect(evaluateTurnClaims([{ seq: 2, effect: 'email_sent' }], [ev(1, 'send_email', true)])).toEqual([{ claim_seq: 2, effect: 'email_sent', reason: 'no_matching_receipt' }]);
     expect(evaluateTurnClaims([{ seq: 2, effect: 'email_send_proposed' }], [ev(1, 'send_email', true)])).toEqual([]);
   });
+  it('a draft receipt cannot back a send-proposal (approval card) claim, even after a failed send_email', () => {
+    const expected = [{ claim_seq: 3, effect: 'email_send_proposed', reason: 'receipt_failed' }];
+    expect(evaluateTurnClaims([{ seq: 3, effect: 'email_send_proposed' }], [ev(1, 'send_email', false), ev(2, 'draft_email', true)])).toEqual(expected);
+    expect(evaluateTurnClaims([{ seq: 3, effect: 'email_send_proposed' }], [ev(2, 'draft_email', true)])).toEqual([{ claim_seq: 3, effect: 'email_send_proposed', reason: 'no_matching_receipt' }]);
+    expect(evaluateTurnClaims([{ seq: 3, effect: 'email_drafted' }], [ev(1, 'send_email', false), ev(2, 'draft_email', true)])).toEqual([]);
+  });
   it('a claim naming a file is not backed by a write to a different file', () => {
     const write = (path: string): LoopEventLike => ({ seq: 1, call: { name: 'workspace_write', args: { path } }, ok: true });
     expect(evaluateTurnClaims([{ seq: 2, effect: 'workspace_file_written', ref: 'v2.md' }], [write('v2b.md')])).toEqual([{ claim_seq: 2, effect: 'workspace_file_written', reason: 'no_matching_receipt' }]);

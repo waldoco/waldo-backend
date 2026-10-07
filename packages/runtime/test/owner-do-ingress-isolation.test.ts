@@ -17,7 +17,7 @@ vi.mock('../src/channels/telegram-owner-do', async load => {
   const { OpenAIResponsesAdapter } = await import('../src/llm/openai');
   return { ...original, TelegramOwnerDO: class extends original.TelegramOwnerDO {
     constructor(state: DurableObjectState, bindings: typeof env) {
-      const subject = [81101, 81102, 81103, 81104].find(value => bindings.TELEGRAM_OWNER_DO!.idFromName(`hermetic-owner-${value}`).toString() === state.id.toString());
+      const subject = [81101, 81102, 81103, 81104, 81105].find(value => bindings.TELEGRAM_OWNER_DO!.idFromName(`hermetic-owner-${value}`).toString() === state.id.toString());
       const host = subject === undefined ? undefined : admittedOwnerHost(`hermetic-owner-${subject}`, String(subject),
         new OpenAIResponsesAdapter({ apiKey: bindings.OPENAI_API_KEY }), ['get_communication', 'propose_calendar_change']);
       super(state, bindings, { mode: 'canonical', host });
@@ -83,7 +83,7 @@ let sequence = 0;
 const traceIdentities = new Map<number, NonNullable<OwnerRoute['traceIdentity']>>();
 const route = (subject: number): OwnerRoute => ({ doName: `hermetic-owner-${subject}`, subject: String(subject), timezone: 'Asia/Kolkata',
   ...(traceIdentities.has(subject) ? { traceIdentity: traceIdentities.get(subject) } : {}) });
-const directory: OwnerDirectory = { byPresence: async (provider, subject) => provider === 'telegram' && ['81101', '81102', '81103', '81104'].includes(subject) ? route(Number(subject)) : null, redeem: async () => null };
+const directory: OwnerDirectory = { byPresence: async (provider, subject) => provider === 'telegram' && ['81101', '81102', '81103', '81104', '81105'].includes(subject) ? route(Number(subject)) : null, redeem: async () => null };
 // On failure, name what is armed and what was sent (ids, kinds, methods; no message text) so a timing flake explains itself.
 const worldNote = (state: { storage: { sql: { exec(q: string): { toArray(): unknown[] } } } }) => {
   const armed = state.storage.sql.exec("SELECT id, kind, status, due_at FROM schedule").toArray();
@@ -424,9 +424,14 @@ describe('real owner-DO ingress in a sealed test world', () => {
     expect(card).toBeDefined();
     const buttons = (card.body.reply_markup as { inline_keyboard: { callback_data: string }[][] }).inline_keyboard.flat();
     const approve = buttons.find(button => button.callback_data.startsWith('a:'))!.callback_data;
-    const snapshot = () => runInDurableObject(doStub(81101), async (_instance, state) => state.storage.sql.exec<{ sources_json: string; revision: number }>('SELECT sources_json, revision FROM owner_task_source_scope').one());
+    const snapshot = () => runInDurableObject(doStub(81101), async (_instance, state) => state.storage.sql.exec<{ sources_json: string; revision: number; ready: number; pending_json: string | null; narrowed: number }>('SELECT sources_json, revision, ready, pending_json, narrowed FROM owner_task_source_scope').one());
     const before = await snapshot(); expect(before.sources_json).toBe('[]');
+    expect(before).toMatchObject({ ready: 0, narrowed: 1 }); expect(before.pending_json).not.toBeNull();
     expect(JSON.stringify(modelInputs)).toContain('outside the current owner task');
+    expect(JSON.stringify(modelInputs)).toContain("The task source scope is unsettled; wait for the owner's task or source decision before using this source.");
+    expect(JSON.stringify(modelInputs)).not.toContain("not in this task's sources");
+    expect(JSON.stringify(modelInputs)).toContain('within existing permissions');
+    expect(JSON.stringify(modelInputs)).toContain("A pending source confirmation still needs the owner's decision; ordinary task text does not approve it.");
     taskDecision = { decision: 'retain', sources: ['mail', 'drive'] };
     await send(81101, 'Keep waiting for the current source decision.', update + 7);
     expect(await snapshot()).toEqual(before);
@@ -558,6 +563,19 @@ describe('real owner-DO ingress in a sealed test world', () => {
     await send(81102, 'Read the fixture inbox after the confirmed decision.', update + 3);
     expect(sourceWorld.accessLog('b@example.invalid')).toEqual([expect.objectContaining({ source: 'mail', kind: 'list', owner_id: 'b@example.invalid' })]);
   });
+  it('a settled supplied-only task names mail as missing without calling a provider', async () => {
+    sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T11:00:00Z', owners: [{ id: 'a@example.invalid' }], sources: {} });
+    outbox.length = 0; modelInputs.length = 0;
+    const update = 910000 + ++sequence * 10;
+    taskDecision = { decision: 'restrict', sources: [], evidence: null };
+    await send(81101, 'Read the fixture inbox using only supplied task data.', update);
+    await runInDurableObject(doStub(81101), async (_instance, state) => {
+      expect(state.storage.sql.exec('SELECT sources_json, ready FROM owner_task_source_scope').one()).toMatchObject({ sources_json: '[]', ready: 1 });
+    });
+    expect(sourceWorld.accessLog('a@example.invalid')).toEqual([]);
+    expect(JSON.stringify(modelInputs)).toContain("mail not in this task's sources");
+    expect(JSON.stringify(modelInputs)).not.toContain('The task source scope is unsettled');
+  });
   it('malformed classification during owner narrowing performs no external source call', async () => {
     sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T11:00:00Z', owners: [{ id: 'a@example.invalid' }], sources: { mail: [
       { owner_id: 'a@example.invalid', id: 'mail', thread_id: 'thread', from: 'sender@example.invalid', subject: 'Fixture report', snippet: 'private fixture mail', at: '2026-09-29T10:30:00Z' },
@@ -579,11 +597,43 @@ describe('real owner-DO ingress in a sealed test world', () => {
     taskDecision = { decision: 'retain', sources: [], evidence: null };
     await send(81101, 'Read the fixture inbox for this current task.', update + 2);
     const before = sourceWorld.accessLog('a@example.invalid'); expect(before).toHaveLength(1);
+    await runInDurableObject(doStub(81101), async (_instance, state) => {
+      expect(state.storage.sql.exec('SELECT sources_json, ready FROM owner_task_source_scope').one()).toMatchObject({ sources_json: '["mail"]', ready: 1 });
+    });
+    modelInputs.length = 0;
     taskDecision = 'not json';
     await send(81101, 'Do not Read the fixture inbox. Use only pasted material for this instruction.', update + 3);
+    await runInDurableObject(doStub(81101), async (_instance, state) => {
+      expect(state.storage.sql.exec('SELECT sources_json, ready, narrowed, pending_json FROM owner_task_source_scope').one()).toMatchObject({ sources_json: '["mail"]', ready: 0, narrowed: 1, pending_json: null });
+    });
     expect(sourceWorld.accessLog('a@example.invalid')).toEqual(before);
     expect(JSON.stringify(modelInputs)).toContain('outside the current owner task');
+    expect(JSON.stringify(modelInputs)).toContain('The task source scope is unsettled');
+    expect(JSON.stringify(modelInputs)).not.toContain("not in this task's sources");
     taskDecision = { decision: 'retain', sources: [], evidence: null };
+  });
+  it('an unsettled task still reads a connected default source without a refusal', async () => {
+    sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T11:00:00Z', owners: [{ id: 'a@example.invalid' }], sources: { mail: [
+      { owner_id: 'a@example.invalid', id: 'mail', thread_id: 'thread', from: 'sender@example.invalid', subject: 'Fixture report', snippet: 'default fixture mail', at: '2026-09-29T10:30:00Z' },
+    ] } });
+    // A dedicated fictional owner keeps this task's retained history out of later logging trials.
+    await runInDurableObject(doStub(81105), async (_instance, state) => {
+      await state.storage.put('google:accounts', [{ id: 'local:a@example.invalid', email: 'a@example.invalid', scopes: null, refresh_token: 'fictional-not-a-token' }]);
+    });
+    outbox.length = 0; modelInputs.length = 0;
+    taskDecision = 'not json';
+    await send(81105, 'Read the fixture inbox for this default-source task.', 920000 + ++sequence * 10);
+    await runInDurableObject(doStub(81105), async (_instance, state) => {
+      const row = state.storage.sql.exec<{ sources_json: string; ready: number; narrowed: number; pending_json: string | null }>('SELECT sources_json, ready, narrowed, pending_json FROM owner_task_source_scope').one();
+      expect(row).toMatchObject({ ready: 0, narrowed: 0, pending_json: null });
+      expect(JSON.parse(row.sources_json)).toContain('mail');
+      await state.storage.delete('google:accounts');
+    });
+    expect(sourceWorld.accessLog('a@example.invalid').filter(access => access.source === 'mail')).toEqual([expect.objectContaining({ kind: 'list', owner_id: 'a@example.invalid' })]);
+    expect(sourceWorld.accessLog('a@example.invalid').every(access => access.kind === 'list' && ['mail', 'calendar'].includes(access.source))).toBe(true);
+    expect(sourceWorld.outbox('a@example.invalid')).toEqual([]);
+    expect(JSON.stringify(modelInputs)).toContain('default fixture mail');
+    expect(JSON.stringify(modelInputs)).not.toContain('This source is outside the current owner task');
   });
   it('routes fictional Google reads through owner-scoped source rows inside the real DO tool loop', async () => {
     sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T11:00:00Z', owners: [{ id: 'a@example.invalid' }, { id: 'b@example.invalid' }], sources: { mail: [
