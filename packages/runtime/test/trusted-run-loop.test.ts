@@ -3463,8 +3463,8 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
-    await runInDurableObject(stub, (instance) => {
+    let runId = '';
+    await runInDurableObject(stub, async (instance,state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
@@ -3472,6 +3472,10 @@ describe('RunLoopDO trusted invocation convergence', () => {
         replayArtifacts: replayArtifacts(),
       });
       runLoop.__runLoopCrashAfter = 'LLM_CALLED';
+      // Install instrumentation before scheduling; keep automatic delivery outside this
+      // test's setup window. The alarm helper below explicitly fires the armed slot.
+      runId = await instance.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+      await armAlarm(state.storage, Date.now() + 60_000);
     });
     await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:LLM_CALLED');
 
