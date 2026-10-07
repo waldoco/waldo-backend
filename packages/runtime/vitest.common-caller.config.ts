@@ -6,6 +6,7 @@ export default defineConfig({
   test: { include: ['test/owner-do-ingress-isolation.test.ts'], name: 'synthetic-common-caller' },
   plugins: [cloudflareTest({
     miniflare: { bindings: {
+      COMMON_TEST_FINAL_EXPIRED:process.env.COMMON_TEST_FINAL_EXPIRED??'0',
       COMMON_TEST_WORKSPACE_RESULT_FAULT:process.env.COMMON_TEST_WORKSPACE_RESULT_FAULT??'0',
       COMMON_TEST_FIRST_FINAL_FAULT:process.env.COMMON_TEST_FIRST_FINAL_FAULT??'0',
       COMMON_TEST_STOP_DURING_ACQUIRE:process.env.COMMON_TEST_STOP_DURING_ACQUIRE??'0',

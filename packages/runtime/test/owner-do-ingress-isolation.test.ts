@@ -1359,9 +1359,16 @@ it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid').ea
    expect(blockedRootFinals).toBeGreaterThan(0);const calls=modelInputs.length;
    await runInDurableObject(root,(_instance,state)=>expect(state.storage.sql.exec('SELECT state FROM execution_attempts').one().state).toBe('running'));
    await runInDurableObject(doStub(subject),(_instance,state)=>expect(state.storage.kv.get<any[]>('telegram_final_outbox_v1')!.some(row=>row.commonExecution&&!row.commonExecution.settled)).toBe(true));
+   const expireFinal=(env as typeof env & {COMMON_TEST_FINAL_EXPIRED?:string}).COMMON_TEST_FINAL_EXPIRED==='1';
+   if(expireFinal){vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(Date.now()+600001);}
    blockFirstRootFinal=false;await evictDurableObject(doStub(subject));await evictDurableObject(root);
    await runInDurableObject(doStub(subject),async(instance)=>{await instance.alarm();});
    expect(modelInputs.length).toBe(calls);
+   if(expireFinal){
+    await runInDurableObject(doStub(subject),(_instance,state)=>expect(state.storage.kv.get<any[]>('telegram_final_outbox_v1')!.some(row=>row.commonExecution&&!row.commonExecution.settled)).toBe(true));
+    await runInDurableObject(root,(_instance,state)=>expect(state.storage.sql.exec('SELECT state FROM execution_attempts').one().state).not.toBe('settled'));
+    return;
+   }
   }
   await runInDurableObject(root,(_instance,state)=>expect(state.storage.sql.exec('SELECT state FROM execution_attempts').one().state).toBe('settled'));
   await evictDurableObject(doStub(subject));await evictDurableObject(root);
