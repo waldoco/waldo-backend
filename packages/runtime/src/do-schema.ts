@@ -1168,6 +1168,26 @@ export const COMMON_MESSAGE_CUSTODY_SCHEMA_MIGRATION: DoMigration = {
   down: ['DROP TABLE common_message_custody;'],
 };
 
+// Preserve canonical WorkUnit rows while widening only the declared execution state.
+const executionWorkUnitTable = RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION.up[1]!
+  .replace("'planned', 'planning_authorized'", "'planned', 'planning_authorized', 'execution_authorized'");
+const copyExecutionWorkUnits = RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION.up[2]!
+  .replace('work_units_v02', 'work_units_v09');
+export const COMMON_EXECUTION_WORKUNIT_SCHEMA_MIGRATION: DoMigration = {
+  version: 10, name: 'common-execution-workunit',
+  up: ['ALTER TABLE work_units RENAME TO work_units_v09;', executionWorkUnitTable,
+    copyExecutionWorkUnits, 'DROP TABLE work_units_v09;'],
+  // Downgrade must never discard an authorized WorkUnit. The guard constraint fails closed.
+  down: [
+    'CREATE TABLE execution_workunit_down_guard (allowed INTEGER CHECK (allowed = 1));',
+    "INSERT INTO execution_workunit_down_guard SELECT NOT EXISTS (SELECT 1 FROM work_units WHERE state = 'execution_authorized');",
+    'DROP TABLE execution_workunit_down_guard;',
+    'ALTER TABLE work_units RENAME TO work_units_v09;',
+    RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION.up[1]!,
+    copyExecutionWorkUnits, 'DROP TABLE work_units_v09;',
+  ],
+};
+
 export const DO_SCHEMA_MIGRATIONS = [
   HEY10_BASE_SCHEMA_MIGRATION,
   HEY144_GOALS_SCHEMA_MIGRATION,
@@ -1178,6 +1198,7 @@ export const DO_SCHEMA_MIGRATIONS = [
   RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION,
   SCHEDULE_RUNS_SCHEMA_MIGRATION,
   COMMON_MESSAGE_CUSTODY_SCHEMA_MIGRATION,
+  COMMON_EXECUTION_WORKUNIT_SCHEMA_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;

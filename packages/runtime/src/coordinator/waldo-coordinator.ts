@@ -1,4 +1,4 @@
-import { createTaskSourceScope, type OwnerTaskInstruction, type TaskSourceFamily } from '../channels/task-source-scope';
+import { readTaskSourceSnapshot, createTaskSourceScope, type OwnerTaskInstruction, type TaskSourceFamily } from '../channels/task-source-scope';
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { CommonOwnerAuthority } from '../identity/common-owner-authority';
 import {
@@ -16,6 +16,7 @@ import {
   executionLeaseV04Schema,
   executionReconciliationV04Schema,
   executionRequestV04Schema,
+  executionAuthorityCeilingV04Schema,
   executionSessionV04Schema,
   executorObservationV04Schema,
   exactRevisionV04Schema,
@@ -494,6 +495,28 @@ export class WaldoCoordinator {
       async () => { await assertCurrent(); this.#identity.assertMessageAuthorityInCurrentTransaction(authority); },
       ownerInput, defaults, allocateTask);
     return capability;
+  }
+
+  async authorizeMessageWorkUnitExecution(input: Readonly<{
+    snapshot: import('../channels/task-source-scope').TaskSourceSnapshot;
+    workUnitId: string; expectedRevision: number; authorityCeiling: unknown;
+    maxProviderTurns: number; maxDurationMs: number; executorId: string; commandId: string;
+  }>, authority: CommonOwnerAuthority, assertCurrent: () => Promise<void>) {
+    const ceiling = executionAuthorityCeilingV04Schema.parse(input.authorityCeiling);
+    await assertCurrent();
+    return this.#storage.transactionSync(() => {
+      this.#identity.assertMessageAuthorityInCurrentTransaction(authority);
+      const snapshot = readTaskSourceSnapshot(this.#storage.sql, `common:${authority.ownerId}`);
+      if (!snapshot.ready || !input.snapshot.ready || JSON.stringify(snapshot.sources) !== JSON.stringify(input.snapshot.sources)
+        || snapshot.taskId !== input.snapshot.taskId
+        || snapshot.revision !== input.snapshot.revision) throw Error('common execution source changed');
+      const unit = this.#storage.sql.exec<{outcome_id:string}>(
+        'SELECT outcome_id FROM work_units WHERE owner_id = ? AND id = ?', authority.ownerId, input.workUnitId).toArray()[0];
+      if (unit?.outcome_id !== snapshot.taskId) throw Error('common execution WorkUnit mismatch');
+      return this.#outcomes.authorizeExecutionInCurrentTransaction({
+        ...input, ownerId: authority.ownerId, authorityCeiling: ceiling, at: this.#deps.now(),
+      });
+    });
   }
 
   async captureMessageResponsibility(

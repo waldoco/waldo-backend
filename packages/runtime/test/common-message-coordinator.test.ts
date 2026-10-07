@@ -134,3 +134,27 @@ it('new global authority admission during a prepared source command fences the o
   expect(state.storage.sql.exec('SELECT revision FROM owner_task_source_scope').one().revision).toBe(1);
  });
 });
+
+it('common planned WorkUnit receives a host ceiling through the same canonical writer and replay before execution admission',async()=>{
+ const stub=env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName('common-authorized-work-'+crypto.randomUUID())) as DurableObjectStub<RunLoopDO>;
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const coordinator=new WaldoCoordinator(state.storage);
+  const scope={runId:'fixture',attempt:'fixture',deadline:Date.now()+30000,signal:new AbortController().signal,admit(){},commit:<T>(work:()=>T)=>state.storage.transactionSync(work)};
+  const cap=await coordinator.commonTaskSourceScope(admitted,{inputRef:'authorize_input',text:'Write a private checklist.'},['workspace'],scope,async()=>{});
+  const snapshot=(await cap.classify(JSON.stringify({decision:'retain',sources:[]}),'authorize_input','Write a private checklist.')).snapshot;
+  const unit=state.storage.sql.exec<{id:string}>('SELECT id FROM work_units').one().id;
+  const ceiling={tools:['workspace_write'],connectors:[],externalEffects:'none' as const,outcomeMutation:'none' as const,evidenceAdmission:'none' as const,verification:'none' as const,acceptance:'none' as const,closure:'none' as const};
+  const authorization={snapshot,workUnitId:unit,expectedRevision:1,authorityCeiling:ceiling,maxProviderTurns:25,maxDurationMs:30000,executorId:'fixture_registered_host',commandId:'fixture_authorization'};
+  await expect(coordinator.authorizeMessageWorkUnitExecution({...authorization,snapshot:{...snapshot,sources:[]}},admitted,async()=>{})).rejects.toThrow('common execution source changed');
+  await expect(coordinator.authorizeMessageWorkUnitExecution(authorization,admitted,async()=>{throw Error('owner changed');})).rejects.toThrow('owner changed');
+  expect(state.storage.sql.exec('SELECT state FROM work_units').one().state).toBe('planned');
+  const result=await coordinator.authorizeMessageWorkUnitExecution(authorization,admitted,async()=>{});
+  const {applyDoMigration, COMMON_EXECUTION_WORKUNIT_SCHEMA_MIGRATION} = await import('../src/do-schema');
+  expect(()=>applyDoMigration(state.storage,COMMON_EXECUTION_WORKUNIT_SCHEMA_MIGRATION,'down')).toThrow();
+  expect(result.workUnit.state).toBe('execution_authorized');
+  expect(result.workUnit.authorityCeiling.tools).toEqual(['workspace_write']);
+  expect(coordinator.replayResponsibility(admitted.ownerId).workUnits[0]).toEqual(result.workUnit);
+  expect(state.storage.sql.exec('SELECT count(*) AS n FROM presence_sessions').one().n).toBe(0);
+  await expect(coordinator.authorizeMessageWorkUnitExecution({snapshot,workUnitId:unit,expectedRevision:1,authorityCeiling:ceiling,maxProviderTurns:25,maxDurationMs:30000,executorId:'fixture_registered_host',commandId:'different_authorization'},admitted,async()=>{})).rejects.toThrow();
+ });
+});

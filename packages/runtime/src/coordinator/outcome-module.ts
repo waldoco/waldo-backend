@@ -1,5 +1,6 @@
 import {
   canonicalWorkUnitRecordV03Schema,
+  workUnitExecutionAuthorizedRecordV04Schema,
   missionRecordV02Schema,
   outcomeRecordV02Schema,
   responsibilityProjectionItemV02Schema,
@@ -413,6 +414,41 @@ export class OutcomeModule {
     return Object.freeze({ workUnit, cursor });
   }
 
+  authorizeExecutionInCurrentTransaction(input: Readonly<{
+    ownerId: string; workUnitId: string; expectedRevision: number;
+    authorityCeiling: unknown; maxProviderTurns: number; maxDurationMs: number;
+    executorId: string; commandId: string; at: string;
+  }>) {
+    const row = this.readWorkUnitRow(input.ownerId, input.workUnitId);
+    if (!row) throw new ResponsibilityProjectionMissingError();
+    const current = canonicalWorkUnitRecordV03Schema.parse(this.decodeWorkUnitRow(row));
+    if (current.revision !== input.expectedRevision || current.state !== 'planned'
+      || current.requiredCapabilities.length || current.dependencyIds.length) {
+      throw new ResponsibilityPlanningConflictError('WorkUnit execution authorization mismatch');
+    }
+    const workUnit = workUnitExecutionAuthorizedRecordV04Schema.parse({
+      ...current, revision: current.revision + 1, authorityCeiling: input.authorityCeiling,
+      budget: { maxProviderTurns: input.maxProviderTurns, maxExternalEffects: 0, maxDurationMs: input.maxDurationMs },
+      isolation: { mode: 'owner_responder', egress: 'host_governed', credentials: 'runtime_managed' },
+      assignee: input.executorId, sessionIds: [], state: 'execution_authorized', updatedAt: input.at,
+    });
+    this.storage.sql.exec(`UPDATE work_units SET revision = ?, authority_ceiling_json = ?, budget_json = ?,
+      isolation_json = ?, assignee = ?, session_ids_json = ?, state = ?, updated_at = ?
+      WHERE owner_id = ? AND id = ? AND revision = ? AND state = 'planned'`,
+      workUnit.revision, JSON.stringify(workUnit.authorityCeiling), JSON.stringify(workUnit.budget),
+      JSON.stringify(workUnit.isolation), workUnit.assignee, JSON.stringify(workUnit.sessionIds), workUnit.state,
+      input.at, input.ownerId, input.workUnitId, input.expectedRevision);
+    if (this.storage.sql.exec<{changed:number}>('SELECT changes() AS changed').one().changed !== 1)
+      throw new ResponsibilityPlanningConflictError('WorkUnit execution authorization mismatch');
+    const cursor = this.events.appendInCurrentTransaction({
+      schemaVersion: '0.4', eventId: this.newId('event'), ownerId: input.ownerId,
+      aggregateKind: 'work_unit', aggregateId: workUnit.id, revision: workUnit.revision,
+      eventType: 'work_unit.execution_authorized', causationId: input.commandId,
+      correlationId: input.commandId, occurredAt: input.at, payloadJson: JSON.stringify(workUnit),
+    });
+    return Object.freeze({ workUnit, cursor });
+  }
+
   replay(ownerId: string): ResponsibilityReplay {
     const highWaterCursor = this.events.readHighWater(ownerId);
     const outcomes = new Map<string, OutcomeRecord>();
@@ -448,7 +484,7 @@ export class OutcomeModule {
         if (row.owner_cursor <= lastCursor || row.owner_id !== ownerId) {
           throw new Error('invalid responsibility event ordering or owner');
         }
-        if (row.schema_version !== '0.2' && row.schema_version !== '0.3') {
+        if (row.schema_version !== '0.2' && row.schema_version !== '0.3' && row.schema_version !== '0.4') {
           throw new Error('invalid responsibility event schema version');
         }
         if (row.schema_version === '0.2' && row.revision !== 1) {
@@ -504,9 +540,10 @@ export class OutcomeModule {
             requiredCapabilities: workUnit.requiredCapabilities, createdAt: workUnit.createdAt,
           }));
         } else {
-          const workUnit = workUnitPlanningAuthorizedRecordV03Schema.parse(record);
+          const workUnit = row.schema_version === '0.4' ? workUnitExecutionAuthorizedRecordV04Schema.parse(record)
+            : workUnitPlanningAuthorizedRecordV03Schema.parse(record);
           const prior = workUnits.get(workUnit.id);
-          if (row.event_type !== 'work_unit.planning_authorized' ||
+          if (row.event_type !== (row.schema_version === '0.4' ? 'work_unit.execution_authorized' : 'work_unit.planning_authorized') ||
               prior === undefined || prior.state !== 'planned' ||
               prior.outcomeId !== workUnit.outcomeId || prior.missionId !== workUnit.missionId ||
               prior.position !== workUnit.position || prior.revision + 1 !== workUnit.revision ||
@@ -630,7 +667,9 @@ export class OutcomeModule {
       ? outcomeRecordV02Schema.safeParse(value)
       : row.aggregate_kind === 'mission'
         ? missionRecordV02Schema.safeParse(value)
-        : row.schema_version === '0.3'
+        : row.schema_version === '0.4'
+          ? workUnitExecutionAuthorizedRecordV04Schema.safeParse(value)
+          : row.schema_version === '0.3'
           ? workUnitPlanningAuthorizedRecordV03Schema.safeParse(value)
           : workUnitRecordV02Schema.safeParse(value);
     if (!parsed.success) {
