@@ -8,6 +8,7 @@ export type TaskSourceProposal = Readonly<{ ownerKey: string; taskId: string; re
 type Row = { owner_key: string; task_id: string; revision: number; sources_json: string; ready: number; pending_json: string | null; start_ref: string | null };
 export type OwnerTaskInstruction = Readonly<{ inputRef: string; text: string; quotedRanges?: readonly Readonly<{ start: number; end: number }>[] }>;
 export type TaskSourceOutcome = 'retained' | 'restricted' | 'owner_transition' | 'confirmed_retry' | 'invalid_decision' | 'uncertain' | 'owner_confirmation' | 'retained_invalid' | 'retained_uncertain';
+export type TaskSourceClassification = Readonly<{ snapshot: TaskSourceSnapshot; proposal?: TaskSourceProposal; outcome: TaskSourceOutcome; decodeReason?: TaskSourceDecodeReason }>;
 export type TaskSourceDecodeReason = 'json_syntax' | 'invalid_shape' | 'unknown_decision' | 'invalid_sources' | 'invalid_evidence';
 class TaskSourceDecodeError extends Error {
   constructor(readonly reason: TaskSourceDecodeReason) { super('Task decision unavailable'); }
@@ -70,7 +71,8 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
       sql.exec('INSERT INTO owner_task_source_scope (owner_key, task_id, revision, sources_json, ready, pending_json, start_ref) VALUES (?, ?, 1, ?, 0, NULL, NULL)', ownerKey, allocateTask(), JSON.stringify(TASK_SOURCE_FAMILIES));
     }
   });
-  const current = async () => { scope.admit(); await assertOwnerCurrent(); scope.admit(); const snapshot = readTaskSourceSnapshot(sql, ownerKey); return defaultSources.length && !isNarrowed() && !hasPending() ? { ...snapshot, defaults: defaultSources } : snapshot; };
+  const snapshotNow = () => { const snapshot = readTaskSourceSnapshot(sql, ownerKey); return defaultSources.length && !isNarrowed() && !hasPending() ? { ...snapshot, defaults: defaultSources } : snapshot; };
+  const current = async () => { scope.admit(); await assertOwnerCurrent(); scope.admit(); return snapshotNow(); };
   const assertSame = async (expected: TaskSourceSnapshot) => {
     const latest = await current();
     if (latest.taskId !== expected.taskId || latest.revision !== expected.revision || latest.ready !== expected.ready) throw new Error('Task source scope changed');
@@ -78,15 +80,16 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
     if (expected.defaults?.some(family => !latest.defaults?.includes(family))) throw new Error('Task source scope changed');
   };
   // narrowed is written in the same statement as the sources. It records that the owner chose or narrowed this task's sources (restrict, an owner-evidenced new/change, an approved card): that explicit list is exact whatever the defaults are later. A closed task / new default task starts at 0.
-  const commit = async (expected: TaskSourceSnapshot, sources: readonly TaskSourceFamily[], ready: boolean, startRef = expected.startRef, newTask = false, narrowed = isNarrowed()) => {
-    await current();
+  const commitNow = (expected: TaskSourceSnapshot, sources: readonly TaskSourceFamily[], ready: boolean, startRef = expected.startRef, newTask = false, narrowed = isNarrowed()) => {
+    scope.admit();
     if (expected.revision >= Number.MAX_SAFE_INTEGER) throw new Error('Task source revision exhausted');
     scope.commit(() => {
       sql.exec('UPDATE owner_task_source_scope SET task_id = ?, sources_json = ?, ready = ?, start_ref = ?, narrowed = ?, revision = revision + 1, pending_json = NULL WHERE owner_key = ? AND task_id = ? AND revision = ?', newTask ? allocateTask() : expected.taskId, JSON.stringify(sources), ready ? 1 : 0, startRef, narrowed ? 1 : 0, ownerKey, expected.taskId, expected.revision);
       if (sql.exec<{ changed: number }>('SELECT changes() AS changed').one().changed !== 1) throw new Error('Task source scope changed');
     });
-    return current();
+    return snapshotNow();
   };
+  const commit = async (...args: Parameters<typeof commitNow>) => { await current(); return commitNow(...args); };
   return {
     current, assertSame,
     async unresolved() {
@@ -94,57 +97,67 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
       const pending = sql.exec<Row>('SELECT * FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).one().pending_json;
       return pending ? previous : commit(previous, previous.sources, false);
     },
-    async classify(raw: string, inputRef?: string, classifiedOwnerText?: string): Promise<{ snapshot: TaskSourceSnapshot; proposal?: TaskSourceProposal; outcome: TaskSourceOutcome; decodeReason?: TaskSourceDecodeReason }> {
+    async classify(raw: string, inputRef?: string, classifiedOwnerText?: string, publish?: (result: TaskSourceClassification) => void): Promise<TaskSourceClassification> {
       const previous = await current();
-      const pending = sql.exec<Row>('SELECT * FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).one().pending_json;
-      let decision: Decision;
-      try { decision = parseDecision(raw); } catch (error) {
-        return { snapshot: pending ? previous : await commit(previous, previous.sources, false), outcome: pending ? 'owner_confirmation' : 'invalid_decision',
-          decodeReason: error instanceof TaskSourceDecodeError ? error.reason : 'invalid_shape' };
-      }
-      // A model continuation cannot consume or approve the visible owner decision.
-      if (pending && (['retain', 'uncertain'].includes(decision.decision) || decision.decision === 'restrict' && decision.sources.length > 0)) return { snapshot: previous, outcome: 'owner_confirmation' };
-      const evidence = decision.evidence;
-      const start = evidence && instruction ? instruction.text.indexOf(evidence) : -1;
-      const ownerTransition = !!instruction && instruction.inputRef === inputRef && instruction.text === classifiedOwnerText
-        && !!evidence && evidence.trim().length > 0 && instruction.text.length <= 16384 && start >= 0
-        && instruction.text.lastIndexOf(evidence) === start
-        && !(instruction.quotedRanges ?? []).some(range => !Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end)
-          || range.start < 0 || range.end < range.start || range.end > instruction.text.length
-          || start < range.end && start + evidence.length > range.start);
-      // A supplied-data-only task or an explicit owner narrowing stays until the owner confirms widening it. When the task already reads connected sources, the owner's own words (evidence anchored in the fresh message) can add another; grants still bound every read.
-      const readdsNarrowed = decision.sources.some(source => source !== 'workspace' && source !== 'web' && !previous.sources.includes(source)) && (decision.decision === 'change' && isNarrowed() || previous.sources.length === 0 && isNarrowed())
-        // A family outside the host defaults and the current task opens directly only when the owner's evidence is the whole message: pasted or forwarded text inside a longer message cannot be told from the owner's words, so that case takes the card.
-        || decision.sources.some(source => source !== 'workspace' && source !== 'web' && !(previous.ready && decision.decision === 'change' ? previous.sources : defaultSources).includes(source)) && !(!!evidence && !!instruction && evidence.trim() === instruction.text.trim());
-      if (ownerTransition && (decision.decision === 'close' || ['new', 'change'].includes(decision.decision) && !readdsNarrowed)) {
-        // Semantic planning within existing authority, never a connector grant/ACL mutation.
-        // CAS clears obsolete cards; the new task boundary prevents prior-task referent reuse.
-        const closing = decision.decision === 'close';
-        // The owner's explicit list is exact; leaving a default out is the owner narrowing. A closed task has no narrowing.
-        const listed = closing ? [] : decision.sources;
-        const transitioned = await commit(previous, listed, !closing,
-          decision.decision === 'change' ? previous.startRef : inputRef!, decision.decision !== 'change', !closing);
-        return { snapshot: transitioned, outcome: 'owner_transition' };
-      }
-      // Repeating a confirmed machine-family request cannot grant anything new.
-      // New-task acknowledgement is consumed once, when its host input boundary is pinned.
-      if (previous.ready && decision.sources.every(source => previous.sources.includes(source))
-        && (decision.decision === 'change' || decision.decision === 'new' && previous.startRef === null && !!inputRef)) {
-        return { snapshot: await commit(previous, previous.sources.filter(source => decision.sources.includes(source)), true, previous.startRef ?? inputRef ?? null, false, isNarrowed() || previous.sources.some(source => !decision.sources.includes(source))), outcome: 'confirmed_retry' };
-      }
-      if (decision.decision === 'retain') return { snapshot: await commit(previous, previous.ready && !isNarrowed() ? families([...new Set([...previous.sources, ...defaultSources])]) : previous.sources, previous.ready || previous.sources.length > 0, previous.startRef ?? inputRef ?? null), outcome: 'retained' };
-      if (decision.decision === 'restrict') {
-      const restricted = await commit(previous, previous.sources.filter(x => decision.sources.includes(x)), true, previous.sources.length === TASK_SOURCE_FAMILIES.length ? inputRef ?? null : previous.startRef, false, true);
-      return { snapshot: restricted, outcome: 'restricted' };
-    }
-      if (decision.decision === 'uncertain') return { snapshot: await commit(previous, previous.sources, false), outcome: 'uncertain' };
-      const snapshot = await commit(previous, previous.sources, false);
-      const proposal: TaskSourceProposal = { ownerKey, taskId: snapshot.taskId, revision: snapshot.revision, nonce: crypto.randomUUID(), action: decision.decision, sources: decision.decision === 'close' ? [] : decision.sources, expiresAt: Date.now() + 30 * 60_000 };
       await current();
-      scope.commit(() => sql.exec('UPDATE owner_task_source_scope SET pending_json = ? WHERE owner_key = ? AND task_id = ? AND revision = ?', JSON.stringify(proposal), ownerKey, snapshot.taskId, snapshot.revision));
-      // The card is now pending: this turn's snapshot must not carry defaults either.
-      const { defaults: _defaults, ...waiting } = snapshot;
-      return { snapshot: waiting, proposal, outcome: 'owner_confirmation' };
+      return scope.commit(() => {
+        const latest = snapshotNow();
+        if (latest.taskId !== previous.taskId || latest.revision !== previous.revision || latest.ready !== previous.ready) throw new Error('Task source scope changed');
+        const reduce = (): TaskSourceClassification => {
+        const pending = sql.exec<Row>('SELECT * FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).one().pending_json;
+        let decision: Decision;
+        try { decision = parseDecision(raw); } catch (error) {
+          return { snapshot: pending ? previous : commitNow(previous, previous.sources, false), outcome: pending ? 'owner_confirmation' : 'invalid_decision',
+            decodeReason: error instanceof TaskSourceDecodeError ? error.reason : 'invalid_shape' };
+        }
+        // A model continuation cannot consume or approve the visible owner decision.
+        if (pending && (['retain', 'uncertain'].includes(decision.decision) || decision.decision === 'restrict' && decision.sources.length > 0)) return { snapshot: previous, outcome: 'owner_confirmation' };
+        const evidence = decision.evidence;
+        const start = evidence && instruction ? instruction.text.indexOf(evidence) : -1;
+        const ownerTransition = !!instruction && instruction.inputRef === inputRef && instruction.text === classifiedOwnerText
+          && !!evidence && evidence.trim().length > 0 && instruction.text.length <= 16384 && start >= 0
+          && instruction.text.lastIndexOf(evidence) === start
+          && !(instruction.quotedRanges ?? []).some(range => !Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end)
+            || range.start < 0 || range.end < range.start || range.end > instruction.text.length
+            || start < range.end && start + evidence.length > range.start);
+        // A supplied-data-only task or an explicit owner narrowing stays until the owner confirms widening it. When the task already reads connected sources, the owner's own words (evidence anchored in the fresh message) can add another; grants still bound every read.
+        const readdsNarrowed = decision.sources.some(source => source !== 'workspace' && source !== 'web' && !previous.sources.includes(source)) && (decision.decision === 'change' && isNarrowed() || previous.sources.length === 0 && isNarrowed())
+          // A family outside the host defaults and the current task opens directly only when the owner's evidence is the whole message: pasted or forwarded text inside a longer message cannot be told from the owner's words, so that case takes the card.
+          || decision.sources.some(source => source !== 'workspace' && source !== 'web' && !(previous.ready && decision.decision === 'change' ? previous.sources : defaultSources).includes(source)) && !(!!evidence && !!instruction && evidence.trim() === instruction.text.trim());
+        if (ownerTransition && (decision.decision === 'close' || ['new', 'change'].includes(decision.decision) && !readdsNarrowed)) {
+          // Semantic planning within existing authority, never a connector grant/ACL mutation.
+          // CAS clears obsolete cards; the new task boundary prevents prior-task referent reuse.
+          const closing = decision.decision === 'close';
+          // The owner's explicit list is exact; leaving a default out is the owner narrowing. A closed task has no narrowing.
+          const listed = closing ? [] : decision.sources;
+          const transitioned = commitNow(previous, listed, !closing,
+            decision.decision === 'change' ? previous.startRef : inputRef!, decision.decision !== 'change', !closing);
+          return { snapshot: transitioned, outcome: 'owner_transition' };
+        }
+        // Repeating a confirmed machine-family request cannot grant anything new.
+        // New-task acknowledgement is consumed once, when its host input boundary is pinned.
+        if (previous.ready && decision.sources.every(source => previous.sources.includes(source))
+          && (decision.decision === 'change' || decision.decision === 'new' && previous.startRef === null && !!inputRef)) {
+          return { snapshot: commitNow(previous, previous.sources.filter(source => decision.sources.includes(source)), true, previous.startRef ?? inputRef ?? null, false, isNarrowed() || previous.sources.some(source => !decision.sources.includes(source))), outcome: 'confirmed_retry' };
+        }
+        if (decision.decision === 'retain') return { snapshot: commitNow(previous, previous.ready && !isNarrowed() ? families([...new Set([...previous.sources, ...defaultSources])]) : previous.sources, previous.ready || previous.sources.length > 0, previous.startRef ?? inputRef ?? null), outcome: 'retained' };
+        if (decision.decision === 'restrict') {
+        const restricted = commitNow(previous, previous.sources.filter(x => decision.sources.includes(x)), true, previous.sources.length === TASK_SOURCE_FAMILIES.length ? inputRef ?? null : previous.startRef, false, true);
+        return { snapshot: restricted, outcome: 'restricted' };
+      }
+        if (decision.decision === 'uncertain') return { snapshot: commitNow(previous, previous.sources, false), outcome: 'uncertain' };
+        const snapshot = commitNow(previous, previous.sources, false);
+        const proposal: TaskSourceProposal = { ownerKey, taskId: snapshot.taskId, revision: snapshot.revision, nonce: crypto.randomUUID(), action: decision.decision, sources: decision.decision === 'close' ? [] : decision.sources, expiresAt: Date.now() + 30 * 60_000 };
+        scope.admit();
+        scope.commit(() => sql.exec('UPDATE owner_task_source_scope SET pending_json = ? WHERE owner_key = ? AND task_id = ? AND revision = ?', JSON.stringify(proposal), ownerKey, snapshot.taskId, snapshot.revision));
+        // The card is now pending: this turn's snapshot must not carry defaults either.
+        const { defaults: _defaults, ...waiting } = snapshot;
+        return { snapshot: waiting, proposal, outcome: 'owner_confirmation' };
+        };
+        const result = reduce();
+        publish?.(result);
+        return result;
+      });
     },
   };
 };

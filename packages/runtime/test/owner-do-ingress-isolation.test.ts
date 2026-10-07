@@ -1056,6 +1056,7 @@ it('real webhook/inbox/turn path emits each verified owner email in Worker logs 
 });
 
 it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')('normal authenticated synthetic chat task reaches the common writer with source-verified auth-user mapping', async () => {
+  taskDecision = { decision:'retain', sources:[] };
   const authUser='30000000-0000-0000-0000-000000000001';
   const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(authUser)))].map(b=>b.toString(16).padStart(2,'0')).join('');
   const owner=`owner_${hash}`;
@@ -1074,6 +1075,30 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
     expect(replyPrompts.length).toBeGreaterThan(0);
     expect(JSON.stringify(replyPrompts)).toContain('Reactions: available');
     const firstTask=await runInDurableObject(root,(_instance,state)=>state.storage.sql.exec<{id:string}>('SELECT id FROM outcomes').one().id);
+    const { signCommonMessageIngress } = await import('../src/identity/common-message-ingress');
+    const { signCommonTaskSourceRequest } = await import('../src/identity/common-task-source-request');
+    const occurrenceId = await runInDurableObject(doStub(81105), (_instance,state) =>
+      state.storage.kv.get<import('../src/channels/telegram-owner-inbox').InboxRecord[]>('telegram_owner_inbox_v1')!.find(row => row.updateId === 997001)!.id);
+    const ingress = await signCommonMessageIngress(env.WALDO_ROUTER_HMAC_SECRET!, {
+      provider:'telegram', subject:'81105', doName:'hermetic-owner-81105', physicalDoId:doStub(81105).id.toString(),
+      occurrenceId, text:'Prepare a private checklist from the supplied notes.', at:Math.floor(Date.now()/1000),
+    });
+    const request = await signCommonTaskSourceRequest(env.WALDO_ROUTER_HMAC_SECRET!, ingress, {
+      operation:'classify', ownerInput:{inputRef:'tg-997001',text:ingress.text},
+      defaults:['local','workspace','web'], raw:JSON.stringify({decision:'retain',sources:[]}),
+    });
+    await evictDurableObject(root);
+    expect((await root.commonTaskSourceFromHost(ingress,request)).operation).toBe('classify');
+    const changed = await signCommonTaskSourceRequest(env.WALDO_ROUTER_HMAC_SECRET!, ingress, {
+      ...request, raw:JSON.stringify({decision:'new',sources:['workspace'],evidence:ingress.text}),
+    });
+    await runInDurableObject(root, async instance => {
+      await expect(instance.commonTaskSourceFromHost(ingress,changed)).rejects.toThrow('common source command conflict');
+    });
+    await runInDurableObject(root, (_instance,state) => {
+      expect(state.storage.sql.exec('SELECT revision FROM owner_task_source_scope').one().revision).toBe(2);
+      expect(state.storage.sql.exec('SELECT count(*) AS n FROM outcomes').one().n).toBe(1);
+    });
     await evictDurableObject(root);
     await send(81105,'Make that checklist shorter without changing sources.',997002);
     await runInDurableObject(root,(_instance,state)=>{

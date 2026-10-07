@@ -84,3 +84,22 @@ it('fresh nonpending owner-evidenced task transition allocates a new canonical O
   expect(state.storage.sql.exec('SELECT user_statement FROM outcomes WHERE id = ?',fresh.taskId).one().user_statement).toBe(text);
  });
 });
+
+it('classification publication crash rolls back the task transition so an exact retry cannot duplicate or lose it',async()=>{
+ const stub=env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName('common-source-crash-'+crypto.randomUUID())) as DurableObjectStub<RunLoopDO>;
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const coordinator=new WaldoCoordinator(state.storage);
+  const scope={runId:'fixture',attempt:'fixture',deadline:Date.now()+30000,signal:new AbortController().signal,admit(){},commit:<T>(work:()=>T)=>state.storage.transactionSync(work)};
+  const text='Start a new task in my workspace.';
+  const cap=await coordinator.commonTaskSourceScope(admitted,{inputRef:'crash_input',text},['workspace'],scope,async()=>{});
+  const before=await cap.current();
+  const raw=JSON.stringify({decision:'new',sources:['workspace'],evidence:text});
+  await expect(cap.classify(raw,'crash_input',text,()=>{throw Error('publication interrupted');})).rejects.toThrow('publication interrupted');
+  expect(await cap.current()).toEqual(before);
+  expect(state.storage.sql.exec('SELECT count(*) AS n FROM outcomes').one().n).toBe(1);
+  const result=await cap.classify(raw,'crash_input',text,value=>state.storage.kv.put('fixture-receipt',value));
+  expect(state.storage.kv.get('fixture-receipt')).toEqual(result);
+  expect(result.snapshot.taskId).not.toBe(before.taskId);
+  expect(state.storage.sql.exec('SELECT count(*) AS n FROM outcomes').one().n).toBe(2);
+ });
+});

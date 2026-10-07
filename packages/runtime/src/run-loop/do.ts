@@ -440,17 +440,38 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       await capability.assertSame(request.expected); return { operation: 'assert_same' as const };
     }
     if (typeof request.raw !== 'string') throw Error('common source classification missing');
-    // Exact occurrence + admitted input + model decision owns one transition across delivery retries.
-    const key=`common-source-command:${await this.deps.sha256Hex(JSON.stringify([authority.ownerId,ingress.provider,ingress.subject,ingress.occurrenceId,request.ownerInput,request.raw]))}`;
-    const saved=this.ctx.storage.kv.get<{ state: 'started' | 'settled'; result?: Awaited<ReturnType<typeof capability.classify>> }>(key);
-    if (saved) {
-      if (saved.state !== 'settled' || !saved.result) throw Error('common source transition recovery required');
-      await capability.assertSame(saved.result.snapshot); return { operation: 'classify' as const, result: saved.result };
+    // The occurrence owns one command. Changed classifier output is a conflict, not another task.
+    const key = `common-source-command:${await this.deps.sha256Hex(JSON.stringify([
+      authority.ownerId, ingress.provider, ingress.subject, ingress.occurrenceId,
+    ]))}`;
+    const commandDigest = await this.deps.sha256Hex(JSON.stringify([
+      request.ownerInput, request.defaults, request.raw,
+    ]));
+    type Receipt = { state: 'prepared' | 'settled'; commandDigest: string;
+      result?: Awaited<ReturnType<typeof capability.classify>> };
+    const assertCommand = (saved: Receipt | undefined) => {
+      if (saved && saved.commandDigest !== commandDigest) throw Error('common source command conflict');
+      if (saved && saved.state !== 'prepared' && saved.state !== 'settled') throw Error('common source transition recovery required');
+    };
+    const saved = this.ctx.storage.kv.get<Receipt>(key);
+    assertCommand(saved);
+    if (saved?.state === 'settled') {
+      if (!saved.result) throw Error('common source receipt missing');
+      await capability.assertSame(saved.result.snapshot);
+      return { operation: 'classify' as const, result: saved.result };
     }
-    // Freeze intent before async classification. An interrupted transition never runs again blindly.
-    scope.commit(()=>this.ctx.storage.kv.put(key,{state:'started'}));
-    const result=await capability.classify(request.raw,request.ownerInput.inputRef,request.ownerInput.text);
-    scope.commit(()=>this.ctx.storage.kv.put(key,{state:'settled',result}));
+    // Atomic reducer publication couples source mutations and capture with the settled receipt.
+    // A prepared retry has no committed mutation; old non-atomic receipts remain held.
+    scope.commit(() => {
+      assertCommand(this.ctx.storage.kv.get<Receipt>(key));
+      this.ctx.storage.kv.put(key, { state: 'prepared', commandDigest });
+    });
+    const result = await capability.classify(request.raw, request.ownerInput.inputRef, request.ownerInput.text, result => {
+      const current = this.ctx.storage.kv.get<Receipt>(key);
+      assertCommand(current);
+      if (current?.state !== 'prepared') throw Error('common source command already settled');
+      this.ctx.storage.kv.put(key, { state: 'settled', commandDigest, result });
+    });
     return { operation: 'classify' as const, result };
   }
 

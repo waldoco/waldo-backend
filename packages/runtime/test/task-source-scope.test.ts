@@ -465,20 +465,19 @@ it('a default-read admission taken before a card is published cannot run after t
   await expect(cap.assertSame(latest)).resolves.toBeUndefined();
 }));
 
-it('real interleaving: a second turn admits with defaults while classify is suspended between the revision bump and the card write', () => run('task-pending-interleave', async (sql, scope) => {
-  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
-  let atBump!: () => void; const reached = new Promise<void>(resolve => { atBump = resolve; });
-  let paused = false;
-  const revisionNow = () => sql.exec<{ revision: number }>('SELECT revision FROM owner_task_source_scope').one().revision;
-  const first = createTaskSourceScope(sql, 'owner-one', scope, async () => { if (!paused && revisionNow() > 1) { paused = true; atBump(); await gate; } }, { inputRef: 'r1', text: 'read my mail' }, ['web', 'mail']);
+it('source revision and pending card publish atomically without an asynchronous default-read gap', () => run('task-pending-interleave', async (sql, scope) => {
+  let checksAfterBump = 0;
+  const first = createTaskSourceScope(sql, 'owner-one', scope, async () => {
+    if (sql.exec<{ revision: number }>('SELECT revision FROM owner_task_source_scope').one().revision > 1) checksAfterBump++;
+  }, { inputRef: 'r1', text: 'read my mail' }, ['web', 'mail']);
   const second = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, undefined, ['web', 'mail']);
-  const classifying = first.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'check my diary' }), 'r1', 'read my mail');
-  await reached;
   const admitted = await second.current();
   expect(admitted.defaults).toEqual(['web', 'mail']);
-  release();
-  const result = await classifying;
+  const result = await first.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'check my diary' }), 'r1', 'read my mail');
   expect(result.proposal).toBeDefined();
+  // There is no await/currentness callback after the bump and before the card.
+  expect(checksAfterBump).toBe(0);
+  expect((await second.current()).defaults).toBeUndefined();
   await expect(second.assertSame(admitted)).rejects.toThrow('Task source scope changed');
 }));
 
