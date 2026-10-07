@@ -32,6 +32,18 @@
     {
       "version": 8,
       "name": "schedule-runs-v0-1"
+    },
+    {
+      "version": 9,
+      "name": "common-message-custody"
+    },
+    {
+      "version": 10,
+      "name": "common-execution-workunit"
+    },
+    {
+      "version": 11,
+      "name": "common-execution-continuation"
     }
   ]
 }
