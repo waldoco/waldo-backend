@@ -212,3 +212,15 @@ it('bounded recovery advances more than eight unresolved sends even with a fixed
  expect(f.desk.ledger([])).toContain('unresolved-9: Gmail outcome unconfirmed');
  expect(f.counts().sends).toBe(1);
 });
+
+
+it('legacy unbound unknown sends stay visible without consuming bound recovery slots',async()=>{
+ const f=await mailFixture({sendError:new Error('response lost'),found:false});await f.desk.decide(f.id,'a','tap');
+ const {connection_id:_connection,account_email:_email,...legacy}=f.payload;
+ for(let i=0;i<8;i++)f.storage.exec("INSERT INTO ledger (id,kind,status,summary,payload_json,created_at,decided_at) VALUES (?,'email_send','uncertain','Legacy unknown',?,0,0)",`legacy-${i}`,JSON.stringify(legacy));
+ f.options.found=true;await f.restart().reconcileEmails();
+ expect(f.counts()).toMatchObject({sends:1,delivered:1});
+ expect(f.storage.exec('SELECT status FROM ledger WHERE id = ?',f.id).one()).toEqual({status:'done'});
+ expect(f.desk.ledger([])).toContain('legacy account unavailable; manually check Gmail before a new proposal');
+ expect(f.storage.exec('SELECT status FROM ledger WHERE id = ?', 'legacy-0').one()).toEqual({status:'uncertain'});
+});

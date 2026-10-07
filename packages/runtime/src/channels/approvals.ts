@@ -393,7 +393,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     async reconcileEmails() {
       // A bounded owner-local readback pass; never replay an effect after interruption.
       const candidates = sql.exec<LedgerRow>(`SELECT l.* FROM ledger l LEFT JOIN email_send_receipts r ON r.approval_id = l.id
-        WHERE l.kind = 'email_send' AND (l.status IN ('sending', 'uncertain') OR (l.status = 'done' AND r.confirmed_at IS NOT NULL AND r.channel_delivered_at IS NULL))
+        WHERE l.kind = 'email_send' AND json_extract(l.payload_json, '$.connection_id') IS NOT NULL AND json_extract(l.payload_json, '$.binding_digest') IS NOT NULL AND (l.status IN ('sending', 'uncertain') OR (l.status = 'done' AND r.confirmed_at IS NOT NULL AND r.channel_delivered_at IS NULL))
         ORDER BY COALESCE(r.reconciliation_order, 0), l.created_at, l.id LIMIT 8`).toArray();
       for (const entry of candidates) {
         const payload = JSON.parse(entry.payload_json) as EmailSendProposal;
@@ -576,7 +576,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         ...(open.length || unconfirmed.length || reviewOnly.length || uncertain.length ? open.map((r) => `- ${r.summary} (waiting on you)`) : ['- nothing waiting on you']),
         ...unconfirmed.map((r) => `- ${r.summary} (review card delivery unconfirmed; cannot approve)`),
         ...reviewOnly.map((r) => `- ${r.summary} (too long for approval card; cannot send)`),
-        ...uncertain.map((r) => `- ${r.summary} (${r.id}: Gmail outcome unconfirmed; /ledger checks without resending)`),
+        ...uncertain.map((r) => `- ${r.summary} (${r.id}: Gmail outcome unconfirmed; ${JSON.parse(r.payload_json).connection_id ? '/ledger checks without resending' : 'legacy account unavailable; manually check Gmail before a new proposal'})`),
         '', 'Reminders',
         ...(reminders.length ? reminders.map((r) => `- ${r.at.replace('T', ' ')} ${r.note}${r.repeat === 'daily' ? ' (daily)' : ''}`) : ['- none set']),
         '', 'Recent',
