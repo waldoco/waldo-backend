@@ -19,7 +19,7 @@ vi.mock('../src/channels/telegram-owner-do', async load => {
     constructor(state: DurableObjectState, bindings: typeof env) {
       const subject = [81101, 81102, 81103, 81104, 81105].find(value => bindings.TELEGRAM_OWNER_DO!.idFromName(`hermetic-owner-${value}`).toString() === state.id.toString());
       const host = subject === undefined ? undefined : admittedOwnerHost(`hermetic-owner-${subject}`, String(subject),
-        new OpenAIResponsesAdapter({ apiKey: bindings.OPENAI_API_KEY }), ['get_communication', 'propose_calendar_change']);
+        new OpenAIResponsesAdapter({ apiKey: bindings.OPENAI_API_KEY }), ['get_communication', 'propose_calendar_change', 'draft_email', 'send_email']);
       super(state, bindings, { mode: 'canonical', host });
     }
   } };
@@ -31,6 +31,9 @@ let onFixtureReply: (() => Promise<void>) | undefined;
 const unexpectedFetches: string[] = [];
 let sourceWorld: IsolatedSourceWorld | null = null;
 let interceptCalendarEffects = false;
+let interceptMailEffects = false;
+let fixtureMailAction: 'draft' | 'propose' | undefined;
+const mailEffects: { kind: string; payload: unknown }[] = [];
 let taskDecision: { decision: string; sources: string[]; evidence?: string | null } | string = { decision: 'retain', sources: [] };
 vi.mock('../src/seams/deps', async (load) => {
   const original = await load<typeof import('../src/seams/deps')>();
@@ -43,7 +46,8 @@ vi.mock('../src/connectors/google', async (load) => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (_app: unknown, tokens: { email?: string }) => {
     if (!sourceWorld || !tokens.email) throw new Error('fixture Google account is unavailable');
-    return interceptCalendarEffects ? isolatedCalendarEffectClient(sourceWorld, tokens.email) : isolatedGoogleClient(sourceWorld, tokens.email);
+    const client = interceptCalendarEffects ? isolatedCalendarEffectClient(sourceWorld, tokens.email) : isolatedGoogleClient(sourceWorld, tokens.email);
+    return !interceptMailEffects ? client : { ...client, draft: async (payload: unknown) => { mailEffects.push({ kind: 'draft', payload }); return { draft_id: 'fixture-draft', message_id: 'fixture-message', thread_id: 'fixture-thread' }; }, sendRaw: async (raw: string) => { mailEffects.push({ kind: 'send', payload: raw }); return { message_id: 'fixture-sent', thread_id: 'fixture-thread' }; } };
   } };
 });
 vi.mock('../src/channels/telegram-api', async (load) => {
@@ -71,6 +75,8 @@ vi.mock('openai', () => ({
       const hasToolOutput = input.includes('function_call_output');
       const output = name === 'task_source_scope' || name === 'claim_ops' || hasToolOutput ? []
         : wantsProposal ? [{ type: 'function_call', call_id: 'fixture-calendar-proposal', name: 'propose_calendar_change', arguments: JSON.stringify({ action: 'create', title: 'Fixture meeting', start: '2026-10-01T10:00:00+05:30', end: '2026-10-01T10:30:00+05:30', reason: 'test-only owner request' }) }]
+        : fixtureMailAction === 'draft' ? [{ type: 'function_call', call_id: 'fixture-draft-mail', name: 'draft_email', arguments: JSON.stringify({ to: ['synthetic@example.test'], subject: 'Synthetic mail-only', body_markdown: 'Synthetic body' }) }]
+        : fixtureMailAction === 'propose' ? [{ type: 'function_call', call_id: 'fixture-propose-mail', name: 'send_email', arguments: JSON.stringify({ to: ['synthetic@example.test'], subject: 'Synthetic mail-only', body_markdown: 'Synthetic body' }) }]
         : wantsMail ? [{ type: 'function_call', call_id: 'fixture-mail-read', name: 'get_communication', arguments: '{}' }]
         : [];
       return { id: `fixture-${modelInputs.length}`, output_text: output.length ? '' : text, output, usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
@@ -401,7 +407,7 @@ describe('real owner-DO ingress in a sealed test world', () => {
     }) as typeof fetch);
   });
   afterEach(() => {
-    sourceWorld = null; interceptCalendarEffects = false;
+    sourceWorld = null; interceptCalendarEffects = false; interceptMailEffects = false; fixtureMailAction = undefined; mailEffects.length = 0;
     vi.unstubAllGlobals();
     expect(unexpectedFetches).toEqual([]);
   });
@@ -678,6 +684,43 @@ describe('real owner-DO ingress in a sealed test world', () => {
       });
       expect(toolInputs.some((input) => input.includes(ownWord) && !input.includes(otherWord))).toBe(true);
     }
+  });
+  it('mail-only custody reaches read and draft, then sends exact proposed bytes only after its real owner callback', async () => {
+    sourceWorld = new IsolatedSourceWorld({ clock: '2026-10-07T00:00:00Z', owners: [{ id: 'mail-only@example.invalid' }], sources: { mail: [{ owner_id: 'mail-only@example.invalid', id: 'fixture-mail-only', thread_id: 'fixture-thread', from: 'synthetic@example.test', subject: 'Synthetic mail-only', snippet: 'Synthetic mail body', at: '2026-10-06T23:00:00Z' }] } });
+    interceptMailEffects = true; mailEffects.length = 0; outbox.length = 0; modelInputs.length = 0;
+    // Complete one-time day-plan boot without an account, before this mail-only trial.
+    await send(81104, 'Warm the fictional host without connected providers.', 919000 + ++sequence * 10);
+    expect(sourceWorld.accessLog('mail-only@example.invalid')).toEqual([]);
+    await runInDurableObject(doStub(81104), async (_instance, state) => {
+      await state.storage.put('google:accounts', [{ id: 'local:mail-only@example.invalid', email: 'mail-only@example.invalid', scopes: null, refresh_token: 'fictional-not-a-token' }]);
+    });
+    const update = 920000 + ++sequence * 10;
+    taskDecision = { decision: 'restrict', sources: ['mail'], evidence: null };
+    await send(81104, 'Read the fixture inbox for this mail-only task.', update);
+    expect(sourceWorld.accessLog('mail-only@example.invalid')).toEqual([expect.objectContaining({ source: 'mail', kind: 'list' })]);
+    modelInputs.length = 0;
+    fixtureMailAction = 'draft';
+    await send(81104, 'Draft a synthetic mail-only email.', update + 1);
+    expect(mailEffects.map(item => item.kind)).toEqual(['draft']);
+    modelInputs.length = 0; outbox.length = 0;
+    fixtureMailAction = 'propose';
+    await send(81104, 'Propose a synthetic mail-only email.', update + 2);
+    expect(mailEffects.map(item => item.kind)).toEqual(['draft']);
+    const card = outbox.find(item => item.method === 'sendMessage' && JSON.stringify(item.body.reply_markup).includes('Send it'))!;
+    expect(card).toBeDefined();
+    const buttons = (card.body.reply_markup as { inline_keyboard: { callback_data: string }[][] }).inline_keyboard.flat();
+    const approve = buttons.find(button => button.callback_data.startsWith('a:'))!.callback_data;
+    await callback(81104, 81102, approve, update + 3);
+    expect(mailEffects.map(item => item.kind)).toEqual(['draft']);
+    await callback(81104, 81104, approve, update + 4);
+    expect(mailEffects.map(item => item.kind)).toEqual(['draft', 'send']);
+    await callback(81104, 81104, approve, update + 5);
+    expect(mailEffects.map(item => item.kind)).toEqual(['draft', 'send']);
+    const raw = String(mailEffects[1]!.payload); const mime = atob(raw.replace(/-/g, '+').replace(/_/g, '/'));
+    expect(mime).toContain('To: synthetic@example.test'); expect(mime).toContain('Synthetic mail-only');
+    await runInDurableObject(doStub(81104), async (_instance, state) => {
+      expect(state.storage.sql.exec<{ sources_json: string }>('SELECT sources_json FROM owner_task_source_scope').one().sources_json).toBe('["mail"]');
+    });
   });
   it('routes an owner-scoped calendar proposal card through the real DO without applying a provider effect', async () => {
     // Proposal-time route custody now resolves a real fixture account before issuing a card.
