@@ -6,12 +6,14 @@
 - [ ] Disconnect failure preserves an existing uncertain action outcome and bounded provider diagnostic, with release failure recorded separately. Entry admission and identity-schema failures return typed bounded rejection rather than arbitrary host error text.
 - [ ] A model-visible select control includes option labels and exact values; dispatch accepts only enabled options present in the current trusted observation.
 - [ ] Denied main documents cannot become useful resumed observations: abort routed failures and discard an explicitly denied tab. Native actionability waits fit the minimum actual host/session deadline; a close acknowledgement failure after dispatch retains an uncertain outcome.
+- [ ] If an explicitly denied document cannot be discarded, physically end the owned provider session and verify absence; never rely on a caught close error to quarantine a retained document.
 
 | Failure | Regression | Boundary |
 | --- | --- | --- |
 | 2026-10-07: late observation awaits could outlast admission; disconnect could replace uncertain outcomes; entry admission errors escaped typed failures | general-browser-driver.test.ts final-title revocation, combined action/disconnect failure, malformed identity and entry revocation controls | Driver fakes and installed-SDK fake binding only; ordinary owner caller, model vision and provider retention still require independent acceptance |
 | 2026-10-07: select dispatch needed values omitted from public observations | general-browser-driver.test.ts select-option observation and typed dispatch | Page option labels/values remain external content, never owner approval evidence |
 | 2026-10-07: denied tabs could be observed later; default action waits exceeded remaining authority; tab close lost uncertainty | general-browser-driver.test.ts denied navigation/resume, routed click denial, short host deadline, close-with-lost-ack controls | No arbitrary denial-text classifier; authoritative response failures are blocked, deadline comes from existing host, real cancellation/retention remain acceptance work |
+| 2026-10-07: failed denied-tab close left the document available for later observation | general-browser-driver.test.ts denied-document close failure and exact-session absence | Physical termination fallback is owner-scoped; cleanup uncertainty remains a typed failure |
 
 ### Incomplete forget recovery and request retention
 

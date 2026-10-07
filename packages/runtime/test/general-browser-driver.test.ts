@@ -22,7 +22,7 @@ function harness(controlTag = 'a') {
   let routeHandler: ((route: any) => Promise<void>) | undefined;
   const context = { pages: () => [...pages], newPage: async () => page(), route: async (_: string, handler: (route: any) => Promise<void>) => { routeHandler = handler; }, unroute: async () => {}, newCDPSession: async (p: any) => ({ send: async () => ({ targetInfo: { targetId: p.id } }), detach: async () => {} }) };
   const browser = { contexts: () => [context], newContext: async () => { throw Error('disposeOnDetach context would lose tabs'); }, close: async () => { calls.push('release'); }, newBrowserCDPSession: async () => ({ send: async () => { ended = true; } }) };
-  const sdk = { acquire: async () => { calls.push('acquire'); return { sessionId: session.providerSessionId }; }, connect: async (_: unknown, options: any) => { expect(options).toEqual({ sessionId: session.providerSessionId, persistent: true }); calls.push('attach'); return browser; }, sessions: async () => ended ? [] : [{ sessionId: session.providerSessionId }] };
+  const sdk = { acquire: async () => { calls.push('acquire'); return { sessionId: session.providerSessionId }; }, connect: async (_: unknown, options: any) => { expect(options).toEqual({ sessionId: session.providerSessionId, persistent: true }); if (ended) throw Error('session ended'); calls.push('attach'); return browser; }, sessions: async () => ended ? [] : [{ sessionId: session.providerSessionId }] };
   return { calls, pages, sdk, browser, route: (route: any) => routeHandler!(route), humanChange: () => { changed = true; } };
 }
 it('navigates a public page, returns actual image bytes, and retains two tabs across detached owner turns', async () => {
@@ -164,6 +164,16 @@ it('does not fulfill a denied document or report a click into it as useful work'
   } });
   await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'page_unavailable', diagnostic: { status: 403 } });
   expect(routeCalls).toEqual(['blocked']);
+});
+it('physically ends the owned session when a denied document cannot be discarded', async () => {
+  const f = harness();
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(session, 'https://docs.example/index');
+  f.pages[0].goto = async () => ({ status: () => 403 });
+  f.pages[0].close = async () => { throw Error('cannot discard document'); };
+  await expect(driver.navigate(session, 'https://docs.example/index')).rejects.toMatchObject({ code: 'page_unavailable' });
+  expect(await f.sdk.sessions()).toEqual([]);
+  await expect(driver.observe(session, first.observation.tab_ref)).rejects.toMatchObject({ code: 'provider_unavailable' });
 });
 it('fits locator auto-wait within the actual host and session deadline', async () => {
   const f = harness(); let now = 1, observedTimeout: number | undefined;

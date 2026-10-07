@@ -207,7 +207,7 @@ export function cloudflareGeneralBrowser(options: Options) {
       const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 }); await admit(session);
       if (!response || response.status() >= 400) {
         // Do not retain a denied document that a later observe could promote.
-        try { await page.close(); } catch { /* host still owns session cleanup */ }
+        try { await page.close(); } catch { await terminateId(session.providerSessionId); }
         throw new GeneralBrowserError('page_unavailable', response ? { status: response.status() } : undefined);
       }
       return observe(session, context, page);
@@ -216,7 +216,7 @@ export function cloudflareGeneralBrowser(options: Options) {
       await allowed(session, url); const page = await context.newPage();
       const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 }); await admit(session);
       if (!response || response.status() >= 400) {
-        try { await page.close(); } catch { /* host still owns session cleanup */ }
+        try { await page.close(); } catch { await terminateId(session.providerSessionId); }
         throw new GeneralBrowserError('page_unavailable', response ? { status: response.status() } : undefined);
       }
       return observe(session, context, page);
