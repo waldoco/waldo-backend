@@ -4,10 +4,10 @@ import { googleHandlers } from '../src/tools/live/google';
 const google = { client: async () => null };
 const desk = {} as never;
 const clock = { now: () => new Date('2026-10-02T00:00:00Z') } as never;
-it('the Google read, draft and send handlers declare requires_connector; propose_calendar_change stays desk-only', () => {
+it('Google handlers, including calendar proposals that inspect event versions, declare their connector dependency', () => {
   const handlers = googleHandlers(google as never, desk, clock);
   const declared = connectorBackedTools(handlers);
-  expect(declared).toEqual(['draft_email', 'get_communication', 'get_tasks', 'query_availability', 'query_calendar', 'read_thread', 'search_communication', 'send_email']);
+  expect(declared).toEqual(['draft_email', 'get_communication', 'get_tasks', 'propose_calendar_change', 'query_availability', 'query_calendar', 'read_thread', 'search_communication', 'send_email']);
 });
 it('omitting the declaration is not connector-backed', () => {
   expect(connectorBackedTools([{ name: 'read_thread' }, { name: 'get_tasks', requires_connector: true }])).toEqual(['get_tasks']);
@@ -32,5 +32,6 @@ it('guard: any Google handler that reaches the Google client at runtime must dec
   }
   // The probe must have seen the read handlers, so an empty set cannot pass the guard silently.
   expect(touched.size).toBeGreaterThanOrEqual(5);
+  expect(touched.has('propose_calendar_change')).toBe(true);
   for (const h of handlers) expect(h.requires_connector === true, h.name).toBe(touched.has(h.name));
 });
