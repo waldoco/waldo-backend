@@ -31,6 +31,19 @@ vi.mock('../src/channels/telegram-owner-do', async load => {
   } };
 });
 
+// Drop only ACKs after the real root committed the observation; never replay model/tool I/O.
+let lostCommonAcks=new Set<string>();let droppedCommonAcks=0;
+vi.mock('../src/run-loop/do',async load=>{
+ const original=await load<typeof import('../src/run-loop/do')>();
+ return {...original,RunLoopDO:class extends original.RunLoopDO{
+  override async commonExecutionFromHost(ingress:import('../src/identity/common-message-ingress').CommonMessageIngress,request:import('../src/identity/common-execution-request').CommonExecutionRequest){
+   const result=await super.commonExecutionFromHost(ingress,request);
+   if(lostCommonAcks.delete(request.operation)){droppedCommonAcks++;throw Error('fixture lost committed observation ACK');}
+   return result;
+  }
+ }};
+});
+
 const outbox: { method: string; body: Record<string, unknown> }[] = [];
 const modelInputs: unknown[] = [];
 let commonWorkspaceJourney=false;
@@ -1095,7 +1108,7 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
     return Response.json({owner_id:'10000000-0000-0000-0000-000000081105',auth_user_id:authUser,
       presence_id:'20000000-0000-0000-0000-000000081105',do_name:args.p_do_name,provider:args.p_provider,subject:args.p_subject,state_version:0,admission_revision:'9007199254740993'});
   });
-  commonBrowserFixture.reset();commonWorkspaceJourney=true;
+  commonBrowserFixture.reset();commonWorkspaceJourney=true;lostCommonAcks=new Set(['provider_settle','tool_settle']);droppedCommonAcks=0;
   try{
     await send(81105,'Prepare a private checklist from the supplied notes.',997001);
     const replyPrompts=modelInputs.filter(body=>JSON.stringify(body).includes('Approval delivery: native_buttons'));
@@ -1169,9 +1182,11 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
       expect(retained[0]![1]).toMatchObject({allocation:'observed',session:{providerSessionId:'fixture-retained-provider',generation:1},tabs:expect.any(Array)});
       expect(retained[0]![1].tabs).toHaveLength(2);
     });
+    expect(droppedCommonAcks).toBe(2);expect(lostCommonAcks.size).toBe(0);
     expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(2);
     const imageRequests=modelInputs.filter(body=>JSON.stringify(body).includes('input_image'));
     expect(imageRequests.length).toBeGreaterThanOrEqual(4);
+    expect(modelInputs.filter(body=>JSON.stringify(body).includes('Approval delivery: native_buttons'))).toHaveLength(12);
     expect(JSON.stringify(imageRequests)).toContain('data:image/png;base64,iVBOR');
     expect(JSON.stringify(imageRequests)).toContain('Option A costs 10 fictional tokens.');
     expect(JSON.stringify(imageRequests)).toContain('Option B costs 20 fictional tokens.');
@@ -1200,8 +1215,25 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
     });
     const toolSettle=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'tool_settle',toolCall:{id:'fixture_write_1',name:'workspace_write',requestDigest:`sha256:${'e'.repeat(64)}`,resultDigest:`sha256:${'e'.repeat(64)}`}});
     await root.commonExecutionFromHost(interruptedIngress,toolSettle);
+    await evictDurableObject(root);
+    await runInDurableObject(root,async instance=>{
+      expect((await instance.commonExecutionFromHost(interruptedIngress,toolSettle)).state).toBe('running');
+      const changedResult=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...toolSettle,toolCall:{...toolSettle.toolCall!,resultDigest:`sha256:${'f'.repeat(64)}`}});
+      await expect(instance.commonExecutionFromHost(interruptedIngress,changedResult)).rejects.toThrow('common tool result conflict');
+    });
+
     const prepare=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'provider_prepare',providerCall:{ordinal:1,model:'gpt-6-luna',requestDigest:`sha256:${'b'.repeat(64)}`}});
     await root.commonExecutionFromHost(interruptedIngress,prepare);
+    const providerSettle=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'provider_settle',providerCall:{...prepare.providerCall!,resultDigest:`sha256:${'c'.repeat(64)}`}});
+    await root.commonExecutionFromHost(interruptedIngress,providerSettle);
+    await evictDurableObject(root);
+    await runInDurableObject(root,async instance=>{
+      expect((await instance.commonExecutionFromHost(interruptedIngress,providerSettle)).state).toBe('running');
+      const conflict=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...providerSettle,providerCall:{...providerSettle.providerCall!,resultDigest:`sha256:${'d'.repeat(64)}`}});
+      await expect(instance.commonExecutionFromHost(interruptedIngress,conflict)).rejects.toThrow('common provider result conflict');
+    });
+    const nextPrepare=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...prepare,providerCall:{...prepare.providerCall!,ordinal:2}});
+    await root.commonExecutionFromHost(interruptedIngress,nextPrepare);
     await evictDurableObject(root);
     await runInDurableObject(root,async instance=>{
       await expect(instance.commonExecutionFromHost(interruptedIngress,prepare)).rejects.toThrow('requires reconciliation');
@@ -1246,7 +1278,7 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
       expect(state.storage.kv.get<{state:string}>(key)?.state).toBe('settled');
     });
   }finally{
-    commonWorkspaceJourney=false;
+    commonWorkspaceJourney=false;lostCommonAcks.clear();
     vi.unstubAllGlobals();
     await runInDurableObject(doStub(81105),async(_instance,state)=>{await state.storage.deleteAlarm();});
     await runInDurableObject(root,async(_instance,state)=>{await state.storage.deleteAlarm();});

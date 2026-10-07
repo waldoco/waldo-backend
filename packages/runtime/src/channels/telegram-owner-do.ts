@@ -308,6 +308,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const signed=await signCommonExecutionRequest(this.env.WALDO_ROUTER_HMAC_SECRET!,ingress,{...request,operation,...(result?{result}:{}),...(providerCall?{providerCall}:{}),...(toolCall?{toolCall}:{})});
       if(operation!=='settle'&&operation!=='cancel')scope.admit();const outcome=await root.commonExecutionFromHost(ingress,signed);if(operation!=='settle'&&operation!=='cancel')scope.admit();return outcome;
     };
+    // A lost root ACK must retry only the frozen digest observation, never the I/O.
+    // Root accepts exact repeated settlement only while the same lease/authority is live.
+    const settleObservation=async(operation:'provider_settle'|'tool_settle',providerCall?:import('../identity/common-execution-request').CommonExecutionRequest['providerCall'],toolCall?:import('../identity/common-execution-request').CommonExecutionRequest['toolCall'])=>{
+      try{return await invoke(operation,undefined,providerCall,toolCall);}
+      catch{scope.admit();return invoke(operation,undefined,providerCall,toolCall);}
+    };
     const execution = {
       begin:async(source:import('./task-source-scope').TaskSourceSnapshot,composition:Extract<import('../context-composer/types').ContextCompositionResult,{ok:true}>,maxProviderTurns:number)=>{
         if(started)return;
@@ -328,7 +334,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const call={ordinal:++providerOrdinal,model:providerRequest.request.model,requestDigest:`sha256:${await sha256Hex(JSON.stringify(frozen))}`};
         await invoke('provider_prepare',undefined,call);
         const result=await issue();
-        await invoke('provider_settle',undefined,{...call,resultDigest:`sha256:${await sha256Hex(JSON.stringify(result))}`});
+        await settleObservation('provider_settle',{...call,resultDigest:`sha256:${await sha256Hex(JSON.stringify(result))}`});
         return result;
       },
       tool:async(name:string,args:unknown,ctx:import('../tools/dispatcher').ToolDispatcherContext,issue:()=>Promise<unknown>)=>{
@@ -336,7 +342,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const call={id:`tool_${await sha256Hex(JSON.stringify([ctx.turnId,ctx.toolCallId]))}`,name,requestDigest:`sha256:${await sha256Hex(JSON.stringify(args))}`};
         await invoke('tool_prepare',undefined,undefined,call);
         const result=await issue();
-        await invoke('tool_settle',undefined,undefined,{...call,resultDigest:`sha256:${await sha256Hex(JSON.stringify(result))}`});
+        await settleObservation('tool_settle',undefined,{...call,resultDigest:`sha256:${await sha256Hex(JSON.stringify(result))}`});
         return result;
       },
       cancel:async()=>{try{if(started)await invoke('cancel');}finally{await browser?.cancel();}},

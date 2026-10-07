@@ -457,7 +457,10 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
         const prepared=current.aggregate.observations.find(value=>value.id===preparedId);const settled=current.aggregate.observations.find(value=>value.id===settledId);
         const requestDigest=`sha256:${await this.deps.sha256Hex(JSON.stringify([call.name,call.requestDigest]))}`;
         if(request.operation==='tool_prepare'&&prepared)throw Error('common tool intent requires reconciliation');
-        if(request.operation==='tool_settle'&&(!prepared||prepared.payloadDigest!==requestDigest||settled))throw Error('common tool result conflict');
+        if(request.operation==='tool_settle'){
+          if(!prepared||prepared.payloadDigest!==requestDigest||settled&&settled.payloadDigest!==call.resultDigest)throw Error('common tool result conflict');
+          if(settled)return {state:'running' as const,lease:saved.lease,expiresAt:current.lease.expiresAt};
+        }
         await this.waldoCoordinator.admitMessageExecutionObservation(saved.lease,{protocolVersion:'0.4',id:request.operation==='tool_prepare'?preparedId:settledId,
           ownerId:authority.ownerId,attemptId:current.attempt.id,environment:current.aggregate.request.environment,leaseId:current.lease.id,
           fencingGeneration:current.lease.fencingGeneration,cancellationGeneration:current.aggregate.currentCancellationGeneration,
@@ -476,7 +479,10 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
           if(prepared)throw Error('common provider intent requires reconciliation');
           const preceding=current.aggregate.observations.filter(value=>value.id.startsWith(`provider_prepare_${identity}_`));
           if(preceding.length!==call.ordinal-1 || preceding.some(value=>!current.aggregate.observations.some(done=>done.id===value.id.replace('provider_prepare_','provider_settle_'))))throw Error('common provider prior result uncertain');
-        } else if(!prepared || prepared.payloadDigest!==call.requestDigest || settled)throw Error('common provider result conflict');
+        } else {
+          if(!prepared || prepared.payloadDigest!==call.requestDigest || settled&&settled.payloadDigest!==call.resultDigest)throw Error('common provider result conflict');
+          if(settled)return {state:'running' as const,lease:saved.lease,expiresAt:current.lease.expiresAt};
+        }
         await this.waldoCoordinator.admitMessageExecutionObservation(saved.lease,{protocolVersion:'0.4',id:request.operation==='provider_prepare'?preparedId:settledId,
           ownerId:authority.ownerId,attemptId:current.attempt.id,environment:current.aggregate.request.environment,leaseId:current.lease.id,
           fencingGeneration:current.lease.fencingGeneration,cancellationGeneration:current.aggregate.currentCancellationGeneration,
