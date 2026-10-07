@@ -190,4 +190,4 @@ export * from './channels/imessage-v1';
 
 export * from './tools/schemas/skills';
 
-export * from './protocol/responsibility-execution-workunit-v0-4';
+export * from './protocol/common-workunit-execution';

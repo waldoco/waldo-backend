@@ -1,12 +1,12 @@
 import {
-  canonicalWorkUnitRecordV03Schema,
+  commonCanonicalWorkUnitRecordSchema as canonicalWorkUnitRecordV03Schema,
   workUnitExecutionAuthorizedRecordV04Schema,
   missionRecordV02Schema,
   outcomeRecordV02Schema,
   responsibilityProjectionItemV02Schema,
   workUnitPlanningAuthorizedRecordV03Schema,
   workUnitRecordV02Schema,
-  type CanonicalWorkUnitRecordV03,
+  type CommonCanonicalWorkUnitRecord,
   type MissionRecordV02,
   type OutcomeRecordV02,
   type ResponsibilityCapturePayloadV02,
@@ -23,7 +23,7 @@ import {
 export type OutcomeRecord = OutcomeRecordV02;
 export type MissionRecord = MissionRecordV02;
 export type WorkUnitRecord = WorkUnitRecordV02;
-export type CanonicalWorkUnitRecord = CanonicalWorkUnitRecordV03;
+export type CanonicalWorkUnitRecord = CommonCanonicalWorkUnitRecord;
 
 export type JudgmentSubjectMaterial = Readonly<{
   subject: Readonly<{ kind: 'outcome' | 'work_unit'; id: string; revision: number }>;

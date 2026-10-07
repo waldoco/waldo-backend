@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { armAlarm, rearmSharedAlarm } from '../src/scheduler/alarm-slot';
+import { armAlarm, COMMON_EXECUTION_DUE_KEY, rearmSharedAlarm } from '../src/scheduler/alarm-slot';
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -471,4 +471,24 @@ it('shared alarm keeps earlier retained common browser expiry alongside schedule
   expect(await state.storage.getAlarm()).toBe(now+120000);
   await state.storage.deleteAlarm();
  });
+});
+
+
+it('keeps a persisted common execution deadline when scheduler rearm has no rows or a later wake', async () => {
+  const stub = freshStub();
+  await runInDurableObject(stub, async (_instance, state) => {
+    const now = Date.now();
+    const executionDue = now + 60000;
+    await state.storage.put(COMMON_EXECUTION_DUE_KEY, executionDue);
+    await rearmSharedAlarm(state.storage, null, now);
+    expect(await state.storage.getAlarm()).toBe(executionDue);
+    await rearmSharedAlarm(state.storage, now + 120000, now);
+    expect(await state.storage.getAlarm()).toBe(executionDue);
+    const earlierSchedule = now + 30000;
+    await rearmSharedAlarm(state.storage, earlierSchedule, now);
+    expect(await state.storage.getAlarm()).toBe(earlierSchedule);
+    await state.storage.put(COMMON_EXECUTION_DUE_KEY, null);
+    await rearmSharedAlarm(state.storage, null, now);
+    expect(await state.storage.getAlarm()).toBeNull();
+  });
 });

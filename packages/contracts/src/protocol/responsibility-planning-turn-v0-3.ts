@@ -1,4 +1,3 @@
-import { workUnitExecutionAuthorizedRecordV04Schema } from './responsibility-execution-workunit-v0-4';
 import { z } from 'zod';
 import { iso8601Schema } from '../core/error';
 import { workUnitRecordV02Schema } from './responsibility-handshake-v0-2';
@@ -189,7 +188,6 @@ export type WorkUnitPlanningAuthorizedRecordV03 = z.infer<
 export const canonicalWorkUnitRecordV03Schema = z.union([
   workUnitRecordV02Schema,
   workUnitPlanningAuthorizedRecordV03Schema,
-  workUnitExecutionAuthorizedRecordV04Schema,
 ]);
 export type CanonicalWorkUnitRecordV03 = z.infer<typeof canonicalWorkUnitRecordV03Schema>;
 

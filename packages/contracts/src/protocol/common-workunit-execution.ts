@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { canonicalWorkUnitRecordV03Schema } from './responsibility-planning-turn-v0-3';
 import { protocolIdSchema } from './responsibility-handshake-v0-1';
 import { workUnitRecordV02Schema } from './responsibility-handshake-v0-2';
 import { executionAuthorityCeilingV04Schema } from './responsibility-execution-v0-4';
@@ -24,3 +25,7 @@ export const workUnitExecutionAuthorizedRecordV04Schema = workUnitRecordV02Schem
   state: z.literal('execution_authorized'),
 });
 export type WorkUnitExecutionAuthorizedRecordV04 = z.infer<typeof workUnitExecutionAuthorizedRecordV04Schema>;
+
+// Runtime composition is new; released v0.3/v0.4 wire schemas remain byte-for-byte pinned.
+export const commonCanonicalWorkUnitRecordSchema = z.union([canonicalWorkUnitRecordV03Schema, workUnitExecutionAuthorizedRecordV04Schema]);
+export type CommonCanonicalWorkUnitRecord = z.infer<typeof commonCanonicalWorkUnitRecordSchema>;

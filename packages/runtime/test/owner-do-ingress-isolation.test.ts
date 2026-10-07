@@ -1,6 +1,7 @@
 // This integration test reaches the real webhook router, per-owner Durable Objects,
 // listener, and model responder. All external model and Telegram effects are intercepted.
 import { env } from 'cloudflare:workers';
+import { WALDO_CHAT_MODEL } from '@waldo/contracts';
 import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OwnerDirectory, OwnerRoute } from '../src/identity/owner-directory';
@@ -27,7 +28,7 @@ vi.mock('../src/channels/telegram-owner-do', async load => {
       const host = subject === undefined ? undefined : admittedOwnerHost(`hermetic-owner-${subject}`, String(subject),
         new OpenAIResponsesAdapter({ apiKey: bindings.OPENAI_API_KEY }), subject===81105&&(bindings as typeof env & {COMMON_OWNER_TASKS?:string}).COMMON_OWNER_TASKS==='1'?['workspace_write','workspace_list','workspace_read','browse_page']:['get_communication', 'propose_calendar_change']);
       const digest=`sha256:${'d'.repeat(64)}`;
-      const executionBinding={provider:{category:'provider' as const,id:'fixture_model_provider',version:'1.0.0',modelRef:'gpt-6-luna',manifest:{id:'fixture_provider_manifest',version:'1.0.0',digest}},environment:{category:'execution_environment' as const,id:'fixture_registered_host',version:'1.0.0',environmentKind:'local' as const,manifest:{id:'fixture_environment_manifest',version:'1.0.0',digest}}};
+      const executionBinding={provider:{category:'provider' as const,id:'fixture_model_provider',version:'1.0.0',modelRef:WALDO_CHAT_MODEL,manifest:{id:'fixture_provider_manifest',version:'1.0.0',digest}},environment:{category:'execution_environment' as const,id:'fixture_registered_host',version:'1.0.0',environmentKind:'local' as const,manifest:{id:'fixture_environment_manifest',version:'1.0.0',digest}}};
       const browser=subject===81105&&(bindings as typeof env & {COMMON_OWNER_TASKS?:string}).COMMON_OWNER_TASKS==='1'?{binding:{} as never,loadSdk:commonBrowserFixtureLoader,
         grant:async(task:import('../src/channels/task-source-scope').TaskSourceSnapshot,ownerId:string)=>({ref:'fixture-browser-grant',taskId:task.taskId,ownerId,expiresAt:commonBrowserFixture.expiresAt,allowedOrigins:['https://public-pages.fixture.invalid'],maxScreenshotBytes:1024,lifetimeMs:60000}),
         reserveAllocation:async()=>{},assertGrantCurrent:async()=>{}}:undefined;
@@ -1249,7 +1250,7 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
       state.storage.kv.put(key,legacy);
       try {
         if((env as typeof env & {COMMON_TEST_LEGACY_PREPARED?:string}).COMMON_TEST_LEGACY_PREPARED==='1'){state.storage.kv.put(key,{...legacy,state:'prepared',lease:undefined});const legacyBegin=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...legacyBase,operation:'begin'});await expect(instance.commonExecutionFromHost(interruptedIngress,legacyBegin)).rejects.toThrow('common physical execution fence unavailable');state.storage.kv.put(key,legacy);}
-        const prepare=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...legacyBase,operation:'provider_prepare',providerCall:{ordinal:1,model:'gpt-6-luna',requestDigest:`sha256:${'b'.repeat(64)}`}});
+        const prepare=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...legacyBase,operation:'provider_prepare',providerCall:{ordinal:1,model:WALDO_CHAT_MODEL,requestDigest:`sha256:${'b'.repeat(64)}`}});
         await expect(instance.commonExecutionFromHost(interruptedIngress,prepare)).rejects.toThrow('common physical execution fence unavailable');
         const check=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...legacyBase,operation:'check'});
         expect((await instance.commonExecutionFromHost(interruptedIngress,check)).state).toBe('running');
@@ -1275,7 +1276,7 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
       await expect(instance.commonExecutionFromHost(interruptedIngress,changedResult)).rejects.toThrow('common tool result conflict');
     });
 
-    const prepare=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'provider_prepare',providerCall:{ordinal:1,model:'gpt-6-luna',requestDigest:`sha256:${'b'.repeat(64)}`}});
+    const prepare=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'provider_prepare',providerCall:{ordinal:1,model:WALDO_CHAT_MODEL,requestDigest:`sha256:${'b'.repeat(64)}`}});
     await root.commonExecutionFromHost(interruptedIngress,prepare);
     const providerSettle=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'provider_settle',providerCall:{...prepare.providerCall!,resultDigest:`sha256:${'c'.repeat(64)}`}});
     await root.commonExecutionFromHost(interruptedIngress,providerSettle);

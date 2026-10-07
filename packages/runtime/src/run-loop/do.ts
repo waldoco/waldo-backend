@@ -1,3 +1,4 @@
+import { armAlarm, COMMON_EXECUTION_DUE_KEY } from '../scheduler/alarm-slot';
 import { EXECUTION_LEASE_MAX_DURATION_MS_V04 } from '../coordinator/planning-execution-module';
 import { verifyCommonExecutionRequest, type CommonExecutionRequest } from '../identity/common-execution-request';
 import { verifyCommonTaskSourceRequest, type CommonTaskSourceRequest } from '../identity/common-task-source-request';
@@ -532,8 +533,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     const admittedLease={executionRequestId:aggregate.request.id,attemptId:attempt.id,leaseId:lease.id,fencingGeneration:attempt.fencingGeneration,cancellationGeneration:attempt.cancellationGeneration,sourceSnapshot:request.source};
     await this.waldoCoordinator.assertMessageExecutionCurrent(admittedLease,authority,()=>directory.assertCurrent(authority));
     this.ctx.storage.transactionSync(()=>this.ctx.storage.kv.put(key,{...saved,state:'running',lease:admittedLease}));
-    const existingAlarm=await this.ctx.storage.getAlarm();
-    await this.ctx.storage.setAlarm(Math.max(this.deps.now()+250,Math.min(existingAlarm??Infinity,Date.parse(lease.expiresAt),saved.preparedAt+request.maxDurationMs,request.hostRun?.deadline??Infinity)));
+    await this.#rearmCommonExecutionTimeouts();
     return {state:'running' as const,lease:admittedLease,expiresAt:lease.expiresAt};
   }
 
@@ -1451,9 +1451,10 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       const lease=aggregate.leases.at(-1);
       if(lease)due=Math.min(due,Date.parse(lease.expiresAt),row.preparedAt+row.request.maxDurationMs,row.request.hostRun?.deadline??Infinity);
     }
+    await this.ctx.storage.put(COMMON_EXECUTION_DUE_KEY,Number.isFinite(due)?due:null);
     if(Number.isFinite(due)){
       const prior=await this.ctx.storage.getAlarm();
-      await this.ctx.storage.setAlarm(Math.max(this.deps.now()+250,Math.min(prior??Infinity,due)));
+      await armAlarm(this.ctx.storage,Math.max(this.deps.now()+250,Math.min(prior??Infinity,due)));
     }
   }
 
