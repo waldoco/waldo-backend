@@ -1,5 +1,6 @@
 import { SCHEDULE_KINDS, setSchedulePreferenceArgsSchema, type SetSchedulePreferenceArgs, type ToolHandler } from '@waldo/contracts';
-import type { Scheduler } from '../scheduler/multiplexer';
+import type { ScheduleEntry } from '@waldo/contracts';
+import type { Scheduler, ScheduleExecutors } from '../scheduler/multiplexer';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { TOOL_PERMISSIONS, triggerTypeSchema } from '@waldo/contracts';
 import { DAY_CARDS } from '../prompt/day-cards';
@@ -62,6 +63,35 @@ export const applySchedulePreferences = async (prefs: SchedulePreferences, ctx: 
     else for (const card of DAY_CARDS) if (scheduler.read(card.id)) await scheduler.cancel(card.id);
   }
 };
+
+// Cancel-only pass for kinds that are off. Run at startup: a stop between saving a preference and cancelling
+// its entries must not leave a due entry behind. It never arms anything.
+export const reconcileSchedulePreferences = async (prefs: SchedulePreferences, ctx: ScheduleApplyContext): Promise<void> => {
+  const { scheduler } = ctx;
+  const cancelIf = async (id: string) => { if (scheduler.read(id)) await scheduler.cancel(id); };
+  if (!prefs.nightly) await cancelIf(NIGHTLY_ID);
+  if (!prefs.heartbeat) await cancelIf(HEARTBEAT_ID);
+  if (!prefs.event_briefs) await cancelIf(BRIEF_SWEEP_ID);
+  if (!prefs.daily_brief) for (const card of DAY_CARDS) await cancelIf(card.id);
+};
+
+// The kind an out-of-the-box schedule entry belongs to, or null for owner-created and internal entries.
+const scheduleKindOf = (entry: ScheduleEntry): ScheduleKind | null => {
+  if (entry.kind === 'dreaming' && entry.id === NIGHTLY_ID) return 'nightly';
+  if (entry.kind === 'heartbeat' && entry.id === HEARTBEAT_ID) return 'heartbeat';
+  if (entry.kind === 'pre_activity_spot' && entry.id === BRIEF_SWEEP_ID) return 'event_briefs';
+  if (entry.kind === 'brief' && DAY_CARDS.some((card) => card.id === entry.id)) return 'daily_brief';
+  return null;
+};
+
+// Fire-time recheck: read the preference at dispatch, not only when arming. A disabled entry is cleared and
+// does nothing, so no send, no card state and no model call happens for something the owner turned off.
+export const gateScheduleExecutors = (executors: ScheduleExecutors, prefs: SchedulePreferenceBook, scheduler: Scheduler): ScheduleExecutors =>
+  Object.fromEntries(Object.entries(executors).map(([kind, executor]) => [kind, async (entry: ScheduleEntry) => {
+    const owned = scheduleKindOf(entry);
+    if (owned !== null && !prefs.enabled(owned)) { await scheduler.cancel(entry.id); return; }
+    return executor!(entry);
+  }])) as ScheduleExecutors;
 
 const allowlist = () => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('set_schedule_preference'));
 
