@@ -602,3 +602,10 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 | --- | --- | --- |
 | 2026-10-07 handoff review: rejecting only event completion left stalled CDP/approval/custody awaits alive and blocked cleanup; one early event could overwrite another handoff's valid report | general-browser-handoff.test.ts abort/deadline during provider, approval and custody stalls plus valid-before-mismatched event ordering; driver test attempted mint abort and exact-session absence | Host callbacks must fence late commits using the supplied lease signal and actual authority. Provider cleanup still needs durable host recovery and independent live acceptance |
 | 2026-10-07 file implementation: declared lengths or write receipts alone do not establish correct downloaded bytes, ownership or provenance | general-browser-files.test.ts actual chunk overflow/cancel, truncated body, withdrawal, denied redirect, receipt/hash mismatch and source-URL redaction; general-browser-file-probe.mjs real Chromium observation through public HTTP stream and actual workspace write/export | In-memory test custody proves store logic, not R2 durability. Native Cloudflare artifact, blob and authenticated downloads are unsupported; owner workspace mapping and grants remain host authority |
+
+
+Browser handoff post-failure custody regression (2026-10-07):
+- [x] Reproduced four stalled cleanup/list/physical-close/detach/release paths red before the repair.
+- [x] Bound cleanup stages and connection/CDP release by the existing host deadline; no new retry or budget allowance.
+- [x] Preserve outcome_uncertain and cleanup_failed/release_failed evidence for existing durable continuation; never declare physical absence from timeout.
+- [x] Driver regression tests exercise all four stalls with fake providers. Attachment, observation and active-operation recovery remain Core integration responsibilities.

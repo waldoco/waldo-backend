@@ -289,3 +289,23 @@ it('terminates the exact owned session when handoff mint hangs and the owner abo
   await mintStarted; controller.abort(); await rejection;
   expect(await f.sdk.sessions()).toEqual([]);
 });
+it.each(['list', 'physical-close', 'detach', 'release'])('returns uncertain custody within the existing host deadline when handoff %s stalls', async stage => {
+  const f = harness(), controller = new AbortController();
+  let deadline = Date.now() + 120000, entered!: () => void;
+  const mintStarted = new Promise<void>(resolve => { entered = resolve; });
+  f.browser.newBrowserCDPSession = async () => ({ on() {}, off() {}, detach: async () => { if (stage === 'detach') await new Promise(() => {}); }, send: async (method: string) => {
+    if (method === 'Cloudflare.getSessionId') return { sessionId: session.providerSessionId };
+    if (method === 'Cloudflare.getHandoffState') return { active: false };
+    if (method === 'Cloudflare.getLiveView') { entered(); return new Promise(() => {}); }
+    if (method === 'Browser.close' && stage === 'physical-close') return new Promise(() => {});
+  } } as any);
+  const row = { ...session, expiresAt: deadline };
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: Date.now, deadline: () => deadline, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(row, 'https://docs.example/index');
+  const result = driver.handoff(row, first, { instructions: 'Inspect public fixture', timeoutMs: 1000, viewExpiresInMs: 60000 }, { beforeHandoff: async () => {}, storeOwnerView: async () => { throw Error('must not publish'); }, signal: controller.signal });
+  const rejection = expect(result).rejects.toMatchObject({ code: 'outcome_uncertain', ...(stage === 'list' || stage === 'physical-close' ? { cleanup_failed: true } : { release_failed: true }) });
+  await mintStarted;
+  if (stage === 'list') f.sdk.sessions = async () => new Promise(() => {});
+  if (stage === 'release') f.browser.close = async () => new Promise(() => {});
+  deadline = Date.now() + 25; controller.abort(); await rejection;
+}, 1000);

@@ -52,6 +52,15 @@ export function cloudflareGeneralBrowser(options: Options) {
     await admit(session);
   };
   const tabRef = (session: BrowserSession, target: string) => generalDigest(JSON.stringify([session.ownerId, session.id, session.generation, target])).then(value => `tab:${value.slice(0, 24)}`);
+  // Cleanup has no new retry allowance or lifetime. Stop awaiting at the actual
+  // host deadline; existing durable cleanup custody must continue unconfirmed work.
+  const cleanupAwait = async <T>(operation: () => Promise<T>): Promise<T> => {
+    const remaining = options.deadline() - options.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) throw new GeneralBrowserError('cleanup_unconfirmed');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try { return await Promise.race([operation(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new GeneralBrowserError('cleanup_unconfirmed')), remaining); })]); }
+    finally { if (timer !== undefined) clearTimeout(timer); }
+  };
   const targetId = async (context: BrowserContext, page: Page) => {
     const cdp = await context.newCDPSession(page);
     try { return (await cdp.send('Target.getTargetInfo')).targetInfo.targetId; }
@@ -134,7 +143,7 @@ export function cloudflareGeneralBrowser(options: Options) {
         }
       }
       // Release this connection, retaining tabs/context; physical end is separate.
-      if (browser) try { await browser.close(); } catch {
+      if (browser) try { await cleanupAwait(() => browser!.close()); } catch {
         if (primary) primary.release_failed = true;
         else {
           const failure = new GeneralBrowserError(mutationDispatched ? 'outcome_uncertain' : 'provider_unavailable');
@@ -171,16 +180,16 @@ export function cloudflareGeneralBrowser(options: Options) {
   const terminateId = async (id: string): Promise<void> => {
     let browser: Browser | undefined;
     try {
-      const sdk = await options.loadSdk();
-      if (!(await sdk.sessions(binding)).some(row => row.sessionId === id)) return;
+      const sdk = await cleanupAwait(options.loadSdk);
+      if (!(await cleanupAwait(() => sdk.sessions(binding))).some(row => row.sessionId === id)) return;
       try {
         const connectOptions = { sessionId: id, persistent: true };
-        browser = await sdk.connect(binding, connectOptions);
-        const cdp = await browser.newBrowserCDPSession(); await cdp.send('Browser.close');
+        browser = await cleanupAwait(() => sdk.connect(binding, connectOptions));
+        const cdp = await cleanupAwait(() => browser!.newBrowserCDPSession()); await cleanupAwait(() => cdp.send('Browser.close'));
       } catch { /* termination may sever the connection before acknowledgement */ }
-      if ((await sdk.sessions(binding)).some(row => row.sessionId === id)) throw new GeneralBrowserError('cleanup_unconfirmed');
+      if ((await cleanupAwait(() => sdk.sessions(binding))).some(row => row.sessionId === id)) throw new GeneralBrowserError('cleanup_unconfirmed');
     } catch { throw new GeneralBrowserError('cleanup_unconfirmed'); }
-    finally { try { await browser?.close(); } catch { /* physical absence is authoritative */ } }
+    finally { try { if (browser) await cleanupAwait(() => browser!.close()); } catch { /* physical absence is authoritative */ } }
   };
   return {
     async start(allowedDomains: readonly string[], lifetimeMs: number,
@@ -278,6 +287,7 @@ export function cloudflareGeneralBrowser(options: Options) {
       };
       await checked();
       const cdp = await browser.newBrowserCDPSession();
+      let primary: GeneralBrowserError | undefined;
       try {
         return await generalBrowserHandoff(cdp, request, { ...control,
           scope: { ownerId: session.ownerId, sessionId: session.id, generation: session.generation, providerSessionId: session.providerSessionId, targetId: snapshot.targetId },
@@ -285,10 +295,16 @@ export function cloudflareGeneralBrowser(options: Options) {
           beforeHandoff: async (digest, signal) => { await control.beforeHandoff(digest, signal); await checked(); },
         });
       } catch (error) {
-        const failure = new GeneralBrowserError(error instanceof GeneralHandoffError ? error.code : 'provider_unavailable');
+        const failure = primary = new GeneralBrowserError(error instanceof GeneralHandoffError ? error.code : 'provider_unavailable');
         if (error instanceof GeneralHandoffError && error.view_mint_attempted) try { await terminateId(session.providerSessionId); } catch { failure.cleanup_failed = true; }
         throw failure;
-      } finally { try { await cdp.detach(); } catch { /* browser connection release remains authoritative below */ } }
+      } finally {
+        try { await cleanupAwait(() => cdp.detach()); }
+        catch {
+          if (primary) primary.release_failed = true;
+          else { const failure = new GeneralBrowserError('outcome_uncertain'); failure.release_failed = true; throw failure; }
+        }
+      }
     }),
     observe: (session: BrowserSession, reference?: string) => attached(session, async (_, context) => observe(session, context, await select(session, context, reference))),
     navigate: (session: BrowserSession, url: string, reference?: string) => attached(session, async (_, context, navigation) => {
