@@ -34,7 +34,7 @@ export function commonBrowserHost(options:Readonly<{
  };
  type Record=BrowserRecord;
  const key=(taskId:string)=>`common-browser:${taskId}`;
- const makeDriver=(grant:CommonBrowserGrant)=>cloudflareGeneralBrowser({ownerId:options.ownerId,binding:options.config.binding,loadSdk:options.config.loadSdk,now:options.now,deadline:options.deadline,maxScreenshotBytes:grant.maxScreenshotBytes,
+ const makeDriver=(grant:CommonBrowserGrant)=>cloudflareGeneralBrowser({ownerId:options.ownerId,binding:options.config.binding,loadSdk:options.config.loadSdk,now:options.now,deadline:options.deadline,cleanupTimeoutMs:10000,maxScreenshotBytes:grant.maxScreenshotBytes,
   admit:async()=>{await checked();await options.config.assertGrantCurrent(grant);await checked();if(options.storage.kv.get<BrowserRecord>(key(grant.taskId))?.cleanup)throw Error('common browser stopped');},
   authorizeRequest:async(url,method)=>{if(!['GET','HEAD'].includes(method))return false;try{return grant.allowedOrigins.includes(new URL(url).origin);}catch{return false;}}});
  const save=(record:BrowserRecord,storageKey:string)=>options.storage.transactionSync(()=>{
@@ -83,7 +83,7 @@ export async function maintainCommonBrowsers(storage:DurableObjectStorage,config
   storage.transactionSync(()=>storage.kv.put(key,{...row,cleanup:'pending'}));
   try {
    if(row.session.providerSessionId==='pending')throw Error('allocation identity uncertain');
-   const driver=cloudflareGeneralBrowser({ownerId:row.session.ownerId,binding:config.binding,loadSdk:config.loadSdk,now:()=>now,deadline:()=>now,maxScreenshotBytes:row.grant.maxScreenshotBytes,admit:async()=>{throw Error('cleanup only');},authorizeRequest:async()=>false});
+   const driver=cloudflareGeneralBrowser({ownerId:row.session.ownerId,binding:config.binding,loadSdk:config.loadSdk,now:()=>now,deadline:()=>now,cleanupTimeoutMs:10000,maxScreenshotBytes:row.grant.maxScreenshotBytes,admit:async()=>{throw Error('cleanup only');},authorizeRequest:async()=>false});
    await driver.terminate(row.session);
    publishCleanup(storage,key,row,true);
   }catch{publishCleanup(storage,key,row,false);}

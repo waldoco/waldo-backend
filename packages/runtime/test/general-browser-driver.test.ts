@@ -250,3 +250,23 @@ it.each(['click', 'close'] as const)('keeps a successful %s uncertain if only di
   if (operation === 'click') expect(f.calls).toContain('click');
   else expect(f.pages).toEqual([]);
 });
+
+it('bounds physical cleanup including deferred detach independently of expired execution',async()=>{
+ const f=harness();f.browser.close=async()=>{f.calls.push('release');await new Promise(()=>{});};
+ const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>1,cleanupTimeoutMs:20,admit:async()=>{throw Error('expired');},authorizeRequest:async()=>false,maxScreenshotBytes:1024} as Parameters<typeof cloudflareGeneralBrowser>[0]);
+ const result=await Promise.race([driver.terminate({...session,expiresAt:1}).then(()=> 'closed',error=>error.code),new Promise(resolve=>setTimeout(()=>resolve('hung'),70))]);
+ expect(result).toBe('cleanup_unconfirmed');expect(await f.sdk.sessions()).toEqual([]);expect(f.calls).toContain('release');
+});
+it('does not allocate or dispatch a late termination after cleanup load timed out',async()=>{
+ const f=harness();let resolve!:(value:any)=>void;const loaded=new Promise<any>(done=>{resolve=done;});
+ const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:()=>loaded,now:()=>1,deadline:()=>1,cleanupTimeoutMs:20,admit:async()=>{throw Error('expired');},authorizeRequest:async()=>false,maxScreenshotBytes:1024} as Parameters<typeof cloudflareGeneralBrowser>[0]);
+ const result=await Promise.race([driver.terminate({...session,expiresAt:1}).then(()=> 'closed',error=>error.code),new Promise(done=>setTimeout(()=>done('hung'),70))]);
+ expect(result).toBe('cleanup_unconfirmed');resolve(f.sdk);await new Promise(done=>setTimeout(done,5));expect(f.calls).toEqual([]);
+});
+
+it('bounds normal retained-browser detach and reports release uncertainty without an image',async()=>{
+ const f=harness();f.browser.close=async()=>{await new Promise(()=>{});};
+ const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>60000,cleanupTimeoutMs:20,admit:async()=>{},authorizeRequest:async()=>true,maxScreenshotBytes:1024});
+ const result=await Promise.race([driver.navigate(session,'https://docs.example/index').then(()=> 'image',error=>({code:error.code,release_failed:error.release_failed})),new Promise(done=>setTimeout(()=>done('hung'),70))]);
+ expect(result).toEqual({code:'provider_unavailable',release_failed:true});expect(f.calls).not.toContain('acquire');
+});
