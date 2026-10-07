@@ -42,3 +42,12 @@ it('malformed retained time counters and widened task grant cannot authorize I/O
  f.rows.set(key,{...row,allocations:1,reservedBrowserMs:0});await expect(f.config().reserveAllocation(grant)).rejects.toThrow('retained policy conflict');
  f.rows.set(key,{...row,taskGrants:[{...grant,allowedOrigins:['https://outside.fixture.invalid']}]});await expect(f.config().assertGrantCurrent(grant)).rejects.toThrow('retained policy conflict');
 });
+
+it('actual host directory admission principal passes the real supplier and distinct root ID does not',async()=>{
+ const f=fixture();const {commonOwnerHost}=await import('../src/channels/common-owner-host');const {ownerMessageAdmission}=await import('../src/identity/owner-message-admission');const {commonOwnerAuthority}=await import('../src/identity/common-owner-authority');
+ const host=commonOwnerHost({...f.env,COMMON_OWNER_TASKS:'1',WALDO_OWNER_DO_NAMESPACE:'fixture'},f.storage,'physical')!;
+ const admission=await ownerMessageAdmission({lookup:host.lookup,scope:{runId:'fixture-run',attempt:'fixture-attempt',deadline:60000,signal:new AbortController().signal,admit:()=>{},commit:work=>work()},locator:{environment:'staging',namespace:'fixture',doName:f.policy.doName,doId:'physical'},actualDoId:'physical',expectedDoId:()=> 'physical',allowedDoNames:[f.policy.doName],provider:'telegram',subject:f.policy.subject,text:'Read public documentation.',occurrenceKey:'fixture-occurrence',occurredAt:9000,now:()=>10000});
+ const principal=admission.invocation.verified_authority.principal_ref;
+ const grant=await f.config().grant(f.task,principal);expect(grant.ownerId).toBe(principal);await f.config().reserveAllocation(grant);await admission.assertCurrent();expect(await f.config().grant(f.task,principal)).toEqual(grant);
+ const root=await commonOwnerAuthority(f.env).resolve('telegram',f.policy.subject,f.policy.doName);expect(root!.ownerId).not.toBe(principal);await expect(f.config().grant(f.task,root!.ownerId)).rejects.toThrow('source unavailable');
+});
