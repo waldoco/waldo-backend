@@ -459,7 +459,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         : out;
       await answer(reported.toast);
       const delivered = await say(reported.message, action === 'a' && out.toast === 'Done' && out.message.includes('Undo is available') ? [['Undo', `u:${id}`]] : undefined);
-      if (delivered != null && (out.toast === 'Done' || out.toast === 'Undone')) calendar.delivered(id);
+      if (delivered != null && (out.toast === 'Done' || out.toast === 'Undone')) calendar.delivered(id, action === 'u' ? 'undo' : 'apply');
     },
     ledger(reminders) {
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();

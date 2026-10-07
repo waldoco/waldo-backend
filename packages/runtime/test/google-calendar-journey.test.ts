@@ -32,6 +32,7 @@ const fixture=()=>{
  let current:any={id:'existing',summary:'Walk',start:{dateTime:'2030-01-01T10:00:00Z'},end:{dateTime:'2030-01-01T11:00:00Z'},etag:'v1'};
  let writes=0,versions=1,failAfterWrite=false,failRead=false,failReceipt=false,race=false,wrongAck=false,readMismatch=false;
  let selected:GoogleClient|null;
+ let receiptGate:Promise<void>|null=null,receiptEntered:(()=>void)|null=null;
  const calls:{url:string;method:string;match:unknown;body:any}[]=[],messages:string[]=[];
  const client=googleClient({clientId:'fixture',clientSecret:'fixture',redirectUri:''},{refresh_token:'fixture'},async(url,init)=>{
   if(String(url).includes('oauth2'))return Response.json({access_token:'fixture'});
@@ -52,9 +53,9 @@ const fixture=()=>{
  },undefined,account);
  selected=client;
  const sql=storage();let n=0,now=1000;
- const deps={owner:42,call:async(method:string,body:object)=>{if(method==='sendMessage'){messages.push((body as {text:string}).text);if(failReceipt&&messages.at(-1)!.startsWith('Done:'))throw new Error('channel outage');}return {};},google:async(_intent:any,_feature:any,connectionId?:string)=>{if(connectionId&&selected?.account?.connection_id!==connectionId)throw new Error('selected account unavailable');return selected;},newId:()=>String(++n),now:()=>now,timezone:'UTC',log:()=>{}};
+ const deps={owner:42,call:async(method:string,body:object)=>{if(method==='sendMessage'){messages.push((body as {text:string}).text);if(receiptGate&&messages.at(-1)!.startsWith('Done:')){receiptEntered?.();await receiptGate;}if(failReceipt&&messages.at(-1)!.startsWith('Done:'))throw new Error('channel outage');}return {};},google:async(_intent:any,_feature:any,connectionId?:string)=>{if(connectionId&&selected?.account?.connection_id!==connectionId)throw new Error('selected account unavailable');return selected;},newId:()=>String(++n),now:()=>now,timezone:'UTC',log:()=>{}};
  const desk=()=>approvalDesk(sql,deps);
- return {sql,desk,client,calls,messages,writes:()=>writes,current:()=>current,select:(c:GoogleClient|null)=>{selected=c;},advance:()=>{now+=600001;},allDay:()=>{current={...current,start:{date:'2030-01-01'},end:{date:'2030-01-02'}};},edit:()=>{current={...current,summary:'Owner edit',etag:'owner-edited'};},lose:()=>{failAfterWrite=true;},readOutage:(v:boolean)=>{failRead=v;},receiptOutage:(v:boolean)=>{failReceipt=v;},race:()=>{race=true;},wrongAck:()=>{wrongAck=true;},mismatch:(v:boolean)=>{readMismatch=v;}};
+ return {sql,desk,client,calls,messages,writes:()=>writes,current:()=>current,select:(c:GoogleClient|null)=>{selected=c;},holdReceipt:()=>{let release!:()=>void;const entered=new Promise<void>(r=>{receiptEntered=r;});receiptGate=new Promise<void>(r=>{release=r;});return {entered,release};},advance:()=>{now+=600001;},allDay:()=>{current={...current,start:{date:'2030-01-01'},end:{date:'2030-01-02'}};},edit:()=>{current={...current,summary:'Owner edit',etag:'owner-edited'};},lose:()=>{failAfterWrite=true;},readOutage:(v:boolean)=>{failRead=v;},receiptOutage:(v:boolean)=>{failReceipt=v;},race:()=>{race=true;},wrongAck:()=>{wrongAck=true;},mismatch:(v:boolean)=>{readMismatch=v;}};
 };
 it.each(['create','move','cancel'] as const)('reconciles a lost %s response after restart without repeating the mutation',async(action)=>{
  const f=fixture(),d=f.desk();const id=await d.propose({...proposal,action,...(action!=='create'?{event_id:'existing'}:{})});
@@ -121,4 +122,15 @@ it('Undo restores an original all-day interval with date endpoints rather than i
  const f=fixture();f.allDay();const id=await f.desk().propose({...proposal,action:'move',event_id:'existing'});
  expect((await f.desk().decide(id,'a','t')).toast).toBe('Done');expect((await f.desk().decide(id,'u','t')).toast).toBe('Undone');
  expect(f.current().start).toEqual({date:'2030-01-01'});expect(f.current().end).toEqual({date:'2030-01-02'});expect(f.writes()).toBe(2);
+});
+it.each(['recovery','callback'] as const)('a delayed %s apply receipt cannot overwrite a lost Undo operation',async origin=>{
+ const f=fixture(),d=f.desk(),id=await d.propose(proposal),gate=f.holdReceipt();
+ if(origin==='recovery')await d.decide(id,'a','t');
+ const delivery=origin==='recovery'?d.reconcileCalendar():d.callback({id:'apply',from:{id:42},data:`a:${id}`},'t');
+ await gate.entered;f.lose();expect((await f.desk().decide(id,'u','t')).toast).toBe('Outcome unknown');expect(f.writes()).toBe(2);
+ gate.release();await delivery;
+ const operation=()=>JSON.parse(f.sql.exec<{undo_json:string}>('SELECT undo_json FROM ledger WHERE id = ?',id).one().undo_json);
+ expect(operation()).toMatchObject({phase:'undo'});expect(operation().delivered_at).toBeUndefined();
+ await f.desk().reconcileCalendar();expect(f.writes()).toBe(2);expect(f.desk().ledger([])).toContain('- undone:');
+ expect(f.messages.filter(m=>m.startsWith('Done:'))).toHaveLength(1);expect(f.messages.filter(m=>m.startsWith('Undone:'))).toHaveLength(1);
 });
