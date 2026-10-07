@@ -67,9 +67,11 @@ describe('reminder book on the Telegram owner object', () => {
       now = Date.parse('2036-09-23T20:00:00Z');
       expect((await book.set(args, 'turn-2-call-1')).id).toBe(first.id);
       expect(book.list().length).toBe(1);
-      state.storage.sql.exec("INSERT INTO reminder_notes (id, note, created_at) VALUES ('reminder:call-turn-2-call-9', 'call mom', 1)");
+      const partial = await book.set({ ...args, at: '2036-09-24T18:30' }, 'turn-2-call-9');
+      state.storage.sql.exec('DELETE FROM schedule WHERE id = ?', partial.id);
+      expect(book.list().map(r => r.id)).not.toContain(partial.id);
       const healed = await book.set({ ...args, at: '2036-09-24T18:30' }, 'turn-2-call-9');
-      expect(healed.id).toBe('reminder:call-turn-2-call-9');
+      expect(healed.id).toBe(partial.id);
       expect(book.list().map(r => r.id)).toContain(healed.id);
       await scheduler.cancel(first.id);
       await scheduler.cancel(healed.id);
