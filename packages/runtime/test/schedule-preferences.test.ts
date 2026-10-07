@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
-import { applySchedulePreferences, schedulePreferenceHandlers, schedulePreferences, schedulePreferencesLine } from '../src/channels/schedule-preferences';
+import { applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, schedulePreferenceHandlers, schedulePreferences, schedulePreferencesLine } from '../src/channels/schedule-preferences';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { loopBook } from '../src/channels/loops';
 import { HEARTBEAT_ID } from '../src/channels/heartbeat';
@@ -13,6 +13,7 @@ import { DAY_CARDS } from '../src/prompt/day-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { ensureSchema } from '../src/tracer/schema';
 import type { Deps } from '../src/seams/deps';
+import type { ScheduleExecutors } from '../src/scheduler/multiplexer';
 
 let sequence = 0;
 const NOW = Date.parse('2026-10-07T02:00:00Z');
@@ -90,6 +91,60 @@ describe('schedule preferences', () => {
   it('on and off need a kind', async () => {
     await withOwner(async ({ call }) => {
       expect(await call({ action: 'off' })).toMatchObject({ ok: false, code: 'invalid_args' });
+    });
+  });
+});
+
+describe('schedule preferences survive an interrupt between the save and the cancel', () => {
+  const KIND_CASES = [
+    { kind: 'daily_brief', id: DAY_CARDS[1]!.id, sched: 'brief', recurrence: null },
+    { kind: 'nightly', id: NIGHTLY_ID, sched: 'dreaming', recurrence: { type: 'interval', every_ms: 86_400_000, phase_ms: 0 } },
+    { kind: 'heartbeat', id: HEARTBEAT_ID, sched: 'heartbeat', recurrence: { type: 'interval', every_ms: 1_800_000, phase_ms: 0 } },
+    { kind: 'event_briefs', id: BRIEF_SWEEP_ID, sched: 'pre_activity_spot', recurrence: { type: 'interval', every_ms: 600_000, phase_ms: 0 } },
+  ] as const;
+  for (const c of KIND_CASES) {
+    it(`does not run a due ${c.kind} entry that the owner already turned off, and clears it`, async () => {
+      await withOwner(async ({ scheduler, prefs }) => {
+        // The preference was saved, the process stopped before the cancel: the entry is still armed and due.
+        prefs.set(c.kind, false);
+        await scheduler.schedule({ id: c.id, kind: c.sched, payloadRefs: { id: c.id }, occurrenceAt: NOW, dueAt: NOW, recurrence: c.recurrence } as never);
+        const ran: string[] = [];
+        const spy = async (entry: { id: string }) => { ran.push(entry.id); };
+        const executors = gateScheduleExecutors({ [c.sched]: spy } as ScheduleExecutors, prefs, scheduler);
+        await scheduler.dispatchDue(executors);
+        expect(ran).toEqual([]);
+        expect(scheduler.read(c.id)).toBeNull();
+      });
+    });
+    it(`still runs a due ${c.kind} entry while it is on`, async () => {
+      await withOwner(async ({ scheduler, prefs }) => {
+        await scheduler.schedule({ id: c.id, kind: c.sched, payloadRefs: { id: c.id }, occurrenceAt: NOW, dueAt: NOW, recurrence: c.recurrence } as never);
+        const ran: string[] = [];
+        await scheduler.dispatchDue(gateScheduleExecutors({ [c.sched]: async (entry: { id: string }) => { ran.push(entry.id); } } as ScheduleExecutors, prefs, scheduler));
+        expect(ran).toEqual([c.id]);
+      });
+    });
+  }
+
+  it('startup reconcile cancels every entry of a kind that is off and arms nothing it should not', async () => {
+    await withOwner(async ({ scheduler, prefs, ctx, ids }) => {
+      await applySchedulePreferences(prefs.all(), ctx);
+      prefs.set('daily_brief', false);
+      prefs.set('heartbeat', false);
+      await reconcileSchedulePreferences(prefs.all(), ctx);
+      expect(ids().some((id) => id.startsWith('card:'))).toBe(false);
+      expect(ids()).not.toContain(HEARTBEAT_ID);
+      expect(ids()).toContain(NIGHTLY_ID);
+      expect(scheduler.read(BRIEF_SWEEP_ID)).not.toBeNull();
+    });
+  });
+
+  it('a save that fails to apply is retried by the same tool call, preferences stay as saved', async () => {
+    await withOwner(async ({ prefs, ctx }) => {
+      prefs.set('nightly', false);
+      expect(prefs.all().nightly).toBe(false);
+      await reconcileSchedulePreferences(prefs.all(), ctx);
+      expect(ctx.scheduler.read(NIGHTLY_ID)).toBeNull();
     });
   });
 });
