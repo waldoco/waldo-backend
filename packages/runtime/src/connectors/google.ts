@@ -245,7 +245,7 @@ export type GoogleClient = Readonly<{
   events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<readonly CalendarItem[]>;
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
   sendRaw(raw: string, threadId?: string): Promise<Readonly<{ message_id: string; thread_id?: string }>>;
-  findSentByMessageId(messageId: string): Promise<boolean>;
+  findSentByMessageId(messageId: string, threadId?: string): Promise<boolean>;
   event(id: string): Promise<CalendarItem>;
   createEvent(input: Readonly<{ title: string; start: string; end: string }>): Promise<CalendarItem>;
   moveEvent(id: string, start: string, end: string, etag?: string): Promise<CalendarItem>;
@@ -460,15 +460,15 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       }) as { id: string; threadId?: string };
       return { message_id: json.id, ...(json.threadId ? { thread_id: json.threadId } : {}) };
     },
-    async findSentByMessageId(messageId) {
+    async findSentByMessageId(messageId, threadId) {
       const list = new URL('https://gmail.googleapis.com/gmail/v1/users/me/messages');
       const bare = messageId.replace(/^<|>$/g, '');
       list.search = new URLSearchParams({ q: `in:sent rfc822msgid:${bare}`, maxResults: '1' }).toString();
       const { messages = [] } = await call(list.toString()) as { messages?: { id: string }[] };
       if (!messages[0]?.id) return false;
-      const found = await call(`${GMAIL}/${encodeURIComponent(messages[0].id)}?format=metadata&metadataHeaders=Message-ID`) as { id?: string; labelIds?: string[]; payload?: { headers?: { name: string; value: string }[] } };
+      const found = await call(`${GMAIL}/${encodeURIComponent(messages[0].id)}?format=metadata&metadataHeaders=Message-ID`) as { id?: string; threadId?: string; labelIds?: string[]; payload?: { headers?: { name: string; value: string }[] } };
       const observed = found.payload?.headers?.find(header => header.name.toLowerCase() === 'message-id')?.value;
-      return found.id === messages[0].id && found.labelIds?.includes('SENT') === true && observed === messageId;
+      return found.id === messages[0].id && found.labelIds?.includes('SENT') === true && observed === messageId && (!threadId || found.threadId === threadId);
     },
   };
 }

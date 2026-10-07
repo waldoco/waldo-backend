@@ -16,7 +16,7 @@ An authenticated approval synchronously claims its ledger row before any await. 
 
 Sent-mail verification queries the Message-ID and reads the returned message metadata, checking the exact Message-ID and SENT label. A provider acknowledgement alone is insufficient. Empty lookup, transport failure and pending proxy intent remain uncertain; they never claim no delivery and never grant a resend.
 
-The existing `/ledger` serving path runs a bounded reconciliation pass (at most eight recent claimed/uncertain/done email rows). It delivers a confirmed receipt that was lost to a channel failure, without resending the email. Unknown operations remain visible in the existing ledger. Gmail Sent confirmation establishes that Gmail recorded the send; recipient delivery is not proven.
+The existing `/ledger` serving path runs a bounded reconciliation pass (at most eight outstanding send/delivery rows in fair durable check order). It delivers a confirmed receipt that was lost to a channel failure, without resending the email. Unknown operations remain visible in the existing ledger. Gmail Sent confirmation establishes that Gmail recorded the send; recipient delivery is not proven.
 
 ## Local evidence and commands
 
@@ -36,7 +36,7 @@ No changes to ticket routing, browser execution, workspace execution or the comm
 
 ## Remaining acceptance
 
-Parent must coordinate an authorized real owner journey on staging, including current Vault/proxy deployment compatibility (the shared connector now returns reply headers and performs message metadata readback), owner account selection and actual channel receipt. No live send was attempted. `/ledger` reconciles only the eight most recent eligible rows per invocation; this is bounded recovery, not unattended bulk reconciliation. This candidate does not send an existing mutable Gmail draft by ID: it sends exactly the separately reviewed MIME. General calendar/Tasks/Drive mutations remain outside this mail outcome.
+Parent must coordinate an authorized real owner journey on staging, including current Vault/proxy deployment compatibility (the shared connector now returns reply headers and performs message metadata readback), owner account selection and actual channel receipt. No live send was attempted. `/ledger` reconciles only up to eight outstanding rows per invocation and advances unfinished backlogs without completed-history starvation; this is bounded recovery, not unattended bulk reconciliation. This candidate does not send an existing mutable Gmail draft by ID: it sends exactly the separately reviewed MIME. General calendar/Tasks/Drive mutations remain outside this mail outcome.
 
 ## Official sources
 

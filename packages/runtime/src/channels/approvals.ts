@@ -97,11 +97,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     undo_json TEXT, created_at INTEGER NOT NULL, decided_at INTEGER)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS email_send_receipts (
     approval_id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, message_id TEXT NOT NULL,
-    provider_message_id TEXT, provider_thread_id TEXT, confirmed_at INTEGER, channel_delivered_at INTEGER)`);
+    provider_message_id TEXT, provider_thread_id TEXT, confirmed_at INTEGER, channel_delivered_at INTEGER, reconciliation_order INTEGER NOT NULL DEFAULT 0)`);
   const emailBinding = ({ binding_digest: _digest, ...payload }: EmailSendProposal) => sha256Hex(JSON.stringify(payload));
-  const unknownEmail = (): ApprovalDecision => ({ toast: 'Outcome unknown', message: 'The send outcome is unknown. Gmail has not confirmed the result yet. Check this approval again to reconcile; no email was sent again.' });
+  const unknownEmail = (): ApprovalDecision => ({ toast: 'Outcome unknown', message: 'The send outcome is unknown. Gmail has not confirmed the result yet. Use /ledger to reconcile; no email was sent again.' });
   const confirmEmail = async (id: string, ep: EmailSendProposal, client: GoogleClient): Promise<ApprovalDecision> => {
-    if (await client.findSentByMessageId(ep.message_id).catch(() => false)) {
+    if (await client.findSentByMessageId(ep.message_id, ep.thread_id).catch(() => false)) {
       sql.exec('INSERT OR IGNORE INTO email_send_receipts (approval_id, connection_id, message_id) VALUES (?, ?, ?)', id, ep.connection_id!, ep.message_id);
       sql.exec('UPDATE email_send_receipts SET confirmed_at = ? WHERE approval_id = ?', deps.now(), id);
       setStatus(id, 'done');
@@ -392,11 +392,17 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     decide,
     async reconcileEmails() {
       // A bounded owner-local readback pass; never replay an effect after interruption.
-      const candidates = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status IN ('sending', 'uncertain', 'done') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
+      const candidates = sql.exec<LedgerRow>(`SELECT l.* FROM ledger l LEFT JOIN email_send_receipts r ON r.approval_id = l.id
+        WHERE l.kind = 'email_send' AND (l.status IN ('sending', 'uncertain') OR (l.status = 'done' AND r.confirmed_at IS NOT NULL AND r.channel_delivered_at IS NULL))
+        ORDER BY COALESCE(r.reconciliation_order, 0), l.created_at, l.id LIMIT 8`).toArray();
       for (const entry of candidates) {
+        const payload = JSON.parse(entry.payload_json) as EmailSendProposal;
+        if (!payload.connection_id) continue;
+        sql.exec('INSERT OR IGNORE INTO email_send_receipts (approval_id, connection_id, message_id) VALUES (?, ?, ?)', entry.id, payload.connection_id, payload.message_id);
+        sql.exec('UPDATE email_send_receipts SET reconciliation_order = (SELECT COALESCE(MAX(reconciliation_order), 0) + 1 FROM email_send_receipts) WHERE approval_id = ?', entry.id);
         const out = entry.status === 'done' ? { toast: 'Sent', message: `Sent: ${describeEmail(JSON.parse(entry.payload_json) as EmailSendProposal)}. Gmail confirmed this Message-ID in Sent mail. No retry was issued; recipient delivery is not confirmed.` } : await decide(entry.id, 'a', 'email:reconcile');
         const receipt = sql.exec<{confirmed_at:number|null;channel_delivered_at:number|null}>('SELECT confirmed_at, channel_delivered_at FROM email_send_receipts WHERE approval_id = ?', entry.id).toArray()[0];
-        if (out.toast !== 'Sent' || !receipt?.confirmed_at || receipt.channel_delivered_at !== null) continue;
+        if (out.toast !== 'Sent' || (!receipt || receipt.confirmed_at === null) || receipt.channel_delivered_at !== null) continue;
         try {
           if (await say(out.message) != null) sql.exec('UPDATE email_send_receipts SET channel_delivered_at = ? WHERE approval_id = ?', deps.now(), entry.id);
         } catch { deps.log({trace:entry.id,hop:'email_receipt_delivery',ms:0,ok:false,code:'send_failed'}); }
@@ -563,12 +569,14 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();
       const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'browser_submit', 'message_send', 'mcp_call', 'calendar_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
       const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'review_only' ORDER BY created_at").toArray();
-      const done = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status NOT IN ('open', 'changing', 'card_unconfirmed', 'review_only') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
+      const uncertain = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status IN ('sending', 'uncertain') ORDER BY created_at").toArray();
+      const done = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE NOT (kind = 'email_send' AND status IN ('sending', 'uncertain')) AND status NOT IN ('open', 'changing', 'card_unconfirmed', 'review_only') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
       const lines = [
         'Open',
-        ...(open.length || unconfirmed.length || reviewOnly.length ? open.map((r) => `- ${r.summary} (waiting on you)`) : ['- nothing waiting on you']),
+        ...(open.length || unconfirmed.length || reviewOnly.length || uncertain.length ? open.map((r) => `- ${r.summary} (waiting on you)`) : ['- nothing waiting on you']),
         ...unconfirmed.map((r) => `- ${r.summary} (review card delivery unconfirmed; cannot approve)`),
         ...reviewOnly.map((r) => `- ${r.summary} (too long for approval card; cannot send)`),
+        ...uncertain.map((r) => `- ${r.summary} (${r.id}: Gmail outcome unconfirmed; /ledger checks without resending)`),
         '', 'Reminders',
         ...(reminders.length ? reminders.map((r) => `- ${r.at.replace('T', ' ')} ${r.note}${r.repeat === 'daily' ? ' (daily)' : ''}`) : ['- none set']),
         '', 'Recent',

@@ -27,7 +27,7 @@ it('registered common tools carry a thread reply through exact review, one send,
   if(String(url).includes('/threads/'))return Response.json({messages:[{id:'original',payload:{headers:[{name:'From',value:'peer@example.test'},{name:'Subject',value:'Topic'},{name:'Message-ID',value:'<original@peer.test>'},{name:'References',value:'<ancestor@peer.test>'}],body:{data:btoa('Original mail')}}}]});
   if(String(url).endsWith('/drafts'))return Response.json({id:'draft-1',message:{id:'draft-msg',threadId:'thread-1'}});
   if(String(url).endsWith('/send')) { readback=true; return Response.json({id:'sent-1',threadId:'thread-1'}); }
-  if(String(url).includes('/messages/sent-1?'))return Response.json({id:'sent-1',labelIds:['SENT'],payload:{headers:[{name:'Message-ID',value:Buffer.from(JSON.parse(String(requests.find(r=>r.url.endsWith('/send'))!.init!.body)).raw,'base64url').toString().split('Message-ID: ')[1]!.split('\r\n')[0]}]}});
+  if(String(url).includes('/messages/sent-1?'))return Response.json({id:'sent-1',threadId:'thread-1',labelIds:['SENT'],payload:{headers:[{name:'Message-ID',value:Buffer.from(JSON.parse(String(requests.find(r=>r.url.endsWith('/send'))!.init!.body)).raw,'base64url').toString().split('Message-ID: ')[1]!.split('\r\n')[0]}]}});
   return Response.json({messages:readback?[{id:'sent-1'}]:[]});
  },undefined,account);
  const desk = approvalDesk(sql(),{owner:42,call:async(method,body)=>{if(method==='sendMessage')receipts.push((body as {text:string}).text);return {};},google:async()=>client,newId:()=> 'journey',now:()=>1000,timezone:'UTC',log:()=>{}});
@@ -171,4 +171,44 @@ it('mail-only task admits reply primitives but explicit pasted-only denies their
  const store=new SourceScopeStore(sql());store.set('pasted_only',{trigger:'user_message',toolArgSourceTaint:null},1000);
  const guarded=guardExternalReads(store,handlers as never[]) as typeof handlers;
  for(const name of ['draft_email','send_email'])expect(await guarded.find(h=>h.name===name)!.handle(args as never,ctx)).toMatchObject({ok:false,code:'forbidden'});
+});
+
+
+it('completed delivered history cannot starve recovery of an older uncertain send',async()=>{
+ const f=await mailFixture({sendError:new Error('response lost'),found:false});
+ await f.desk.decide(f.id,'a','tap');
+ for(let i=0;i<8;i++){
+  const id=`later-${i}`;
+  f.storage.exec("INSERT INTO ledger (id,kind,status,summary,payload_json,created_at,decided_at) VALUES (?,'email_send','done','later sent',?,2000,2000)",id,JSON.stringify(f.payload));
+  f.storage.exec('INSERT INTO email_send_receipts (approval_id,connection_id,message_id,confirmed_at,channel_delivered_at) VALUES (?,?,?,2000,2000)',id,account.connection_id,f.payload.message_id);
+ }
+ f.options.found=true;await f.restart().reconcileEmails();
+ expect(f.counts()).toMatchObject({sends:1,delivered:1});
+ expect(f.storage.exec('SELECT status FROM ledger WHERE id = ?',f.id).one()).toEqual({status:'done'});
+});
+
+it.each([{id:'other',labelIds:['SENT'],message:'<fixture@waldo-send>',threadId:'thread'}, {id:'sent',labelIds:['INBOX'],message:'<fixture@waldo-send>',threadId:'thread'}, {id:'sent',labelIds:['SENT'],message:'<different@waldo-send>',threadId:'thread'}, {id:'sent',labelIds:['SENT'],message:'<fixture@waldo-send>',threadId:'wrong-thread'}])('provider readback must match message identity, SENT label and requested thread: %j',async found=>{
+ const client=googleClient({clientId:'fixture',clientSecret:'fixture',redirectUri:''},{refresh_token:'fixture'},async url=>{
+  if(String(url).includes('oauth2'))return Response.json({access_token:'fixture'});
+  if(String(url).includes('/messages?'))return Response.json({messages:[{id:'sent'}]});
+  return Response.json({...found,payload:{headers:[{name:'Message-ID',value:found.message}]}});
+ });
+ expect(await client.findSentByMessageId('<fixture@waldo-send>','thread')).toBe(false);
+});
+
+
+it('bounded recovery advances more than eight unresolved sends even with a fixed fixture clock',async()=>{
+ const f=await mailFixture({found:false});
+ await f.desk.decide(f.id,'a','tap');
+ for(let i=0;i<10;i++){
+  const id=`unresolved-${i}`,payload={...f.payload,message_id:`<backlog-${i}@waldo-send>`};
+  const binding_digest=await sha256Hex(JSON.stringify(payload));
+  f.storage.exec("INSERT INTO ledger (id,kind,status,summary,payload_json,created_at,decided_at) VALUES (?,'email_send','uncertain','Backlog fixture',?,1000,1000)",id,JSON.stringify({...payload,binding_digest}));
+ }
+ const seen:string[]=[];f.client.findSentByMessageId=async id=>{seen.push(id);return false;};
+ await f.restart().reconcileEmails();expect(seen).toHaveLength(8);
+ await f.restart().reconcileEmails();expect(new Set(seen).size).toBe(11);
+ expect(f.desk.ledger([])).toContain(`${f.id}: Gmail outcome unconfirmed`);
+ expect(f.desk.ledger([])).toContain('unresolved-9: Gmail outcome unconfirmed');
+ expect(f.counts().sends).toBe(1);
 });
