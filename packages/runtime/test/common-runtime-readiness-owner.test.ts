@@ -1,0 +1,24 @@
+import {env} from 'cloudflare:workers';
+import {runInDurableObject} from 'cloudflare:test';
+import {expect,it} from 'vitest';
+import {consoleAccess} from '../src/channels/console';
+import {handleConsole} from '../src/channels/console-signin';
+import type {ConsoleAuth} from '../src/identity/console-auth';
+const path='https://telegram-owner/console/diagnostics/common-runtime-readiness';
+it('actual owner DO denies unsigned and cross-owner cookies; valid owner gets fixed receipt without exposing authority or opening unlinked workspace',async()=>{
+ const a=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('diag-a')),b=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('diag-b'));
+ const token=await runInDurableObject(a,(instance,state)=>{
+  Object.assign((instance as unknown as {env:Record<string,unknown>}).env,{TELEGRAM_BOT_TOKEN:'synthetic',OPENAI_API_KEY:'synthetic',WALDO_ENVIRONMENT:'staging',SUPABASE_PROJECT_URL:'https://togdshayyxycitzckpqv.supabase.co',SUPABASE_PUBLISHABLE_KEY:'private-key',WALDO_ROUTER_HMAC_SECRET:'private-hmac',RESPONSIBILITY_RATE_LIMITER:{limit:async()=>({success:true})}});
+  return consoleAccess(state.storage).grant();
+ });
+ expect((await a.fetch(path)).status).toBe(401);
+ expect((await b.fetch(path,{headers:{cookie:`waldo_console=${token}`}})).status).toBe(401);
+ const before=await runInDurableObject(a,(_i,state)=>state.storage.sql.exec('SELECT name FROM sqlite_master ORDER BY name').toArray());
+ const headers={cookie:`waldo_console=${token}`};
+ const response=await a.fetch(path,{headers});expect(response.status).toBe(503);expect(await response.json()).toMatchObject({error:'owner_unavailable'});
+ expect((await a.fetch(path+'?url=private',{headers})).status).toBe(400);
+ expect((await a.fetch(path,{method:'POST',headers})).status).toBe(405);
+ expect(await runInDurableObject(a,(_i,state)=>state.storage.sql.exec('SELECT name FROM sqlite_master ORDER BY name').toArray())).toEqual(before);
+ await runInDurableObject(a,async(_i,state)=>consoleAccess(state.storage).signOutAll());
+ expect((await a.fetch(path,{headers})).status).toBe(401);
+});
