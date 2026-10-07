@@ -74,7 +74,7 @@ export const reminderHandlers = (book: ReminderBook) => [
     trigger_allowlist: allowlist('set_reminder'),
     autonomy_gated: false,
     mutates_state: true,
-    async handle(args, ctx) {
+    async handle(args, ctx?: ToolDispatcherContext) {
       try {
         const key = ctx?.turnId && ctx?.toolCallId ? `${ctx.turnId}-${ctx.toolCallId}` : undefined;
         return { ok: true, data: await book.set(args, key), source_taint: null };
