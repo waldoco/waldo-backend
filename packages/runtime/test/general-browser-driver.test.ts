@@ -238,3 +238,15 @@ it('keeps routed mutation uncertainty and separately records unconfirmed denied-
   } });
   await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'outcome_uncertain', diagnostic: { status: 403 }, cleanup_failed: true });
 });
+it.each(['click', 'close'] as const)('keeps a successful %s uncertain if only disconnect fails', async operation => {
+  const f = harness();
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(session, 'https://docs.example/index');
+  f.browser.close = async () => { throw Error('release failed'); };
+  const effect = operation === 'click'
+    ? driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})
+    : driver.closeTab(session, first.observation.tab_ref, async () => {});
+  await expect(effect).rejects.toMatchObject({ code: 'outcome_uncertain', release_failed: true });
+  if (operation === 'click') expect(f.calls).toContain('click');
+  else expect(f.pages).toEqual([]);
+});

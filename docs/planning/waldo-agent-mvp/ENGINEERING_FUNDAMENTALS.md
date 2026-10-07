@@ -580,3 +580,7 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 | Failure | Regression | Boundary |
 | --- | --- | --- |
 | 2026-10-07 review: an iframe redirect substituted another origin's HTML; cross-origin resource fulfillment duplicated a host-only cookie onto the original origin; final routed failure could hide an already dispatched mutation | general-browser-redirects.test.ts iframe/cross-origin guards; local real Chromium fixture proves zero target requests and no foreign cookie; general-browser-driver.test.ts routed denied click and post-close revocation preserve outcome_uncertain | Child-frame and cross-origin resource redirects remain explicitly unsupported; top-level vetted redirects work. No provider/model calls or authority widening |
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| 2026-10-07 review: release failure after a successful mutation bypassed the primary catch and returned provider_unavailable without release metadata | general-browser-driver.test.ts successful click/observation and successful close followed only by failed disconnect | Both preserve outcome_uncertain and release_failed; no automatic effect retry or replacement session |

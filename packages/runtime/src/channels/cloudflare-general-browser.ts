@@ -130,7 +130,10 @@ export function cloudflareGeneralBrowser(options: Options) {
       // Release this connection, retaining tabs/context; physical end is separate.
       if (browser) try { await browser.close(); } catch {
         if (primary) primary.release_failed = true;
-        else throw new GeneralBrowserError('provider_unavailable');
+        else {
+          const failure = new GeneralBrowserError(mutationDispatched ? 'outcome_uncertain' : 'provider_unavailable');
+          failure.release_failed = true; throw failure;
+        }
       }
     }
   };
