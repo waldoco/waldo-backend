@@ -309,3 +309,18 @@ it.each(['list', 'physical-close', 'detach', 'release'])('returns uncertain cust
   if (stage === 'release') f.browser.close = async () => new Promise(() => {});
   deadline = Date.now() + 25; controller.abort(); await rejection;
 }, 1000);
+it.each(['direct', 'routed'])('bounds stalled %s denied-document discard and preserves failure custody', async source => {
+  const f = harness(); let deadline = Date.now() + 120000;
+  const row = { ...session, expiresAt: deadline };
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: Date.now, deadline: () => deadline, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  await driver.navigate(row, 'https://docs.example/index');
+  f.pages[0].close = async () => new Promise(() => {});
+  f.pages[0].goto = async () => {
+    if (source === 'routed') {
+      await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }), fetch: async () => ({ status: () => 403 }), abort: async () => {} });
+      deadline = Date.now() + 25; throw Error('blocked navigation');
+    }
+    deadline = Date.now() + 25; return { status: () => 403 };
+  };
+  await expect(driver.navigate(row, 'https://docs.example/denied')).rejects.toMatchObject({ code: 'page_unavailable', diagnostic: { status: 403 }, cleanup_failed: true });
+}, 500);

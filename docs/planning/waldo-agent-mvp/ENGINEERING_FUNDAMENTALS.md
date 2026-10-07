@@ -609,3 +609,9 @@ Browser handoff post-failure custody regression (2026-10-07):
 - [x] Bound cleanup stages and connection/CDP release by the existing host deadline; no new retry or budget allowance.
 - [x] Preserve outcome_uncertain and cleanup_failed/release_failed evidence for existing durable continuation; never declare physical absence from timeout.
 - [x] Driver regression tests exercise all four stalls with fake providers. Attachment, observation and active-operation recovery remain Core integration responsibilities.
+
+
+Denied-document discard sibling regression (2026-10-07):
+- [x] Independently reproduced direct HTTP denial and routed main-document denial with stalled page.close; both red before repair.
+- [x] Applied the same existing-host-deadline cleanup bound to both discard paths, preserving page_unavailable/status and cleanup_failed for continuation.
+- [x] No useful-content acceptance or physical absence inferred from the deadline.

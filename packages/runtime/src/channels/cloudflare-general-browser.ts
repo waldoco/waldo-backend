@@ -85,8 +85,10 @@ export function cloudflareGeneralBrowser(options: Options) {
           const next = redirects.get(page); redirects.delete(page);
           if (next) { url = next; continue; }
           if (!response || response.status() >= 400) {
-            try { await page.close(); } catch { await terminateId(session.providerSessionId); }
-            throw new GeneralBrowserError('page_unavailable', response ? { status: response.status() } : undefined);
+            const failure = new GeneralBrowserError('page_unavailable', response ? { status: response.status() } : undefined);
+            try { await cleanupAwait(() => page.close()); }
+            catch { try { await terminateId(session.providerSessionId); } catch { failure.cleanup_failed = true; } }
+            throw failure;
           }
           return;
         }
@@ -136,7 +138,7 @@ export function cloudflareGeneralBrowser(options: Options) {
     } finally {
       // Aborted main navigations can retain a Chromium error document. Discard
       // independently of expired/revoked action authority before releasing custody.
-      for (const page of invalidDocuments) try { await page.close(); } catch {
+      for (const page of invalidDocuments) try { await cleanupAwait(() => page.close()); } catch {
         try { await terminateId(session.providerSessionId); } catch {
           if (primary) primary.cleanup_failed = true;
           else throw new GeneralBrowserError('cleanup_unconfirmed');
