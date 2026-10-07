@@ -1,0 +1,29 @@
+diff --git a/tmp/common-ingress-original.ts b/repro/common-core/common-ingress-red.full.test.ts
+index 8d2aaf72..66a3481e 100644
+--- a/tmp/common-ingress-original.ts
++++ b/repro/common-core/common-ingress-red.full.test.ts
+@@ -1054,3 +1054,24 @@ it('real webhook/inbox/turn path emits each verified owner email in Worker logs
+     for (const subject of [81103, 81104]) await runInDurableObject(doStub(subject), async (_instance, state) => { await state.storage.deleteAlarm(); });
+   }
+ });
++
++it('normal authenticated synthetic chat task reaches the common responsibility writer rather than only returning chat prose', async () => {
++  // Serving-path RED: real Telegram webhook and registered DO; model/channel and directory facts synthetic.
++  // This assertion is only durable handoff, not artifact execution or shared-task closure.
++  const ownerAuthUser = '30000000-0000-0000-0000-000000000001';
++  const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ownerAuthUser)))].map(b => b.toString(16).padStart(2, '0')).join('');
++  const canonicalOwner = `owner_${hash}`;
++  const { responsibilityOwnerRootName } = await import('../src/index');
++  const root = env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName(await responsibilityOwnerRootName(canonicalOwner)));
++  vi.stubGlobal('fetch', (async () => { throw new Error('synthetic task attempted live network'); }) as typeof fetch);
++  try {
++    await send(81105, 'Prepare a private reviewable meeting checklist and keep this task available for background continuation.', 997001);
++    const roots = await runInDurableObject(root, (_instance, state) => state.storage.sql.exec<{ owner_id: string }>('SELECT owner_id FROM owner_roots').toArray());
++    // A final message in Telegram is not the common task admission receipt.
++    expect(roots).toEqual([expect.objectContaining({ owner_id: canonicalOwner })]);
++  } finally {
++    vi.unstubAllGlobals();
++    await runInDurableObject(doStub(81105), async (_instance, state) => { await state.storage.deleteAlarm(); });
++    await runInDurableObject(root, async (_instance, state) => { await state.storage.deleteAlarm(); });
++  }
++});
