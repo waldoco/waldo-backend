@@ -1,5 +1,5 @@
 import {it,expect} from 'vitest';
-import {commonBrowserHost,maintainCommonBrowsers,type CommonBrowserGrant} from '../src/channels/common-browser-host';
+import {commonBrowserHost,maintainCommonBrowsers,revokeCommonBrowsers,type CommonBrowserGrant} from '../src/channels/common-browser-host';
 import {commonBrowserFixture,commonBrowserFixtureLoader} from './fixtures/common-browser-sdk';
 const fixture=()=>{
  commonBrowserFixture.reset();let live=true;const rows=new Map<string,unknown>();
@@ -52,4 +52,12 @@ it('wrong owner/provider/origin are rejected before allocation',async()=>{
  for(const args of [{url:'https://public-pages.fixture.invalid/a',provider:'browserbase'},{url:'https://outside.fixture.invalid/a'}])expect(await host.handler.handle({...args,instruction:'Read.'} as never,f.ctx)).toMatchObject({ok:false});
  expect(await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},{authenticatedUserId:'another-owner'} as never)).toMatchObject({ok:false});
  expect(commonBrowserFixture.allocations).toBe(0);
+});
+
+it('stop during provider acquire preserves cleanup fence when exact provider ID arrives',async()=>{
+ const f=fixture();commonBrowserFixture.onAcquire=()=>revokeCommonBrowsers(f.storage,Date.now());
+ const host=f.host();expect(await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx)).toMatchObject({ok:false});
+ const row=f.rows.get('common-browser:fixture-task') as any;
+ expect(row).toMatchObject({cleanup:'pending',allocation:'observed',session:{providerSessionId:'fixture-retained-provider'}});
+ expect(commonBrowserFixture.ends).toBe(1);expect(host.attachments()).toHaveLength(0);expect(commonBrowserFixture.allocations).toBe(1);
 });

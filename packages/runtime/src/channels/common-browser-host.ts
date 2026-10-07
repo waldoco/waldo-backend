@@ -29,7 +29,7 @@ export function commonBrowserHost(options:Readonly<{
  type Record=BrowserRecord;
  const key=(taskId:string)=>`common-browser:${taskId}`;
  const makeDriver=(grant:CommonBrowserGrant)=>cloudflareGeneralBrowser({ownerId:options.ownerId,binding:options.config.binding,loadSdk:options.config.loadSdk,now:options.now,deadline:options.deadline,maxScreenshotBytes:grant.maxScreenshotBytes,
-  admit:async()=>{await checked();await options.config.assertGrantCurrent(grant);await checked();},
+  admit:async()=>{await checked();await options.config.assertGrantCurrent(grant);await checked();if(options.storage.kv.get<BrowserRecord>(key(grant.taskId))?.cleanup)throw Error('common browser stopped');},
   authorizeRequest:async(url,method)=>{if(!['GET','HEAD'].includes(method))return false;try{return grant.allowedOrigins.includes(new URL(url).origin);}catch{return false;}}});
  const save=(record:BrowserRecord,storageKey:string)=>options.storage.transactionSync(()=>{
   options.storage.kv.put(storageKey,record);
@@ -45,7 +45,7 @@ export function commonBrowserHost(options:Readonly<{
     if(record&&(JSON.stringify(record.grant)!==JSON.stringify(grant)||record.session.ownerId!==options.ownerId||record.cleanup||record.allocation!=='observed'))throw Error('common browser retained identity uncertain');
     if(!record){
      const now=options.now();record={grant,allocation:'prepared',tabs:[],session:browserSessionSchema.parse({id:crypto.randomUUID(),ownerId:options.ownerId,provider:'cloudflare_playwright',providerSessionId:'pending',contextHandle:null,mode:'public',state:'starting',generation:1,expiresAt:Math.min(grant.expiresAt,now+grant.lifetimeMs),updatedAt:now})};
-     await driver.start(grant.allowedOrigins.map(origin=>new URL(origin).hostname),grant.lifetimeMs,async()=>{await options.config.reserveAllocation(grant);await checked();save(record!,storageKey);},async id=>{record={...record!,allocation:'observed',session:{...record!.session,providerSessionId:id,state:'active',updatedAt:options.now()}};save(record!,storageKey);});
+     await driver.start(grant.allowedOrigins.map(origin=>new URL(origin).hostname),grant.lifetimeMs,async()=>{await options.config.reserveAllocation(grant);await checked();save(record!,storageKey);},async id=>{const retained=options.storage.kv.get<Record>(storageKey);if(!retained||retained.session.id!==record!.session.id)throw Error('common browser allocation custody changed');record={...retained,cleanupFailed:undefined,allocation:'observed',session:{...retained.session,providerSessionId:id,state:'active',updatedAt:options.now()}};save(record!,storageKey);});
     }
     if(images.length>=4)throw Error('common browser image budget exhausted');
     const existing=record.tabs.find(tab=>tab.url===args.url);
