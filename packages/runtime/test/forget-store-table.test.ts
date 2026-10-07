@@ -43,6 +43,7 @@ const TABLES: Record<string, Row> = {
   runtime_run_scribe_audit: exempt('run id and version'), probe_state: exempt('a tick counter'), workspace_upload_lease: exempt('lease token, expiry and byte count'),
   card_pins: exempt('card id and time'), heartbeat_notified: exempt('loop id and times'), artifact_exports: exempt('ids, format, size and time'),
   event_briefs: exempt('event id and times'), schedule_runs: exempt('ids, status codes and times'),
+  email_send_receipts: exempt('approval/connection/provider/RFC Message-ID custody plus confirmation/delivery timestamps and reconciliation counter; no recipients, subject, body, credentials or owner-authored text; retained to prevent resend after interruption'),
   observed_mail: exempt('provider source/thread/message IDs, update-card row pointer, observation time and judged/attached flags; no sender/subject/snippet/body; unattached pointers expire after seven days'),
   loop_mail_sources: exempt('loop/source/message IDs, due/timezone, fixed delivery-state code and revisit time; source-derived title lives in loops and source text in update_cards'),
   // Text the owner made or the runtime stored, not reached by a literal forget

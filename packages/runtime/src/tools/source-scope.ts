@@ -65,9 +65,11 @@ export class SourceScopeStore {
 // checked at call time, so a limit set mid-turn applies at once. Apply it to the handler array before
 // delegate_task is attached; child agents filter that same array, so they inherit the denial.
 export const guardExternalReads = <H extends { name: string; handle: (...args: never[]) => Promise<unknown> }>(store: SourceScopeStore, handlers: readonly H[]): H[] =>
-  handlers.map((handler) => DENIED.has(handler.name)
+  handlers.map((handler) => DENIED.has(handler.name) || ['draft_email', 'send_email'].includes(handler.name)
     ? { ...handler, async handle(...args: never[]) {
-      return store.denies(handler.name)
+      // Reply preparation reads provider headers; outbound writers must respect pasted-only too.
+      const reply = ['draft_email', 'send_email'].includes(handler.name) && !!(args[0] as { reply_to_thread_id?: string } | undefined)?.reply_to_thread_id;
+      return store.denies(handler.name) || (reply && store.denies('read_thread'))
         ? { ok: false, code: 'forbidden', error: 'The owner limited this task to text they pasted. Ask the owner before reading anything else.' }
         : handler.handle(...args);
     } } as H

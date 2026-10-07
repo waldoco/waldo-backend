@@ -33,6 +33,20 @@ export const googleHas = (scopes: readonly string[] | null | undefined, feature:
 export const GOOGLE_CALLBACK_PATH = '/oauth/google/callback';
 
 export type GoogleApp = Readonly<{ clientId: string; clientSecret: string; redirectUri: string }>;
+export class GoogleMailAccountError extends Error {
+  constructor(message: string, readonly reason: 'scope_missing' | 'account_unavailable' | 'selection_required' | 'reply_invalid' = 'reply_invalid') { super(message); }
+}
+
+// Resolve only within the current owner account set; mail never falls through to another account.
+export const googleAccountCandidates = <T extends { id: string; scopes: readonly string[] | null }>(accounts: readonly T[], feature: GoogleFeature, connectionId?: string): readonly T[] => {
+  const selected = connectionId ? accounts.filter(account => account.id === connectionId) : accounts;
+  if (connectionId && !selected.length) throw new GoogleMailAccountError('The selected Google account is disconnected; no other account was used.', 'account_unavailable');
+  const eligible = selected.filter(account => googleHas(account.scopes, feature));
+  if (selected.length && !eligible.length && (connectionId || feature === 'mail')) throw new GoogleMailAccountError('The selected Google account lacks the required scopes; no other account was used.', 'scope_missing');
+  if (feature === 'mail' && !connectionId && eligible.length > 1) throw new GoogleMailAccountError('Multiple Google mail accounts are connected. Read connect_service and supply the intended connection_id.', 'selection_required');
+  return eligible;
+};
+
 export type GoogleTokens = Readonly<{ refresh_token: string; email?: string; scopes?: readonly string[] | null }>;
 type Fetch = typeof fetch;
 
@@ -170,8 +184,8 @@ export type CalendarChange = Omit<CalendarItem, 'status'> & Readonly<{ status: s
 export type MailItem = Readonly<{ id: string; thread_id: string; from: string; subject: string; snippet: string; at: string }>;
 // A1: a thread-read message carries the decoded body; the list projection (MailItem) stays
 // snippet-only so 'what is new' scans never pull bodies into a turn.
-export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string }>;
-export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string }>;
+export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string; message_id?: string; references?: string }>;
+export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string; inReplyTo?: string; references?: string; from?: string }>;
 
 // Canonical MIME for the send rail: fixed header order, CRLF, no display names. The digest the
 // owner approves binds these exact bytes; Message-ID (set by us) is the reconciliation handle
@@ -179,11 +193,15 @@ export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[
 export const buildMime = (input: DraftInput & { messageId?: string }): string => {
   const clean = (value: string) => value.replace(/[\r\n]+/g, ' ');
   const headers = [
+    ...(input.from ? [`From: ${clean(input.from)}`] : []),
     `To: ${clean(input.to.join(', '))}`,
     ...(input.cc?.length ? [`Cc: ${clean(input.cc.join(', '))}`] : []),
     ...(input.bcc?.length ? [`Bcc: ${clean(input.bcc.join(', '))}`] : []),
     `Subject: ${clean(input.subject)}`,
-    ...(input.messageId ? [`Message-ID: ${input.messageId}`, 'MIME-Version: 1.0'] : []),
+    ...(input.inReplyTo ? [`In-Reply-To: ${clean(input.inReplyTo)}`] : []),
+    ...(input.references ? [`References: ${clean(input.references)}`] : []),
+    ...(input.messageId ? [`Message-ID: ${clean(input.messageId)}`] : []),
+    'MIME-Version: 1.0',
     'Content-Type: text/plain; charset="UTF-8"',
   ];
   return `${headers.join('\r\n')}\r\n\r\n${input.body}`;
@@ -227,7 +245,7 @@ export type GoogleClient = Readonly<{
   events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<readonly CalendarItem[]>;
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
   sendRaw(raw: string, threadId?: string): Promise<Readonly<{ message_id: string; thread_id?: string }>>;
-  findSentByMessageId(messageId: string): Promise<boolean>;
+  findSentByMessageId(messageId: string, threadId?: string): Promise<boolean>;
   event(id: string): Promise<CalendarItem>;
   createEvent(input: Readonly<{ title: string; start: string; end: string }>): Promise<CalendarItem>;
   moveEvent(id: string, start: string, end: string, etag?: string): Promise<CalendarItem>;
@@ -399,12 +417,14 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     // back to the snippet so the model still sees something.
     async readThread(threadId, limit) {
       const json = await call(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`) as { messages?: GmailFullMessage[] };
-      return (json.messages ?? []).slice(0, limit).map((message) => {
+      return (json.messages ?? []).slice(-limit).map((message) => {
         const header = (name: string) => message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
         return {
           id: message.id ?? '', from: header('From'), subject: header('Subject'),
           at: new Date(Number(message.internalDate ?? 0)).toISOString(),
           body: threadBody(message.payload) || (message.snippet ?? ''),
+          ...(header('Message-ID') ? { message_id: header('Message-ID') } : {}),
+          ...(header('References') ? { references: header('References') } : {}),
         };
       });
     },
@@ -440,12 +460,15 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       }) as { id: string; threadId?: string };
       return { message_id: json.id, ...(json.threadId ? { thread_id: json.threadId } : {}) };
     },
-    async findSentByMessageId(messageId) {
+    async findSentByMessageId(messageId, threadId) {
       const list = new URL('https://gmail.googleapis.com/gmail/v1/users/me/messages');
       const bare = messageId.replace(/^<|>$/g, '');
       list.search = new URLSearchParams({ q: `in:sent rfc822msgid:${bare}`, maxResults: '1' }).toString();
       const { messages = [] } = await call(list.toString()) as { messages?: { id: string }[] };
-      return messages.length > 0;
+      if (!messages[0]?.id) return false;
+      const found = await call(`${GMAIL}/${encodeURIComponent(messages[0].id)}?format=metadata&metadataHeaders=Message-ID`) as { id?: string; threadId?: string; labelIds?: string[]; payload?: { headers?: { name: string; value: string }[] } };
+      const observed = found.payload?.headers?.find(header => header.name.toLowerCase() === 'message-id')?.value;
+      return found.id === messages[0].id && found.labelIds?.includes('SENT') === true && observed === messageId && (!threadId || found.threadId === threadId);
     },
   };
 }

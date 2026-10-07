@@ -47,6 +47,12 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - A signed RPC's canonical data covers every parameter the function stores; an unsigned stored parameter is a tamperable write.
 - A refusal precedes any one-use consumption: validate first, then spend the invite, token or code. An error branch re-rendering a form puts the error in the note, never in a data field.
 
+### Google mail actions
+
+- Mail reads, reply preparation and approved sends retain the same explicit owner connection. Account health changes, revoked scopes and a missing selected account never select a different sender. Cover common admission and mail-only task scope, including refusal of unresolved mutation defaults and provider header reads under pasted-only restrictions. Register new operational receipt stores in the forget inventory; routing fixtures must carry the frozen sender account and prove its disappearance never sends through a different account.
+- Claim email approval durably before any await; freeze sender, recipients, body, thread and exact MIME. Cover concurrent callbacks, modified payload, old-card Modify, interruption and desk recreation.
+- Gmail acknowledgement is not readback. Confirm the exact RFC Message-ID and SENT label, persist provider IDs and channel delivery separately, and retain uncertainty when lookup is empty or unavailable. Recovery reconciles without issuing another send. Exclude completed receipts before bounded selection, rotate unfinished checks durably, and keep old uncertainty visible even after newer completed history.
+
 ### Idempotency and retries
 - Sign-in retries retain escaped email/contact/invite details only in form responses, never OTP values in restored pages or storage. Test send refusals, edit-before-resend, repeated submits, history restoration and explicit stop-waiting recovery; interrupted requests may already have completed.
 - Every webhook, callback, scheduled fire and migration can run twice without a second effect. Store the offset or the key before or atomically with the effect.
@@ -567,3 +573,7 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] Common execution deadlines contribute persisted due time to the sole alarm arbiter; a scheduler rearm with no rows or a later wake must preserve the common deadline. Regression: scheduler-alarm.test.ts persisted common execution deadline; RED without its arbiter contribution.
 
 | 2026-10-07 | Exhaustive PR897 guard run found duplicated model IDs, two direct alarm calls, released v0.3 union mutation/new file misclassified as released v0.4; shared scheduler rearm could erase common execution wake; local pgTAP inherited IST | Repository contracts / Alarm lifetime / Released protocol bytes | Canonical WALDO_CHAT_MODEL reference; original released bytes restored and common extension composed separately; scheduler-alarm.test.ts deadline-preservation RED->GREEN; full guards and pgTAP466/466; test cluster explicitlyUTC | Guard breadth before push. One physical alarm arbiter, persisted common deadline, pinned released protocol bytes, deterministic local test timezone. No guard bypass or golden fingerprint change |
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Google mail tools were excluded from common admission; proposals lost sender account and reply headers; concurrent approvals could duplicate local sends; timeout lookup could falsely claim no delivery | `google-mail-journey.test.ts`, existing `approvals.test.ts`, `common-owner-host.test.ts`, `google.test.ts` | Owner-local account selection, exact-payload approval, durable claim and read-only recovery; synthetic proof only until parent-coordinated live acceptance |
