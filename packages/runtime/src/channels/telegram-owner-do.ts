@@ -1,3 +1,5 @@
+import {commonOwnerTools} from './common-owner-tool-policy';
+import {commonOwnerWorkspace} from './common-owner-workspace';
 import {commonOwnerMemory} from './common-owner-memory';
 import {commonOwnerHost} from './common-owner-host';
 import {revokeCommonBrowsers,maintainCommonBrowsers,COMMON_BROWSER_DUE,commonBrowserHost,type CommonBrowserConfiguration} from './common-browser-host';
@@ -200,7 +202,7 @@ export type TelegramOwnerPrivateHost = Readonly<{
   namespace: string;
   allowedDoNames: readonly string[];
   lookup(provider: 'telegram', subject: string): Promise<unknown>;
-  context(admission: OwnerMessageAdmission): ContextComposerDependencies;
+  context(admission: OwnerMessageAdmission, workspace?:()=>Promise<readonly import('../context-composer').ContextFragment[]>): ContextComposerDependencies;
   taskMaterials?: Parameters<typeof createOwnerMessageContextAdapter>[0]['taskMaterials'];
   access: Parameters<typeof createOwnerMessageContextAdapter>[0]['access'];
   connectorBacked(handler: Parameters<OwnerResponderHost['prepare']>[1][number]): boolean;
@@ -328,7 +330,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           // This executor admits reviewed enabled skill selection, private workspace tools
           // and explicitly registered read-only browser custody. Skill install/disable
           // and other effects remain held; procedure loading adds no capabilities.
-          tools:composition.evidence.tool_acl.filter(tool=>['skills_list','skills_load','get_context','read_owner_context','workspace_list','workspace_read','workspace_search','workspace_write','workspace_render',...(host.browser?['browse_page']:[])].includes(tool)),
+          tools:composition.evidence.tool_acl.filter(tool=>commonOwnerTools({googleConnected:(this.ctx.storage.kv.get<readonly GoogleAccount[]>('google:accounts')??[]).length>0,driveReads:this.env.DRIVE_READS==='1',publicSearch:!!this.env.BRAVE_SEARCH_API_KEY,browser:!!host.browser}).includes(tool)),
           maxProviderTurns,maxDurationMs:Math.max(1,Math.min(600000,scope.deadline-Date.now()))};
         if(prior && (!prior.hostRun || prior.hostRun.runId!==scope.runId || prior.hostRun.attempt!==scope.attempt || prior.hostRun.deadline!==scope.deadline || JSON.stringify(prior.source)!==JSON.stringify(source) || prior.binding.contextProjectionRef!==composition.checkpoint.context_ref || prior.binding.contextProjectionDigest!==composition.evidence.prompt_digest))throw Error('common execution frozen context changed');
         scope.commit(()=>this.ctx.storage.kv.put(frozenKey,request));
@@ -1934,7 +1936,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           occurrenceKey: occurrence.id, occurredAt: occurrence.admittedAt, now: Date.now,
         });
         const skills = createCuratedSkillCapability(storage.sql, admission, turn.text, turn.traceId, scope);
-        const adapter = createOwnerMessageContextAdapter({ admission, scope, dependencies: host.context(admission),
+        const adapter = createOwnerMessageContextAdapter({ admission, scope, dependencies: host.context(admission,()=>commonOwnerWorkspace(admission,()=>workspaceOwnerHost(this.env,storage,this.ctx.id.toString(),occurrence.doName,fetch,scope,()=>adapter.assertCurrent()),()=>memory.incompleteTopics().length===0)),
           retainedRecallAvailable: () => memory.incompleteTopics().length === 0, taskMaterials: host.taskMaterials,
           registeredHandlers: [...handlers, ...skills.handlers].map(handler => handler.name), connectorBacked: handlers.filter(handler => host.connectorBacked(handler)).map(handler => handler.name), access: host.access.bind(host) });
         this.activeOwnerContext = adapter;

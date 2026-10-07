@@ -458,3 +458,15 @@ it('canonical admitted memory tool uses only its private physical store and pres
  args[21]={binding:{...args[21]!.binding!,memoryRead:{...args[21]!.binding!.memoryRead!,principal_ref:'prn_ffffffffffffffffffffffffffffffff'}}};
  expect(()=>createOwnerResponder(...args)).toThrow('memory projection owner rejected');
 });
+it('connected reads share canonical responder/tool custody, source taint and revocation gate',async()=>{
+ const s=await setup('Read my calendar.');
+ let enabled=true;
+ const adapter=createOwnerMessageContextAdapter({...s,registeredHandlers:['query_calendar'],connectorBacked:['query_calendar'],access:async()=>({grants:{status:'available',tools:enabled?['query_calendar']:[]},connectors:{status:'available',tools:enabled?['query_calendar']:[]}})});
+ const captured:string[]=[];let first=true;
+ const requirePermissions=(await import('@waldo/contracts')).TOOL_PERMISSIONS;
+ const handler={name:'query_calendar' as const,description:'fixture read',schema:(await import('@waldo/contracts')).queryCalendarArgsSchema,trigger_allowlist:(await import('@waldo/contracts')).triggerTypeSchema.options.filter(t=>(requirePermissions[t] as readonly string[]).includes('query_calendar')),autonomy_gated:false,requires_connector:true as const,handle:vi.fn(async()=>({ok:true as const,source_taint:'external' as const,data:{events:[],coverage:'fixture-only'}}))};
+ const gateway:LLMGatewayAdapter={complete:async request=>{captured.push(JSON.stringify(request.request));const tool_calls=first?[{call_id:'common-calendar-read',name:'query_calendar',arguments:'{}'}]:undefined;first=false;return{ok:true,data:{model:request.request.model,text:tool_calls?'':'Read completed',...(tool_calls?{tool_calls}:{}),input_tokens:1,output_tokens:1,cache_read_input_tokens:0,output_items:[],latency_ms:0}};}};
+ const store={load:async()=>({entries:[],leafId:null}),save:async()=>undefined};const args:Parameters<typeof createOwnerResponder>=['fixture',store];args[5]=[handler];args[10]=gateway;args[21]={binding:{admission:s.admission,adapter,store}};
+ await createOwnerResponder(...args).respond({traceId:'connected-canonical',conversationRef:'owner',surface:'telegram',text:'Read my calendar.',memoryWrites:false},(_name,work)=>work());
+ expect(handler.handle).toHaveBeenCalledTimes(1);expect(captured.join('\n')).toContain('fixture-only');enabled=false;await expect(adapter.assertCurrent()).rejects.toThrow('owner context rejected');
+});
