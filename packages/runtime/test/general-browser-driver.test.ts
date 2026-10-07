@@ -272,3 +272,20 @@ it('binds the concrete handoff operation to a fresh owned snapshot and private o
   expect(commands).toEqual(['Cloudflare.getSessionId', 'Cloudflare.getHandoffState', 'Cloudflare.getLiveView', 'Cloudflare.handoff']);
   expect(listeners.size).toBe(0);
 });
+it('terminates the exact owned session when handoff mint hangs and the owner aborts', async () => {
+  const f = harness(), physical = f.browser.newBrowserCDPSession, controller = new AbortController();
+  let entered!: () => void; const mintStarted = new Promise<void>(resolve => { entered = resolve; });
+  f.browser.newBrowserCDPSession = async () => ({ on() {}, off() {}, detach: async () => {}, send: async (method: string) => {
+    if (method === 'Cloudflare.getSessionId') return { sessionId: session.providerSessionId };
+    if (method === 'Cloudflare.getHandoffState') return { active: false };
+    if (method === 'Cloudflare.getLiveView') { entered(); return new Promise(() => {}); }
+    if (method === 'Browser.close') return (await physical()).send();
+  } } as any);
+  const row = { ...session, expiresAt: 120001 };
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 120001, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(row, 'https://docs.example/index');
+  const result = driver.handoff(row, first, { instructions: 'Inspect public fixture', timeoutMs: 1000, viewExpiresInMs: 60000 }, { beforeHandoff: async () => {}, storeOwnerView: async () => { throw Error('must not publish an unacknowledged mint'); }, signal: controller.signal });
+  const rejection = expect(result).rejects.toMatchObject({ code: 'outcome_uncertain' });
+  await mintStarted; controller.abort(); await rejection;
+  expect(await f.sdk.sessions()).toEqual([]);
+});

@@ -94,3 +94,42 @@ it('does not retain event listeners after an owner abort', async () => {
   await expect(generalBrowserHandoff(f.cdp as never, { instructions: 'Inspect', timeoutMs: 1000, viewExpiresInMs: 60000 }, f.options)).rejects.toMatchObject({ code: 'rejected' });
   expect(f.calls).toEqual([]); expect(f.listeners.size).toBe(0);
 });
+it.each(['Cloudflare.getSessionId', 'Cloudflare.getHandoffState', 'Cloudflare.getLiveView', 'Cloudflare.handoff', 'approval', 'custody'])('abort bounds a stalled %s operation', async phase => {
+  const f = fixture(), send = f.cdp.send;
+  let started!: () => void; const entered = new Promise<void>(resolve => { started = resolve; });
+  const hang = async (): Promise<any> => { started(); return new Promise(() => {}); };
+  f.cdp.send = async (method, params) => method === phase ? hang() : send(method, params);
+  if (phase === 'approval') f.options.beforeHandoff = hang;
+  if (phase === 'custody') f.options.storeOwnerView = hang;
+  const result = generalBrowserHandoff(f.cdp as never, { instructions: 'Inspect', timeoutMs: 1000, viewExpiresInMs: 60000 }, f.options);
+  const rejection = expect(result).rejects.toMatchObject({ code: ['Cloudflare.getLiveView', 'Cloudflare.handoff', 'custody'].includes(phase) ? 'outcome_uncertain' : 'rejected' });
+  await entered; f.controller.abort(); await rejection;
+  expect(f.listeners.size).toBe(0);
+});
+it('keeps a valid early completion when another handoff event arrives later', async () => {
+  const f = fixture(), send = f.cdp.send;
+  f.cdp.send = async (method, params) => {
+    if (method === 'Cloudflare.handoff') {
+      f.emit({ targetId: 'target-a', handoffId: 'handoff-a', success: true });
+      f.emit({ targetId: 'target-a', handoffId: 'old-handoff', success: false });
+      return { targetId: 'target-a', handoffId: 'handoff-a' } as any;
+    }
+    return send(method, params);
+  };
+  await expect(generalBrowserHandoff(f.cdp as never, { instructions: 'Inspect', timeoutMs: 1000, viewExpiresInMs: 60000 }, f.options)).resolves.toMatchObject({ reported_success: true });
+});
+it.each(['Cloudflare.getSessionId', 'Cloudflare.getLiveView', 'Cloudflare.handoff', 'approval', 'custody'])('actual deadline bounds a stalled %s operation', async phase => {
+  vi.useFakeTimers();
+  try {
+    const f = fixture(), send = f.cdp.send;
+    let started!: () => void; const entered = new Promise<void>(resolve => { started = resolve; });
+    const hang = async (): Promise<any> => { started(); return new Promise(() => {}); };
+    f.cdp.send = async (method, params) => method === phase ? hang() : send(method, params);
+    if (phase === 'approval') f.options.beforeHandoff = hang;
+    if (phase === 'custody') f.options.storeOwnerView = hang;
+    const result = generalBrowserHandoff(f.cdp as never, { instructions: 'Inspect', timeoutMs: 1000, viewExpiresInMs: 60000 }, f.options);
+    const rejection = expect(result).rejects.toMatchObject({ code: ['Cloudflare.getLiveView', 'Cloudflare.handoff', 'custody'].includes(phase) ? 'outcome_uncertain' : 'rejected' });
+    await entered; await vi.advanceTimersByTimeAsync(1000); await rejection;
+    expect(f.listeners.size).toBe(0);
+  } finally { vi.useRealTimers(); }
+});

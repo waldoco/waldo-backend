@@ -6,13 +6,14 @@ import { generalDigest, generalPageState, type GeneralSnapshot } from './general
 import { parseGeneralBrowserAction, type GeneralBrowserAction } from './general-browser-actions';
 export type { GeneralBrowserAction } from './general-browser-actions';
 import { generalBrowserDiagnostic, type GeneralBrowserDiagnostic } from './general-browser-diagnostic';
+import { captureGeneralBrowserFile, GeneralFileError, type GeneralFileControl } from './general-browser-files';
 import { generalBrowserHandoff, GeneralHandoffError, type GeneralHandoffRequest, type GeneralHandoffControl } from './cloudflare-general-handoff';
 import { GENERAL_BROWSER_REDIRECT_LIMIT, GeneralRedirectError, guardGeneralBrowserRoute } from './general-browser-redirects';
 
 export class GeneralBrowserError extends Error {
   release_failed?: true;
   cleanup_failed?: true;
-  constructor(readonly code: 'rejected' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
+  constructor(readonly code: 'rejected' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain' | 'file_unavailable' | 'file_oversize', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
 }
 type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; now(): number; deadline(): number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number }>;
 type Navigation = Readonly<{ goto(page: Page, url: string): Promise<void>; finish(page: Page): Promise<void>; pending(page: Page): boolean; dispatched(): void }>;
@@ -249,6 +250,24 @@ export function cloudflareGeneralBrowser(options: Options) {
       }
       catch { throw new GeneralBrowserError('outcome_uncertain'); }
     }),
+    retrieveFile: (session: BrowserSession, snapshot: GeneralSnapshot, elementRef: string, control: GeneralFileControl) => attached(session, async (_, context, navigation) => {
+      if (snapshot.ownerId !== session.ownerId || snapshot.sessionId !== session.id || snapshot.generation !== session.generation || control.signal.aborted) throw new GeneralBrowserError('rejected');
+      const page = await select(session, context, snapshot.observation.tab_ref);
+      const checked = async () => {
+        const current = await observe(session, context, page);
+        if (current.targetId !== snapshot.targetId || current.digest !== snapshot.digest) throw new GeneralBrowserError('stale_observation');
+      };
+      const index = snapshot.observation.elements.findIndex(element => element.ref === elementRef), element = snapshot.state.elements[index];
+      if (!element || element.tag !== 'a' || element.disabled || !element.href) throw new GeneralBrowserError('rejected');
+      await checked(); await allowed(session, element.href);
+      try {
+        return await captureGeneralBrowserFile({ ...control,
+          scope: { ownerId: session.ownerId, sessionId: session.id, generation: session.generation, targetId: snapshot.targetId, observationRevision: snapshot.observation.revision }, sourceUrl: element.href,
+          now: options.now, deadline: () => Math.min(session.expiresAt, options.deadline()), admit: () => admit(session), authorize: url => allowed(session, url, 'GET'), onPersistAttempt: navigation.dispatched,
+          beforeFileCapture: async (intent, signal) => { await control.beforeFileCapture(await generalDigest(JSON.stringify({ revision: snapshot.observation.revision, intent })), signal); await checked(); },
+        });
+      } catch (error) { throw new GeneralBrowserError(error instanceof GeneralFileError ? error.code : 'file_unavailable', error instanceof GeneralFileError ? error.diagnostic : undefined); }
+    }),
     handoff: (session: BrowserSession, snapshot: GeneralSnapshot, request: GeneralHandoffRequest,
       control: Pick<GeneralHandoffControl, 'beforeHandoff' | 'storeOwnerView' | 'signal'>) => attached(session, async (browser, context, navigation) => {
       if (snapshot.ownerId !== session.ownerId || snapshot.sessionId !== session.id || snapshot.generation !== session.generation) throw new GeneralBrowserError('stale_observation');
@@ -263,7 +282,7 @@ export function cloudflareGeneralBrowser(options: Options) {
         return await generalBrowserHandoff(cdp, request, { ...control,
           scope: { ownerId: session.ownerId, sessionId: session.id, generation: session.generation, providerSessionId: session.providerSessionId, targetId: snapshot.targetId },
           now: options.now, deadline: () => Math.min(session.expiresAt, options.deadline()), admit: () => admit(session), onMintAttempt: navigation.dispatched,
-          beforeHandoff: async digest => { await control.beforeHandoff(digest); await checked(); },
+          beforeHandoff: async (digest, signal) => { await control.beforeHandoff(digest, signal); await checked(); },
         });
       } catch (error) {
         const failure = new GeneralBrowserError(error instanceof GeneralHandoffError ? error.code : 'provider_unavailable');
