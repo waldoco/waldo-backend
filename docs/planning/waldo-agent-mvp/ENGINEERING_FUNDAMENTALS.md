@@ -615,3 +615,9 @@ Denied-document discard sibling regression (2026-10-07):
 - [x] Independently reproduced direct HTTP denial and routed main-document denial with stalled page.close; both red before repair.
 - [x] Applied the same existing-host-deadline cleanup bound to both discard paths, preserving page_unavailable/status and cleanup_failed for continuation.
 - [x] No useful-content acceptance or physical absence inferred from the deadline.
+
+Local retained browser session acceptance (2026-10-07):
+- [x] Previous Chromium fixtures used no-op release and did not prove real reconnect. Added a real local CDP transport fixture with synthetic loopback pages.
+- [x] Exact published driver f0cdf117 passed retained two-tab/default-context/input state, useful text+PNG, second-turn observation/action, stale rejection and authority cancellation before an effect.
+- [x] Actual Browser.close acknowledges before local process exit; preserve cleanup_unconfirmed, wait for real OS exit, and explicitly confirm exact endpoint absence through the existing cleanup API.
+- [x] Fixture validates actual process exit and rejected reconnect, without provider allocation/model/account calls. This is local Chromium evidence, not Cloudflare session retention, host integration, in-flight cancellation or staging acceptance.
