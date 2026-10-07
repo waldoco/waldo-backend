@@ -1175,6 +1175,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
           'alarm',
           'answerJudgmentFromWorker',
           'cancelPlanningTurnFromWorker',
+          'captureCommonMessageFromHost',
           'captureResponsibilityFromWorker',
           'constructor',
           'executePlanningTurnFromWorker',
@@ -4886,4 +4887,11 @@ describe('RunLoopDO trusted invocation convergence', () => {
     ]);
     expect(rows.map((table) => table)).toEqual([[{ run_id: runIds[0] }], [{ run_id: runIds[0] }], [{ run_id: runIds[0] }]]);
   });
+});
+
+it('held common-message host RPC refuses before any signed source lookup by default',async()=>{
+ const stub=env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName('common-held-'+crypto.randomUUID()));
+ await runInDurableObject(stub, async instance => {
+  await expect(instance.captureCommonMessageFromHost({} as never)).rejects.toThrow('common tasks held');
+ });
 });

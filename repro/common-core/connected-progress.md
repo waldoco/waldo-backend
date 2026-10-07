@@ -22,3 +22,9 @@ Validation:
 - Fresh local pgTAP shim: 466 pass with PGTZ=UTC, 12 new mapping/currentness tests. Initial fixture failed current verified-phone WA constraint, fixed; pre-existing health timestamp test requires UTC. Live DB not touched.
 
 Constraints: console-signin.ts untouched; Telegram login/banner/buttons untouched; no probe --live; S0 off; browser activation/production/money/private-material scope unchanged; Dalda owns browser driver, Core shared caller wiring. finishRun overlaps serialized. Existing exact-head CI/review gates still apply. #892 Actions disabled blocker not bypassed.
+
+## Second local checkpoint
+- Common-root source dependency now reuses createTaskSourceScope with Outcome allocation through existing writer. Direct retain/narrowing under another issuer keeps one Outcome; a fresh nonpending new owner instruction allocates another. This dependency is not yet connected to serving caller.
+- Pending widening is preserved across capability recreation. No approval callback applies it from a later reply; execution must recover original admitted request before allocating new task. That recovery is unresolved.
+- Full runtime attempt exceeded 120-second command limit and stopped incomplete. Partial failure was explicit RPC prototype list missing new held signed method, not provider behavior. Updated list and tested default hold denial. Narrow full trusted suite72 passes. Full runtime remains unverified.
+- New direct source5 + existing classifier55 pass. Both worker/integration typechecks pass.

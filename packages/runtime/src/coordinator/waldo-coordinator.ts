@@ -1,3 +1,5 @@
+import { createTaskSourceScope, type OwnerTaskInstruction, type TaskSourceFamily } from '../channels/task-source-scope';
+import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { CommonOwnerAuthority } from '../identity/common-owner-authority';
 import {
   authorityGrantV05Schema,
@@ -461,6 +463,33 @@ export class WaldoCoordinator {
   }
 
   /** Private serving-path admission: the host verifies directory currentness, never fabricates a session. */
+  async commonTaskSourceScope(
+    authority: CommonOwnerAuthority,
+    ownerInput: OwnerTaskInstruction,
+    defaults: readonly TaskSourceFamily[],
+    scope: RunEffectScope,
+    assertCurrent: () => Promise<void>,
+  ) {
+    await assertCurrent();
+    scope.commit(() => this.#storage.transactionSync(() =>
+      this.#identity.admitMessageAuthorityInCurrentTransaction(authority, this.#deps.now())));
+    // Canonical source policy lives at the common root, not at a transport locator.
+    const allocateTask = () => {
+      this.#identity.assertMessageAuthorityInCurrentTransaction(authority);
+      const at = this.#deps.now();
+      this.#outcomes.projections.ensureSnapshotInCurrentTransaction(authority.ownerId, this.#deps.newId('snapshot'), at);
+      return this.#outcomes.captureInCurrentTransaction({ ownerId: authority.ownerId,
+        payload: responsibilityCapturePayloadV02Schema.parse({ userStatement: ownerInput.text }), at,
+        commandId: ownerInput.inputRef, correlationId: ownerInput.inputRef,
+      }).outcome.id;
+    };
+    const fencedScope: RunEffectScope = { ...scope, commit: work => scope.commit(() => this.#storage.transactionSync(work)) };
+    const capability = createTaskSourceScope(this.#storage.sql, `common:${authority.ownerId}`, fencedScope,
+      async () => { await assertCurrent(); this.#identity.assertMessageAuthorityInCurrentTransaction(authority); },
+      ownerInput, defaults, allocateTask);
+    return capability;
+  }
+
   async captureMessageResponsibility(
     input: Readonly<{ requestId: string; commandId: string; correlationId: string; payload: unknown }>,
     authority: CommonOwnerAuthority,

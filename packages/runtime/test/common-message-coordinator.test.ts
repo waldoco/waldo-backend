@@ -33,3 +33,54 @@ it('freshness failure stops capture and a newer global custody receipt fences al
   await expect(coordinator.captureMessageResponsibility(input,{...admitted,authenticatedSubjectRef:'supabase_subject_'+'b'.repeat(64)},async()=>{})).rejects.toThrow();
  });
 });
+
+it('existing source classifier allocates canonical Outcomes once, retains restrictions across a second issuer and recreation',async()=>{
+ const stub=env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName('common-source-'+crypto.randomUUID())) as DurableObjectStub<RunLoopDO>;
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const coordinator=new WaldoCoordinator(state.storage);
+  const scope={runId:'fixture-common-attempt',attempt:'fixture',deadline:Date.now()+30000,signal:new AbortController().signal,admit(){},commit:<T>(work:()=>T)=>state.storage.transactionSync(work)};
+  const first=await coordinator.commonTaskSourceScope(admitted,{inputRef:'input_one',text:'Summarize only supplied notes.'},[],scope,async()=>{});
+  const narrowed=(await first.classify(JSON.stringify({decision:'restrict',sources:[]}),'input_one','Summarize only supplied notes.')).snapshot;
+  expect(narrowed.taskId.startsWith('outcome_')).toBe(true);
+  const second=await coordinator.commonTaskSourceScope({...admitted,provider:'whatsapp',subject:'15550001111',presenceId:'20000000-0000-0000-0000-000000000002',custodyDigest:'c'.repeat(64)}, {inputRef:'input_two',text:'Make it shorter.'},['mail'],scope,async()=>{});
+  const retained=(await second.classify(JSON.stringify({decision:'retain',sources:['mail']}),'input_two','Make it shorter.')).snapshot;
+  expect(retained.taskId).toBe(narrowed.taskId);expect(retained.sources).toEqual([]);
+  expect(state.storage.sql.exec('SELECT count(*) AS n FROM outcomes').one().n).toBe(1);
+  expect(state.storage.sql.exec('SELECT count(*) AS n FROM owner_task_source_scope').one().n).toBe(1);
+ });
+});
+
+it('pending widening survives root policy recreation without treating a later reply as the original task',async()=>{
+ const stub=env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName('common-new-source-'+crypto.randomUUID())) as DurableObjectStub<RunLoopDO>;
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const coordinator=new WaldoCoordinator(state.storage);
+  const scope={runId:'fixture-common-attempt',attempt:'fixture',deadline:Date.now()+30000,signal:new AbortController().signal,admit(){},commit:<T>(work:()=>T)=>state.storage.transactionSync(work)};
+  const first=await coordinator.commonTaskSourceScope(admitted,{inputRef:'input_one',text:'Summarize only supplied notes.'},[],scope,async()=>{});
+  const old=(await first.classify(JSON.stringify({decision:'restrict',sources:[]}),'input_one','Summarize only supplied notes.')).snapshot;
+  const request='Start a new task and read my mail.';
+  const second=await coordinator.commonTaskSourceScope(admitted,{inputRef:'input_two',text:request},['mail'],scope,async()=>{});
+  const waiting=await second.classify(JSON.stringify({decision:'new',sources:['mail'],evidence:request}),'input_two',request);
+  expect(waiting.proposal).toBeDefined();expect(waiting.snapshot.taskId).toBe(old.taskId);
+  const recreated=await coordinator.commonTaskSourceScope(admitted,{inputRef:'input_three',text:'Yes looks good.'},['mail'],scope,async()=>{});
+  const stillWaiting=await recreated.classify(JSON.stringify({decision:'retain',sources:['mail']}),'input_three','Yes looks good.');
+  expect(stillWaiting.snapshot.ready).toBe(false);expect(stillWaiting.snapshot.sources).toEqual([]);
+  // Applying a pending new-task approval needs the original admitted request, not this later reply.
+  // Caller recovery for that source is still unwired: preserve the pending boundary, do not mint from 'Yes'.
+  expect(state.storage.sql.exec('SELECT count(*) AS n FROM outcomes').one().n).toBe(1);
+ });
+});
+
+it('fresh nonpending owner-evidenced task transition allocates a new canonical Outcome rather than transport policy UUID',async()=>{
+ const stub=env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName('common-transition-'+crypto.randomUUID())) as DurableObjectStub<RunLoopDO>;
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const coordinator=new WaldoCoordinator(state.storage);
+  const scope={runId:'fixture-common-attempt',attempt:'fixture',deadline:Date.now()+30000,signal:new AbortController().signal,admit(){},commit:<T>(work:()=>T)=>state.storage.transactionSync(work)};
+  const first=await coordinator.commonTaskSourceScope(admitted,{inputRef:'input_one',text:'Summarize notes.'},['workspace'],scope,async()=>{});
+  const initial=(await first.classify(JSON.stringify({decision:'retain',sources:[]}),'input_one','Summarize notes.')).snapshot;
+  const text='Start a new task in my workspace.';
+  const second=await coordinator.commonTaskSourceScope(admitted,{inputRef:'input_two',text},['workspace'],scope,async()=>{});
+  const fresh=(await second.classify(JSON.stringify({decision:'new',sources:['workspace'],evidence:text}),'input_two',text)).snapshot;
+  expect(fresh.taskId).not.toBe(initial.taskId);
+  expect(state.storage.sql.exec('SELECT user_statement FROM outcomes WHERE id = ?',fresh.taskId).one().user_statement).toBe(text);
+ });
+});
