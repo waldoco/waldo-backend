@@ -1,5 +1,16 @@
 # Engineering fundamentals (standing owner directive, 2026-09-24)
 
+### General browser observation and failure custody
+
+- [ ] Browser actions recheck current owner authority after all awaited observation metadata and immediately before dispatch. Revocation during a final tab-title/CDP read must produce zero effects.
+- [ ] Disconnect failure preserves an existing uncertain action outcome and bounded provider diagnostic, with release failure recorded separately. Entry admission and identity-schema failures return typed bounded rejection rather than arbitrary host error text.
+- [ ] A model-visible select control includes option labels and exact values; dispatch accepts only enabled options present in the current trusted observation.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| 2026-10-07: late observation awaits could outlast admission; disconnect could replace uncertain outcomes; entry admission errors escaped typed failures | general-browser-driver.test.ts final-title revocation, combined action/disconnect failure, malformed identity and entry revocation controls | Driver fakes and installed-SDK fake binding only; ordinary owner caller, model vision and provider retention still require independent acceptance |
+| 2026-10-07: select dispatch needed values omitted from public observations | general-browser-driver.test.ts select-option observation and typed dispatch | Page option labels/values remain external content, never owner approval evidence |
+
 ### Incomplete forget recovery and request retention
 
 - [ ] Retry one owner-local incomplete topic per memory record from durable custody. Retained forget commands remain inert quoted sources and require exact reviewed instruction spans; never exempt a row by a model label or erase only its bare marker. Include every unsaved main/steered request and shared retention projection in both supplied and fresh coverage snapshots, and reject settlement while any projection still contains the topic. Preserve coverage suppliers through episode-index wrappers. Prove restart, partial/mismatched selection, interruption and steering through the actual registered two-argument owner DO, with unchanged unrelated claim provenance and honest host receipts.

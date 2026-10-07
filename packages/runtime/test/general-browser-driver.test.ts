@@ -12,7 +12,7 @@ function harness(controlTag = 'a') {
       goto: async (value: string) => { url = value; calls.push('navigate'); return { status: () => 200 }; },
       evaluate: async (fn: Function, args?: unknown) => {
         if (fn.name !== 'generalPageState') { calls.push(`scroll:${JSON.stringify(args)}`); return; }
-        return { url, title: 'Public documentation', text: changed ? 'Changed by the human' : 'Compare Browser Run sessions and contexts.', width: 1280, height: 720, scrollX: 0, scrollY: 0, elements: [{ selector: 'html > body > a:nth-of-type(1)', tag: controlTag, role: controlTag === 'a' ? 'link' : 'textbox', name: 'Session reuse', href: controlTag === 'a' ? 'https://docs.example/reuse' : '', value, type: controlTag === 'input' ? 'text' : '', disabled: false, selected: false, checked: false, inForm: false }] };
+        return { url, title: 'Public documentation', text: changed ? 'Changed by the human' : 'Compare Browser Run sessions and contexts.', width: 1280, height: 720, scrollX: 0, scrollY: 0, elements: [{ selector: 'html > body > a:nth-of-type(1)', tag: controlTag, role: controlTag === 'a' ? 'link' : 'textbox', name: 'Session reuse', href: controlTag === 'a' ? 'https://docs.example/reuse' : '', value, type: controlTag === 'input' ? 'text' : '', disabled: false, selected: false, checked: false, inForm: false, ...(controlTag === 'select' ? { options: [{ value: 'second', label: 'Second choice', disabled: false, selected: value === 'second' }] } : {}) }] };
       },
       locator: () => ({ click: async () => { calls.push('click'); url = 'https://docs.example/reuse'; }, fill: async (input: string) => { calls.push(`fill:${input}`); value = input; }, selectOption: async (input: string) => { calls.push(`select:${input}`); value = input; }, press: async (input: string) => { calls.push(`press:${input}`); } }),
       screenshot: async () => new Uint8Array([137, 80, 78, 71]), close: async () => { pages.splice(pages.indexOf(p), 1); },
@@ -23,7 +23,7 @@ function harness(controlTag = 'a') {
   const context = { pages: () => [...pages], newPage: async () => page(), route: async (_: string, handler: (route: any) => Promise<void>) => { routeHandler = handler; }, unroute: async () => {}, newCDPSession: async (p: any) => ({ send: async () => ({ targetInfo: { targetId: p.id } }), detach: async () => {} }) };
   const browser = { contexts: () => [context], newContext: async () => { throw Error('disposeOnDetach context would lose tabs'); }, close: async () => { calls.push('release'); }, newBrowserCDPSession: async () => ({ send: async () => { ended = true; } }) };
   const sdk = { acquire: async () => { calls.push('acquire'); return { sessionId: session.providerSessionId }; }, connect: async (_: unknown, options: any) => { expect(options).toEqual({ sessionId: session.providerSessionId, persistent: true }); calls.push('attach'); return browser; }, sessions: async () => ended ? [] : [{ sessionId: session.providerSessionId }] };
-  return { calls, pages, sdk, route: (route: any) => routeHandler!(route), humanChange: () => { changed = true; } };
+  return { calls, pages, sdk, browser, route: (route: any) => routeHandler!(route), humanChange: () => { changed = true; } };
 }
 it('navigates a public page, returns actual image bytes, and retains two tabs across detached owner turns', async () => {
   const f = harness();
@@ -56,6 +56,7 @@ it('selects, presses keys and scrolls without accepting model-authored code', as
   const f = harness('select');
   const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   const first = await driver.navigate(session, 'https://docs.example/index');
+  expect(first.observation.elements[0]).toMatchObject({ options: [{ value: 'second', label: 'Second choice' }] });
   const selected = await driver.act(session, first, { operation: 'select', element_ref: first.observation.elements[0]!.ref, value: 'second' }, async () => {});
   expect(f.calls).toContain('select:second');
   const pressed = await driver.act(session, selected, { operation: 'press', element_ref: selected.observation.elements[0]!.ref, key: 'Tab' }, async () => {});
@@ -120,6 +121,36 @@ it('cleans an allocation if recording or the post-acquire authority check fails'
   const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => { if (recorded) throw Error('expired'); }, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   await expect(driver.start(['docs.example'], 60000, async () => {}, async () => { recorded = true; })).rejects.toBeDefined();
   expect(await f.sdk.sessions()).toEqual([]);
+});
+it('rechecks authority after the final observation await before dispatch', async () => {
+  const f = harness(); let revoked = false, approved = false;
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => { if (revoked) throw Error('PRIVATE_REVOCATION'); }, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(session, 'https://docs.example/index');
+  const originalTitle = f.pages[0].title;
+  f.pages[0].title = async () => { if (approved) revoked = true; return originalTitle(); };
+  await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => { approved = true; })).rejects.toMatchObject({ code: 'rejected' });
+  expect(f.calls).not.toContain('click');
+});
+it('keeps an uncertain action outcome when disconnect also fails', async () => {
+  const f = harness();
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(session, 'https://docs.example/index');
+  f.pages[0].locator = () => ({ click: async () => { throw Error('PRIVATE_ACTION_ERROR'); } });
+  f.browser.close = async () => { throw Error('PRIVATE_DISCONNECT_ERROR'); };
+  await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'outcome_uncertain', release_failed: true });
+});
+it('normalizes malformed identity and entry revocation without leaking raw errors', async () => {
+  const f = harness();
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => { throw Error('PRIVATE_AUTHORITY_ERROR'); }, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  await expect(driver.observe(session)).rejects.toMatchObject({ code: 'rejected', message: 'browser_rejected' });
+  await expect(driver.observe({ ...session, generation: 'invalid' } as never)).rejects.toMatchObject({ code: 'rejected', message: 'browser_rejected' });
+  expect(f.calls).toEqual([]);
+});
+it('does not count a denied page as useful provider verification', async () => {
+  const f = harness();
+  f.pages[0].goto = async () => ({ status: () => 403 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  await expect(driver.navigate(session, 'https://docs.example/index')).rejects.toMatchObject({ code: 'page_unavailable', diagnostic: { status: 403 } });
 });
 it('rejects redirect chains before an unchecked redirected request', async () => {
   const f = harness();
