@@ -11,6 +11,13 @@ import { pathToFileURL } from 'node:url';
 const require = createRequire(import.meta.url), { chromium } = require(process.argv[2] ?? 'playwright');
 const executablePath = process.argv[3]; if (!executablePath) throw Error('Local Chromium executable required');
 const { cloudflareGeneralBrowser } = await import(process.argv[4] ? pathToFileURL(process.argv[4]).href : '../../src/channels/cloudflare-general-browser.ts');
+const probeDeadline = Date.now() + 60000;
+async function withinHarness(operation) {
+  const remaining = probeDeadline - Date.now(); if (remaining <= 0) throw Error('Local fixture deadline exceeded');
+  let timer;
+  try { return await Promise.race([operation(), new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Local fixture deadline exceeded')), remaining); })]); }
+  finally { clearTimeout(timer); }
+}
 const requests = [], connections = [], profile = await mkdtemp(join(tmpdir(), 'waldo-local-browser-session-'));
 const server = createServer((request, response) => {
   requests.push(request.url); response.setHeader('content-type', 'text/html');
@@ -19,18 +26,20 @@ const server = createServer((request, response) => {
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let processHandle, processExit, observer;
+// This watchdog controls only the synthetic local process, not provider/task budgets.
+const watchdog = setTimeout(() => processHandle?.kill('SIGKILL'), Math.max(0, probeDeadline - Date.now()));
 try {
-  processHandle = spawn(executablePath, ['--headless', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  processHandle = spawn(executablePath, ['--headless', '--disable-background-networking', '--disable-component-update', '--disable-default-apps', '--disable-extensions', '--disable-sync', '--metrics-recording-only', '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
   processExit = new Promise(resolve => processHandle.once('exit', resolve));
-  await new Promise((resolve, reject) => {
+  await withinHarness(() => new Promise((resolve, reject) => {
     let stderr = '';
     const ready = data => { stderr += data.toString(); if (stderr.includes('DevTools listening on ws://')) { processHandle.stderr.off('data', ready); resolve(); } };
     processHandle.stderr.on('data', ready); processHandle.once('error', reject); processHandle.once('exit', () => reject(Error('Local Chromium exited before CDP readiness')));
-  });
+  }));
   const [port, socketPath] = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).trim().split('\n');
   const endpoint = `http://127.0.0.1:${port}`, endpointSocket = `ws://127.0.0.1:${port}${socketPath}`, origin = `http://127.0.0.1:${server.address().port}`;
   const providerSessionId = 'local-owned-CDP', now = Date.now(); let admitted = true;
-  const session = { id: 'local-owner-session', ownerId: 'owner-a', provider: 'cloudflare_playwright', providerSessionId, contextHandle: null, mode: 'public', state: 'active', generation: 1, expiresAt: now + 60000, updatedAt: now };
+  const session = { id: 'local-owner-session', ownerId: 'owner-a', provider: 'cloudflare_playwright', providerSessionId, contextHandle: null, mode: 'public', state: 'active', generation: 1, expiresAt: probeDeadline, updatedAt: now };
   const sessions = async () => {
     try { const response = await fetch(endpoint + '/json/version', { signal: AbortSignal.timeout(1000) }); const version = await response.json(); return response.ok && version.webSocketDebuggerUrl === endpointSocket ? [{ sessionId: providerSessionId }] : []; }
     catch { return []; }
@@ -38,7 +47,7 @@ try {
   const sdk = {
     connect: async (_binding, options) => {
       assert.deepEqual(options, { sessionId: providerSessionId, persistent: true });
-      const connection = await chromium.connectOverCDP(endpoint); connections.push(connection);
+      const connection = await withinHarness(() => chromium.connectOverCDP(endpoint)); connections.push(connection);
       assert.equal(connection.contexts().length, 1); return connection;
     }, sessions,
     acquire: async () => { throw Error('No allocation or replacement is allowed'); },
@@ -61,7 +70,7 @@ try {
   const acted = await driver.act(session, other, { operation: 'click', element_ref: other.observation.elements.find(element => element.name === 'Continue').ref }, async () => {});
   useful(acted, 'Completed local button action'); await detached();
   const fresh = await driver.observe(session, first.observation.tab_ref);
-  observer = await chromium.connectOverCDP(endpoint);
+  observer = await withinHarness(() => chromium.connectOverCDP(endpoint));
   const retained = observer.contexts()[0].pages().find(page => page.url() === origin + '/one');
   await retained.evaluate(() => { document.querySelector('h1').textContent = 'Useful public tab One changed by local human'; });
   await observer.close(); observer = undefined;
@@ -76,14 +85,14 @@ try {
   // absence confirmation after the actual operating-system process exit event.
   const physicalClosure = processExit;
   let initialCleanupConfirmed = true;
-  try { await driver.terminate(session); }
+  try { await withinHarness(() => driver.terminate(session)); }
   catch (error) { assert.equal(error.code, 'cleanup_unconfirmed'); initialCleanupConfirmed = false; }
-  await physicalClosure;
+  await withinHarness(() => physicalClosure);
   assert.deepEqual(await sessions(), []);
-  await driver.terminate(session);
+  await withinHarness(() => driver.terminate(session));
   assert.deepEqual(await sessions(), []); assert.equal(processHandle.exitCode, 0);
   await assert.rejects(chromium.connectOverCDP(endpoint, { timeout: 1000 }));
   assert(connections.every(connection => !connection.isConnected()));
   assert.deepEqual(requests, ['/one', '/two']);
   process.stdout.write(JSON.stringify({ localOnly: true, provider: false, realCDPDisconnectReconnect: true, retainedTabs: 2, retainedInput: true, usefulTextAndPng: true, secondTurnObservationAction: true, staleRejected: true, authorityCancellationBeforeEffect: true, exactPhysicalClosure: true, actualProcessExit: true, initialCleanupConfirmed, explicitAbsenceConfirmation: true, connections: connections.length, screenshotBytes: [first.image.bytes.length, second.image.bytes.length, acted.image.bytes.length] }) + '\n');
-} finally { await observer?.close().catch(() => {}); if (processHandle && processHandle.exitCode === null) { processHandle.kill('SIGTERM'); await processExit; } await new Promise(resolve => server.close(resolve)); await rm(profile, { recursive: true, force: true }); }
+} finally { clearTimeout(watchdog); if (processHandle?.pid && processHandle.exitCode === null) { processHandle.kill('SIGKILL'); await processExit; } await observer?.close().catch(() => {}); await new Promise(resolve => server.close(resolve)); await rm(profile, { recursive: true, force: true }); }
