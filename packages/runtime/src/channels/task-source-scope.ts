@@ -185,6 +185,14 @@ export const taskSourceAllowed = (snapshot: TaskSourceSnapshot, handler: Readonl
   if (handler.mutates_state || handler.autonomy_gated || ['delegate_task', 'skills_list', 'skills_load', 'skills_install', 'skills_disable', ...OWNER_OWN_LISTS].includes(handler.name)) return true;
   return (snapshot.ready && snapshot.sources.includes('local')) || unreadyDefault('local');
 };
+// Admission owns default-read and no-source exceptions; diagnostics must not contradict them.
+export const taskSourceMissing = (snapshot: TaskSourceSnapshot, handler: Parameters<typeof taskSourceAllowed>[1], args?: unknown): readonly TaskSourceFamily[] => {
+  if (taskSourceAllowed(snapshot, handler, args)) return [];
+  const family = taskSourceFamily(handler, args);
+  if (family) return [family];
+  if (handler.requires_connector) return TASK_SOURCE_FAMILIES.filter(name => !snapshot.ready || !snapshot.sources.includes(name));
+  return ['local'];
+};
 export const taskSourcePrompt = (snapshot: TaskSourceSnapshot): string => !snapshot.ready
   ? `Current owner task source scope is unresolved.${snapshot.defaults?.length ? ` Read-only sources stay available (edits to existing files and source-dependent actions wait until the task is settled): ${snapshot.defaults.join(', ')}.` : ''} Do not read other connected or retained sources. Only ask the owner to clarify the task if you cannot proceed with what is available; current supplied request data remains usable. If a source confirmation card is pending, wait for its owner decision; ordinary clarification text does not approve it.`
   : snapshot.sources.length === 0

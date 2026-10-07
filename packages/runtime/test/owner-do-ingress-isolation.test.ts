@@ -427,6 +427,9 @@ describe('real owner-DO ingress in a sealed test world', () => {
     const snapshot = () => runInDurableObject(doStub(81101), async (_instance, state) => state.storage.sql.exec<{ sources_json: string; revision: number }>('SELECT sources_json, revision FROM owner_task_source_scope').one());
     const before = await snapshot(); expect(before.sources_json).toBe('[]');
     expect(JSON.stringify(modelInputs)).toContain('outside the current owner task');
+    expect(JSON.stringify(modelInputs)).toContain("not in this task's sources");
+    expect(JSON.stringify(modelInputs)).toContain('within existing permissions');
+    expect(JSON.stringify(modelInputs)).toContain("A pending source confirmation still needs the owner's decision; ordinary task text does not approve it.");
     taskDecision = { decision: 'retain', sources: ['mail', 'drive'] };
     await send(81101, 'Keep waiting for the current source decision.', update + 7);
     expect(await snapshot()).toEqual(before);

@@ -1,7 +1,7 @@
 import { OWNER_REQUEST_HOP } from './harness';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import type { OwnerSkillCapability } from '../skills/curated-host';
-import { TASK_SOURCE_INSTRUCTION, TASK_SOURCE_SCHEMA, taskSourceAllowed, taskSourceRequired, taskSourcePrompt, type OwnerTaskSourceScope, type TaskSourceSnapshot, type TaskSourceFamily } from './task-source-scope';
+import { TASK_SOURCE_INSTRUCTION, TASK_SOURCE_SCHEMA, taskSourceAllowed, taskSourceMissing, taskSourceRequired, taskSourcePrompt, type OwnerTaskSourceScope, type TaskSourceSnapshot, type TaskSourceFamily } from './task-source-scope';
 import { asciiLiteralIncludes, isPlainForgetText, forgetSnapshot, forgetSourceBatch, selectedForgetResult, SELECTIVE_FORGET_INSTRUCTION, SELECTIVE_FORGET_SCHEMA, SELECTIVE_FORGET_SPAN_INSTRUCTION, mergeSecondSpanPass, unspannedEpisodeRows, type ForgetSource } from '../memory/selective-forget';
 import { ownerForgetTopic, hasForgetIntent } from '../memory/claims';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
@@ -514,7 +514,7 @@ export const createOwnerResponder = (
           const admittedSteering = sourceSteeringRevision;
           const sourceRead = taskSourceRequired(handler, args);
           if (interactiveSource && requireTaskScope && sourceRead) {
-            if (!sourceScope || !admittedSource || !taskSourceAllowed(admittedSource, handler, args)) return { ok: false, code: 'rejected', error: 'This source is outside the current owner task. Use supplied task data or the owner confirmation.', source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
+            if (!sourceScope || !admittedSource || !taskSourceAllowed(admittedSource, handler, args)) return { ok: false, code: 'rejected', error: `This source is outside the current owner task${admittedSource ? `: ${taskSourceMissing(admittedSource, handler, args).join(', ') || 'its scope'} not in this task's sources. Starting a new task or changing this one can update its source scope within existing permissions. A pending source confirmation still needs the owner's decision; ordinary task text does not approve it.` : '.'} Use supplied task data or the owner confirmation.`, source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
             if (control.revision() !== admittedSteering) return { ok: false, code: 'rejected', error: 'New owner direction must be admitted before reading this source.', source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
             await sourceScope.assertSame(admittedSource);
           }
