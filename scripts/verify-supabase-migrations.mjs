@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { canonicalHistoryVersions } from './canonical-history-versions.mjs';
 
 const expectedMigrations = [
   '20260709171312_0001_identity.sql',
@@ -59,8 +60,7 @@ if (JSON.stringify(migrations) !== JSON.stringify(expectedMigrations)) {
 }
 
 const historyAssertion = readFileSync(new URL('../supabase/fixtures/assert-canonical-migration-history.sql', import.meta.url), 'utf8');
-const expectedBlock = /expected constant text\[\] := array\[([\s\S]*?)\];/.exec(historyAssertion)?.[1];
-const historyVersions = [...(expectedBlock ?? '').matchAll(/'(\d{14})'/g)].map(match => match[1]);
+const historyVersions = canonicalHistoryVersions(historyAssertion);
 if (JSON.stringify(historyVersions) !== JSON.stringify(expectedMigrations.map(name => name.slice(0, 14)))) {
   throw new Error('SQL canonical migration history assertion drifted from source list');
 }

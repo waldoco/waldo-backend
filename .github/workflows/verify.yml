@@ -115,6 +115,7 @@ jobs:
 
       - name: Verify canonical migration ordering
         run: |
+          node --test scripts/canonical-history-versions.test.mjs
           node scripts/verify-supabase-migrations.mjs
           supabase migration list --local
           supabase db query --local --file supabase/fixtures/assert-canonical-migration-history.sql

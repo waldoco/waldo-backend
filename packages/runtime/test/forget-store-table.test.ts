@@ -33,7 +33,7 @@ const TABLES: Record<string, Row> = {
   exempt_telemetry: exempt('counts'), subkind_state: exempt('counts and times'), loop_kill_flags: exempt('flag keys'), loop_progress: exempt('counts'),
   loop_progress_params: exempt('parameter hashes'), loop_observations: exempt('tool name and hashes'),
   local_ingress_rate: exempt('rate buckets'), responsibility_ingress_rate: exempt('rate buckets'), owner_roots: exempt('root key and owner id'),
-  common_message_custody: exempt('presence/owner IDs and authority/revision digests only; no owner text'),
+  common_message_custody: gap('retained authority metadata: owner/presence IDs and digest derived from directory, subject (including WhatsApp phone), locator and revision; no message text, but personal-derived identity retention across content-forget is not a justified unqualified exemption; routing authority is not erased by this inventory'),
   execution_workunit_down_guard: exempt('temporary rollback guard containing only an allowed integer; dropped in the same migration'),
   execution_continuation_down_guard: exempt('temporary rollback guard containing only an allowed integer; dropped in the same migration'),
   owner_event_state: exempt('cursor'), presence_registrations: exempt('ids and state'), presence_sessions: exempt('session ids and times'),
