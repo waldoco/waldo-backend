@@ -57,9 +57,9 @@ import { b64url, buildMime, sha256Hex, googleAccountCandidates, GoogleError, Goo
 import { ProxyIntentError } from '../src/connectors/proxy-intent';
 import { GOOGLE_FEATURE_SCOPES } from '../src/connectors/google';
 
-const mailFixture = async (options: { sendError?: Error; found?: boolean; account?: typeof account; readError?: Error; deliveryError?: boolean } = {}) => {
+const mailFixture = async (options: { sendError?: Error; found?: boolean; account?: typeof account; readError?: Error; deliveryError?: boolean; seenIds?: string[] } = {}) => {
  const storage=sql(); let sends=0, lookups=0, sequence=0, delivered=0;
- const client={account:options.account??account,sendRaw:async()=>{sends++;if(options.sendError)throw options.sendError;return {message_id:'sent-1'};},findSentByMessageId:async()=>{lookups++;if(options.readError)throw options.readError;return options.found??true;}} as unknown as GoogleClient;
+ const client={account:options.account??account,sendRaw:async()=>{sends++;if(options.sendError)throw options.sendError;return {message_id:'sent-1'};},findSentByMessageId:async(messageId:string)=>{lookups++;options.seenIds?.push(messageId);if(options.readError)throw options.readError;return options.found??true;}} as unknown as GoogleClient;
  const deps={owner:42,call:async(method:string,body:object)=>{if(method==='sendMessage'&&(body as {text:string}).text.includes('Gmail confirmed')){if(options.deliveryError)throw new Error('fixture channel unavailable');delivered++;}return {};},google:async()=>client,newId:()=>String(++sequence),now:()=>1000,timezone:'UTC',log:()=>{}};
  const raw=b64url(new TextEncoder().encode(buildMime({to:['peer@example.test'],subject:'Topic',body:'First reply',messageId:'<fixture@waldo-send>'})));
  const payload={to:['peer@example.test'],subject:'Topic',body:'First reply',connection_id:account.connection_id,account_email:account.email,message_id:'<fixture@waldo-send>',raw,digest:await sha256Hex(raw)};
@@ -205,7 +205,7 @@ it('bounded recovery advances more than eight unresolved sends even with a fixed
   const binding_digest=await sha256Hex(JSON.stringify(payload));
   f.storage.exec("INSERT INTO ledger (id,kind,status,summary,payload_json,created_at,decided_at) VALUES (?,'email_send','uncertain','Backlog fixture',?,1000,1000)",id,JSON.stringify({...payload,binding_digest}));
  }
- const seen:string[]=[];f.client.findSentByMessageId=async id=>{seen.push(id);return false;};
+ const seen:string[]=[];f.options.seenIds=seen;
  await f.restart().reconcileEmails();expect(seen).toHaveLength(8);
  await f.restart().reconcileEmails();expect(new Set(seen).size).toBe(11);
  expect(f.desk.ledger([])).toContain(`${f.id}: Gmail outcome unconfirmed`);

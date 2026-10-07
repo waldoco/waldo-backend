@@ -51,7 +51,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 - Mail reads, reply preparation and approved sends retain the same explicit owner connection. Account health changes, revoked scopes and a missing selected account never select a different sender. Cover common admission and mail-only task scope, including provider header reads under pasted-only restrictions.
 - Claim email approval durably before any await; freeze sender, recipients, body, thread and exact MIME. Cover concurrent callbacks, modified payload, old-card Modify, interruption and desk recreation.
-- Gmail acknowledgement is not readback. Confirm the exact RFC Message-ID and SENT label, persist provider IDs and channel delivery separately, and retain uncertainty when lookup is empty or unavailable. Recovery reconciles without issuing another send.
+- Gmail acknowledgement is not readback. Confirm the exact RFC Message-ID and SENT label, persist provider IDs and channel delivery separately, and retain uncertainty when lookup is empty or unavailable. Recovery reconciles without issuing another send. Exclude completed receipts before bounded selection, rotate unfinished checks durably, and keep old uncertainty visible even after newer completed history.
 
 ### Idempotency and retries
 - Sign-in retries retain escaped email/contact/invite details only in form responses, never OTP values in restored pages or storage. Test send refusals, edit-before-resend, repeated submits, history restoration and explicit stop-waiting recovery; interrupted requests may already have completed.
