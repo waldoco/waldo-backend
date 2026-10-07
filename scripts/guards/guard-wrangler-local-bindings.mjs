@@ -71,7 +71,15 @@ for (const [envName, envCfg] of Object.entries(cfg?.env ?? {})) {
 // 4. The staging browser binding stays OFF in source until the network-side block is proven
 //    (owner decision 2026-10-06, S0 live test). An enabled binding here ships on the next
 //    Workers Builds promote. Turn it on only in the PR that records a passing S0 run.
-if (staging?.browser !== undefined) bad.push('env.staging must not bind a browser until the S0 network-block test passes');
+// The record is the checked-in result of the S0 run on the throwaway env.s0 worker.
+let s0Record;
+try { s0Record = JSON.parse(readFileSync(path.replace(/wrangler\.jsonc$/, 's0-result.json'), 'utf8')); } catch { /* none recorded */ }
+const s0Passed = s0Record?.passed === true && s0Record?.allowedLoaded === true && s0Record?.terminated === true
+  && Array.isArray(s0Record?.probes) && s0Record.probes.length >= 3 && s0Record.probes.every((p) => p?.reached === false) && s0Record?.worker === 'waldo-s0-staging';
+if (staging?.browser !== undefined && !s0Passed) bad.push('env.staging must not bind a browser until the S0 network-block test passes and packages/runtime/s0-result.json records it');
+// env.s0 is the throwaway test worker: it may bind only a browser, never owner state.
+const s0 = cfg?.env?.s0;
+if (s0) for (const k of ['durable_objects', 'r2_buckets', 'kv_namespaces', 'd1_databases', 'queues', 'services', 'ai', 'vectorize', 'assets']) if (s0[k] !== undefined) bad.push(`env.s0 must not bind ${k}`);
 
 if (bad.length) {
   process.stderr.write(`guard-wrangler-local-bindings: ${bad.join('; ')}\n`);
