@@ -96,6 +96,7 @@ export type OwnerResponderBinding = Readonly<{
       composition: Extract<import('../context-composer/types').ContextCompositionResult,{ok:true}>, maxProviderTurns:number):Promise<void>;
     assertCurrent():Promise<void>;
     settle(ref:string,text:string):Promise<void>;
+    finalIntent(): NonNullable<import('./telegram-final-outbox').FinalRecord['commonExecution']>;
     cancel():Promise<void>;
     provider(request:import('../llm/provider').LLMGatewayRequest,
       issue:()=>Promise<import('@waldo/contracts').AdapterResult<import('@waldo/contracts').LLMResponse>>):Promise<import('@waldo/contracts').AdapterResult<import('@waldo/contracts').LLMResponse>>;

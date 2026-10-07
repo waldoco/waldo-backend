@@ -320,11 +320,35 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return result;
       },
       cancel:async()=>{if(started)await invoke('cancel');},
+      finalIntent:()=>{if(!started||!request)throw Error('common execution not started');return {request};},
       settle:async(ref:string,text:string)=>{if(!started)throw Error('common execution not started');await invoke('settle',{ref,digest:`sha256:${await sha256Hex(text)}`});},
       allows:(tool:string)=>started&&request?.tools.includes(tool)===true,
     };
     this.activeCommonExecution=execution;
     return execution;
+  }
+
+  private async reconcileCommonFinal(final:FinalRecord):Promise<void> {
+    if(!final.commonExecution || final.commonExecution.settled)return;
+    if(!final.inbox || !this.env.WALDO_ROUTER_HMAC_SECRET || !this.env.RUN_LOOP_DO ||
+      final.ownerSubject!==this.ctx.storage.kv.get<string>('telegram_subject') || final.doName!==this.ctx.storage.kv.get<string>('do_name') ||
+      this.ctx.storage.kv.get<boolean>('telegram_unlinked') || this.env.TELEGRAM_OWNER_DO?.idFromName(final.doName).toString()!==this.ctx.id.toString())throw Error('common final binding unavailable');
+    const row=(await this.inbox.records()).find(row=>row.id===final.inbox!.id);
+    if(!row || row.runId!==final.inbox.runId || row.attempt!==final.inbox.attempt || row.subject!==final.ownerSubject || row.doName!==final.doName)throw Error('common final occurrence unavailable');
+    const directory=commonOwnerAuthority(this.env);const authority=await directory.resolve('telegram',row.subject,row.doName);
+    if(!authority)throw Error('common final owner unavailable');
+    const ingress=await signCommonMessageIngress(this.env.WALDO_ROUTER_HMAC_SECRET,{provider:'telegram',subject:row.subject,doName:row.doName,physicalDoId:this.ctx.id.toString(),occurrenceId:row.id,text:'Read back the committed physical final for this occurrence.',at:Math.floor(Date.now()/1000)});
+    const request=await signCommonExecutionRequest(this.env.WALDO_ROUTER_HMAC_SECRET,ingress,{...final.commonExecution.request,operation:'settle',result:{ref:`final_${row.updateId}`,digest:`sha256:${await sha256Hex(final.payload.text)}`}});
+    const rootHash=await sha256Hex(`waldo-owner-root\0${authority.ownerId}`);
+    const root=this.env.RUN_LOOP_DO.get(this.env.RUN_LOOP_DO.idFromName(`owner-root:sha256:${rootHash}`));
+    await root.commonExecutionFromHost(ingress,request);
+    await directory.assertCurrent(authority);
+    this.ctx.storage.transactionSync(()=>{
+      const current=this.setup().finalOutbox.records();const stored=current.find(value=>value.id===final.id);
+      if(this.ctx.storage.kv.get<string>('telegram_subject')!==row.subject || this.ctx.storage.kv.get<string>('do_name')!==row.doName || this.ctx.storage.kv.get<boolean>('telegram_unlinked'))throw Error('common final owner changed');
+      if(!stored || stored.digest!==final.digest || stored.payload.text!==final.payload.text || JSON.stringify(stored.commonExecution)!==JSON.stringify(final.commonExecution))throw Error('common final changed');
+      stored.commonExecution!.settled=true;this.ctx.storage.kv.put('telegram_final_outbox_v1',current);
+    });
   }
 
   private closeRunAtomic(run: InboxRecord, reason: string, awaitingDelivery = false): void {
@@ -1129,6 +1153,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       await ready;
       await finalOutbox.maintain();
       // Reconcile finals before quarantining recovered claims with committed payloads.
+      for(const final of finalOutbox.records())if(final.commonExecution&&!final.commonExecution.settled) {
+        try { await this.reconcileCommonFinal(final); } catch { console.error('common final settlement unresolved'); }
+      }
       const finals = finalOutbox.records();
       const protectedAttempts = new Set(this.liveAttempts);
       for (const final of finals) if (final.inbox) {
@@ -1150,7 +1177,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (selected === 0) { try { await this.drainInbox(); } finally { await scheduler.rearm(); } return; }
       if (selected === 1) {
         try { await finalOutbox.drain({
-          allowed: async r => (!(r.mailFollowup || r.calendarPrep) || retainedRecallAvailable()) && r.payload.chat_id === owner && r.ownerSubject === String(owner)
+          allowed: async r => (!r.commonExecution || r.commonExecution.settled===true) && (!(r.mailFollowup || r.calendarPrep) || retainedRecallAvailable()) && r.payload.chat_id === owner && r.ownerSubject === String(owner)
             && (!r.bot || r.bot === this.env.TELEGRAM_BOT_TOKEN?.split(':')[0])
             && r.doName === (this.ctx.storage.kv.get<string>('do_name') ?? '')
             && this.ctx.storage.kv.get<boolean>('telegram_unlinked') !== true
@@ -1158,6 +1185,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             && (!r.calendarPrep || await calendarPrepCurrent(r.calendarPrep))
             && heartbeatEligible(r, this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', Date.now()),
           defer: async r => {
+            if(r.commonExecution&&!r.commonExecution.settled)return Date.now()+30_000;
             // Frozen source-derived outputs cannot replay retained facts while coverage is unproved.
             // Keep bytes and transport state intact; current owner replies use a separate lane.
             if ((r.mailFollowup || r.calendarPrep) && !retainedRecallAvailable()) return Math.min(Date.now() + 10 * 60_000, r.expiresAt ?? r.createdAt + 86400000);
@@ -1932,7 +1960,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (probeCapture.current !== null) { await api.sendMessage(payload); return; }
         const captured = this.activeInbox;
         if (turn.runScope && (!captured || captured.runId !== turn.runScope.runId || captured.attempt !== turn.runScope.attempt || captured.updateId !== turn.updateId)) throw new ClosedRunError();
-        const input = { id: captured ? `turn:${captured.id}` : `turn:${turn.updateId}`, trace: ownerTurnTrace(channel, turn.updateId), payload: { ...payload, text: redactSecretUrls(payload.text).text },
+        const input = { ...(this.activeCommonExecution?{commonExecution:this.activeCommonExecution.finalIntent()}:{}), id: captured ? `turn:${captured.id}` : `turn:${turn.updateId}`, trace: ownerTurnTrace(channel, turn.updateId), payload: { ...payload, text: redactSecretUrls(payload.text).text },
           ...(captured?.runId && captured.attempt ? { inbox: { id: captured.id, runId: captured.runId, attempt: captured.attempt } } : {}),
           receiptUrls: [...(turnReceiptUrls.get(ownerTurnTrace(channel, turn.updateId)) ?? [])],
           ownerSubject: String(owner), doName: identity.get<string>('do_name') ?? '',
@@ -1943,7 +1971,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           work(); this.closeRunAtomic(captured, 'final_committed', true);
         }));
         else await finalOutbox.enqueue(input);
-        await this.activeCommonExecution?.settle(`final_${turn.updateId}`,input.payload.text);
+        const committed=finalOutbox.records().find(row=>row.id===input.id);
+        if(committed?.commonExecution)await this.reconcileCommonFinal(committed);
         turnReceiptUrls.delete(ownerTurnTrace(channel, turn.updateId));
         await scheduler.rearm();
       } } : {}),

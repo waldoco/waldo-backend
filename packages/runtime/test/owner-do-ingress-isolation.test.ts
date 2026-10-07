@@ -1102,7 +1102,20 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
       expect(state.storage.sql.exec('SELECT revision FROM owner_task_source_scope').one().revision).toBe(2);
       expect(state.storage.sql.exec('SELECT count(*) AS n FROM outcomes').one().n).toBe(1);
     });
-    await evictDurableObject(root);
+    // Seed only a lost host ACK for an already committed root settlement, not a new provider effect.
+    const replyCount=modelInputs.filter(body=>JSON.stringify(body).includes('Approval delivery: native_buttons')).length;
+    await runInDurableObject(doStub(81105),async(_instance,state)=>{
+      const finals=state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!;
+      const final=finals.find(row=>row.inbox?.id.endsWith(':997001'))!;
+      expect(final.commonExecution?.settled).toBe(true);delete final.commonExecution!.settled;
+      state.storage.kv.put('telegram_final_outbox_v1',finals);await state.storage.deleteAlarm();
+    });
+    await evictDurableObject(doStub(81105));await evictDurableObject(root);
+    await runInDurableObject(doStub(81105),async(instance,state)=>{
+      await instance.alarm();
+      expect(state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!.find(row=>row.inbox?.id.endsWith(':997001'))?.commonExecution?.settled).toBe(true);
+    });
+    expect(modelInputs.filter(body=>JSON.stringify(body).includes('Approval delivery: native_buttons')).length).toBe(replyCount);
     await send(81105,'Make that checklist shorter without changing sources.',997002);
     await runInDurableObject(root,(_instance,state)=>{
       expect(state.storage.sql.exec('SELECT id FROM outcomes').toArray()).toEqual([{id:firstTask}]);

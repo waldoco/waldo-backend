@@ -18,6 +18,8 @@ export type FinalRecord = {
   receiptUrls?: string[]; ownerSubject: string; doName: string; status: 'pending' | 'attempting' | 'delivered' | 'quarantined' | 'blocked';
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; deliveredAt?: number; reason?: string;
   inbox?: { id: string; runId: string; attempt: string };
+  // Host-owned frozen settlement intent, committed with the physical final.
+  commonExecution?: { request: Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>; settled?: boolean };
   heartbeat?: HeartbeatReceipt;
   mailFollowup?: MailFollowupReceipt;
   calendarPrep?: CalendarPrepReceipt;
