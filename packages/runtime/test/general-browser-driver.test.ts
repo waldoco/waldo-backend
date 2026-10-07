@@ -270,3 +270,12 @@ it('bounds normal retained-browser detach and reports release uncertainty withou
  const result=await Promise.race([driver.navigate(session,'https://docs.example/index').then(()=> 'image',error=>({code:error.code,release_failed:error.release_failed})),new Promise(done=>setTimeout(()=>done('hung'),70))]);
  expect(result).toEqual({code:'provider_unavailable',release_failed:true});expect(f.calls).not.toContain('acquire');
 });
+
+it.each(['cdp','send','absence'])('attempts release for already-held attachment on %s timeout',async phase=>{
+ const f=harness();const never=()=>new Promise<any>(()=>{});let lists=0;
+ if(phase==='cdp')f.browser.newBrowserCDPSession=never;
+ if(phase==='send')f.browser.newBrowserCDPSession=async()=>({send:never});
+ if(phase==='absence'){const original=f.sdk.sessions;f.sdk.sessions=async()=>++lists===1?original():never();}
+ const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>1,cleanupTimeoutMs:20,admit:async()=>{},authorizeRequest:async()=>false,maxScreenshotBytes:1024});
+ await expect(driver.terminate({...session,expiresAt:1})).rejects.toMatchObject({code:'cleanup_unconfirmed'});expect(f.calls).toContain('release');expect(f.calls).not.toContain('acquire');
+});

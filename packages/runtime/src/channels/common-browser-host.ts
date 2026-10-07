@@ -64,7 +64,7 @@ export function commonBrowserHost(options:Readonly<{
     images.push({kind:'image',filename:`browser-${images.length+1}.png`,mime_type:observed.image.mime_type,data_base64:btoa(binary)});
     record={...record,tabs:observed.observation.tabs.map(tab=>({url:tab.url,ref:tab.ref}))};save(record!,storageKey);
     return {ok:true,data:{...observed.observation,text:observed.observation.text.slice(0,8000),elements:observed.observation.elements.slice(0,64),tabs:observed.observation.tabs.slice(0,8)},source_taint:'external'};
-   }catch(error){return {ok:false,code:'rejected',...(error instanceof GeneralBrowserError?{browser_code:error.code,...(error.diagnostic?{diagnostic:error.diagnostic}:{}),...(error.cleanup_failed?{cleanup_failed:true}:{}),...(error.release_failed?{release_failed:true}:{})}:{}),error:'Public browser read is unavailable or uncertain. Inspect retained task state before retrying; no successful read is claimed.',source_taint:'external'};}
+   }catch(error){return {ok:false,code:'rejected',error:'Public browser read is unavailable or uncertain. Inspect retained task state before retrying; no successful read is claimed.'+(error instanceof GeneralBrowserError?' Browser diagnostic: '+JSON.stringify({browser_code:error.code,...(error.diagnostic?{diagnostic:error.diagnostic}:{}),...(error.cleanup_failed?{cleanup_failed:true}:{}),...(error.release_failed?{release_failed:true}:{})}):''),source_taint:'external'};}
   }};
  return {handler,attachments:()=>[...images],async cancel(){images=[];const task=snapshot();const record=options.storage.kv.get<Record>(key(task.taskId));if(!record)return;
   save({...record,cleanup:'pending'},key(task.taskId));

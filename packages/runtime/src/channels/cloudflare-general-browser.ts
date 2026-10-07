@@ -191,7 +191,7 @@ export function cloudflareGeneralBrowser(options: Options) {
       if ((await step(() => sdk.sessions(binding))).some(row => row.sessionId === id)) throw new GeneralBrowserError('cleanup_unconfirmed');
     } catch { throw new GeneralBrowserError('cleanup_unconfirmed'); }
     finally {
-      if (browser) await step(async () => { try { await browser!.close(); } catch { /* physical readback remains authoritative */ } });
+      if (browser) await cleanup(release => release(async () => { try { await browser!.close(); } catch { /* physical readback remains authoritative */ } }));
     }
   });
   return {

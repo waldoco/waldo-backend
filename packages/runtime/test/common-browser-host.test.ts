@@ -75,5 +75,13 @@ for(const mode of ['cancel','maintain'] as const)it(`delayed ${mode} cleanup can
 it('preserves bounded provider failure diagnostic through common caller without provider text',async()=>{
  const f=fixture();const {GeneralBrowserError}=await import('../src/channels/cloudflare-general-browser');
  commonBrowserFixture.onAcquire=()=>{throw new GeneralBrowserError('provider_unavailable',{status:402,code:'usage_limit',request_id:'request-123'});};
- expect(await f.host().handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx)).toMatchObject({ok:false,code:'rejected',diagnostic:{status:402,code:'usage_limit',request_id:'request-123'},browser_code:'provider_unavailable'});
+ const result=await f.host().handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx);expect(result).toMatchObject({ok:false,code:'rejected',source_taint:'external'});expect(JSON.stringify(result)).toContain('402');expect(JSON.stringify(result)).toContain('usage_limit');expect(JSON.stringify(result)).toContain('request-123');
+});
+
+it('registered dispatcher and post hooks preserve provider402 to model-bound result',async()=>{
+ const f=fixture();const {GeneralBrowserError}=await import('../src/channels/cloudflare-general-browser');const {dispatchTool}=await import('../src/tools/dispatcher');const {buildSessionState}=await import('@waldo/contracts');
+ commonBrowserFixture.onAcquire=()=>{throw new GeneralBrowserError('provider_unavailable',{status:402,code:'usage_limit',request_id:'request-123'});};
+ const ctx={authenticatedUserId:'fixture-owner',assertTaskSourceCurrent:async()=>{},trigger:'user_message',egressAllowlist:['public-pages.fixture.invalid'],session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:Date.now()}),hasApproval:()=>true,sourceTaint:null,toolArgSourceTaint:null,sanitise:(await import('../src/scribe/sanitiser')).sanitise} as never;
+ const result=await dispatchTool({id:'fixture402',name:'browse_page',args:{url:'https://public-pages.fixture.invalid/a',instruction:'Read.'}},ctx,{handlers:[f.host().handler]});
+ expect(result).toMatchObject({ok:false,reason:'tool_result_error',source_taint:'external'});expect(JSON.stringify(result)).toContain('402');expect(JSON.stringify(result)).toContain('usage_limit');expect(JSON.stringify(result)).toContain('request-123');
 });
