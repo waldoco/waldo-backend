@@ -1,3 +1,4 @@
+import {commonRuntimeReadiness} from './common-runtime-readiness';
 import {commonOwnerTools} from './common-owner-tool-policy';
 import {commonOwnerWorkspace} from './common-owner-workspace';
 import {commonOwnerMemory} from './common-owner-memory';
@@ -989,6 +990,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if(request.method!=='GET')return new Response('method not allowed',{status:405,headers});
       if(url.search)return Response.json({error:'invalid_query'},{status:400,headers});
       return commonRuntimeDiagnostic(this.env, this.env.RESPONSIBILITY_RATE_LIMITER, this.ctx.id.toString());
+    }
+    if (url.pathname === `${CONSOLE_PATH}/diagnostics/common-runtime-readiness`) {
+      const headers={'cache-control':'no-store','referrer-policy':'no-referrer','x-frame-options':'DENY'};
+      if(request.method!=='GET')return new Response('method not allowed',{status:405,headers});
+      if(url.search)return Response.json({error:'invalid_query'},{status:400,headers});
+      return commonRuntimeReadiness(this.env,this.ctx.storage,this.ctx.id.toString(),this.env.RESPONSIBILITY_RATE_LIMITER);
     }
     // Narrow owner-authenticated scheduler receipt. No arbitrary id or SQL.
     if (url.pathname === `${CONSOLE_PATH}/diagnostics/nightly` && request.method === 'GET') {
