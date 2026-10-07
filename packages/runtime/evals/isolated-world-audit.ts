@@ -30,14 +30,17 @@ export const auditIsolatedWorld = (manifest: NativeManifest, evidence: Evidence)
       if (!at.snapshot(effect.owner_id).permitted_effects.includes(effect.kind)) errors.push('effect outside synthetic grant and branch');
     } catch { errors.push('invalid effect time'); }
     if (effect.kind !== 'calendar.create') { errors.push('unsupported effect readback'); continue; }
-    const id = `fixture-event-${effect.idempotency_key}`;
+    const payload = effect.payload as { id?: unknown; operation_tag?: unknown } | null;
+    if (payload?.id !== undefined && (typeof payload.id !== 'string' || !payload.id)) { errors.push('invalid provider event id'); continue; }
+    const id = typeof payload?.id === 'string' ? payload.id : `fixture-event-${effect.idempotency_key}`;
     if (eventIds.has(id)) errors.push('duplicate effect id');
     eventIds.add(id);
     const found = evidence.candidate_calendar.filter((row) => row.id === id);
     if (found.length !== 1 || found[0]?.owner_id !== manifest.candidate_owner || found[0]?.etag !== effect.idempotency_key ||
       !same(found[0]?.title, (effect.payload as { title?: unknown } | null)?.title) ||
       !same(found[0]?.start, (effect.payload as { start?: unknown } | null)?.start) ||
-      !same(found[0]?.end, (effect.payload as { end?: unknown } | null)?.end)) errors.push('provider state differs from intercepted effect');
+      !same(found[0]?.end, (effect.payload as { end?: unknown } | null)?.end) ||
+      !same(found[0]?.operation_tag, payload?.operation_tag)) errors.push('provider state differs from intercepted effect');
   }
   if (evidence.candidate_calendar.length !== eventIds.size || evidence.candidate_calendar.some((row) => row.owner_id !== manifest.candidate_owner || !eventIds.has(row.id)))
     errors.push('unexplained provider state');

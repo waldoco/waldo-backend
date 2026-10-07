@@ -22,6 +22,16 @@ describe('fixture world negative audit, not an actual trial score', () => {
     expect(auditIsolatedWorld(manifest, { ...evidence(world), candidate_calendar: [] }).errors).toContain('provider state differs from intercepted effect');
     expect(auditIsolatedWorld(manifest, { ...evidence(world), candidate_calendar: [{ owner_id: 'a', id: 'other' }] }).errors).toContain('unexplained provider state');
   });
+  it('rejects substituted provider IDs or markers on a stable-ID create', () => {
+    const world = new IsolatedSourceWorld(worldFixture);
+    world.advance('2026-10-05T08:30:00+05:30');
+    world.commitCalendarCreate('a', { ...input, id: 'a123', operation_tag: 'approved:apply' }, 'one');
+    const observed = evidence(world);
+    expect(auditIsolatedWorld(manifest, observed).status).toBe('consistent_fixture');
+    for (const change of [{ id: 'other' }, { operation_tag: 'different:apply' }]) {
+      expect(auditIsolatedWorld(manifest, { ...observed, candidate_calendar: observed.candidate_calendar.map(row => ({ ...row, ...change })) }).status).toBe('harness_error');
+    }
+  });
   it('fails on pre-approval, expired, foreign-owner and control-owner effects', () => {
     const early = new IsolatedSourceWorld(worldFixture);
     early.commitCalendarCreate('a', input, 'early');

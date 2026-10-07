@@ -10,6 +10,13 @@ it('reports no missing family for a default read while the task is unresolved', 
   expect(taskSourceMissing(snapshot, handler)).toEqual([]);
 });
 
+it('calendar proposals need current calendar scope and cannot use unresolved read defaults',()=>{
+ const handler={name:'propose_calendar_change',mutates_state:true,requires_connector:true} as const;
+ expect(taskSourceAllowed(snap(['calendar']),handler)).toBe(true);
+ expect(taskSourceMissing(snap(['mail']),handler)).toEqual(['calendar']);
+ expect(taskSourceAllowed(snap([],false,['calendar']),handler)).toBe(false);
+});
+
 it('names the family a refused read is missing, and every family a connector-wide tool lacks', () => {
   expect(taskSourceMissing(snap(['local', 'web']), { name: 'send_email', requires_connector: true })).toEqual(TASK_SOURCE_FAMILIES.filter(name => name !== 'local' && name !== 'web'));
   expect(taskSourceMissing(snap(['local', 'web']), { name: 'query_calendar' })).toEqual(['calendar']);

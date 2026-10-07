@@ -80,6 +80,7 @@ export const isolatedGoogleClient = (world: IsolatedSourceWorld, owner: string):
 export const isolatedCalendarEffectClient = (world: IsolatedSourceWorld, owner: string): GoogleClient => {
   return {
     ...isolatedGoogleClient(world, owner),
+    event: async (id) => { const row = world.providerCalendarReadback(owner).find(row => row.id === id) ?? world.read(owner, 'calendar', id); return row ? copy<CalendarItem>(row) : rejectRead(); },
     createEvent: async (input) => {
       return copy<CalendarItem>(world.commitCalendarCreate(owner, input, world.nextProviderKey(owner)));
     },

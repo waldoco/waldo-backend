@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GoogleError, b64url, buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState, sha256Hex } from '../src/connectors/google';
+import { GoogleError, type GoogleClient, b64url, buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState, sha256Hex } from '../src/connectors/google';
 import { connectServiceHandler, googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 
 const app = { clientId: 'cid', clientSecret: 'csecret', redirectUri: 'https://w.example/oauth/google/callback' };
@@ -236,7 +236,7 @@ describe('google tools', () => {
   });
 
   it('propose a calendar change without applying it', async () => {
-    const google: GoogleAccess = { client: async () => null };
+    const google: GoogleAccess = { client: async () => ({account:{connection_id:'fixture',email:'owner@example.test'}} as GoogleClient) };
     const propose = googleHandlers(google, proposals, clock).find((h) => h.name === 'propose_calendar_change')!;
     expect(await propose.handle({ action: 'cancel', event_id: 'e1', reason: 'double booked' } as never)).toMatchObject({ ok: true, data: { proposal_id: 'proposal:1', applied: false } });
   });

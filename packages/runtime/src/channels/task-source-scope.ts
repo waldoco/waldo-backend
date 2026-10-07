@@ -183,7 +183,7 @@ export const approveTaskSourceProposal = (sql: SqlStorage, ownerKey: string, sup
 const TOOL_SOURCE: Partial<Record<ToolName, TaskSourceFamily>> = {
   read_owner_context: 'local', read_memory: 'local', search_episodes: 'local', read_tool_output: 'local',
   workspace_list: 'workspace', workspace_read: 'workspace', workspace_search: 'workspace', workspace_render: 'workspace', export_artifact: 'workspace', read_artifact: 'workspace', list_artifacts: 'workspace', get_communication: 'mail', search_communication: 'mail', read_thread: 'mail',
-  query_calendar: 'calendar', query_availability: 'calendar', get_tasks: 'tasks', read_drive: 'drive', web_search: 'web', browse_page: 'web', browse_act: 'web', read_mcp_tool: 'mcp', call_mcp_tool: 'mcp',
+  query_calendar: 'calendar', propose_calendar_change: 'calendar', query_availability: 'calendar', get_tasks: 'tasks', read_drive: 'drive', web_search: 'web', browse_page: 'web', browse_act: 'web', read_mcp_tool: 'mcp', call_mcp_tool: 'mcp',
 };
 const taskSourceFamily = (handler: Readonly<{ name: ToolName }>, args?: unknown): TaskSourceFamily | undefined => {
   if (handler.name === 'workspace_write' && args && typeof args === 'object' && ('edits' in args || 'expected_revision' in args && typeof args.expected_revision === 'number' && args.expected_revision > 0)) return 'workspace';

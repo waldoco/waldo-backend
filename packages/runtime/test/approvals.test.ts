@@ -236,18 +236,20 @@ describe('approval desk', () => {
       const google: string[] = [];
       let now = 1_000_000;
       let n = 0;
+      let current: any = {title:'Gym',start:'2026-09-23T18:00:00+05:30',end:'2026-09-23T19:00:00+05:30',all_day:false,etag:'v1'};
       const client = {
-        event: async (id: string) => ({ id, title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false, etag: 'v1' }),
-        moveEvent: async (id: string, start: string) => { google.push(`move ${id} ${start}`); return { id, title: 'Gym', start, end: start, all_day: false, etag: 'v1' }; },
-        createEvent: async () => { google.push('create'); return { id: 'new1', title: 'x', start: '', end: '', all_day: false, etag: 'v1' }; },
-        cancelEvent: async (id: string) => { google.push(`cancel ${id}`); },
+        account: {connection_id:'fixture',email:'owner@example.test'},
+        event: async (id:string) => {if(!current)throw new GoogleError(410,'deleted');return {...current,id};},
+        moveEvent: async (id:string,start:string,end:string,_match?:string,operation_tag?:string) => {google.push(`move ${id} ${start}`);current={...current,id,start,end,operation_tag,etag:'v2'};return current;},
+        createEvent: async (input:any) => {google.push('create');current={...input,title:input.title,all_day:false,etag:'v1'};return current;},
+        cancelEvent: async (id:string) => {google.push(`cancel ${id}`);current=null;},
       } as unknown as GoogleClient;
       const desk = approvalDesk(state.storage.sql, {
         call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
         owner: 42, google: async () => client, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
       });
       const id = await desk.propose({ action: 'move', event_id: 'e1', title: 'Gym', start: iso('2026-09-23T19:00:00+05:30'), end: iso('2026-09-23T20:00:00+05:30'), reason: 'you have a call at 6' });
-      expect(sent[0]!.body.text).toBe('Proposed: Move "Gym" to Wed 23 Sept, 19:00 to Wed 23 Sept, 20:00. you have a call at 6');
+      expect(sent[0]!.body.text).toBe('Proposed on owner@example.test (primary calendar): Move "Gym" to Wed 23 Sept, 19:00 to Wed 23 Sept, 20:00. you have a call at 6');
       expect(JSON.stringify(sent[0]!.body.reply_markup)).toContain(`a:${id}`);
       expect(google).toEqual([]);
 
@@ -277,10 +279,10 @@ describe('approval desk', () => {
       desk.record('email_draft', 'Drafted "Hi" to a@example.com', {});
       const open = await desk.propose({ action: 'cancel', event_id: 'e3', title: 'Standup', reason: 'sick' });
       const ledger = desk.ledger([{ note: 'water', at: '2026-09-24T09:00', repeat: 'daily' }]);
-      expect(ledger).toContain('- Cancel "Standup". sick (waiting on you)');
+      expect(ledger).toContain('- Cancel "Walk". sick (waiting on you)');
       expect(ledger).toContain('- 2026-09-24 09:00 water (daily)');
       expect(ledger).toContain('- undone: Move "Gym"');
-      expect(ledger).toContain('- skipped: Cancel "Sync"');
+      expect(ledger).toContain('- skipped: Cancel "Gym"');
       expect(ledger).toContain('- done: Drafted "Hi" to a@example.com');
       expect(open).toMatch(/^p/);
     });
@@ -296,6 +298,7 @@ describe('approval desk', () => {
       let etag = 'v1';
       let conflict = false;
       const client = {
+        account: {connection_id:'fixture',email:'owner@example.test'},
         event: async (id: string) => ({ id, title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false, etag }),
         moveEvent: async (id: string, start: string, _end: string, match?: string) => {
           if (conflict) throw new GoogleError(412, 'google 412: precondition failed');
@@ -321,13 +324,13 @@ describe('approval desk', () => {
       etag = 'v2';
       await tap(edited);
       expect(google).toEqual([]);
-      expect(texts.at(-1)).toContain('The event changed in your calendar');
+      expect(texts.at(-1)).toContain('The event changed');
 
       const raced = await desk.propose(move);
       conflict = true;
       await tap(raced);
       expect(google).toEqual([]);
-      expect(texts.at(-1)).toContain('The event changed in your calendar');
+      expect(texts.at(-1)).toContain('The event changed');
 
       conflict = false;
       const fresh = await desk.propose(move);
@@ -344,11 +347,13 @@ describe('approval desk', () => {
       const google: string[] = [];
       let now = 1_000_000;
       let n = 0;
+      let current: any = {title:'Gym',start:'2026-09-23T18:00:00+05:30',end:'2026-09-23T19:00:00+05:30',all_day:false,etag:'v1'};
       const client = {
-        event: async (id: string) => ({ id, title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false, etag: 'v1' }),
-        moveEvent: async (id: string, start: string) => { google.push(`move ${id} ${start}`); return { id, title: 'Gym', start, end: start, all_day: false, etag: 'v1' }; },
-        createEvent: async () => { google.push('create'); return { id: 'new1', title: 'x', start: '', end: '', all_day: false, etag: 'v1' }; },
-        cancelEvent: async (id: string) => { google.push(`cancel ${id}`); },
+        account: {connection_id:'fixture',email:'owner@example.test'},
+        event: async (id:string) => {if(!current)throw new GoogleError(410,'deleted');return {...current,id};},
+        moveEvent: async (id:string,start:string,end:string,_match?:string,operation_tag?:string) => {google.push(`move ${id} ${start}`);current={...current,id,start,end,operation_tag,etag:'v2'};return current;},
+        createEvent: async (input:any) => {google.push('create');current={...input,title:input.title,all_day:false,etag:'v1'};return current;},
+        cancelEvent: async (id:string) => {google.push(`cancel ${id}`);current=null;},
       } as unknown as GoogleClient;
       const desk = approvalDesk(state.storage.sql, {
         call: async () => ({}),
@@ -391,7 +396,7 @@ describe('approval desk', () => {
 
 describe('calendar Undo version protection', () => {
   const setup = async (state: DurableObjectState, action: 'create' | 'move') => {
-    let current: { id: string; title: string; start: string; end: string; all_day: boolean; etag?: string } | null = {
+    let current: { id: string; title: string; start: string; end: string; all_day: boolean; etag?: string; operation_tag?: string } | null = {
       id: 'e1', title: 'Gym', start: '2026-10-07T10:00:00Z', end: '2026-10-07T11:00:00Z', all_day: false, etag: 'v1',
     };
     const original = { ...current };
@@ -410,15 +415,16 @@ describe('calendar Undo version protection', () => {
       if (match && match !== current?.etag) throw new GoogleError(412, 'precondition failed');
     };
     const client = {
-      event: async () => { if (readFailure) throw new GoogleError(503, 'read unavailable'); return { ...current! }; },
-      createEvent: async (input: { title: string; start: string; end: string }) => {
+      account: {connection_id:'fixture',email:'owner@example.test'},
+      event: async () => {if(!current)throw new GoogleError(410,'deleted'); if (readFailure) throw new GoogleError(503, 'read unavailable'); return { ...current! }; },
+      createEvent: async (input: { id:string;title: string; start: string; end: string;operation_tag:string }) => {
         current = { ...current!, ...input, etag: 'v2' };
         writes.push({ op: 'create' });
         return { ...current, etag: missingApplied ? undefined : current.etag };
       },
-      moveEvent: async (_id: string, start: string, end: string, match?: string) => {
+      moveEvent: async (_id: string, start: string, end: string, match?: string, operation_tag?:string) => {
         writes.push({ op: 'move', match }); await waitPending(); check(match);
-        current = { ...current!, start, end, etag: current!.etag === 'v1' ? 'v2' : 'v4' };
+        current = { ...current!, start, end, operation_tag, etag: current!.etag === 'v1' ? 'v2' : 'v4' };
         return { ...current, etag: missingApplied ? undefined : current.etag };
       },
       cancelEvent: async (_id: string, match?: string) => { writes.push({ op: 'cancel', match }); await waitPending(); check(match); current = null; },
@@ -453,7 +459,7 @@ describe('calendar Undo version protection', () => {
       const reopened = f.reopen();
       await reopened.callback({ id: 'undo-1', from: { id: 42 }, data: `u:${f.id}` }, 't');
       expect(f.writes.at(-1)).toEqual({ op: action === 'create' ? 'cancel' : 'move', match: 'v2' });
-      expect(f.current()).toEqual(action === 'create' ? null : { ...f.original, etag: 'v4' });
+      expect(f.current()).toEqual(action === 'create' ? null : { ...f.original, operation_tag:'pversion:undo', etag: 'v4' });
       await reopened.callback({ id: 'undo-2', from: { id: 42 }, data: `u:${f.id}` }, 't');
       expect((await reopened.decide(f.id, 'u', 't')).toast).toBe('Already handled.');
       expect(f.writes).toHaveLength(2);
@@ -518,15 +524,15 @@ describe('calendar Undo version protection', () => {
       await f.desk.decide(f.id, 'a', 't');
       f.fail(true);
       const failed = await f.desk.decide(f.id, 'u', 't');
-      expect(failed.toast).toBe('That failed');
+      expect(failed.toast).toBe('Outcome unknown');
       expect(failed.message).not.toContain('Undone');
       expect(f.current()?.etag).toBe('v2');
       expect(f.desk.ledger([])).not.toContain('- undone:');
       f.fail(false); f.edit();
-      expect((await f.desk.decide(f.id, 'u', 't')).toast).toBe('The event changed');
+      expect((await f.desk.decide(f.id, 'u', 't')).toast).toBe('Already handled.');
       expect(f.writes).toHaveLength(2);
       f.failRead();
-      expect((await f.desk.decide(f.id, 'u', 't')).toast).toBe('That failed');
+      expect((await f.desk.decide(f.id, 'u', 't')).toast).toBe('Already handled.');
       expect(f.writes).toHaveLength(2);
     });
   });
@@ -538,7 +544,7 @@ describe('calendar Undo version protection', () => {
       await f.desk.decide(f.id, 'a', 't');
       const results = await Promise.all([f.desk.decide(f.id, 'u', 't1'), f.desk.decide(f.id, 'u', 't2')]);
       expect(results.filter((result) => result.toast === 'Undone')).toHaveLength(1);
-      expect(f.current()).toEqual(action === 'create' ? null : { ...f.original, etag: 'v4' });
+      expect(f.current()).toEqual(action === 'create' ? null : { ...f.original, operation_tag:'pversion:undo', etag: 'v4' });
       expect(f.desk.ledger([])).toContain('- undone:');
       expect((await f.desk.decide(f.id, 'u', 't3')).toast).toBe('Already handled.');
     });
@@ -557,7 +563,7 @@ describe('calendar Undo version protection', () => {
       await second;
       expect(f.desk.ledger([])).toContain('- undone:');
       expect((await f.desk.decide(f.id, 'u', 't3')).toast).toBe('Already handled.');
-      expect(f.current()).toEqual(action === 'create' ? null : { ...f.original, etag: 'v4' });
+      expect(f.current()).toEqual(action === 'create' ? null : { ...f.original, operation_tag:'pversion:undo', etag: 'v4' });
     });
   });
 
@@ -802,7 +808,7 @@ describe('task source card ledger write', () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-blocked-card-${blocked}`));
     await runInDurableObject(stub, async (_instance, state) => {
       let n = 0; let ran = 0;
-      const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => (blocked ? undefined : { message_id: 1 }), google: async () => null, newId: () => `blocked-${++n}`, now: () => 1000, timezone: 'UTC', log: () => {},
+      const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => (blocked ? undefined : { message_id: 1 }), google: async () => ({account:{connection_id:'fixture',email:'owner@example.test'}} as GoogleClient), newId: () => `blocked-${++n}`, now: () => 1000, timezone: 'UTC', log: () => {},
         browserSubmit: async () => { ran++; return { status: 'rejected', message: 'fixture', receipt: {} } as never; } });
       const proposals = [
         () => desk.proposeBrowserSubmit({ url: 'https://fixture.invalid', action: { selector: '#submit', description: 'Submit' }, binding: { value: 'synthetic' }, steps: [] }),
@@ -818,7 +824,7 @@ describe('task source card ledger write', () => {
       expect(rows).toHaveLength(4);
       expect(rows.every(row => row.status === (blocked ? 'card_unconfirmed' : 'open'))).toBe(true);
       if (blocked) {
-        expect(desk.pending(1000)).toEqual([]);
+        expect(desk.pending(1000)).toEqual([expect.objectContaining({kind:'calendar_change',state:'unconfirmed',undoable:false})]);
         for (const row of rows) expect((await desk.decide(row.id, 'a', 'test')).toast).toBe('Already handled.');
         expect(ran).toBe(0);
         expect(desk.ledger([]).match(/review card delivery unconfirmed; cannot approve/g)).toHaveLength(4);

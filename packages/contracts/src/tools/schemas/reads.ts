@@ -45,6 +45,7 @@ export type GetHealthArgs = z.infer<typeof getHealthArgsSchema>;
 
 // 'query_calendar' is the ADR-0040 rename of the legacy schedule read.
 export const queryCalendarArgsSchema = z.strictObject({
+  connection_id: z.string().min(1).max(300).optional(),
   date_range: dateRangeSchema.optional(),
   calendar_id: z.string().min(1).max(254).default('primary'),
   page_token: z.string().min(1).max(4096).optional(),
