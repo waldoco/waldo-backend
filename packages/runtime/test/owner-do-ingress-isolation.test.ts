@@ -1239,6 +1239,25 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
     const interruptedIngress=await signCommonMessageIngress(env.WALDO_ROUTER_HMAC_SECRET!,{...ingress,occurrenceId:'fixture-interrupted-executor',at:Math.floor(Date.now()/1000)});
     const begin=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'begin'});
     await root.commonExecutionFromHost(interruptedIngress,begin);
+    // Recreate a pre-hostRun persisted receipt with a correctly signed legacy request.
+    const {hostRun:_legacyFence,...legacyBase}=executionBase;
+    await runInDurableObject(root,async(instance,state)=>{
+      const entry=[...state.storage.kv.list<any>({prefix:'common-execution:'})].find(([,row])=>row.request.source.taskId===executionBase.source.taskId&&row.state==='running')!;
+      const [key,original]=entry;
+      const legacyDigest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([legacyBase.source,legacyBase.binding,legacyBase.tools,legacyBase.maxProviderTurns,legacyBase.maxDurationMs]))))].map(b=>b.toString(16).padStart(2,'0')).join('');
+      const legacy={...original,request:legacyBase,digest:legacyDigest};
+      state.storage.kv.put(key,legacy);
+      try {
+        if((env as typeof env & {COMMON_TEST_LEGACY_PREPARED?:string}).COMMON_TEST_LEGACY_PREPARED==='1'){state.storage.kv.put(key,{...legacy,state:'prepared',lease:undefined});const legacyBegin=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...legacyBase,operation:'begin'});await expect(instance.commonExecutionFromHost(interruptedIngress,legacyBegin)).rejects.toThrow('common physical execution fence unavailable');state.storage.kv.put(key,legacy);}
+        const prepare=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...legacyBase,operation:'provider_prepare',providerCall:{ordinal:1,model:'gpt-6-luna',requestDigest:`sha256:${'b'.repeat(64)}`}});
+        await expect(instance.commonExecutionFromHost(interruptedIngress,prepare)).rejects.toThrow('common physical execution fence unavailable');
+        const check=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...legacyBase,operation:'check'});
+        expect((await instance.commonExecutionFromHost(interruptedIngress,check)).state).toBe('running');
+        state.storage.kv.put(key,{...legacy,state:'prepared',lease:undefined});
+        const legacyBegin=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...legacyBase,operation:'begin'});
+        await expect(instance.commonExecutionFromHost(interruptedIngress,legacyBegin)).rejects.toThrow('common physical execution fence unavailable');
+      } finally {state.storage.kv.put(key,original);}
+    });
     const toolPrepare=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'tool_prepare',toolCall:{id:'fixture_write_1',name:'workspace_write',requestDigest:`sha256:${'e'.repeat(64)}`}});
     await root.commonExecutionFromHost(interruptedIngress,toolPrepare);
     await evictDurableObject(root);

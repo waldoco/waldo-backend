@@ -453,6 +453,13 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       if(request.operation==='settle')return {state:'indeterminate' as const,lease:saved.lease!,expiresAt:null};
       throw Error('common execution reconciliation required');
     }
+    // Legacy receipt observation/cancellation remains available, but no resumed
+    // physical issuance may be authorized without the signed host fence.
+    if (['begin','provider_prepare','tool_prepare'].includes(request.operation) &&
+        (!request.hostRun || request.hostRun.deadline <= this.deps.now() ||
+         request.hostRun.deadline > this.deps.now() + EXECUTION_LEASE_MAX_DURATION_MS_V04)) {
+      throw Error('common physical execution fence unavailable');
+    }
     if(saved && this.deps.now() >= Math.min(saved.preparedAt + request.maxDurationMs,request.hostRun?.deadline??Infinity))throw Error('common execution budget expired');
     if(saved?.state==='running'&&saved.lease){
       const current=await this.waldoCoordinator.assertMessageExecutionCurrent(saved.lease,authority,()=>directory.assertCurrent(authority));
