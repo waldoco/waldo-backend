@@ -1075,6 +1075,7 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
     expect(replyPrompts.length).toBeGreaterThan(0);
     expect(JSON.stringify(replyPrompts)).toContain('Reactions: available');
     const firstTask=await runInDurableObject(root,(_instance,state)=>state.storage.sql.exec<{id:string}>('SELECT id FROM outcomes').one().id);
+    const firstWorkUnit=await runInDurableObject(root,(_instance,state)=>state.storage.sql.exec<{id:string}>('SELECT id FROM work_units').one().id);
     const { signCommonMessageIngress } = await import('../src/identity/common-message-ingress');
     const { signCommonTaskSourceRequest } = await import('../src/identity/common-task-source-request');
     const occurrenceId = await runInDurableObject(doStub(81105), (_instance,state) =>
@@ -1103,6 +1104,7 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
     await send(81105,'Make that checklist shorter without changing sources.',997002);
     await runInDurableObject(root,(_instance,state)=>{
       expect(state.storage.sql.exec('SELECT id FROM outcomes').toArray()).toEqual([{id:firstTask}]);
+      expect(state.storage.sql.exec('SELECT id, outcome_id, responsibility FROM work_units').toArray()).toEqual([{id:firstWorkUnit,outcome_id:firstTask,responsibility:'Prepare a private checklist from the supplied notes.'}]);
       expect(state.storage.sql.exec('SELECT task_id FROM owner_task_source_scope').one().task_id).toBe(firstTask);
       expect(state.storage.sql.exec('SELECT revision FROM owner_task_source_scope').one().revision).toBe(3);
       expect(state.storage.sql.exec('SELECT owner_id FROM owner_roots').toArray()).toEqual([{owner_id:owner}]);

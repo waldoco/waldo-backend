@@ -448,11 +448,19 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       request.ownerInput, request.defaults, request.raw,
     ]));
     type Receipt = { state: 'prepared' | 'settled'; commandDigest: string;
+      expected: Awaited<ReturnType<typeof capability.current>>;
       result?: Awaited<ReturnType<typeof capability.classify>> };
     const assertCommand = (saved: Receipt | undefined) => {
       if (saved && saved.commandDigest !== commandDigest) throw Error('common source command conflict');
       if (saved && saved.state !== 'prepared' && saved.state !== 'settled') throw Error('common source transition recovery required');
     };
+    const legacyKey = `common-source-command:${await this.deps.sha256Hex(JSON.stringify([
+      authority.ownerId, ingress.provider, ingress.subject, ingress.occurrenceId, request.ownerInput, request.raw,
+    ]))}`;
+    const legacyDefaultsKey = `common-source-command:${await this.deps.sha256Hex(JSON.stringify([
+      authority.ownerId, ingress.provider, ingress.subject, ingress.occurrenceId, request.ownerInput, request.defaults, request.raw,
+    ]))}`;
+    if (this.ctx.storage.kv.get(legacyKey) || this.ctx.storage.kv.get(legacyDefaultsKey)) throw Error('common source transition recovery required');
     const saved = this.ctx.storage.kv.get<Receipt>(key);
     assertCommand(saved);
     if (saved?.state === 'settled') {
@@ -462,16 +470,20 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     }
     // Atomic reducer publication couples source mutations and capture with the settled receipt.
     // A prepared retry has no committed mutation; old non-atomic receipts remain held.
+    const expected = saved?.expected ?? await capability.current();
+    await capability.assertSame(expected);
     scope.commit(() => {
-      assertCommand(this.ctx.storage.kv.get<Receipt>(key));
-      this.ctx.storage.kv.put(key, { state: 'prepared', commandDigest });
+      const current = this.ctx.storage.kv.get<Receipt>(key);
+      assertCommand(current);
+      if (current?.state === 'settled') throw Error('common source command already settled');
+      this.ctx.storage.kv.put(key, { state: 'prepared', commandDigest, expected });
     });
     const result = await capability.classify(request.raw, request.ownerInput.inputRef, request.ownerInput.text, result => {
       const current = this.ctx.storage.kv.get<Receipt>(key);
       assertCommand(current);
       if (current?.state !== 'prepared') throw Error('common source command already settled');
-      this.ctx.storage.kv.put(key, { state: 'settled', commandDigest, result });
-    });
+      this.ctx.storage.kv.put(key, { state: 'settled', commandDigest, expected, result });
+    }, expected);
     return { operation: 'classify' as const, result };
   }
 

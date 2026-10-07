@@ -103,3 +103,19 @@ it('classification publication crash rolls back the task transition so an exact 
   expect(state.storage.sql.exec('SELECT count(*) AS n FROM outcomes').one().n).toBe(2);
  });
 });
+
+it('prepared classifier retry refuses a changed source snapshot instead of applying the old decision to a later task',async()=>{
+ const stub=env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName('common-source-prepared-'+crypto.randomUUID())) as DurableObjectStub<RunLoopDO>;
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const coordinator=new WaldoCoordinator(state.storage);
+  const scope={runId:'fixture',attempt:'fixture',deadline:Date.now()+30000,signal:new AbortController().signal,admit(){},commit:<T>(work:()=>T)=>state.storage.transactionSync(work)};
+  const text='Start a new task in my workspace.';
+  const cap=await coordinator.commonTaskSourceScope(admitted,{inputRef:'prepared_input',text},['workspace'],scope,async()=>{});
+  const expected=await cap.current();
+  await cap.classify(JSON.stringify({decision:'restrict',sources:[]}),'restriction_input');
+  const current=await cap.current();
+  await expect(cap.classify(JSON.stringify({decision:'new',sources:['workspace'],evidence:text}),'prepared_input',text,()=>{},expected)).rejects.toThrow('Task source scope changed');
+  expect(await cap.current()).toEqual(current);
+  expect(state.storage.sql.exec('SELECT count(*) AS n FROM outcomes').one().n).toBe(1);
+ });
+});

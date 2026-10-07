@@ -479,7 +479,10 @@ export class WaldoCoordinator {
       const at = this.#deps.now();
       this.#outcomes.projections.ensureSnapshotInCurrentTransaction(authority.ownerId, this.#deps.newId('snapshot'), at);
       return this.#outcomes.captureInCurrentTransaction({ ownerId: authority.ownerId,
-        payload: responsibilityCapturePayloadV02Schema.parse({ userStatement: ownerInput.text }), at,
+        payload: responsibilityCapturePayloadV02Schema.parse({ userStatement: ownerInput.text,
+          workUnits: [{ responsibility: ownerInput.text, inputs: [], dependencyPositions: [],
+            expectedEvidence: [], requiredCapabilities: [], stopConditions: [] }],
+        }), at,
         commandId: ownerInput.inputRef, correlationId: ownerInput.inputRef,
       }).outcome.id;
     };

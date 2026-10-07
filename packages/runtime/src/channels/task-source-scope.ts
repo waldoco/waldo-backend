@@ -97,8 +97,10 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
       const pending = sql.exec<Row>('SELECT * FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).one().pending_json;
       return pending ? previous : commit(previous, previous.sources, false);
     },
-    async classify(raw: string, inputRef?: string, classifiedOwnerText?: string, publish?: (result: TaskSourceClassification) => void): Promise<TaskSourceClassification> {
+    async classify(raw: string, inputRef?: string, classifiedOwnerText?: string, publish?: (result: TaskSourceClassification) => void, expected?: TaskSourceSnapshot): Promise<TaskSourceClassification> {
       const previous = await current();
+      if (expected && (expected.taskId !== previous.taskId || expected.revision !== previous.revision || expected.ready !== previous.ready
+        || expected.defaults?.some(family => !previous.defaults?.includes(family)))) throw new Error('Task source scope changed');
       await current();
       return scope.commit(() => {
         const latest = snapshotNow();
