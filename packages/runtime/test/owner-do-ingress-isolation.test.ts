@@ -1364,7 +1364,7 @@ it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid').ea
    await runInDurableObject(root,(_instance,state)=>expect(state.storage.sql.exec('SELECT state FROM execution_attempts').one().state).toBe('running'));
    await runInDurableObject(doStub(subject),(_instance,state)=>expect(state.storage.kv.get<any[]>('telegram_final_outbox_v1')!.some(row=>row.commonExecution&&!row.commonExecution.settled)).toBe(true));
    const expireFinal=(env as typeof env & {COMMON_TEST_FINAL_EXPIRED?:string}).COMMON_TEST_FINAL_EXPIRED==='1';
-   if(expireFinal){vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(Date.now()+600001);}
+   if(expireFinal){const deadline=await runInDurableObject(doStub(subject),(_instance,state)=>state.storage.kv.get<any[]>('telegram_owner_inbox_v1')!.find(row=>row.updateId===998001).deadline);vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(deadline+1);}
    blockFirstRootFinal=false;await evictDurableObject(doStub(subject));await evictDurableObject(root);
    await runInDurableObject(doStub(subject),async(instance)=>{await instance.alarm();});
    expect(modelInputs.length).toBe(calls);
@@ -1380,6 +1380,8 @@ it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid').ea
     return;
    }
   }
+  const physical=await runInDurableObject(doStub(subject),(_instance,state)=>state.storage.kv.get<any[]>('telegram_owner_inbox_v1')!.find(row=>row.updateId===998001));
+  await runInDurableObject(root,(_instance,state)=>{const receipt=[...state.storage.kv.list<any>({prefix:'common-execution:'})][0]![1];expect(receipt.request.hostRun).toEqual({runId:physical.runId,attempt:physical.attempt,deadline:physical.deadline});const lease=state.storage.sql.exec<{expires_at:string}>('SELECT expires_at FROM planning_execution_leases').one();expect(Date.parse(lease.expires_at)).toBeLessThanOrEqual(physical.deadline);});
   await runInDurableObject(root,(_instance,state)=>expect(state.storage.sql.exec('SELECT state FROM execution_attempts').one().state).toBe('settled'));
   await evictDurableObject(doStub(subject));await evictDurableObject(root);
   await send(subject,'Shorten the real private note without changing sources.',998002);

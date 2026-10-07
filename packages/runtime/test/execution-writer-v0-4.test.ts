@@ -612,7 +612,7 @@ describe('responsibility execution v0.4 sole writer', () => {
       expect(() => coordinator.claimExecutionAttemptV04({
         ...claimAdmission,
         expiresAt: '2099-01-01T00:00:00.000Z',
-      })).toThrow(/unrecognized/i);
+      })).toThrow(/expiry rejected/i);
       const aggregate = coordinator.claimExecutionAttemptV04(claimAdmission);
       expect(aggregate.attempts[0]).toMatchObject({
         ownerId: request.ownerId,

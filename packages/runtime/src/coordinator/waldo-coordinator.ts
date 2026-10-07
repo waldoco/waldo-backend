@@ -284,6 +284,7 @@ export type ExecutionClaimV04 = Readonly<{
   leaseId: string;
   sessionId: string;
   providerSessionRef: string | null;
+  expiresAt?: string;
 }>;
 
 function parseExecutionClaimV04(value: unknown): ExecutionClaimV04 {
@@ -298,11 +299,18 @@ function parseExecutionClaimV04(value: unknown): ExecutionClaimV04 {
     'sessionId',
     'providerSessionRef',
   ];
+  if (input.expiresAt !== undefined) expectedKeys.push('expiresAt');
+  if (input.expiresAt !== undefined &&
+      (typeof input.expiresAt !== 'string' || !Number.isFinite(Date.parse(input.expiresAt)) ||
+       new Date(input.expiresAt).toISOString() !== input.expiresAt)) {
+    throw new Error('execution claim expiry rejected');
+  }
   if (Object.keys(input).length !== expectedKeys.length ||
       expectedKeys.some((key) => !Object.prototype.hasOwnProperty.call(input, key))) {
     throw new Error('execution claim contains unrecognized fields');
   }
   return Object.freeze({
+    ...(input.expiresAt !== undefined ? {expiresAt: input.expiresAt as string} : {}),
     executionRequestId: protocolIdSchema.parse(input.executionRequestId),
     attemptId: protocolIdSchema.parse(input.attemptId),
     leaseId: protocolIdSchema.parse(input.leaseId),
@@ -1373,12 +1381,18 @@ export class WaldoCoordinator {
         const existingSession = aggregate.sessions[matchingIndex];
         if (existingLease?.id !== claim.leaseId ||
             existingSession?.id !== claim.sessionId ||
-            existingSession.providerSessionRef !== claim.providerSessionRef) {
+            existingSession.providerSessionRef !== claim.providerSessionRef ||
+            (claim.expiresAt !== undefined && existingLease.expiresAt !== claim.expiresAt)) {
           throw new Error('execution claim digest conflict');
         }
         return aggregate;
       }
       const claimedAt = this.#deps.now();
+      if (claim.expiresAt !== undefined &&
+          (Date.parse(claim.expiresAt) <= Date.parse(claimedAt) ||
+           Date.parse(claim.expiresAt) > Date.parse(claimedAt) + EXECUTION_LEASE_MAX_DURATION_MS_V04)) {
+        throw new Error('execution claim expiry rejected');
+      }
       const previousAttempt = aggregate.attempts.at(-1);
       const previousLease = aggregate.leases.at(-1);
       const attemptNumber = previousAttempt === undefined
@@ -1413,7 +1427,7 @@ export class WaldoCoordinator {
         fencingGeneration,
         cancellationGeneration: aggregate.currentCancellationGeneration,
         acquiredAt: claimedAt,
-        expiresAt: new Date(
+        expiresAt: claim.expiresAt ?? new Date(
           Date.parse(claimedAt) + EXECUTION_LEASE_MAX_DURATION_MS_V04,
         ).toISOString(),
       });

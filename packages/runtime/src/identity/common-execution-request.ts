@@ -6,12 +6,13 @@ export type CommonExecutionRequest = Readonly<{
   operation: 'begin' | 'check' | 'settle' | 'provider_prepare' | 'provider_settle' | 'tool_prepare' | 'tool_settle' | 'cancel'; source: TaskSourceSnapshot;
   binding: ExecutionBindingResolutionV04; tools: readonly string[];
   maxProviderTurns: number; maxDurationMs: number;
+  hostRun?:Readonly<{runId:string;attempt:string;deadline:number}>;
   providerCall?: Readonly<{ordinal:number;model:string;requestDigest:string;resultDigest?:string}>;
   toolCall?: Readonly<{id:string;name:string;requestDigest:string;resultDigest?:string}>;
   result?: Readonly<{ref:string;digest:string}>; signature: string;
 }>;
 const material = (ingress: CommonMessageIngress, request: Omit<CommonExecutionRequest,'signature'>) =>
-  JSON.stringify(['common-execution-v1',ingress.signature,request.operation,request.source,request.binding,request.tools,request.maxProviderTurns,request.maxDurationMs,request.result ?? null,request.providerCall ?? null,request.toolCall ?? null]);
+  JSON.stringify(['common-execution-v1',ingress.signature,request.operation,request.source,request.binding,request.tools,request.maxProviderTurns,request.maxDurationMs,request.result ?? null,request.providerCall ?? null,request.toolCall ?? null,...(request.hostRun?[request.hostRun]:[])]);
 export async function signCommonExecutionRequest(secret:string,ingress:CommonMessageIngress,request:Omit<CommonExecutionRequest,'signature'>):Promise<CommonExecutionRequest>{
   return {...request,signature:await routerSignature(secret,ingress.at,material(ingress,request))};
 }
@@ -21,6 +22,7 @@ export async function verifyCommonExecutionRequest(secret:string,ingress:CommonM
     || !Number.isSafeInteger(request.maxProviderTurns)||request.maxProviderTurns<1
     || !request.source || typeof request.source.taskId!=='string' || !Number.isSafeInteger(request.source.revision) || request.source.revision<1 || !Array.isArray(request.source.sources) || request.source.ready!==true
     || !Number.isSafeInteger(request.maxDurationMs)||request.maxDurationMs<1||request.maxDurationMs>600000
+    || request.hostRun!==undefined && (Object.keys(request.hostRun).sort().join(',')!=='attempt,deadline,runId'||![request.hostRun.runId,request.hostRun.attempt].every(value=>typeof value==='string'&&/^[A-Za-z0-9._:-]{1,128}$/.test(value))||!Number.isSafeInteger(request.hostRun.deadline)||request.hostRun.deadline<0)
     || request.operation==='settle' && (!request.result || !/^[A-Za-z0-9._:-]{1,128}$/.test(request.result.ref) || !/^sha256:[a-f0-9]{64}$/.test(request.result.digest))
     || request.operation!=='settle' && request.result!==undefined
     || request.operation.startsWith('provider_') && (!request.providerCall || !Number.isSafeInteger(request.providerCall.ordinal) || request.providerCall.ordinal<1 || !/^sha256:[a-f0-9]{64}$/.test(request.providerCall.requestDigest) || (typeof request.providerCall.model!=='string'||request.providerCall.model.length>128) || request.operation==='provider_settle' && !/^sha256:[a-f0-9]{64}$/.test(request.providerCall.resultDigest??''))

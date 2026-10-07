@@ -164,6 +164,29 @@ function seedCanonicalProductState(storage: DurableObjectStorage): void {
 }
 
 describe('execution environment to sole-writer conformance', () => {
+  it('caps canonical lease by the provided absolute host expiry and rejects widening or changed replay', async () => {
+    await runInDurableObject(freshStub(), async (_instance, state) => {
+      provisionDoSchema(state.storage);
+      seedCanonicalProductState(state.storage);
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => request.requestedAt,
+        newId: (kind) => `${kind}_unused`,
+        async resolveExecutionBindingV04() { return resolvedBinding; },
+        async sha256Hex() { return 'a'.repeat(64); },
+      });
+      const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
+      await coordinator.admitExecutionRequestV04(admission, authority);
+      const now = Date.parse(request.requestedAt);
+      for (const expiresAt of [new Date(now).toISOString(), new Date(now + 600001).toISOString(), 'bad-date']) {
+        expect(() => coordinator.claimExecutionAttemptV04({...claim, expiresAt})).toThrow(/expiry rejected/);
+      }
+      const expiresAt = new Date(now + 150000).toISOString();
+      const claimed = coordinator.claimExecutionAttemptV04({...claim, expiresAt});
+      expect(claimed.leases.at(-1)?.expiresAt).toBe(expiresAt);
+      expect(coordinator.claimExecutionAttemptV04({...claim, expiresAt})).toEqual(claimed);
+      expect(() => coordinator.claimExecutionAttemptV04({...claim, expiresAt:new Date(now + 150001).toISOString()})).toThrow(/digest conflict/);
+    });
+  });
   it('composes public start through commit, recover-first issue, and public observation admission', async () => {
     const stub = freshStub();
     await runInDurableObject(stub, async (_instance, state) => {

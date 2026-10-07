@@ -27,4 +27,8 @@ it('binds host execution, provider intent and observed result to the exact signe
  await verifyCommonExecutionRequest('fixture-secret',ingress,toolResult);
  await expect(verifyCommonExecutionRequest('fixture-secret',ingress,{...toolResult,toolCall:{...toolResult.toolCall!,resultDigest:undefined}})).rejects.toThrow();
 
+ const hostRun={runId:'physical-run',attempt:'physical-attempt',deadline:50000};
+ const fenced=await signCommonExecutionRequest('fixture-secret',ingress,{...base,hostRun});await verifyCommonExecutionRequest('fixture-secret',ingress,fenced);
+ for(const changed of [{...hostRun,runId:'other-run'},{...hostRun,attempt:'other-attempt'},{...hostRun,deadline:50001}])await expect(verifyCommonExecutionRequest('fixture-secret',ingress,{...fenced,hostRun:changed})).rejects.toThrow();
+
 });

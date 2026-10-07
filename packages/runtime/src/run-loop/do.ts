@@ -1,3 +1,4 @@
+import { EXECUTION_LEASE_MAX_DURATION_MS_V04 } from '../coordinator/planning-execution-module';
 import { verifyCommonExecutionRequest, type CommonExecutionRequest } from '../identity/common-execution-request';
 import { verifyCommonTaskSourceRequest, type CommonTaskSourceRequest } from '../identity/common-task-source-request';
 import type { RunEffectScope } from '../channels/run-effect-scope';
@@ -429,7 +430,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     if(this.ctx.id.toString()!==this.envBindings.RUN_LOOP_DO.idFromName(`owner-root:sha256:${rootDigest}`).toString())throw Error('common root route rejected');
     const identity=await this.deps.sha256Hex(JSON.stringify([authority.ownerId,ingress.provider,ingress.subject,ingress.occurrenceId]));
     const key=`common-execution:${identity}`;
-    const digest=await this.deps.sha256Hex(JSON.stringify([request.source,request.binding,request.tools,request.maxProviderTurns,request.maxDurationMs]));
+    const digest=await this.deps.sha256Hex(JSON.stringify([request.source,request.binding,request.tools,request.maxProviderTurns,request.maxDurationMs,...(request.hostRun?[request.hostRun]:[])]));
     type Lease={executionRequestId:string;attemptId:string;leaseId:string;fencingGeneration:number;cancellationGeneration:number;sourceSnapshot:typeof request.source};
     type Receipt={ownerId:string;request:CommonExecutionRequest;digest:string;state:'prepared'|'running'|'settled'|'indeterminate';expectedRevision:number;workUnitId:string;preparedAt:number;lease?:Lease;result?:typeof request.result};
     if(request.operation==='settle')await this.#reconcileCommonExecutionTimeouts();
@@ -452,7 +453,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       if(request.operation==='settle')return {state:'indeterminate' as const,lease:saved.lease!,expiresAt:null};
       throw Error('common execution reconciliation required');
     }
-    if(saved && this.deps.now() >= saved.preparedAt + request.maxDurationMs)throw Error('common execution budget expired');
+    if(saved && this.deps.now() >= Math.min(saved.preparedAt + request.maxDurationMs,request.hostRun?.deadline??Infinity))throw Error('common execution budget expired');
     if(saved?.state==='running'&&saved.lease){
       const current=await this.waldoCoordinator.assertMessageExecutionCurrent(saved.lease,authority,()=>directory.assertCurrent(authority));
       if(request.operation.startsWith('tool_')) {
@@ -508,6 +509,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     }
     if(request.operation!=='begin')throw Error('common execution unavailable');
     if(!saved){
+      if(!request.hostRun||request.hostRun.deadline<=this.deps.now()||request.hostRun.deadline>this.deps.now()+EXECUTION_LEASE_MAX_DURATION_MS_V04)throw Error('common physical execution fence unavailable');
       const units=this.ctx.storage.sql.exec<{id:string;revision:number}>('SELECT id,revision FROM work_units WHERE owner_id = ? AND outcome_id = ? ORDER BY position',authority.ownerId,request.source.taskId).toArray();
       if(units.length!==1)throw Error('common execution WorkUnit unavailable');
       saved={ownerId:authority.ownerId,request,digest,state:'prepared',preparedAt:this.deps.now(),expectedRevision:units[0]!.revision,workUnitId:units[0]!.id};
@@ -518,13 +520,13 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       maxProviderTurns:request.maxProviderTurns,maxDurationMs:request.maxDurationMs,executorId:request.binding.environment.id,commandId:`common_authorize_${identity}`,
     },authority,()=>directory.assertCurrent(authority));
     const aggregate=await this.waldoCoordinator.admitMessageExecutionRequestV04({id:`common_execution_${identity}`,outcomeId:request.source.taskId,workUnitId:authorized.workUnit.id},authority,()=>directory.assertCurrent(authority),request.binding);
-    const claimed=this.waldoCoordinator.claimExecutionAttemptV04({executionRequestId:aggregate.request.id,attemptId:`common_attempt_${identity}`,leaseId:`common_lease_${identity}`,sessionId:`common_session_${identity}`,providerSessionRef:null});
+    const claimed=this.waldoCoordinator.claimExecutionAttemptV04({executionRequestId:aggregate.request.id,attemptId:`common_attempt_${identity}`,leaseId:`common_lease_${identity}`,sessionId:`common_session_${identity}`,providerSessionRef:null,expiresAt:new Date(Math.min(request.hostRun?.deadline??Infinity,saved.preparedAt+request.maxDurationMs,saved.preparedAt+EXECUTION_LEASE_MAX_DURATION_MS_V04)).toISOString()});
     const attempt=claimed.attempts.at(-1)!;const lease=claimed.leases.at(-1)!;
     const admittedLease={executionRequestId:aggregate.request.id,attemptId:attempt.id,leaseId:lease.id,fencingGeneration:attempt.fencingGeneration,cancellationGeneration:attempt.cancellationGeneration,sourceSnapshot:request.source};
     await this.waldoCoordinator.assertMessageExecutionCurrent(admittedLease,authority,()=>directory.assertCurrent(authority));
     this.ctx.storage.transactionSync(()=>this.ctx.storage.kv.put(key,{...saved,state:'running',lease:admittedLease}));
     const existingAlarm=await this.ctx.storage.getAlarm();
-    await this.ctx.storage.setAlarm(Math.max(this.deps.now()+250,Math.min(existingAlarm??Infinity,Date.parse(lease.expiresAt),saved.preparedAt+request.maxDurationMs)));
+    await this.ctx.storage.setAlarm(Math.max(this.deps.now()+250,Math.min(existingAlarm??Infinity,Date.parse(lease.expiresAt),saved.preparedAt+request.maxDurationMs,request.hostRun?.deadline??Infinity)));
     return {state:'running' as const,lease:admittedLease,expiresAt:lease.expiresAt};
   }
 
@@ -1440,7 +1442,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       if(row.state!=='running'||!row.lease)continue;
       const aggregate=this.waldoCoordinator.readExecutionAggregateV04(row.ownerId,row.lease.executionRequestId);
       const lease=aggregate.leases.at(-1);
-      if(lease)due=Math.min(due,Date.parse(lease.expiresAt),row.preparedAt+row.request.maxDurationMs);
+      if(lease)due=Math.min(due,Date.parse(lease.expiresAt),row.preparedAt+row.request.maxDurationMs,row.request.hostRun?.deadline??Infinity);
     }
     if(Number.isFinite(due)){
       const prior=await this.ctx.storage.getAlarm();
@@ -1453,7 +1455,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       if(row.state!=='running'||!row.lease)continue;
       const aggregate=this.waldoCoordinator.readExecutionAggregateV04(row.ownerId,row.lease.executionRequestId);
       const attempt=aggregate.attempts.at(-1);const lease=aggregate.leases.at(-1);
-      if(!attempt||!lease||this.deps.now()<Math.min(Date.parse(lease.expiresAt),row.preparedAt+row.request.maxDurationMs))continue;
+      if(!attempt||!lease||this.deps.now()<Math.min(Date.parse(lease.expiresAt),row.preparedAt+row.request.maxDurationMs,row.request.hostRun?.deadline??Infinity))continue;
       // No end is inferred from a clock. Retain the original intent; never restart an uncertain provider effect.
       const publish=()=>{const current=this.ctx.storage.kv.get<typeof row>(key);if(!current||JSON.stringify(current)!==JSON.stringify(row))throw Error('common timeout receipt changed');this.ctx.storage.kv.put(key,{...current,state:'indeterminate'});};
       if(attempt.state==='running'||attempt.state==='indeterminate'){
