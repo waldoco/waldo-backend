@@ -61,3 +61,13 @@ it('stop during provider acquire preserves cleanup fence when exact provider ID 
  expect(row).toMatchObject({cleanup:'pending',allocation:'observed',session:{providerSessionId:'fixture-retained-provider'}});
  expect(commonBrowserFixture.ends).toBe(1);expect(host.attachments()).toHaveLength(0);expect(commonBrowserFixture.allocations).toBe(1);
 });
+
+for(const mode of ['cancel','maintain'] as const)it(`delayed ${mode} cleanup cannot overwrite a changed session generation`,async()=>{
+ const f=fixture();const host=f.host();await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx);
+ let reached!:()=>void,release!:()=>void;const entered=new Promise<void>(r=>reached=r),gate=new Promise<void>(r=>release=r);
+ commonBrowserFixture.onTerminate=async()=>{reached();await gate;};
+ const cleanup=mode==='cancel'?host.cancel():maintainCommonBrowsers(f.storage,f.config,f.grant.expiresAt+1);await entered;
+ const key='common-browser:fixture-task',prior=f.rows.get(key) as any;
+ const successor={...prior,cleanup:undefined,session:{...prior.session,generation:prior.session.generation+1,providerSessionId:'different-exact-id'}};f.rows.set(key,successor);
+ release();await cleanup;expect(f.rows.get(key)).toEqual(successor);expect(commonBrowserFixture.ends).toBe(1);
+});

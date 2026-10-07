@@ -1298,7 +1298,7 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
   }
 });
 
-it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid')('two-argument registered owner host reaches canonical workspace across physical reconstruction',async()=>{
+it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid').each([(env as typeof env & {COMMON_TEST_STOP_DURING_ACQUIRE?:string}).COMMON_TEST_STOP_DURING_ACQUIRE==='1'])('two-argument registered owner host reaches canonical workspace across physical reconstruction (stop-during-acquire %s)',async(stopDuringAcquire)=>{
  const subject=81106,authUser='30000000-0000-0000-0000-000000000006';
  const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(authUser)))].map(b=>b.toString(16).padStart(2,'0')).join('');
  const {responsibilityOwnerRootName}=await import('../src/index');
@@ -1309,9 +1309,33 @@ it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid')('t
   if(String(input)==='https://common-source.fixture.invalid/rest/v1/rpc/workspace_owner_binding')return Response.json({owner_id:'10000000-0000-0000-0000-000000081106',environment:args.p_environment,namespace:args.p_namespace,do_name:args.p_do_name,do_id:args.p_do_id,state_version:0,mapping_version:1});
   throw Error('unexpected real-host synthetic fetch');
  });
+ await runInDurableObject(doStub(subject),async(_instance,state)=>{await state.storage.deleteAll();});
+ await runInDurableObject(root,async(_instance,state)=>{await state.storage.deleteAll();});
+ await evictDurableObject(doStub(subject));await evictDurableObject(root);
  commonBrowserFixture.reset();commonRealHostJourney=true;taskDecision={decision:'retain',sources:[]};
+ let reachedAcquire!:()=>void,releaseAcquire!:()=>void;
+ const acquireReached=new Promise<void>(resolve=>{reachedAcquire=resolve;});
+ const acquireGate=new Promise<void>(resolve=>{releaseAcquire=resolve;});
+ if(stopDuringAcquire)commonBrowserFixture.onAcquire=async()=>{reachedAcquire();await acquireGate;};
+
  try{
-  await send(subject,'Prepare a real private note from supplied material.',998001);
+  const pendingSend=send(subject,'Prepare a real private note from supplied material.',998001);
+  if(stopDuringAcquire){
+   await acquireReached;
+   const response=await doStub(subject).fetch('https://telegram-owner/enqueue',{method:'POST',headers:{'x-waldo-inbox-secret':'hermetic-test-webhook-secret','x-waldo-telegram-subject':String(subject),'x-waldo-do-name':route(subject).doName},body:JSON.stringify({update_id:998004,message:{message_id:998004,from:{id:subject,is_bot:false},chat:{id:subject,type:'private'},text:'/stop'}})});
+   expect(response.status).toBe(200);releaseAcquire();
+  }
+  await pendingSend;
+  if(stopDuringAcquire){
+   await vi.waitFor(()=>expect(commonBrowserFixture.ends).toBe(1));expect(commonBrowserFixture.allocations).toBe(1);
+   await runInDurableObject(doStub(subject),async(_instance,state)=>{
+    const rows=[...state.storage.kv.list<any>({prefix:'common-browser:'})];expect(rows).toHaveLength(1);expect(rows[0]![1]).toMatchObject({cleanup:'closed',allocation:'observed',session:{providerSessionId:'fixture-retained-provider'}});
+    const tables=state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name='workspace_manifest'").toArray();expect(tables).toHaveLength(0);
+    const finals=state.storage.kv.get<any[]>('telegram_final_outbox_v1')??[];expect(finals.some(final=>String(final.payload.text).includes('Private note saved'))).toBe(false);
+   });
+   return;
+  }
+
   await runInDurableObject(root,(_instance,state)=>expect(state.storage.sql.exec('SELECT state FROM execution_attempts').one().state).toBe('settled'));
   await evictDurableObject(doStub(subject));await evictDurableObject(root);
   await send(subject,'Shorten the real private note without changing sources.',998002);

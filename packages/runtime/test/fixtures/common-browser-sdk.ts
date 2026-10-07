@@ -1,6 +1,6 @@
 // Synthetic provider fixture. Sessions/pages outlive caller instances; no network is issued.
 import type { CloudflareBrowserSdkLoader } from '../../src/channels/public-fixture-browser';
-export const commonBrowserFixture={expiresAt:Date.now()+60000,allocations:0,attachments:0,ends:0,onAcquire:undefined as undefined|(()=>void),pages:[] as any[],reset(){this.expiresAt=Date.now()+60000;this.allocations=0;this.attachments=0;this.ends=0;this.onAcquire=undefined;this.pages=[];}};
+export const commonBrowserFixture={expiresAt:Date.now()+60000,allocations:0,attachments:0,ends:0,onTerminate:undefined as undefined|(()=>void|Promise<void>),onAcquire:undefined as undefined|(()=>void|Promise<void>),pages:[] as any[],reset(){this.expiresAt=Date.now()+60000;this.allocations=0;this.attachments=0;this.ends=0;this.onAcquire=undefined;this.onTerminate=undefined;this.pages=[];}};
 const image=Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB1cAAAAASUVORK5CYII='),x=>x.charCodeAt(0));
 let ended=false;
 const page=()=>{
@@ -13,7 +13,7 @@ const page=()=>{
 };
 const context={pages:()=>commonBrowserFixture.pages.slice(),newPage:async()=>page(),route:async()=>{},unroute:async()=>{},newCDPSession:async(p:any)=>({send:async()=>({targetInfo:{targetId:p.id}}),detach:async()=>{}})};
 export const commonBrowserFixtureLoader:CloudflareBrowserSdkLoader=async()=>({
- acquire:async()=>{ended=false;commonBrowserFixture.allocations++;if(!commonBrowserFixture.pages.length)page();commonBrowserFixture.onAcquire?.();return {sessionId:'fixture-retained-provider'};},
- connect:async()=>{if(ended)throw Error('fixture session ended');commonBrowserFixture.attachments++;return {contexts:()=>[context],close:async()=>{},newBrowserCDPSession:async()=>({send:async()=>{ended=true;commonBrowserFixture.ends++;}})};},
+ acquire:async()=>{ended=false;commonBrowserFixture.allocations++;if(!commonBrowserFixture.pages.length)page();await commonBrowserFixture.onAcquire?.();return {sessionId:'fixture-retained-provider'};},
+ connect:async()=>{if(ended)throw Error('fixture session ended');commonBrowserFixture.attachments++;return {contexts:()=>[context],close:async()=>{},newBrowserCDPSession:async()=>({send:async()=>{await commonBrowserFixture.onTerminate?.();ended=true;commonBrowserFixture.ends++;}})};},
  sessions:async()=>ended?[]:[{sessionId:'fixture-retained-provider'}],endpointURLString:()=>'',
 } as never);

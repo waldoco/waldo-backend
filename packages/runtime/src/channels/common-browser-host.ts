@@ -14,6 +14,12 @@ export type CommonBrowserConfiguration = Readonly<{
 }>;
 export const COMMON_BROWSER_DUE='common_browser_due_v1';
 type BrowserRecord={grant:CommonBrowserGrant;session:BrowserSession;tabs:Readonly<{url:string;ref:string}>[];allocation:'prepared'|'observed';cleanup?:'pending'|'closed';cleanupFailed?:boolean};
+const sameSession=(a:BrowserRecord,b:BrowserRecord)=>a.session.id===b.session.id&&a.session.generation===b.session.generation&&a.session.providerSessionId===b.session.providerSessionId&&JSON.stringify(a.grant)===JSON.stringify(b.grant);
+const publishCleanup=(storage:DurableObjectStorage,key:string,expected:BrowserRecord,closed:boolean)=>storage.transactionSync(()=>{
+ const current=storage.kv.get<BrowserRecord>(key);
+ if(!current||!sameSession(current,expected)||current.cleanup==='closed')return;
+ storage.kv.put(key,{...current,cleanup:closed?'closed':'pending',cleanupFailed:closed?undefined:true,session:{...current.session,state:closed?'ended':current.session.state}});
+});
 export function commonBrowserHost(options:Readonly<{
  storage:DurableObjectStorage;config:CommonBrowserConfiguration;ownerId:string;
  source():TaskSourceSnapshot;assertCurrent():Promise<void>;deadline():number;now():number;
@@ -45,7 +51,7 @@ export function commonBrowserHost(options:Readonly<{
     if(record&&(JSON.stringify(record.grant)!==JSON.stringify(grant)||record.session.ownerId!==options.ownerId||record.cleanup||record.allocation!=='observed'))throw Error('common browser retained identity uncertain');
     if(!record){
      const now=options.now();record={grant,allocation:'prepared',tabs:[],session:browserSessionSchema.parse({id:crypto.randomUUID(),ownerId:options.ownerId,provider:'cloudflare_playwright',providerSessionId:'pending',contextHandle:null,mode:'public',state:'starting',generation:1,expiresAt:Math.min(grant.expiresAt,now+grant.lifetimeMs),updatedAt:now})};
-     await driver.start(grant.allowedOrigins.map(origin=>new URL(origin).hostname),grant.lifetimeMs,async()=>{await options.config.reserveAllocation(grant);await checked();save(record!,storageKey);},async id=>{const retained=options.storage.kv.get<Record>(storageKey);if(!retained||retained.session.id!==record!.session.id)throw Error('common browser allocation custody changed');record={...retained,cleanupFailed:undefined,allocation:'observed',session:{...retained.session,providerSessionId:id,state:'active',updatedAt:options.now()}};save(record!,storageKey);});
+     await driver.start(grant.allowedOrigins.map(origin=>new URL(origin).hostname),grant.lifetimeMs,async()=>{await options.config.reserveAllocation(grant);await checked();save(record!,storageKey);},async id=>{options.storage.transactionSync(()=>{const retained=options.storage.kv.get<Record>(storageKey);if(!retained||retained.session.id!==record!.session.id||retained.session.generation!==record!.session.generation||JSON.stringify(retained.grant)!==JSON.stringify(grant))throw Error('common browser allocation custody changed');record={...retained,cleanupFailed:undefined,allocation:'observed',session:{...retained.session,providerSessionId:id,state:retained.cleanup?retained.session.state:'active',updatedAt:options.now()}};save(record!,storageKey);});});
     }
     if(images.length>=4)throw Error('common browser image budget exhausted');
     const existing=record.tabs.find(tab=>tab.url===args.url);
@@ -65,7 +71,7 @@ export function commonBrowserHost(options:Readonly<{
   if(record.session.providerSessionId==='pending')throw Error('common browser allocation uncertain');
   // Cleanup does not depend on a still-live execution lease.
   await makeDriver(record.grant).terminate(record.session);
-  save({...record,cleanup:'closed',session:{...record.session,state:'ended'}},key(task.taskId));
+  publishCleanup(options.storage,key(task.taskId),record,true);
  }};
 }
 
@@ -79,8 +85,8 @@ export async function maintainCommonBrowsers(storage:DurableObjectStorage,config
    if(row.session.providerSessionId==='pending')throw Error('allocation identity uncertain');
    const driver=cloudflareGeneralBrowser({ownerId:row.session.ownerId,binding:config.binding,loadSdk:config.loadSdk,now:()=>now,deadline:()=>now,maxScreenshotBytes:row.grant.maxScreenshotBytes,admit:async()=>{throw Error('cleanup only');},authorizeRequest:async()=>false});
    await driver.terminate(row.session);
-   storage.transactionSync(()=>storage.kv.put(key,{...row,cleanup:'closed',session:{...row.session,state:'ended'}}));
-  }catch{storage.transactionSync(()=>storage.kv.put(key,{...row,cleanup:'pending',cleanupFailed:true}));}
+   publishCleanup(storage,key,row,true);
+  }catch{publishCleanup(storage,key,row,false);}
  }
  const due=[...storage.kv.list<BrowserRecord>({prefix:'common-browser:'})].map(([,row])=>row).filter(row=>row.cleanup!=='closed'&&!row.cleanupFailed).map(row=>row.session.expiresAt);
  storage.kv.put(COMMON_BROWSER_DUE,due.length?Math.min(...due):null);
