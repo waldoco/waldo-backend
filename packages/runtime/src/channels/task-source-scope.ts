@@ -49,6 +49,17 @@ const withNarrowedColumn = (sql: SqlStorage) => { if (!sql.exec<{ name: string }
 // Read-only families the owner's own chat uses by default: his own memory (local) and workspace, the public web, and the Google families once Google is connected.
 // Sends, calendar writes, spending and other effects keep their own approval desks.
 export const ownerReadSources = (googleAccounts: readonly unknown[]): readonly TaskSourceFamily[] => googleAccounts.length ? ['local', 'workspace', 'web', 'mail', 'calendar', 'contacts', 'tasks', 'drive'] : ['local', 'workspace', 'web'];
+// Enabling the common path for an owner: legacy custody that holds only host defaults carries no
+// owner decision and is retired; an explicit owner restriction or pending proposal is never dropped silently.
+export const retireLegacyDefaultTaskSources = (sql: SqlStorage): 'none' | 'retired' | 'owner_restriction' => {
+  if (!sql.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='owner_task_source_scope'").toArray().length) return 'none';
+  withNarrowedColumn(sql);
+  const rows = sql.exec<{ narrowed: number; pending_json: string | null }>('SELECT narrowed, pending_json FROM owner_task_source_scope').toArray();
+  if (!rows.length) return 'none';
+  if (rows.some(row => row.narrowed === 1 || row.pending_json !== null)) return 'owner_restriction';
+  sql.exec('DELETE FROM owner_task_source_scope');
+  return 'retired';
+};
 export const readTaskSourceSnapshot = (sql: SqlStorage, ownerKey: string): TaskSourceSnapshot => {
   const row = sql.exec<Row>('SELECT * FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).toArray()[0];
   if (!row || !row.task_id || !Number.isSafeInteger(row.revision) || row.revision < 1 || ![0, 1].includes(row.ready)) throw new Error('Task source custody unavailable');

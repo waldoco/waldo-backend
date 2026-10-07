@@ -534,3 +534,16 @@ it('an owner-worded non-default family (mcp) commits directly with no card; gran
   expect(result.snapshot.ready).toBe(true);
   expect(result.snapshot.sources).toEqual(expect.arrayContaining(['mail', 'mcp']));
 }));
+
+it('enabling common retires default legacy custody but never drops an owner restriction', () => run('task-custody-retire', async (sql, scope) => {
+  const { retireLegacyDefaultTaskSources } = await import('../src/channels/task-source-scope');
+  expect(retireLegacyDefaultTaskSources(sql)).toBe('none');
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, undefined, ['workspace', 'web']);
+  await cap.current();
+  expect(retireLegacyDefaultTaskSources(sql)).toBe('retired');
+  expect(sql.exec('SELECT owner_key FROM owner_task_source_scope').toArray()).toEqual([]);
+  const cap2 = createTaskSourceScope(sql, 'owner-one', scope, async () => {});
+  await cap2.classify(decision('restrict', ['mail']));
+  expect(retireLegacyDefaultTaskSources(sql)).toBe('owner_restriction');
+  expect(sql.exec('SELECT owner_key FROM owner_task_source_scope').toArray().length).toBe(1);
+}));
