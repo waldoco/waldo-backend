@@ -58,6 +58,9 @@ jobs:
       - name: Hermetic owner ingress
         working-directory: packages/runtime
         run: npx vitest run --config vitest.owner-ingress.config.ts
+      - name: Console ticket tenant routing
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.console-ticket.config.ts
 
   # Matches the in-lane gate exactly: 4 shards, each a small process that exits cleanly.
   # Falsifier for coverage: the shard totals must sum to the full runtime test count.

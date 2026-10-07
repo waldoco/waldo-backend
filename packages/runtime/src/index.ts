@@ -19,7 +19,8 @@ import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH } from './channels/console';
 import { ownerDirectory } from './identity/owner-directory';
 import { downloadReturnTarget, handleConsole, CONSOLE_SIGNIN_PATH } from './channels/console-signin';
-import { consoleAuth } from './identity/console-auth';
+import { consoleAuth, OWNER_COOKIE } from './identity/console-auth';
+import { readConsoleTicket } from './identity/console-ticket';
 import { serveDashboard } from './channels/dashboard-static';
 import { consoleLog, consoleTrace, withConsoleTrace } from './observability/console-correlation';
 import type { GatewaySecretBinding } from './llm/gateway';
@@ -115,9 +116,9 @@ export class RuntimeProbeDO extends DurableObject<Env> {
   }
 }
 
-const forwardTicketConsole = async (request: Request, env: Env): Promise<Response> => {
-  if (!env.TELEGRAM_OWNER_DO || !env.WALDO_OWNER_TELEGRAM_ID) return new Response('unauthorized', { status: 401 });
-  const ownerRoute = await ownerDirectory(env).byPresence('telegram', env.WALDO_OWNER_TELEGRAM_ID);
+const forwardTicketConsole = async (request: Request, env: Env, issuer?: string): Promise<Response> => {
+  if (!env.TELEGRAM_OWNER_DO || (!issuer && !env.WALDO_OWNER_TELEGRAM_ID)) return new Response('unauthorized', { status: 401 });
+  const ownerRoute = issuer ? { doName: issuer } : await ownerDirectory(env).byPresence('telegram', env.WALDO_OWNER_TELEGRAM_ID!);
   if (!ownerRoute) return new Response('owner unavailable', { status: 503 });
   const doName = ownerRoute.doName;
   const forwarded = new Request(request);
@@ -125,8 +126,37 @@ const forwardTicketConsole = async (request: Request, env: Env): Promise<Respons
   return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(doName)).fetch(forwarded);
 };
 
+const routedConsoleTicket = async (request: Request, env: Env): Promise<Response | null> => {
+  const url = new URL(request.url);
+  if (url.pathname !== CONSOLE_PATH || !['GET', 'POST'].includes(request.method)) return null;
+  let value: string | null;
+  try { value = request.method === 'GET' ? url.searchParams.get('t') : String((await request.clone().formData()).get('t') ?? ''); }
+  catch { return new Response('invalid console request', { status: 400, headers: { 'cache-control': 'no-store' } }); }
+  if (!value || /^[a-f0-9]{64}$/.test(value)) return null;
+  const rejected = () => new Response('This console link is invalid or expired. Request a new link. If another account is signed in, sign out first.', { status: 403, headers: { 'cache-control': 'no-store' } });
+  if (!value.startsWith('c1.') || !env.WALDO_ROUTER_HMAC_SECRET) return rejected();
+  const ticket = await readConsoleTicket(value, env.WALDO_ROUTER_HMAC_SECRET);
+  const auth = consoleAuth(env);
+  if (!ticket || !auth) return rejected();
+  const hasOwner = (request.headers.get('cookie') ?? '').split(';').some(part => part.trim().startsWith(`${OWNER_COOKIE}=`));
+  try { if (hasOwner && await auth.readOwnerCookie(request) !== ticket.owner) return rejected(); }
+  catch { return new Response('Sign-in is temporarily unavailable.', { status: 503, headers: { 'cache-control': 'no-store' } }); }
+  const response = await forwardTicketConsole(request, env, ticket.owner);
+  if (request.method !== 'POST' || response.status !== 303 || !response.headers.get('set-cookie')) return response;
+  let ownerCookie: string | null;
+  try { ownerCookie = await auth.ownerCookie(ticket.owner); }
+  catch { ownerCookie = null; }
+  if (!ownerCookie) return new Response('Sign-in is temporarily unavailable. Request a new link and try again.', { status: 503, headers: { 'cache-control': 'no-store' } });
+  const headers = new Headers(response.headers);
+  headers.append('set-cookie', `${OWNER_COOKIE}=${ownerCookie}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200`);
+  headers.set('cache-control', 'no-store');
+  return new Response(response.body, { status: response.status, headers });
+};
+
 export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+    const ticketResponse = await routedConsoleTicket(request, env);
+    if (ticketResponse) return ticketResponse;
     if (new URL(request.url).pathname === '/healthz') {
       return Response.json({ ok: true, release: env.WALDO_RELEASE ?? null });
     }

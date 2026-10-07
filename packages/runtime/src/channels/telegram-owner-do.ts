@@ -101,6 +101,7 @@ import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, sha256H
 import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
 import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
 import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
+import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
 import { googleProxy } from '../connectors/connections';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
@@ -941,7 +942,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (link && request.method === 'GET') return signInPage(link);
     const posted = url.pathname === CONSOLE_PATH && request.method === 'POST' ? String((await request.formData()).get('t') ?? '') : '';
     if (posted) {
-      const session = await access.redeem(posted, sessionCookie(request));
+      const routed = posted.startsWith('c1.') && this.env.WALDO_ROUTER_HMAC_SECRET ? await readConsoleTicket(posted, this.env.WALDO_ROUTER_HMAC_SECRET) : null;
+      if (posted.startsWith('c1.') && (!routed || this.env.TELEGRAM_OWNER_DO?.idFromName(routed.owner).toString() !== this.ctx.id.toString())) return new Response('Invalid console link.', { status: 403 });
+      const session = await this.serial(() => access.redeem(routed?.token ?? posted, sessionCookie(request)));
       if (!session) return new Response('This console link is used or expired. Send /console to Waldo for a new one.', { status: 403 });
       return new Response(null, { status: 303, headers: { location: CONSOLE_PATH, 'set-cookie': `${CONSOLE_COOKIE}=${session}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200` } });
     }
@@ -1408,7 +1411,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (harness?.kind === 'console') {
         if (!durable) await this.ctx.storage.put(offsetKey, updateId + 1);
         const origin = await this.ctx.storage.get<string>('origin');
-        await call('sendMessage', { chat_id: owner, text: origin ? `Console (link works once, for 10 minutes): ${await consoleAccess(this.ctx.storage).mintLink(origin)}` : 'Console origin is not known yet; send any message first.', link_preview_options: { is_disabled: true } });
+        const issuer = this.ctx.storage.kv.get<string>('do_name');
+        const secret = this.env.WALDO_ROUTER_HMAC_SECRET;
+        const configured = consoleAuth(this.env) !== null;
+        const link = origin && (!configured || issuer && secret) ? await consoleAccess(this.ctx.storage).mintLink(origin, configured ? { owner: issuer!, secret: secret! } : undefined) : null;
+        await call('sendMessage', { chat_id: owner, text: link ? `Console (link works once, for 10 minutes): ${link}` : 'Console sign-in is unavailable; try again shortly.', link_preview_options: { is_disabled: true } });
         return;
       }
       if (harness) {
