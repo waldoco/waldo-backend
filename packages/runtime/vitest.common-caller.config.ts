@@ -6,6 +6,8 @@ export default defineConfig({
   test: { include: ['test/owner-do-ingress-isolation.test.ts'], name: 'synthetic-common-caller' },
   plugins: [cloudflareTest({
     miniflare: { bindings: {
+      COMMON_TEST_WORKSPACE_RESULT_FAULT:process.env.COMMON_TEST_WORKSPACE_RESULT_FAULT??'0',
+      COMMON_TEST_FIRST_FINAL_FAULT:process.env.COMMON_TEST_FIRST_FINAL_FAULT??'0',
       COMMON_TEST_STOP_DURING_ACQUIRE:process.env.COMMON_TEST_STOP_DURING_ACQUIRE??'0',
       WALDO_ENV: 'test', RUN_LOOP_PROVIDER_MODE: 'fake', COMMON_OWNER_TASKS:'1', WALDO_EGRESS_ALLOWLIST:'public-pages.fixture.invalid',
       SUPABASE_PROJECT_URL:'https://common-source.fixture.invalid', SUPABASE_PUBLISHABLE_KEY:'common-source-fixture', WALDO_ROUTER_HMAC_SECRET:'common-source-fictional-hmac',

@@ -37,6 +37,8 @@ import { ProxyIntentError, type ProxyIntent } from '../connectors/proxy-intent';
 import { eventAdmission } from './event-admission';
 import { DurableObject } from 'cloudflare:workers';
 import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
+import {workspaceOperationId} from '../tools/live/workspace-operation';
+import {workspaceDelivery} from './workspace-delivery';
 import { workspaceToolHandlers } from '../tools/live/workspace';
 import { workspaceDownload, workspacePage, workspaceRead } from './console-workspace';
 import { triggerTypeSchema, TOOL_PERMISSIONS, browsePageArgsSchema, setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from '@waldo/contracts';
@@ -341,8 +343,26 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       tool:async(name:string,args:unknown,ctx:import('../tools/dispatcher').ToolDispatcherContext,issue:()=>Promise<unknown>)=>{
         if(!started||!ctx.toolCallId||!request?.tools.includes(name))throw Error('common tool invocation unavailable');
         const call={id:`tool_${await sha256Hex(JSON.stringify([ctx.turnId,ctx.toolCallId]))}`,name,requestDigest:`sha256:${await sha256Hex(JSON.stringify(args))}`};
+        const operationId=name==='workspace_write'?await workspaceOperationId([ctx.authenticatedUserId,ctx.turnId,ctx.toolCallId]):undefined;
+        const receiptKey=`common-tool-host:${occurrence.id}:${call.id}`;
+        const identity={call,operationId:operationId??null};
+        const prior=this.ctx.storage.kv.get<typeof identity>(receiptKey);
+        if(prior&&JSON.stringify(prior)!==JSON.stringify(identity))throw Error('common tool identity changed');
+        scope.commit(()=>this.ctx.storage.kv.put(receiptKey,identity));
         await invoke('tool_prepare',undefined,undefined,call);
-        const result=await issue();
+        let result:unknown;
+        try{result=await issue();}catch(error){
+          if(!operationId)throw error;
+          await invoke('check');scope.admit();await ctx.assertTaskSourceCurrent?.();
+          // Exact original operation readback, never handler/write replay or a new model call.
+          const store=await workspaceOwnerHost(this.env,this.ctx.storage,this.ctx.id.toString(),occurrence.doName,fetch,scope,ctx.assertTaskSourceCurrent);
+          const meta=await store.reconcile(operationId);
+          await store.export(meta.file_id,meta.revision);
+          if(this.ctx.storage.kv.get<typeof identity>(receiptKey)?.call.requestDigest!==call.requestDigest)throw Error('common tool recovery changed');
+          const delivery=await workspaceDelivery(store,meta,{durable:Boolean(this.env.ARTIFACTS),origin:async()=>await this.ctx.storage.get<string>('origin')??null});
+          result={ok:true,source_taint:null,data:{file_id:meta.file_id,revision:meta.revision,byte_size:meta.byte_size,sha256:meta.sha256,delivery}};
+          await invoke('check');scope.admit();await ctx.assertTaskSourceCurrent?.();
+        }
         await settleObservation('tool_settle',undefined,{...call,resultDigest:`sha256:${await sha256Hex(JSON.stringify(result))}`});
         return result;
       },

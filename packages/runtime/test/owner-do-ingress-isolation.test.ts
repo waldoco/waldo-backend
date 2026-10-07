@@ -36,8 +36,24 @@ vi.mock('../src/channels/telegram-owner-do', async load => {
   } };
 });
 
+let loseWorkspaceResult=false;let lostWorkspaceResults=0;let issuedWorkspaceWrites=0;
+vi.mock('../src/tools/live/workspace',async load=>{
+ const original=await load<typeof import('../src/tools/live/workspace')>();
+ return {...original,workspaceToolHandlers:(...args:Parameters<typeof original.workspaceToolHandlers>)=>original.workspaceToolHandlers(...args).map(handler=>handler.name!=='workspace_write'?handler:{...handler,handle:async(...call:Parameters<typeof handler.handle>)=>{
+  issuedWorkspaceWrites++;const result=await handler.handle(...call);if(loseWorkspaceResult&&result.ok){loseWorkspaceResult=false;lostWorkspaceResults++;throw Error('fixture lost original committed workspace result');}return result;
+ }})};
+});
+
+vi.mock('../src/identity/common-execution-request',async load=>{
+ const original=await load<typeof import('../src/identity/common-execution-request')>();
+ return {...original,signCommonExecutionRequest:async(...args:Parameters<typeof original.signCommonExecutionRequest>)=>{
+  if(blockFirstRootFinal&&args[2].operation==='settle'){blockedRootFinals++;throw Error('fixture host interrupted before first root final request');}
+  return original.signCommonExecutionRequest(...args);
+ }};
+});
+
 // Drop only ACKs after the real root committed the observation; never replay model/tool I/O.
-let lostCommonAcks=new Set<string>();let droppedCommonAcks=0;
+let lostCommonAcks=new Set<string>();let droppedCommonAcks=0;let blockFirstRootFinal=false;let blockedRootFinals=0;
 vi.mock('../src/run-loop/do',async load=>{
  const original=await load<typeof import('../src/run-loop/do')>();
  return {...original,RunLoopDO:class extends original.RunLoopDO{
@@ -1313,6 +1329,8 @@ it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid').ea
  await runInDurableObject(root,async(_instance,state)=>{await state.storage.deleteAll();});
  await evictDurableObject(doStub(subject));await evictDurableObject(root);
  commonBrowserFixture.reset();commonRealHostJourney=true;taskDecision={decision:'retain',sources:[]};
+ const recoverWorkspace=(env as typeof env & {COMMON_TEST_WORKSPACE_RESULT_FAULT?:string}).COMMON_TEST_WORKSPACE_RESULT_FAULT==='1';if(recoverWorkspace){loseWorkspaceResult=true;lostWorkspaceResults=0;issuedWorkspaceWrites=0;}
+ const interruptFinal=(env as typeof env & {COMMON_TEST_FIRST_FINAL_FAULT?:string}).COMMON_TEST_FIRST_FINAL_FAULT==='1';if(interruptFinal){blockFirstRootFinal=true;blockedRootFinals=0;}
  let reachedAcquire!:()=>void,releaseAcquire!:()=>void;
  const acquireReached=new Promise<void>(resolve=>{reachedAcquire=resolve;});
  const acquireGate=new Promise<void>(resolve=>{releaseAcquire=resolve;});
@@ -1336,6 +1354,15 @@ it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid').ea
    return;
   }
 
+  if(recoverWorkspace){expect(lostWorkspaceResults).toBe(1);expect(issuedWorkspaceWrites).toBe(1);}
+  if(interruptFinal){
+   expect(blockedRootFinals).toBeGreaterThan(0);const calls=modelInputs.length;
+   await runInDurableObject(root,(_instance,state)=>expect(state.storage.sql.exec('SELECT state FROM execution_attempts').one().state).toBe('running'));
+   await runInDurableObject(doStub(subject),(_instance,state)=>expect(state.storage.kv.get<any[]>('telegram_final_outbox_v1')!.some(row=>row.commonExecution&&!row.commonExecution.settled)).toBe(true));
+   blockFirstRootFinal=false;await evictDurableObject(doStub(subject));await evictDurableObject(root);
+   await runInDurableObject(doStub(subject),async(instance)=>{await instance.alarm();});
+   expect(modelInputs.length).toBe(calls);
+  }
   await runInDurableObject(root,(_instance,state)=>expect(state.storage.sql.exec('SELECT state FROM execution_attempts').one().state).toBe('settled'));
   await evictDurableObject(doStub(subject));await evictDurableObject(root);
   await send(subject,'Shorten the real private note without changing sources.',998002);
@@ -1363,5 +1390,5 @@ it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid').ea
    const rows=[...state.storage.kv.list<any>({prefix:'common-browser:'})];expect(rows[0]![1].cleanup).toBe('closed');
   });
 
- }finally{commonRealHostJourney=false;vi.unstubAllGlobals();}
+ }finally{loseWorkspaceResult=false;blockFirstRootFinal=false;commonRealHostJourney=false;vi.unstubAllGlobals();}
 });
