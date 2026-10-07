@@ -6,6 +6,7 @@ import { generalDigest, generalPageState, type GeneralSnapshot } from './general
 import { parseGeneralBrowserAction, type GeneralBrowserAction } from './general-browser-actions';
 export type { GeneralBrowserAction } from './general-browser-actions';
 import { generalBrowserDiagnostic, type GeneralBrowserDiagnostic } from './general-browser-diagnostic';
+import { generalBrowserHandoff, GeneralHandoffError, type GeneralHandoffRequest, type GeneralHandoffControl } from './cloudflare-general-handoff';
 import { GENERAL_BROWSER_REDIRECT_LIMIT, GeneralRedirectError, guardGeneralBrowserRoute } from './general-browser-redirects';
 
 export class GeneralBrowserError extends Error {
@@ -117,6 +118,10 @@ export function cloudflareGeneralBrowser(options: Options) {
       primary = mutationDispatched || error instanceof GeneralBrowserError && error.code === 'outcome_uncertain'
         ? new GeneralBrowserError('outcome_uncertain', (error instanceof GeneralBrowserError ? error.diagnostic : undefined) ?? documentFailure?.diagnostic)
         : documentFailure ?? (error instanceof GeneralBrowserError ? error : new GeneralBrowserError(error instanceof GeneralRedirectError ? 'rejected' : 'provider_unavailable'));
+      if (error instanceof GeneralBrowserError) {
+        if (error.cleanup_failed) primary.cleanup_failed = true;
+        if (error.release_failed) primary.release_failed = true;
+      }
       throw primary;
     } finally {
       // Aborted main navigations can retain a Chromium error document. Discard
@@ -243,6 +248,28 @@ export function cloudflareGeneralBrowser(options: Options) {
         return await observe(session, context, page);
       }
       catch { throw new GeneralBrowserError('outcome_uncertain'); }
+    }),
+    handoff: (session: BrowserSession, snapshot: GeneralSnapshot, request: GeneralHandoffRequest,
+      control: Pick<GeneralHandoffControl, 'beforeHandoff' | 'storeOwnerView' | 'signal'>) => attached(session, async (browser, context, navigation) => {
+      if (snapshot.ownerId !== session.ownerId || snapshot.sessionId !== session.id || snapshot.generation !== session.generation) throw new GeneralBrowserError('stale_observation');
+      const page = await select(session, context, snapshot.observation.tab_ref);
+      const checked = async () => {
+        const current = await observe(session, context, page);
+        if (current.targetId !== snapshot.targetId || current.digest !== snapshot.digest) throw new GeneralBrowserError('stale_observation');
+      };
+      await checked();
+      const cdp = await browser.newBrowserCDPSession();
+      try {
+        return await generalBrowserHandoff(cdp, request, { ...control,
+          scope: { ownerId: session.ownerId, sessionId: session.id, generation: session.generation, providerSessionId: session.providerSessionId, targetId: snapshot.targetId },
+          now: options.now, deadline: () => Math.min(session.expiresAt, options.deadline()), admit: () => admit(session), onMintAttempt: navigation.dispatched,
+          beforeHandoff: async digest => { await control.beforeHandoff(digest); await checked(); },
+        });
+      } catch (error) {
+        const failure = new GeneralBrowserError(error instanceof GeneralHandoffError ? error.code : 'provider_unavailable');
+        if (error instanceof GeneralHandoffError && error.view_mint_attempted) try { await terminateId(session.providerSessionId); } catch { failure.cleanup_failed = true; }
+        throw failure;
+      } finally { try { await cdp.detach(); } catch { /* browser connection release remains authoritative below */ } }
     }),
     observe: (session: BrowserSession, reference?: string) => attached(session, async (_, context) => observe(session, context, await select(session, context, reference))),
     navigate: (session: BrowserSession, url: string, reference?: string) => attached(session, async (_, context, navigation) => {

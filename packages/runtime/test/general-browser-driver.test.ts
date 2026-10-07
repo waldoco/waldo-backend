@@ -250,3 +250,25 @@ it.each(['click', 'close'] as const)('keeps a successful %s uncertain if only di
   if (operation === 'click') expect(f.calls).toContain('click');
   else expect(f.pages).toEqual([]);
 });
+it('binds the concrete handoff operation to a fresh owned snapshot and private owner custody', async () => {
+  const f = harness(), listeners = new Set<(event: any) => void>(), stored: any[] = [], commands: string[] = [];
+  const row = { ...session, expiresAt: 120001 };
+  f.browser.newBrowserCDPSession = async () => ({
+    on: (_: string, listener: any) => { listeners.add(listener); }, off: (_: string, listener: any) => { listeners.delete(listener); }, detach: async () => {},
+    send: async (method: string) => {
+      commands.push(method);
+      if (method === 'Cloudflare.getSessionId') return { sessionId: session.providerSessionId };
+      if (method === 'Cloudflare.getHandoffState') return { active: false };
+      if (method === 'Cloudflare.getLiveView') return { id: f.pages[0].id, devtoolsFrontendUrl: 'https://live.browser.run/ui/view?mode=tab&wss=synthetic-private-bearer', webSocketDebuggerUrl: 'wss://live.browser.run/synthetic-private-bearer', options: {} };
+      if (method === 'Cloudflare.handoff') { for (const listener of listeners) listener({ targetId: f.pages[0].id, handoffId: 'handoff-a', success: true }); return { targetId: f.pages[0].id, handoffId: 'handoff-a' }; }
+    },
+  } as any);
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 120001, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(row, 'https://docs.example/index');
+  const result = await driver.handoff(row, first, { instructions: 'Inspect this public fixture', timeoutMs: 1000, viewExpiresInMs: 60000 }, { beforeHandoff: async () => {}, storeOwnerView: async view => { stored.push(view); }, signal: new AbortController().signal });
+  expect(result).toMatchObject({ status: 'provider_reported', reported_success: true });
+  expect(JSON.stringify(result)).not.toContain('synthetic-private-bearer');
+  expect(stored[0]).toMatchObject({ ownerId: 'owner-a', sessionId: session.id, generation: session.generation });
+  expect(commands).toEqual(['Cloudflare.getSessionId', 'Cloudflare.getHandoffState', 'Cloudflare.getLiveView', 'Cloudflare.handoff']);
+  expect(listeners.size).toBe(0);
+});

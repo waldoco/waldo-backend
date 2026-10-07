@@ -584,3 +584,13 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 | Failure | Regression | Boundary |
 | --- | --- | --- |
 | 2026-10-07 review: release failure after a successful mutation bypassed the primary catch and returned provider_unavailable without release metadata | general-browser-driver.test.ts successful click/observation and successful close followed only by failed disconnect | Both preserve outcome_uncertain and release_failed; no automatic effect retry or replacement session |
+
+### Browser human handoff custody
+
+- [ ] Verify exact retained session and fresh owner/session/generation/target observation before minting a Live View. Existing host approval and owner-encrypted private custody callbacks are required; a bearer URL never appears in a model result or log.
+- [ ] Subscribe before initiating handoff and correlate both target and handoff IDs. Inactive polling is not success. A provider-reported human outcome is not task-completion proof.
+- [ ] Recheck actual remaining authority after approval before minting against provider minimum60-second connection-start lifetime; link expiry does not revoke established viewers. Host withdrawal must physically terminate the owned session; mint/custody uncertainty retains cleanup obligations.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| 2026-10-07: approval awaits can consume the remaining Live View lifetime; unmatched events, inactive state or private custody failure could otherwise be mistaken for authorized completion | general-browser-handoff.test.ts post-approval deadline, wrong target/handoff, timeout, provider/session mismatch, private-custody failure and bounded provider report; general-browser-driver.test.ts concrete owned snapshot/private-custody invocation | Pinned CDP command types and fake transport only. Actual encrypted custody, owner UI delivery, takeover-mode transition, restart recovery and source-withdrawal cancellation remain Core integration and provider acceptance work |
