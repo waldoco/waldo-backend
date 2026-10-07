@@ -2,6 +2,9 @@
 
 ### General browser observation and failure custody
 
+- [ ] Browser observation scripts must execute after the real installed TypeScript transform and Playwright serialization in Chromium; nested named functions can introduce host-only compilation helpers invisible to structural fakes.
+- [ ] Never fulfill a redirect response to Chromium when each hop needs authorization. Main redirects settle into an empty host bridge before fresh vetted navigation; resource hops strip cross-origin credentials, do not replay a mutative redirect, and remain bounded by the installed SDK redirect limit. Discard rejected main navigations before reuse.
+
 - [ ] Browser actions recheck current owner authority after all awaited observation metadata and immediately before dispatch. Revocation during a final tab-title/CDP read must produce zero effects.
 - [ ] Disconnect failure preserves an existing uncertain action outcome and bounded provider diagnostic, with release failure recorded separately. Entry admission and identity-schema failures return typed bounded rejection rather than arbitrary host error text.
 - [ ] A model-visible select control includes option labels and exact values; dispatch accepts only enabled options present in the current trusted observation.
@@ -565,3 +568,8 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] Controlled synthetic browser submit classification includes native button/default-button and input submit/image controls plus Enter in a form. Model labels or a declared read never bypass the owner hold; a declared send may widen it. Regression: browser-synthetic-commands.test.ts native submitter matrix.
 - [ ] Browser absolute expiry is checked synchronously after the final awaited observation, at physical execution and at exact approved request authorization. Regression: browser-synthetic-commands.test.ts advances the clock during final observation and proves zero POSTs plus physical cleanup.
 - [ ] Widening a hold from a model-declared send must not substitute a different action. Only the observed configured native form submit or Enter may mint this slice's submit card; other declared sends remain explicitly unsupported, with no card, action or success claim.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| 2026-10-07: tsx/esbuild keepNames injected a host-only __name helper into nested browser observation code, breaking ordinary navigate/observe/action observation | general-browser-redirect-probe.mjs evaluates the actual transformed function with installed Playwright and local Chromium; old reviewed source reproduces ReferenceError | Local real-engine proof; no remote Cloudflare retention or model proof |
+| 2026-10-07: fulfilling 302 bypassed subsequent routing; aborting an approved redirect raced a chrome-error navigation; rejected main navigation retained an error document | general-browser-redirect-probe.mjs authorized two-hop navigation and clicked redirect, zero disallowed requests and stale rejected tab; general-browser-redirects.test.ts credential stripping and POST replay controls | Existing host authorization executes before every fetched hop; native provider guardrails remain fixed, no automatic paid fallback or broader grants |

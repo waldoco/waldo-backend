@@ -159,7 +159,7 @@ it('does not fulfill a denied document or report a click into it as useful work'
   const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   const first = await driver.navigate(session, 'https://docs.example/index');
   f.pages[0].locator = () => ({ click: async () => {
-    await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null }) }),
+    await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }),
       fetch: async () => ({ status: () => 403 }), fulfill: async () => { routeCalls.push('fulfilled'); }, abort: async () => { routeCalls.push('blocked'); } });
   } });
   await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'page_unavailable', diagnostic: { status: 403 } });
@@ -202,7 +202,7 @@ it('rejects redirect chains before an unchecked redirected request', async () =>
   const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   await driver.navigate(session, 'https://docs.example/index');
   const calls: string[] = [];
-  await f.route({ request: () => ({ url: () => 'https://docs.example/redirect', method: () => 'GET' }),
+  await f.route({ request: () => ({ url: () => 'https://docs.example/redirect', method: () => 'GET', isNavigationRequest: () => false }),
     continue: async () => { calls.push('unchecked'); },
     fetch: async (options: unknown) => { expect(options).toMatchObject({ maxRedirects: 0 }); return { status: () => 302 }; },
     fulfill: async () => { calls.push('fulfilled'); }, abort: async () => { calls.push('blocked'); } });

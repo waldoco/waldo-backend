@@ -6,12 +6,15 @@ import { generalDigest, generalPageState, type GeneralSnapshot } from './general
 import { parseGeneralBrowserAction, type GeneralBrowserAction } from './general-browser-actions';
 export type { GeneralBrowserAction } from './general-browser-actions';
 import { generalBrowserDiagnostic, type GeneralBrowserDiagnostic } from './general-browser-diagnostic';
+import { GENERAL_BROWSER_REDIRECT_LIMIT, GeneralRedirectError, guardGeneralBrowserRoute } from './general-browser-redirects';
 
 export class GeneralBrowserError extends Error {
   release_failed?: true;
+  cleanup_failed?: true;
   constructor(readonly code: 'rejected' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
 }
 type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; now(): number; deadline(): number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number }>;
+type Navigation = Readonly<{ goto(page: Page, url: string): Promise<void>; finish(page: Page): Promise<void>; pending(page: Page): boolean }>;
 
 // The owner host owns the durable checkpoint, authority and serialization. This
 // driver never allocates on attach failure and never creates a second ledger.
@@ -52,8 +55,33 @@ export function cloudflareGeneralBrowser(options: Options) {
     try { return (await cdp.send('Target.getTargetInfo')).targetInfo.targetId; }
     finally { await cdp.detach(); }
   };
-  const attached = async <T>(session: BrowserSession, work: (browser: Browser, context: BrowserContext) => Promise<T>): Promise<T> => {
+  const attached = async <T>(session: BrowserSession, work: (browser: Browser, context: BrowserContext, navigation: Navigation) => Promise<T>): Promise<T> => {
     let browser: Browser | undefined, primary: GeneralBrowserError | undefined, documentFailure: GeneralBrowserError | undefined;
+    const redirects = new Map<Page, string>();
+    const invalidDocuments = new Set<Page>();
+    const navigation: Navigation = {
+      async goto(page, initialUrl) {
+        let url = initialUrl; const visited = new Set<string>();
+        for (;;) {
+          if (documentFailure) throw documentFailure;
+          if (visited.has(url) || visited.size > GENERAL_BROWSER_REDIRECT_LIMIT) throw new GeneralBrowserError('rejected');
+          visited.add(url); await allowed(session, url); redirects.delete(page);
+          let response: Awaited<ReturnType<Page['goto']>> = null;
+          try { response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: actionTimeout(session) }); }
+          catch (error) { if (!redirects.has(page)) throw error; }
+          await admit(session);
+          const next = redirects.get(page); redirects.delete(page);
+          if (next) { url = next; continue; }
+          if (!response || response.status() >= 400) {
+            try { await page.close(); } catch { await terminateId(session.providerSessionId); }
+            throw new GeneralBrowserError('page_unavailable', response ? { status: response.status() } : undefined);
+          }
+          return;
+        }
+      },
+      async finish(page) { const next = redirects.get(page); if (next) await navigation.goto(page, next); },
+      pending: page => redirects.has(page),
+    };
     try {
       await admit(session);
       const sdk = await options.loadSdk(); await admit(session);
@@ -68,29 +96,35 @@ export function cloudflareGeneralBrowser(options: Options) {
       await context.unroute('**/*'); await admit(session);
       await context.route('**/*', async route => {
         try {
-          await allowed(session, route.request().url(), route.request().method());
-          // continue follows redirects without re-running this authorization.
-          // Fail closed on redirects until a separately vetted navigation path
-          // exists; never follow a chain through an unchecked target.
-          const response = await route.fetch({ maxRedirects: 0, timeout: 10000 });
+          await guardGeneralBrowserRoute(route, { authorize: (url, method) => allowed(session, url, method), timeout: () => actionTimeout(session), admit: () => admit(session),
+            redirect: (page, url) => { redirects.set(page, url); }, denied: (page, status) => { invalidDocuments.add(page); documentFailure = new GeneralBrowserError('page_unavailable', { status }); } });
           await admit(session);
-          if (response.status() >= 400 && route.request().isNavigationRequest() && !route.request().frame().parentFrame()) {
-            documentFailure = new GeneralBrowserError('page_unavailable', { status: response.status() });
-            await route.abort('blockedbyclient');
-          } else if (response.status() >= 300 && response.status() < 400) await route.abort('blockedbyclient');
-          else await route.fulfill({ response });
         }
-        catch { await route.abort('blockedbyclient'); }
+        catch (error) {
+          if (route.request().isNavigationRequest() && !route.request().frame().parentFrame()) {
+            invalidDocuments.add(route.request().frame().page());
+            documentFailure = error instanceof GeneralBrowserError ? error : new GeneralBrowserError('rejected');
+          }
+          try { await route.abort('blockedbyclient'); } catch { /* route may already have settled; discard invalid main document below */ }
+        }
       });
-      const result = await work(browser, context); await admit(session);
+      const result = await work(browser, context, navigation); await admit(session);
       if (documentFailure) throw documentFailure;
       return result;
     } catch (error) {
       primary = error instanceof GeneralBrowserError && error.code === 'outcome_uncertain'
         ? new GeneralBrowserError('outcome_uncertain', error.diagnostic ?? documentFailure?.diagnostic)
-        : documentFailure ?? (error instanceof GeneralBrowserError ? error : new GeneralBrowserError('provider_unavailable'));
+        : documentFailure ?? (error instanceof GeneralBrowserError ? error : new GeneralBrowserError(error instanceof GeneralRedirectError ? 'rejected' : 'provider_unavailable'));
       throw primary;
     } finally {
+      // Aborted main navigations can retain a Chromium error document. Discard
+      // independently of expired/revoked action authority before releasing custody.
+      for (const page of invalidDocuments) try { await page.close(); } catch {
+        try { await terminateId(session.providerSessionId); } catch {
+          if (primary) primary.cleanup_failed = true;
+          else throw new GeneralBrowserError('cleanup_unconfirmed');
+        }
+      }
       // Release this connection, retaining tabs/context; physical end is separate.
       if (browser) try { await browser.close(); } catch {
         if (primary) primary.release_failed = true;
@@ -161,7 +195,7 @@ export function cloudflareGeneralBrowser(options: Options) {
         throw new GeneralBrowserError('provider_unavailable');
       }
     },
-    act: (session: BrowserSession, snapshot: GeneralSnapshot, input: GeneralBrowserAction, beforeAction: (actionDigest: string) => Promise<void>) => attached(session, async (_, context) => {
+    act: (session: BrowserSession, snapshot: GeneralSnapshot, input: GeneralBrowserAction, beforeAction: (actionDigest: string) => Promise<void>) => attached(session, async (_, context, navigation) => {
       const action = parseGeneralBrowserAction(input);
       if (!action) throw new GeneralBrowserError('rejected');
       if (snapshot.ownerId !== session.ownerId || snapshot.sessionId !== session.id || snapshot.generation !== session.generation) throw new GeneralBrowserError('stale_observation');
@@ -190,35 +224,29 @@ export function cloudflareGeneralBrowser(options: Options) {
           await page.evaluate(({ x, y }) => (globalThis as any).scrollBy(x, y), { x, y });
         } else {
           const locator = page.locator(element!.selector);
-          switch (action.operation) {
-            case 'click': await locator.click({ timeout }); break;
-            case 'fill': await locator.fill(action.value, { timeout }); break;
-            case 'select': await locator.selectOption(action.value, { timeout }); break;
-            case 'press': await locator.press(action.key, { timeout }); break;
-          }
+          try {
+            switch (action.operation) {
+              case 'click': await locator.click({ timeout }); break;
+              case 'fill': await locator.fill(action.value, { timeout }); break;
+              case 'select': await locator.selectOption(action.value, { timeout }); break;
+              case 'press': await locator.press(action.key, { timeout }); break;
+            }
+          } catch (error) { if (!navigation.pending(page)) throw error; }
         }
+        await navigation.finish(page);
         return await observe(session, context, page);
       }
       catch { throw new GeneralBrowserError('outcome_uncertain'); }
     }),
     observe: (session: BrowserSession, reference?: string) => attached(session, async (_, context) => observe(session, context, await select(session, context, reference))),
-    navigate: (session: BrowserSession, url: string, reference?: string) => attached(session, async (_, context) => {
+    navigate: (session: BrowserSession, url: string, reference?: string) => attached(session, async (_, context, navigation) => {
       await allowed(session, url); const page = await select(session, context, reference); page.setDefaultTimeout(10000);
-      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 }); await admit(session);
-      if (!response || response.status() >= 400) {
-        // Do not retain a denied document that a later observe could promote.
-        try { await page.close(); } catch { await terminateId(session.providerSessionId); }
-        throw new GeneralBrowserError('page_unavailable', response ? { status: response.status() } : undefined);
-      }
+      await navigation.goto(page, url);
       return observe(session, context, page);
     }),
-    openTab: (session: BrowserSession, url: string) => attached(session, async (_, context) => {
+    openTab: (session: BrowserSession, url: string) => attached(session, async (_, context, navigation) => {
       await allowed(session, url); const page = await context.newPage();
-      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 }); await admit(session);
-      if (!response || response.status() >= 400) {
-        try { await page.close(); } catch { await terminateId(session.providerSessionId); }
-        throw new GeneralBrowserError('page_unavailable', response ? { status: response.status() } : undefined);
-      }
+      await navigation.goto(page, url);
       return observe(session, context, page);
     }),
     closeTab: (session: BrowserSession, reference: string, beforeAction: (actionDigest: string) => Promise<void>) => attached(session, async (_, context) => {
