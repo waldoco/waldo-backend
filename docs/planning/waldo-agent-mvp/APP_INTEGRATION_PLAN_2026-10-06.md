@@ -2,7 +2,7 @@
 
 Status: **plan only**. Candidate roadmap, not authority (see `CLAUDE.md`). Nothing here authorizes code, migrations, deployment or secrets.
 
-Pins: backend `a43a4152` (Pin4sf/waldo-backend, worktree `claude/waldo-agent-app-integration-61c8cb`); app `895ed6e4` (Pin4sf/waldo-app local `main`, plus untracked `.agents/` and one WIP migration); device-bridge PRs #771 `b7d1cdfd` and #772 `3e7a750c` (both draft); bridge contract in waldoco/Waldo-Kennel `docs/contracts/waldo-device-bridge-v0.2.3.md` @ `1699e764`.
+Pins: backend `a43a4152` (waldoco/waldo-backend; the local remote still says Pin4sf/waldo-backend, which GitHub redirects; worktree `claude/waldo-agent-app-integration-61c8cb`); app `895ed6e4` (Pin4sf/waldo-app local `main`, plus untracked `.agents/` and one WIP migration); device-bridge PRs #771 `b7d1cdfd` and #772 `3e7a750c` (both draft); bridge contract in waldoco/Waldo-Kennel `docs/contracts/waldo-device-bridge-v0.2.3.md` @ `1699e764`.
 
 Labels: **SOURCE** = read in source at the pins above (✓ = re-read by the plan author; others read by a research subagent with file:line cited). **UNVERIFIED** = not observed. **CI** and **STAGING**: no claim in this document carries either label. No test, build or staging request was run for this plan.
 
@@ -14,7 +14,6 @@ Labels: **SOURCE** = read in source at the pins above (✓ = re-read by the plan
 
 | Prompt premise | Finding | Label |
 |---|---|---|
-| Backend lives at `waldoco/waldo-backend` | The git remote is `Pin4sf/waldo-backend`. `waldoco` hosts Waldo-Kennel. | SOURCE ✓ |
 | The app's fabricated chat success is still present | Fixed at app HEAD. App PR #12 (`bdb0b856`) removed `onError`/`prototypeReply`. `src/chat/useChat.ts:65-68` now shows "Waldo couldn't confirm a reply…". | SOURCE |
 | Legacy chat reads a caller-supplied thread with no owner check | Fixed at app HEAD. `supabase/functions/agent/chat.ts:66-74` checks `id`+`user_id` and returns 404 `thread_unavailable`. History and updates are owner-scoped (`:100-107`, `:163-170`). The handler still uses the service-role client (`_shared/http.ts:28-35`), and RLS is SELECT-only (`0003_chat_and_memory.sql:90-98`), so the code check is the only guard. | SOURCE |
 | There is "the owner Durable Object" | There are **two** owner systems. **System A**: `TelegramOwnerDO`, keyed by `waldo.owners.do_name`. It holds the live Telegram/WhatsApp/console agent, conversation tree, claims memory and approvals ledger. **System B**: `RunLoopDO` + `WaldoCoordinator`, keyed `owner-root:sha256(…)` (`runtime/src/index.ts:252-259`), reached by the bearer responsibility API. A and B share no conversation, memory or DO state. | SOURCE |
