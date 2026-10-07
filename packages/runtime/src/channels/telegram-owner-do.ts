@@ -785,7 +785,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (failure) {
         // A failed or unstarted turn used to leave only a Worker console line. The owner gets one fixed notice (no message
         // text, no error text). If no turn started it is safe to resend; if one started it may have had effects, so the notice says
-        // to check first. A turn that already started is never replayed. The turn's own listener already answers model failures.
+        // to check first. A turn that already started is never replayed. Listener failures propagate here for this fixed notice.
         // Consume the pending record before the send so a cold instance recovering during this request cannot send a second notice.
         if (pendingKey) { this.liveWhatsapp.delete(pendingKey); this.ctx.storage.kv.delete(pendingKey); }
         try {
