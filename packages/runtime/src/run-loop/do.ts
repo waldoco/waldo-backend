@@ -1,3 +1,4 @@
+import { verifyCommonExecutionRequest, type CommonExecutionRequest } from '../identity/common-execution-request';
 import { verifyCommonTaskSourceRequest, type CommonTaskSourceRequest } from '../identity/common-task-source-request';
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
@@ -413,6 +414,90 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   ) {
     this.#assertLocalTestSeam();
     return this.waldoCoordinator.createTrustedJudgmentRequestV05(proposal, authority);
+  }
+
+  async commonExecutionFromHost(ingress: CommonMessageIngress, request: CommonExecutionRequest) {
+    if ((this.envBindings as Cloudflare.Env & {COMMON_OWNER_TASKS?:string}).COMMON_OWNER_TASKS !== '1') throw Error('common tasks held');
+    await verifyCommonMessageIngress(this.envBindings.WALDO_ROUTER_HMAC_SECRET,ingress,this.deps.now());
+    await verifyCommonExecutionRequest(this.envBindings.WALDO_ROUTER_HMAC_SECRET!,ingress,request);
+    const physical=this.envBindings.TELEGRAM_OWNER_DO;
+    if (!physical || physical.idFromName(ingress.doName).toString()!==ingress.physicalDoId) throw Error('common host locator rejected');
+    const directory=commonOwnerAuthority(this.envBindings);
+    const authority=await directory.resolve(ingress.provider,ingress.subject,ingress.doName);
+    if(!authority)throw Error('common owner unavailable');
+    const rootDigest=await this.deps.sha256Hex(`waldo-owner-root\0${authority.ownerId}`);
+    if(this.ctx.id.toString()!==this.envBindings.RUN_LOOP_DO.idFromName(`owner-root:sha256:${rootDigest}`).toString())throw Error('common root route rejected');
+    const identity=await this.deps.sha256Hex(JSON.stringify([authority.ownerId,ingress.provider,ingress.subject,ingress.occurrenceId]));
+    const key=`common-execution:${identity}`;
+    const digest=await this.deps.sha256Hex(JSON.stringify([request.source,request.binding,request.tools,request.maxProviderTurns,request.maxDurationMs]));
+    type Lease={executionRequestId:string;attemptId:string;leaseId:string;fencingGeneration:number;cancellationGeneration:number;sourceSnapshot:typeof request.source};
+    type Receipt={ownerId:string;request:CommonExecutionRequest;digest:string;state:'prepared'|'running'|'settled'|'indeterminate';expectedRevision:number;workUnitId:string;preparedAt:number;lease?:Lease;result?:typeof request.result};
+    let saved=this.ctx.storage.kv.get<Receipt>(key);
+    if(saved&&saved.digest!==digest)throw Error('common execution command conflict');
+    if(saved?.state==='settled') {
+      await directory.assertCurrent(authority);
+      this.ctx.storage.transactionSync(()=>this.waldoCoordinator.assertMessageAuthorityCurrent(authority));
+      if(request.operation==='settle'&&JSON.stringify(saved.result)!==JSON.stringify(request.result))throw Error('common execution result conflict');
+      if(request.operation!=='settle')throw Error('common execution settled');
+      return {state:'settled' as const,lease:saved.lease!,expiresAt:null};
+    }
+    if(request.operation==='cancel') {
+      if(!saved?.lease)throw Error('common execution unavailable');
+      const cancelled=await this.waldoCoordinator.cancelMessageExecution(saved.lease.executionRequestId,`common_cancel_${identity}`,authority,()=>directory.assertCurrent(authority));
+      return {state:'cancelled' as const,lease:saved.lease,expiresAt:null,cancellationGeneration:cancelled.currentCancellationGeneration};
+    }
+    if(saved?.state==='indeterminate')throw Error('common execution reconciliation required');
+    if(saved && this.deps.now() >= saved.preparedAt + request.maxDurationMs)throw Error('common execution budget expired');
+    if(saved?.state==='running'&&saved.lease){
+      const current=await this.waldoCoordinator.assertMessageExecutionCurrent(saved.lease,authority,()=>directory.assertCurrent(authority));
+      if(request.operation.startsWith('provider_')) {
+        const call=request.providerCall!;
+        if(call.model!==current.aggregate.request.provider.modelRef || call.ordinal>request.maxProviderTurns)throw Error('common provider budget or model mismatch');
+        const preparedId=`provider_prepare_${identity}_${call.ordinal}`;
+        const settledId=`provider_settle_${identity}_${call.ordinal}`;
+        const prepared=current.aggregate.observations.find(value=>value.id===preparedId);
+        const settled=current.aggregate.observations.find(value=>value.id===settledId);
+        if(request.operation==='provider_prepare') {
+          if(prepared)throw Error('common provider intent requires reconciliation');
+          const preceding=current.aggregate.observations.filter(value=>value.id.startsWith(`provider_prepare_${identity}_`));
+          if(preceding.length!==call.ordinal-1 || preceding.some(value=>!current.aggregate.observations.some(done=>done.id===value.id.replace('provider_prepare_','provider_settle_'))))throw Error('common provider prior result uncertain');
+        } else if(!prepared || prepared.payloadDigest!==call.requestDigest || settled)throw Error('common provider result conflict');
+        await this.waldoCoordinator.admitMessageExecutionObservation(saved.lease,{protocolVersion:'0.4',id:request.operation==='provider_prepare'?preparedId:settledId,
+          ownerId:authority.ownerId,attemptId:current.attempt.id,environment:current.aggregate.request.environment,leaseId:current.lease.id,
+          fencingGeneration:current.lease.fencingGeneration,cancellationGeneration:current.aggregate.currentCancellationGeneration,
+          sequence:current.session.lastObservationSequence+1,kind:'activity',payloadRef:`provider_call_${call.ordinal}`,
+          payloadDigest:request.operation==='provider_prepare'?call.requestDigest:call.resultDigest,observedAt:new Date(this.deps.now()).toISOString()},authority,()=>directory.assertCurrent(authority));
+        return {state:'running' as const,lease:saved.lease,expiresAt:current.lease.expiresAt};
+      }
+      if(request.operation==='settle') {
+        const pending=current.aggregate.observations.filter(value=>value.id.startsWith(`provider_prepare_${identity}_`));
+        if(!pending.length || pending.some(value=>!current.aggregate.observations.some(done=>done.id===value.id.replace('provider_prepare_','provider_settle_'))))throw Error('common provider result uncertain');
+        await this.waldoCoordinator.settleMessageExecution(saved.lease,request.result!,authority,()=>directory.assertCurrent(authority),
+          ()=>this.ctx.storage.kv.put(key,{...saved,state:'settled',result:request.result}));
+        return {state:'settled' as const,lease:saved.lease,expiresAt:null};
+      }
+      return {state:'running' as const,lease:saved.lease,expiresAt:current.lease.expiresAt};
+    }
+    if(request.operation!=='begin')throw Error('common execution unavailable');
+    if(!saved){
+      const units=this.ctx.storage.sql.exec<{id:string;revision:number}>('SELECT id,revision FROM work_units WHERE owner_id = ? AND outcome_id = ? ORDER BY position',authority.ownerId,request.source.taskId).toArray();
+      if(units.length!==1)throw Error('common execution WorkUnit unavailable');
+      saved={ownerId:authority.ownerId,request,digest,state:'prepared',preparedAt:this.deps.now(),expectedRevision:units[0]!.revision,workUnitId:units[0]!.id};
+      this.ctx.storage.transactionSync(()=>this.ctx.storage.kv.put(key,saved));
+    }
+    const authorized=await this.waldoCoordinator.authorizeMessageWorkUnitExecution({snapshot:request.source,workUnitId:saved.workUnitId,expectedRevision:saved.expectedRevision,
+      authorityCeiling:{tools:request.tools,connectors:[],externalEffects:'none',outcomeMutation:'none',evidenceAdmission:'none',verification:'none',acceptance:'none',closure:'none'},
+      maxProviderTurns:request.maxProviderTurns,maxDurationMs:request.maxDurationMs,executorId:request.binding.environment.id,commandId:`common_authorize_${identity}`,
+    },authority,()=>directory.assertCurrent(authority));
+    const aggregate=await this.waldoCoordinator.admitMessageExecutionRequestV04({id:`common_execution_${identity}`,outcomeId:request.source.taskId,workUnitId:authorized.workUnit.id},authority,()=>directory.assertCurrent(authority),request.binding);
+    const claimed=this.waldoCoordinator.claimExecutionAttemptV04({executionRequestId:aggregate.request.id,attemptId:`common_attempt_${identity}`,leaseId:`common_lease_${identity}`,sessionId:`common_session_${identity}`,providerSessionRef:null});
+    const attempt=claimed.attempts.at(-1)!;const lease=claimed.leases.at(-1)!;
+    const admittedLease={executionRequestId:aggregate.request.id,attemptId:attempt.id,leaseId:lease.id,fencingGeneration:attempt.fencingGeneration,cancellationGeneration:attempt.cancellationGeneration,sourceSnapshot:request.source};
+    await this.waldoCoordinator.assertMessageExecutionCurrent(admittedLease,authority,()=>directory.assertCurrent(authority));
+    this.ctx.storage.transactionSync(()=>this.ctx.storage.kv.put(key,{...saved,state:'running',lease:admittedLease}));
+    const existingAlarm=await this.ctx.storage.getAlarm();
+    await this.ctx.storage.setAlarm(Math.max(this.deps.now()+250,Math.min(existingAlarm??Infinity,Date.parse(lease.expiresAt),saved.preparedAt+request.maxDurationMs)));
+    return {state:'running' as const,lease:admittedLease,expiresAt:lease.expiresAt};
   }
 
   async commonTaskSourceFromHost(ingress: CommonMessageIngress, request: CommonTaskSourceRequest) {
@@ -1316,7 +1401,37 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   }
 
   override async alarm(): Promise<void> {
+    await this.#reconcileCommonExecutionTimeouts();
     await this.scheduler.dispatchDue(this.#scheduleExecutors());
+    await this.#rearmCommonExecutionTimeouts();
+  }
+
+  async #rearmCommonExecutionTimeouts() {
+    let due=Infinity;
+    for(const [,row] of this.ctx.storage.kv.list<{state:string;preparedAt:number;request:CommonExecutionRequest;lease?:{executionRequestId:string};ownerId:string}>({prefix:'common-execution:'})) {
+      if(row.state!=='running'||!row.lease)continue;
+      const aggregate=this.waldoCoordinator.readExecutionAggregateV04(row.ownerId,row.lease.executionRequestId);
+      const lease=aggregate.leases.at(-1);
+      if(lease)due=Math.min(due,Date.parse(lease.expiresAt),row.preparedAt+row.request.maxDurationMs);
+    }
+    if(Number.isFinite(due)){
+      const prior=await this.ctx.storage.getAlarm();
+      await this.ctx.storage.setAlarm(Math.max(this.deps.now()+250,Math.min(prior??Infinity,due)));
+    }
+  }
+
+  async #reconcileCommonExecutionTimeouts() {
+    for(const [key,row] of this.ctx.storage.kv.list<{state:string;preparedAt:number;request:CommonExecutionRequest;lease?:{executionRequestId:string};ownerId:string}>({prefix:'common-execution:'})) {
+      if(row.state!=='running'||!row.lease)continue;
+      const aggregate=this.waldoCoordinator.readExecutionAggregateV04(row.ownerId,row.lease.executionRequestId);
+      const attempt=aggregate.attempts.at(-1);const lease=aggregate.leases.at(-1);
+      if(!attempt||!lease||this.deps.now()<Math.min(Date.parse(lease.expiresAt),row.preparedAt+row.request.maxDurationMs))continue;
+      // No end is inferred from a clock. Retain the original intent; never restart an uncertain provider effect.
+      if(attempt.state==='running'||attempt.state==='indeterminate')await this.waldoCoordinator.reconcileExecutionAttemptV04({protocolVersion:'0.4',id:`timeout_${attempt.id}`,
+        ownerId:row.ownerId,attemptId:attempt.id,leaseId:lease.id,fencingGeneration:attempt.fencingGeneration,
+        cancellationGeneration:aggregate.currentCancellationGeneration,state:'indeterminate',basisObservationIds:[],checkedAt:new Date(this.deps.now()).toISOString()});
+      this.ctx.storage.transactionSync(()=>this.ctx.storage.kv.put(key,{...row,state:'indeterminate'}));
+    }
   }
 
   #scheduleExecutors(): ScheduleExecutors {

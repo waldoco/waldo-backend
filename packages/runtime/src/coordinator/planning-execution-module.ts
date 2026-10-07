@@ -681,6 +681,25 @@ export class PlanningExecutionModule {
     return nextGeneration;
   }
 
+  cancelMessageExecutionInCurrentTransaction(input: Readonly<{ownerId:string;executionRequestId:string;commandId:string;commandDigest:string;at:string}>) {
+    const row=this.storage.sql.exec<{status:string;cancellation_generation:number;cancellation_request_id:string|null;cancellation_request_digest:string|null}>(
+      "SELECT status,cancellation_generation,cancellation_request_id,cancellation_request_digest FROM planning_execution_requests WHERE owner_id = ? AND id = ? AND protocol_version = '0.4'",input.ownerId,input.executionRequestId).toArray()[0];
+    if(!row)throw Error('message execution not found');
+    if(row.cancellation_request_id===input.commandId){
+      if(row.cancellation_request_digest!==input.commandDigest)throw new ResponsibilityDigestConflictError();
+      return row.cancellation_generation;
+    }
+    if(row.cancellation_request_id!==null || !['pending','leased','ambiguous','failed'].includes(row.status))throw Error('message execution cancellation rejected');
+    const generation=row.cancellation_generation+1;
+    this.storage.sql.exec(`UPDATE planning_execution_requests SET cancellation_generation = ?,status = 'cancelled',updated_at = ?,
+      cancellation_request_id = ?,cancellation_request_digest = ?,cancellation_request_json = ? WHERE owner_id = ? AND id = ?`,
+      generation,input.at,input.commandId,input.commandDigest,JSON.stringify({kind:'message_execution_cancel',...input}),input.ownerId,input.executionRequestId);
+    this.storage.sql.exec("UPDATE execution_attempts SET cancellation_generation = ?,state = 'cancelling',updated_at = ? WHERE owner_id = ? AND execution_request_id = ? AND state IN ('queued','running','settling','indeterminate')",generation,input.at,input.ownerId,input.executionRequestId);
+    this.storage.sql.exec('UPDATE planning_execution_leases SET cancellation_generation = ? WHERE owner_id = ? AND execution_request_id = ?',generation,input.ownerId,input.executionRequestId);
+    this.storage.sql.exec("UPDATE planning_agent_sessions SET cancellation_generation = ?,status = 'unknown',updated_at = ? WHERE owner_id = ? AND execution_request_id = ? AND protocol_version = '0.4' AND status IN ('starting','active','lost','unknown')",generation,input.at,input.ownerId,input.executionRequestId);
+    return generation;
+  }
+
   reconcileExecutionAttemptV04InCurrentTransaction(input: Readonly<{
     reconciliation: unknown;
     reconciliationDigest: string;

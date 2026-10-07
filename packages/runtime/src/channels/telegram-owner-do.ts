@@ -1,3 +1,4 @@
+import {signCommonExecutionRequest} from '../identity/common-execution-request';
 import { signCommonTaskSourceRequest } from '../identity/common-task-source-request';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import { signCommonMessageIngress } from '../identity/common-message-ingress';
@@ -198,6 +199,7 @@ export type TelegramOwnerPrivateHost = Readonly<{
   access: Parameters<typeof createOwnerMessageContextAdapter>[0]['access'];
   connectorBacked(handler: Parameters<OwnerResponderHost['prepare']>[1][number]): boolean;
   gateway: LLMGatewayAdapter;
+  executionBinding?: Pick<import('../coordinator/waldo-coordinator').ExecutionBindingResolutionV04,'provider'|'environment'>;
 }>;
 
 // Private construction selects canonical preparation independently of supplier availability.
@@ -242,6 +244,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly inbox = new TelegramOwnerInbox(this.ctx.storage, persistInboxWake);
   private readonly liveAttempts = new Set<string>();
   private activeInbox: InboxRecord | null = null;
+  private activeCommonExecution: import('./owner-turn').OwnerResponderBinding['execution'];
   private activeScope: RunEffectScope | undefined;
   private activeAbort: AbortController | undefined;
   private activeOwnerContext: ReturnType<typeof createOwnerMessageContextAdapter> | undefined;
@@ -272,6 +275,56 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       assertSame:async expected=>{await invoke({operation:'assert_same',expected});},
       classify:async(raw,inputRef,text)=>{if(inputRef!==turn.traceId||text!==turn.text)throw Error('common owner steering not admitted');const result=await invoke({operation:'classify',raw});if(!('result' in result)||!result.result)throw Error('common source response');return result.result;},
     };
+  }
+
+  private commonExecutionForTurn(turn: import('./owner-turn-envelope').OwnerTurnEnvelope,scope:RunEffectScope,host:TelegramOwnerPrivateHost) {
+    const occurrence=this.activeInbox;
+    const binding=host.executionBinding;
+    if(!occurrence||!binding||!this.env.WALDO_ROUTER_HMAC_SECRET||!this.env.RUN_LOOP_DO)throw Error('common responder execution binding unavailable');
+    const directory=commonOwnerAuthority(this.env);
+    let request:Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>|undefined;
+    let started=false;
+    let providerOrdinal=0;
+    const invoke=async(operation:import('../identity/common-execution-request').CommonExecutionRequest['operation'],result?:Readonly<{ref:string;digest:string}>,providerCall?:import('../identity/common-execution-request').CommonExecutionRequest['providerCall'])=>{
+      if(!request)throw Error('common execution context unavailable');
+      if(operation!=='settle'&&operation!=='cancel')scope.admit();
+      const authority=await directory.resolve('telegram',occurrence.subject,occurrence.doName);
+      if(!authority)throw Error('common owner unavailable');
+      const rootHash=await sha256Hex(`waldo-owner-root\0${authority.ownerId}`);
+      const root=this.env.RUN_LOOP_DO!.get(this.env.RUN_LOOP_DO!.idFromName(`owner-root:sha256:${rootHash}`));
+      const ingress=await signCommonMessageIngress(this.env.WALDO_ROUTER_HMAC_SECRET!,{provider:'telegram',subject:occurrence.subject,doName:occurrence.doName,physicalDoId:this.ctx.id.toString(),occurrenceId:occurrence.id,text:turn.text,at:Math.floor(Date.now()/1000)});
+      const signed=await signCommonExecutionRequest(this.env.WALDO_ROUTER_HMAC_SECRET!,ingress,{...request,operation,...(result?{result}:{}),...(providerCall?{providerCall}:{})});
+      if(operation!=='settle'&&operation!=='cancel')scope.admit();const outcome=await root.commonExecutionFromHost(ingress,signed);if(operation!=='settle'&&operation!=='cancel')scope.admit();return outcome;
+    };
+    const execution = {
+      begin:async(source:import('./task-source-scope').TaskSourceSnapshot,composition:Extract<import('../context-composer/types').ContextCompositionResult,{ok:true}>,maxProviderTurns:number)=>{
+        if(started)return;
+        const frozenKey=`common-execution-host:${occurrence.id}`;
+        const prior=this.ctx.storage.kv.get<Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>>(frozenKey);
+        request=prior??{operation:'begin',source,binding:{...binding,contextProjectionRef:composition.checkpoint.context_ref,contextProjectionDigest:composition.evidence.prompt_digest},
+          // This first executor admits only private workspace tools. Other effects keep their existing desks and remain held here.
+          tools:composition.evidence.tool_acl.filter(tool=>['workspace_list','workspace_read','workspace_search','workspace_write','workspace_render'].includes(tool)),
+          maxProviderTurns,maxDurationMs:Math.max(1,Math.min(600000,scope.deadline-Date.now()))};
+        if(prior && (JSON.stringify(prior.source)!==JSON.stringify(source) || prior.binding.contextProjectionRef!==composition.checkpoint.context_ref || prior.binding.contextProjectionDigest!==composition.evidence.prompt_digest))throw Error('common execution frozen context changed');
+        scope.commit(()=>this.ctx.storage.kv.put(frozenKey,request));
+        await invoke('begin');started=true;
+      },
+      assertCurrent:async()=>{if(started)await invoke('check');},
+      provider:async(providerRequest:import('../llm/provider').LLMGatewayRequest,issue:()=>Promise<import('@waldo/contracts').AdapterResult<import('@waldo/contracts').LLMResponse>>)=>{
+        if(!started)return issue(); // Source classification is prerequisite, not the admitted responder attempt.
+        const {runScope:_scope,...frozen}=providerRequest;
+        const call={ordinal:++providerOrdinal,model:providerRequest.request.model,requestDigest:`sha256:${await sha256Hex(JSON.stringify(frozen))}`};
+        await invoke('provider_prepare',undefined,call);
+        const result=await issue();
+        await invoke('provider_settle',undefined,{...call,resultDigest:`sha256:${await sha256Hex(JSON.stringify(result))}`});
+        return result;
+      },
+      cancel:async()=>{if(started)await invoke('cancel');},
+      settle:async(ref:string,text:string)=>{if(!started)throw Error('common execution not started');await invoke('settle',{ref,digest:`sha256:${await sha256Hex(text)}`});},
+      allows:(tool:string)=>started&&request?.tools.includes(tool)===true,
+    };
+    this.activeCommonExecution=execution;
+    return execution;
   }
 
   private closeRunAtomic(run: InboxRecord, reason: string, awaitingDelivery = false): void {
@@ -482,6 +535,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       await this.inbox.transition(row.id, attempt, 'quarantined', 'execution_uncertain');
     } finally {
       clearTimeout(timeout);
+      try { if(this.activeCommonExecution && !this.setup().finalOutbox.records().some(r=>r.inbox?.runId===runId))await this.activeCommonExecution.cancel(); } catch { console.error('common cancellation unresolved; root timeout retains uncertainty'); }
       // Failed durable closure must keep the serial queue held. Never abort/release first.
       for (;;) {
         try { this.closeRunAtomic(claimed, 'execution_closed'); break; }
@@ -491,7 +545,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         await this.notifyUncertainRecovery();
       } catch { console.error('fixed failure notice unavailable'); } finally {
-      if (this.activeScope === scope) { this.activeScope = undefined; this.activeOwnerContext = undefined; this.activeAbort = undefined; }
+      if (this.activeScope === scope) { this.activeScope = undefined; this.activeOwnerContext = undefined; this.activeCommonExecution = undefined; this.activeAbort = undefined; }
       try {
       for (const child of await this.inbox.records()) if (child.control?.targetRun === runId && child.attempt) {
         if (child.state === 'claimed' && child.control.kind === 'steer') await this.inbox.returnUnconsumedSteer(child.id, child.attempt);
@@ -1145,6 +1199,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const trace = `tg-${update.update_id}`;
     if (text === '/stop') {
       this.ctx.waitUntil(this.browserTasks.stop());
+      if(this.activeCommonExecution)this.ctx.waitUntil(this.activeCommonExecution.cancel().catch(()=>{console.error('common stop cancellation unresolved');}));
       const stopping = control.stop();
       log({ trace, hop: 'stop', ms: 0, ok: true, detail: stopping ? 'stopping the running turn' : 'nothing running' });
       void call('sendMessage', { chat_id: owner, text: stopping ? 'Stopping.' : 'Nothing is running right now.' }).catch(() => undefined);
@@ -1787,6 +1842,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (await currentTaskOwnerKey() !== taskOwnerKey) throw new ClosedRunError();
         }, { inputRef: turn.traceId, text: turn.text, quotedRanges: turn.sourceQuoteRanges }, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? []));
         return { admission, adapter, store: ownerCanonicalHistory(storage, admission, adapter), skills,
+          ...(this.env.COMMON_OWNER_TASKS==='1'?{execution:this.commonExecutionForTurn(turn,scope,host)}:{}),
           sourceScope: { ...sourceScope, propose: async proposal => { await admission.assertCurrent(); if (this.env.COMMON_OWNER_TASKS === '1') throw Error('common source approval recovery unavailable'); await desk.proposeTaskSources(proposal); await admission.assertCurrent(); } },
           forgetting: { principal_ref: admission.invocation.verified_authority.principal_ref, tenant_ref: admission.invocation.verified_authority.tenant_ref, store: memory } };
       } } : undefined, !this.canonicalPreparation && channel === 'telegram' ? { prepare: async (turn, contextOwnerId, scope) => {
@@ -1882,10 +1938,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           ownerSubject: String(owner), doName: identity.get<string>('do_name') ?? '',
           ...(turn.messageId === null ? {} : { reaction: { message_id: turn.messageId, emoji } }),
         };
+        await this.activeCommonExecution?.assertCurrent();
         if (turn.runScope && captured) await finalOutbox.enqueueFenced(input, work => turn.runScope!.commit(() => {
           work(); this.closeRunAtomic(captured, 'final_committed', true);
         }));
         else await finalOutbox.enqueue(input);
+        await this.activeCommonExecution?.settle(`final_${turn.updateId}`,input.payload.text);
         turnReceiptUrls.delete(ownerTurnTrace(channel, turn.updateId));
         await scheduler.rearm();
       } } : {}),

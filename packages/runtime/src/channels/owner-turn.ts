@@ -91,6 +91,16 @@ const MAX_TOOL_ROUNDS = 25;
 // which the production tenancy work replaces.
 export type OwnerResponderBinding = Readonly<{
   sourceScope?: OwnerTaskSourceScope;
+  execution?: Readonly<{
+    begin(source: import('./task-source-scope').TaskSourceSnapshot,
+      composition: Extract<import('../context-composer/types').ContextCompositionResult,{ok:true}>, maxProviderTurns:number):Promise<void>;
+    assertCurrent():Promise<void>;
+    settle(ref:string,text:string):Promise<void>;
+    cancel():Promise<void>;
+    provider(request:import('../llm/provider').LLMGatewayRequest,
+      issue:()=>Promise<import('@waldo/contracts').AdapterResult<import('@waldo/contracts').LLMResponse>>):Promise<import('@waldo/contracts').AdapterResult<import('@waldo/contracts').LLMResponse>>;
+    allows(tool:string):boolean;
+  }>;
   admission: OwnerMessageAdmission;
   adapter: ReturnType<typeof createOwnerMessageContextAdapter>;
   store: ConversationStore;
@@ -182,7 +192,7 @@ export const createOwnerResponder = (
   }
   let backgroundCurrent: (() => Promise<void>) | undefined;
   let transientDecision = false;
-  const assertCurrent = async () => { privateRunScope?.admit(); await binding?.adapter.assertCurrent(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
+  const assertCurrent = async () => { privateRunScope?.admit(); await binding?.adapter.assertCurrent(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); await binding?.execution?.assertCurrent(); privateRunScope?.admit(); };
   const ownerId = invocation.verified_authority.principal_ref;
   const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;
@@ -266,7 +276,7 @@ export const createOwnerResponder = (
       await assertCurrent();
       if (transientDecision && (request.context !== 'full_context' || new TextEncoder().encode(JSON.stringify(request.request)).byteLength > 32_768)) throw new Error('background decision context bound');
       if (!transientDecision && skills && expectedProcedure !== undefined) await skills.assertProcedureCurrent(expectedProcedure, CANARIES);
-      const result = await adapter.complete(request);
+      const result = binding?.execution ? await binding.execution.provider(request,()=>adapter.complete(request)) : await adapter.complete(request);
       await assertCurrent();
       if (!transientDecision && skills && expectedProcedure !== undefined) await skills.assertProcedureCurrent(expectedProcedure, CANARIES);
       return result;
@@ -498,6 +508,10 @@ export const createOwnerResponder = (
   };
   const path = new JoinedConversationPath(binding?.adapter.composer ?? adapters.contextComposer!, {
     complete: async (request) => {
+      if (binding?.execution) {
+        if (!sourceSnapshot?.ready) throw Error('common execution sources unsettled');
+        await binding.execution.begin(sourceSnapshot,request.composition,Math.max(1,MAX_TOOL_ROUNDS-sourceAdmissionCalls));
+      }
       await assertCurrent();
       refreshPendingRedaction();
       const trace = traceId;
@@ -507,7 +521,7 @@ export const createOwnerResponder = (
       // Capture-mode probe turns run on the stripped handler set; delegation wraps that
       // same set so probe confinement applies to children too (children are read-only by
       // construction, and the strip list is not widened here).
-      const admittedHandlers = handlers.filter(handler => (!binding || request.tools.includes(handler.name)) && (backgroundToolNames === undefined || backgroundToolNames.includes(handler.name)));
+      const admittedHandlers = handlers.filter(handler => (!binding || request.tools.includes(handler.name)) && (!binding?.execution || binding.execution.allows(handler.name)) && (backgroundToolNames === undefined || backgroundToolNames.includes(handler.name)));
       const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => {
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertCurrent();

@@ -205,6 +205,10 @@ it('settled host execution re-enters the same WorkUnit without reopening an old 
   const claimed=recovered.claimExecutionAttemptV04({executionRequestId:request.id,attemptId:'first_attempt',leaseId:'first_lease',sessionId:'first_session',providerSessionRef:null});
   await expect(recovered.authorizeMessageWorkUnitExecution(secondAuthorization,admitted,async()=>{})).rejects.toThrow();
   const attempt=claimed.attempts[0]!;
+  const leaseInput={executionRequestId:request.id,attemptId:attempt.id,leaseId:attempt.leaseId,fencingGeneration:attempt.fencingGeneration,cancellationGeneration:attempt.cancellationGeneration,sourceSnapshot:snapshot};
+  await expect(recovered.settleMessageExecution(leaseInput,{ref:'fixture_final',digest},admitted,async()=>{},()=>{throw Error('settlement publication interrupted');})).rejects.toThrow('settlement publication interrupted');
+  expect(recovered.readExecutionAggregateV04(ownerId,request.id).observations).toHaveLength(0);
+  expect((await recovered.assertMessageExecutionCurrent(leaseInput,admitted,async()=>{})).attempt.state).toBe('running');
   const at=new Date().toISOString();
   await recovered.admitExecutorObservationV04({protocolVersion:'0.4',id:'first_ended',ownerId,attemptId:attempt.id,environment:binding.environment,leaseId:attempt.leaseId,fencingGeneration:attempt.fencingGeneration,cancellationGeneration:attempt.cancellationGeneration,sequence:1,kind:'ended',payloadRef:null,payloadDigest:null,observedAt:at});
   await expect(recovered.authorizeMessageWorkUnitExecution(secondAuthorization,admitted,async()=>{})).rejects.toThrow();

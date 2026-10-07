@@ -20,7 +20,9 @@ vi.mock('../src/channels/telegram-owner-do', async load => {
       const subject = [81101, 81102, 81103, 81104, 81105].find(value => bindings.TELEGRAM_OWNER_DO!.idFromName(`hermetic-owner-${value}`).toString() === state.id.toString());
       const host = subject === undefined ? undefined : admittedOwnerHost(`hermetic-owner-${subject}`, String(subject),
         new OpenAIResponsesAdapter({ apiKey: bindings.OPENAI_API_KEY }), ['get_communication', 'propose_calendar_change']);
-      super(state, subject === 81105 ? bindings : {...bindings, SUPABASE_PROJECT_URL: undefined}, { mode: 'canonical', host });
+      const digest=`sha256:${'d'.repeat(64)}`;
+      const executionBinding={provider:{category:'provider' as const,id:'fixture_model_provider',version:'1.0.0',modelRef:'gpt-6-luna',manifest:{id:'fixture_provider_manifest',version:'1.0.0',digest}},environment:{category:'execution_environment' as const,id:'fixture_registered_host',version:'1.0.0',environmentKind:'local' as const,manifest:{id:'fixture_environment_manifest',version:'1.0.0',digest}}};
+      super(state, subject === 81105 ? bindings : {...bindings, SUPABASE_PROJECT_URL: undefined}, { mode: 'canonical', host:host && subject===81105?{...host,executionBinding}:host });
     }
   } };
 });
@@ -1109,7 +1111,46 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
       expect(state.storage.sql.exec('SELECT revision FROM owner_task_source_scope').one().revision).toBe(3);
       expect(state.storage.sql.exec('SELECT owner_id FROM owner_roots').toArray()).toEqual([{owner_id:owner}]);
       expect(state.storage.sql.exec('SELECT user_statement FROM outcomes').toArray()).toEqual([{user_statement:'Prepare a private checklist from the supplied notes.'}]);
+      expect(state.storage.sql.exec('SELECT state FROM execution_attempts').toArray()).toEqual([{state:'settled'},{state:'settled'}]);
+      expect(state.storage.sql.exec('SELECT status FROM planning_execution_requests').toArray()).toEqual([{status:'completed'},{status:'completed'}]);
+      expect(state.storage.sql.exec('SELECT revision FROM work_units').one().revision).toBe(3);
       expect(state.storage.sql.exec('SELECT count(*) AS n FROM presence_sessions').one().n).toBe(0);
+    });
+    const receipts=await runInDurableObject(root,(_instance,state)=>[...state.storage.kv.list<unknown>({prefix:'common-execution:'})]);
+    expect(receipts).toHaveLength(2);
+    await runInDurableObject(root,(_instance,state)=>{
+      const rows=state.storage.sql.exec<{kind:string}>('SELECT kind FROM execution_observations').toArray();
+      expect(rows.filter(row=>row.kind==='activity')).toHaveLength(4);
+      expect(rows.filter(row=>row.kind==='ended')).toHaveLength(2);
+    });
+    // Separate interrupted-host fixture: original request and provider intent survive root eviction.
+    // This is not another normal owner turn and cannot stand in for background recovery acceptance.
+    const {signCommonExecutionRequest}=await import('../src/identity/common-execution-request');
+    const executionBase=await runInDurableObject(root,(_instance,state)=>[...state.storage.kv.list<{request:import('../src/identity/common-execution-request').CommonExecutionRequest}>({prefix:'common-execution:'})].at(-1)![1].request);
+    const interruptedIngress=await signCommonMessageIngress(env.WALDO_ROUTER_HMAC_SECRET!,{...ingress,occurrenceId:'fixture-interrupted-executor',at:Math.floor(Date.now()/1000)});
+    const begin=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'begin'});
+    await root.commonExecutionFromHost(interruptedIngress,begin);
+    const prepare=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'provider_prepare',providerCall:{ordinal:1,model:'gpt-6-luna',requestDigest:`sha256:${'b'.repeat(64)}`}});
+    await root.commonExecutionFromHost(interruptedIngress,prepare);
+    await evictDurableObject(root);
+    await runInDurableObject(root,async instance=>{
+      await expect(instance.commonExecutionFromHost(interruptedIngress,prepare)).rejects.toThrow('requires reconciliation');
+      const final=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'settle',result:{ref:'fixture_unobserved',digest:`sha256:${'b'.repeat(64)}`}});
+      await expect(instance.commonExecutionFromHost(interruptedIngress,final)).rejects.toThrow('provider result uncertain');
+    });
+      // The root alarm retains an uncertain attempt after its budget, never fabricates end or restarts it.
+      await runInDurableObject(root,async (runtime,state)=>{
+        for(const [key,row] of state.storage.kv.list<{state:string;preparedAt:number}>({prefix:'common-execution:'}))if(row.state==='running')state.storage.kv.put(key,{...row,preparedAt:Date.now()-600001});
+        await runtime.alarm();
+        expect(state.storage.sql.exec("SELECT state FROM execution_attempts WHERE state = 'indeterminate'").toArray()).toHaveLength(1);
+      });
+      await runInDurableObject(root,async instance=>{await expect(instance.commonExecutionFromHost(interruptedIngress,begin)).rejects.toThrow('reconciliation required');});
+    await runInDurableObject(root,async instance=>{
+      const cancel=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'cancel'});
+      expect((await instance.commonExecutionFromHost(interruptedIngress,cancel)).state).toBe('cancelled');
+      expect((await instance.commonExecutionFromHost(interruptedIngress,cancel)).state).toBe('cancelled');
+      await expect(instance.commonExecutionFromHost(interruptedIngress,prepare)).rejects.toThrow();
+
     });
     const retryIngress = await signCommonMessageIngress(env.WALDO_ROUTER_HMAC_SECRET!, {
       ...ingress, occurrenceId:'fixture-prepared-recovery', text:'Keep the same source scope.', at:Math.floor(Date.now()/1000),

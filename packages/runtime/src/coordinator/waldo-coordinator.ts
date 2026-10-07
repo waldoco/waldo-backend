@@ -1545,6 +1545,60 @@ export class WaldoCoordinator {
     });
   }
 
+  assertMessageAuthorityCurrent(authority:CommonOwnerAuthority) {
+    this.#identity.assertMessageAuthorityInCurrentTransaction(authority);
+  }
+
+  async cancelMessageExecution(executionRequestId:string,commandId:string,authority:CommonOwnerAuthority,assertCurrent:()=>Promise<void>) {
+    const id=protocolIdSchema.parse(executionRequestId);const command=protocolIdSchema.parse(commandId);
+    const commandDigest=await this.#deps.sha256Hex(JSON.stringify([authority.ownerId,id,command]));
+    await assertCurrent();
+    return this.#storage.transactionSync(()=>{
+      this.#identity.assertMessageAuthorityInCurrentTransaction(authority);
+      this.#planning.cancelMessageExecutionInCurrentTransaction({ownerId:authority.ownerId,executionRequestId:id,commandId:command,commandDigest,at:this.#deps.now()});
+      return this.readExecutionAggregateV04(authority.ownerId,id);
+    });
+  }
+
+  async admitMessageExecutionObservation(input: Parameters<WaldoCoordinator['assertMessageExecutionCurrent']>[0],
+    observationValue: unknown, authority: CommonOwnerAuthority, assertCurrent: () => Promise<void>) {
+    const observation=executorObservationV04Schema.parse(observationValue);
+    if(observation.ownerId!==authority.ownerId || observation.attemptId!==input.attemptId || observation.leaseId!==input.leaseId ||
+      observation.fencingGeneration!==input.fencingGeneration || observation.cancellationGeneration!==input.cancellationGeneration)
+      throw Error('message execution observation binding mismatch');
+    const observationDigest=await this.#deps.sha256Hex(JSON.stringify(observation));
+    await this.assertMessageExecutionCurrent(input,authority,assertCurrent);
+    return this.#storage.transactionSync(()=>{
+      this.#identity.assertMessageAuthorityInCurrentTransaction(authority);
+      return this.#planning.admitExecutorObservationV04InCurrentTransaction({observation,observationDigest,receivedAt:this.#deps.now()});
+    });
+  }
+
+  async settleMessageExecution(input: Parameters<WaldoCoordinator['assertMessageExecutionCurrent']>[0],
+    result: Readonly<{ref:string;digest:string}>, authority: CommonOwnerAuthority,
+    assertCurrent: () => Promise<void>, publish: () => void) {
+    const current=await this.assertMessageExecutionCurrent(input,authority,assertCurrent);
+    const at=this.#deps.now();
+    const observation=executorObservationV04Schema.parse({protocolVersion:'0.4',id:`ended_${input.attemptId}`,
+      ownerId:authority.ownerId,attemptId:input.attemptId,environment:current.aggregate.request.environment,
+      leaseId:input.leaseId,fencingGeneration:input.fencingGeneration,cancellationGeneration:input.cancellationGeneration,
+      sequence:current.session.lastObservationSequence+1,kind:'ended',payloadRef:result.ref,payloadDigest:result.digest,observedAt:at});
+    const reconciliation=executionReconciliationV04Schema.parse({protocolVersion:'0.4',id:`settled_${input.attemptId}`,
+      ownerId:authority.ownerId,attemptId:input.attemptId,leaseId:input.leaseId,fencingGeneration:input.fencingGeneration,
+      cancellationGeneration:input.cancellationGeneration,state:'settled',basisObservationIds:[observation.id],checkedAt:at});
+    const [observationDigest,reconciliationDigest]=await Promise.all([
+      this.#deps.sha256Hex(JSON.stringify(observation)),this.#deps.sha256Hex(JSON.stringify(reconciliation))]);
+    await this.assertMessageExecutionCurrent(input,authority,assertCurrent);
+    return this.#storage.transactionSync(()=>{
+      this.#identity.assertMessageAuthorityInCurrentTransaction(authority);
+      this.#planning.admitExecutorObservationV04InCurrentTransaction({observation,observationDigest,receivedAt:at});
+      this.#planning.reconcileExecutionAttemptV04InCurrentTransaction({reconciliation,reconciliationDigest,receivedAt:at});
+      const published=publish() as unknown;
+      if(published && typeof (published as {then?:unknown}).then==='function')throw Error('execution settlement publication must be synchronous');
+      return this.readExecutionAggregateV04(authority.ownerId,input.executionRequestId);
+    });
+  }
+
   async readCurrentExecutionAggregateV04(
     ownerId: string,
     executionRequestId: string,

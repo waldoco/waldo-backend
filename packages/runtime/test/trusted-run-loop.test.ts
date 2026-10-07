@@ -1176,6 +1176,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
           'answerJudgmentFromWorker',
           'cancelPlanningTurnFromWorker',
           'commonTaskSourceFromHost',
+          'commonExecutionFromHost',
           'captureResponsibilityFromWorker',
           'constructor',
           'executePlanningTurnFromWorker',

@@ -14,6 +14,7 @@ export type JoinedConversationModel = Readonly<{
     skillPrompt?: string;
     messages: readonly ConversationModelMessage[];
     tools: readonly string[];
+    composition: Extract<import('../context-composer/types').ContextCompositionResult,{ok:true}>;
   }>): Promise<string>;
 }>;
 
@@ -70,6 +71,7 @@ export class JoinedConversationPath {
       ...(composition.skillPrompt ? { skillPrompt: composition.skillPrompt } : {}),
       messages: windowed.messages,
       tools: composition.evidence.tool_acl,
+      composition,
     });
     if (text.trim().length === 0) throw new Error('conversation model returned empty output');
     const assistantEntry: ConversationEntry = {

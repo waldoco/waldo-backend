@@ -1,0 +1,22 @@
+import {expect,it} from 'vitest';
+import {signCommonExecutionRequest,verifyCommonExecutionRequest} from '../src/identity/common-execution-request';
+import {signCommonMessageIngress} from '../src/identity/common-message-ingress';
+it('binds host execution, provider intent and observed result to the exact signed occurrence',async()=>{
+ const ingress=await signCommonMessageIngress('fixture-secret',{provider:'telegram',subject:'81105',doName:'fixture-host',physicalDoId:'a'.repeat(64),occurrenceId:'fixture-occurrence',text:'Write a private checklist.',at:100});
+ const digest=`sha256:${'b'.repeat(64)}`;
+ const binding={provider:{category:'provider' as const,id:'fixture-provider',version:'1',modelRef:'fixture-model',manifest:{id:'fixture-manifest',version:'1',digest}},environment:{category:'execution_environment' as const,id:'fixture-host',version:'1',environmentKind:'local' as const,manifest:{id:'fixture-host-manifest',version:'1',digest}},contextProjectionRef:'fixture-context',contextProjectionDigest:digest};
+ const base={operation:'begin' as const,source:{taskId:'fixture-task',revision:1,sources:[],ready:true,startRef:'fixture-input'},binding,tools:[],maxProviderTurns:2,maxDurationMs:30000};
+ const signed=await signCommonExecutionRequest('fixture-secret',ingress,base);
+ await verifyCommonExecutionRequest('fixture-secret',ingress,signed);
+ await expect(verifyCommonExecutionRequest('fixture-secret',ingress,{...signed,maxProviderTurns:3})).rejects.toThrow();
+ await expect(verifyCommonExecutionRequest('fixture-secret',{...ingress,signature:'c'.repeat(64)},signed)).rejects.toThrow();
+ const prepare=await signCommonExecutionRequest('fixture-secret',ingress,{...base,operation:'provider_prepare',providerCall:{ordinal:1,model:'fixture-model',requestDigest:digest}});
+ await verifyCommonExecutionRequest('fixture-secret',ingress,prepare);
+ await expect(verifyCommonExecutionRequest('fixture-secret',ingress,{...prepare,providerCall:{...prepare.providerCall!,ordinal:0}})).rejects.toThrow();
+ const settle=await signCommonExecutionRequest('fixture-secret',ingress,{...base,operation:'provider_settle',providerCall:{ordinal:1,model:'fixture-model',requestDigest:digest,resultDigest:digest}});
+ await verifyCommonExecutionRequest('fixture-secret',ingress,settle);
+ await expect(verifyCommonExecutionRequest('fixture-secret',ingress,{...settle,providerCall:{ordinal:1,model:'fixture-model',requestDigest:digest}})).rejects.toThrow();
+ const final=await signCommonExecutionRequest('fixture-secret',ingress,{...base,operation:'settle',result:{ref:'fixture-final',digest}});
+ await verifyCommonExecutionRequest('fixture-secret',ingress,final);
+ await expect(verifyCommonExecutionRequest('fixture-secret',ingress,{...final,result:undefined})).rejects.toThrow();
+});
