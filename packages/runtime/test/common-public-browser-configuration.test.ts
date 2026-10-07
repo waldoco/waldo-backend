@@ -35,3 +35,10 @@ it('exact retained policy prevents resetting usage by changing limits or origins
  const wider=commonPublicBrowserConfiguration({env:f.env,storage:f.storage,actualDoId:'physical',policy:{...f.policy,maxAllocations:2},loadSdk:commonBrowserFixtureLoader,now:()=>10000})!;
  await expect(wider.grant(f.task,f.ownerId)).rejects.toThrow('retained policy conflict');
 });
+
+it('malformed retained time counters and widened task grant cannot authorize I/O',async()=>{
+ const f=fixture();const grant=await f.config().grant(f.task,f.ownerId),key='common-public-browser-usage:fixture-policy';
+ const row=f.rows.get(key) as any;
+ f.rows.set(key,{...row,allocations:1,reservedBrowserMs:0});await expect(f.config().reserveAllocation(grant)).rejects.toThrow('retained policy conflict');
+ f.rows.set(key,{...row,taskGrants:[{...grant,allowedOrigins:['https://outside.fixture.invalid']}]});await expect(f.config().assertGrantCurrent(grant)).rejects.toThrow('retained policy conflict');
+});

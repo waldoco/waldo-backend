@@ -33,7 +33,11 @@ export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramW
  const read=():Usage=>{
   const retained=storage.kv.get<Usage>(key);
   if(!retained)return {policy,allocations:0,reservedBrowserMs:0,taskGrants:[]};
-  if(JSON.stringify(retained.policy)!==JSON.stringify(policy)||!Number.isSafeInteger(retained.allocations)||retained.allocations<0||retained.allocations>policy.maxAllocations||!Number.isSafeInteger(retained.reservedBrowserMs)||retained.reservedBrowserMs<0||retained.reservedBrowserMs>policy.maxReservedBrowserMs||!Array.isArray(retained.taskGrants))throw Error('common public browser retained policy conflict');
+  if(JSON.stringify(retained.policy)!==JSON.stringify(policy)||!Number.isSafeInteger(retained.allocations)||retained.allocations<0||retained.allocations>policy.maxAllocations||!Number.isSafeInteger(retained.reservedBrowserMs)||retained.reservedBrowserMs<0||retained.reservedBrowserMs>policy.maxReservedBrowserMs||!Array.isArray(retained.taskGrants)||retained.taskGrants.length>policy.maxAllocations
+   ||retained.allocations*policy.lifetimeMs*2!==retained.reservedBrowserMs
+   ||typeof retained.custodyDigest!=='string'||!/^[a-f0-9]{64}$/.test(retained.custodyDigest)
+   ||new Set(retained.taskGrants.map(grant=>grant.taskId)).size!==retained.taskGrants.length
+   ||retained.taskGrants.some(grant=>!grant||!grant.taskId||JSON.stringify(grant)!==JSON.stringify({ref:policy.ref,ownerId:`prn_${policy.directoryOwnerId.toLowerCase().replaceAll('-','')}`,taskId:grant.taskId,expiresAt:policy.expiresAt,allowedOrigins:policy.allowedOrigins,lifetimeMs:policy.lifetimeMs,maxScreenshotBytes:policy.maxScreenshotBytes})))throw Error('common public browser retained policy conflict');
   return retained;
  };
  const owner=async()=>{physical();const row=await directory.resolve('telegram',policy.subject,policy.doName);physical();if(!row||row.directoryOwnerId!==policy.directoryOwnerId.toLowerCase())throw Error('common public browser owner unavailable');return {ownerId:`prn_${row.directoryOwnerId.replaceAll('-','')}`,custodyDigest:row.custodyDigest};};
