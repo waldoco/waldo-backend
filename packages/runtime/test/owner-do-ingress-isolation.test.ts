@@ -16,10 +16,14 @@ vi.mock('../src/channels/telegram-owner-do', async load => {
   const original = await load<typeof import('../src/channels/telegram-owner-do')>();
   const { admittedOwnerHost } = await import('./fixtures/admitted-owner-host');
   const { OpenAIResponsesAdapter } = await import('../src/llm/openai');
+  const {configureCommonPublicBrowser}=await import('../src/channels/common-public-browser-configuration');
+  const {commonBrowserFixtureLoader:registeredFixtureLoader}=await import('./fixtures/common-browser-sdk');
+  if(env.SUPABASE_PROJECT_URL==='https://common-source.fixture.invalid')configureCommonPublicBrowser({ref:'registered-fixture-public-policy',doName:'hermetic-owner-81106',subject:'81106',directoryOwnerId:'10000000-0000-0000-0000-000000081106',createdAt:Date.now()-1000,expiresAt:Date.now()+300000,allowedOrigins:['https://public-pages.fixture.invalid'],maxAllocations:1,maxReservedBrowserMs:120000,lifetimeMs:60000,maxScreenshotBytes:1024},registeredFixtureLoader);
+
   return { ...original, TelegramOwnerDO: class extends original.TelegramOwnerDO {
     constructor(state: DurableObjectState, bindings: typeof env) {
       const subject = [81101, 81102, 81103, 81104, 81105,81106].find(value => bindings.TELEGRAM_OWNER_DO!.idFromName(`hermetic-owner-${value}`).toString() === state.id.toString());
-      if(subject===81106){super(state,bindings);return;}
+      if(subject===81106){super(state,{...bindings,BROWSER:{} as never});return;}
       const host = subject === undefined ? undefined : admittedOwnerHost(`hermetic-owner-${subject}`, String(subject),
         new OpenAIResponsesAdapter({ apiKey: bindings.OPENAI_API_KEY }), subject===81105&&(bindings as typeof env & {COMMON_OWNER_TASKS?:string}).COMMON_OWNER_TASKS==='1'?['workspace_write','workspace_list','workspace_read','browse_page']:['get_communication', 'propose_calendar_change']);
       const digest=`sha256:${'d'.repeat(64)}`;
@@ -86,9 +90,9 @@ vi.mock('openai', () => ({
       if(!name&&commonRealHostJourney&&JSON.stringify(body).includes('Approval delivery: native_buttons')){
        const items=Array.isArray((body as any).input)?(body as any).input:[];
        const result=(id:string)=>{const row=items.find((item:any)=>item.type==='function_call_output'&&item.call_id===id);return row?JSON.parse(row.output):undefined;};
-       const listed=result('real-list'),written=result('real-write'),read=result('real-read');
+       const pageA=result('real-page-a'),pageB=result('real-page-b'),listed=result('real-list'),written=result('real-write'),read=result('real-read');
        const revised=JSON.stringify(body).includes('Shorten the real private note');
-       const call=!listed?{name:'workspace_list',arguments:'{}',call_id:'real-list'}:!written?{name:'workspace_write',arguments:JSON.stringify({path:'real-note.md',text:revised?'Short owner note.':'Private owner note from real host.',mime:'text/markdown',expected_revision:revised?listed.data.files[0].revision:0}),call_id:'real-write'}:!read?{name:'workspace_read',arguments:JSON.stringify({file_id:written.data.file_id,revision:written.data.revision}),call_id:'real-read'}:undefined;
+       const call=!pageA?{name:'browse_page',arguments:JSON.stringify({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'}),call_id:'real-page-a'}:!pageB?{name:'browse_page',arguments:JSON.stringify({url:'https://public-pages.fixture.invalid/b',instruction:'Read B.'}),call_id:'real-page-b'}:!listed?{name:'workspace_list',arguments:'{}',call_id:'real-list'}:!written?{name:'workspace_write',arguments:JSON.stringify({path:'real-note.md',text:revised?'Short owner note.':'Private owner note from real host.',mime:'text/markdown',expected_revision:revised?listed.data.files[0].revision:0}),call_id:'real-write'}:!read?{name:'workspace_read',arguments:JSON.stringify({file_id:written.data.file_id,revision:written.data.revision}),call_id:'real-read'}:undefined;
        return {id:`real-host-${modelInputs.length}`,output_text:call?'':'Private note saved and read back.',output:call?[{type:'function_call',...call}]:[],usage:{input_tokens:1,output_tokens:1,input_tokens_details:{cached_tokens:0}}};
       }
       if(!name&&commonWorkspaceJourney&&JSON.stringify(body).includes('Approval delivery: native_buttons')){
@@ -1305,7 +1309,7 @@ it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid')('t
   if(String(input)==='https://common-source.fixture.invalid/rest/v1/rpc/workspace_owner_binding')return Response.json({owner_id:'10000000-0000-0000-0000-000000081106',environment:args.p_environment,namespace:args.p_namespace,do_name:args.p_do_name,do_id:args.p_do_id,state_version:0,mapping_version:1});
   throw Error('unexpected real-host synthetic fetch');
  });
- commonRealHostJourney=true;taskDecision={decision:'retain',sources:[]};
+ commonBrowserFixture.reset();commonRealHostJourney=true;taskDecision={decision:'retain',sources:[]};
  try{
   await send(subject,'Prepare a real private note from supplied material.',998001);
   await runInDurableObject(root,(_instance,state)=>expect(state.storage.sql.exec('SELECT state FROM execution_attempts').one().state).toBe('settled'));
@@ -1322,6 +1326,11 @@ it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid')('t
    const {workspaceOwnerHost}=await import('../src/channels/workspace-host');const store=await workspaceOwnerHost(env,state.storage,state.id.toString(),'hermetic-owner-81106');
    expect(new TextDecoder().decode((await store.export(manifest.files[0]!.file_id,2)).bytes)).toBe('Short owner note.');
    expect([...state.storage.kv.list({prefix:'canonical-owner-v1:'})].length).toBeGreaterThan(0);
+   expect(state.storage.kv.get('common-public-browser-usage:registered-fixture-public-policy')).toMatchObject({allocations:1,reservedBrowserMs:120000});
+   const browserRows=[...state.storage.kv.list<any>({prefix:'common-browser:'})];expect(browserRows).toHaveLength(1);expect(browserRows[0]![1].tabs).toHaveLength(2);
+
   });
+  expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(2);
+  expect(JSON.stringify(modelInputs)).toContain('input_image');
  }finally{commonRealHostJourney=false;vi.unstubAllGlobals();}
 });

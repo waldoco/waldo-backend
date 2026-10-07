@@ -1,3 +1,4 @@
+import {commonPublicBrowserConfiguration} from './common-public-browser-configuration';
 import { WALDO_CHAT_MODEL, recallResultSchema, TOOL_PERMISSIONS, type ToolName } from '@waldo/contracts';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import { OpenAIResponsesAdapter } from '../llm/openai';
@@ -42,7 +43,8 @@ export function commonOwnerHost(env:TelegramWebhookEnv,storage:DurableObjectStor
   };
   currentMaterials={snapshotRef:snapshot.snapshot_ref,source:deps.materials};return deps;
  };
- const tools:readonly ToolName[]=TOOL_PERMISSIONS.user_message.filter(name=>['get_context','workspace_list','workspace_read','workspace_search','workspace_write','workspace_render','skills_list','skills_load','skills_install','skills_disable'].includes(name));
+ const browser=commonPublicBrowserConfiguration({env,storage,actualDoId});
+ const tools:readonly ToolName[]=TOOL_PERMISSIONS.user_message.filter(name=>['get_context','workspace_list','workspace_read','workspace_search','workspace_write','workspace_render','skills_list','skills_load','skills_install','skills_disable',...(browser?['browse_page']:[])].includes(name));
  return {
   environment:env.WALDO_ENVIRONMENT,namespace:env.WALDO_OWNER_DO_NAMESPACE??'',
   get allowedDoNames(){return [currentName()];},
@@ -51,6 +53,7 @@ export function commonOwnerHost(env:TelegramWebhookEnv,storage:DurableObjectStor
   taskMaterials:async(request)=>{const source=currentMaterials?.snapshotRef===request.snapshot_ref?currentMaterials.source:undefined;if(!source)throw Error('common task material requires current admission');return source.load(request);},
   access:async()=>{currentName();return {grants:{status:'available',tools},connectors:{status:'available',tools}};},
   connectorBacked:handler=>tools.includes(handler.name as ToolName),
+  ...(browser?{browser}:{}),
   gateway:new OpenAIResponsesAdapter({apiKey:env.OPENAI_API_KEY}),
   executionBinding:{
    provider:{category:'provider',id:'openai_responses',version:'1.0.0',modelRef:WALDO_CHAT_MODEL,manifest:{id:'openai_responses_complete_v1',version:'1.0.0',digest:'sha256:e2a36d454ce6ec223373f8c6b44360cbc82834e89f299d9465f0b46d6b9f7b12'}},
