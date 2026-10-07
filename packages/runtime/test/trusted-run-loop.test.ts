@@ -3474,7 +3474,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       runLoop.__runLoopCrashAfter = 'LLM_CALLED';
       // Install instrumentation before scheduling; keep automatic delivery outside this
       // test's setup window. The alarm helper below explicitly fires the armed slot.
-      runId = await instance.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+      runId = await runLoop.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
       await armAlarm(state.storage, Date.now() + 60_000);
     });
     await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:LLM_CALLED');
