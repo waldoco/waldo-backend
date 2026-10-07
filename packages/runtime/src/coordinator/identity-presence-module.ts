@@ -181,7 +181,9 @@ export class IdentityPresenceModule {
   admitMessageAuthorityInCurrentTransaction(claim: CommonOwnerAuthority, at: string): void {
     if (!/^[a-f0-9]{64}$/.test(claim.custodyDigest) || claim.kind !== 'verified_message_presence' || !/^owner_[a-f0-9]{64}$/.test(claim.ownerId)
       || !/^supabase_subject_[a-f0-9]{64}$/.test(claim.authenticatedSubjectRef)
-      || !/^[1-9][0-9]{0,18}$/.test(claim.admissionRevision) || !Number.isFinite(Date.parse(at))) {
+      || claim.authenticatedSubjectRef.slice('supabase_subject_'.length) !== claim.ownerId.slice('owner_'.length)
+      || !/^[1-9][0-9]{0,18}$/.test(claim.admissionRevision) || BigInt(claim.admissionRevision) > 9223372036854775807n
+      || !Number.isFinite(Date.parse(at))) {
       throw new ResponsibilityAuthorityDeniedError();
     }
     const root = this.readRoot();
@@ -213,10 +215,10 @@ export class IdentityPresenceModule {
 
   assertMessageAuthorityInCurrentTransaction(claim: CommonOwnerAuthority): void {
     const root = this.readRoot();
-    const row = this.storage.sql.exec<{ authority_digest: string }>(
-      'SELECT authority_digest FROM common_message_custody WHERE presence_id = ?', claim.presenceId).toArray()[0];
+    const row = this.storage.sql.exec<{ authority_digest: string; admission_revision: string }>(
+      'SELECT authority_digest, admission_revision FROM common_message_custody WHERE presence_id = ?', claim.presenceId).toArray()[0];
     if (!root || root.owner_id !== claim.ownerId || root.authenticated_subject_ref !== claim.authenticatedSubjectRef
-      || root.state !== 'active' || !row || row.authority_digest !== claim.custodyDigest) throw new ResponsibilityAuthorityDeniedError();
+      || root.state !== 'active' || !row || row.authority_digest !== claim.custodyDigest || row.admission_revision !== claim.admissionRevision) throw new ResponsibilityAuthorityDeniedError();
   }
 
   assertCanonicalAuthorityInCurrentTransaction(
