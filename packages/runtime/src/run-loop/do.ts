@@ -1,3 +1,4 @@
+import {commonOwnerActivation} from '../channels/common-owner-activation';
 import { armAlarm, COMMON_EXECUTION_DUE_KEY } from '../scheduler/alarm-slot';
 import { EXECUTION_LEASE_MAX_DURATION_MS_V04 } from '../coordinator/planning-execution-module';
 import { verifyCommonExecutionRequest, type CommonExecutionRequest } from '../identity/common-execution-request';
@@ -419,7 +420,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   }
 
   async commonExecutionFromHost(ingress: CommonMessageIngress, request: CommonExecutionRequest) {
-    if ((this.envBindings as Cloudflare.Env & {COMMON_OWNER_TASKS?:string}).COMMON_OWNER_TASKS !== '1') throw Error('common tasks held');
+    if (!commonOwnerActivation(this.envBindings as Cloudflare.Env & {COMMON_OWNER_TASKS?:string;COMMON_OWNER_DO_NAME?:string;WALDO_ENVIRONMENT?:string},ingress.doName)) throw Error('common tasks held');
     await verifyCommonMessageIngress(this.envBindings.WALDO_ROUTER_HMAC_SECRET,ingress,this.deps.now());
     await verifyCommonExecutionRequest(this.envBindings.WALDO_ROUTER_HMAC_SECRET!,ingress,request);
     const physical=this.envBindings.TELEGRAM_OWNER_DO;
@@ -538,7 +539,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   }
 
   async commonTaskSourceFromHost(ingress: CommonMessageIngress, request: CommonTaskSourceRequest) {
-    if ((this.envBindings as Cloudflare.Env & { COMMON_OWNER_TASKS?: string }).COMMON_OWNER_TASKS !== '1') throw Error('common tasks held');
+    if (!commonOwnerActivation(this.envBindings as Cloudflare.Env & {COMMON_OWNER_TASKS?:string;COMMON_OWNER_DO_NAME?:string;WALDO_ENVIRONMENT?:string},ingress.doName)) throw Error('common tasks held');
     await verifyCommonMessageIngress(this.envBindings.WALDO_ROUTER_HMAC_SECRET, ingress, this.deps.now());
     await verifyCommonTaskSourceRequest(this.envBindings.WALDO_ROUTER_HMAC_SECRET!, ingress, request);
     const physical = this.envBindings.TELEGRAM_OWNER_DO;
