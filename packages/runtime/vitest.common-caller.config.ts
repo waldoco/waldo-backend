@@ -6,7 +6,7 @@ export default defineConfig({
   test: { include: ['test/owner-do-ingress-isolation.test.ts'], name: 'synthetic-common-caller' },
   plugins: [cloudflareTest({
     miniflare: { bindings: {
-      WALDO_ENV: 'test', RUN_LOOP_PROVIDER_MODE: 'fake', COMMON_OWNER_TASKS:'1',
+      WALDO_ENV: 'test', RUN_LOOP_PROVIDER_MODE: 'fake', COMMON_OWNER_TASKS:'1', WALDO_EGRESS_ALLOWLIST:'public-pages.fixture.invalid',
       SUPABASE_PROJECT_URL:'https://common-source.fixture.invalid', SUPABASE_PUBLISHABLE_KEY:'common-source-fixture', WALDO_ROUTER_HMAC_SECRET:'common-source-fictional-hmac',
       // The verified owner email follows the text-capture switch (trace-privacy-owner-email.test.ts); this config models the staging vars in wrangler.jsonc (WALDO_ENVIRONMENT staging, capture true); the wrangler default is production, capture off.
       WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE:'hermetic-owner-host', LANGFUSE_CAPTURE_TEXT: 'true',

@@ -9,6 +9,7 @@ import { IsolatedSourceWorld } from '../scenarios/isolated-source-world';
 import { isolatedCalendarEffectClient, isolatedGoogleClient } from '../scenarios/isolated-google-client';
 import { captureFixtureAdapters } from '../evals/fixture-adapter-capture';
 import { auditIsolatedWorld } from '../evals/isolated-world-audit';
+import {commonBrowserFixture,commonBrowserFixtureLoader} from './fixtures/common-browser-sdk';
 import type { NativeManifest } from '../evals/native-manifest';
 
 vi.mock('../src/channels/telegram-owner-do', async load => {
@@ -19,10 +20,13 @@ vi.mock('../src/channels/telegram-owner-do', async load => {
     constructor(state: DurableObjectState, bindings: typeof env) {
       const subject = [81101, 81102, 81103, 81104, 81105].find(value => bindings.TELEGRAM_OWNER_DO!.idFromName(`hermetic-owner-${value}`).toString() === state.id.toString());
       const host = subject === undefined ? undefined : admittedOwnerHost(`hermetic-owner-${subject}`, String(subject),
-        new OpenAIResponsesAdapter({ apiKey: bindings.OPENAI_API_KEY }), subject===81105?['workspace_write','workspace_list','workspace_read']:['get_communication', 'propose_calendar_change']);
+        new OpenAIResponsesAdapter({ apiKey: bindings.OPENAI_API_KEY }), subject===81105&&(bindings as typeof env & {COMMON_OWNER_TASKS?:string}).COMMON_OWNER_TASKS==='1'?['workspace_write','workspace_list','workspace_read','browse_page']:['get_communication', 'propose_calendar_change']);
       const digest=`sha256:${'d'.repeat(64)}`;
       const executionBinding={provider:{category:'provider' as const,id:'fixture_model_provider',version:'1.0.0',modelRef:'gpt-6-luna',manifest:{id:'fixture_provider_manifest',version:'1.0.0',digest}},environment:{category:'execution_environment' as const,id:'fixture_registered_host',version:'1.0.0',environmentKind:'local' as const,manifest:{id:'fixture_environment_manifest',version:'1.0.0',digest}}};
-      super(state, subject === 81105 ? bindings : {...bindings, SUPABASE_PROJECT_URL: undefined}, { mode: 'canonical', host:host && subject===81105?{...host,executionBinding}:host });
+      const browser=subject===81105&&(bindings as typeof env & {COMMON_OWNER_TASKS?:string}).COMMON_OWNER_TASKS==='1'?{binding:{} as never,loadSdk:commonBrowserFixtureLoader,
+        grant:async(task:import('../src/channels/task-source-scope').TaskSourceSnapshot,ownerId:string)=>({ref:'fixture-browser-grant',taskId:task.taskId,ownerId,expiresAt:commonBrowserFixture.expiresAt,allowedOrigins:['https://public-pages.fixture.invalid'],maxScreenshotBytes:1024,lifetimeMs:60000}),
+        reserveAllocation:async()=>{},assertGrantCurrent:async()=>{}}:undefined;
+      super(state, subject === 81105 ? bindings : {...bindings, SUPABASE_PROJECT_URL: undefined}, { mode: 'canonical', host:host && subject===81105?{...host,executionBinding,browser}:host });
     }
   } };
 });
@@ -69,10 +73,13 @@ vi.mock('openai', () => ({
         const nativeInput=(body as {input?:unknown}).input;const items=Array.isArray(nativeInput)?nativeInput:[];
         const result=(id:string)=>{const row=items.find((item:any)=>item.type==='function_call_output'&&item.call_id===id) as {output:string}|undefined;return row?JSON.parse(row.output):undefined;};
         const revised=JSON.stringify(body).includes('Make that checklist shorter');
+        const pageA=result('common-page-a');const pageB=result('common-page-b');
         const create=result('common-write');const listed=result('common-list');const read=result('common-read');
         let call:Record<string,unknown>|undefined;
-        if(!listed)call={name:'workspace_list',arguments:'{}',call_id:'common-list'};
-        else if(!create)call={name:'workspace_write',arguments:JSON.stringify({path:'checklist.md',text:revised?'Short checklist: verify bytes.':'Private checklist: prepare notes and verify saved bytes.',mime:'text/markdown',expected_revision:revised?listed.data.files.find((f:any)=>f.path==='checklist.md').revision:0}),call_id:'common-write'};
+        if(!pageA)call={name:'browse_page',arguments:JSON.stringify({url:'https://public-pages.fixture.invalid/a',instruction:'Read public option A.'}),call_id:'common-page-a'};
+        else if(!pageB)call={name:'browse_page',arguments:JSON.stringify({url:'https://public-pages.fixture.invalid/b',instruction:'Read public option B.'}),call_id:'common-page-b'};
+        else if(!listed)call={name:'workspace_list',arguments:'{}',call_id:'common-list'};
+        else if(!create)call={name:'workspace_write',arguments:JSON.stringify({path:'checklist.md',text:revised?'Short comparison: A has 10, B has 20 fictional tokens.':'Private comparison: Option A has 10 fictional tokens. Option B has 20 fictional tokens.',mime:'text/markdown',expected_revision:revised?listed.data.files.find((f:any)=>f.path==='checklist.md').revision:0}),call_id:'common-write'};
         else if(!read)call={name:'workspace_read',arguments:JSON.stringify({file_id:create.data.file_id,revision:create.data.revision}),call_id:'common-read'};
         return {id:`fixture-${modelInputs.length}`,output_text:call?'':'Private checklist saved and read back.',output:call?[{type:'function_call',...call}]:[],usage:{input_tokens:1,output_tokens:1,input_tokens_details:{cached_tokens:0}}};
       }
@@ -1088,7 +1095,7 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
     return Response.json({owner_id:'10000000-0000-0000-0000-000000081105',auth_user_id:authUser,
       presence_id:'20000000-0000-0000-0000-000000081105',do_name:args.p_do_name,provider:args.p_provider,subject:args.p_subject,state_version:0,admission_revision:'9007199254740993'});
   });
-  commonWorkspaceJourney=true;
+  commonBrowserFixture.reset();commonWorkspaceJourney=true;
   try{
     await send(81105,'Prepare a private checklist from the supplied notes.',997001);
     const replyPrompts=modelInputs.filter(body=>JSON.stringify(body).includes('Approval delivery: native_buttons'));
@@ -1154,14 +1161,25 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
       const {workspaceOwnerHost}=await import('../src/channels/workspace-host');
       const store=await workspaceOwnerHost(env,state.storage,state.id.toString(),'hermetic-owner-81105');
       const exported=await store.export(manifest.files[0]!.file_id,2);
-      expect(new TextDecoder().decode(exported.bytes)).toBe('Short checklist: verify bytes.');
+      expect(new TextDecoder().decode(exported.bytes)).toBe('Short comparison: A has 10, B has 20 fictional tokens.');
       expect(exported.meta.sha256).toBe([...new Uint8Array(await crypto.subtle.digest('SHA-256',exported.bytes))].map(b=>b.toString(16).padStart(2,'0')).join(''));
     });
+    await runInDurableObject(doStub(81105),async(instance,state)=>{
+      const retained=[...state.storage.kv.list<any>({prefix:'common-browser:'})];expect(retained).toHaveLength(1);
+      expect(retained[0]![1]).toMatchObject({allocation:'observed',session:{providerSessionId:'fixture-retained-provider',generation:1},tabs:expect.any(Array)});
+      expect(retained[0]![1].tabs).toHaveLength(2);
+    });
+    expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(2);
+    const imageRequests=modelInputs.filter(body=>JSON.stringify(body).includes('input_image'));
+    expect(imageRequests.length).toBeGreaterThanOrEqual(4);
+    expect(JSON.stringify(imageRequests)).toContain('data:image/png;base64,iVBOR');
+    expect(JSON.stringify(imageRequests)).toContain('Option A costs 10 fictional tokens.');
+    expect(JSON.stringify(imageRequests)).toContain('Option B costs 20 fictional tokens.');
     const receipts=await runInDurableObject(root,(_instance,state)=>[...state.storage.kv.list<unknown>({prefix:'common-execution:'})]);
     expect(receipts).toHaveLength(2);
     await runInDurableObject(root,(_instance,state)=>{
       const rows=state.storage.sql.exec<{kind:string}>('SELECT kind FROM execution_observations').toArray();
-      expect(rows.filter(row=>row.kind==='activity')).toHaveLength(28);
+      expect(rows.filter(row=>row.kind==='activity')).toHaveLength(44);
       expect(rows.filter(row=>row.kind==='ended')).toHaveLength(2);
     });
     // Separate interrupted-host fixture: original request and provider intent survive root eviction.

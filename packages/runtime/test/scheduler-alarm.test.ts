@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { armAlarm } from '../src/scheduler/alarm-slot';
+import { armAlarm, rearmSharedAlarm } from '../src/scheduler/alarm-slot';
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -457,4 +457,18 @@ describe('cron recurrence create-time validation (Codex #229)', () => {
       expect(rows).toEqual([]);
     });
   });
+});
+
+it('shared alarm keeps earlier retained common browser expiry alongside scheduled work',async()=>{
+ const stub=freshStub();
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const now=Date.now(),browserDue=now+60000;
+  await state.storage.put('common_browser_due_v1',browserDue);
+  await rearmSharedAlarm(state.storage,now+120000,now);
+  expect(await state.storage.getAlarm()).toBe(browserDue);
+  await state.storage.put('common_browser_due_v1',null);
+  await rearmSharedAlarm(state.storage,now+120000,now);
+  expect(await state.storage.getAlarm()).toBe(now+120000);
+  await state.storage.deleteAlarm();
+ });
 });

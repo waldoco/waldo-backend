@@ -1,3 +1,4 @@
+import {maintainCommonBrowsers,COMMON_BROWSER_DUE,commonBrowserHost,type CommonBrowserConfiguration} from './common-browser-host';
 import {signCommonExecutionRequest} from '../identity/common-execution-request';
 import { signCommonTaskSourceRequest } from '../identity/common-task-source-request';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
@@ -37,7 +38,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
 import { workspaceToolHandlers } from '../tools/live/workspace';
 import { workspaceDownload, workspacePage, workspaceRead } from './console-workspace';
-import { setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from '@waldo/contracts';
+import { triggerTypeSchema, TOOL_PERMISSIONS, browsePageArgsSchema, setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
@@ -199,6 +200,7 @@ export type TelegramOwnerPrivateHost = Readonly<{
   access: Parameters<typeof createOwnerMessageContextAdapter>[0]['access'];
   connectorBacked(handler: Parameters<OwnerResponderHost['prepare']>[1][number]): boolean;
   gateway: LLMGatewayAdapter;
+  browser?:CommonBrowserConfiguration;
   executionBinding?: Pick<import('../coordinator/waldo-coordinator').ExecutionBindingResolutionV04,'provider'|'environment'>;
 }>;
 
@@ -244,6 +246,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly inbox = new TelegramOwnerInbox(this.ctx.storage, persistInboxWake);
   private readonly liveAttempts = new Set<string>();
   private activeInbox: InboxRecord | null = null;
+  private activeCommonBrowser: ReturnType<typeof commonBrowserHost>|undefined;
   private activeCommonExecution: import('./owner-turn').OwnerResponderBinding['execution'];
   private activeScope: RunEffectScope | undefined;
   private activeAbort: AbortController | undefined;
@@ -277,6 +280,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
   }
 
+  private ownerHostBrowserRead() {
+    return {name:'browse_page' as const,description:'Read a granted public page with a retained task browser and screenshot.',schema:browsePageArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_page')),autonomy_gated:false,
+      handle:async(args:import('@waldo/contracts').BrowsePageArgs,ctx:import('../tools/dispatcher').ToolDispatcherContext)=>{
+        if(!this.activeCommonBrowser)return {ok:false as const,code:'rejected' as const,error:'Common browser host unavailable.',source_taint:'external' as const};
+        return this.activeCommonBrowser.handler.handle(args,ctx);
+      }};
+  }
+
   private commonExecutionForTurn(turn: import('./owner-turn-envelope').OwnerTurnEnvelope,scope:RunEffectScope,host:TelegramOwnerPrivateHost) {
     const occurrence=this.activeInbox;
     const binding=host.executionBinding;
@@ -285,6 +296,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     let request:Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>|undefined;
     let started=false;
     let providerOrdinal=0;
+    let browser:ReturnType<typeof commonBrowserHost>|undefined;
     const invoke=async(operation:import('../identity/common-execution-request').CommonExecutionRequest['operation'],result?:Readonly<{ref:string;digest:string}>,providerCall?:import('../identity/common-execution-request').CommonExecutionRequest['providerCall'],toolCall?:import('../identity/common-execution-request').CommonExecutionRequest['toolCall'])=>{
       if(!request)throw Error('common execution context unavailable');
       if(operation!=='settle'&&operation!=='cancel')scope.admit();
@@ -302,8 +314,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const frozenKey=`common-execution-host:${occurrence.id}`;
         const prior=this.ctx.storage.kv.get<Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>>(frozenKey);
         request=prior??{operation:'begin',source,binding:{...binding,contextProjectionRef:composition.checkpoint.context_ref,contextProjectionDigest:composition.evidence.prompt_digest},
-          // This first executor admits only private workspace tools. Other effects keep their existing desks and remain held here.
-          tools:composition.evidence.tool_acl.filter(tool=>['workspace_list','workspace_read','workspace_search','workspace_write','workspace_render'].includes(tool)),
+          // This executor admits private workspace tools and explicitly registered read-only browser custody. Other effects remain held here.
+          tools:composition.evidence.tool_acl.filter(tool=>['workspace_list','workspace_read','workspace_search','workspace_write','workspace_render',...(host.browser?['browse_page']:[])].includes(tool)),
           maxProviderTurns,maxDurationMs:Math.max(1,Math.min(600000,scope.deadline-Date.now()))};
         if(prior && (JSON.stringify(prior.source)!==JSON.stringify(source) || prior.binding.contextProjectionRef!==composition.checkpoint.context_ref || prior.binding.contextProjectionDigest!==composition.evidence.prompt_digest))throw Error('common execution frozen context changed');
         scope.commit(()=>this.ctx.storage.kv.put(frozenKey,request));
@@ -327,7 +339,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await invoke('tool_settle',undefined,undefined,{...call,resultDigest:`sha256:${await sha256Hex(JSON.stringify(result))}`});
         return result;
       },
-      cancel:async()=>{if(started)await invoke('cancel');},
+      cancel:async()=>{try{if(started)await invoke('cancel');}finally{await browser?.cancel();}},
+      source:()=>{if(!request)throw Error('common source unavailable');return request.source;},
+      attachments:()=>browser?.attachments()??[],
+      bindBrowser:(value:ReturnType<typeof commonBrowserHost>|undefined)=>{browser=value;},
       finalIntent:()=>{if(!started||!request)throw Error('common execution not started');return {request};},
       settle:async(ref:string,text:string)=>{if(!started)throw Error('common execution not started');await invoke('settle',{ref,digest:`sha256:${await sha256Hex(text)}`});},
       allows:(tool:string)=>started&&request?.tools.includes(tool)===true,
@@ -1157,6 +1172,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           return;
         }
       }
+      if(this.ownerHost?.browser && (this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE)??Infinity)<=Date.now())await maintainCommonBrowsers(this.ctx.storage,this.ownerHost.browser,Date.now());
       const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal, call, owner, calendarPrepCurrent, retainedRecallAvailable } = this.setup();
       await ready;
       await finalOutbox.maintain();
@@ -1837,7 +1853,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }, { origin: async () => await storage.get<string>('origin') ?? null, durable: Boolean(this.env.ARTIFACTS) });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...workspaceTools, ...(this.ownerHost?.browser?[{...this.ownerHostBrowserRead()}]:[]), ...reminderHandlers(book), ...healthLogHandlers(healthLogs), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
         // with the artifact text (kinds + sender only; the code itself touches no store).
@@ -1845,7 +1861,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await sentOrThrow(api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` }));
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env)), browserTaskHandler({ legacy: browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
+      }), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), ...(this.ownerHost?.browser?[]:[browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))]), browserTaskHandler({ legacy: browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
         if (!context.assertTaskSourceCurrent) throw Error('browser task source unavailable');
         await context.assertTaskSourceCurrent();
         const ownerKey = await currentTaskOwnerKey(); await context.assertTaskSourceCurrent();
@@ -1877,8 +1893,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           await admission.assertCurrent();
           if (await currentTaskOwnerKey() !== taskOwnerKey) throw new ClosedRunError();
         }, { inputRef: turn.traceId, text: turn.text, quotedRanges: turn.sourceQuoteRanges }, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? []));
+        const execution=this.env.COMMON_OWNER_TASKS==='1'?this.commonExecutionForTurn(turn,scope,host):undefined;
+        this.activeCommonBrowser=host.browser&&execution?commonBrowserHost({storage:this.ctx.storage,config:host.browser,ownerId:admission.invocation.verified_authority.principal_ref,source:execution.source,assertCurrent:()=>execution.assertCurrent(),deadline:()=>scope.deadline,now:Date.now}):undefined;
+        execution?.bindBrowser(this.activeCommonBrowser);
         return { admission, adapter, store: ownerCanonicalHistory(storage, admission, adapter), skills,
-          ...(this.env.COMMON_OWNER_TASKS==='1'?{execution:this.commonExecutionForTurn(turn,scope,host)}:{}),
+          ...(execution?{execution}:{}),
           sourceScope: { ...sourceScope, propose: async proposal => { await admission.assertCurrent(); if (this.env.COMMON_OWNER_TASKS === '1') throw Error('common source approval recovery unavailable'); await desk.proposeTaskSources(proposal); await admission.assertCurrent(); } },
           forgetting: { principal_ref: admission.invocation.verified_authority.principal_ref, tenant_ref: admission.invocation.verified_authority.tenant_ref, store: memory } };
       } } : undefined, !this.canonicalPreparation && channel === 'telegram' ? { prepare: async (turn, contextOwnerId, scope) => {
