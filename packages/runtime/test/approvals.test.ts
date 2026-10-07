@@ -565,7 +565,7 @@ describe('calendar Undo version protection', () => {
 
 describe('approval desk - email_send rail', () => {
   const proposal = {
-    to: ['a@x.test'], subject: 'Hello', body: 'Body text', message_id: '<m1@waldo-send>',
+    to: ['a@x.test'], subject: 'Hello', body: 'Body text', connection_id: 'fixture-account', account_email: 'owner@example.test', message_id: '<m1@waldo-send>',
     raw: 'To: a@x.test\r\nSubject: Hello\r\nMessage-ID: <m1@waldo-send>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\nBody text',
     digest: '',
   };
@@ -576,8 +576,9 @@ describe('approval desk - email_send rail', () => {
     let now = 1_000_000;
     let n = 0;
     const client = {
+      account: { connection_id: 'fixture-account', email: 'owner@example.test' },
       sendRaw: async (raw: string) => { sentRaw.push(raw); if (opts.sendError) throw opts.sendError; return { message_id: 'g1' }; },
-      findSentByMessageId: async () => opts.found ?? false,
+      findSentByMessageId: async () => opts.found ?? true,
     } as unknown as GoogleClient;
     const desk = approvalDesk(state.storage.sql, {
       call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
@@ -597,9 +598,9 @@ describe('approval desk - email_send rail', () => {
         owner: 42, google: async () => null, newId: () => '7', now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
       });
       await desk.proposeSendEmail({
-        to: ['a@x.test'], cc: ['c@x.test'], bcc: ['b@x.test'], subject: 'Quarterly', body: 'Line one\nLine two', message_id: '<m2@waldo-send>', raw: 'raw', digest: 'd',
+        connection_id: 'fixture-account', account_email: 'owner@example.test', to: ['a@x.test'], cc: ['c@x.test'], bcc: ['b@x.test'], subject: 'Quarterly', body: 'Line one\nLine two', message_id: '<m2@waldo-send>', raw: 'raw', digest: 'd',
       });
-      expect(sent[0]!.body.text).toBe('Send this email? To: a@x.test\nCc: c@x.test\nBcc: b@x.test\nSubject: Quarterly\n\nLine one\nLine two');
+      expect(sent[0]!.body.text).toBe('Send this email? From: owner@example.test\nTo: a@x.test\nCc: c@x.test\nBcc: b@x.test\nSubject: Quarterly\n\nLine one\nLine two');
     });
   });
 
@@ -629,7 +630,7 @@ describe('approval desk - email_send rail', () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-1'));
     await runInDurableObject(stub, async (_i, state) => {
       const { desk, id, sent, sentRaw, tick } = await setup(state, {});
-      expect(sent[0]!.body.text).toBe('Send this email? To: a@x.test\nSubject: Hello\n\nBody text');
+      expect(sent[0]!.body.text).toBe('Send this email? From: owner@example.test\nTo: a@x.test\nSubject: Hello\n\nBody text');
       const keyboard = JSON.stringify(sent[0]!.body.reply_markup);
       expect(keyboard).toContain(`a:${id}`);
       expect(keyboard).toContain(`e:${id}`);
@@ -753,13 +754,13 @@ describe('approval desk - email_send rail', () => {
       const ok = await setup(state, { sendError: new Error('network timeout'), found: true });
       const out1 = await ok.desk.decide(ok.id, 'a', 't');
       expect(out1.toast).toBe('Sent');
-      expect(out1.message).toContain('exactly once');
+      expect(out1.message).toContain('No retry was issued');
       expect(ok.sentRaw).toHaveLength(1);
 
       const miss = await setup(state, { sendError: new Error('network timeout'), found: false, messageId: '<m4@waldo-send>' });
       const out2 = await miss.desk.decide(miss.id, 'a', 't');
-      expect(out2.toast).toBe("That didn't send");
-      expect(out2.message).toContain('Nothing was delivered');
+      expect(out2.toast).toBe('Outcome unknown');
+      expect(out2.message).not.toContain('Nothing was delivered');
       expect(miss.sentRaw).toHaveLength(1);
     });
   });
@@ -780,9 +781,9 @@ it('approved email propagates ledger intent and pending proxy outcome remains un
  const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-proxy-${crypto.randomUUID()}`));
  await runInDurableObject(stub,async(_instance,state)=>{
   const contexts:unknown[]=[];let sends=0;const raw='fixture-mime';
-  const client={sendRaw:async()=>{sends++;throw new ProxyIntentError('intent_pending');},findSentByMessageId:async()=>false} as unknown as GoogleClient;
+  const client={account:{connection_id:'fixture-account',email:'owner@example.test'},sendRaw:async()=>{sends++;throw new ProxyIntentError('intent_pending');},findSentByMessageId:async()=>false} as unknown as GoogleClient;
   const desk=approvalDesk(state.storage.sql,{call:async()=>({message_id:1}),owner:42,google:async(intent,feature)=>{contexts.push({intent,feature});return client;},newId:()=>crypto.randomUUID(),now:()=>1000,timezone:'UTC',log:()=>{}});
-  const id=await desk.proposeSendEmail({to:['fictional@test.invalid'],subject:'fixture',body:'fixture',raw,digest:await sha256Hex(raw),message_id:'fixture-id'});
+  const id=await desk.proposeSendEmail({connection_id:'fixture-account',account_email:'owner@example.test',to:['fictional@test.invalid'],subject:'fixture',body:'fixture',raw,digest:await sha256Hex(raw),message_id:'fixture-id'});
   const result=await desk.decide(id,'a','fixture');expect(result.toast).toBe('Outcome unknown');expect(result.message).not.toContain('Nothing was delivered');expect(contexts).toEqual([{intent:{id:`approval:${id}:apply`},feature:'mail'}]);
   expect(state.storage.sql.exec<{status:string}>('SELECT status FROM ledger WHERE id=?',id).one().status).toBe('uncertain');await desk.decide(id,'a','fixture');expect(sends).toBe(1);
  });

@@ -96,7 +96,7 @@ describe('google client', () => {
 describe('google tools', () => {
   const proposals = { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined };
   it('returns typed receipt outcomes for email proposals without claiming a Gmail send', async () => {
-    const google: GoogleAccess = { client: async () => ({} as never) };
+    const google: GoogleAccess = { client: async () => ({ account: { connection_id: 'fixture-account', email: 'owner@example.test' } } as never) };
     const args = { to: ['a@example.test'], subject: 'Hello', body_markdown: 'Body' };
     const good = googleHandlers(google, { ...proposals, proposeSendEmail: async () => 'p1' }, clock).find((tool) => tool.name === 'send_email')!;
     const receipt = await good.handle(args as never);
@@ -263,6 +263,7 @@ describe('gmail send rail bytes', () => {
       if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
       if (url.includes('/messages/send')) return Response.json({ id: 'sent1', threadId: 't1' });
       if (url.includes('/messages?')) return Response.json({ messages: [{ id: 'sent1' }] });
+      if (url.includes('/messages/sent1?')) return Response.json({id:'sent1',labelIds:['SENT'],payload:{headers:[{name:'Message-ID',value:'<m1@waldo-send>'}]}});
       return new Response('{}', { status: 404 });
     }) as typeof fetch;
     const client = googleClient(app, { refresh_token: 'rt' }, f);

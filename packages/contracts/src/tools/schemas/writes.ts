@@ -91,6 +91,7 @@ export type DraftDocumentArgs = z.infer<typeof draftDocumentArgsSchema>;
 // Drafts carry no approval rail; sends do. Tool args carry bare addresses: display-name
 // forms are the adapter's inbound draft shape, never the model's outbound one.
 export const draftEmailArgsSchema = z.strictObject({
+  connection_id: z.string().min(1).max(1024).optional(),
   to: z.array(z.email()).min(1).max(50),
   cc: z.array(z.email()).max(50).optional(),
   bcc: z.array(z.email()).max(50).optional(),

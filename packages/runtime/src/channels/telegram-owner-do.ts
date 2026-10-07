@@ -97,7 +97,7 @@ import { artifactExports, exportArtifactHandler, r2ArtifactBinaries } from './ar
 import { ARTIFACT_EXPORT_PATH, artifactExportDownload, exportDownloadUrl } from './artifact-export-download';
 import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
 import { runBook } from './background-runs';
-import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, sha256Hex, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
+import { googleAccountCandidates, exchangeGoogleCode, googleAccessToken, googleClient, googleHas, sha256Hex, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
 import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
 import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
 import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
@@ -1683,13 +1683,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await storage.delete(['google:tokens', 'google:connection']);
         log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: vault ? 'moved to vault' : 'moved to account list' });
       },
-      // The first healthy account whose grant covers the feature serves it.
-      async client(feature: GoogleFeature = 'calendar', intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>) {
+      // Explicit mail selections and approved effects retain their exact owner account.
+      async client(feature: GoogleFeature = 'calendar', intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>, connectionId?: string) {
         const app = await googleApp();
         if (!app) {if(intent)throw new ProxyIntentError('intent_unavailable');return null;}
         await google.migrate();
         const [all, failing, doName] = [await accounts(), await health(), vaultOwner()];
-        const fit = all.filter((account) => googleHas(account.scopes, feature)).map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
+        const fit = googleAccountCandidates(all,feature,connectionId).map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
         const account = pinProxyIntentRoute(storage.sql,intent,`google:${feature}`,fit,fit.find((candidate) => !failing[candidate.id]) ?? fit[0]);
         if (!account) return null;
         const metadata = { connection_id: account.id, email: account.email };
@@ -1803,7 +1803,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       return this.browserTasks.resolve(this.browserTasks.principal, source);
     } });
     const desk = approvalDesk(storage.sql, {
-      call: routedCall, owner, google: (intent,feature) => google.client(feature??'calendar',intent), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
+      call: routedCall, owner, google: (intent,feature,connectionId) => google.client(feature??'calendar',intent,undefined,connectionId), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
       timezone: clock.timezone, log,
       taskSources: async proposal => {
         const scope = this.activeScope;
@@ -1859,10 +1859,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const runs = runBook(storage.sql, clock, () => deps.newRunId().slice(0, 8));
     // A9: recent meal/workout logs join the proactive context; the read degrades to empty
     // when the store is unlinked so beats and the /ledger command never break on it.
-    const ledger = async () =>
-      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), proactivityLine(loops.proactivity()), schedulePreferencesLine(schedPrefs.all()), healthSection(await healthLogs.recent(10), clock.timezone)]
+    const ledger = async () => {
+      await desk.reconcileEmails();
+      return [loopsSection(loops, clock.timezone), desk.ledger(book.list()), proactivityLine(loops.proactivity()), schedulePreferencesLine(schedPrefs.all()), healthSection(await healthLogs.recent(10), clock.timezone)]
         .filter((section) => section !== '')
         .join('\n\n');
+    };
     const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
     // Media reads are per-channel: Telegram file ids go through getFile; WhatsApp media ids go
     // through the Graph two-step (W4). Both feed the same transcriber/attachment pipeline.

@@ -7,13 +7,13 @@ import {
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { b64url, buildMime, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature } from '../../connectors/google';
+import { GoogleMailAccountError, b64url, buildMime, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature } from '../../connectors/google';
 import { EmailProposalError, type EmailSendProposal } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 
 export type GoogleAccess = Readonly<{
-  client(feature?: GoogleFeature, intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>): Promise<GoogleClient | null>;
+  client(feature?: GoogleFeature, intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>, connectionId?: string): Promise<GoogleClient | null>;
   state?():Promise<readonly Readonly<{id:string;email:string;error:string|null;calendar:boolean;mail:boolean;tasks:boolean}>[]>;
 }>;
 
@@ -37,12 +37,15 @@ const authFailed = (reason: ConnectIntent['reason'], feature: GoogleFeature): To
   connect: { status: 'auth_required', service: 'google', reason, feature },
 });
 
-async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, ctx: ToolDispatcherContext | undefined, work: (client: GoogleClient) => Promise<T>): Promise<ToolResult<T>> {
-  const client = await google.client(feature, undefined, ctx?.assertTaskSourceCurrent);
-  if (client === null) return authFailed('not_connected', feature);
+async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, ctx: ToolDispatcherContext | undefined, work: (client: GoogleClient) => Promise<T>, connectionId?: string): Promise<ToolResult<T>> {
   try {
+    const client = await google.client(feature, undefined, ctx?.assertTaskSourceCurrent, connectionId);
+    if (client === null) return authFailed('not_connected', feature);
+    if (connectionId && client.account?.connection_id !== connectionId) return { ok: false, code: 'rejected', error: 'The requested Google account is unavailable; no other account was used.', source_taint: 'external' };
     return { ok: true, data: await work(taskSourceClient(client, ctx)), source_taint: 'external' };
   } catch (error) {
+    if (error instanceof GoogleMailAccountError && error.reason === 'scope_missing') return authFailed('scope_missing', feature);
+    if (error instanceof GoogleMailAccountError) return { ok: false, code: 'rejected', error: error.message, source_taint: 'external' };
     // 401 = the stored grant is dead. A 403 prompts for consent only on structured evidence that the scope is
     // missing; a disabled API, a quota or a plain denial is not fixed by consent, so it returns the provider's words.
     if (error instanceof GoogleError && error.status === 403 && error.reason === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT') return authFailed('scope_missing', feature);
@@ -51,6 +54,17 @@ async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, ctx: 
     return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error), source_taint: 'external' };
   }
 }
+
+// Gmail replies need provider thread headers as well as threadId. Caller text cannot supply custody.
+const prepareMailReply = async (client: GoogleClient, args: DraftEmailArgs) => {
+  if (!args.reply_to_thread_id) return {};
+  if (!args.connection_id || client.account?.connection_id !== args.connection_id) throw new GoogleMailAccountError('A reply requires the connection_id returned by the thread read; no other account was used.');
+  const messages = await client.readThread(args.reply_to_thread_id, 20);
+  const parent = args.in_reply_to_msg_id ? messages.find(message => message.id === args.in_reply_to_msg_id || message.message_id === args.in_reply_to_msg_id) : messages.at(-1);
+  if (!parent?.message_id || !/^<[^<>\s]+@[^<>\s]+>$/.test(parent.message_id) || /[\r\n]/.test(parent.references ?? '')) throw new GoogleMailAccountError('The reply headers are unavailable or invalid; reread the thread before preparing this reply.');
+  if (args.subject !== parent.subject && args.subject !== `Re: ${parent.subject}`) throw new GoogleMailAccountError('The reply subject differs from its thread; prepare a new email or preserve the thread subject.');
+  return { inReplyTo: parent.message_id, references: [parent.references, parent.message_id].filter(Boolean).join(' ') };
+};
 
 // E1 (issue #150) as amended by the owner's September 27, 2026 ruling ("instinct way for OTP"):
 // a verification artifact in either visible list field quarantines both - the snippet routinely
@@ -129,7 +143,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('get_communication'),
     autonomy_gated: false,
     requires_connector: true,
-    handle: ({ date_range,limit=10,page_token }: GetCommunicationArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
+    handle: ({ date_range,limit=10,page_token,connection_id }: GetCommunicationArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
       const since = date_range?.from ? Date.parse(date_range.from) : clock.now().getTime() - DAY_MS;
       const to = date_range?.to ?? clock.now().toISOString();
       const from = new Date(since).toISOString();
@@ -150,7 +164,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       }
       const fetched=page? page.messages : await client.newMail(since,limit);
       const messages = fetched.filter(item => { const at = Date.parse(item.at); return Number.isFinite(at) && at >= since && at < Date.parse(to); }).map(quarantineMailItem);
-      return { since: from, from: date_range?.from ?? from, to, timezone: clock.timezone, messages, query: degraded?null:query, ...(degraded?{query_note:'legacy_since_filter_no_gmail_query'}:{}), next_page_token:page?.next_page_token??null,result_size_estimate:page?.result_size_estimate??null, coverage: {
+      return { account: client.account ?? null, since: from, from: date_range?.from ?? from, to, timezone: clock.timezone, messages, query: degraded?null:query, ...(degraded?{query_note:'legacy_since_filter_no_gmail_query'}:{}), next_page_token:page?.next_page_token??null,result_size_estimate:page?.result_size_estimate??null, coverage: {
         lower_bound_query: paged?'previous_epoch_second_then_exact_timestamp_filter':'legacy_adapter_lower_bound_unverified',
         cursor_query_binding: page_token?'caller_supplied_window_not_authenticated_to_cursor':'first_page',
         scope: 'inbox_primary_category', account_selection: 'connected_adapter_account_not_all_accounts',
@@ -159,7 +173,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
         upper_bound_applied_after_page: !paged, complete: paged&&page!.next_page_token===null&&page_token===undefined&&fetched.length===messages.length,
         limitation: paged?'Primary inbox category from one adapter account. Provider cursor is opaque and not authenticated to this supplied query/window. Result size is an estimate. Not all accounts or categories.':'One sampled Primary-inbox page; pagination is unavailable. A newer page may exclude messages in an older requested window. Empty results do not prove the range is empty.',
       } };
-    }),
+    }, connection_id),
   } satisfies ToolHandler<GetCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'search_communication',
@@ -168,31 +182,31 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('search_communication'),
     autonomy_gated: false,
     requires_connector: true,
-    handle: ({ query, date_range, limit }: SearchCommunicationArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
+    handle: ({ query, date_range, limit, connection_id }: SearchCommunicationArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
       const clauses = [query];
       if (date_range?.from) clauses.push(`after:${Math.floor(Date.parse(date_range.from) / 1000)}`);
       if (date_range?.to) clauses.push(`before:${Math.floor(Date.parse(date_range.to) / 1000)}`);
       const messages = (await client.searchMail(clauses.join(' '), limit)).map(quarantineMailItem);
-      return { query, messages, coverage: { scope: 'matching_query_one_adapter_account', complete: false, limitation: 'Bounded matching search, not a complete view of Gmail or all accounts.' },
+      return { account: client.account ?? null, query, messages, coverage: { scope: 'matching_query_one_adapter_account', complete: false, limitation: 'Bounded matching search, not a complete view of Gmail or all accounts.' },
         ...(messages.length === 0 ? { recovery: {
           status: 'empty_query_not_absence', preserve_date_range: true,
           query_semantics: 'unquoted_terms_are_conjunctive',
           next_step: 'Use fewer distinctive terms or a known sender/repository only when this preserves the request. Keep the same account, date range and result limit. Preserve explicit exact phrases, sender restrictions and operators; do not drop them to find unrelated mail. Read returned subjects/snippets to check relevance. Empty still means no matches for this query, not no mail.',
         } } : {}),
       };
-    }),
+    }, connection_id),
   } satisfies ToolHandler<SearchCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'read_thread',
-    description: "Read one Gmail thread by thread_id - the messages with sender, subject, time and body. Use after get_communication or search_communication surfaces a thread the owner asks about, before drafting a reply.",
+    description: "Read one Gmail thread by thread_id - the messages with sender, subject, time and body. Use the connection_id from the preceding search/read. Return that account alongside the thread, and preserve it when drafting or sending a reply.",
     schema: readThreadArgsSchema,
     trigger_allowlist: allowlist('read_thread'),
     autonomy_gated: false,
     requires_connector: true,
-    handle: ({ thread_id, limit }: ReadThreadArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => ({
-      thread_id,
+    handle: ({ thread_id, limit, connection_id }: ReadThreadArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => ({
+      thread_id, account: client.account ?? null,
       messages: await Promise.all((await client.readThread(thread_id, limit)).map((message) => relayThreadMessage(message, relayArtifact))),
-    })),
+    }), connection_id),
   } satisfies ToolHandler<ReadThreadArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_tasks',
@@ -232,21 +246,23 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     handle: async (args: DraftEmailArgs, ctx?: ToolDispatcherContext) => {
       if (!ctx?.turnId || !ctx.toolCallId) return { ok: false as const, code: 'rejected' as const, error: 'Draft invocation identity is unavailable.' };
       const intent = { id: `draft:${await sha256Hex(JSON.stringify([ctx.authenticatedUserId,ctx.turnId,ctx.toolCallId]))}` };
-      const access: GoogleAccess = { client: (feature, _intent, guard) => google.client(feature,intent,guard) };
+      const access: GoogleAccess = { client: (feature, _intent, guard, connectionId) => google.client(feature,intent,guard,connectionId) };
       const result = await withGoogle(access, 'mail', ctx, async (client) => {
+        const reply = await prepareMailReply(client, args);
         const draft = await client.draft({
+          ...reply,
           to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
           subject: args.subject, body: args.body_markdown, ...(args.reply_to_thread_id ? { threadId: args.reply_to_thread_id } : {}),
         });
         desk.record('email_draft', `Drafted "${args.subject}" to ${args.to.join(', ')}`, draft);
-        return { ...draft, sent: false };
-      });
+        return { ...draft, account: client.account ?? null, sent: false };
+      }, args.connection_id);
       return result.ok ? { ...result, source_taint: null } : result;
     },
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
   {
     name: 'send_email',
-    description: "Send an email from the owner's Gmail. The owner gets Send it / Modify / Not now buttons showing the exact recipients, subject and body; nothing sends until they approve. Use draft_email instead when the owner wants to review or edit it in Gmail themselves.",
+    description: "Send an email from the owner's Gmail. The owner gets Send it / Modify / Not now buttons showing the exact recipients, subject and body; nothing sends until they approve. For replies preserve connection_id and reply_to_thread_id from read_thread. Use draft_email instead when the owner wants to review or edit it in Gmail themselves.",
     schema: sendEmailArgsSchema,
     trigger_allowlist: allowlist('send_email'),
     autonomy_gated: false,
@@ -259,7 +275,11 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     handle: async (args: SendEmailArgs, ctx?: ToolDispatcherContext) => {
       // Connectivity is gated at propose time (same tier-2 contract as the other google
       // handlers): no client -> typed connect intent, no half-proposed card.
-      const gate = await withGoogle(google, 'mail', ctx, async () => null);
+      const gate = await withGoogle(google, 'mail', ctx, async (client) => {
+        const account = client.account;
+        if (!account?.connection_id || !account.email) throw new GoogleMailAccountError('The sending account identity is unavailable; no proposal was prepared.');
+        return { account, reply: await prepareMailReply(client, args) };
+      }, args.connection_id);
       if (!gate.ok) return { ...gate, source_taint: null };
       // A replay of the same ingress turn with the same final email arguments must reuse its
       // proposal, even though each invocation mints fresh wire Message-ID bytes. Later turns
@@ -271,13 +291,14 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       // "Base64 decoding failed" on the approved send path.)
       const raw = b64url(new TextEncoder().encode(buildMime({
         to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
-        subject: args.subject, body: args.body_markdown, messageId: message_id,
+        subject: args.subject, body: args.body_markdown, messageId: message_id, ...gate.data.reply, from: gate.data.account.email!,
       })));
       try {
         const proposal_id = await desk.proposeSendEmail({
           to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
           subject: args.subject, body: args.body_markdown,
           ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
+          connection_id: gate.data.account.connection_id!, account_email: gate.data.account.email!,
           message_id, raw, digest: await sha256Hex(raw), ...(dedupe_key ? { dedupe_key } : {}),
         });
         return { ok: true, data: { proposal_id, status: 'review card requested in chat; nothing was sent', sent: false }, source_taint: null };
