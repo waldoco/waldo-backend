@@ -72,10 +72,10 @@ describe('whatsapp telegram shim', () => {
     expect(JSON.stringify(body)).not.toContain('tok');
   });
 
-  it('non-send methods are logged no-ops, and the unlinked gate drops sends before any fetch', async () => {
+  it('non-send methods return no successful receipt, and the unlinked gate drops sends before any fetch', async () => {
     const graph = vi.fn(async () => Response.json({}));
     const shim = whatsappTelegramShim('tok', 'pn1', '15550001111', graph as unknown as typeof fetch);
-    expect(await shim('answerCallbackQuery', { callback_query_id: 'q' })).toEqual({});
+    expect(await shim('answerCallbackQuery', { callback_query_id: 'q' })).toBeUndefined();
     expect(graph).not.toHaveBeenCalled();
     let linked = false;
     const gated = gatedCaller(shim, () => !linked);

@@ -147,7 +147,7 @@ export class TelegramOwnerListener {
       // The responder has already applied current-turn artifact receipt admission.
       // Rich formatting is confined to this final reply, never progress/events/errors.
       const guardedText = redactSecretUrls(text).text;
-      const rich = telegramRichReply(guardedText);
+      const rich = this.options.surface === 'whatsapp' ? {text: guardedText} : telegramRichReply(guardedText);
       if (this.options.queueFinal) {
         const chosen = telegramReaction(readyChoice);
         const finalReaction = chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌';

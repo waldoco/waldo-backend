@@ -222,3 +222,14 @@ it('failed WhatsApp model span and final failure retain WhatsApp trace', async (
   expect(entries.some(entry => entry.hop === 'fixture_model' && !entry.ok)).toBe(true);
   expect(entries.some(entry => entry.hop === 'turn' && !entry.ok)).toBe(true);
 });
+
+it('renders WhatsApp final directly as guarded plain text, with no Telegram HTML on queued or direct delivery', async () => {
+  const text = '**Result** <literal> https://files.fixture.invalid/note?a=1&b=2';
+  for (const queued of [false,true]) {
+    const {api,calls}=recorder(); const queueFinal=vi.fn(async(_turn: unknown,_payload: unknown,_reaction: string)=>undefined);
+    const listener=new TelegramOwnerListener({ownerTelegramId:OWNER,surface:'whatsapp',api,respond:async()=>text,saveOffset:async()=>undefined,...(queued?{queueFinal}:{})});
+    await listener.handle({updateId:1,senderId:OWNER,chatId:OWNER,messageId:null,sentAt:null,text:'make note'});
+    const payload=queued?queueFinal.mock.calls[0]![1]:calls.find(([kind])=>kind==='send')![1];
+    expect(payload).toEqual({chat_id:OWNER,text});
+  }
+});

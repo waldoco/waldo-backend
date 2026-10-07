@@ -192,3 +192,9 @@ Parent relays Dalda hosted pinned staging common_owner_authority absent and hist
 - RED at bbdba8: actual registered two-argument caller receipt lacked hostRun. GREEN: both normal connected synthetic callers; registered physical reconstruction, stop-during-acquire, workspace-result readback, lost-final retry, and expiry reconciliation/crash gap. Expiry now checked at physical deadline+1 rather than after 10 minutes.
 - 80 source guards (10 files), worker/integration types. Added canonical lease bounded-expiry/replay checks and signed identity tamper checks. Earlier failed whitelist/new test setup/typecheck attempts corrected and rerun; none counted as passes.
 - SOURCE/SYNTHETIC only; outbound egress blocked, no hosted migration/push/deploy/live/provider-spend. Callback forget/stop linearization and canonical Outcome forget retention remain unresolved; unsafe source-card diagnostic still reverted.
+
+## 2026-10-07 WhatsApp presentation truth corrections
+- Independently reproduced missing URL fallback, false unsupported-operation success, and Telegram HTML leaking into WhatsApp final. RED then GREEN tests for each.
+- WhatsApp text shim retains exact URL buttons and callback instructions; unsupported operations return undefined plus unsupported_surface_action, not ok:true/{}.
+- Listener renders WhatsApp queued/direct final from original guarded text. Telegram rich rendering untouched. Shim accepts explicit fallback_text for direct compatible callers.
+- 65 WhatsApp/listener/outbox guards across 10 files; worker/integration types. Native buttons/lists/reactions/typing remain unadvertised; no provider sends/account/version proof. Native wamid ACK/status handling, ordinary input identity, transport timeout and service window remain open.

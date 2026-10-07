@@ -19,24 +19,22 @@ export const createWhatsAppCaller = (token: string, phoneNumberId: string, fetch
 export const sendWhatsAppText = (call: WhatsAppCall, to: string, text: string) =>
   call({ to, type: 'text', text: { body: text } });
 
-// Telegram-shaped shim over the Cloud API (the OpenClaw channel-plugin pattern: normalize the
-// provider behind one call interface so the turn pipeline never branches on provider, and the
-// reply always goes back out the channel it came in on). sendMessage maps to a text send; buttons
-// flatten to reply instructions because WhatsApp interactive replies carry no callback_data, so
-// approval cards arrive as "reply a:<id>" lines. Everything else is a logged no-op.
+// Telegram-shaped compatibility caller. WhatsApp currently uses explicit text
+// instructions for approvals and exact URL text for link buttons. Unsupported
+// Telegram operations return no receipt, never a fabricated successful result.
 export type TelegramShimCall = (method: string, body: object) => Promise<unknown>;
 
 export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: string, fetcher: typeof fetch = fetch): TelegramShimCall => {
   const call = createWhatsAppCaller(token, phoneNumberId, fetcher);
   return async (method, body) => {
     if (method === 'sendMessage') {
-      const b = body as { text: string; reply_markup?: { inline_keyboard?: { text: string; callback_data?: string }[][] } };
-      const buttons = (b.reply_markup?.inline_keyboard ?? []).flat().filter((x) => x.callback_data);
-      const suffix = buttons.length ? `\n\n${buttons.map((x) => `- ${x.text}: reply "${x.callback_data}"`).join('\n')}` : '';
-      return sendWhatsAppText(call, to, b.text + suffix);
+      const b = body as { text: string; fallback_text?: string; reply_markup?: { inline_keyboard?: { text: string; callback_data?: string; url?: string }[][] } };
+      const buttons = (b.reply_markup?.inline_keyboard ?? []).flat().filter((x) => x.callback_data || x.url);
+      const suffix = buttons.length ? `\n\n${buttons.map((x) => x.url ? `- ${x.text}: ${x.url}` : `- ${x.text}: reply "${x.callback_data}"`).join('\n')}` : '';
+      return sendWhatsAppText(call, to, (b.fallback_text ?? b.text) + suffix);
     }
-    console.log(JSON.stringify({ hop: 'whatsapp_shim', ok: true, skipped: method }));
-    return {};
+    console.log(JSON.stringify({ hop: 'whatsapp_shim', ok: false, skipped: method, code: 'unsupported_surface_action' }));
+    return undefined;
   };
 };
 
