@@ -7,6 +7,7 @@ import { asciiLiteralIncludes, forgetSourceBatch, type ForgetSource, type Forget
 export type ConversationStore = Readonly<{
   load(): Promise<Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null }>>;
   save(entries: readonly ConversationEntry[], leafId: string, scope?: RunEffectScope): Promise<void>;
+  persistOwnerInput?(entry: ConversationEntry, scope: RunEffectScope): Promise<void>;
   forgetSources?(topic: string): Promise<{ sources: ForgetSource[]; incomplete: boolean }>;
   forgetSourceBatch?(topic: string): Promise<ForgetBatch>;
   forgetSourceBatchCurrent?(topic: string): ForgetBatch | null;

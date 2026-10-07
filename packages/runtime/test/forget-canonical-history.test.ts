@@ -82,3 +82,17 @@ describe('forget reaches the canonical owner history', () => {
     });
   });
 });
+
+it('early original owner input is unique forget-covered and cannot be resurrected after redaction',async()=>{
+ await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('canonical-early-original')),async(_i,state)=>{
+  const admission={invocation:{verified_authority:{principal_ref:'prn_x',tenant_ref:'ten_x'}}};const adapter={assertCurrent:async()=>{},readCanonicalHistory:async(read:any)=>(await read()).entries.map((row:any)=>row.entry)};
+  const store=ownerCanonicalHistory(state.storage,admission as never,adapter as never);const scope={commit:<T>(work:()=>T)=>state.storage.transactionSync(work)} as never;
+  const original={id:'early',ownerId:'prn_x',chatId:'owner',parentId:null,threadAnchorId:null,surface:'telegram',role:'user' as const,modelPayload:'Read zebra code word.',appPayload:'Read zebra code word.',modelProjection:{mode:'include' as const}};
+  await store.persistOwnerInput!(original,scope);await store.persistOwnerInput!(original,scope);expect((await state.storage.list({prefix:P+'conv:'})).size).toBe(1);expect((await store.load()).leafId).toBeNull();
+  await store.save([original],original.id,scope);expect((await state.storage.list({prefix:P+'conv:'})).size).toBe(1);expect((await store.load()).leafId).toBe(original.id);
+  expect(store.forgetSourcesCurrent!('zebra code word')!.sources.length).toBeGreaterThan(0);
+  await redactConversationEntries(state.storage,['zebra code word'],'[forgotten]',scope);
+  await expect(store.persistOwnerInput!(original,scope)).rejects.toThrow('original input conflict');await expect(store.save([original],original.id,scope)).rejects.toThrow('original input conflict');
+  expect(JSON.stringify((await store.load()).entries)).not.toContain('zebra code word');
+ });
+});
