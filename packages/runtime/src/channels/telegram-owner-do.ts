@@ -323,8 +323,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const frozenKey=`common-execution-host:${occurrence.id}`;
         const prior=this.ctx.storage.kv.get<Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>>(frozenKey);
         request=prior??{operation:'begin',hostRun:{runId:scope.runId,attempt:scope.attempt,deadline:scope.deadline},source,binding:{...binding,contextProjectionRef:composition.checkpoint.context_ref,contextProjectionDigest:composition.evidence.prompt_digest},
-          // This executor admits private workspace tools and explicitly registered read-only browser custody. Other effects remain held here.
-          tools:composition.evidence.tool_acl.filter(tool=>['get_context','workspace_list','workspace_read','workspace_search','workspace_write','workspace_render',...(host.browser?['browse_page']:[])].includes(tool)),
+          // This executor admits reviewed enabled skill selection, private workspace tools
+          // and explicitly registered read-only browser custody. Skill install/disable
+          // and other effects remain held; procedure loading adds no capabilities.
+          tools:composition.evidence.tool_acl.filter(tool=>['skills_list','skills_load','get_context','workspace_list','workspace_read','workspace_search','workspace_write','workspace_render',...(host.browser?['browse_page']:[])].includes(tool)),
           maxProviderTurns,maxDurationMs:Math.max(1,Math.min(600000,scope.deadline-Date.now()))};
         if(prior && (!prior.hostRun || prior.hostRun.runId!==scope.runId || prior.hostRun.attempt!==scope.attempt || prior.hostRun.deadline!==scope.deadline || JSON.stringify(prior.source)!==JSON.stringify(source) || prior.binding.contextProjectionRef!==composition.checkpoint.context_ref || prior.binding.contextProjectionDigest!==composition.evidence.prompt_digest))throw Error('common execution frozen context changed');
         scope.commit(()=>this.ctx.storage.kv.put(frozenKey,request));

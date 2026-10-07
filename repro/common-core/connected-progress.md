@@ -208,3 +208,9 @@ Parent relays Dalda hosted pinned staging common_owner_authority absent and hist
 - Added continuation behavior only when shared task/decisions/execution/file receipts are supplied, no retell of available context, explicit missing-context/uncertain-effect response.
 - Verified artifact links for no-attachment surfaces; no link invention/access widening or fake native selection authority. Acceptance versus delivery distinction and actual retained follow-up requirement.
 - RED missing prompt rules; GREEN19 messaging/surface guards. Prompt behavior only, not canonical shared background lifecycle or native delivery proof.
+
+## 2026-10-07 requested progressive skill wiring into common execution
+- Owner original15:31:22 explicitly requests existing capabilities wired into common brain across surfaces; computer/Linux later, no new compute rollout or broad access.
+- Common executor now admits skills_list/load already in host/composer ACL; exact reviewed/owner-enabled/currentness constraints retained. Install/disable and other effects remain held. No arbitrary file skill execution.
+- RED old common receipt excludes skill selection. GREEN actual registered two-argument constructor executes metadata list, load selected preparation procedure, next model step carries body, browse pages, workspace read/write/revision2 across host/root eviction; physical tool intent receipts contain both skill calls, root ceiling includes selection but not install/disable. Stop-during-browser-acquire after skill load also passes.
+- 63 skill guards and worker/integration types pass. One added receipt assertion initially queried a nonexistent root KV prefix, fixed to actual physical common-tool-host receipts; failed test not counted as proof. SOURCE/SYNTHETIC only, existing Telegram caller, not WA/common background coverage or live provider.
