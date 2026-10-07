@@ -159,6 +159,7 @@ it('common planned WorkUnit receives a host ceiling through the same canonical w
     environment:{category:'execution_environment' as const,id:'fixture_registered_host',version:'1.0.0',environmentKind:'local' as const,manifest:{id:'fixture_environment_manifest',version:'1.0.0',digest}},
     contextProjectionRef:'fixture_frozen_context',contextProjectionDigest:digest};
   const admission={id:'fixture_execution_request',outcomeId:snapshot.taskId,workUnitId:unit};
+  await expect(coordinator.admitMessageExecutionRequestV04(admission,admitted,async()=>{},{...binding,environment:{...binding.environment,id:'unregistered_executor'}})).rejects.toThrow('common execution host mismatch');
   const aggregate=await coordinator.admitMessageExecutionRequestV04(admission,admitted,async()=>{},binding);
   expect(aggregate.request.authorityCeiling).toEqual(ceiling);
   expect(await coordinator.admitMessageExecutionRequestV04(admission,admitted,async()=>{},binding)).toEqual(aggregate);
@@ -176,5 +177,58 @@ it('common planned WorkUnit receives a host ceiling through the same canonical w
 
   expect(state.storage.sql.exec('SELECT count(*) AS n FROM presence_sessions').one().n).toBe(0);
   await expect(coordinator.authorizeMessageWorkUnitExecution({snapshot,workUnitId:unit,expectedRevision:1,authorityCeiling:ceiling,maxProviderTurns:25,maxDurationMs:30000,executorId:'fixture_registered_host',commandId:'different_authorization'},admitted,async()=>{})).rejects.toThrow();
+ });
+});
+
+
+it('settled host execution re-enters the same WorkUnit without reopening an old request, and recovers exact authorization after recreation',async()=>{
+ const stub=env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName('common-reentry-'+crypto.randomUUID())) as DurableObjectStub<RunLoopDO>;
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const coordinator=new WaldoCoordinator(state.storage);
+  const scope={runId:'fixture',attempt:'fixture',deadline:Date.now()+30000,signal:new AbortController().signal,admit(){},commit:<T>(work:()=>T)=>state.storage.transactionSync(work)};
+  const cap=await coordinator.commonTaskSourceScope(admitted,{inputRef:'reentry_input',text:'Write a private checklist.'},['workspace'],scope,async()=>{});
+  const snapshot=(await cap.classify(JSON.stringify({decision:'retain',sources:[]}),'reentry_input','Write a private checklist.')).snapshot;
+  const unit=state.storage.sql.exec<{id:string}>('SELECT id FROM work_units').one().id;
+  const ceiling={tools:['workspace_write'],connectors:[],externalEffects:'none' as const,outcomeMutation:'none' as const,evidenceAdmission:'none' as const,verification:'none' as const,acceptance:'none' as const,closure:'none' as const};
+  const authorization={snapshot,workUnitId:unit,expectedRevision:1,authorityCeiling:ceiling,maxProviderTurns:25,maxDurationMs:30000,executorId:'fixture_registered_host',commandId:'first_authorization'};
+  const first=await coordinator.authorizeMessageWorkUnitExecution(authorization,admitted,async()=>{});
+  // Simulated root recreation after authorization but before request admission.
+  const recovered=new WaldoCoordinator(state.storage);
+  expect(await recovered.authorizeMessageWorkUnitExecution(authorization,admitted,async()=>{})).toEqual(first);
+  await expect(recovered.authorizeMessageWorkUnitExecution({...authorization,maxProviderTurns:26},admitted,async()=>{})).rejects.toThrow();
+  const digest=`sha256:${'d'.repeat(64)}`;
+  const binding={provider:{category:'provider' as const,id:'fixture_model_provider',version:'1.0.0',modelRef:'fixture_model',manifest:{id:'fixture_provider_manifest',version:'1.0.0',digest}},environment:{category:'execution_environment' as const,id:'fixture_registered_host',version:'1.0.0',environmentKind:'local' as const,manifest:{id:'fixture_environment_manifest',version:'1.0.0',digest}},contextProjectionRef:'fixture_first_context',contextProjectionDigest:digest};
+  const request={id:'first_execution',outcomeId:snapshot.taskId,workUnitId:unit};
+  const aggregate=await recovered.admitMessageExecutionRequestV04(request,admitted,async()=>{},binding);
+  const secondAuthorization={...authorization,expectedRevision:2,commandId:'second_authorization'};
+  await expect(recovered.authorizeMessageWorkUnitExecution(secondAuthorization,admitted,async()=>{})).rejects.toThrow();
+  const claimed=recovered.claimExecutionAttemptV04({executionRequestId:request.id,attemptId:'first_attempt',leaseId:'first_lease',sessionId:'first_session',providerSessionRef:null});
+  await expect(recovered.authorizeMessageWorkUnitExecution(secondAuthorization,admitted,async()=>{})).rejects.toThrow();
+  const attempt=claimed.attempts[0]!;
+  const at=new Date().toISOString();
+  await recovered.admitExecutorObservationV04({protocolVersion:'0.4',id:'first_ended',ownerId,attemptId:attempt.id,environment:binding.environment,leaseId:attempt.leaseId,fencingGeneration:attempt.fencingGeneration,cancellationGeneration:attempt.cancellationGeneration,sequence:1,kind:'ended',payloadRef:null,payloadDigest:null,observedAt:at});
+  await expect(recovered.authorizeMessageWorkUnitExecution(secondAuthorization,admitted,async()=>{})).rejects.toThrow();
+  await recovered.reconcileExecutionAttemptV04({protocolVersion:'0.4',id:'first_settled',ownerId,attemptId:attempt.id,leaseId:attempt.leaseId,fencingGeneration:attempt.fencingGeneration,cancellationGeneration:attempt.cancellationGeneration,state:'settled',basisObservationIds:['first_ended'],checkedAt:new Date().toISOString()});
+  // Existing request history is the boundary, even after a terminal observation.
+  for (const status of ['pending','leased','failed','ambiguous','cancelled']) {
+    state.storage.sql.exec('UPDATE planning_execution_requests SET status = ? WHERE id = ?',status,request.id);
+    await expect(recovered.authorizeMessageWorkUnitExecution(secondAuthorization,admitted,async()=>{})).rejects.toThrow('settlement required');
+  }
+  state.storage.sql.exec("UPDATE planning_execution_requests SET status = 'completed' WHERE id = ?",request.id);
+  const secondSnapshot=(await cap.classify(JSON.stringify({decision:'retain',sources:[]}),'followup_input','Make it shorter.')).snapshot;
+  const second=await recovered.authorizeMessageWorkUnitExecution({...secondAuthorization,snapshot:secondSnapshot},admitted,async()=>{});
+  expect(second.workUnit.id).toBe(first.workUnit.id);expect(second.workUnit.revision).toBe(3);
+  const next=await recovered.admitMessageExecutionRequestV04({...request,id:'second_execution'},admitted,async()=>{},{...binding,contextProjectionRef:'fixture_second_context'});
+  expect(next.request.workUnit.id).toBe(aggregate.request.workUnit.id);expect(next.request.workUnit.revision).toBe(3);
+  await expect(recovered.authorizeMessageWorkUnitExecution(authorization,admitted,async()=>{})).rejects.toThrow('common execution source changed');
+  const {applyDoMigration,COMMON_EXECUTION_CONTINUATION_SCHEMA_MIGRATION}=await import('../src/do-schema');
+  expect(()=>applyDoMigration(state.storage,COMMON_EXECUTION_CONTINUATION_SCHEMA_MIGRATION,'down')).toThrow();
+  expect(state.storage.sql.exec('SELECT count(*) AS n FROM planning_execution_requests').one().n).toBe(2);
+
+  expect(recovered.readExecutionAggregateV04(ownerId,request.id).attempts[0]!.state).toBe('settled');
+  expect(()=>recovered.claimExecutionAttemptV04({executionRequestId:request.id,attemptId:'old_reopen',leaseId:'old_lease',sessionId:'old_session',providerSessionRef:null})).toThrow();
+  expect(state.storage.sql.exec('SELECT count(*) AS n FROM outcomes').one().n).toBe(1);
+  expect(state.storage.sql.exec('SELECT count(*) AS n FROM work_units').one().n).toBe(1);
+  expect(recovered.replayResponsibility(ownerId).workUnits[0]).toEqual(second.workUnit);
  });
 });

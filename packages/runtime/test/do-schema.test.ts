@@ -16,6 +16,7 @@ import {
   SCHEDULE_RUNS_SCHEMA_MIGRATION,
   COMMON_MESSAGE_CUSTODY_SCHEMA_MIGRATION,
   COMMON_EXECUTION_WORKUNIT_SCHEMA_MIGRATION,
+  COMMON_EXECUTION_CONTINUATION_SCHEMA_MIGRATION,
   RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION,
   applyDoMigration,
   assertDoSchema,
@@ -108,7 +109,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(10);
+    expect(result.version).toBe(11);
     expect(result.version).toBe(DO_SCHEMA_VERSION);
     expect(result.assertResult.ok).toBe(true);
     for (const table of DO_PRODUCT_TABLES) {
@@ -203,7 +204,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(10);
+    expect(result.version).toBe(11);
     expect(result.legacyRevisionOneRejected).toBe(true);
     expect(result.tables).toContain('goals');
     expect(result.explicitGoalsIndexes).toEqual([]);
@@ -236,7 +237,7 @@ describe('HEY-10 DO SQLite schema root', () => {
         ).one().description,
       };
     });
-    expect(result).toEqual({ version: 10, description: 'Preserve this row.' });
+    expect(result).toEqual({ version: 11, description: 'Preserve this row.' });
   });
 
   it('migrates the merged V3 responsibility schema to current without changing responsibility state', async () => {
@@ -331,7 +332,7 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result.before.version).toBe(3);
-    expect(result.after).toEqual({ ...result.before, version: 10 });
+    expect(result.after).toEqual({ ...result.before, version: 11 });
     expect(result.authority).toEqual({
       authenticated_subject_ref: null,
       state: null,
@@ -443,7 +444,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(10);
+    expect(result.version).toBe(11);
     expect(result.after).toEqual(result.preserved);
     expect(result.newState).toEqual({ state: 'planning_authorized', revision: 2 });
   });
@@ -523,7 +524,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(10);
+    expect(result.version).toBe(11);
     expect(result.preserved).toEqual(result.before);
     expect(result.protocolVersion).toBe('0.3');
     expect(result.executionTables).toEqual([
@@ -661,10 +662,29 @@ describe('HEY-10 DO SQLite schema root', () => {
     expect(result).toEqual({ version: 6, attempt: 'attempt-v04' });
   });
 
+  it('preserves all populated request columns across continuation upgrade and safe single-request downgrade', async () => {
+    const stub=freshStub();
+    await runInDurableObject(stub,(_instance,state)=>{
+      provisionDoSchema(state.storage);
+      applyDoMigration(state.storage, COMMON_EXECUTION_CONTINUATION_SCHEMA_MIGRATION, 'down');
+      const table=state.storage.sql.exec<{name:string;type:string}>('PRAGMA table_info(planning_execution_requests)').toArray();
+      const values=table.map(column=>column.name==='protocol_version'?'0.4':column.name==='status'?'completed':column.name==='work_unit_revision'?2:column.name==='cancellation_generation'?1:column.name.startsWith('cancellation_request_')?null:`fixture_${column.name}`);
+      state.storage.sql.exec(`INSERT INTO planning_execution_requests (${table.map(column=>column.name).join(',')}) VALUES (${table.map(()=>'?').join(',')})`,...values);
+      const before=state.storage.sql.exec('SELECT * FROM planning_execution_requests').one();
+      applyDoMigration(state.storage, COMMON_EXECUTION_CONTINUATION_SCHEMA_MIGRATION, 'up');
+      expect(state.storage.sql.exec('SELECT * FROM planning_execution_requests').one()).toEqual(before);
+      // One immutable request per canonical revision remains a database invariant.
+      expect(()=>state.storage.sql.exec(`INSERT INTO planning_execution_requests (${table.map(column=>column.name).join(',')}) VALUES (${table.map(()=>'?').join(',')})`,...values.map((value,index)=>table[index]!.name==='id'?'other_id':table[index]!.name==='request_id'?'other_request':value))).toThrow();
+      applyDoMigration(state.storage, COMMON_EXECUTION_CONTINUATION_SCHEMA_MIGRATION, 'down');
+      expect(state.storage.sql.exec('SELECT * FROM planning_execution_requests').one()).toEqual(before);
+    });
+  });
+
   it('downgrades an empty V7 judgment schema to V6', async () => {
     const stub = freshStub();
     const result = await runInDurableObject(stub, (_instance, state) => {
       provisionDoSchema(state.storage);
+      applyDoMigration(state.storage, COMMON_EXECUTION_CONTINUATION_SCHEMA_MIGRATION, 'down');
       applyDoMigration(state.storage, COMMON_EXECUTION_WORKUNIT_SCHEMA_MIGRATION, 'down');
       applyDoMigration(state.storage, COMMON_MESSAGE_CUSTODY_SCHEMA_MIGRATION, 'down');
       applyDoMigration(state.storage, SCHEDULE_RUNS_SCHEMA_MIGRATION, 'down');
@@ -794,7 +814,7 @@ describe('HEY-10 DO SQLite schema root', () => {
           ).one().count,
         };
       });
-      expect(result).toEqual({ version: 10, rows: 1 });
+      expect(result).toEqual({ version: 11, rows: 1 });
     }
   });
 
@@ -1044,7 +1064,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       provisionDoSchema(state.storage);
       const beforeVersion = getSchemaVersion(state.storage.sql);
       const badMigration: DoMigration = {
-        version: 11,
+        version: 12,
         name: 'intentional-failure',
         up: [
           'CREATE TABLE transient_failure_probe (id TEXT PRIMARY KEY);',
@@ -1066,8 +1086,8 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result).toEqual({
-      beforeVersion: 10,
-      afterVersion: 10,
+      beforeVersion: 11,
+      afterVersion: 11,
       outcomesPresent: true,
       probeTables: [],
     });

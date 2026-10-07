@@ -950,12 +950,15 @@ export class PlanningExecutionModule {
   ): Readonly<{ id: string }> | null {
     const ownerId = protocolIdSchema.parse(ownerIdValue);
     const workUnitId = protocolIdSchema.parse(workUnitIdValue);
-    const row = this.storage.sql.exec<{ id: string }>(
+    const rows = this.storage.sql.exec<{ id: string }>(
       `SELECT id FROM planning_execution_requests
         WHERE owner_id = ? AND work_unit_id = ?`,
       ownerId,
       workUnitId,
-    ).toArray()[0];
+    ).toArray();
+    // Host continuations can now preserve several revisions. Never choose a public identity arbitrarily.
+    if (rows.length > 1) throw new ResponsibilityDigestConflictError();
+    const row = rows[0];
     return row === undefined
       ? null
       : Object.freeze({ id: row.id });

@@ -1188,6 +1188,35 @@ export const COMMON_EXECUTION_WORKUNIT_SCHEMA_MIGRATION: DoMigration = {
   ],
 };
 
+// Host continuation keeps request history and one request per canonical WorkUnit revision.
+// Public admission still enforces one request per WorkUnit at its own command boundary.
+const executionRequestColumns = `id, owner_id, outcome_id, work_unit_id, work_unit_revision, request_id,
+request_digest, governed_inputs_json, provider_ref_json, executor_ref_json,
+capability_manifest_json, authority_ceiling_json, status, cancellation_generation,
+created_at, updated_at, protocol_version, outcome_ref_json, work_unit_ref_json,
+environment_ref_json, context_projection_ref, context_projection_digest, request_json,
+cancellation_request_id, cancellation_request_digest, cancellation_request_json`;
+const originalExecutionRequestTable = RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION.up[1]!;
+const copyExecutionRequests = `INSERT INTO planning_execution_requests (${executionRequestColumns})
+  SELECT ${executionRequestColumns} FROM planning_execution_requests_v10;`;
+const executionCancelIndex = RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION.up[4]!;
+export const COMMON_EXECUTION_CONTINUATION_SCHEMA_MIGRATION: DoMigration = {
+  version: 11, name: 'common-execution-continuation',
+  up: ['ALTER TABLE planning_execution_requests RENAME TO planning_execution_requests_v10;',
+    originalExecutionRequestTable.replace('UNIQUE (owner_id, work_unit_id)',
+      'UNIQUE (owner_id, work_unit_id, work_unit_revision)'),
+    copyExecutionRequests, 'DROP TABLE planning_execution_requests_v10;', executionCancelIndex],
+  down: [
+    'CREATE TABLE execution_continuation_down_guard (allowed INTEGER CHECK (allowed = 1));',
+    `INSERT INTO execution_continuation_down_guard SELECT NOT EXISTS (
+      SELECT 1 FROM planning_execution_requests GROUP BY owner_id, work_unit_id HAVING count(*) > 1);`,
+    'DROP TABLE execution_continuation_down_guard;',
+    'ALTER TABLE planning_execution_requests RENAME TO planning_execution_requests_v10;',
+    originalExecutionRequestTable, copyExecutionRequests,
+    'DROP TABLE planning_execution_requests_v10;', executionCancelIndex,
+  ],
+};
+
 export const DO_SCHEMA_MIGRATIONS = [
   HEY10_BASE_SCHEMA_MIGRATION,
   HEY144_GOALS_SCHEMA_MIGRATION,
@@ -1199,6 +1228,7 @@ export const DO_SCHEMA_MIGRATIONS = [
   SCHEDULE_RUNS_SCHEMA_MIGRATION,
   COMMON_MESSAGE_CUSTODY_SCHEMA_MIGRATION,
   COMMON_EXECUTION_WORKUNIT_SCHEMA_MIGRATION,
+  COMMON_EXECUTION_CONTINUATION_SCHEMA_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;

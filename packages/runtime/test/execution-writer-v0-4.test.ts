@@ -288,6 +288,12 @@ describe('responsibility execution v0.4 sole writer', () => {
         publicAdmission,
         authority,
       )).rejects.toBeInstanceOf(ResponsibilityDigestConflictError);
+      // The schema allows private host continuation by revision, not a second public command.
+      await expect(coordinator.admitPublicExecutionRequestV04({
+        ...publicAdmission, id: `er_${'C'.repeat(43)}_${'D'.repeat(43)}`,
+        commandIdPrefix: `er_${'C'.repeat(43)}_`,
+        expectedWorkUnitRevision: request.workUnit.revision + 1,
+      }, authority)).rejects.toBeInstanceOf(ResponsibilityDigestConflictError);
     });
   });
 

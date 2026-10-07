@@ -504,6 +504,9 @@ export class WaldoCoordinator {
     maxProviderTurns: number; maxDurationMs: number; executorId: string; commandId: string;
   }>, authority: CommonOwnerAuthority, assertCurrent: () => Promise<void>) {
     const ceiling = executionAuthorityCeilingV04Schema.parse(input.authorityCeiling);
+    const authorizationRef = `common_authorization_${await this.#deps.sha256Hex(JSON.stringify({
+      ...input, authorityCeiling: ceiling,
+    }))}`;
     await assertCurrent();
     return this.#storage.transactionSync(() => {
       this.#identity.assertMessageAuthorityInCurrentTransaction(authority);
@@ -515,7 +518,7 @@ export class WaldoCoordinator {
         'SELECT outcome_id FROM work_units WHERE owner_id = ? AND id = ?', authority.ownerId, input.workUnitId).toArray()[0];
       if (unit?.outcome_id !== snapshot.taskId) throw Error('common execution WorkUnit mismatch');
       return this.#outcomes.authorizeExecutionInCurrentTransaction({
-        ...input, ownerId: authority.ownerId, authorityCeiling: ceiling, at: this.#deps.now(),
+        ...input, authorizationRef, ownerId: authority.ownerId, authorityCeiling: ceiling, at: this.#deps.now(),
       });
     });
   }
@@ -1125,12 +1128,31 @@ export class WaldoCoordinator {
 
   async admitMessageExecutionRequestV04(
     admission: unknown, authority: CommonOwnerAuthority, assertCurrent: () => Promise<void>,
-    hostBinding?: ExecutionBindingResolutionV04,
+    hostBinding: ExecutionBindingResolutionV04,
   ): Promise<ExecutionAggregateV04> {
+    const binding = parseExecutionBindingResolutionV04(hostBinding);
+    const request = parseExecutionAdmissionV04(admission);
+    const assertHostCurrent = () => {
+      const unit = this.#storage.sql.exec<{state:string;assignee:string}>(
+        'SELECT state, assignee FROM work_units WHERE owner_id = ? AND id = ? AND outcome_id = ?',
+        authority.ownerId, request.workUnitId, request.outcomeId).toArray()[0];
+      if (unit?.state !== 'execution_authorized' || unit.assignee !== binding.environment.id)
+        throw Error('common execution host mismatch');
+    };
+    const assertAdmissionCurrent = async () => {
+      await assertCurrent();
+      this.#storage.transactionSync(() => {
+        this.#identity.assertMessageAuthorityInCurrentTransaction(authority);
+        assertHostCurrent();
+      });
+    };
     await assertCurrent();
-    this.#storage.transactionSync(() => this.#identity.admitMessageAuthorityInCurrentTransaction(authority, this.#deps.now()));
-    const aggregate = await this.#admitExecutionRequestV04(admission, authority, undefined, assertCurrent, hostBinding);
-    await assertCurrent();
+    this.#storage.transactionSync(() => {
+      this.#identity.admitMessageAuthorityInCurrentTransaction(authority, this.#deps.now());
+      assertHostCurrent();
+    });
+    const aggregate = await this.#admitExecutionRequestV04(admission, authority, undefined, assertAdmissionCurrent, binding);
+    await assertAdmissionCurrent();
     return aggregate;
   }
 

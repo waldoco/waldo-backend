@@ -417,14 +417,38 @@ export class OutcomeModule {
   authorizeExecutionInCurrentTransaction(input: Readonly<{
     ownerId: string; workUnitId: string; expectedRevision: number;
     authorityCeiling: unknown; maxProviderTurns: number; maxDurationMs: number;
-    executorId: string; commandId: string; at: string;
+    executorId: string; commandId: string; authorizationRef: string; at: string;
   }>) {
+    const receipt = this.storage.sql.exec<{aggregate_id:string;correlation_id:string;payload_json:string;owner_cursor:number}>(
+      `SELECT aggregate_id, correlation_id, payload_json, owner_cursor FROM owner_domain_events
+       WHERE owner_id = ? AND causation_id = ? AND event_type = 'work_unit.execution_authorized'`,
+      input.ownerId, input.commandId).toArray()[0];
+    if (receipt) {
+      if (receipt.aggregate_id !== input.workUnitId || receipt.correlation_id !== input.authorizationRef)
+        throw new ResponsibilityPlanningConflictError('WorkUnit execution authorization conflict');
+      const workUnit = workUnitExecutionAuthorizedRecordV04Schema.parse(JSON.parse(receipt.payload_json));
+      const current = this.readWorkUnitRow(input.ownerId, input.workUnitId);
+      if (!current || current.revision !== workUnit.revision)
+        throw new ResponsibilityPlanningConflictError('WorkUnit execution authorization superseded');
+      return Object.freeze({workUnit, cursor: receipt.owner_cursor});
+    }
     const row = this.readWorkUnitRow(input.ownerId, input.workUnitId);
     if (!row) throw new ResponsibilityProjectionMissingError();
     const current = canonicalWorkUnitRecordV03Schema.parse(this.decodeWorkUnitRow(row));
-    if (current.revision !== input.expectedRevision || current.state !== 'planned'
-      || current.requiredCapabilities.length || current.dependencyIds.length) {
+    if (current.revision !== input.expectedRevision ||
+      (current.state !== 'planned' && current.state !== 'execution_authorized') ||
+      current.requiredCapabilities.length || current.dependencyIds.length) {
       throw new ResponsibilityPlanningConflictError('WorkUnit execution authorization mismatch');
+    }
+    if (current.state === 'execution_authorized') {
+      // A fresh owner turn is another bounded execution, not a retry or reopening of an old request.
+      // Every prior request must be settled; uncertain, pending, failed and cancelled work stays held.
+      const requests = this.storage.sql.exec<{work_unit_revision:number;status:string}>(
+        `SELECT work_unit_revision, status FROM planning_execution_requests
+         WHERE owner_id = ? AND work_unit_id = ?`, input.ownerId, input.workUnitId).toArray();
+      if (!requests.some(request => request.work_unit_revision === current.revision) ||
+        requests.some(request => request.status !== 'completed'))
+        throw new ResponsibilityPlanningConflictError('WorkUnit execution settlement required');
     }
     const workUnit = workUnitExecutionAuthorizedRecordV04Schema.parse({
       ...current, revision: current.revision + 1, authorityCeiling: input.authorityCeiling,
@@ -432,19 +456,20 @@ export class OutcomeModule {
       isolation: { mode: 'owner_responder', egress: 'host_governed', credentials: 'runtime_managed' },
       assignee: input.executorId, sessionIds: [], state: 'execution_authorized', updatedAt: input.at,
     });
+    this.assertCaptureCapacity([workUnit]);
     this.storage.sql.exec(`UPDATE work_units SET revision = ?, authority_ceiling_json = ?, budget_json = ?,
       isolation_json = ?, assignee = ?, session_ids_json = ?, state = ?, updated_at = ?
-      WHERE owner_id = ? AND id = ? AND revision = ? AND state = 'planned'`,
+      WHERE owner_id = ? AND id = ? AND revision = ? AND state = ?`,
       workUnit.revision, JSON.stringify(workUnit.authorityCeiling), JSON.stringify(workUnit.budget),
       JSON.stringify(workUnit.isolation), workUnit.assignee, JSON.stringify(workUnit.sessionIds), workUnit.state,
-      input.at, input.ownerId, input.workUnitId, input.expectedRevision);
+      input.at, input.ownerId, input.workUnitId, input.expectedRevision, current.state);
     if (this.storage.sql.exec<{changed:number}>('SELECT changes() AS changed').one().changed !== 1)
       throw new ResponsibilityPlanningConflictError('WorkUnit execution authorization mismatch');
     const cursor = this.events.appendInCurrentTransaction({
       schemaVersion: '0.4', eventId: this.newId('event'), ownerId: input.ownerId,
       aggregateKind: 'work_unit', aggregateId: workUnit.id, revision: workUnit.revision,
       eventType: 'work_unit.execution_authorized', causationId: input.commandId,
-      correlationId: input.commandId, occurredAt: input.at, payloadJson: JSON.stringify(workUnit),
+      correlationId: input.authorizationRef, occurredAt: input.at, payloadJson: JSON.stringify(workUnit),
     });
     return Object.freeze({ workUnit, cursor });
   }
@@ -544,7 +569,8 @@ export class OutcomeModule {
             : workUnitPlanningAuthorizedRecordV03Schema.parse(record);
           const prior = workUnits.get(workUnit.id);
           if (row.event_type !== (row.schema_version === '0.4' ? 'work_unit.execution_authorized' : 'work_unit.planning_authorized') ||
-              prior === undefined || prior.state !== 'planned' ||
+              prior === undefined || (prior.state !== 'planned' &&
+                !(row.schema_version === '0.4' && prior.state === 'execution_authorized')) ||
               prior.outcomeId !== workUnit.outcomeId || prior.missionId !== workUnit.missionId ||
               prior.position !== workUnit.position || prior.revision + 1 !== workUnit.revision ||
               prior.responsibility !== workUnit.responsibility ||
