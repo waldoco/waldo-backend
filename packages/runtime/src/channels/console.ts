@@ -1,4 +1,6 @@
 import type { ApprovalItem, ApprovalReview } from './approvals';
+import { SCHEDULE_KINDS } from '@waldo/contracts';
+import { SCHEDULE_LABELS, type SchedulePreferences } from './schedule-preferences';
 import type { Claim, ConstellationEdge, ConstellationNode, profile } from '../memory/claims';
 import type { Proactivity } from './loops';
 import type { E2EStep, LastRequest, TraceRow } from './harness';
@@ -98,7 +100,7 @@ export const signInPage = (token: string): Response => new Response(
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 // The trace detail for a console action. The form id is free-form text (parseConsoleAction
@@ -125,6 +127,8 @@ export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction 
 export const NOTICES: Readonly<Record<string, string>> = {
   'spot.dismiss': 'Spot dismissed. Waldo will stop using it.',
   'proactivity.set': 'Saved. Waldo will reach out on your new settings.',
+  'schedule.set': 'Saved. That scheduled behavior is updated.',
+  'schedule.reset': 'Reset. Every scheduled behavior is back to its default (on).',
   'invite.create': 'Invite saved. Send the code to the intended person yourself; Waldo did not email anyone.',
   'invite.member': 'Invite saved. Send the code yourself; Waldo did not email anyone.',
   'invite.revoke': 'Invite revoked.',
@@ -172,6 +176,7 @@ export type ConsoleView = Readonly<{
   cards: readonly ConsoleCard[];
   ledger: string;
   proactivity: Proactivity;
+  schedules: SchedulePreferences;
   files: readonly StoredFile[];
   steps: readonly E2EStep[];
   lastRequest: LastRequest | null;
@@ -357,6 +362,9 @@ const timezone = (view: ConsoleView) => `<form class="card-edit" method="post" a
 
 const proactivity = (view: ConsoleView) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="proactivity.set"><label>Quiet from <input type="time" name="quiet_start" value="${esc(view.proactivity.quiet_start ?? '')}"></label><label>until <input type="time" name="quiet_end" value="${esc(view.proactivity.quiet_end ?? '')}"></label><select name="volume">${VOLUMES.map(([value, label]) => `<option value="${value}"${view.proactivity.volume === value ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select><button class="btn quiet">Save</button></form><div class="sub">During quiet hours Waldo holds cards, updates and event briefs. Reminders you set still fire. Leave both times empty for no quiet hours.</div>`;
 
+const scheduleRows = (view: ConsoleView) => SCHEDULE_KINDS.map((kind) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="schedule.set"><input type="hidden" name="id" value="${kind}"><input type="hidden" name="value" value="${view.schedules[kind] ? 'off' : 'on'}"><span>${esc(SCHEDULE_LABELS[kind])}: <b>${view.schedules[kind] ? 'on' : 'off'}</b></span><button class="btn quiet">${view.schedules[kind] ? 'Turn off' : 'Turn on'}</button></form>`).join('');
+const schedules = (view: ConsoleView) => `${scheduleRows(view)}<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="schedule.reset"><button class="btn quiet">Reset to defaults</button></form><div class="sub">Nothing here is forced on you. You can also tell Waldo in chat, and both places stay in sync. Reset turns everything back on.</div>`;
+
 const size = (bytes: number | null) => bytes === null ? '' : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 const KIND_LABEL: Readonly<Record<string, string>> = { photo: 'Photo', document: 'Document', voice: 'Voice note', audio: 'Audio' };
 
@@ -502,7 +510,7 @@ export const renderConsole = (view: ConsoleView, page: string = '', banner = '')
     connections: section('connections', 'Connections', 'What Waldo has permission to reach. To verify a tool, try a real request in chat and check Activity below.', serviceStatus(view) + connectors(view)),
     spots: section('spots', 'Spots', 'Small things Waldo has noticed about you. You can confirm, dismiss, or forget a spot here; corrections go through chat.', spots(view) + forgetting(view) + retired(view) + held(view)),
     constellation: section('constellation', 'Constellation', 'Lasting patterns built each night from repeated spots, and how they link. Strength is Waldo\'s uncalibrated estimate from 0 to 1, not a probability of truth.', constellation(view)),
-    day: section('day', 'Your day', 'Waldo plans when each card arrives. Change a time for today, or pin it so Waldo always uses it.', cards(view) + '<h3>Time zone</h3>' + timezone(view) + '<h3>Quiet hours and volume</h3>' + proactivity(view)),
+    day: section('day', 'Your day', 'Waldo plans when each card arrives. Change a time for today, or pin it so Waldo always uses it.', cards(view) + '<h3>Time zone</h3>' + timezone(view) + '<h3>Quiet hours and volume</h3>' + proactivity(view) + '<h3>Scheduled behaviors</h3>' + schedules(view)),
     memory: section('memory', 'Memory', 'What Waldo keeps about you. It updates after chats and each night.', memory(view)),
     files: section('files', 'Files', 'What you have sent Waldo on Telegram. Files stay stored with Telegram; this list keeps a reference so you can open them again.', files(view)),
     usage: section('usage', 'Usage and cost', 'Real per-model totals from Waldo\'s own trace log, most expensive first.', usage(view)),

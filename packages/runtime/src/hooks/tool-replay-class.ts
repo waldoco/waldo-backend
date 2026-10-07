@@ -37,7 +37,7 @@ export const TOOL_REPLAY_CLASS: Readonly<Record<ToolName, ToolReplayRow>> = {
   workspace_write: { replay: 'provider_idempotent', basis: 'operation_id derived from user+turn+toolCall plus expected_revision; collapse is at the workspace store, not a remote provider', evidence: { file: 'tools/live/workspace.ts', needle: 'operation_id' } },
   workspace_render: unknown('not inspected'),
   set_reminder: unknown(NOT_INSPECTED), cancel_reminder: unknown(NOT_INSPECTED),
-  open_loop: unknown(NOT_INSPECTED), close_loop: unknown(NOT_INSPECTED), set_proactivity: unknown(NOT_INSPECTED),
+  open_loop: unknown(NOT_INSPECTED), close_loop: unknown(NOT_INSPECTED), set_proactivity: unknown(NOT_INSPECTED), set_schedule_preference: unknown(NOT_INSPECTED),
   log_meal: unknown(NOT_INSPECTED), log_workout: unknown(NOT_INSPECTED),
   set_standing_order: unknown(NOT_INSPECTED), cancel_standing_order: unknown(NOT_INSPECTED),
   call_mcp_tool: unknown('proposes a card on the owner channel, executes directly elsewhere; remote effect unknown'),

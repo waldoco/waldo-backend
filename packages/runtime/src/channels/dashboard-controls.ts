@@ -35,6 +35,7 @@ const projections = {
     date: view.now.slice(0,10),
     cards: view.cards.map((card) => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin })),
     proactivity: { quiet_start: view.proactivity.quiet_start, quiet_end: view.proactivity.quiet_end, volume: view.proactivity.volume },
+    schedules: view.schedules,
   }),
   connections: (view: ConsoleView) => ({
     google: {
