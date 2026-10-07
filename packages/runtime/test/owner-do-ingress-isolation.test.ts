@@ -1139,10 +1139,21 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
     // Separate interrupted-host fixture: original request and provider intent survive root eviction.
     // This is not another normal owner turn and cannot stand in for background recovery acceptance.
     const {signCommonExecutionRequest}=await import('../src/identity/common-execution-request');
-    const executionBase=await runInDurableObject(root,(_instance,state)=>[...state.storage.kv.list<{request:import('../src/identity/common-execution-request').CommonExecutionRequest}>({prefix:'common-execution:'})].at(-1)![1].request);
+    const frozenExecutionBase=await runInDurableObject(root,(_instance,state)=>[...state.storage.kv.list<{request:import('../src/identity/common-execution-request').CommonExecutionRequest}>({prefix:'common-execution:'})].at(-1)![1].request);
+    const executionBase={...frozenExecutionBase,tools:['workspace_write']};
     const interruptedIngress=await signCommonMessageIngress(env.WALDO_ROUTER_HMAC_SECRET!,{...ingress,occurrenceId:'fixture-interrupted-executor',at:Math.floor(Date.now()/1000)});
     const begin=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'begin'});
     await root.commonExecutionFromHost(interruptedIngress,begin);
+    const toolPrepare=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'tool_prepare',toolCall:{id:'fixture_write_1',name:'workspace_write',requestDigest:`sha256:${'e'.repeat(64)}`}});
+    await root.commonExecutionFromHost(interruptedIngress,toolPrepare);
+    await evictDurableObject(root);
+    await runInDurableObject(root,async instance=>{
+      await expect(instance.commonExecutionFromHost(interruptedIngress,toolPrepare)).rejects.toThrow('common tool intent requires reconciliation');
+      const changedTool=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'tool_settle',toolCall:{id:'fixture_write_1',name:'workspace_write',requestDigest:`sha256:${'f'.repeat(64)}`,resultDigest:`sha256:${'e'.repeat(64)}`}});
+      await expect(instance.commonExecutionFromHost(interruptedIngress,changedTool)).rejects.toThrow('common tool result conflict');
+    });
+    const toolSettle=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'tool_settle',toolCall:{id:'fixture_write_1',name:'workspace_write',requestDigest:`sha256:${'e'.repeat(64)}`,resultDigest:`sha256:${'e'.repeat(64)}`}});
+    await root.commonExecutionFromHost(interruptedIngress,toolSettle);
     const prepare=await signCommonExecutionRequest(env.WALDO_ROUTER_HMAC_SECRET!,interruptedIngress,{...executionBase,operation:'provider_prepare',providerCall:{ordinal:1,model:'gpt-6-luna',requestDigest:`sha256:${'b'.repeat(64)}`}});
     await root.commonExecutionFromHost(interruptedIngress,prepare);
     await evictDurableObject(root);

@@ -450,6 +450,21 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     if(saved && this.deps.now() >= saved.preparedAt + request.maxDurationMs)throw Error('common execution budget expired');
     if(saved?.state==='running'&&saved.lease){
       const current=await this.waldoCoordinator.assertMessageExecutionCurrent(saved.lease,authority,()=>directory.assertCurrent(authority));
+      if(request.operation.startsWith('tool_')) {
+        const call=request.toolCall!;
+        if(!current.aggregate.request.authorityCeiling.tools.includes(call.name))throw Error('common tool ceiling mismatch');
+        const preparedId=`tool_prepare_${call.id}`;const settledId=`tool_settle_${call.id}`;
+        const prepared=current.aggregate.observations.find(value=>value.id===preparedId);const settled=current.aggregate.observations.find(value=>value.id===settledId);
+        const requestDigest=`sha256:${await this.deps.sha256Hex(JSON.stringify([call.name,call.requestDigest]))}`;
+        if(request.operation==='tool_prepare'&&prepared)throw Error('common tool intent requires reconciliation');
+        if(request.operation==='tool_settle'&&(!prepared||prepared.payloadDigest!==requestDigest||settled))throw Error('common tool result conflict');
+        await this.waldoCoordinator.admitMessageExecutionObservation(saved.lease,{protocolVersion:'0.4',id:request.operation==='tool_prepare'?preparedId:settledId,
+          ownerId:authority.ownerId,attemptId:current.attempt.id,environment:current.aggregate.request.environment,leaseId:current.lease.id,
+          fencingGeneration:current.lease.fencingGeneration,cancellationGeneration:current.aggregate.currentCancellationGeneration,
+          sequence:current.session.lastObservationSequence+1,kind:'activity',payloadRef:call.id,
+          payloadDigest:request.operation==='tool_prepare'?requestDigest:call.resultDigest,observedAt:new Date(this.deps.now()).toISOString()},authority,()=>directory.assertCurrent(authority));
+        return {state:'running' as const,lease:saved.lease,expiresAt:current.lease.expiresAt};
+      }
       if(request.operation.startsWith('provider_')) {
         const call=request.providerCall!;
         if(call.model!==current.aggregate.request.provider.modelRef || call.ordinal>request.maxProviderTurns)throw Error('common provider budget or model mismatch');
@@ -471,6 +486,8 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       }
       if(request.operation==='settle') {
         const pending=current.aggregate.observations.filter(value=>value.id.startsWith(`provider_prepare_${identity}_`));
+        const tools=current.aggregate.observations.filter(value=>value.id.startsWith('tool_prepare_'));
+        if(tools.some(value=>!current.aggregate.observations.some(done=>done.id===value.id.replace('tool_prepare_','tool_settle_'))))throw Error('common tool result uncertain');
         if(!pending.length || pending.some(value=>!current.aggregate.observations.some(done=>done.id===value.id.replace('provider_prepare_','provider_settle_'))))throw Error('common provider result uncertain');
         await this.waldoCoordinator.settleMessageExecution(saved.lease,request.result!,authority,()=>directory.assertCurrent(authority),
           ()=>this.ctx.storage.kv.put(key,{...saved,state:'settled',result:request.result}));

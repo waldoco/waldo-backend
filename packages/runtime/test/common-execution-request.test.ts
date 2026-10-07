@@ -19,4 +19,12 @@ it('binds host execution, provider intent and observed result to the exact signe
  const final=await signCommonExecutionRequest('fixture-secret',ingress,{...base,operation:'settle',result:{ref:'fixture-final',digest}});
  await verifyCommonExecutionRequest('fixture-secret',ingress,final);
  await expect(verifyCommonExecutionRequest('fixture-secret',ingress,{...final,result:undefined})).rejects.toThrow();
+ const toolBase={...base,tools:['workspace_write']};
+ const tool=await signCommonExecutionRequest('fixture-secret',ingress,{...toolBase,operation:'tool_prepare',toolCall:{id:'fixture-write',name:'workspace_write',requestDigest:digest}});
+ await verifyCommonExecutionRequest('fixture-secret',ingress,tool);
+ await expect(verifyCommonExecutionRequest('fixture-secret',ingress,{...tool,toolCall:{...tool.toolCall!,name:'send_email'}})).rejects.toThrow();
+ const toolResult=await signCommonExecutionRequest('fixture-secret',ingress,{...toolBase,operation:'tool_settle',toolCall:{id:'fixture-write',name:'workspace_write',requestDigest:digest,resultDigest:digest}});
+ await verifyCommonExecutionRequest('fixture-secret',ingress,toolResult);
+ await expect(verifyCommonExecutionRequest('fixture-secret',ingress,{...toolResult,toolCall:{...toolResult.toolCall!,resultDigest:undefined}})).rejects.toThrow();
+
 });

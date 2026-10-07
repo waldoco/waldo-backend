@@ -285,7 +285,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     let request:Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>|undefined;
     let started=false;
     let providerOrdinal=0;
-    const invoke=async(operation:import('../identity/common-execution-request').CommonExecutionRequest['operation'],result?:Readonly<{ref:string;digest:string}>,providerCall?:import('../identity/common-execution-request').CommonExecutionRequest['providerCall'])=>{
+    const invoke=async(operation:import('../identity/common-execution-request').CommonExecutionRequest['operation'],result?:Readonly<{ref:string;digest:string}>,providerCall?:import('../identity/common-execution-request').CommonExecutionRequest['providerCall'],toolCall?:import('../identity/common-execution-request').CommonExecutionRequest['toolCall'])=>{
       if(!request)throw Error('common execution context unavailable');
       if(operation!=='settle'&&operation!=='cancel')scope.admit();
       const authority=await directory.resolve('telegram',occurrence.subject,occurrence.doName);
@@ -293,7 +293,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const rootHash=await sha256Hex(`waldo-owner-root\0${authority.ownerId}`);
       const root=this.env.RUN_LOOP_DO!.get(this.env.RUN_LOOP_DO!.idFromName(`owner-root:sha256:${rootHash}`));
       const ingress=await signCommonMessageIngress(this.env.WALDO_ROUTER_HMAC_SECRET!,{provider:'telegram',subject:occurrence.subject,doName:occurrence.doName,physicalDoId:this.ctx.id.toString(),occurrenceId:occurrence.id,text:turn.text,at:Math.floor(Date.now()/1000)});
-      const signed=await signCommonExecutionRequest(this.env.WALDO_ROUTER_HMAC_SECRET!,ingress,{...request,operation,...(result?{result}:{}),...(providerCall?{providerCall}:{})});
+      const signed=await signCommonExecutionRequest(this.env.WALDO_ROUTER_HMAC_SECRET!,ingress,{...request,operation,...(result?{result}:{}),...(providerCall?{providerCall}:{}),...(toolCall?{toolCall}:{})});
       if(operation!=='settle'&&operation!=='cancel')scope.admit();const outcome=await root.commonExecutionFromHost(ingress,signed);if(operation!=='settle'&&operation!=='cancel')scope.admit();return outcome;
     };
     const execution = {
@@ -317,6 +317,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await invoke('provider_prepare',undefined,call);
         const result=await issue();
         await invoke('provider_settle',undefined,{...call,resultDigest:`sha256:${await sha256Hex(JSON.stringify(result))}`});
+        return result;
+      },
+      tool:async(name:string,args:unknown,ctx:import('../tools/dispatcher').ToolDispatcherContext,issue:()=>Promise<unknown>)=>{
+        if(!started||!ctx.toolCallId||!request?.tools.includes(name))throw Error('common tool invocation unavailable');
+        const call={id:`tool_${await sha256Hex(JSON.stringify([ctx.turnId,ctx.toolCallId]))}`,name,requestDigest:`sha256:${await sha256Hex(JSON.stringify(args))}`};
+        await invoke('tool_prepare',undefined,undefined,call);
+        const result=await issue();
+        await invoke('tool_settle',undefined,undefined,{...call,resultDigest:`sha256:${await sha256Hex(JSON.stringify(result))}`});
         return result;
       },
       cancel:async()=>{if(started)await invoke('cancel');},

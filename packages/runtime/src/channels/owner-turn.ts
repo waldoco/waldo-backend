@@ -100,6 +100,7 @@ export type OwnerResponderBinding = Readonly<{
     cancel():Promise<void>;
     provider(request:import('../llm/provider').LLMGatewayRequest,
       issue:()=>Promise<import('@waldo/contracts').AdapterResult<import('@waldo/contracts').LLMResponse>>):Promise<import('@waldo/contracts').AdapterResult<import('@waldo/contracts').LLMResponse>>;
+    tool(name:string,args:unknown,ctx:ToolDispatcherContext,issue:()=>Promise<unknown>):Promise<unknown>;
     allows(tool:string):boolean;
   }>;
   admission: OwnerMessageAdmission;
@@ -543,7 +544,7 @@ export const createOwnerResponder = (
             if (control.revision() !== admittedSteering) throw new Error('Owner steering changed the task');
             await sourceScope!.assertSame(admittedSource);
           } } : ctx;
-          let result = await handler.handle(args, sourceContext); await assertCurrent();
+          let result = (binding?.execution ? await binding.execution.tool(handler.name,args,sourceContext,()=>handler.handle(args, sourceContext)) : await handler.handle(args, sourceContext)) as Awaited<ReturnType<typeof handler.handle>>; await assertCurrent();
           await sourceContext.assertTaskSourceCurrent?.();
           if (interactiveSource && requireTaskScope && sourceRead && admittedSource) await sourceScope!.assertSame(admittedSource);
           if (retainedRead) {
