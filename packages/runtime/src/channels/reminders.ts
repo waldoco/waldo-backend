@@ -18,6 +18,8 @@ export type ReminderBook = Readonly<{
 
 // Owner reminders ride the DO scheduler (kind 'reminder'); the note text lives beside it
 // because schedule payloads carry refs only.
+// Fixed 40-hex id part keeps 'reminder:call-' + digest (54 chars) inside the 100-char cancel schema.
+const shortDigest = async (value: string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))].slice(0, 20).map(b => b.toString(16).padStart(2, '0')).join('');
 export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: OwnerClock, newId: () => string): ReminderBook => {
   sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)');
   const local = (at: number) => localIso(at, clock.timezone);
@@ -28,7 +30,7 @@ export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: Owner
       const now = clock.now().getTime();
       const rawDue = localToEpoch(at, clock.timezone);
       // A tool call's own identity makes a retry after a lost response return the same reminder, not a second one.
-      const id = key ? `reminder:call-${key.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 96)}` : `reminder:${newId()}`;
+      const id = key ? `reminder:call-${await shortDigest(key)}` : `reminder:${newId()}`;
       // Checked before past-time validation so a delayed retry of an already-set reminder still returns it.
       const existing = key ? sql.exec<{ id: string }>('SELECT id FROM reminder_notes WHERE id = ?', id).toArray()[0] : undefined;
       if (existing) {
@@ -47,7 +49,9 @@ export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: Owner
             : { occurrenceAt: due, dueAt: due }),
         });
       } catch (error) {
-        if (!existing) sql.exec('DELETE FROM reminder_notes WHERE id = ?', id);
+        // The schedule row can exist even when arming the alarm failed. Keep the note then, so the armed reminder
+        // never fires note-less and a retry finds it; delete only a note that has no schedule behind it.
+        if (!existing && !scheduler.read(id)) sql.exec('DELETE FROM reminder_notes WHERE id = ?', id);
         throw error;
       }
       return { id, note, at: local(entry.due_at), repeat };

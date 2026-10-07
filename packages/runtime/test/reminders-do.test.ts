@@ -1,3 +1,4 @@
+import { cancelReminderArgsSchema } from '@waldo/contracts';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
@@ -72,6 +73,20 @@ describe('reminder book on the Telegram owner object', () => {
       expect(book.list().map(r => r.id)).toContain(healed.id);
       await scheduler.cancel(first.id);
       await scheduler.cancel(healed.id);
+    });
+  });
+
+  it('a maximum-length call id yields a reminder id the cancel schema accepts', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('reminder-book-longid'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      claimStore(state.storage.sql);
+      ensureSchema(state.storage);
+      const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+      const book = reminderBook(state.storage.sql, scheduler, { timezone: 'Asia/Kolkata', now: () => new Date(Date.parse('2036-09-23T08:00:00Z')) }, () => 'x');
+      const made = await book.set({ note: 'call mom', at: '2036-09-23T18:30', repeat: 'none' as const }, `turn-${'a'.repeat(60)}-${'b'.repeat(64)}`);
+      expect(made.id.length).toBeLessThanOrEqual(100);
+      expect(cancelReminderArgsSchema.safeParse({ id: made.id }).success).toBe(true);
+      await scheduler.cancel(made.id);
     });
   });
 });
