@@ -16,3 +16,18 @@ it('reports unsupported Telegram-only operations without no-op success', async (
   expect(await shim('setMessageReaction',{message_id:1})).toBeUndefined();
   expect(graph).not.toHaveBeenCalled();
 });
+
+it('bounds an uncertain WhatsApp send, with no retry or fallback after network issue', async () => {
+  vi.useFakeTimers();
+  try {
+    const graph = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve,reject) => init?.signal?.addEventListener('abort',()=>reject(new Error('fixture transport aborted')))));
+    const {createWhatsAppCaller}=await import('../src/channels/whatsapp-api');
+    const send=createWhatsAppCaller('fictional-token','fixture-phone',graph as typeof fetch);
+    const pending=send({to:'15550001111',type:'text',text:{body:'one frozen message'}});
+    const rejected=expect(pending).rejects.toThrow(/aborted/);
+    await vi.advanceTimersByTimeAsync(15001);
+    await rejected;
+    expect(graph).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {vi.useRealTimers();}
+},2000);

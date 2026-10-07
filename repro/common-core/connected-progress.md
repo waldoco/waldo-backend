@@ -198,3 +198,8 @@ Parent relays Dalda hosted pinned staging common_owner_authority absent and hist
 - WhatsApp text shim retains exact URL buttons and callback instructions; unsupported operations return undefined plus unsupported_surface_action, not ok:true/{}.
 - Listener renders WhatsApp queued/direct final from original guarded text. Telegram rich rendering untouched. Shim accepts explicit fallback_text for direct compatible callers.
 - 65 WhatsApp/listener/outbox guards across 10 files; worker/integration types. Native buttons/lists/reactions/typing remain unadvertised; no provider sends/account/version proof. Native wamid ACK/status handling, ordinary input identity, transport timeout and service window remain open.
+
+## 2026-10-07 WhatsApp transport bound
+- RED current caller hangs on post-issue fetch; GREEN 15-second AbortController bound through response JSON, finally clears timer, one attempt/no fallback. First test fault itself assumed signal existed, corrected to optional signal before RED timeout.
+- Centralized pinned v21.0 Graph version for send/media lookup, unchanged version. No new API capability/feature compatibility claim.
+- 46 WhatsApp guards and worker/integration types; source only, no provider send. Provider native ACK/status/window, physical original input IDs and all-call spend still open.

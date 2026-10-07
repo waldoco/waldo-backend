@@ -5,15 +5,26 @@ import { onlyArtifacts, quarantineArtifacts } from '../security/artifact-hygiene
 // feeds voice notes to the shared transcriber (W4), and the ingress normalization below.
 export type WhatsAppCall = (body: object) => Promise<unknown>;
 
+// Match the existing Telegram transport bound. A timed-out POST is uncertain,
+// so this caller never retries and never reports a successful acknowledgement.
+export const WHATSAPP_API_TIMEOUT_MS = 15_000;
+export const WHATSAPP_GRAPH_VERSION = 'v21.0';
 export const createWhatsAppCaller = (token: string, phoneNumberId: string, fetcher: typeof fetch = fetch): WhatsAppCall =>
   async (body) => {
-    const response = await fetcher(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ messaging_product: 'whatsapp', ...body }),
-    });
-    if (!response.ok) throw new Error(`whatsapp ${response.status}: ${(await response.text()).slice(0, 200)}`);
-    return response.json();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), WHATSAPP_API_TIMEOUT_MS);
+    try {
+      const response = await fetcher(`https://graph.facebook.com/${WHATSAPP_GRAPH_VERSION}/${phoneNumberId}/messages`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ messaging_product: 'whatsapp', ...body }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`whatsapp ${response.status}: ${(await response.text()).slice(0, 200)}`);
+      return await response.json();
+    } finally {
+      clearTimeout(timer);
+    }
   };
 
 export const sendWhatsAppText = (call: WhatsAppCall, to: string, text: string) =>
@@ -53,7 +64,7 @@ const WHATSAPP_MEDIA_HOST = /(^|\.)(fbsbx\.com|whatsapp\.net|facebook\.com)$/;
 export const createWhatsAppMediaDownloader = (token: string, fetcher: typeof fetch = fetch): WhatsAppMediaDownloader => async (mediaId) => {
   if (mediaId.length === 0 || mediaId.length > 256) throw new Error('whatsapp media id invalid');
   const auth = { authorization: `Bearer ${token}` };
-  const meta = await fetcher(`https://graph.facebook.com/v21.0/${encodeURIComponent(mediaId)}`, { headers: auth });
+  const meta = await fetcher(`https://graph.facebook.com/${WHATSAPP_GRAPH_VERSION}/${encodeURIComponent(mediaId)}`, { headers: auth });
   if (!meta.ok) throw new Error(`whatsapp media lookup failed: ${meta.status}`);
   const { url } = await meta.json() as { url?: string };
   const host = url ? new URL(url).host : '';
