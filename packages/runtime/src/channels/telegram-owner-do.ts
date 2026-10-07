@@ -270,7 +270,6 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       || scope !== this.activeScope || turn.surface !== 'telegram' || !turn.text || turn.attachment || turn.mediaNote) throw new ClosedRunError();
     // Populated physical source custody cannot be silently reset/imported by enabling the common path.
     if (retireLegacyDefaultTaskSources(this.ctx.storage.sql) === 'owner_restriction') throw Error('legacy task source disposition required');
-    if (legacyTable.length && this.ctx.storage.sql.exec('SELECT owner_key FROM owner_task_source_scope LIMIT 1').toArray().length) throw Error('legacy task source disposition required');
     const directory=commonOwnerAuthority(this.env);
     const authority=await directory.resolve('telegram',occurrence.subject,occurrence.doName);
     scope.admit();if(!authority)throw Error('common owner unavailable');
