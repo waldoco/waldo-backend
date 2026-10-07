@@ -14,7 +14,7 @@ export type InboxRecord = InboxBinding & {
 };
 export const needsRecoveryNotice = (row: InboxRecord): boolean => row.state === 'quarantined' && !row.outcomeNoticeQueued && !row.outcomeNoticeBlocked
   && (row.control?.kind === 'steer' && ['not_consumed', 'consumed_target_outcome_uncertain', 'recovered_uncertain'].includes(row.reason ?? '')
-    || row.control === undefined && ['recovered_uncertain', 'execution_closed', 'owner_stopped'].includes(row.reason ?? ''));
+    || row.control === undefined && ['recovered_uncertain', 'execution_closed', 'owner_stopped','common_execution_indeterminate'].includes(row.reason ?? ''));
 export const ownerInboxDue = (rows: InboxRecord[], now: number): number | null => {
   const due = rows.flatMap(row => row.state === 'admitted' ? [now + 250] : row.state === 'claimed' || row.state === 'consumed'
     ? [row.deadline ?? now + 250] : needsRecoveryNotice(row) ? [now + 250] : row.state === 'completed' ? [row.admittedAt + RETENTION_MS] : []);

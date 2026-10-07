@@ -432,6 +432,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     const digest=await this.deps.sha256Hex(JSON.stringify([request.source,request.binding,request.tools,request.maxProviderTurns,request.maxDurationMs]));
     type Lease={executionRequestId:string;attemptId:string;leaseId:string;fencingGeneration:number;cancellationGeneration:number;sourceSnapshot:typeof request.source};
     type Receipt={ownerId:string;request:CommonExecutionRequest;digest:string;state:'prepared'|'running'|'settled'|'indeterminate';expectedRevision:number;workUnitId:string;preparedAt:number;lease?:Lease;result?:typeof request.result};
+    if(request.operation==='settle')await this.#reconcileCommonExecutionTimeouts();
     let saved=this.ctx.storage.kv.get<Receipt>(key);
     if(saved&&saved.digest!==digest)throw Error('common execution command conflict');
     if(saved?.state==='settled') {
@@ -446,7 +447,11 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       const cancelled=await this.waldoCoordinator.cancelMessageExecution(saved.lease.executionRequestId,`common_cancel_${identity}`,authority,()=>directory.assertCurrent(authority));
       return {state:'cancelled' as const,lease:saved.lease,expiresAt:null,cancellationGeneration:cancelled.currentCancellationGeneration};
     }
-    if(saved?.state==='indeterminate')throw Error('common execution reconciliation required');
+    if(saved?.state==='indeterminate'){
+      await directory.assertCurrent(authority);this.ctx.storage.transactionSync(()=>this.waldoCoordinator.assertMessageAuthorityCurrent(authority));
+      if(request.operation==='settle')return {state:'indeterminate' as const,lease:saved.lease!,expiresAt:null};
+      throw Error('common execution reconciliation required');
+    }
     if(saved && this.deps.now() >= saved.preparedAt + request.maxDurationMs)throw Error('common execution budget expired');
     if(saved?.state==='running'&&saved.lease){
       const current=await this.waldoCoordinator.assertMessageExecutionCurrent(saved.lease,authority,()=>directory.assertCurrent(authority));

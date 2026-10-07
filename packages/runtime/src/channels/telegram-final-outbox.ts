@@ -19,7 +19,7 @@ export type FinalRecord = {
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; deliveredAt?: number; reason?: string;
   inbox?: { id: string; runId: string; attempt: string };
   // Host-owned frozen settlement intent, committed with the physical final.
-  commonExecution?: { request: Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>; settled?: boolean };
+  commonExecution?: { request: Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>; settled?: boolean; disposition?:'indeterminate' };
   heartbeat?: HeartbeatReceipt;
   mailFollowup?: MailFollowupReceipt;
   calendarPrep?: CalendarPrepReceipt;

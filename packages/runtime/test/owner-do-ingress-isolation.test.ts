@@ -1365,7 +1365,10 @@ it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid').ea
    await runInDurableObject(doStub(subject),async(instance)=>{await instance.alarm();});
    expect(modelInputs.length).toBe(calls);
    if(expireFinal){
-    await runInDurableObject(doStub(subject),(_instance,state)=>expect(state.storage.kv.get<any[]>('telegram_final_outbox_v1')!.some(row=>row.commonExecution&&!row.commonExecution.settled)).toBe(true));
+    await runInDurableObject(doStub(subject),(_instance,state)=>{const finals=state.storage.kv.get<any[]>('telegram_final_outbox_v1')!;const original=finals.find(row=>row.commonExecution);expect(original).toMatchObject({status:'blocked',settled:true,reason:'common_execution_indeterminate',commonExecution:{disposition:'indeterminate'}});expect(finals.filter(row=>String(row.id).startsWith('failure:'))).toHaveLength(1);expect(finals.find(row=>String(row.id).startsWith('failure:')).payload.text).toContain('I did not send the unverified final or run the work again');});
+    await evictDurableObject(doStub(subject));await runInDurableObject(doStub(subject),async(instance)=>{await instance.alarm();});
+    expect(modelInputs.length).toBe(calls);
+    await runInDurableObject(doStub(subject),(_instance,state)=>expect(state.storage.kv.get<any[]>('telegram_final_outbox_v1')!.filter(row=>String(row.id).startsWith('failure:'))).toHaveLength(1));
     await runInDurableObject(root,(_instance,state)=>expect(state.storage.sql.exec('SELECT state FROM execution_attempts').one().state).not.toBe('settled'));
     return;
    }

@@ -379,7 +379,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   private async reconcileCommonFinal(final:FinalRecord):Promise<void> {
-    if(!final.commonExecution || final.commonExecution.settled)return;
+    if(!final.commonExecution || final.commonExecution.settled||final.commonExecution.disposition)return;
     if(!final.inbox || !this.env.WALDO_ROUTER_HMAC_SECRET || !this.env.RUN_LOOP_DO ||
       final.ownerSubject!==this.ctx.storage.kv.get<string>('telegram_subject') || final.doName!==this.ctx.storage.kv.get<string>('do_name') ||
       this.ctx.storage.kv.get<boolean>('telegram_unlinked') || this.env.TELEGRAM_OWNER_DO?.idFromName(final.doName).toString()!==this.ctx.id.toString())throw Error('common final binding unavailable');
@@ -391,13 +391,20 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const request=await signCommonExecutionRequest(this.env.WALDO_ROUTER_HMAC_SECRET,ingress,{...final.commonExecution.request,operation:'settle',result:{ref:`final_${row.updateId}`,digest:`sha256:${await sha256Hex(final.payload.text)}`}});
     const rootHash=await sha256Hex(`waldo-owner-root\0${authority.ownerId}`);
     const root=this.env.RUN_LOOP_DO.get(this.env.RUN_LOOP_DO.idFromName(`owner-root:sha256:${rootHash}`));
-    await root.commonExecutionFromHost(ingress,request);
+    const outcome=await root.commonExecutionFromHost(ingress,request);
     await directory.assertCurrent(authority);
     this.ctx.storage.transactionSync(()=>{
       const current=this.setup().finalOutbox.records();const stored=current.find(value=>value.id===final.id);
       if(this.ctx.storage.kv.get<string>('telegram_subject')!==row.subject || this.ctx.storage.kv.get<string>('do_name')!==row.doName || this.ctx.storage.kv.get<boolean>('telegram_unlinked'))throw Error('common final owner changed');
       if(!stored || stored.digest!==final.digest || stored.payload.text!==final.payload.text || JSON.stringify(stored.commonExecution)!==JSON.stringify(final.commonExecution))throw Error('common final changed');
-      stored.commonExecution!.settled=true;this.ctx.storage.kv.put('telegram_final_outbox_v1',current);
+      if(outcome.state==='indeterminate'){
+        stored.commonExecution!.disposition='indeterminate';stored.status='blocked';stored.reason='common_execution_indeterminate';stored.settled=true;
+        const inbox=this.ctx.storage.kv.get<InboxRecord[]>('telegram_owner_inbox_v1')??[];const occurrence=inbox.find(value=>value.id===row.id&&value.runId===row.runId&&value.attempt===row.attempt);
+        if(!occurrence)throw Error('common final occurrence changed');
+        occurrence.state='quarantined';occurrence.reason='common_execution_indeterminate';occurrence.body='';
+        this.ctx.storage.kv.put('telegram_owner_inbox_v1',inbox);this.ctx.storage.kv.put('telegram_owner_inbox_due_v1',ownerInboxDue(inbox,Date.now()));
+      }else stored.commonExecution!.settled=true;
+      this.ctx.storage.kv.put('telegram_final_outbox_v1',current);
     });
   }
 
@@ -451,7 +458,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const requestTime = `${localIso(child.admittedAt, noticeZone).slice(0, 16).replace('T', ' ')} ${noticeZone}`;
       const noticeId = `${ordinary ? 'failure' : 'steer-failure'}:${child.id}:${child.attempt}`;
       const noticeText = ordinary
-          ? child.reason === 'owner_stopped' ? 'Stopped. In-flight changes may still finish.'
+          ? child.reason === 'common_execution_indeterminate' ? 'The task expired before its result could be verified for delivery. A private result may already be saved. I did not send the unverified final or run the work again. Check the saved result before retrying changes.'
+            : child.reason === 'owner_stopped' ? 'Stopped. In-flight changes may still finish.'
             : child.reason === 'execution_closed' ? 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.'
             : 'Your request was interrupted, and its outcome is uncertain. Some changes may have completed. Please check the result before retrying.'
           : child.reason === 'not_consumed'
@@ -1209,12 +1217,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       await ready;
       await finalOutbox.maintain();
       // Reconcile finals before quarantining recovered claims with committed payloads.
-      for(const final of finalOutbox.records())if(final.commonExecution&&!final.commonExecution.settled) {
+      for(const final of finalOutbox.records())if(final.commonExecution&&!final.commonExecution.settled&&!final.commonExecution.disposition) {
         try { await this.reconcileCommonFinal(final); } catch { console.error('common final settlement unresolved'); }
       }
       const finals = finalOutbox.records();
       const protectedAttempts = new Set(this.liveAttempts);
-      for (const final of finals) if (final.inbox) {
+      for (const final of finals) if (final.inbox&&!final.commonExecution?.disposition) {
         protectedAttempts.add(final.inbox.attempt);
         await this.inbox.transition(final.inbox.id, final.inbox.attempt, 'awaiting_delivery');
       }
