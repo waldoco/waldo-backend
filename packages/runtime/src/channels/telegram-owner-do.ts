@@ -2175,7 +2175,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const run = runs.start('heartbeat', entry.id);
       try {
         const delivery = await heartbeatTick({
-          scheduler, sql: storage.sql, loops, plans, timezone: clock.timezone, now: () => Date.now(),
+          scheduler, sql: storage.sql, loops, plans, timezone: clock.timezone, now: () => Date.now(), releaseHeldCards: schedPrefs.enabled('daily_brief'),
           enqueue: async (text, heartbeat) => finalOutbox.enqueue({
             id: `heartbeat:${entry.id}:${entry.occurrence_at}`, trace,
             payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),

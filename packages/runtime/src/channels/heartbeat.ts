@@ -41,6 +41,7 @@ export const armHeartbeat = async (scheduler: Scheduler, now: number): Promise<v
 type Sql = Pick<SqlStorage, 'exec'>;
 
 export type HeartbeatDeps = Readonly<{
+  releaseHeldCards?: boolean;
   scheduler: Scheduler;
   sql: Sql;
   loops: LoopBook;
@@ -76,7 +77,7 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
     // resets the entry to armed, so a crashed release retry re-arms idempotently; yesterday's
     // held cards are stale and stay as the historical record of the hold.
     const today = localIso(firedAt, deps.timezone).slice(0, 10);
-    const heldCards = deps.plans.heldToday(today);
+    const heldCards = deps.releaseHeldCards === false ? [] : deps.plans.heldToday(today);
     for (const card of heldCards) {
       await deps.scheduler.schedule({
         id: card, kind: 'brief', payloadRefs: { id: card },
