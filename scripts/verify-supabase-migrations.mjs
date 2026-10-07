@@ -43,6 +43,7 @@ const expectedMigrations = [
   '20261003000000_waldo_router_signed_fail_closed.sql',
   '20261004030000_browser_owner_binding.sql',
   '20261004190110_owner_trace_identity.sql',
+  '20261007040100_common_owner_authority.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);
