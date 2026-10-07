@@ -23,6 +23,7 @@ export type OwnerTurnEnvelope = Readonly<{
   traceId: string;
   conversationRef: string;
   surface: string;
+  presentation?: import('../prompt/messaging-behavior').SurfacePresentation;
   text: string;
   // Host-parsed source markup; these ranges never supply task-transition evidence.
   sourceQuoteRanges?: readonly Readonly<{ start: number; end: number }>[];

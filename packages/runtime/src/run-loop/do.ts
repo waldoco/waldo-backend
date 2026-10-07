@@ -1,3 +1,5 @@
+import { commonOwnerAuthority } from '../identity/common-owner-authority';
+import { verifyCommonMessageIngress, type CommonMessageIngress } from '../identity/common-message-ingress';
 import { DurableObject } from 'cloudflare:workers';
 import {
   TOOL_PERMISSIONS,
@@ -409,6 +411,23 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   ) {
     this.#assertLocalTestSeam();
     return this.waldoCoordinator.createTrustedJudgmentRequestV05(proposal, authority);
+  }
+
+  async captureCommonMessageFromHost(ingress: CommonMessageIngress): Promise<ResponsibilityCaptureResult> {
+    if ((this.envBindings as Cloudflare.Env & { COMMON_OWNER_TASKS?: string }).COMMON_OWNER_TASKS !== '1') throw Error('common tasks held');
+    await verifyCommonMessageIngress(this.envBindings.WALDO_ROUTER_HMAC_SECRET, ingress, this.deps.now());
+    const physical = this.envBindings.TELEGRAM_OWNER_DO;
+    if (!physical || physical.idFromName(ingress.doName).toString() !== ingress.physicalDoId) throw Error('common host locator rejected');
+    const directory = commonOwnerAuthority(this.envBindings);
+    const authority = await directory.resolve(ingress.provider, ingress.subject, ingress.doName);
+    if (!authority) throw Error('common owner unavailable');
+    const rootDigest = await this.deps.sha256Hex(`waldo-owner-root\0${authority.ownerId}`);
+    if (this.ctx.id.toString() !== this.envBindings.RUN_LOOP_DO.idFromName(`owner-root:sha256:${rootDigest}`).toString()) throw Error('common root route rejected');
+    const commandHash = await this.deps.sha256Hex(JSON.stringify([ingress.provider, ingress.subject, ingress.doName, ingress.occurrenceId]));
+    return this.waldoCoordinator.captureMessageResponsibility({
+      requestId: `message_${commandHash}`, commandId: `command_${commandHash}`, correlationId: `correlation_${commandHash}`,
+      payload: { userStatement: ingress.text },
+    }, authority, () => directory.assertCurrent(authority));
   }
 
   async captureResponsibilityFromWorker(

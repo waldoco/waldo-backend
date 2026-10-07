@@ -15,6 +15,7 @@ export const DO_PRODUCT_TABLES = [
   'owner_roots',
   'presence_registrations',
   'presence_sessions',
+  'common_message_custody',
   'owner_event_state',
   'outcomes',
   'missions',
@@ -1158,6 +1159,15 @@ export const SCHEDULE_RUNS_SCHEMA_MIGRATION: DoMigration = {
   down: ['DROP TABLE IF EXISTS schedule_runs;'],
 };
 
+export const COMMON_MESSAGE_CUSTODY_SCHEMA_MIGRATION: DoMigration = {
+  version: 9, name: 'common-message-custody',
+  up: [`CREATE TABLE common_message_custody (
+    presence_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL,
+    authority_digest TEXT NOT NULL, admission_revision TEXT NOT NULL
+  );`],
+  down: ['DROP TABLE common_message_custody;'],
+};
+
 export const DO_SCHEMA_MIGRATIONS = [
   HEY10_BASE_SCHEMA_MIGRATION,
   HEY144_GOALS_SCHEMA_MIGRATION,
@@ -1167,6 +1177,7 @@ export const DO_SCHEMA_MIGRATIONS = [
   RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION,
   RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION,
   SCHEDULE_RUNS_SCHEMA_MIGRATION,
+  COMMON_MESSAGE_CUSTODY_SCHEMA_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;
@@ -1319,6 +1330,7 @@ const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
     'created_at',
     'updated_at',
   ],
+  common_message_custody: ['presence_id', 'owner_id', 'authority_digest', 'admission_revision'],
   presence_sessions: [
     'authenticated_session_id',
     'presence_registration_id',

@@ -1,3 +1,5 @@
+import { commonOwnerAuthority } from '../identity/common-owner-authority';
+import { signCommonMessageIngress } from '../identity/common-message-ingress';
 import { taskSourceFetch } from '../tools/task-source-io';
 import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerControlsRead,ownerControlsAction} from './dashboard-owner-controls';
 import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
@@ -242,6 +244,33 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private activeScope: RunEffectScope | undefined;
   private activeAbort: AbortController | undefined;
   private activeOwnerContext: ReturnType<typeof createOwnerMessageContextAdapter> | undefined;
+
+  private async handoffCommonMessage(turn: import('./telegram-polling').TelegramInboundTurn) {
+    const scope = turn.runScope;
+    const occurrence = this.activeInbox;
+    const namespace = this.env.RUN_LOOP_DO;
+    // The currently deploy-owner-only path has no auth-user authority. Do not invent its root.
+    if (this.env.COMMON_OWNER_TASKS !== '1') return undefined;
+    if (!namespace || !this.env.SUPABASE_PROJECT_URL || !this.env.SUPABASE_PUBLISHABLE_KEY || !this.env.WALDO_ROUTER_HMAC_SECRET) return undefined;
+    if (!scope || !occurrence || occurrence.runId !== scope.runId || occurrence.attempt !== scope.attempt
+      || occurrence.updateId !== turn.updateId || turn.media || !turn.text) throw new ClosedRunError();
+    scope.admit();
+    const directory = commonOwnerAuthority(this.env);
+    const authority = await directory.resolve('telegram', occurrence.subject, occurrence.doName);
+    scope.admit();
+    if (!authority) throw Error('common owner unavailable');
+    const rootHash = await sha256Hex(`waldo-owner-root\0${authority.ownerId}`);
+    const ingress = await signCommonMessageIngress(this.env.WALDO_ROUTER_HMAC_SECRET, {
+      provider: 'telegram', subject: occurrence.subject, doName: occurrence.doName,
+      physicalDoId: this.ctx.id.toString(), occurrenceId: occurrence.id, text: turn.text,
+      at: Math.floor(Date.now()/1000),
+    });
+    scope.admit();
+    const captured = await namespace.get(namespace.idFromName(`owner-root:sha256:${rootHash}`)).captureCommonMessageFromHost(ingress);
+    scope.admit();
+    if (captured.ownerId !== authority.ownerId || captured.outcome.userStatement !== turn.text) throw Error('common handoff mismatch');
+    return captured;
+  }
 
   private closeRunAtomic(run: InboxRecord, reason: string, awaitingDelivery = false): void {
     this.ctx.storage.transactionSync(() => {
@@ -1835,7 +1864,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         turn.runScope?.admit();
         return responder.chooseReaction(turn);
       },
-      respond: (turn, time) => {
+      respond: async (turn, time) => {
+        if (turn.runScope && !turn.media && turn.text) await this.handoffCommonMessage(turn);
         if (turn.media) files.record(turn.media, turn.text ?? '', Date.now());
         return responder.respond(turn, time);
       },

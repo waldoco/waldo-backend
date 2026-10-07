@@ -14,6 +14,7 @@ import {
   RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION,
   RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION,
   SCHEDULE_RUNS_SCHEMA_MIGRATION,
+  COMMON_MESSAGE_CUSTODY_SCHEMA_MIGRATION,
   RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION,
   applyDoMigration,
   assertDoSchema,
@@ -106,7 +107,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(8);
+    expect(result.version).toBe(9);
     expect(result.version).toBe(DO_SCHEMA_VERSION);
     expect(result.assertResult.ok).toBe(true);
     for (const table of DO_PRODUCT_TABLES) {
@@ -201,7 +202,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(8);
+    expect(result.version).toBe(9);
     expect(result.legacyRevisionOneRejected).toBe(true);
     expect(result.tables).toContain('goals');
     expect(result.explicitGoalsIndexes).toEqual([]);
@@ -234,7 +235,7 @@ describe('HEY-10 DO SQLite schema root', () => {
         ).one().description,
       };
     });
-    expect(result).toEqual({ version: 8, description: 'Preserve this row.' });
+    expect(result).toEqual({ version: 9, description: 'Preserve this row.' });
   });
 
   it('migrates the merged V3 responsibility schema to current without changing responsibility state', async () => {
@@ -329,7 +330,7 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result.before.version).toBe(3);
-    expect(result.after).toEqual({ ...result.before, version: 8 });
+    expect(result.after).toEqual({ ...result.before, version: 9 });
     expect(result.authority).toEqual({
       authenticated_subject_ref: null,
       state: null,
@@ -441,7 +442,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(8);
+    expect(result.version).toBe(9);
     expect(result.after).toEqual(result.preserved);
     expect(result.newState).toEqual({ state: 'planning_authorized', revision: 2 });
   });
@@ -521,7 +522,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(8);
+    expect(result.version).toBe(9);
     expect(result.preserved).toEqual(result.before);
     expect(result.protocolVersion).toBe('0.3');
     expect(result.executionTables).toEqual([
@@ -663,6 +664,7 @@ describe('HEY-10 DO SQLite schema root', () => {
     const stub = freshStub();
     const result = await runInDurableObject(stub, (_instance, state) => {
       provisionDoSchema(state.storage);
+      applyDoMigration(state.storage, COMMON_MESSAGE_CUSTODY_SCHEMA_MIGRATION, 'down');
       applyDoMigration(state.storage, SCHEDULE_RUNS_SCHEMA_MIGRATION, 'down');
       applyDoMigration(
         state.storage,
@@ -790,7 +792,7 @@ describe('HEY-10 DO SQLite schema root', () => {
           ).one().count,
         };
       });
-      expect(result).toEqual({ version: 8, rows: 1 });
+      expect(result).toEqual({ version: 9, rows: 1 });
     }
   });
 
@@ -1062,8 +1064,8 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result).toEqual({
-      beforeVersion: 8,
-      afterVersion: 8,
+      beforeVersion: 9,
+      afterVersion: 9,
       outcomesPresent: true,
       probeTables: [],
     });

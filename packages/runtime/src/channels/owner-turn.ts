@@ -27,7 +27,7 @@ import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath, taskHistoryMessages } from '../conversation/joined-path';
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
-import { OWNER_TASK_SOURCE_PRECEDENCE, messagingSystemPrompt, ownerClockLine, withOwnerSkillProcedures, OWNER_SKILL_SAFEGUARDS } from '../prompt/messaging-behavior';
+import { OWNER_TASK_SOURCE_PRECEDENCE, messagingSystemPrompt, surfacePresentationPrompt, ownerClockLine, withOwnerSkillProcedures, OWNER_SKILL_SAFEGUARDS } from '../prompt/messaging-behavior';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { FORGOTTEN, applyClaimOps, type ClaimOutcome, applyPromotion, CLAIM_OPS_SCHEMA, exchangeInput, MEMORY_INSTRUCTION, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
@@ -187,6 +187,7 @@ export const createOwnerResponder = (
   const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;
   let traceId = '';
+  let surfacePresentation: import('../prompt/messaging-behavior').SurfacePresentation | undefined;
   const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' }, { ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: async () => {
     refreshPendingRedaction();
     if (!sourceFamilyAvailable('local') || forgettingState?.incompleteTopics().length) return [];
@@ -683,21 +684,21 @@ export const createOwnerResponder = (
           await assertCurrent();
           if (control.revision() !== contextSteering) throw new ClosedRunError();
           const skillMetadata = skills && (!binding || request.tools.includes('skills_list')) ? skills.metadata() : '';
-          const canonicalSystem = [canonicalPrompt, OWNER_TASK_SOURCE_PRECEDENCE, MEMORY_CLAIM_RULE, sourceNotice, recallNotice, turnNotice, ...(memoryReceipts.length ? [`Memory this turn: ${memoryReceipts.join(' ')}`] : []), skillMetadata, taskContext].filter(Boolean).join('\n\n');
+          const canonicalSystem = [canonicalPrompt, ...(surfacePresentation ? [surfacePresentationPrompt(surfacePresentation)] : []), OWNER_TASK_SOURCE_PRECEDENCE, MEMORY_CLAIM_RULE, sourceNotice, recallNotice, turnNotice, ...(memoryReceipts.length ? [`Memory this turn: ${memoryReceipts.join(' ')}`] : []), skillMetadata, taskContext].filter(Boolean).join('\n\n');
           // Owner memory gets the room left in the FINAL system prompt (after the skill wrapper), because the sanitiser drops an oversize one whole.
           const unboundSystem = (): string => {
             const wrapped = skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined);
-            const before = [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), MEMORY_CLAIM_RULE, sourceNotice, ...(recallNotice ? [recallNotice] : []), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : [])];
+            const before = [messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation), ownerClockLine(clock), MEMORY_CLAIM_RULE, sourceNotice, ...(recallNotice ? [recallNotice] : []), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : [])];
             const afterBase = [...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
             // Owner memory takes its room first; open loops get what the same reserve leaves, and the section names what it left out.
-            const room = systemRoom(withOwnerSkillProcedures([...before, ...afterBase].join('\n\n'), wrapped));
+            const room = systemRoom(withOwnerSkillProcedures([...before, ...afterBase].join('\n\n'), wrapped, surfacePresentation));
             const memoryPart = memory && sourceFamilyAvailable('local') ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText, room)] : [];
-            const loopsSection = loopsSectionFor(Math.max(0, systemRoom(withOwnerSkillProcedures([...before, ...memoryPart, ...afterBase].join('\n\n'), wrapped))));
+            const loopsSection = loopsSectionFor(Math.max(0, systemRoom(withOwnerSkillProcedures([...before, ...memoryPart, ...afterBase].join('\n\n'), wrapped, surfacePresentation))));
             const after = [...(ordersSection ? [ordersSection] : []), ...(loopsSection ? [loopsSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
-            return withOwnerSkillProcedures([...before, ...memoryPart, ...after].join('\n\n'), wrapped);
+            return withOwnerSkillProcedures([...before, ...memoryPart, ...after].join('\n\n'), wrapped, surfacePresentation);
           };
           return complete(trace, 'reply',
-          binding ? withOwnerSkillProcedures(canonicalSystem, skillPrompt) : unboundSystem(),
+          binding ? withOwnerSkillProcedures(canonicalSystem, skillPrompt, surfacePresentation) : unboundSystem(),
           entries,
           undefined,
           pending,
@@ -985,6 +986,7 @@ export const createOwnerResponder = (
       if (skills?.admission && (await skills.admission.readInput()).text !== turn.text) throw new Error('owner input mismatch');
       await restored();
       const id = turn.traceId;
+      surfacePresentation = turn.presentation;
       traceId = id;
       log({ trace: id, hop: OWNER_REQUEST_HOP, ms: 0, ok: true });
       interactiveSource = true;

@@ -1,3 +1,4 @@
+import type { CommonOwnerAuthority } from '../identity/common-owner-authority';
 import {
   authorityGrantV05Schema,
   canonicalizeJudgmentAnswerRequestV05ForDigest,
@@ -24,6 +25,7 @@ import {
   protocolDigestSchema,
   protocolIdSchema,
   providerRefV04Schema,
+  responsibilityCapturePayloadV02Schema,
   responsibilityCaptureRequestSchema,
   responsibilityCaptureRequestV02Schema,
   responsibilityCaptureResultSchema,
@@ -456,6 +458,24 @@ export class WaldoCoordinator {
     admission: ResponsibilityCaptureAdmission,
   ): Promise<ResponsibilityCaptureResult> {
     return this.#captureResponsibility(admission);
+  }
+
+  /** Private serving-path admission: the host verifies directory currentness, never fabricates a session. */
+  async captureMessageResponsibility(
+    input: Readonly<{ requestId: string; commandId: string; correlationId: string; payload: unknown }>,
+    authority: CommonOwnerAuthority,
+    assertCurrent: () => Promise<void>,
+  ): Promise<ResponsibilityCaptureResult> {
+    const requestId = protocolIdSchema.parse(input.requestId);
+    const commandId = protocolIdSchema.parse(input.commandId);
+    const correlationId = protocolIdSchema.parse(input.correlationId);
+    const payload = responsibilityCapturePayloadV02Schema.parse(input.payload);
+    // Dedupe belongs to the task command, not its transport issuer or transient session.
+    const requestDigest = `sha256:${await this.#deps.sha256Hex(JSON.stringify([requestId, payload]))}`;
+    await assertCurrent();
+    return this.#commitCapture({ routedOwnerId: authority.ownerId },
+      { requestId, payload }, { commandId, correlationId }, requestDigest, '0.2',
+      () => this.#identity.admitMessageAuthorityInCurrentTransaction(authority, this.#deps.now()));
   }
 
   async captureAuthorizedResponsibility(
@@ -1036,17 +1056,41 @@ export class WaldoCoordinator {
     return this.#planning.readIdempotentResult(ownerId, request.requestId, requestDigest);
   }
 
+  #executionAuthority(authority: ResponsibilityCanonicalAuthority | CommonOwnerAuthority, at: string) {
+    if ('kind' in authority && authority.kind === 'verified_message_presence') {
+      this.#identity.assertMessageAuthorityInCurrentTransaction(authority);
+      return authority;
+    }
+    return this.#identity.assertCanonicalAuthorityInCurrentTransaction(authority as ResponsibilityCanonicalAuthority, at);
+  }
+
+  async admitMessageExecutionRequestV04(
+    admission: unknown, authority: CommonOwnerAuthority, assertCurrent: () => Promise<void>,
+  ): Promise<ExecutionAggregateV04> {
+    await assertCurrent();
+    this.#storage.transactionSync(() => this.#identity.admitMessageAuthorityInCurrentTransaction(authority, this.#deps.now()));
+    const aggregate = await this.#admitExecutionRequestV04(admission, authority, undefined, assertCurrent);
+    await assertCurrent();
+    return aggregate;
+  }
+
   async admitExecutionRequestV04(
     admissionValue: unknown,
     canonicalAuthority: ResponsibilityCanonicalAuthority,
     publicCommandScope?: Readonly<{ commandIdPrefix: string }>,
   ): Promise<ExecutionAggregateV04> {
+    return this.#admitExecutionRequestV04(admissionValue, canonicalAuthority, publicCommandScope);
+  }
+
+  async #admitExecutionRequestV04(
+    admissionValue: unknown,
+    canonicalAuthority: ResponsibilityCanonicalAuthority | CommonOwnerAuthority,
+    publicCommandScope?: Readonly<{ commandIdPrefix: string }>,
+    assertCurrent?: () => Promise<void>,
+  ): Promise<ExecutionAggregateV04> {
     const admission = parseExecutionAdmissionV04(admissionValue);
     const admittedAt = this.#deps.now();
-    const preflightAuthority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
-      canonicalAuthority,
-      admittedAt,
-    );
+    const preflightAuthority = this.#executionAuthority(canonicalAuthority, admittedAt);
     const existing = this.#planning.readExecutionAggregateByRequestIdV04IfExists(admission.id);
     if (existing !== null) {
       if (existing.request.ownerId !== preflightAuthority.ownerId ||
@@ -1054,10 +1098,7 @@ export class WaldoCoordinator {
         throw new ResponsibilityDigestConflictError();
       }
       return this.#storage.transactionSync(() => {
-        const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
-          canonicalAuthority,
-          this.#deps.now(),
-        );
+        const authority = this.#executionAuthority(canonicalAuthority, this.#deps.now());
         if (authority.ownerId !== existing.request.ownerId) {
           throw new ResponsibilityOwnerRootMismatchError();
         }
@@ -1124,11 +1165,9 @@ export class WaldoCoordinator {
       contextProjectionRef: request.contextProjectionRef,
       contextProjectionDigest: request.contextProjectionDigest,
     });
+    await assertCurrent?.();
     return this.#storage.transactionSync(() => {
-      const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
-        canonicalAuthority,
-        this.#deps.now(),
-      );
+      const authority = this.#executionAuthority(canonicalAuthority, this.#deps.now());
       if (authority.ownerId !== request.ownerId) {
         throw new ResponsibilityOwnerRootMismatchError();
       }
@@ -1592,13 +1631,26 @@ export class WaldoCoordinator {
       throw new ResponsibilityDigestConflictError();
     }
 
+    return this.#commitCapture(admission, request, trustedEnvelope, requestDigest, parsed.responseVersion, () => {
+      if (canonicalAuthority === undefined) {
+        this.#identity.bindOrAssertOwnerRootInCurrentTransaction(admission.routedOwnerId, this.#deps.now());
+      } else {
+        this.#identity.assertCanonicalAuthorityInCurrentTransaction(canonicalAuthority, this.#deps.now());
+      }
+    });
+  }
+
+  #commitCapture(
+    admission: Readonly<{ routedOwnerId: string }>,
+    request: Pick<ResponsibilityCaptureRequestV02, 'requestId' | 'payload'>,
+    trustedEnvelope: Readonly<{ commandId: string; correlationId: string }>,
+    requestDigest: string,
+    responseVersion: '0.1' | '0.2',
+    assertAuthority: () => void,
+  ): ResponsibilityCaptureResult {
     return this.#storage.transactionSync(() => {
       const at = this.#deps.now();
-      if (canonicalAuthority === undefined) {
-        this.#identity.bindOrAssertOwnerRootInCurrentTransaction(admission.routedOwnerId, at);
-      } else {
-        this.#identity.assertCanonicalAuthorityInCurrentTransaction(canonicalAuthority, at);
-      }
+      assertAuthority();
       this.#deps.afterWrite?.('owner_root');
 
       const existing = this.#storage.sql.exec<StoredCommandRow>(
@@ -1614,7 +1666,8 @@ export class WaldoCoordinator {
         const persisted = responsibilityCaptureResultSchema.parse(
           JSON.parse(existing.result_json),
         );
-        this.#assertPersistedCaptureResult(persisted, request, parsed.responseVersion);
+        if (persisted.ownerId !== admission.routedOwnerId) throw new ResponsibilityDigestConflictError();
+        this.#assertPersistedCaptureResult(persisted, request, responseVersion);
         return Object.freeze(persisted);
       }
 
@@ -1635,7 +1688,7 @@ export class WaldoCoordinator {
         afterProjection: () => this.#deps.afterWrite?.('projection'),
       });
       const result = Object.freeze(responsibilityCaptureResultSchema.parse({
-        protocolVersion: parsed.responseVersion,
+        protocolVersion: responseVersion,
         ownerId: admission.routedOwnerId,
         requestId: request.requestId,
         outcome: captured.outcome,
@@ -1985,7 +2038,7 @@ export class WaldoCoordinator {
 
   #assertPersistedCaptureResult(
     persisted: ResponsibilityCaptureResult,
-    request: ResponsibilityCaptureRequestV02,
+    request: Pick<ResponsibilityCaptureRequestV02, 'requestId' | 'payload'>,
     responseVersion: '0.1' | '0.2',
   ): void {
     if (persisted.protocolVersion !== responseVersion || persisted.ownerId === '' ||

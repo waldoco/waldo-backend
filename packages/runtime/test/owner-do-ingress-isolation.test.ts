@@ -20,7 +20,7 @@ vi.mock('../src/channels/telegram-owner-do', async load => {
       const subject = [81101, 81102, 81103, 81104, 81105].find(value => bindings.TELEGRAM_OWNER_DO!.idFromName(`hermetic-owner-${value}`).toString() === state.id.toString());
       const host = subject === undefined ? undefined : admittedOwnerHost(`hermetic-owner-${subject}`, String(subject),
         new OpenAIResponsesAdapter({ apiKey: bindings.OPENAI_API_KEY }), ['get_communication', 'propose_calendar_change']);
-      super(state, bindings, { mode: 'canonical', host });
+      super(state, subject === 81105 ? bindings : {...bindings, SUPABASE_PROJECT_URL: undefined}, { mode: 'canonical', host });
     }
   } };
 });
@@ -1052,5 +1052,35 @@ it('real webhook/inbox/turn path emits each verified owner email in Worker logs 
   } finally {
     log.mockRestore();
     for (const subject of [81103, 81104]) await runInDurableObject(doStub(subject), async (_instance, state) => { await state.storage.deleteAlarm(); });
+  }
+});
+
+it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')('normal authenticated synthetic chat task reaches the common writer with source-verified auth-user mapping', async () => {
+  const authUser='30000000-0000-0000-0000-000000000001';
+  const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(authUser)))].map(b=>b.toString(16).padStart(2,'0')).join('');
+  const owner=`owner_${hash}`;
+  const {responsibilityOwnerRootName}=await import('../src/index');
+  const root=env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName(await responsibilityOwnerRootName(owner)));
+  vi.stubGlobal('fetch',async(input: RequestInfo|URL,init?: RequestInit)=>{
+    if(String(input)!=='https://common-source.fixture.invalid/rest/v1/rpc/common_owner_authority')throw Error('unexpected synthetic fetch');
+    const args=JSON.parse(String(init?.body));
+    if(args.p_provider!=='telegram'||args.p_subject!=='81105'||args.p_do_name!=='hermetic-owner-81105')throw Error('fixture locator mismatch');
+    return Response.json({owner_id:'10000000-0000-0000-0000-000000081105',auth_user_id:authUser,
+      presence_id:'20000000-0000-0000-0000-000000081105',do_name:args.p_do_name,provider:args.p_provider,subject:args.p_subject,state_version:0,admission_revision:'9007199254740993'});
+  });
+  try{
+    await send(81105,'Prepare a private checklist from the supplied notes.',997001);
+    const replyPrompts=modelInputs.filter(body=>JSON.stringify(body).includes('Approval delivery: native_buttons'));
+    expect(replyPrompts.length).toBeGreaterThan(0);
+    expect(JSON.stringify(replyPrompts)).toContain('Reactions: available');
+    await runInDurableObject(root,(_instance,state)=>{
+      expect(state.storage.sql.exec('SELECT owner_id FROM owner_roots').toArray()).toEqual([{owner_id:owner}]);
+      expect(state.storage.sql.exec('SELECT user_statement FROM outcomes').toArray()).toEqual([{user_statement:'Prepare a private checklist from the supplied notes.'}]);
+      expect(state.storage.sql.exec('SELECT count(*) AS n FROM presence_sessions').one().n).toBe(0);
+    });
+  }finally{
+    vi.unstubAllGlobals();
+    await runInDurableObject(doStub(81105),async(_instance,state)=>{await state.storage.deleteAlarm();});
+    await runInDurableObject(root,async(_instance,state)=>{await state.storage.deleteAlarm();});
   }
 });

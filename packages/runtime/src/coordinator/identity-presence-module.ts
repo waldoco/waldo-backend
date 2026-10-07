@@ -1,3 +1,4 @@
+import type { CommonOwnerAuthority } from '../identity/common-owner-authority';
 import { RESPONSIBILITY_OWNER_ROOT_ROUTING_VERSION } from '../responsibility/constants';
 import {
   ResponsibilityAuthorityDeniedError,
@@ -174,6 +175,48 @@ export class IdentityPresenceModule {
       );
     }
     return freezeAuthority(registration, authAssurance);
+  }
+
+  // Private host calls this only after a fresh signed directory check. No session is created.
+  admitMessageAuthorityInCurrentTransaction(claim: CommonOwnerAuthority, at: string): void {
+    if (!/^[a-f0-9]{64}$/.test(claim.custodyDigest) || claim.kind !== 'verified_message_presence' || !/^owner_[a-f0-9]{64}$/.test(claim.ownerId)
+      || !/^supabase_subject_[a-f0-9]{64}$/.test(claim.authenticatedSubjectRef)
+      || !/^[1-9][0-9]{0,18}$/.test(claim.admissionRevision) || !Number.isFinite(Date.parse(at))) {
+      throw new ResponsibilityAuthorityDeniedError();
+    }
+    const root = this.readRoot();
+    if (!root) {
+      this.storage.sql.exec(`INSERT INTO owner_roots (root_key, owner_id, created_at,
+        authenticated_subject_ref, state, owner_policy_revision, owner_root_routing_version, updated_at)
+        VALUES (1, ?, ?, ?, 'active', 0, ?, ?)`, claim.ownerId, at,
+        claim.authenticatedSubjectRef, RESPONSIBILITY_OWNER_ROOT_ROUTING_VERSION, at);
+    } else if (root.owner_id !== claim.ownerId || root.authenticated_subject_ref !== claim.authenticatedSubjectRef
+      || root.state !== 'active' || root.owner_root_routing_version !== RESPONSIBILITY_OWNER_ROOT_ROUTING_VERSION) {
+      throw new ResponsibilityAuthorityDeniedError();
+    }
+    const receipts = this.storage.sql.exec<{ admission_revision: string; authority_digest: string }>(
+      'SELECT admission_revision, authority_digest FROM common_message_custody').toArray();
+    if (receipts.some(row => BigInt(row.admission_revision) > BigInt(claim.admissionRevision))) {
+      throw new ResponsibilityAuthorityDeniedError();
+    }
+    // Epoch is owner-global. A fresh custody change invalidates all older issuer snapshots.
+    if (receipts.some(row => row.admission_revision !== claim.admissionRevision)) {
+      this.storage.sql.exec('DELETE FROM common_message_custody');
+    }
+    const previous = this.storage.sql.exec<{ authority_digest: string }>(
+      'SELECT authority_digest FROM common_message_custody WHERE presence_id = ?', claim.presenceId).toArray()[0];
+    if (previous && previous.authority_digest !== claim.custodyDigest) throw new ResponsibilityAuthorityDeniedError();
+    this.storage.sql.exec(`INSERT OR IGNORE INTO common_message_custody
+      (presence_id, owner_id, authority_digest, admission_revision) VALUES (?, ?, ?, ?)`,
+      claim.presenceId, claim.ownerId, claim.custodyDigest, claim.admissionRevision);
+  }
+
+  assertMessageAuthorityInCurrentTransaction(claim: CommonOwnerAuthority): void {
+    const root = this.readRoot();
+    const row = this.storage.sql.exec<{ authority_digest: string }>(
+      'SELECT authority_digest FROM common_message_custody WHERE presence_id = ?', claim.presenceId).toArray()[0];
+    if (!root || root.owner_id !== claim.ownerId || root.authenticated_subject_ref !== claim.authenticatedSubjectRef
+      || root.state !== 'active' || !row || row.authority_digest !== claim.custodyDigest) throw new ResponsibilityAuthorityDeniedError();
   }
 
   assertCanonicalAuthorityInCurrentTransaction(
