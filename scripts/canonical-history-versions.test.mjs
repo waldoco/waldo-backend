@@ -17,6 +17,10 @@ test('real executable43-entry declaration excludes line/block/nested comment ver
 test('strings and quoted identifiers never supply declarations, malformed/duplicate arrays fail closed',()=>{
  assert.throws(()=>canonicalHistoryVersions("select 'expected constant text[] := array[''11111111111111''];';"));
  assert.throws(()=>canonicalHistoryVersions('"expected" constant text[] := array[\'11111111111111\'];'));
+ // An interior closing tag hidden in a presumed comment ends the real
+ // PostgreSQL body; declarations after it are not executable. Reject, never 43.
+ assert.throws(()=>canonicalHistoryVersions(sql.replace('declare',"declare -- preview $assertion$\n")));
+ assert.throws(()=>canonicalHistoryVersions(sql.replace('begin',"/* preview $assertion$ */ begin")));
  for(const bad of [sql.replace("'20261007040100'","'not-a-version'"),sql.replace("'20261007040100'","coalesce('20261007040100','x')"),sql+'\nexpected constant text[] := array[\'11111111111111\'];',sql+'/*unterminated',sql.replace('declare','declare $$ expected constant text[] := array[\'11111111111111\']; $$;'),sql.replace('constant text',"'constant' text")])assert.throws(()=>canonicalHistoryVersions(bad));
 });
 
@@ -33,5 +37,9 @@ test('actual verifier rejects42active line/block comment entries and accepts exa
    writeFileSync(fixture,sql.replace("'20261004190110',","'20261004190110'").replace("'20261007040100'",comment));
    const result=run();assert.equal(result.status,1);assert.ok(result.stderr.includes('SQL canonical migration history assertion drifted'));
   }
+  // Interior tag probe: all 43 declarations remain textually present, but the
+  // real body closes early; the verifier must refuse instead of reporting 43.
+  writeFileSync(fixture,sql.replace('declare','declare -- preview $assertion$\n'));
+  const interior=run();assert.ok(interior.stderr.includes('unsupported SQL assertion wrapper'));
  }finally{rmSync(root,{recursive:true,force:true});}
 });

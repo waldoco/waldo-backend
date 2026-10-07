@@ -3,9 +3,15 @@
 export function canonicalHistoryVersions(sql){
  // Only the reviewed single DO block is supported. Additional dollar-quoted
  // strings/bodies fail closed rather than becoming a second declaration source.
- const trimmed=sql.trim(),open='do $assertion$',close='$assertion$;';
- if(!trimmed.startsWith(open)||!trimmed.endsWith(close))throw Error('unsupported SQL assertion wrapper');
- sql=trimmed.slice(open.length,-close.length);
+ const trimmed=sql.trim(),open='do $assertion$',tag='$assertion$';
+ if(!trimmed.startsWith(open))throw Error('unsupported SQL assertion wrapper');
+ // PostgreSQL closes the body at the FIRST interior tag occurrence; comments
+ // and strings do not exist inside a dollar-quoted body. Validate the real
+ // boundary before lexing so a tag hidden in a presumed comment or string
+ // cannot smuggle declarations the database would never execute.
+ const rest=trimmed.slice(open.length),end=rest.indexOf(tag);
+ if(end<0||rest.slice(end+tag.length)!==';')throw Error('unsupported SQL assertion wrapper');
+ sql=rest.slice(0,end);
  let i=0;const tokens=[];
  const letter=c=>c!==undefined&&((c>='a'&&c<='z')||(c>='A'&&c<='Z')||c==='_');
  const digit=c=>c!==undefined&&c>='0'&&c<='9';

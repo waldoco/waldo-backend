@@ -16,6 +16,7 @@ it('alternate or malformed targets do not gain equality or expose their values',
 it('production and absent/failed limiter fail closed',async()=>{
  expect((await commonRuntimeDiagnostic({...env,WALDO_ENVIRONMENT:'production'},limiter,'owner')).status).toBe(404);
  expect((await commonRuntimeDiagnostic(env,undefined,'owner')).status).toBe(503);
- expect((await commonRuntimeDiagnostic(env,{limit:async()=>({success:false})} as RateLimit,'owner')).status).toBe(429);
+ {const limited=await commonRuntimeDiagnostic(env,{limit:async()=>({success:false})} as RateLimit,'owner');expect(limited.status).toBe(429);
+ expect(limited.headers.get('retry-after')).toBe('60');}
  expect((await commonRuntimeDiagnostic(env,{limit:async()=>{throw Error('private');}} as RateLimit,'owner')).status).toBe(503);
 });

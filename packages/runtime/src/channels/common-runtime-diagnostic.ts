@@ -7,7 +7,7 @@ export async function commonRuntimeDiagnostic(env:TelegramWebhookEnv,limiter:Rat
  const headers={'cache-control':'no-store','referrer-policy':'no-referrer','x-frame-options':'DENY'};
  if(env.WALDO_ENVIRONMENT!=='staging')return new Response('not found',{status:404,headers});
  if(!limiter)return Response.json({error:'unavailable'},{status:503,headers});
- try{if(!(await limiter.limit({key:`common-runtime-diagnostic:${ownerScope}`})).success)return Response.json({error:'rate_limited'},{status:429,headers});}
+ try{if(!(await limiter.limit({key:`common-runtime-diagnostic:${ownerScope}`})).success)return Response.json({error:'rate_limited'},{status:429,headers:{...headers,'retry-after':'60'}});}
  catch{return Response.json({error:'unavailable'},{status:503,headers});}
  let matches=false;
  try{const url=new URL(env.SUPABASE_PROJECT_URL??'');matches=url.protocol==='https:'&&url.hostname==='togdshayyxycitzckpqv.supabase.co'&&!url.username&&!url.password&&!url.port&&(url.pathname==='/'||url.pathname==='')&&!url.search&&!url.hash;}
