@@ -209,6 +209,10 @@ it('settled host execution re-enters the same WorkUnit without reopening an old 
   await expect(recovered.settleMessageExecution(leaseInput,{ref:'fixture_final',digest},admitted,async()=>{},()=>{throw Error('settlement publication interrupted');})).rejects.toThrow('settlement publication interrupted');
   expect(recovered.readExecutionAggregateV04(ownerId,request.id).observations).toHaveLength(0);
   expect((await recovered.assertMessageExecutionCurrent(leaseInput,admitted,async()=>{})).attempt.state).toBe('running');
+  const timeout={protocolVersion:'0.4',id:'atomic_timeout_guard',ownerId,attemptId:attempt.id,leaseId:attempt.leaseId,fencingGeneration:attempt.fencingGeneration,cancellationGeneration:attempt.cancellationGeneration,state:'indeterminate',basisObservationIds:[],checkedAt:new Date().toISOString()};
+  await expect(recovered.reconcileExecutionAttemptV04(timeout,()=>{state.storage.kv.put('timeout_guard','published');throw Error('receipt publication crash');})).rejects.toThrow('receipt publication crash');
+  expect(state.storage.kv.get('timeout_guard')).toBeUndefined();expect(state.storage.sql.exec("SELECT id FROM execution_reconciliations WHERE id='atomic_timeout_guard'").toArray()).toHaveLength(0);
+  expect(recovered.readExecutionAggregateV04(ownerId,request.id).attempts[0]!.state).toBe('running');
   const at=new Date().toISOString();
   await recovered.admitExecutorObservationV04({protocolVersion:'0.4',id:'first_ended',ownerId,attemptId:attempt.id,environment:binding.environment,leaseId:attempt.leaseId,fencingGeneration:attempt.fencingGeneration,cancellationGeneration:attempt.cancellationGeneration,sequence:1,kind:'ended',payloadRef:null,payloadDigest:null,observedAt:at});
   await expect(recovered.authorizeMessageWorkUnitExecution(secondAuthorization,admitted,async()=>{})).rejects.toThrow();

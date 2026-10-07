@@ -1370,6 +1370,9 @@ it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid').ea
     expect(modelInputs.length).toBe(calls);
     await runInDurableObject(doStub(subject),(_instance,state)=>expect(state.storage.kv.get<any[]>('telegram_final_outbox_v1')!.filter(row=>String(row.id).startsWith('failure:'))).toHaveLength(1));
     await runInDurableObject(root,(_instance,state)=>expect(state.storage.sql.exec('SELECT state FROM execution_attempts').one().state).not.toBe('settled'));
+    // Recreate the prior-version crash gap: canonical timeout committed, host receipt still running.
+    await runInDurableObject(root,(_instance,state)=>{for(const [key,row] of state.storage.kv.list<any>({prefix:'common-execution:'})){expect(row.state).toBe('indeterminate');state.storage.kv.put(key,{...row,state:'running'});}});
+    vi.setSystemTime(Date.now()+1000);await evictDurableObject(root);await runInDurableObject(root,async(instance,state)=>{await instance.alarm();expect([...state.storage.kv.list<any>({prefix:'common-execution:'})].every(([,row])=>row.state==='indeterminate')).toBe(true);});
     return;
    }
   }

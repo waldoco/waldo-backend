@@ -1455,10 +1455,16 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       const attempt=aggregate.attempts.at(-1);const lease=aggregate.leases.at(-1);
       if(!attempt||!lease||this.deps.now()<Math.min(Date.parse(lease.expiresAt),row.preparedAt+row.request.maxDurationMs))continue;
       // No end is inferred from a clock. Retain the original intent; never restart an uncertain provider effect.
-      if(attempt.state==='running'||attempt.state==='indeterminate')await this.waldoCoordinator.reconcileExecutionAttemptV04({protocolVersion:'0.4',id:`timeout_${attempt.id}`,
-        ownerId:row.ownerId,attemptId:attempt.id,leaseId:lease.id,fencingGeneration:attempt.fencingGeneration,
-        cancellationGeneration:aggregate.currentCancellationGeneration,state:'indeterminate',basisObservationIds:[],checkedAt:new Date(this.deps.now()).toISOString()});
-      this.ctx.storage.transactionSync(()=>this.ctx.storage.kv.put(key,{...row,state:'indeterminate'}));
+      const publish=()=>{const current=this.ctx.storage.kv.get<typeof row>(key);if(!current||JSON.stringify(current)!==JSON.stringify(row))throw Error('common timeout receipt changed');this.ctx.storage.kv.put(key,{...current,state:'indeterminate'});};
+      if(attempt.state==='running'||attempt.state==='indeterminate'){
+        const id=`timeout_${attempt.id}`;
+        const prior=this.ctx.storage.sql.exec<{reconciliation_json:string}>('SELECT reconciliation_json FROM execution_reconciliations WHERE id=?',id).toArray()[0];
+        const reconciliation=prior?JSON.parse(prior.reconciliation_json):{protocolVersion:'0.4',id,
+          ownerId:row.ownerId,attemptId:attempt.id,leaseId:lease.id,fencingGeneration:attempt.fencingGeneration,
+          cancellationGeneration:aggregate.currentCancellationGeneration,state:'indeterminate',basisObservationIds:[],checkedAt:new Date(this.deps.now()).toISOString()};
+        if(reconciliation.ownerId!==row.ownerId||reconciliation.attemptId!==attempt.id||reconciliation.leaseId!==lease.id||reconciliation.fencingGeneration!==attempt.fencingGeneration||reconciliation.cancellationGeneration!==aggregate.currentCancellationGeneration||reconciliation.state!=='indeterminate')throw Error('common timeout reconciliation changed');
+        await this.waldoCoordinator.reconcileExecutionAttemptV04(reconciliation,publish);
+      }else this.ctx.storage.transactionSync(publish);
     }
   }
 

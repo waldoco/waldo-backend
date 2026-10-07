@@ -1495,6 +1495,7 @@ export class WaldoCoordinator {
 
   async reconcileExecutionAttemptV04(
     reconciliationValue: unknown,
+    publish?:()=>void,
   ): Promise<ExecutionAggregateV04> {
     const reconciliation = executionReconciliationV04Schema.parse(reconciliationValue);
     const reconciliationDigest = `sha256:${await this.#deps.sha256Hex(
@@ -1507,6 +1508,8 @@ export class WaldoCoordinator {
         receivedAt: this.#deps.now(),
       });
       this.#deps.afterWrite?.('execution_reconciliation');
+      const published=publish?.() as unknown;
+      if(published&&typeof (published as {then?:unknown}).then==='function')throw Error('execution reconciliation publication must be synchronous');
       return this.#planning.readExecutionAggregateForAttemptV04(
         reconciliation.ownerId,
         reconciliation.attemptId,
