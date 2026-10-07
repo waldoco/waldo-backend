@@ -66,6 +66,7 @@ import { parseEgressAllowlistEnv } from '../hooks/egress-policy';
 import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
 import { armNightly, backfillEpisodes, consolidationDay, episodeIndex, indexedConversationStore, transcript } from './episodes';
 import { nightlyDiagnostic } from './nightly-diagnostic';
+import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT } from './event-briefs';
 import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
 import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
@@ -979,6 +980,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       return workspaceRequest(request, session.csrf,
         () => workspaceOwnerHost(this.env, this.ctx.storage, this.ctx.id.toString(), this.ctx.storage.kv.get<string>('do_name')),
         request.headers.get('accept')==='application/json'?workspaceRead:workspacePage, () => workspaceUploadLease(this.ctx.storage, () => workspaceOwnerHost(this.env, this.ctx.storage, this.ctx.id.toString(), this.ctx.storage.kv.get<string>('do_name'))), workspaceDownload);
+    }
+    if (url.pathname === `${CONSOLE_PATH}/diagnostics/common-runtime`) {
+      const headers={'cache-control':'no-store','referrer-policy':'no-referrer','x-frame-options':'DENY'};
+      if(request.method!=='GET')return new Response('method not allowed',{status:405,headers});
+      if(url.search)return Response.json({error:'invalid_query'},{status:400,headers});
+      return commonRuntimeDiagnostic(this.env, this.env.RESPONSIBILITY_RATE_LIMITER, this.ctx.id.toString());
     }
     // Narrow owner-authenticated scheduler receipt. No arbitrary id or SQL.
     if (url.pathname === `${CONSOLE_PATH}/diagnostics/nightly` && request.method === 'GET') {
