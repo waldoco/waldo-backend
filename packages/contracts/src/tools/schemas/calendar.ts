@@ -4,6 +4,8 @@ import { iso8601Schema } from '../../core/error';
 // A proposed change to the owner's own calendar (owner queue slice 3). Proposal only: the
 // write happens after the owner approves it.
 export const proposeCalendarChangeArgsSchema = z.strictObject({
+  connection_id: z.string().min(1).max(300).optional(),
+  calendar_id: z.literal('primary').optional().describe('Changes target the selected account primary calendar.'),
   action: z.enum(['create', 'move', 'cancel']),
   event_id: z.string().min(1).max(200).optional().describe('Required for move and cancel; from query_calendar.'),
   title: z.string().min(1).max(200).optional(),
@@ -13,4 +15,5 @@ export const proposeCalendarChangeArgsSchema = z.strictObject({
 }).refine((args) => args.action === 'create' ? Boolean(args.title && args.start && args.end) : Boolean(args.event_id), {
   error: 'create needs title, start and end; move and cancel need event_id',
 }).refine((args) => args.action !== 'move' || Boolean(args.start && args.end), { error: 'move needs start and end' });
+// Interval validity is enforced before the approval card is created.
 export type ProposeCalendarChangeArgs = z.infer<typeof proposeCalendarChangeArgsSchema>;

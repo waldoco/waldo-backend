@@ -13,12 +13,12 @@ import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 
 export type GoogleAccess = Readonly<{
-  client(feature?: GoogleFeature, intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>): Promise<GoogleClient | null>;
+  client(feature?: GoogleFeature, intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>, connectionId?: string): Promise<GoogleClient | null>;
   state?():Promise<readonly Readonly<{id:string;email:string;error:string|null;calendar:boolean;mail:boolean;tasks:boolean}>[]>;
 }>;
 
 export type EffectDesk = Readonly<{
-  propose(proposal: ProposeCalendarChangeArgs): Promise<string>;
+  propose(proposal: ProposeCalendarChangeArgs, assertCurrent?: () => Promise<void>): Promise<string>;
   proposeSendEmail(proposal: EmailSendProposal): Promise<string>;
   record(kind: string, summary: string, payload: unknown): void;
 }>;
@@ -37,20 +37,25 @@ const authFailed = (reason: ConnectIntent['reason'], feature: GoogleFeature): To
   connect: { status: 'auth_required', service: 'google', reason, feature },
 });
 
-async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, ctx: ToolDispatcherContext | undefined, work: (client: GoogleClient) => Promise<T>): Promise<ToolResult<T>> {
-  const client = await google.client(feature, undefined, ctx?.assertTaskSourceCurrent);
-  if (client === null) return authFailed('not_connected', feature);
+async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, ctx: ToolDispatcherContext | undefined, work: (client: GoogleClient) => Promise<T>, connectionId?: string): Promise<ToolResult<T>> {
   try {
+    const client = await google.client(feature, undefined, ctx?.assertTaskSourceCurrent, connectionId);
+    if (client === null) return authFailed('not_connected', feature);
+    if(connectionId && client.account?.connection_id !== connectionId)throw new Error('Selected Google account unavailable');
     return { ok: true, data: await work(taskSourceClient(client, ctx)), source_taint: 'external' };
   } catch (error) {
+    return googleFailure(error, feature);
+  }
+}
+
+const googleFailure = (error: unknown, feature: GoogleFeature): ToolResult<never> => {
     // 401 = the stored grant is dead. A 403 prompts for consent only on structured evidence that the scope is
     // missing; a disabled API, a quota or a plain denial is not fixed by consent, so it returns the provider's words.
     if (error instanceof GoogleError && error.status === 403 && error.reason === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT') return authFailed('scope_missing', feature);
     if (error instanceof GoogleError && error.status === 403) return { ok: false, code: 'rejected', error: `Google refused the request (403${error.reason === 'SERVICE_DISABLED' ? ', the API is disabled for this project' : ''}): ${error.message}`, source_taint: 'external' };
     if (error instanceof GoogleError && error.status === 401) return authFailed('reauth_needed', feature);
     return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error), source_taint: 'external' };
-  }
-}
+};
 
 // E1 (issue #150) as amended by the owner's September 27, 2026 ruling ("instinct way for OTP"):
 // a verification artifact in either visible list field quarantines both - the snippet routinely
@@ -95,7 +100,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('query_calendar'),
     autonomy_gated: false,
     requires_connector: true,
-    handle: ({ date_range, include_declined, limit, calendar_id = 'primary', page_token }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'calendar', ctx, async (client) => {
+    handle: ({ date_range, include_declined, limit, calendar_id = 'primary', page_token, connection_id }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'calendar', ctx, async (client) => {
       const now = clock.now().getTime();
       const from = date_range?.from ?? new Date(now).toISOString();
       const to = date_range?.to ?? new Date(now + DAY_MS).toISOString();
@@ -120,7 +125,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           limitation:page?'One account and calendar. Each result contains only its current page. A local null connection_id means host canonical mapping is unavailable; email is grant metadata, not permission.':'Legacy sampled primary-calendar read; account and pagination are unknown. Empty does not prove absence.',
         },
       };
-    }),
+    }, connection_id),
   } satisfies ToolHandler<QueryCalendarArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_communication',
@@ -214,8 +219,14 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('propose_calendar_change'),
     autonomy_gated: false,
     mutates_state: true,
-    async handle(args: ProposeCalendarChangeArgs) {
-      return { ok: true, data: { proposal_id: await desk.propose(args), status: 'sent to the owner with Do it / Modify / Not now buttons', applied: false }, source_taint: null };
+    requires_connector: true,
+    async handle(args: ProposeCalendarChangeArgs, ctx?: ToolDispatcherContext) {
+      await ctx?.assertTaskSourceCurrent?.();
+      const gate = await withGoogle(google, 'calendar', ctx, async () => null, args.connection_id);
+      if (!gate.ok) return gate;
+      try {
+        return { ok: true, data: { proposal_id: await desk.propose(args, ctx?.assertTaskSourceCurrent), status: 'sent to the owner with Do it / Modify / Not now buttons', applied: false }, source_taint: null };
+      } catch (error) { return googleFailure(error, 'calendar'); }
     },
   } satisfies ToolHandler<ProposeCalendarChangeArgs, unknown, ToolDispatcherContext>,
   {

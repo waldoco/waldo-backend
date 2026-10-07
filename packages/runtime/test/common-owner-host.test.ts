@@ -34,8 +34,8 @@ it('canonical access excludes outbound effects and browser while admitting exist
 it('connected read-only tools use shared admission and revoked connector state changes its ACL',async()=>{
  const f=fixture();f.rows.set('google:accounts',[{id:'account',email:'owner@example.test'}]);
  const host=commonOwnerHost({...f.env,DRIVE_READS:'1',BRAVE_SEARCH_API_KEY:'fictional-search'},f.storage,'physical-id')!;
- const connected=await host.access();expect(connected.grants).toMatchObject({tools:expect.arrayContaining(['query_calendar','query_availability','get_tasks','read_drive','web_search'])});
- if(connected.grants.status==='available'){for(const name of ['send_email','read_thread','execute_action','propose_calendar_change'])expect(connected.grants.tools).not.toContain(name);}
+ const connected=await host.access();expect(connected.grants).toMatchObject({tools:expect.arrayContaining(['query_calendar','query_availability','get_tasks','propose_calendar_change','read_drive','web_search'])});
+ if(connected.grants.status==='available'){for(const name of ['send_email','read_thread','execute_action'])expect(connected.grants.tools).not.toContain(name);}
  f.rows.set('google:accounts',[]);const revoked=await host.access();if(revoked.grants.status==='available')expect(revoked.grants.tools).not.toContain('query_calendar');
 });
 it('task scope excluding workspace never invokes receipt projection and matching scope admits it',async()=>{

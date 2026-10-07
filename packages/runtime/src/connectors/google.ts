@@ -125,7 +125,7 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
   return { refresh_token: result.refresh_token, scopes: (result.scope ?? '').split(' ').filter(Boolean), ...(claims.email ? { email: claims.email } : {}) };
 }
 
-export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string;
+export type CalendarItem = Readonly<{ operation_tag?: string; id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string;
   status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[] }>;
 
 // Provider-internal etags are unnecessary in model-facing context. Keep them in the
@@ -229,8 +229,8 @@ export type GoogleClient = Readonly<{
   sendRaw(raw: string, threadId?: string): Promise<Readonly<{ message_id: string; thread_id?: string }>>;
   findSentByMessageId(messageId: string): Promise<boolean>;
   event(id: string): Promise<CalendarItem>;
-  createEvent(input: Readonly<{ title: string; start: string; end: string }>): Promise<CalendarItem>;
-  moveEvent(id: string, start: string, end: string, etag?: string): Promise<CalendarItem>;
+  createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string; operation_tag?: string }>): Promise<CalendarItem>;
+  moveEvent(id: string, start: string, end: string, etag?: string, operation_tag?: string): Promise<CalendarItem>;
   cancelEvent(id: string, etag?: string): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
   mailPage(query:string,limit:number,pageToken?:string):Promise<Readonly<{messages:readonly MailItem[];next_page_token:string|null;result_size_estimate:number|null}>>;
@@ -297,6 +297,8 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     return json;
   };
   const EVENTS = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+  // Undo may restore an all-day endpoint after a timed move; clear its opposite representation.
+  const endpoint = (at: string) => /^\d{4}-\d\d-\d\d$/.test(at) ? {date:at,dateTime:null} : {dateTime:at,date:null};
   const match = (etag?: string): Record<string, string> => (etag ? { 'if-match': etag } : {});
   const send = async (url: string, method: string, body: unknown, etag?: string) =>
     toItem(await call(url, { method, headers: { 'content-type': 'application/json', ...match(etag) }, body: JSON.stringify(body) }) as unknown as GoogleEvent);
@@ -326,8 +328,8 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       if (!validCalendarEvent(value) || value.id !== id) throw new Error('invalid Calendar event response');
       return toItem(value);
     },
-    createEvent: ({ title, start, end }) => send(EVENTS, 'POST', { summary: title, start: { dateTime: start }, end: { dateTime: end } }),
-    moveEvent: (id, start, end, etag) => send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { start: { dateTime: start }, end: { dateTime: end } }, etag),
+    createEvent: ({ title, start, end, id, operation_tag }) => send(EVENTS, 'POST', { ...(id ? {id} : {}), summary: title, start: { dateTime: start }, end: { dateTime: end }, ...(operation_tag ? {extendedProperties:{private:{waldoApproval:operation_tag}}} : {}) }),
+    moveEvent: (id, start, end, etag, operation_tag) => send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { start: endpoint(start), end: endpoint(end), ...(operation_tag ? {extendedProperties:{private:{waldoApproval:operation_tag}}} : {}) }, etag),
     async cancelEvent(id, etag) {
       await call(`${EVENTS}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: match(etag) });
     },
@@ -488,6 +490,7 @@ const toItem = (event: GoogleEvent): CalendarItem => ({
   ...(event.location ? { location: event.location } : {}),
   ...(event.description?.trim() ? { description: event.description.trim().slice(0, 2000) } : {}),
   ...(event.attendees?.length ? { attendees: event.attendees.length } : {}),
+  ...(typeof event.extendedProperties?.private?.waldoApproval === 'string' ? {operation_tag:event.extendedProperties.private.waldoApproval} : {}),
   ...(event.etag ? { etag: event.etag } : {}),
   ...(['confirmed', 'tentative', 'cancelled'].includes(event.status ?? '') ? { status: event.status as CalendarItem['status'] } : {}),
   ...(typeof event.updated === 'string' && validCalendarInstant(event.updated) ? { updated: event.updated } : {}),
@@ -498,6 +501,7 @@ const toItem = (event: GoogleEvent): CalendarItem => ({
 });
 
 type GoogleEvent = {
+  extendedProperties?: {private?: {waldoApproval?: string}};
   id: string; etag?: string; status?: string; summary?: string; location?: string; description?: string; created?: string; updated?: string; recurringEventId?: string; originalStartTime?: { dateTime?: string; date?: string }; htmlLink?: string;
   start: { dateTime?: string; date?: string }; end: { dateTime?: string; date?: string };
   attendees?: { self?: boolean; responseStatus?: string; displayName?: string }[];
