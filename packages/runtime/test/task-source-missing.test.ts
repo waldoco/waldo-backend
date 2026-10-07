@@ -11,16 +11,16 @@ it('reports no missing family for a default read while the task is unresolved', 
 });
 
 it('names the family a refused read is missing, and every family a connector-wide tool lacks', () => {
-  expect(taskSourceMissing(snap(['local', 'web']), { name: 'send_email', requires_connector: true })).toEqual(TASK_SOURCE_FAMILIES.filter(name => name !== 'local' && name !== 'web'));
+  expect(taskSourceMissing(snap(['local', 'web']), { name: 'skills_load', requires_connector: true })).toEqual(TASK_SOURCE_FAMILIES.filter(name => name !== 'local' && name !== 'web'));
   expect(taskSourceMissing(snap(['local', 'web']), { name: 'query_calendar' })).toEqual(['calendar']);
   expect(taskSourceMissing(snap(['local', 'calendar']), { name: 'query_calendar' })).toEqual([]);
-  expect(taskSourceMissing(snap([]), { name: 'send_email', requires_connector: true })).toEqual([...TASK_SOURCE_FAMILIES]);
+  expect(taskSourceMissing(snap([]), { name: 'skills_load', requires_connector: true })).toEqual([...TASK_SOURCE_FAMILIES]);
   expect(taskSourceMissing(snap(['local', 'web'], false), { name: 'query_calendar' })).toEqual(['calendar']);
 });
 
 it('agrees with taskSourceAllowed: nothing missing exactly when the call is allowed', () => {
   for (const sources of [[], ['local'], ['web'], ['local', 'web'], [...TASK_SOURCE_FAMILIES]] as TaskSourceSnapshot['sources'][]) {
-    for (const handler of [{ name: 'query_calendar' }, { name: 'send_email', requires_connector: true }, { name: 'search_communication', requires_connector: true }, { name: 'read_memory' }] as const) {
+    for (const handler of [{ name: 'query_calendar' }, { name: 'skills_load', requires_connector: true }, { name: 'search_communication', requires_connector: true }, { name: 'read_memory' }] as const) {
       const s = snap(sources);
       expect(taskSourceMissing(s, handler).length === 0).toBe(taskSourceAllowed(s, handler));
     }
@@ -51,7 +51,7 @@ it('uses local defaults for unclassified reads without admitting a different sou
 });
 
 it('preserves the connector fallback, including dynamically connector-backed tool metadata', () => {
-  for (const handler of [{ name: 'send_email', requires_connector: true, mutates_state: true }, { name: 'skills_load', requires_connector: true }] as const) {
+  for (const handler of [{ name: 'skills_load', requires_connector: true, mutates_state: true }, { name: 'skills_load', requires_connector: true }] as const) {
     expect(taskSourceAllowed(snap(['mail']), handler)).toBe(false);
     expect(taskSourceMissing(snap(['mail']), handler)).toEqual(TASK_SOURCE_FAMILIES.filter(family => family !== 'mail'));
     expect(taskSourceAllowed(snap([...TASK_SOURCE_FAMILIES]), handler)).toBe(true);
