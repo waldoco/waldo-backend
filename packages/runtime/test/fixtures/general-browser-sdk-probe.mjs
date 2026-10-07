@@ -11,7 +11,7 @@ const binding = { fetch: async (url, init) => {
 } };
 globalThis.__fixtureWorkerEnv = { BROWSER: binding };
 const sdk = await import('@cloudflare/playwright');
-const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding, loadSdk: async () => sdk, now: () => 1, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding, loadSdk: async () => sdk, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
 const id = await driver.start(['docs.example'], 60000, async () => {}, async () => {});
 assert.equal(id, 'sdk-probe-id');
 assert.deepEqual(JSON.parse(calls[0].body), { guardrails: { allowedDomains: ['docs.example'] } });

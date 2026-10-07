@@ -27,7 +27,7 @@ function harness(controlTag = 'a') {
 }
 it('navigates a public page, returns actual image bytes, and retains two tabs across detached owner turns', async () => {
   const f = harness();
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   const first = await driver.navigate(session, 'https://docs.example/index');
   expect(first.observation).toMatchObject({ url: 'https://docs.example/index', text: 'Compare Browser Run sessions and contexts.', elements: [{ role: 'link', name: 'Session reuse' }] });
   expect(first.image.bytes).toEqual(new Uint8Array([137, 80, 78, 71]));
@@ -45,7 +45,7 @@ it('navigates a public page, returns actual image bytes, and retains two tabs ac
 });
 it('dispatches typed fill and returns changed field state', async () => {
   const f = harness('input');
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   const snapshot = await driver.navigate(session, 'https://docs.example/index');
   const ref = snapshot.observation.elements[0]!.ref;
   const after = await driver.act(session, snapshot, { operation: 'fill', element_ref: ref, value: 'Walrus' }, async () => {});
@@ -54,7 +54,7 @@ it('dispatches typed fill and returns changed field state', async () => {
 });
 it('selects, presses keys and scrolls without accepting model-authored code', async () => {
   const f = harness('select');
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   const first = await driver.navigate(session, 'https://docs.example/index');
   expect(first.observation.elements[0]).toMatchObject({ options: [{ value: 'second', label: 'Second choice' }] });
   const selected = await driver.act(session, first, { operation: 'select', element_ref: first.observation.elements[0]!.ref, value: 'second' }, async () => {});
@@ -67,7 +67,7 @@ it('selects, presses keys and scrolls without accepting model-authored code', as
 });
 it('withdraws authority before an effect and rejects foreign owner and expired reads', async () => {
   const f = harness(); let revoked = false;
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => { if (revoked) throw Error('revoked'); }, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => { if (revoked) throw Error('revoked'); }, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   const first = await driver.navigate(session, 'https://docs.example/index');
   await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => { revoked = true; })).rejects.toBeDefined();
   expect(f.calls).not.toContain('click');
@@ -79,14 +79,14 @@ it('withdraws authority before an effect and rejects foreign owner and expired r
 it('never replaces a lost provider session or exposes its raw error', async () => {
   const f = harness();
   f.sdk.connect = async () => { throw Error('PRIVATE_PROVIDER_ID secret response'); };
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   await expect(driver.observe(session)).rejects.toMatchObject({ code: 'provider_unavailable', message: 'browser_provider_unavailable' });
   expect(f.calls).not.toContain('acquire');
   await expect(driver.terminate(session)).rejects.toMatchObject({ code: 'cleanup_unconfirmed' });
 });
 it('rejects oversized screenshots and keeps provider cancellation separate from disconnect', async () => {
   const f = harness();
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 3 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 3 });
   await expect(driver.navigate(session, 'https://docs.example/index')).rejects.toMatchObject({ code: 'image_oversize' });
   expect(await f.sdk.sessions()).toHaveLength(1);
   await driver.terminate(session);
@@ -94,7 +94,7 @@ it('rejects oversized screenshots and keeps provider cancellation separate from 
 });
 it('closes the selected tab and rejects its old reference', async () => {
   const f = harness();
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   const first = await driver.navigate(session, 'https://docs.example/index');
   await driver.openTab(session, 'https://docs.example/reuse');
   await driver.closeTab(session, first.observation.tab_ref, async () => {});
@@ -103,7 +103,7 @@ it('closes the selected tab and rejects its old reference', async () => {
 });
 it('reserves before allocation and records the allocated id before rechecking authority', async () => {
   const f = harness(); let recorded = false;
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   const id = await driver.start(['docs.example'], 60000, async () => { f.calls.push('reserve'); }, async id => { expect(id).toBe(session.providerSessionId); recorded = true; f.calls.push('record'); });
   expect(id).toBe(session.providerSessionId);
   expect(recorded).toBe(true);
@@ -113,18 +113,18 @@ it('returns bounded 402 status, code and request id without provider body conten
   const f = harness();
   f.sdk.connect = async (binding: any) => { await binding.fetch('https://provider.example'); throw Error('SDK should not receive the provider body'); };
   const binding = { fetch: async () => new Response(JSON.stringify({ code: 'usage_limit', message: 'PRIVATE_SECRET' }), { status: 402, headers: { 'x-request-id': 'request-123' } }) };
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: binding as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: binding as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   await expect(driver.observe(session)).rejects.toMatchObject({ code: 'provider_unavailable', diagnostic: { status: 402, code: 'usage_limit', request_id: 'request-123' } });
 });
 it('cleans an allocation if recording or the post-acquire authority check fails', async () => {
   const f = harness(); let recorded = false;
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => { if (recorded) throw Error('expired'); }, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => { if (recorded) throw Error('expired'); }, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   await expect(driver.start(['docs.example'], 60000, async () => {}, async () => { recorded = true; })).rejects.toBeDefined();
   expect(await f.sdk.sessions()).toEqual([]);
 });
 it('rechecks authority after the final observation await before dispatch', async () => {
   const f = harness(); let revoked = false, approved = false;
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => { if (revoked) throw Error('PRIVATE_REVOCATION'); }, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => { if (revoked) throw Error('PRIVATE_REVOCATION'); }, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   const first = await driver.navigate(session, 'https://docs.example/index');
   const originalTitle = f.pages[0].title;
   f.pages[0].title = async () => { if (approved) revoked = true; return originalTitle(); };
@@ -133,7 +133,7 @@ it('rechecks authority after the final observation await before dispatch', async
 });
 it('keeps an uncertain action outcome when disconnect also fails', async () => {
   const f = harness();
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   const first = await driver.navigate(session, 'https://docs.example/index');
   f.pages[0].locator = () => ({ click: async () => { throw Error('PRIVATE_ACTION_ERROR'); } });
   f.browser.close = async () => { throw Error('PRIVATE_DISCONNECT_ERROR'); };
@@ -141,20 +141,55 @@ it('keeps an uncertain action outcome when disconnect also fails', async () => {
 });
 it('normalizes malformed identity and entry revocation without leaking raw errors', async () => {
   const f = harness();
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => { throw Error('PRIVATE_AUTHORITY_ERROR'); }, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => { throw Error('PRIVATE_AUTHORITY_ERROR'); }, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   await expect(driver.observe(session)).rejects.toMatchObject({ code: 'rejected', message: 'browser_rejected' });
   await expect(driver.observe({ ...session, generation: 'invalid' } as never)).rejects.toMatchObject({ code: 'rejected', message: 'browser_rejected' });
   expect(f.calls).toEqual([]);
 });
 it('does not count a denied page as useful provider verification', async () => {
   const f = harness();
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(session, 'https://docs.example/index');
   f.pages[0].goto = async () => ({ status: () => 403 });
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   await expect(driver.navigate(session, 'https://docs.example/index')).rejects.toMatchObject({ code: 'page_unavailable', diagnostic: { status: 403 } });
+  await expect(driver.observe(session, first.observation.tab_ref)).rejects.toMatchObject({ code: 'stale_observation' });
+});
+it('does not fulfill a denied document or report a click into it as useful work', async () => {
+  const f = harness(); const routeCalls: string[] = [];
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(session, 'https://docs.example/index');
+  f.pages[0].locator = () => ({ click: async () => {
+    await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null }) }),
+      fetch: async () => ({ status: () => 403 }), fulfill: async () => { routeCalls.push('fulfilled'); }, abort: async () => { routeCalls.push('blocked'); } });
+  } });
+  await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'page_unavailable', diagnostic: { status: 403 } });
+  expect(routeCalls).toEqual(['blocked']);
+});
+it('fits locator auto-wait within the actual host and session deadline', async () => {
+  const f = harness(); let now = 1, observedTimeout: number | undefined;
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => now, deadline: () => 100, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(session, 'https://docs.example/index'); now = 99;
+  f.pages[0].locator = () => ({ click: async (options?: { timeout: number }) => {
+    observedTimeout = options?.timeout;
+    // The control becomes ready only after this admitted deadline.
+    if (observedTimeout !== undefined && observedTimeout < 2) throw Error('actionability timed out');
+    f.calls.push('late-effect');
+  } });
+  await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'outcome_uncertain' });
+  expect(observedTimeout).toBe(1);
+  expect(f.calls).not.toContain('late-effect');
+});
+it('keeps tab close uncertain when physical close succeeds but acknowledgement fails', async () => {
+  const f = harness();
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(session, 'https://docs.example/index');
+  f.pages[0].close = async () => { f.pages.splice(0, 1); throw Error('lost close acknowledgement'); };
+  await expect(driver.closeTab(session, first.observation.tab_ref, async () => {})).rejects.toMatchObject({ code: 'outcome_uncertain' });
+  expect(f.pages).toHaveLength(0);
 });
 it('rejects redirect chains before an unchecked redirected request', async () => {
   const f = harness();
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   await driver.navigate(session, 'https://docs.example/index');
   const calls: string[] = [];
   await f.route({ request: () => ({ url: () => 'https://docs.example/redirect', method: () => 'GET' }),
@@ -165,7 +200,7 @@ it('rejects redirect chains before an unchecked redirected request', async () =>
 });
 it('acts on an observed ref and refuses human changes during asynchronous action approval', async () => {
   const f = harness();
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   const snapshot = await driver.navigate(session, 'https://docs.example/index');
   const action = { operation: 'click' as const, element_ref: snapshot.observation.elements[0]!.ref };
   const after = await driver.act(session, snapshot, action, async () => {});

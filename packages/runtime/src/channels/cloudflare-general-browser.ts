@@ -11,7 +11,7 @@ export class GeneralBrowserError extends Error {
   release_failed?: true;
   constructor(readonly code: 'rejected' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
 }
-type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; now(): number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number }>;
+type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; now(): number; deadline(): number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number }>;
 
 // The owner host owns the durable checkpoint, authority and serialization. This
 // driver never allocates on attach failure and never creates a second ledger.
@@ -35,6 +35,11 @@ export function cloudflareGeneralBrowser(options: Options) {
     catch (error) { if (error instanceof GeneralBrowserError) throw error; throw new GeneralBrowserError('rejected'); }
   };
   const admit = async (session: BrowserSession) => { identity(session); await hostAdmit(); identity(session); };
+  const actionTimeout = (session: BrowserSession) => {
+    const remaining = Math.min(session.expiresAt, options.deadline()) - options.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) throw new GeneralBrowserError('rejected');
+    return Math.min(10000, remaining);
+  };
   const allowed = async (session: BrowserSession, url: string, method = 'GET') => {
     await admit(session);
     const target = new URL(url);
@@ -48,7 +53,7 @@ export function cloudflareGeneralBrowser(options: Options) {
     finally { await cdp.detach(); }
   };
   const attached = async <T>(session: BrowserSession, work: (browser: Browser, context: BrowserContext) => Promise<T>): Promise<T> => {
-    let browser: Browser | undefined, primary: GeneralBrowserError | undefined;
+    let browser: Browser | undefined, primary: GeneralBrowserError | undefined, documentFailure: GeneralBrowserError | undefined;
     try {
       await admit(session);
       const sdk = await options.loadSdk(); await admit(session);
@@ -69,14 +74,21 @@ export function cloudflareGeneralBrowser(options: Options) {
           // exists; never follow a chain through an unchecked target.
           const response = await route.fetch({ maxRedirects: 0, timeout: 10000 });
           await admit(session);
-          if (response.status() >= 300 && response.status() < 400) await route.abort('blockedbyclient');
+          if (response.status() >= 400 && route.request().isNavigationRequest() && !route.request().frame().parentFrame()) {
+            documentFailure = new GeneralBrowserError('page_unavailable', { status: response.status() });
+            await route.abort('blockedbyclient');
+          } else if (response.status() >= 300 && response.status() < 400) await route.abort('blockedbyclient');
           else await route.fulfill({ response });
         }
         catch { await route.abort('blockedbyclient'); }
       });
-      const result = await work(browser, context); await admit(session); return result;
+      const result = await work(browser, context); await admit(session);
+      if (documentFailure) throw documentFailure;
+      return result;
     } catch (error) {
-      primary = error instanceof GeneralBrowserError ? error : new GeneralBrowserError('provider_unavailable');
+      primary = error instanceof GeneralBrowserError && error.code === 'outcome_uncertain'
+        ? new GeneralBrowserError('outcome_uncertain', error.diagnostic ?? documentFailure?.diagnostic)
+        : documentFailure ?? (error instanceof GeneralBrowserError ? error : new GeneralBrowserError('provider_unavailable'));
       throw primary;
     } finally {
       // Release this connection, retaining tabs/context; physical end is separate.
@@ -170,6 +182,7 @@ export function cloudflareGeneralBrowser(options: Options) {
       // exact approval evidence here. This callback is never model/page code.
       await beforeAction(await generalDigest(JSON.stringify({ revision: snapshot.observation.revision, action })));
       await admit(session); await checked(); await admit(session); identity(session);
+      const timeout = actionTimeout(session);
       try {
         if (action.operation === 'scroll') {
           const x = action.direction === 'left' ? -snapshot.state.width : action.direction === 'right' ? snapshot.state.width : 0;
@@ -178,10 +191,10 @@ export function cloudflareGeneralBrowser(options: Options) {
         } else {
           const locator = page.locator(element!.selector);
           switch (action.operation) {
-            case 'click': await locator.click(); break;
-            case 'fill': await locator.fill(action.value); break;
-            case 'select': await locator.selectOption(action.value); break;
-            case 'press': await locator.press(action.key); break;
+            case 'click': await locator.click({ timeout }); break;
+            case 'fill': await locator.fill(action.value, { timeout }); break;
+            case 'select': await locator.selectOption(action.value, { timeout }); break;
+            case 'press': await locator.press(action.key, { timeout }); break;
           }
         }
         return await observe(session, context, page);
@@ -192,20 +205,28 @@ export function cloudflareGeneralBrowser(options: Options) {
     navigate: (session: BrowserSession, url: string, reference?: string) => attached(session, async (_, context) => {
       await allowed(session, url); const page = await select(session, context, reference); page.setDefaultTimeout(10000);
       const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 }); await admit(session);
-      if (!response || response.status() >= 400) throw new GeneralBrowserError('page_unavailable', response ? { status: response.status() } : undefined);
+      if (!response || response.status() >= 400) {
+        // Do not retain a denied document that a later observe could promote.
+        try { await page.close(); } catch { /* host still owns session cleanup */ }
+        throw new GeneralBrowserError('page_unavailable', response ? { status: response.status() } : undefined);
+      }
       return observe(session, context, page);
     }),
     openTab: (session: BrowserSession, url: string) => attached(session, async (_, context) => {
       await allowed(session, url); const page = await context.newPage();
       const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 }); await admit(session);
-      if (!response || response.status() >= 400) throw new GeneralBrowserError('page_unavailable', response ? { status: response.status() } : undefined);
+      if (!response || response.status() >= 400) {
+        try { await page.close(); } catch { /* host still owns session cleanup */ }
+        throw new GeneralBrowserError('page_unavailable', response ? { status: response.status() } : undefined);
+      }
       return observe(session, context, page);
     }),
     closeTab: (session: BrowserSession, reference: string, beforeAction: (actionDigest: string) => Promise<void>) => attached(session, async (_, context) => {
       const page = await select(session, context, reference);
       await beforeAction(await generalDigest(JSON.stringify({ operation: 'close_tab', tab_ref: reference })));
       await admit(session);
-      await page.close();
+      try { await page.close(); }
+      catch { throw new GeneralBrowserError('outcome_uncertain'); }
     }),
     async terminate(input: BrowserSession): Promise<void> {
       return terminateId(identity(input, true).providerSessionId);
