@@ -71,3 +71,9 @@ for(const mode of ['cancel','maintain'] as const)it(`delayed ${mode} cleanup can
  const successor={...prior,cleanup:undefined,session:{...prior.session,generation:prior.session.generation+1,providerSessionId:'different-exact-id'}};f.rows.set(key,successor);
  release();await cleanup;expect(f.rows.get(key)).toEqual(successor);expect(commonBrowserFixture.ends).toBe(1);
 });
+
+it('preserves bounded provider failure diagnostic through common caller without provider text',async()=>{
+ const f=fixture();const {GeneralBrowserError}=await import('../src/channels/cloudflare-general-browser');
+ commonBrowserFixture.onAcquire=()=>{throw new GeneralBrowserError('provider_unavailable',{status:402,code:'usage_limit',request_id:'request-123'});};
+ expect(await f.host().handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx)).toMatchObject({ok:false,code:'rejected',diagnostic:{status:402,code:'usage_limit',request_id:'request-123'},browser_code:'provider_unavailable'});
+});
