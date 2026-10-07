@@ -57,9 +57,9 @@ it('lost send cannot fall over to B when A disappears; desk keeps truthful unkno
  await runInDurableObject(stub,async(_instance,state)=>{
   const a={id:'a',rail:'proxy' as const};const b={id:'b',rail:'proxy' as const};let candidates=[a,b];let preferred=a;let effects=0;let release:()=>void=()=>{};let began:()=>void=()=>{};
   const started=new Promise<void>(r=>{began=r;});const gate=new Promise<void>(r=>{release=r;});
-  const client={sendRaw:async()=>{effects++;began();await gate;throw new ProxyIntentError('intent_pending');}} as unknown as GoogleClient;
-  const desk=approvalDesk(state.storage.sql,{call:async()=>({message_id:1}),owner:42,google:async(intent)=>{const route=pinProxyIntentRoute(state.storage.sql,intent,'google:mail',candidates,preferred);return route?client:null;},newId:()=>String(1),now:()=>1000,timezone:'UTC',log:()=>{}});
-  const raw='fixture';const id=await desk.proposeSendEmail({to:['fictional@test.invalid'],subject:'fixture',body:'fixture',message_id:'fixture',raw,digest:await sha256Hex(raw)});
+  const client={findSentByMessageId:async()=>false,sendRaw:async()=>{effects++;began();await gate;throw new ProxyIntentError('intent_pending');}} as unknown as GoogleClient;
+  const desk=approvalDesk(state.storage.sql,{call:async()=>({message_id:1}),owner:42,google:async(intent,_feature,connectionId)=>{const available=connectionId?candidates.filter(account=>account.id===connectionId):candidates;const route=pinProxyIntentRoute(state.storage.sql,intent,'google:mail',available,available.find(account=>account.id===preferred.id)??available[0]);return route?{...client,account:{connection_id:route.id,email:`${route.id}@fixture.test`}}:null;},newId:()=>String(1),now:()=>1000,timezone:'UTC',log:()=>{}});
+  const raw='fixture';const id=await desk.proposeSendEmail({connection_id:'a',account_email:'a@fixture.test',to:['fictional@test.invalid'],subject:'fixture',body:'fixture',message_id:'fixture',raw,digest:await sha256Hex(raw)});
   const first=desk.decide(id,'a','fixture');await started;candidates=[b];preferred=b;
   const repeat=await desk.decide(id,'a','fixture');expect(repeat.toast).toBe('Outcome unknown');expect(repeat.message).not.toContain('Nothing was delivered');release();await first;expect(effects).toBe(1);
  });

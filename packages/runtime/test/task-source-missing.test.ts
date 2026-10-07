@@ -10,11 +10,11 @@ it('reports no missing family for a default read while the task is unresolved', 
   expect(taskSourceMissing(snapshot, handler)).toEqual([]);
 });
 
-it('names the family a refused read is missing, and every family a connector-wide tool lacks', () => {
-  expect(taskSourceMissing(snap(['local', 'web']), { name: 'send_email', requires_connector: true })).toEqual(TASK_SOURCE_FAMILIES.filter(name => name !== 'local' && name !== 'web'));
+it('names the specific family each registered mail/calendar tool is missing', () => {
+  expect(taskSourceMissing(snap(['local', 'web']), { name: 'send_email', requires_connector: true })).toEqual(['mail']);
   expect(taskSourceMissing(snap(['local', 'web']), { name: 'query_calendar' })).toEqual(['calendar']);
   expect(taskSourceMissing(snap(['local', 'calendar']), { name: 'query_calendar' })).toEqual([]);
-  expect(taskSourceMissing(snap([]), { name: 'send_email', requires_connector: true })).toEqual([...TASK_SOURCE_FAMILIES]);
+  expect(taskSourceMissing(snap([]), { name: 'send_email', requires_connector: true })).toEqual(['mail']);
   expect(taskSourceMissing(snap(['local', 'web'], false), { name: 'query_calendar' })).toEqual(['calendar']);
 });
 
@@ -51,7 +51,7 @@ it('uses local defaults for unclassified reads without admitting a different sou
 });
 
 it('preserves the connector fallback, including dynamically connector-backed tool metadata', () => {
-  for (const handler of [{ name: 'send_email', requires_connector: true, mutates_state: true }, { name: 'skills_load', requires_connector: true }] as const) {
+  for (const handler of [{ name: 'skills_load', requires_connector: true }] as const) {
     expect(taskSourceAllowed(snap(['mail']), handler)).toBe(false);
     expect(taskSourceMissing(snap(['mail']), handler)).toEqual(TASK_SOURCE_FAMILIES.filter(family => family !== 'mail'));
     expect(taskSourceAllowed(snap([...TASK_SOURCE_FAMILIES]), handler)).toBe(true);
@@ -87,4 +87,15 @@ it('distinguishes supplied workspace creation from source-dependent edits and re
     expect(taskSourceAllowed(snap(['workspace']), handler, args)).toBe(true);
     expect(taskSourceMissing(snap(['workspace']), handler, args)).toEqual([]);
   }
+});
+
+
+it.each(['draft_email', 'send_email'] as const)('admits %s only with a current mail task, never an unresolved default', name => {
+  const handler = { name, requires_connector: true, mutates_state: true } as const;
+  expect(taskSourceAllowed(snap(['mail']), handler)).toBe(true);
+  expect(taskSourceMissing(snap(['mail']), handler)).toEqual([]);
+  expect(taskSourceAllowed(snap(['calendar']), handler)).toBe(false);
+  expect(taskSourceMissing(snap(['calendar']), handler)).toEqual(['mail']);
+  expect(taskSourceAllowed(snap([], false, ['mail']), handler)).toBe(false);
+  expect(taskSourceMissing(snap([], false, ['mail']), handler)).toEqual(['mail']);
 });

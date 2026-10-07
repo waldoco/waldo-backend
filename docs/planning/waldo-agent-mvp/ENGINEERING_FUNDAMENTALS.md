@@ -49,7 +49,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 ### Google mail actions
 
-- Mail reads, reply preparation and approved sends retain the same explicit owner connection. Account health changes, revoked scopes and a missing selected account never select a different sender. Cover common admission and mail-only task scope, including provider header reads under pasted-only restrictions.
+- Mail reads, reply preparation and approved sends retain the same explicit owner connection. Account health changes, revoked scopes and a missing selected account never select a different sender. Cover common admission and mail-only task scope, including refusal of unresolved mutation defaults and provider header reads under pasted-only restrictions. Register new operational receipt stores in the forget inventory; routing fixtures must carry the frozen sender account and prove its disappearance never sends through a different account.
 - Claim email approval durably before any await; freeze sender, recipients, body, thread and exact MIME. Cover concurrent callbacks, modified payload, old-card Modify, interruption and desk recreation.
 - Gmail acknowledgement is not readback. Confirm the exact RFC Message-ID and SENT label, persist provider IDs and channel delivery separately, and retain uncertainty when lookup is empty or unavailable. Recovery reconciles without issuing another send. Exclude completed receipts before bounded selection, rotate unfinished checks durably, and keep old uncertainty visible even after newer completed history.
 
