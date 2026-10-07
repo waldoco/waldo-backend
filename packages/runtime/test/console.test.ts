@@ -368,6 +368,17 @@ describe('owner console', () => {
     expect(sessionCookie(new Request('https://x/console'))).toBeNull();
   });
 
+  it('shows every scheduled behavior with its state and a reset, and parses the schedule actions', () => {
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, schedules: { ...SAMPLE_CONSOLE_VIEW.schedules, heartbeat: false } }, 'day');
+    expect(html).toContain('Scheduled behaviors');
+    expect(html).toContain('periodic open-loop check: <b>off</b>');
+    expect(html).toContain('prep notes before events: <b>on</b>');
+    expect(html).toContain('name="value" value="on"><span>periodic open-loop check');
+    expect(html).toContain('value="schedule.reset"');
+    expect(parseConsoleAction(formOf({ action: 'schedule.set', id: 'heartbeat', value: 'on', csrf: 'good' }), 'good')).toEqual({ action: 'schedule.set', id: 'heartbeat', value: 'on' });
+    expect(parseConsoleAction(formOf({ action: 'schedule.reset', csrf: 'good' }), 'good')).toEqual({ action: 'schedule.reset', id: '', value: '' });
+  });
+
   it('accepts only known actions carrying the session csrf token', () => {
     expect(parseConsoleAction(formOf({ action: 'spot.dismiss', id: '4', csrf: 'good' }), 'good')).toEqual({ action: 'spot.dismiss', id: '4', value: '' });
     expect(parseConsoleAction(formOf({ action: 'spot.dismiss', id: '4', csrf: 'bad' }), 'good')).toBeNull();

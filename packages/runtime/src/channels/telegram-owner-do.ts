@@ -45,7 +45,7 @@ import {workspaceOperationId} from '../tools/live/workspace-operation';
 import {workspaceDelivery} from './workspace-delivery';
 import { workspaceToolHandlers } from '../tools/live/workspace';
 import { workspaceDownload, workspacePage, workspaceRead } from './console-workspace';
-import { triggerTypeSchema, TOOL_PERMISSIONS, browsePageArgsSchema, setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from '@waldo/contracts';
+import { SCHEDULE_KINDS, triggerTypeSchema, TOOL_PERMISSIONS, browsePageArgsSchema, setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
@@ -71,6 +71,7 @@ import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-
 import { armNightly, backfillEpisodes, consolidationDay, episodeIndex, indexedConversationStore, transcript } from './episodes';
 import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
+import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences } from './schedule-preferences';
 import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT } from './event-briefs';
 import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
 import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
@@ -1845,6 +1846,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (copied) log({ trace: 'memory:migration', hop: 'memory_backup', ms: 0, ok: true, detail: copied });
     const files = fileBook(storage.sql);
     const loops = loopBook(storage.sql, { newId: () => deps.newRunId().slice(0, 8), now: () => Date.now() });
+    const schedPrefs = schedulePreferences(storage.sql, loops);
     const orders = standingOrderBook(storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
     // A5: working-artifact store. Bodies ride R2 when the binding exists; a deploy missing it
     // degrades to per-DO-memory bodies (artifacts become session-scoped, turns never crash).
@@ -1858,7 +1860,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     // A9: recent meal/workout logs join the proactive context; the read degrades to empty
     // when the store is unlinked so beats and the /ledger command never break on it.
     const ledger = async () =>
-      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), proactivityLine(loops.proactivity()), healthSection(await healthLogs.recent(10), clock.timezone)]
+      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), proactivityLine(loops.proactivity()), schedulePreferencesLine(schedPrefs.all()), healthSection(await healthLogs.recent(10), clock.timezone)]
         .filter((section) => section !== '')
         .join('\n\n');
     const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
@@ -1897,7 +1899,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
     };
     const updates = updateBook(storage.sql);
-    const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, plans, clock.timezone, Date.now()), armHeartbeat(scheduler, Date.now()), this.browserReady])
+    const ready = Promise.all([backfillEpisodes(kv, episodes), (schedPrefs.enabled('nightly') ? armNightly(scheduler, clock.timezone, Date.now()) : Promise.resolve()), (schedPrefs.enabled('event_briefs') ? armBriefSweep(scheduler, Date.now()) : Promise.resolve()), (schedPrefs.enabled('daily_brief') ? armDayCards(scheduler, plans, clock.timezone, Date.now()) : Promise.resolve(false)), (schedPrefs.enabled('heartbeat') ? armHeartbeat(scheduler, Date.now()) : Promise.resolve()), this.browserReady])
       .then(async ([, , , seeded]) => {
         const scrubbed = await scrubConversationHistory(storage);
         if (scrubbed > 0) log({ trace: 'history:scrub', hop: 'egress_scrub', ms: 0, ok: true, detail: `${scrubbed} entries` });
@@ -1926,7 +1928,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const ownerKey = await currentTaskOwnerKey(); await context.assertTaskSourceCurrent();
         browserSources.capture(payload, ownerKey);
         const id = await desk.proposeBrowserSubmit(payload); await context.assertTaskSourceCurrent(); return id;
-      }, stopAdmission: async () => { await this.browserTasks.revoke(); } }), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerHost?.gateway, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
+      }, stopAdmission: async () => { await this.browserTasks.revoke(); } }), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now() }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerHost?.gateway, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
       (opt) => opt ? openLoopsPrompt(loops, clock.timezone, opt.loopsRoom) : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
@@ -2157,7 +2159,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         const calendar = await readCalendar(dayWindow(now, clock.timezone), clock.timezone, await google.client(), false);
         const said = dayPlanInput({ localNow: localIso(now, clock.timezone), calendar, cards, proactivity: proactivityLine(loops.proactivity()) });
-        const applied = await applyDayPlan(scheduler, plans, clock.timezone, now, parseDayPlan(await responder.planDay(trace, said), cards));
+        const applied = await applyDayPlan(scheduler, plans, clock.timezone, now, parseDayPlan(await responder.planDay(trace, said), cards), true, schedPrefs.enabled('daily_brief'));
         // Count only - the planned times are the owner's schedule, not trace content.
         log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: true, detail: dayPlanTraceDetail(applied) });
       } catch (error) {
@@ -2173,7 +2175,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const run = runs.start('heartbeat', entry.id);
       try {
         const delivery = await heartbeatTick({
-          scheduler, sql: storage.sql, loops, plans, timezone: clock.timezone, now: () => Date.now(),
+          scheduler, sql: storage.sql, loops, plans, timezone: clock.timezone, now: () => Date.now(), releaseHeldCards: schedPrefs.enabled('daily_brief'),
           enqueue: async (text, heartbeat) => finalOutbox.enqueue({
             id: `heartbeat:${entry.id}:${entry.occurrence_at}`, trace,
             payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
@@ -2215,7 +2217,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await responder.promote(trace)
           .then((detail) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: true, detail }))
           .catch((error: unknown) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: false, error: String(error) }));
-        await armDayCards(scheduler, plans, clock.timezone, Date.now());
+        if (schedPrefs.enabled('daily_brief')) await armDayCards(scheduler, plans, clock.timezone, Date.now());
         await planToday(`${trace}:plan`);
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'nightly' });
       } catch (error) {
@@ -2494,7 +2496,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             const row = planned.get(card.id);
             return { id: card.id, name: card.name, defaultTime: card.defaultTime, time: row ? row.time : card.defaultTime, reason: row?.reason ?? 'not planned yet', sent: row?.sent ?? false, pin: pins[card.id] ?? null };
           }),
-          ledger: await ledger(), proactivity: loops.proactivity(), files: files.list(), steps: traces.steps(clock.timezone), lastRequest: traces.lastRequest(clock.timezone), trace: tracePage.rows,
+          ledger: await ledger(), proactivity: loops.proactivity(), schedules: schedPrefs.all(), files: files.list(), steps: traces.steps(clock.timezone), lastRequest: traces.lastRequest(clock.timezone), trace: tracePage.rows,
           runs: runPage.rows.map((row) => ({ id: row.id, kind: row.kind, status: row.status, summary: row.summary, parent_id: row.parent_id, started: localIso(row.started_at, clock.timezone).slice(5, 16).replace('T', ' '), ended: row.ended_at === null ? null : localIso(row.ended_at, clock.timezone).slice(5, 16).replace('T', ' ') })),
           page: { trace_before: tracePage.next, runs_before: runPage.next, trace_applied: page?.traceBefore ?? null, runs_applied: page?.runsBefore ?? null },
         };
@@ -2508,7 +2510,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       act: async ({ action, id, value }) => {
         const now = Date.now();
         const spotId = Number(id);
-        if (action === 'proactivity.set') {
+        if (action === 'schedule.set' || action === 'schedule.reset') {
+          const kind = SCHEDULE_KINDS.find((candidate) => candidate === id);
+          if (action === 'schedule.set') { if (!kind || (value !== 'on' && value !== 'off')) return false; schedPrefs.set(kind, value === 'on'); } else schedPrefs.reset();
+          await applySchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now }, action === 'schedule.set' ? kind : undefined);
+        } else if (action === 'proactivity.set') {
           const [quietStart = '', quietEnd = '', volume = ''] = (value ?? '').split('|');
           const parsed = setProactivityArgsSchema.safeParse({ quiet_start: quietStart || null, quiet_end: quietEnd || null, volume });
           if (!parsed.success || !(await saveSettings({ timezone: clock.timezone, ...parsed.data }))) return false;
@@ -2516,7 +2522,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         } else if (action === 'timezone.set') {
           if (!validZone(value) || !(await saveSettings({ timezone: value, ...loops.proactivity() }))) return false;
           identity.put('timezone', value);
-          await armNightly(scheduler, value, now);
+          if (schedPrefs.enabled('nightly')) await armNightly(scheduler, value, now);
         } else if (action === 'spot.dismiss' || action === 'spot.forget' || action === 'spot.confirm') {
           // A claim mid-scrub (status 'purging') is the retry path: the stated 'try again'
           // must be able to select it. Dismiss/confirm stay active-only.
@@ -2576,7 +2582,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           else {
             if (!isClock(value)) return false;
             if (action === 'card.pin') plans.pin(card.id, value);
-            await applyDayPlan(scheduler, plans, clock.timezone, now, [{ card: card.id, time: value, reason: action === 'card.pin' ? 'pinned by you' : 'set by you for today' }], action === 'card.pin');
+            await applyDayPlan(scheduler, plans, clock.timezone, now, [{ card: card.id, time: value, reason: action === 'card.pin' ? 'pinned by you' : 'set by you for today' }], action === 'card.pin', schedPrefs.enabled('daily_brief'));
           }
         }
         // consoleActionTraceDetail strips the free-form form id before it can reach the
