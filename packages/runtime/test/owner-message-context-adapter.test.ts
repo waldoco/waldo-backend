@@ -12,6 +12,7 @@ import { episodeIndex } from '../src/channels/episodes';
 import { ownerCanonicalHistory } from '../src/channels/owner-canonical-history';
 import { redactConversationEntries } from '../src/channels/conversation-store';
 import { FORGOTTEN } from '../src/memory/claims';
+import {commonOwnerMemory} from '../src/channels/common-owner-memory';
 import { toolOutputLedger } from '../src/conversation/tool-output-ledger';
 async function setup(text = 'Plan the Bengaluru demo on October 15.') {
     const scope: RunEffectScope = { runId: 'run', attempt: 'attempt', deadline: Date.now() + 30000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() };
@@ -438,4 +439,22 @@ it('ADVERSARIAL ordinary canonical turn must retry stored incomplete topic', asy
         expect(phases).toContain('forget_source_spans');
         expect(memory.incompleteTopics()).toEqual([]);
     });
+});
+
+it('canonical admitted memory tool uses only its private physical store and preserves provenance',async()=>{
+ const s=await setup('What meeting time do I prefer?');
+ const recall=vi.fn(()=>[{id:77,kind:'preference',text:'Meetings after breakfast',source:'stated',evidence:'Original owner words',origin:'owner',status:'active',source_ref:'owner-message-77',verification_status:'owner-grounded',created_at:'2026-10-07T00:00:00Z',last_seen_at:'2026-10-07T00:00:00Z',seen_count:1}]);
+ const memory={recall,incompleteTopics:()=>[]} as unknown as Parameters<typeof commonOwnerMemory>[0];
+ const adapter=createOwnerMessageContextAdapter({...s,registeredHandlers:['read_owner_context'],connectorBacked:[],access:async()=>({grants:{status:'available',tools:['read_owner_context']},connectors:{status:'available',tools:[]}})});
+ const captured:string[]=[];let first=true;
+ const gateway:LLMGatewayAdapter={complete:async request=>{captured.push(JSON.stringify(request.request));const tool_calls=first?[{call_id:'common-owner-read',name:'read_owner_context',arguments:'{"topic":"meetings"}'}]:undefined;first=false;return {ok:true,data:{model:request.request.model,text:tool_calls?'':'Meetings after breakfast',...(tool_calls?{tool_calls}:{}),input_tokens:1,output_tokens:1,cache_read_input_tokens:0,output_items:[],latency_ms:0}};}};
+ const store={load:async()=>({entries:[],leafId:null}),save:async()=>undefined};
+ const args:Parameters<typeof createOwnerResponder>=['fixture',store];args[10]=gateway;
+ args[21]={binding:{admission:s.admission,adapter,store,memoryRead:{...s.admission.invocation.verified_authority,store:commonOwnerMemory(memory)}}};
+ await createOwnerResponder(...args).respond({traceId:'common-memory',conversationRef:'owner',surface:'telegram',text:'What meeting time do I prefer?',memoryWrites:false},(_name,work)=>work());
+ expect(recall).toHaveBeenCalled();expect(captured.join('\n')).toContain('owner-message-77');expect(captured.join('\n')).toContain('context_only_not_action_approval');
+ s.lookup.mockResolvedValue({...await s.lookup(),state_version:2});
+ await expect(createOwnerResponder(...args).respond({traceId:'common-memory-revoked',conversationRef:'owner',surface:'telegram',text:'What meeting time do I prefer?',memoryWrites:false},(_name,work)=>work())).rejects.toBeDefined();
+ args[21]={binding:{...args[21]!.binding!,memoryRead:{...args[21]!.binding!.memoryRead!,principal_ref:'prn_ffffffffffffffffffffffffffffffff'}}};
+ expect(()=>createOwnerResponder(...args)).toThrow('memory projection owner rejected');
 });

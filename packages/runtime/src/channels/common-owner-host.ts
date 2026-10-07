@@ -44,7 +44,7 @@ export function commonOwnerHost(env:TelegramWebhookEnv,storage:DurableObjectStor
   currentMaterials={snapshotRef:snapshot.snapshot_ref,source:deps.materials};return deps;
  };
  const browser=commonPublicBrowserConfiguration({env,storage,actualDoId});
- const tools:readonly ToolName[]=TOOL_PERMISSIONS.user_message.filter(name=>['get_context','workspace_list','workspace_read','workspace_search','workspace_write','workspace_render','skills_list','skills_load','skills_install','skills_disable',...(browser?['browse_page']:[])].includes(name));
+ const tools:readonly ToolName[]=TOOL_PERMISSIONS.user_message.filter(name=>['get_context','read_owner_context','workspace_list','workspace_read','workspace_search','workspace_write','workspace_render','skills_list','skills_load','skills_install','skills_disable',...(browser?['browse_page']:[])].includes(name));
  return {
   environment:env.WALDO_ENVIRONMENT,namespace:env.WALDO_OWNER_DO_NAMESPACE??'',
   get allowedDoNames(){return [currentName()];},

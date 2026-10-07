@@ -110,6 +110,7 @@ export type OwnerResponderBinding = Readonly<{
   store: ConversationStore;
   skills?: OwnerSkillCapability;
   forgetting?: Readonly<{ principal_ref: string; tenant_ref: string; store: ClaimStore }>;
+  memoryRead?: Readonly<{ principal_ref: string; tenant_ref: string; store: Pick<ClaimStore,'recall'> }>;
 }>;
 export type OwnerResponderHost = Readonly<{
   prepare(turn: OwnerTurnEnvelope, handlers: DispatchToolOptions<ToolDispatcherContext>['handlers'], scope: RunEffectScope): Promise<OwnerResponderBinding>;
@@ -186,7 +187,7 @@ export const createOwnerResponder = (
   const cleanupLedger = toolLedger;
   if (binding?.forgetting && (binding.forgetting.principal_ref !== invocation.verified_authority.principal_ref || binding.forgetting.tenant_ref !== invocation.verified_authority.tenant_ref)) throw new Error('forgetting owner binding rejected');
   // Canonical owner memory needs its own reviewed supplier and forget/redaction lifecycle.
-  // This bounded binding admits fresh conversation only; legacy memory is never promoted.
+  // Only explicit owner-bound projections are admitted; raw legacy stores are never promoted.
   if (binding) {
     memory = undefined;
     standingOrders = undefined;
@@ -227,7 +228,8 @@ export const createOwnerResponder = (
     // Typed store provenance for the provider's retrieval receipts (owner review on #212).
     ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
   };
-  const handlers = [getContextHandler(clock), ownerContextHandler(memory), ...tools, ...(skills?.handlers ?? []), ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
+  if(binding?.memoryRead && (binding.memoryRead.principal_ref!==ownerId || binding.memoryRead.tenant_ref!==invocation.verified_authority.tenant_ref))throw Error('memory projection owner rejected');
+  const handlers = [getContextHandler(clock), ownerContextHandler(binding?.memoryRead?.store ?? memory), ...tools, ...(skills?.handlers ?? []), ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
   // Exact forgotten payload is transient, owner-local and bounded. It lasts only
   // until captured provider messages and unsaved outputs have been scrubbed.
   const forgottenTexts = new Set<string>();
@@ -538,6 +540,7 @@ export const createOwnerResponder = (
             await sourceScope.assertSame(admittedSource);
           }
           const retainedRead = ['read_owner_context', 'read_memory', 'search_episodes', 'read_tool_output'].includes(handler.name);
+          if(binding?.memoryRead && handler.name==='read_owner_context' && holdsAnyHeldTopic())return {ok:false,code:'transient',error:'Owner memory is withheld while forgetting coverage is incomplete.',source_taint:'external'};
           if (backgroundToolNames !== undefined && handler.name === 'open_loop' && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
             return { ok: false, code: 'invalid_args', error: 'Background mail follow-up requires an observed source_ref.', source_taint: null };
           }
@@ -570,7 +573,7 @@ export const createOwnerResponder = (
             if (handler.name === 'read_owner_context' && holdsAnyHeldTopic()) {
               const data = (result as { data?: { claims?: ReadonlyArray<{ id?: number }> } }).data;
               if (Array.isArray(data?.claims)) {
-                const aliasesById = new Map([...memory!.claims(), ...memory!.claims('promoted')].map(claim => [claim.id, (claim as { aliases?: string | null }).aliases] as const));
+                const aliasesById = new Map([...(forgettingState?.claims()??[]), ...(forgettingState?.claims('promoted')??[])].map(claim => [claim.id, (claim as { aliases?: string | null }).aliases] as const));
                 const claims = data.claims.filter(claim => typeof claim.id === 'number' && aliasesById.has(claim.id) && !holdsHeldTopic(aliasesById.get(claim.id)));
                 tally.dropped += data.claims.length - claims.length;
                 result = { ...(result as object), data: { ...data, claims } } as typeof result;

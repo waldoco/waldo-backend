@@ -1,3 +1,4 @@
+import {commonOwnerMemory} from './common-owner-memory';
 import {commonOwnerHost} from './common-owner-host';
 import {revokeCommonBrowsers,maintainCommonBrowsers,COMMON_BROWSER_DUE,commonBrowserHost,type CommonBrowserConfiguration} from './common-browser-host';
 import {signCommonExecutionRequest} from '../identity/common-execution-request';
@@ -327,7 +328,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           // This executor admits reviewed enabled skill selection, private workspace tools
           // and explicitly registered read-only browser custody. Skill install/disable
           // and other effects remain held; procedure loading adds no capabilities.
-          tools:composition.evidence.tool_acl.filter(tool=>['skills_list','skills_load','get_context','workspace_list','workspace_read','workspace_search','workspace_write','workspace_render',...(host.browser?['browse_page']:[])].includes(tool)),
+          tools:composition.evidence.tool_acl.filter(tool=>['skills_list','skills_load','get_context','read_owner_context','workspace_list','workspace_read','workspace_search','workspace_write','workspace_render',...(host.browser?['browse_page']:[])].includes(tool)),
           maxProviderTurns,maxDurationMs:Math.max(1,Math.min(600000,scope.deadline-Date.now()))};
         if(prior && (!prior.hostRun || prior.hostRun.runId!==scope.runId || prior.hostRun.attempt!==scope.attempt || prior.hostRun.deadline!==scope.deadline || JSON.stringify(prior.source)!==JSON.stringify(source) || prior.binding.contextProjectionRef!==composition.checkpoint.context_ref || prior.binding.contextProjectionDigest!==composition.evidence.prompt_digest))throw Error('common execution frozen context changed');
         scope.commit(()=>this.ctx.storage.kv.put(frozenKey,request));
@@ -1948,6 +1949,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return { admission, adapter, store: ownerCanonicalHistory(storage, admission, adapter), skills,
           ...(execution?{execution}:{}),
           sourceScope: { ...sourceScope, propose: async proposal => { await admission.assertCurrent(); if (this.env.COMMON_OWNER_TASKS === '1') throw Error('common source approval recovery unavailable'); await desk.proposeTaskSources(proposal); await admission.assertCurrent(); } },
+          memoryRead: {principal_ref:admission.invocation.verified_authority.principal_ref,tenant_ref:admission.invocation.verified_authority.tenant_ref,store:commonOwnerMemory(memory)},
           forgetting: { principal_ref: admission.invocation.verified_authority.principal_ref, tenant_ref: admission.invocation.verified_authority.tenant_ref, store: memory } };
       } } : undefined, !this.canonicalPreparation && channel === 'telegram' ? { prepare: async (turn, contextOwnerId, scope) => {
         if (turn.attachment || turn.mediaNote || probeCapture.current !== null) return undefined;
