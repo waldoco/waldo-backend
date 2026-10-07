@@ -29,7 +29,7 @@ describe('channel-neutral owner conversation seam', () => {
     });
   }
   it('Telegram adapter preserves existing trace and conversation IDs', () => {
-    expect(telegramTurnEnvelope({ updateId: 12, chatId: 7, text: 'hello' } as never)).toEqual({ traceId: 'tg-12', conversationRef: 'telegram-7', surface: 'telegram', text: 'hello' });
+    expect(telegramTurnEnvelope({ updateId: 12, chatId: 7, text: 'hello' } as never)).toEqual({ traceId: 'tg-12', conversationRef: 'telegram-7', surface: 'telegram', text: 'hello', presentation: { surface: 'telegram', commands: ['/stop', '/ledger'], delivery: { text: true, approval: 'native_buttons', attachments: false, reactions: true } } });
   });
   it('WhatsApp compatibility adapter no longer labels persisted entries Telegram', async () => {
     const entries: ConversationEntry[] = [];
