@@ -31,4 +31,25 @@ describe('reminder book on the Telegram owner object', () => {
       await scheduler.cancel(once.id);
     });
   });
+
+  it('a retried tool call returns the same reminder instead of a second one', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('reminder-book-retry'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      claimStore(state.storage.sql);
+      ensureSchema(state.storage);
+      const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+      const now = Date.parse('2036-09-23T08:00:00Z');
+      let n = 0;
+      const book = reminderBook(state.storage.sql, scheduler, { timezone: 'Asia/Kolkata', now: () => new Date(now) }, () => String(++n));
+      const args = { note: 'call mom', at: '2036-09-23T18:30', repeat: 'none' as const };
+      const first = await book.set(args, 'turn-1-call-1');
+      const retry = await book.set(args, 'turn-1-call-1');
+      const other = await book.set(args, 'turn-1-call-2');
+      expect(retry.id).toBe(first.id);
+      expect(other.id).not.toBe(first.id);
+      expect(book.list().length).toBe(2);
+      await scheduler.cancel(first.id);
+      await scheduler.cancel(other.id);
+    });
+  });
 });

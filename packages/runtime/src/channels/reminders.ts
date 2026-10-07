@@ -9,7 +9,7 @@ import type { OwnerClock } from '../tools/live/get-context';
 type Reminder = Readonly<{ id: string; note: string; at: string; repeat: 'none' | 'daily' }>;
 
 export type ReminderBook = Readonly<{
-  set(args: SetReminderArgs): Promise<Reminder>;
+  set(args: SetReminderArgs, key?: string): Promise<Reminder>;
   list(): readonly Reminder[];
   cancel(id: string): Promise<boolean>;
   note(id: string): string | null;
@@ -24,11 +24,14 @@ export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: Owner
   const toReminder = (row: { id: string; note: string; due_at: number; recurrence_json: string | null }): Reminder =>
     ({ id: row.id, note: row.note, at: local(row.due_at), repeat: row.recurrence_json === null ? 'none' : 'daily' });
   return {
-    async set({ note, at, repeat }) {
+    async set({ note, at, repeat }, key) {
       const now = clock.now().getTime();
       const due = localToEpoch(at, clock.timezone);
       if (repeat === 'none' && due <= now) throw new Error(`${at} is already past in ${clock.timezone}`);
-      const id = `reminder:${newId()}`;
+      // A tool call's own identity makes a retry after a lost response return the same reminder, not a second one.
+      const id = key ? `reminder:call-${key.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 96)}` : `reminder:${newId()}`;
+      const existing = key ? sql.exec<{ id: string }>('SELECT id FROM reminder_notes WHERE id = ?', id).toArray()[0] : undefined;
+      if (existing) return this.list().find(item => item.id === id) ?? { id, note, at, repeat };
       sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', id, note, now);
       const entry = await scheduler.schedule({
         id, kind: 'reminder', payloadRefs: { reminder_id: id },
@@ -71,9 +74,10 @@ export const reminderHandlers = (book: ReminderBook) => [
     trigger_allowlist: allowlist('set_reminder'),
     autonomy_gated: false,
     mutates_state: true,
-    async handle(args) {
+    async handle(args, ctx) {
       try {
-        return { ok: true, data: await book.set(args), source_taint: null };
+        const key = ctx?.turnId && ctx?.toolCallId ? `${ctx.turnId}-${ctx.toolCallId}` : undefined;
+        return { ok: true, data: await book.set(args, key), source_taint: null };
       } catch (error) {
         return { ok: false, code: 'invalid_args', error: error instanceof Error ? error.message : String(error) };
       }
