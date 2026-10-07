@@ -85,3 +85,15 @@ export async function maintainCommonBrowsers(storage:DurableObjectStorage,config
  const due=[...storage.kv.list<BrowserRecord>({prefix:'common-browser:'})].map(([,row])=>row).filter(row=>row.cleanup!=='closed'&&!row.cleanupFailed).map(row=>row.session.expiresAt);
  storage.kv.put(COMMON_BROWSER_DUE,due.length?Math.min(...due):null);
 }
+
+// Stop fences retained sessions synchronously before asynchronous physical cleanup.
+// This still works after physical host recreation with no active execution object.
+export function revokeCommonBrowsers(storage:DurableObjectStorage,now:number){
+ storage.transactionSync(()=>{
+  let pending=false;
+  for(const [key,row] of storage.kv.list<BrowserRecord>({prefix:'common-browser:'}))if(row.cleanup!=='closed'){
+   storage.kv.put(key,{...row,cleanup:'pending'});if(!row.cleanupFailed)pending=true;
+  }
+  storage.kv.put(COMMON_BROWSER_DUE,pending?now:null);
+ });
+}

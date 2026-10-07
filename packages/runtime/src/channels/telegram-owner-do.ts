@@ -1,5 +1,5 @@
 import {commonOwnerHost} from './common-owner-host';
-import {maintainCommonBrowsers,COMMON_BROWSER_DUE,commonBrowserHost,type CommonBrowserConfiguration} from './common-browser-host';
+import {revokeCommonBrowsers,maintainCommonBrowsers,COMMON_BROWSER_DUE,commonBrowserHost,type CommonBrowserConfiguration} from './common-browser-host';
 import {signCommonExecutionRequest} from '../identity/common-execution-request';
 import { signCommonTaskSourceRequest } from '../identity/common-task-source-request';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
@@ -501,6 +501,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       // Binding follows authenticated admission, and never replaces a different binding.
       this.ctx.storage.kv.put('do_name', doName); this.ctx.storage.kv.put('telegram_subject', subject);
       if (text === '/stop') {
+        if(this.ownerHost?.browser){
+          revokeCommonBrowsers(this.ctx.storage,Date.now());
+          const config=this.ownerHost.browser;
+          this.ctx.waitUntil(maintainCommonBrowsers(this.ctx.storage,config,Date.now()).catch(()=>{console.error('common browser stop cleanup unresolved');}));
+        }
         if (this.browserTrial) {
           this.ctx.storage.kv.delete(BROWSER_TRIAL_PENDING_KEY);
           this.ctx.storage.kv.put(BROWSER_TRIAL_REVOCATION_KEY, crypto.randomUUID());

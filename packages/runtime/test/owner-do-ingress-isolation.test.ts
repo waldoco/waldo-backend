@@ -1332,5 +1332,12 @@ it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid')('t
   });
   expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(2);
   expect(JSON.stringify(modelInputs)).toContain('input_image');
+  await evictDurableObject(doStub(subject));await evictDurableObject(root);
+  await send(subject,'/stop',998003);
+  await vi.waitFor(()=>expect(commonBrowserFixture.ends).toBe(1));
+  await runInDurableObject(doStub(subject),async(_instance,state)=>{
+   const rows=[...state.storage.kv.list<any>({prefix:'common-browser:'})];expect(rows[0]![1].cleanup).toBe('closed');
+  });
+
  }finally{commonRealHostJourney=false;vi.unstubAllGlobals();}
 });
