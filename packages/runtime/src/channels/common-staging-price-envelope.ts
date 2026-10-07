@@ -1,9 +1,9 @@
 // Verified vendor envelopes, 2026-10-07. Does not grant spend, select an account,
 // register a browser or discount uncertain receipts. Highest documented rates
 // include cache writes, long context, fast processing and regional processing.
-// https://developers.openai.com/api/docs/models/gpt-6-luna
+// https://developers.openai.com/api/docs/pricing
 // https://developers.cloudflare.com/browser-run/pricing/
-export const COMMON_PRICE_SOURCES=Object.freeze({model:'https://developers.openai.com/api/docs/models/gpt-6-luna',browser:'https://developers.cloudflare.com/browser-run/pricing/',checkedAt:'2026-10-07'});
+export const COMMON_PRICE_SOURCES=Object.freeze({model:'https://developers.openai.com/api/docs/pricing',browser:'https://developers.cloudflare.com/browser-run/pricing/',checkedAt:'2026-10-07'});
 const integer=(value:number,min:number,max:number)=>{if(!Number.isSafeInteger(value)||value<min||value>max)throw Error('price envelope invalid');return BigInt(value);};
 const ceiling=(numerator:bigint,denominator:bigint)=>Number((numerator+denominator-1n)/denominator);
 // Input tokens must cover the exact wire request, including images, files,
