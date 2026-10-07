@@ -1,3 +1,4 @@
+import { currentExecutionBinding } from '../execution-environment/binding';
 import { readTaskSourceSnapshot, createTaskSourceScope, type OwnerTaskInstruction, type TaskSourceFamily } from '../channels/task-source-scope';
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { CommonOwnerAuthority } from '../identity/common-owner-authority';
@@ -1124,10 +1125,11 @@ export class WaldoCoordinator {
 
   async admitMessageExecutionRequestV04(
     admission: unknown, authority: CommonOwnerAuthority, assertCurrent: () => Promise<void>,
+    hostBinding?: ExecutionBindingResolutionV04,
   ): Promise<ExecutionAggregateV04> {
     await assertCurrent();
     this.#storage.transactionSync(() => this.#identity.admitMessageAuthorityInCurrentTransaction(authority, this.#deps.now()));
-    const aggregate = await this.#admitExecutionRequestV04(admission, authority, undefined, assertCurrent);
+    const aggregate = await this.#admitExecutionRequestV04(admission, authority, undefined, assertCurrent, hostBinding);
     await assertCurrent();
     return aggregate;
   }
@@ -1145,14 +1147,20 @@ export class WaldoCoordinator {
     canonicalAuthority: ResponsibilityCanonicalAuthority | CommonOwnerAuthority,
     publicCommandScope?: Readonly<{ commandIdPrefix: string }>,
     assertCurrent?: () => Promise<void>,
+    hostBinding?: ExecutionBindingResolutionV04,
   ): Promise<ExecutionAggregateV04> {
     const admission = parseExecutionAdmissionV04(admissionValue);
+    const binding = hostBinding === undefined ? undefined : parseExecutionBindingResolutionV04(hostBinding);
     const admittedAt = this.#deps.now();
     const preflightAuthority = this.#executionAuthority(canonicalAuthority, admittedAt);
     const existing = this.#planning.readExecutionAggregateByRequestIdV04IfExists(admission.id);
     if (existing !== null) {
       if (existing.request.ownerId !== preflightAuthority.ownerId ||
-          !executionAdmissionMatchesRequestV04(admission, existing.request)) {
+          !executionAdmissionMatchesRequestV04(admission, existing.request) || binding && (
+            JSON.stringify(binding.provider) !== JSON.stringify(existing.request.provider)
+            || JSON.stringify(binding.environment) !== JSON.stringify(existing.request.environment)
+            || binding.contextProjectionRef !== existing.request.contextProjectionRef
+            || binding.contextProjectionDigest !== existing.request.contextProjectionDigest)) {
         throw new ResponsibilityDigestConflictError();
       }
       return this.#storage.transactionSync(() => {
@@ -1172,11 +1180,11 @@ export class WaldoCoordinator {
       publicCommandScope,
     );
     const resolveExecutionBindingV04 = this.#deps.resolveExecutionBindingV04;
-    if (resolveExecutionBindingV04 === undefined) {
+    if (resolveExecutionBindingV04 === undefined && binding === undefined) {
       throw new Error('execution binding authority unavailable');
     }
-    const resolvedBinding = parseExecutionBindingResolutionV04(
-      await resolveExecutionBindingV04({
+    const resolvedBinding = binding ?? parseExecutionBindingResolutionV04(
+      await resolveExecutionBindingV04!({
         ownerId: preflightAuthority.ownerId,
         outcomeId: admission.outcomeId,
         workUnitId: admission.workUnitId,
@@ -1232,7 +1240,11 @@ export class WaldoCoordinator {
       const concurrent = this.#planning.readExecutionAggregateByRequestIdV04IfExists(request.id);
       if (concurrent !== null) {
         if (concurrent.request.ownerId !== authority.ownerId ||
-            !executionAdmissionMatchesRequestV04(admission, concurrent.request)) {
+            !executionAdmissionMatchesRequestV04(admission, concurrent.request) || binding && (
+              JSON.stringify(binding.provider) !== JSON.stringify(concurrent.request.provider)
+              || JSON.stringify(binding.environment) !== JSON.stringify(concurrent.request.environment)
+              || binding.contextProjectionRef !== concurrent.request.contextProjectionRef
+              || binding.contextProjectionDigest !== concurrent.request.contextProjectionDigest)) {
           throw new ResponsibilityDigestConflictError();
         }
         return concurrent;
@@ -1485,6 +1497,30 @@ export class WaldoCoordinator {
     executionRequestId: string,
   ): ExecutionAggregateV04 {
     return this.#planning.readExecutionAggregateV04(ownerId, executionRequestId);
+  }
+
+  async assertMessageExecutionCurrent(input: Readonly<{
+    executionRequestId: string; attemptId: string; leaseId: string;
+    fencingGeneration: number; cancellationGeneration: number;
+    sourceSnapshot: import('../channels/task-source-scope').TaskSourceSnapshot;
+  }>, authority: CommonOwnerAuthority, assertCurrent: () => Promise<void>) {
+    await assertCurrent();
+    await this.readCurrentExecutionAggregateV04(authority.ownerId, input.executionRequestId);
+    return this.#storage.transactionSync(() => {
+      this.#identity.assertMessageAuthorityInCurrentTransaction(authority);
+      const source = readTaskSourceSnapshot(this.#storage.sql, `common:${authority.ownerId}`);
+      if (!source.ready || source.taskId !== input.sourceSnapshot.taskId
+        || source.revision !== input.sourceSnapshot.revision
+        || JSON.stringify(source.sources) !== JSON.stringify(input.sourceSnapshot.sources)) throw Error('common execution source changed');
+      const current = currentExecutionBinding(this.readExecutionAggregateV04(authority.ownerId, input.executionRequestId));
+      if (current.aggregate.request.outcome.id !== source.taskId
+        || current.attempt.id !== input.attemptId || current.lease.id !== input.leaseId
+        || current.lease.fencingGeneration !== input.fencingGeneration
+        || current.aggregate.currentCancellationGeneration !== input.cancellationGeneration
+        || current.attempt.state !== 'running' || current.session.state !== 'active'
+        || Date.parse(current.lease.expiresAt) <= Date.parse(this.#deps.now())) throw Error('common execution lease closed');
+      return current;
+    });
   }
 
   async readCurrentExecutionAggregateV04(

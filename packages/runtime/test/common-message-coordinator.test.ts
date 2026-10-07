@@ -154,6 +154,26 @@ it('common planned WorkUnit receives a host ceiling through the same canonical w
   expect(result.workUnit.state).toBe('execution_authorized');
   expect(result.workUnit.authorityCeiling.tools).toEqual(['workspace_write']);
   expect(coordinator.replayResponsibility(admitted.ownerId).workUnits[0]).toEqual(result.workUnit);
+  const digest=`sha256:${'d'.repeat(64)}`;
+  const binding={provider:{category:'provider' as const,id:'fixture_model_provider',version:'1.0.0',modelRef:'fixture_model',manifest:{id:'fixture_provider_manifest',version:'1.0.0',digest}},
+    environment:{category:'execution_environment' as const,id:'fixture_registered_host',version:'1.0.0',environmentKind:'local' as const,manifest:{id:'fixture_environment_manifest',version:'1.0.0',digest}},
+    contextProjectionRef:'fixture_frozen_context',contextProjectionDigest:digest};
+  const admission={id:'fixture_execution_request',outcomeId:snapshot.taskId,workUnitId:unit};
+  const aggregate=await coordinator.admitMessageExecutionRequestV04(admission,admitted,async()=>{},binding);
+  expect(aggregate.request.authorityCeiling).toEqual(ceiling);
+  expect(await coordinator.admitMessageExecutionRequestV04(admission,admitted,async()=>{},binding)).toEqual(aggregate);
+  await expect(coordinator.admitMessageExecutionRequestV04(admission,admitted,async()=>{},{...binding,contextProjectionRef:'changed_context'})).rejects.toThrow();
+  const claimed=coordinator.claimExecutionAttemptV04({executionRequestId:admission.id,attemptId:'fixture_attempt',leaseId:'fixture_lease',sessionId:'fixture_session',providerSessionRef:null});
+  expect(claimed.attempts[0]!.workUnit.id).toBe(unit);
+  expect(claimed.attempts[0]!.workUnit.revision).toBe(2);
+  expect(claimed.attempts[0]!.provider).toEqual(binding.provider);
+  const leaseInput={executionRequestId:admission.id,attemptId:'fixture_attempt',leaseId:'fixture_lease',fencingGeneration:1,cancellationGeneration:1,sourceSnapshot:snapshot};
+  expect((await coordinator.assertMessageExecutionCurrent(leaseInput,admitted,async()=>{})).attempt.id).toBe('fixture_attempt');
+  await expect(coordinator.assertMessageExecutionCurrent({...leaseInput,fencingGeneration:2},admitted,async()=>{})).rejects.toThrow('common execution lease closed');
+  await cap.classify(JSON.stringify({decision:'restrict',sources:[]}),'restrict_after_claim');
+  await expect(coordinator.assertMessageExecutionCurrent(leaseInput,admitted,async()=>{})).rejects.toThrow('common execution source changed');
+
+
   expect(state.storage.sql.exec('SELECT count(*) AS n FROM presence_sessions').one().n).toBe(0);
   await expect(coordinator.authorizeMessageWorkUnitExecution({snapshot,workUnitId:unit,expectedRevision:1,authorityCeiling:ceiling,maxProviderTurns:25,maxDurationMs:30000,executorId:'fixture_registered_host',commandId:'different_authorization'},admitted,async()=>{})).rejects.toThrow();
  });
