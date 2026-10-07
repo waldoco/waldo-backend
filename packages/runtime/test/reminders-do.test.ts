@@ -52,4 +52,26 @@ describe('reminder book on the Telegram owner object', () => {
       await scheduler.cancel(other.id);
     });
   });
+
+  it('a delayed retry after the due time still returns the set reminder, and a note without a schedule gets scheduled', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('reminder-book-partial'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      claimStore(state.storage.sql);
+      ensureSchema(state.storage);
+      const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+      let now = Date.parse('2036-09-23T08:00:00Z');
+      const book = reminderBook(state.storage.sql, scheduler, { timezone: 'Asia/Kolkata', now: () => new Date(now) }, () => 'x');
+      const args = { note: 'call mom', at: '2036-09-23T18:30', repeat: 'none' as const };
+      const first = await book.set(args, 'turn-2-call-1');
+      now = Date.parse('2036-09-23T20:00:00Z');
+      expect((await book.set(args, 'turn-2-call-1')).id).toBe(first.id);
+      expect(book.list().length).toBe(1);
+      state.storage.sql.exec("INSERT INTO reminder_notes (id, note, created_at) VALUES ('reminder:call-turn-2-call-9', 'call mom', 1)");
+      const healed = await book.set({ ...args, at: '2036-09-24T18:30' }, 'turn-2-call-9');
+      expect(healed.id).toBe('reminder:call-turn-2-call-9');
+      expect(book.list().map(r => r.id)).toContain(healed.id);
+      await scheduler.cancel(first.id);
+      await scheduler.cancel(healed.id);
+    });
+  });
 });

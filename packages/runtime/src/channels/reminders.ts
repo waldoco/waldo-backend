@@ -26,19 +26,30 @@ export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: Owner
   return {
     async set({ note, at, repeat }, key) {
       const now = clock.now().getTime();
-      const due = localToEpoch(at, clock.timezone);
-      if (repeat === 'none' && due <= now) throw new Error(`${at} is already past in ${clock.timezone}`);
+      const rawDue = localToEpoch(at, clock.timezone);
       // A tool call's own identity makes a retry after a lost response return the same reminder, not a second one.
       const id = key ? `reminder:call-${key.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 96)}` : `reminder:${newId()}`;
+      // Checked before past-time validation so a delayed retry of an already-set reminder still returns it.
       const existing = key ? sql.exec<{ id: string }>('SELECT id FROM reminder_notes WHERE id = ?', id).toArray()[0] : undefined;
-      if (existing) return this.list().find(item => item.id === id) ?? { id, note, at, repeat };
-      sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', id, note, now);
-      const entry = await scheduler.schedule({
-        id, kind: 'reminder', payloadRefs: { reminder_id: id },
-        ...(repeat === 'daily'
-          ? { occurrenceAt: nextAfter(due, now), dueAt: nextAfter(due, now), recurrence: { type: 'daily_local' as const, time: at.slice(11), timezone: clock.timezone } }
-          : { occurrenceAt: due, dueAt: due }),
-      });
+      if (existing) {
+        const scheduled = this.list().find(item => item.id === id);
+        if (scheduled) return scheduled;
+      } else if (repeat === 'none' && rawDue <= now) throw new Error(`${at} is already past in ${clock.timezone}`);
+      // An existing note without a schedule is a partial earlier attempt: schedule it, never report it done unscheduled.
+      const due = existing && repeat === 'none' ? Math.max(rawDue, now) : rawDue;
+      if (!existing) sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', id, note, now);
+      let entry: Awaited<ReturnType<typeof scheduler.schedule>>;
+      try {
+        entry = await scheduler.schedule({
+          id, kind: 'reminder', payloadRefs: { reminder_id: id },
+          ...(repeat === 'daily'
+            ? { occurrenceAt: nextAfter(due, now), dueAt: nextAfter(due, now), recurrence: { type: 'daily_local' as const, time: at.slice(11), timezone: clock.timezone } }
+            : { occurrenceAt: due, dueAt: due }),
+        });
+      } catch (error) {
+        if (!existing) sql.exec('DELETE FROM reminder_notes WHERE id = ?', id);
+        throw error;
+      }
       return { id, note, at: local(entry.due_at), repeat };
     },
     list() {
