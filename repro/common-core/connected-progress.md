@@ -28,3 +28,10 @@ Constraints: console-signin.ts untouched; Telegram login/banner/buttons untouche
 - Pending widening is preserved across capability recreation. No approval callback applies it from a later reply; execution must recover original admitted request before allocating new task. That recovery is unresolved.
 - Full runtime attempt exceeded 120-second command limit and stopped incomplete. Partial failure was explicit RPC prototype list missing new held signed method, not provider behavior. Updated list and tested default hold denial. Narrow full trusted suite72 passes. Full runtime remains unverified.
 - New direct source5 + existing classifier55 pass. Both worker/integration typechecks pass.
+
+## Normal source caller candidate
+- Replaced per-occurrence capture RPC with commonTaskSourceFromHost, signed message + signed source command (operation/raw decision/defaults/quoted spans/expected snapshot). Same existing model classifier runs in responder; decision is reduced at common root.
+- Normal sealed webhook fixture retains one Outcome through a second follow-up after actual common-root eviction, source revision2->3. Model and directory/channel dependencies remain synthetic; outbound blocked.
+- Populated physical source policy currently refuses with disposition-required, not silently imported/reset. Common pending proposal presentation refuses until original-request recovery/approval route is implemented. No new native feature, no permission widening.
+- Transition intent is marked started before async reduction and settled afterward. Interrupted started intent fails closed awaiting recovery, never blindly reruns classification. Does not yet implement full reducer recovery.
+- Worker tsc,63 new/source tests,47 sealed ingress regressions,2 RPC prototype/default-hold tests pass at10:11. Current signed source caller does not own executor/model retry; inbox still does.

@@ -1175,7 +1175,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
           'alarm',
           'answerJudgmentFromWorker',
           'cancelPlanningTurnFromWorker',
-          'captureCommonMessageFromHost',
+          'commonTaskSourceFromHost',
           'captureResponsibilityFromWorker',
           'constructor',
           'executePlanningTurnFromWorker',
@@ -4892,6 +4892,6 @@ describe('RunLoopDO trusted invocation convergence', () => {
 it('held common-message host RPC refuses before any signed source lookup by default',async()=>{
  const stub=env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName('common-held-'+crypto.randomUUID()));
  await runInDurableObject(stub, async instance => {
-  await expect(instance.captureCommonMessageFromHost({} as never)).rejects.toThrow('common tasks held');
+  await expect(instance.commonTaskSourceFromHost({} as never, {} as never)).rejects.toThrow('common tasks held');
  });
 });

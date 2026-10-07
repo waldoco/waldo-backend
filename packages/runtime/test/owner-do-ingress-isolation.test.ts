@@ -1073,7 +1073,13 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
     const replyPrompts=modelInputs.filter(body=>JSON.stringify(body).includes('Approval delivery: native_buttons'));
     expect(replyPrompts.length).toBeGreaterThan(0);
     expect(JSON.stringify(replyPrompts)).toContain('Reactions: available');
+    const firstTask=await runInDurableObject(root,(_instance,state)=>state.storage.sql.exec<{id:string}>('SELECT id FROM outcomes').one().id);
+    await evictDurableObject(root);
+    await send(81105,'Make that checklist shorter without changing sources.',997002);
     await runInDurableObject(root,(_instance,state)=>{
+      expect(state.storage.sql.exec('SELECT id FROM outcomes').toArray()).toEqual([{id:firstTask}]);
+      expect(state.storage.sql.exec('SELECT task_id FROM owner_task_source_scope').one().task_id).toBe(firstTask);
+      expect(state.storage.sql.exec('SELECT revision FROM owner_task_source_scope').one().revision).toBe(3);
       expect(state.storage.sql.exec('SELECT owner_id FROM owner_roots').toArray()).toEqual([{owner_id:owner}]);
       expect(state.storage.sql.exec('SELECT user_statement FROM outcomes').toArray()).toEqual([{user_statement:'Prepare a private checklist from the supplied notes.'}]);
       expect(state.storage.sql.exec('SELECT count(*) AS n FROM presence_sessions').one().n).toBe(0);

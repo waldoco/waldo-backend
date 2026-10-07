@@ -1,3 +1,5 @@
+import { verifyCommonTaskSourceRequest, type CommonTaskSourceRequest } from '../identity/common-task-source-request';
+import type { RunEffectScope } from '../channels/run-effect-scope';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import { verifyCommonMessageIngress, type CommonMessageIngress } from '../identity/common-message-ingress';
 import { DurableObject } from 'cloudflare:workers';
@@ -413,9 +415,10 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     return this.waldoCoordinator.createTrustedJudgmentRequestV05(proposal, authority);
   }
 
-  async captureCommonMessageFromHost(ingress: CommonMessageIngress): Promise<ResponsibilityCaptureResult> {
+  async commonTaskSourceFromHost(ingress: CommonMessageIngress, request: CommonTaskSourceRequest) {
     if ((this.envBindings as Cloudflare.Env & { COMMON_OWNER_TASKS?: string }).COMMON_OWNER_TASKS !== '1') throw Error('common tasks held');
     await verifyCommonMessageIngress(this.envBindings.WALDO_ROUTER_HMAC_SECRET, ingress, this.deps.now());
+    await verifyCommonTaskSourceRequest(this.envBindings.WALDO_ROUTER_HMAC_SECRET!, ingress, request);
     const physical = this.envBindings.TELEGRAM_OWNER_DO;
     if (!physical || physical.idFromName(ingress.doName).toString() !== ingress.physicalDoId) throw Error('common host locator rejected');
     const directory = commonOwnerAuthority(this.envBindings);
@@ -423,11 +426,32 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     if (!authority) throw Error('common owner unavailable');
     const rootDigest = await this.deps.sha256Hex(`waldo-owner-root\0${authority.ownerId}`);
     if (this.ctx.id.toString() !== this.envBindings.RUN_LOOP_DO.idFromName(`owner-root:sha256:${rootDigest}`).toString()) throw Error('common root route rejected');
-    const commandHash = await this.deps.sha256Hex(JSON.stringify([ingress.provider, ingress.subject, ingress.doName, ingress.occurrenceId]));
-    return this.waldoCoordinator.captureMessageResponsibility({
-      requestId: `message_${commandHash}`, commandId: `command_${commandHash}`, correlationId: `correlation_${commandHash}`,
-      payload: { userStatement: ingress.text },
-    }, authority, () => directory.assertCurrent(authority));
+    // This source-policy handoff is not the common executor lease. It expires with signed transport.
+    const scope: RunEffectScope = { runId: ingress.occurrenceId, attempt: 'source_policy', deadline: (ingress.at+300)*1000,
+      signal: new AbortController().signal,
+      admit: () => { if (this.deps.now() >= (ingress.at+300)*1000) throw Error('common source handoff expired'); },
+      commit: work => { scope.admit(); return this.ctx.storage.transactionSync(work); },
+    };
+    const capability = await this.waldoCoordinator.commonTaskSourceScope(authority, request.ownerInput, request.defaults, scope, () => directory.assertCurrent(authority));
+    if (request.operation === 'current') return { operation: 'current' as const, snapshot: await capability.current() };
+    if (request.operation === 'unresolved') return { operation: 'unresolved' as const, snapshot: await capability.unresolved() };
+    if (request.operation === 'assert_same') {
+      if (!request.expected) throw Error('common source snapshot missing');
+      await capability.assertSame(request.expected); return { operation: 'assert_same' as const };
+    }
+    if (typeof request.raw !== 'string') throw Error('common source classification missing');
+    // Exact occurrence + admitted input + model decision owns one transition across delivery retries.
+    const key=`common-source-command:${await this.deps.sha256Hex(JSON.stringify([authority.ownerId,ingress.provider,ingress.subject,ingress.occurrenceId,request.ownerInput,request.raw]))}`;
+    const saved=this.ctx.storage.kv.get<{ state: 'started' | 'settled'; result?: Awaited<ReturnType<typeof capability.classify>> }>(key);
+    if (saved) {
+      if (saved.state !== 'settled' || !saved.result) throw Error('common source transition recovery required');
+      await capability.assertSame(saved.result.snapshot); return { operation: 'classify' as const, result: saved.result };
+    }
+    // Freeze intent before async classification. An interrupted transition never runs again blindly.
+    scope.commit(()=>this.ctx.storage.kv.put(key,{state:'started'}));
+    const result=await capability.classify(request.raw,request.ownerInput.inputRef,request.ownerInput.text);
+    scope.commit(()=>this.ctx.storage.kv.put(key,{state:'settled',result}));
+    return { operation: 'classify' as const, result };
   }
 
   async captureResponsibilityFromWorker(

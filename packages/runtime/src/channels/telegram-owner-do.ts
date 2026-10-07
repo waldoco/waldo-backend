@@ -1,3 +1,4 @@
+import { signCommonTaskSourceRequest } from '../identity/common-task-source-request';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import { signCommonMessageIngress } from '../identity/common-message-ingress';
 import { taskSourceFetch } from '../tools/task-source-io';
@@ -105,7 +106,7 @@ import { selectTranscriber } from '../llm/transcriber';
 import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
 import { TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
-import { createTaskSourceScope, approveTaskSourceProposal, ownerReadSources } from './task-source-scope';
+import { createTaskSourceScope, approveTaskSourceProposal, ownerReadSources, type OwnerTaskSourceScope } from './task-source-scope';
 import type { TurnControl } from './turn-control';
 import { turnFailureCode } from './turn-failure-code';
 import type { TelegramWebhookEnv } from './telegram-webhook';
@@ -245,31 +246,32 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private activeAbort: AbortController | undefined;
   private activeOwnerContext: ReturnType<typeof createOwnerMessageContextAdapter> | undefined;
 
-  private async handoffCommonMessage(turn: import('./telegram-polling').TelegramInboundTurn) {
-    const scope = turn.runScope;
+  private async commonTaskSourcesForTurn(turn: import('./owner-turn-envelope').OwnerTurnEnvelope, scope: RunEffectScope, defaults: ReturnType<typeof ownerReadSources>): Promise<OwnerTaskSourceScope> {
     const occurrence = this.activeInbox;
     const namespace = this.env.RUN_LOOP_DO;
-    // The currently deploy-owner-only path has no auth-user authority. Do not invent its root.
-    if (this.env.COMMON_OWNER_TASKS !== '1') return undefined;
-    if (!namespace || !this.env.SUPABASE_PROJECT_URL || !this.env.SUPABASE_PUBLISHABLE_KEY || !this.env.WALDO_ROUTER_HMAC_SECRET) return undefined;
-    if (!scope || !occurrence || occurrence.runId !== scope.runId || occurrence.attempt !== scope.attempt
-      || occurrence.updateId !== turn.updateId || turn.media || !turn.text) throw new ClosedRunError();
-    scope.admit();
-    const directory = commonOwnerAuthority(this.env);
-    const authority = await directory.resolve('telegram', occurrence.subject, occurrence.doName);
-    scope.admit();
-    if (!authority) throw Error('common owner unavailable');
-    const rootHash = await sha256Hex(`waldo-owner-root\0${authority.ownerId}`);
-    const ingress = await signCommonMessageIngress(this.env.WALDO_ROUTER_HMAC_SECRET, {
-      provider: 'telegram', subject: occurrence.subject, doName: occurrence.doName,
-      physicalDoId: this.ctx.id.toString(), occurrenceId: occurrence.id, text: turn.text,
-      at: Math.floor(Date.now()/1000),
-    });
-    scope.admit();
-    const captured = await namespace.get(namespace.idFromName(`owner-root:sha256:${rootHash}`)).captureCommonMessageFromHost(ingress);
-    scope.admit();
-    if (captured.ownerId !== authority.ownerId || captured.outcome.userStatement !== turn.text) throw Error('common handoff mismatch');
-    return captured;
+    if (this.env.COMMON_OWNER_TASKS !== '1' || !namespace || !this.env.SUPABASE_PROJECT_URL || !this.env.SUPABASE_PUBLISHABLE_KEY || !this.env.WALDO_ROUTER_HMAC_SECRET) throw Error('common task sources unavailable');
+    if (!occurrence || occurrence.runId !== scope.runId || occurrence.attempt !== scope.attempt
+      || scope !== this.activeScope || turn.surface !== 'telegram' || !turn.text || turn.attachment || turn.mediaNote) throw new ClosedRunError();
+    // Populated physical source custody cannot be silently reset/imported by enabling the common path.
+    const legacyTable=this.ctx.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='owner_task_source_scope'").toArray();
+    if (legacyTable.length && this.ctx.storage.sql.exec('SELECT owner_key FROM owner_task_source_scope LIMIT 1').toArray().length) throw Error('legacy task source disposition required');
+    const directory=commonOwnerAuthority(this.env);
+    const authority=await directory.resolve('telegram',occurrence.subject,occurrence.doName);
+    scope.admit();if(!authority)throw Error('common owner unavailable');
+    const rootHash=await sha256Hex(`waldo-owner-root\0${authority.ownerId}`);
+    const root=namespace.get(namespace.idFromName(`owner-root:sha256:${rootHash}`));
+    const invoke=async(request: Omit<import('../identity/common-task-source-request').CommonTaskSourceRequest,'signature'|'ownerInput'|'defaults'>) => {
+      scope.admit();await directory.assertCurrent(authority);scope.admit();
+      const ingress=await signCommonMessageIngress(this.env.WALDO_ROUTER_HMAC_SECRET!,{provider:'telegram',subject:occurrence.subject,doName:occurrence.doName,physicalDoId:this.ctx.id.toString(),occurrenceId:occurrence.id,text:turn.text,at:Math.floor(Date.now()/1000)});
+      const signed=await signCommonTaskSourceRequest(this.env.WALDO_ROUTER_HMAC_SECRET!,ingress,{...request,ownerInput:{inputRef:turn.traceId,text:turn.text,quotedRanges:turn.sourceQuoteRanges},defaults});
+      scope.admit();const result=await root.commonTaskSourceFromHost(ingress,signed);scope.admit();return result;
+    };
+    return {
+      current:async()=>{const result=await invoke({operation:'current'});if(!('snapshot' in result)||!result.snapshot)throw Error('common source response');return result.snapshot;},
+      unresolved:async()=>{const result=await invoke({operation:'unresolved'});if(!('snapshot' in result)||!result.snapshot)throw Error('common source response');return result.snapshot;},
+      assertSame:async expected=>{await invoke({operation:'assert_same',expected});},
+      classify:async(raw,inputRef,text)=>{if(inputRef!==turn.traceId||text!==turn.text)throw Error('common owner steering not admitted');const result=await invoke({operation:'classify',raw});if(!('result' in result)||!result.result)throw Error('common source response');return result.result;},
+    };
   }
 
   private closeRunAtomic(run: InboxRecord, reason: string, awaitingDelivery = false): void {
@@ -1780,12 +1782,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           registeredHandlers: [...handlers, ...skills.handlers].map(handler => handler.name), connectorBacked: handlers.filter(handler => host.connectorBacked(handler)).map(handler => handler.name), access: host.access.bind(host) });
         this.activeOwnerContext = adapter;
         const taskOwnerKey = await currentTaskOwnerKey();
-        const sourceScope = createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
+        const sourceScope = this.env.COMMON_OWNER_TASKS === '1' ? await this.commonTaskSourcesForTurn(turn, scope, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? [])) : createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
           await admission.assertCurrent();
           if (await currentTaskOwnerKey() !== taskOwnerKey) throw new ClosedRunError();
         }, { inputRef: turn.traceId, text: turn.text, quotedRanges: turn.sourceQuoteRanges }, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? []));
         return { admission, adapter, store: ownerCanonicalHistory(storage, admission, adapter), skills,
-          sourceScope: { ...sourceScope, propose: async proposal => { await admission.assertCurrent(); await desk.proposeTaskSources(proposal); await admission.assertCurrent(); } },
+          sourceScope: { ...sourceScope, propose: async proposal => { await admission.assertCurrent(); if (this.env.COMMON_OWNER_TASKS === '1') throw Error('common source approval recovery unavailable'); await desk.proposeTaskSources(proposal); await admission.assertCurrent(); } },
           forgetting: { principal_ref: admission.invocation.verified_authority.principal_ref, tenant_ref: admission.invocation.verified_authority.tenant_ref, store: memory } };
       } } : undefined, !this.canonicalPreparation && channel === 'telegram' ? { prepare: async (turn, contextOwnerId, scope) => {
         if (turn.attachment || turn.mediaNote || probeCapture.current !== null) return undefined;
@@ -1823,12 +1825,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const capability = createScopedCuratedSkillCapability(storage.sql, { owner: admission?.invocation.verified_authority.principal_ref ?? contextOwnerId, custodyKey: `telegram:${owner}`, turnId: turn.traceId,
           trigger: 'user_message', ownerText: turn.text, assertCurrent: assertSkillOwnerCurrent }, scope);
         const taskOwnerKey = await currentTaskOwnerKey();
-        const sourceScope = createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
+        const sourceScope = this.env.COMMON_OWNER_TASKS === '1' ? await this.commonTaskSourcesForTurn(turn, scope, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? [])) : createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
           await assertSkillOwnerCurrent();
           if (await currentTaskOwnerKey() !== taskOwnerKey) throw new ClosedRunError();
         }, { inputRef: turn.traceId, text: turn.text, quotedRanges: turn.sourceQuoteRanges }, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? []));
         return Object.freeze({ ...capability, ...(admission ? { admission } : {}), sourceScope: { ...sourceScope, propose: async proposal => {
-          await assertSkillOwnerCurrent(); await desk.proposeTaskSources(proposal); await assertSkillOwnerCurrent();
+          await assertSkillOwnerCurrent(); if (this.env.COMMON_OWNER_TASKS === '1') throw Error('common source approval recovery unavailable'); await desk.proposeTaskSources(proposal); await assertSkillOwnerCurrent();
         } }, taskContext: async (assertSourceCurrent?: () => Promise<void>) => {
           await assertSkillOwnerCurrent();
           let receipts: Awaited<ReturnType<Awaited<ReturnType<typeof workspaceOwnerHost>>['recentWrites']>>;
@@ -1865,7 +1867,6 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return responder.chooseReaction(turn);
       },
       respond: async (turn, time) => {
-        if (turn.runScope && !turn.media && turn.text) await this.handoffCommonMessage(turn);
         if (turn.media) files.record(turn.media, turn.text ?? '', Date.now());
         return responder.respond(turn, time);
       },
