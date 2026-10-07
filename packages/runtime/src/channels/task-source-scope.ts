@@ -157,7 +157,8 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
         return { snapshot: waiting, proposal, outcome: 'owner_confirmation' };
         };
         const result = reduce();
-        publish?.(result);
+        const publication = publish?.(result) as unknown;
+        if (publication && typeof publication === 'object' && 'then' in publication) throw new Error('Source publication must be synchronous');
         return result;
       });
     },

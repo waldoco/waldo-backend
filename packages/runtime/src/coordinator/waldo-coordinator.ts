@@ -486,7 +486,10 @@ export class WaldoCoordinator {
         commandId: ownerInput.inputRef, correlationId: ownerInput.inputRef,
       }).outcome.id;
     };
-    const fencedScope: RunEffectScope = { ...scope, commit: work => scope.commit(() => this.#storage.transactionSync(work)) };
+    const fencedScope: RunEffectScope = { ...scope, commit: work => scope.commit(() => this.#storage.transactionSync(() => {
+      this.#identity.assertMessageAuthorityInCurrentTransaction(authority);
+      return work();
+    })) };
     const capability = createTaskSourceScope(this.#storage.sql, `common:${authority.ownerId}`, fencedScope,
       async () => { await assertCurrent(); this.#identity.assertMessageAuthorityInCurrentTransaction(authority); },
       ownerInput, defaults, allocateTask);

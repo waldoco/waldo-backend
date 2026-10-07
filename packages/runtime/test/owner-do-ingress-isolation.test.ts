@@ -1111,6 +1111,29 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
       expect(state.storage.sql.exec('SELECT user_statement FROM outcomes').toArray()).toEqual([{user_statement:'Prepare a private checklist from the supplied notes.'}]);
       expect(state.storage.sql.exec('SELECT count(*) AS n FROM presence_sessions').one().n).toBe(0);
     });
+    const retryIngress = await signCommonMessageIngress(env.WALDO_ROUTER_HMAC_SECRET!, {
+      ...ingress, occurrenceId:'fixture-prepared-recovery', text:'Keep the same source scope.', at:Math.floor(Date.now()/1000),
+    });
+    const retryRequest = await signCommonTaskSourceRequest(env.WALDO_ROUTER_HMAC_SECRET!, retryIngress, {
+      operation:'classify', ownerInput:{inputRef:'fixture-prepared-recovery',text:retryIngress.text},
+      defaults:['local','workspace','web'], raw:JSON.stringify({decision:'retain',sources:[]}),
+    });
+    const sha = async (value:string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)))].map(b=>b.toString(16).padStart(2,'0')).join('');
+    const key = `common-source-command:${await sha(JSON.stringify([owner,retryIngress.provider,retryIngress.subject,retryIngress.occurrenceId]))}`;
+    const commandDigest = await sha(JSON.stringify([retryRequest.ownerInput,retryRequest.defaults,retryRequest.raw]));
+    const current = await root.commonTaskSourceFromHost(retryIngress,await signCommonTaskSourceRequest(env.WALDO_ROUTER_HMAC_SECRET!,retryIngress,{...retryRequest,operation:'current'}));
+    if (!('snapshot' in current)) throw Error('fixture snapshot missing');
+    await runInDurableObject(root, (_instance,state) => {state.storage.kv.put(key,{state:'prepared',commandDigest,expected:current.snapshot});});
+    await evictDurableObject(root);
+    const recovered = await root.commonTaskSourceFromHost(retryIngress,retryRequest);
+    await evictDurableObject(root);
+    expect(await root.commonTaskSourceFromHost(retryIngress,retryRequest)).toEqual(recovered);
+    await runInDurableObject(root, (_instance,state) => {
+      expect(state.storage.sql.exec('SELECT revision FROM owner_task_source_scope').one().revision).toBe(4);
+      expect(state.storage.sql.exec('SELECT count(*) AS n FROM outcomes').one().n).toBe(1);
+      expect(state.storage.sql.exec('SELECT count(*) AS n FROM work_units').one().n).toBe(1);
+      expect(state.storage.kv.get<{state:string}>(key)?.state).toBe('settled');
+    });
   }finally{
     vi.unstubAllGlobals();
     await runInDurableObject(doStub(81105),async(_instance,state)=>{await state.storage.deleteAlarm();});

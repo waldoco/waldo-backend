@@ -119,3 +119,18 @@ it('prepared classifier retry refuses a changed source snapshot instead of apply
   expect(state.storage.sql.exec('SELECT count(*) AS n FROM outcomes').one().n).toBe(1);
  });
 });
+
+it('new global authority admission during a prepared source command fences the old reducer at local commit',async()=>{
+ const stub=env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName('common-source-epoch-'+crypto.randomUUID())) as DurableObjectStub<RunLoopDO>;
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const coordinator=new WaldoCoordinator(state.storage);
+  const scope={runId:'fixture',attempt:'fixture',deadline:Date.now()+30000,signal:new AbortController().signal,admit(){},commit:<T>(work:()=>T)=>state.storage.transactionSync(work)};
+  let calls=0;
+  const assertCurrent=async()=>{
+   if (++calls === 3) await coordinator.captureMessageResponsibility({...input,requestId:'epoch_input',commandId:'epoch_command'}, {...admitted,admissionRevision:'10'},async()=>{});
+  };
+  const cap=await coordinator.commonTaskSourceScope(admitted,{inputRef:'epoch_source',text:'Make this shorter.'},['workspace'],scope,assertCurrent);
+  await expect(cap.classify(JSON.stringify({decision:'retain',sources:[]}),'epoch_source','Make this shorter.')).rejects.toThrow();
+  expect(state.storage.sql.exec('SELECT revision FROM owner_task_source_scope').one().revision).toBe(1);
+ });
+});
