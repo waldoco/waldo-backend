@@ -14,7 +14,7 @@ export class GeneralBrowserError extends Error {
   constructor(readonly code: 'rejected' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
 }
 type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; now(): number; deadline(): number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number }>;
-type Navigation = Readonly<{ goto(page: Page, url: string): Promise<void>; finish(page: Page): Promise<void>; pending(page: Page): boolean }>;
+type Navigation = Readonly<{ goto(page: Page, url: string): Promise<void>; finish(page: Page): Promise<void>; pending(page: Page): boolean; dispatched(): void }>;
 
 // The owner host owns the durable checkpoint, authority and serialization. This
 // driver never allocates on attach failure and never creates a second ledger.
@@ -57,6 +57,7 @@ export function cloudflareGeneralBrowser(options: Options) {
   };
   const attached = async <T>(session: BrowserSession, work: (browser: Browser, context: BrowserContext, navigation: Navigation) => Promise<T>): Promise<T> => {
     let browser: Browser | undefined, primary: GeneralBrowserError | undefined, documentFailure: GeneralBrowserError | undefined;
+    let mutationDispatched = false;
     const redirects = new Map<Page, string>();
     const invalidDocuments = new Set<Page>();
     const navigation: Navigation = {
@@ -81,6 +82,7 @@ export function cloudflareGeneralBrowser(options: Options) {
       },
       async finish(page) { const next = redirects.get(page); if (next) await navigation.goto(page, next); },
       pending: page => redirects.has(page),
+      dispatched: () => { mutationDispatched = true; },
     };
     try {
       await admit(session);
@@ -112,8 +114,8 @@ export function cloudflareGeneralBrowser(options: Options) {
       if (documentFailure) throw documentFailure;
       return result;
     } catch (error) {
-      primary = error instanceof GeneralBrowserError && error.code === 'outcome_uncertain'
-        ? new GeneralBrowserError('outcome_uncertain', error.diagnostic ?? documentFailure?.diagnostic)
+      primary = mutationDispatched || error instanceof GeneralBrowserError && error.code === 'outcome_uncertain'
+        ? new GeneralBrowserError('outcome_uncertain', (error instanceof GeneralBrowserError ? error.diagnostic : undefined) ?? documentFailure?.diagnostic)
         : documentFailure ?? (error instanceof GeneralBrowserError ? error : new GeneralBrowserError(error instanceof GeneralRedirectError ? 'rejected' : 'provider_unavailable'));
       throw primary;
     } finally {
@@ -217,6 +219,7 @@ export function cloudflareGeneralBrowser(options: Options) {
       await beforeAction(await generalDigest(JSON.stringify({ revision: snapshot.observation.revision, action })));
       await admit(session); await checked(); await admit(session); identity(session);
       const timeout = actionTimeout(session);
+      navigation.dispatched();
       try {
         if (action.operation === 'scroll') {
           const x = action.direction === 'left' ? -snapshot.state.width : action.direction === 'right' ? snapshot.state.width : 0;
@@ -249,10 +252,11 @@ export function cloudflareGeneralBrowser(options: Options) {
       await navigation.goto(page, url);
       return observe(session, context, page);
     }),
-    closeTab: (session: BrowserSession, reference: string, beforeAction: (actionDigest: string) => Promise<void>) => attached(session, async (_, context) => {
+    closeTab: (session: BrowserSession, reference: string, beforeAction: (actionDigest: string) => Promise<void>) => attached(session, async (_, context, navigation) => {
       const page = await select(session, context, reference);
       await beforeAction(await generalDigest(JSON.stringify({ operation: 'close_tab', tab_ref: reference })));
       await admit(session);
+      navigation.dispatched();
       try { await page.close(); }
       catch { throw new GeneralBrowserError('outcome_uncertain'); }
     }),

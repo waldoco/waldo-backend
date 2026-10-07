@@ -162,7 +162,7 @@ it('does not fulfill a denied document or report a click into it as useful work'
     await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }),
       fetch: async () => ({ status: () => 403 }), fulfill: async () => { routeCalls.push('fulfilled'); }, abort: async () => { routeCalls.push('blocked'); } });
   } });
-  await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'page_unavailable', diagnostic: { status: 403 } });
+  await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'outcome_uncertain', diagnostic: { status: 403 } });
   expect(routeCalls).toEqual(['blocked']);
 });
 it('physically ends the owned session when a denied document cannot be discarded', async () => {
@@ -218,4 +218,23 @@ it('acts on an observed ref and refuses human changes during asynchronous action
   expect(f.calls.filter(x => x === 'click')).toHaveLength(1);
   await expect(driver.act(session, after, { operation: 'click', element_ref: after.observation.elements[0]!.ref }, async () => { f.humanChange(); })).rejects.toMatchObject({ code: 'stale_observation' });
   expect(f.calls.filter(x => x === 'click')).toHaveLength(1);
+});
+it('keeps a dispatched tab close uncertain when final host admission is withdrawn', async () => {
+  const f = harness(); let revoked = false;
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => { if (revoked) throw Error('revoked'); }, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(session, 'https://docs.example/index');
+  const close = f.pages[0].close;
+  f.pages[0].close = async () => { await close(); revoked = true; };
+  await expect(driver.closeTab(session, first.observation.tab_ref, async () => {})).rejects.toMatchObject({ code: 'outcome_uncertain' });
+});
+it('keeps routed mutation uncertainty and separately records unconfirmed denied-document cleanup', async () => {
+  const f = harness();
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(session, 'https://docs.example/index');
+  f.pages[0].close = async () => { throw Error('cannot discard'); };
+  f.browser.newBrowserCDPSession = async () => ({ send: async () => { throw Error('termination unconfirmed'); } });
+  f.pages[0].locator = () => ({ click: async () => {
+    await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }), fetch: async () => ({ status: () => 403 }), abort: async () => {} });
+  } });
+  await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'outcome_uncertain', diagnostic: { status: 403 }, cleanup_failed: true });
 });

@@ -25,6 +25,7 @@ export async function guardGeneralBrowserRoute(route: Route, options: Routing): 
     const mainDocument = request.isNavigationRequest() && !request.frame().parentFrame();
     if (status >= 400 && mainDocument) { options.denied(request.frame().page(), status); await route.abort('blockedbyclient'); return; }
     if (![301, 302, 303, 307, 308].includes(status)) { await route.fulfill({ response }); return; }
+    if (request.isNavigationRequest() && !mainDocument) throw new GeneralRedirectError();
     const location = response.headers()['location'];
     if (!location) throw new GeneralRedirectError();
     const next = new URL(location, url).href;
@@ -39,6 +40,9 @@ export async function guardGeneralBrowserRoute(route: Route, options: Routing): 
       // racing chrome-error document; caller immediately navigates the vetted URL.
       await route.fulfill({ status: 200, contentType: 'text/html', body: '' }); return;
     }
+    // Fulfilling B's body at A's URL changes CORS/cookie origin semantics.
+    // Keep cross-origin resource redirects unsupported rather than emulate them.
+    if (new URL(next).origin !== new URL(url).origin) throw new GeneralRedirectError();
     headers ??= { ...await request.allHeaders() };
     for (const key of Object.keys(headers)) {
       const name = key.toLowerCase();

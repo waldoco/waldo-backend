@@ -17,11 +17,12 @@ it('authorizes a main-document redirect and schedules a new navigation rather th
   expect(f.calls.map(call => call[0])).toEqual(['fetch', 'fulfill']);
   expect(f.calls[1][1]).toEqual({ status: 200, contentType: 'text/html', body: '' });
 });
-it('vets resource redirect hops and drops cross-origin credential headers', async () => {
+it('vets same-origin resource redirect hops and drops cookie headers', async () => {
   const f = route('GET', false); const authorized: string[] = [];
+  f.responses[0] = { status: () => 302, headers: () => ({ location: 'https://docs.example/final' }) };
   await guardGeneralBrowserRoute(f.route as never, { authorize: async url => { authorized.push(url); }, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: () => {} });
-  expect(authorized).toEqual(['https://docs.example/start', 'https://assets.example/final']);
-  expect(f.calls[1]).toEqual(['fetch', { url: 'https://assets.example/final', method: 'GET', maxRedirects: 0, timeout: 1000, headers: { accept: 'text/html' } }]);
+  expect(authorized).toEqual(['https://docs.example/start', 'https://docs.example/final']);
+  expect(f.calls[1]).toEqual(['fetch', { url: 'https://docs.example/final', method: 'GET', maxRedirects: 0, timeout: 1000, headers: { authorization: 'private-origin-auth', accept: 'text/html' } }]);
   expect(f.calls.map(call => call[0])).toEqual(['fetch', 'fetch', 'fulfill']);
 });
 it('blocks a disallowed redirect target before fetching it', async () => {
@@ -39,6 +40,7 @@ it('allows POST-to-GET redirect without replaying the approved POST, and rejects
 });
 it('rejects redirect cycles before fetching a previously visited resource', async () => {
   const f = route('GET', false);
+  f.responses[0] = { status: () => 302, headers: () => ({ location: 'https://docs.example/final' }) };
   f.responses[1] = { status: () => 302, headers: () => ({ location: 'https://docs.example/start' }) };
   await expect(guardGeneralBrowserRoute(f.route as never, { authorize: async () => {}, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: () => {} })).rejects.toMatchObject({ code: 'rejected' });
   expect(f.calls.filter(call => call[0] === 'fetch')).toHaveLength(2);
@@ -51,19 +53,33 @@ it('uses the installed SDK twenty-redirect bound without retrying a request', as
 });
 it('does not fetch the next hop after authority is withdrawn', async () => {
   const f = route('GET', false); let admissions = 0;
+  f.responses[0] = { status: () => 302, headers: () => ({ location: 'https://docs.example/final' }) };
   await expect(guardGeneralBrowserRoute(f.route as never, { authorize: async () => { if (++admissions === 2) throw Error('authority withdrawn'); }, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: () => {} })).rejects.toThrow();
   expect(f.calls.filter(call => call[0] === 'fetch')).toHaveLength(1);
 });
 it('clears the original POST body and content headers on a resource POST-to-GET redirect', async () => {
   const f = route('POST', false);
+  f.responses[0] = { status: () => 302, headers: () => ({ location: 'https://docs.example/final' }) };
   f.route.request().allHeaders = async () => ({ authorization: 'private-origin-auth', cookie: 'private-origin-cookie', accept: 'text/html', 'content-type': 'application/json' } as any);
   await guardGeneralBrowserRoute(f.route as never, { authorize: async () => {}, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: () => {} });
-  expect(f.calls[1][1]).toMatchObject({ method: 'GET', postData: '', headers: { accept: 'text/html' } });
+  expect(f.calls[1][1]).toMatchObject({ method: 'GET', postData: '', headers: { authorization: 'private-origin-auth', accept: 'text/html' } });
   expect(f.calls[1][1].headers).not.toHaveProperty('content-type');
 });
 
 it('does not fulfill fetched content when authority expires during transport', async () => {
   const f = route();
   await expect(guardGeneralBrowserRoute(f.route as never, { authorize: async () => {}, timeout: () => 1000, admit: async () => { throw Error('expired'); }, redirect: () => {}, denied: () => {} })).rejects.toThrow();
+  expect(f.calls.map(call => call[0])).toEqual(['fetch']);
+});
+it('does not substitute redirected iframe content into the original frame origin', async () => {
+  const f = route();
+  f.route.request().frame = () => ({ parentFrame: () => ({} as any), page: () => f.page });
+  await expect(guardGeneralBrowserRoute(f.route as never, { authorize: async () => {}, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: () => {} })).rejects.toMatchObject({ code: 'rejected' });
+  expect(f.calls.map(call => call[0])).toEqual(['fetch']);
+});
+
+it('blocks cross-origin resource redirect before any cookie/origin-changing target fetch', async () => {
+  const f = route('GET', false);
+  await expect(guardGeneralBrowserRoute(f.route as never, { authorize: async () => {}, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: () => {} })).rejects.toMatchObject({ code: 'rejected' });
   expect(f.calls.map(call => call[0])).toEqual(['fetch']);
 });
