@@ -1,3 +1,4 @@
+import { calendarActions } from './calendar-actions';
 import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
 import type { BrowserTaskContinuation, ProposeCalendarChangeArgs } from '@waldo/contracts';
@@ -40,7 +41,7 @@ const BROWSER_SUBMIT_TTL_MS = 30 * 60_000;
 // closed instead of sending; message_id reconciles an ambiguous send via Sent-mail lookup.
 export type EmailSendProposal = Readonly<{
   to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[];
-  subject: string; body: string; thread_id?: string; message_id: string; raw: string; digest: string; dedupe_key?: string;
+  subject: string; body: string; thread_id?: string; connection_id?: string; account_email?: string; binding_digest?: string; message_id: string; raw: string; digest: string; dedupe_key?: string;
 }>;
 
 // send_message proposals (ADR-0054): the exact channel + content the owner approved, replayed
@@ -55,11 +56,11 @@ export type ApprovalDecision = Readonly<{ toast: string; message: string }>;
 export type ApprovalReview =
   | Readonly<{ kind: 'email_send'; to: readonly string[]; cc: readonly string[]; bcc: readonly string[]; subject: string; body: string }>
   | Readonly<{ kind: 'message_send'; channel: string; content: string }>
-  | Readonly<{ kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string }>;
+  | Readonly<{ kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string; connection_id?: string; account_email?: string; calendar_id?: 'primary' }>;
 export type ApprovalItem = Readonly<{ id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; undoable: boolean; review: ApprovalReview | null }>;
 export type ApprovalDesk = Readonly<{
   proposeTaskSources(payload: TaskSourceProposal): Promise<string>;
-  propose(args: ProposeCalendarChangeArgs): Promise<string>;
+  propose(args: ProposeCalendarChangeArgs, assertCurrent?: () => Promise<void>): Promise<string>;
   proposeBrowserSubmit(payload: BrowserSubmitProposal): Promise<string>;
   proposeSendEmail(payload: EmailSendProposal): Promise<string>;
   proposeSendMessage(payload: MessageSendProposal): Promise<string>;
@@ -67,7 +68,9 @@ export type ApprovalDesk = Readonly<{
   record(kind: string, summary: string, payload: unknown): void;
   callback(query: CallbackQuery, trace: string): Promise<void>;
   decide(id: string, action: 'a' | 's' | 'e' | 'u', trace: string): Promise<ApprovalDecision>;
+  reconcileEmails(): Promise<void>;
   pending(now: number): readonly ApprovalItem[];
+  reconcileCalendar(): Promise<void>;
   ledger(reminders: readonly Readonly<{ note: string; at: string; repeat: string }>[]): string;
 }>;
 
@@ -77,7 +80,7 @@ export type ApprovalDesk = Readonly<{
 export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   call: TelegramCall;
   owner: number;
-  google(intent?: ProxyIntent, feature?: 'mail' | 'calendar'): Promise<GoogleClient | null>;
+  google(intent?: ProxyIntent, feature?: 'mail' | 'calendar', connectionId?: string, assertCurrent?: () => Promise<void>): Promise<GoogleClient | null>;
   newId(): string;
   now(): number;
   timezone: string;
@@ -94,6 +97,22 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
     undo_json TEXT, created_at INTEGER NOT NULL, decided_at INTEGER)`);
+  sql.exec(`CREATE TABLE IF NOT EXISTS email_send_receipts (
+    approval_id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, message_id TEXT NOT NULL,
+    provider_message_id TEXT, provider_thread_id TEXT, confirmed_at INTEGER, channel_delivered_at INTEGER, reconciliation_order INTEGER NOT NULL DEFAULT 0)`);
+  const emailBinding = ({ binding_digest: _digest, ...payload }: EmailSendProposal) => sha256Hex(JSON.stringify(payload));
+  const unknownEmail = (): ApprovalDecision => ({ toast: 'Outcome unknown', message: 'The send outcome is unknown. Gmail has not confirmed the result yet. Use /ledger to reconcile; no email was sent again.' });
+  const confirmEmail = async (id: string, ep: EmailSendProposal, client: GoogleClient): Promise<ApprovalDecision> => {
+    if (await client.findSentByMessageId(ep.message_id, ep.thread_id).catch(() => false)) {
+      sql.exec('INSERT OR IGNORE INTO email_send_receipts (approval_id, connection_id, message_id) VALUES (?, ?, ?)', id, ep.connection_id!, ep.message_id);
+      sql.exec('UPDATE email_send_receipts SET confirmed_at = ? WHERE approval_id = ?', deps.now(), id);
+      setStatus(id, 'done');
+      return { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. Gmail confirmed this Message-ID in Sent mail. No retry was issued; recipient delivery is not confirmed.` };
+    }
+    // An empty search may be eventually consistent; an outage is not proof of absence.
+    if (row(id)?.status !== 'done') setStatus(id, 'uncertain');
+    return unknownEmail();
+  };
   const when = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: deps.timezone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
   const describe = (p: ProposeCalendarChangeArgs) => {
     const name = p.title ? `"${p.title}"` : 'the event';
@@ -127,7 +146,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // button, because approving would send content the owner never saw.
   const REVIEW_BUDGET = 3800;
   const reviewEmail = (p: EmailSendProposal) =>
-    [`To: ${p.to.join(', ')}`,
+    [...(p.account_email ? [`From: ${p.account_email}`] : []), `To: ${p.to.join(', ')}`,
       ...(p.cc?.length ? [`Cc: ${p.cc.join(', ')}`] : []),
       ...(p.bcc?.length ? [`Bcc: ${p.bcc.join(', ')}`] : []),
       `Subject: ${p.subject}`, '', p.body].join('\n');
@@ -152,39 +171,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const expired = (entry: LedgerRow, p: Stored) =>
     (entry.kind === 'browser_submit' && (p as unknown as BrowserSubmitProposal).approvalExpiresAt !== undefined && (!Number.isSafeInteger((p as unknown as BrowserSubmitProposal).approvalExpiresAt) || deps.now() >= (p as unknown as BrowserSubmitProposal).approvalExpiresAt!)) ||
     deps.now() - entry.created_at > (entry.kind === 'browser_submit' ? BROWSER_SUBMIT_TTL_MS : PROPOSAL_TTL_MS) || (entry.kind !== 'browser_submit' && p.start !== undefined && Date.parse(p.start) <= deps.now());
-  const apply = async (client: GoogleClient, p: Stored): Promise<Undo | null | 'stale'> => {
-    if (p.action === 'create') {
-      const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end! });
-      return applied.etag ? { op: 'cancel', id: applied.id, applied_etag: applied.etag } : null;
-    }
-    const before = await client.event(p.event_id!);
-    if (p.seen_etag && before.etag && before.etag !== p.seen_etag) return 'stale';
-    try {
-      if (p.action === 'move') {
-        const applied = await client.moveEvent(p.event_id!, p.start!, p.end!, before.etag);
-        return applied.etag ? { op: 'move', id: p.event_id!, start: before.start, end: before.end, applied_etag: applied.etag } : null;
-      }
-      await client.cancelEvent(p.event_id!, before.etag);
-    } catch (error) {
-      if (error instanceof GoogleError && error.status === 412) return 'stale';
-      throw error;
-    }
-    return null;
-  };
-  const revert = async (client: GoogleClient, undo: Undo): Promise<'undone' | 'stale' | 'unavailable'> => {
-    // Legacy entries have no applied version. A fresh owner edit never grants Undo authority.
-    if (!undo.applied_etag) return 'unavailable';
-    const current = await client.event(undo.id);
-    if (current.etag !== undo.applied_etag) return 'stale';
-    try {
-      if (undo.op === 'cancel') await client.cancelEvent(undo.id, undo.applied_etag);
-      else await client.moveEvent(undo.id, undo.start, undo.end, undo.applied_etag);
-    } catch (error) {
-      if (error instanceof GoogleError && error.status === 412) return 'stale';
-      throw error;
-    }
-    return 'undone';
-  };
+  const calendar = calendarActions(sql, { ...deps, say, describe });
 
   const decide = async (id: string, action: 'a' | 's' | 'e' | 'u', trace: string): Promise<ApprovalDecision> => {
     const started = deps.now();
@@ -193,6 +180,15 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (entry?.status === 'review_only' && action === 's') {
       setStatus(id, 'skipped');
       return { toast: 'Not now', message: 'Left it. Nothing changed.' };
+    }
+    if (entry?.kind === 'email_send' && action === 'a' && ['sending', 'uncertain'].includes(entry.status)) {
+      const ep = JSON.parse(entry.payload_json) as EmailSendProposal;
+      try {
+        if (!ep.connection_id || !ep.binding_digest || await emailBinding(ep) !== ep.binding_digest) return { toast: 'Email changed', message: 'The stored email changed. No retry was issued.' };
+        const client = await deps.google(undefined, 'mail', ep.connection_id);
+        if (!client || client.account?.connection_id !== ep.connection_id || client.account.email !== ep.account_email) return unknownEmail();
+        return await confirmEmail(id, ep, client);
+      } catch { return unknownEmail(); }
     }
     if (!entry || entry.status !== expected) return { toast: 'Already handled.', message: 'Already handled.' };
     const proposal = JSON.parse(entry.payload_json) as Stored;
@@ -262,30 +258,27 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         if (action === 'u') {
           out = { toast: "Can't be undone", message: 'A sent email cannot be undone. Nothing was reversed.' };
         } else {
-          const client = await deps.google({id:`approval:${id}:apply`},'mail');
-          if (client === null) {
-            out = { toast: 'Google is not connected', message: 'I could not send that because Google is not connected.' };
-          } else if (await sha256Hex(ep.raw) !== ep.digest) {
+          // Consume approval before the first await. A crash or duplicate callback can only reconcile.
+          sql.exec("UPDATE ledger SET status = 'sending', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
+          if (sql.exec<{changed:number}>('SELECT changes() AS changed').one().changed !== 1) return { toast: 'Already handled.', message: 'Already handled.' };
+          if (!ep.connection_id || !ep.account_email || !ep.binding_digest || await emailBinding(ep) !== ep.binding_digest || await sha256Hex(ep.raw) !== ep.digest) {
             setStatus(id, 'failed');
-            out = { toast: 'Email changed', message: `The stored email no longer matches what you approved, so nothing was sent: ${describeEmail(ep)}. Ask me again and I'll prepare a fresh one.` };
+            out = { toast: 'Email changed', message: `The stored email or account no longer matches what you approved, so nothing was sent: ${describeEmail(ep)}. Ask for a fresh proposal.` };
           } else {
-            try {
-              await client.sendRaw(ep.raw, ep.thread_id);
-              setStatus(id, 'done');
-              out = { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. This one can't be undone.` };
-            } catch (error) {
-              if(error instanceof ProxyIntentError || (error instanceof GoogleError && error.message==='intent_pending')) {
-                setStatus(id,'uncertain');
-                return {toast:'Outcome unknown',message:'The send outcome is unknown. Check Gmail before retrying; nothing was sent again.'};
+            const client = await deps.google({id:`approval:${id}:apply`}, 'mail', ep.connection_id);
+            if (!client || client.account?.connection_id !== ep.connection_id || client.account.email !== ep.account_email) {
+              setStatus(id, 'failed');
+              out = { toast: 'Google is not connected', message: 'The approved Google account is unavailable. Nothing was sent from another account.' };
+            } else {
+              sql.exec('INSERT OR IGNORE INTO email_send_receipts (approval_id, connection_id, message_id) VALUES (?, ?, ?)', id, ep.connection_id, ep.message_id);
+              try {
+                const sent = await client.sendRaw(ep.raw, ep.thread_id);
+                if (!sent.message_id || (ep.thread_id && sent.thread_id !== ep.thread_id)) throw new Error('Google send acknowledgement is incomplete');
+                sql.exec('UPDATE email_send_receipts SET provider_message_id = ?, provider_thread_id = ? WHERE approval_id = ?', sent.message_id, sent.thread_id ?? null, id);
+              } catch {
+                // Transport and proxy ambiguity never grant another send or prove no delivery.
               }
-              const landed = await client.findSentByMessageId(ep.message_id).catch(() => false);
-              if (landed) {
-                setStatus(id, 'done');
-                out = { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. Gmail confirmed it after a hiccup; it went out exactly once.` };
-              } else {
-                setStatus(id, 'failed');
-                out = { toast: "That didn't send", message: `The email did not send (${error instanceof Error ? error.message : String(error)}). Nothing was delivered - ask me to send it again.` };
-              }
+              out = await confirmEmail(id, ep, client);
             }
           }
         }
@@ -326,33 +319,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           }
         }
       } else {
-        const client = await deps.google({id:`approval:${id}:${action==='u'?'undo':'apply'}`,requireRoute:action==='u'||proposal.action!=='create'});
-        if (client === null) {
-          out = { toast: 'Google is not connected', message: 'I could not do that because Google is not connected.' };
-        } else if (action === 'a') {
-          const undo = await apply(client, proposal);
-          if (undo === 'stale') {
-            setStatus(id, 'stale');
-            out = { toast: 'The event changed', message: `The event changed in your calendar after I proposed this, so I didn't apply it: ${describe(proposal)}. Ask me again and I'll look at the new version.` };
-          } else {
-            setStatus(id, 'done', undo);
-            out = { toast: 'Done', message: `Done: ${describe(proposal)}.${undo ? ' Undo is available for 10 minutes.' : " This one can't be undone from here."}` };
-          }
-        } else if (entry.undo_json && entry.decided_at !== null && deps.now() - entry.decided_at <= UNDO_WINDOW_MS) {
-          const result = await revert(client, JSON.parse(entry.undo_json) as Undo);
-          if (result === 'undone') {
-            setStatus(id, 'undone');
-            out = { toast: 'Undone', message: `Undone: ${describe(proposal)}.` };
-          } else if (result === 'stale') {
-            out = { toast: 'The event changed', message: "The event changed after I applied this, so I didn't undo it. Your calendar was left as it is." };
-          } else {
-            out = { toast: "Can't be undone", message: 'I cannot safely undo this because its applied calendar version is unavailable. Nothing was reversed.' };
-          }
-        } else if (!entry.undo_json) {
-          out = { toast: "Can't be undone", message: 'This calendar change cannot be safely undone from here. Nothing was reversed.' };
-        } else {
-          out = { toast: 'Too late to undo', message: 'The 10-minute undo window has passed, so I left it as it is.' };
-        }
+        out = await calendar.decide(id, action === 'u' ? 'undo' : 'apply');
       }
       deps.log({ trace, hop: `approval_${action}`, ms: deps.now() - started, ok: true, detail: id });
       return out;
@@ -360,12 +327,32 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       // A late duplicate failure cannot replace a confirmed Undo receipt.
       if (action === 'u' && row(id)?.status === 'undone') return { toast: 'Already handled.', message: 'Already handled.' };
       if(error instanceof ProxyIntentError || (error instanceof GoogleError && error.message==='intent_pending')) { setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The operation outcome is unknown. Check the result before retrying; nothing was run again.'}; }
+      if (entry.kind === 'email_send' && row(id)?.status === 'sending') { setStatus(id, 'uncertain'); return unknownEmail(); }
       deps.log({ trace, hop: `approval_${action}`, ms: deps.now() - started, ok: false, error: String(error) });
       return { toast: 'That failed', message: `That didn't work: ${error instanceof Error ? error.message : String(error)}` };
     }
   };
   return {
     decide,
+    async reconcileEmails() {
+      // A bounded owner-local readback pass; never replay an effect after interruption.
+      const candidates = sql.exec<LedgerRow>(`SELECT l.* FROM ledger l LEFT JOIN email_send_receipts r ON r.approval_id = l.id
+        WHERE l.kind = 'email_send' AND json_extract(l.payload_json, '$.connection_id') IS NOT NULL AND json_extract(l.payload_json, '$.binding_digest') IS NOT NULL AND (l.status IN ('sending', 'uncertain') OR (l.status = 'done' AND r.confirmed_at IS NOT NULL AND r.channel_delivered_at IS NULL))
+        ORDER BY COALESCE(r.reconciliation_order, 0), l.created_at, l.id LIMIT 8`).toArray();
+      for (const entry of candidates) {
+        const payload = JSON.parse(entry.payload_json) as EmailSendProposal;
+        if (!payload.connection_id) continue;
+        sql.exec('INSERT OR IGNORE INTO email_send_receipts (approval_id, connection_id, message_id) VALUES (?, ?, ?)', entry.id, payload.connection_id, payload.message_id);
+        sql.exec('UPDATE email_send_receipts SET reconciliation_order = (SELECT COALESCE(MAX(reconciliation_order), 0) + 1 FROM email_send_receipts) WHERE approval_id = ?', entry.id);
+        const out = entry.status === 'done' ? { toast: 'Sent', message: `Sent: ${describeEmail(JSON.parse(entry.payload_json) as EmailSendProposal)}. Gmail confirmed this Message-ID in Sent mail. No retry was issued; recipient delivery is not confirmed.` } : await decide(entry.id, 'a', 'email:reconcile');
+        const receipt = sql.exec<{confirmed_at:number|null;channel_delivered_at:number|null}>('SELECT confirmed_at, channel_delivered_at FROM email_send_receipts WHERE approval_id = ?', entry.id).toArray()[0];
+        if (out.toast !== 'Sent' || (!receipt || receipt.confirmed_at === null) || receipt.channel_delivered_at !== null) continue;
+        try {
+          if (await say(out.message) != null) sql.exec('UPDATE email_send_receipts SET channel_delivered_at = ? WHERE approval_id = ?', deps.now(), entry.id);
+        } catch { deps.log({trace:entry.id,hop:'email_receipt_delivery',ms:0,ok:false,code:'send_failed'}); }
+      }
+    },
+    reconcileCalendar: calendar.reconcile,
     async proposeTaskSources(payload) {
       if (!['new', 'change', 'close'].includes(payload.action) || payload.sources.some(x => !TASK_SOURCE_FAMILIES.includes(x)) || payload.sources.length > TASK_SOURCE_FAMILIES.length) throw new Error('Task source proposal unavailable');
       const prior = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'task_sources' AND json_extract(payload_json, '$.nonce') = ?", payload.nonce).toArray()[0];
@@ -389,6 +376,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       return id;
     },
     async proposeSendEmail(payload) {
+      const binding_digest = await emailBinding(payload);
       // The turn/content key binds ingress retries; Message-ID is the fallback for exact desk
       // retries. A prior card whose delivery is unknown is not issued again blindly:
       // duplicate cards could each approve one effect.
@@ -397,7 +385,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         : sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND json_extract(payload_json, '$.message_id') = ? ORDER BY created_at DESC LIMIT 1", payload.message_id).toArray()[0];
       if (prior) {
         const was = JSON.parse(prior.payload_json) as EmailSendProposal;
-        const semantic = ({ to, cc, bcc, subject, body, thread_id }: EmailSendProposal) => JSON.stringify({ to, cc, bcc, subject, body, thread_id });
+        const semantic = ({ to, cc, bcc, subject, body, thread_id, connection_id, account_email }: EmailSendProposal) => JSON.stringify({ to, cc, bcc, subject, body, thread_id, connection_id, account_email });
         if (semantic(was) !== semantic(payload)) throw new EmailProposalError('identifier_reused');
         if (prior.status === 'open' || prior.status === 'review_only') return prior.id;
         if (prior.status === 'card_unconfirmed') throw new EmailProposalError('card_unconfirmed');
@@ -405,7 +393,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       }
       const id = `p${deps.newId()}`;
       const summary = describeEmail(payload);
-      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify({ ...payload, binding_digest }), deps.now());
       const text = `Send this email? ${reviewEmail(payload)}`;
       const approvable = text.length <= REVIEW_BUDGET;
       try {
@@ -450,15 +438,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         text.length <= REVIEW_BUDGET ? [['Do it', `a:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]]);
       return id;
     },
-    async propose(p) {
+    async propose(p, assertCurrent) {
       const id = `p${deps.newId()}`;
-      const summary = `${describe(p)}. ${p.reason}`;
-      const client = await deps.google({id:`approval:${id}:apply`},'calendar');
-      if(p.event_id&&!client)throw new Error('The calendar account is unavailable; no proposal was prepared.');
-      const seen = client && p.event_id ? (await client.event(p.event_id)).etag : undefined;
-      const stored: Stored = seen ? { ...p, seen_etag: seen } : p;
+      const stored = await calendar.prepare(p, id, assertCurrent);
+      const summary = `${describe(stored)}. ${stored.reason}`;
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
-      await sayCard(id, `Proposed: ${summary}`, [['Do it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
+      await assertCurrent?.();
+      await sayCard(id, `Proposed on ${stored.account_email} (primary calendar): ${summary}`, [['Do it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
       return id;
     },
     record(kind, summary, payload) {
@@ -468,9 +454,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     // offering an approval action. Never expose raw MIME, tokens or arbitrary MCP args here.
     pending(now) {
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'open' ORDER BY created_at").toArray();
-      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
+      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE (kind = 'email_send' AND status = 'card_unconfirmed') OR (kind = 'calendar_change' AND status IN ('card_unconfirmed','applying','uncertain','undoing','undo_uncertain')) ORDER BY created_at").toArray();
       const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'review_only' ORDER BY created_at").toArray();
-      const undoable = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'done' AND undo_json IS NOT NULL AND decided_at IS NOT NULL ORDER BY decided_at DESC LIMIT 5").toArray();
+      const undoable = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'done' AND undo_json IS NOT NULL AND json_extract(undo_json, '$.op') IS NOT NULL AND decided_at IS NOT NULL ORDER BY decided_at DESC LIMIT 5").toArray();
       const review = (r: LedgerRow): ApprovalReview | null => {
         try {
           if (r.kind === 'email_send') {
@@ -488,7 +474,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             if (p.action === 'create' && (!p.title || !p.start || !p.end)) return null;
             if (p.action === 'move' && (!p.event_id || !p.title || !p.start || !p.end)) return null;
             if (p.action === 'cancel' && (!p.event_id || !p.title)) return null;
-            return { kind: 'calendar_change', action: p.action, title: p.title ?? null, event_id: p.event_id ?? null, start: p.start ?? null, end: p.end ?? null, reason: p.reason };
+            return { kind: 'calendar_change', action: p.action, title: p.title ?? null, event_id: p.event_id ?? null, start: p.start ?? null, end: p.end ?? null, reason: p.reason, connection_id: p.connection_id, account_email: (p as Stored & {account_email?:string}).account_email, calendar_id: 'primary' };
           }
           return null;
         } catch { return null; }
@@ -505,7 +491,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const answer = (text: string) => deps.call('answerCallbackQuery', { callback_query_id: query.id, text }).catch(() => undefined);
       if (query.from.id !== deps.owner || !id || !['a', 's', 'e', 'u'].includes(action)) return void (await answer('Not available.'));
       if (query.message) await deps.call('editMessageReplyMarkup', { chat_id: query.message.chat.id, message_id: query.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
-      const out = await decide(id, action as 'a' | 's' | 'e' | 'u', trace);
+      let out = await decide(id, action as 'a' | 's' | 'e' | 'u', trace);
+      if (action === 'a' && row(id)?.kind === 'email_send' && row(id)?.status === 'done') {
+        const receipt = sql.exec<{channel_delivered_at:number|null}>('SELECT channel_delivered_at FROM email_send_receipts WHERE approval_id = ?', id).toArray()[0];
+        if (receipt && receipt.channel_delivered_at === null) out = { toast: 'Sent', message: `Sent: ${describeEmail(JSON.parse(row(id)!.payload_json) as EmailSendProposal)}. Gmail confirmed this Message-ID in Sent mail. No retry was issued; recipient delivery is not confirmed.` };
+      }
       // An uncertain card may have reached the owner before a channel timeout. It has
       // no valid send approval until reconciled, so tell the owner what to do next.
       const unconfirmedRow = out.toast === 'Already handled.' ? row(id) : undefined;
@@ -515,18 +505,24 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           : 'That approval card was not confirmed, so I cannot use its button. Nothing was done. Check this chat and ask for a fresh proposal if you still want it.' }
         : out;
       await answer(reported.toast);
-      await say(reported.message, action === 'a' && out.toast === 'Done' && out.message.includes('Undo is available') ? [['Undo', `u:${id}`]] : undefined);
+      const delivered = await say(reported.message, action === 'a' && out.toast === 'Done' && out.message.includes('Undo is available') ? [['Undo', `u:${id}`]] : undefined);
+      if (delivered != null && reported.toast === 'Sent') sql.exec('UPDATE email_send_receipts SET channel_delivered_at = ? WHERE approval_id = ?', deps.now(), id);
+      if (delivered != null && (out.toast === 'Done' || out.toast === 'Undone')) calendar.delivered(id, action === 'u' ? 'undo' : 'apply');
     },
     ledger(reminders) {
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();
       const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'browser_submit', 'message_send', 'mcp_call', 'calendar_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
       const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'review_only' ORDER BY created_at").toArray();
-      const done = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status NOT IN ('open', 'changing', 'card_unconfirmed', 'review_only') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
+      const uncertain = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE (kind = 'email_send' AND status IN ('sending', 'uncertain')) OR (kind = 'calendar_change' AND status IN ('applying','uncertain','undoing','undo_uncertain')) ORDER BY created_at").toArray();
+      const done = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE NOT ((kind = 'email_send' AND status IN ('sending', 'uncertain')) OR (kind = 'calendar_change' AND status IN ('applying','uncertain','undoing','undo_uncertain'))) AND status NOT IN ('open', 'changing', 'card_unconfirmed', 'review_only') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
       const lines = [
         'Open',
-        ...(open.length || unconfirmed.length || reviewOnly.length ? open.map((r) => `- ${r.summary} (waiting on you)`) : ['- nothing waiting on you']),
+        ...(open.length || unconfirmed.length || reviewOnly.length || uncertain.length ? open.map((r) => `- ${r.summary} (waiting on you)`) : ['- nothing waiting on you']),
         ...unconfirmed.map((r) => `- ${r.summary} (review card delivery unconfirmed; cannot approve)`),
         ...reviewOnly.map((r) => `- ${r.summary} (too long for approval card; cannot send)`),
+        ...uncertain.map((r) => r.kind === 'email_send'
+          ? `- ${r.summary} (${r.id}: Gmail outcome unconfirmed; ${JSON.parse(r.payload_json).connection_id ? '/ledger checks without resending' : 'legacy account unavailable; manually check Gmail before a new proposal'})`
+          : `- outcome unknown: ${r.summary} (check the approved calendar; never retry blindly)`),
         '', 'Reminders',
         ...(reminders.length ? reminders.map((r) => `- ${r.at.replace('T', ' ')} ${r.note}${r.repeat === 'daily' ? ' (daily)' : ''}`) : ['- none set']),
         '', 'Recent',

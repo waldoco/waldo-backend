@@ -106,6 +106,15 @@ it('guard denies a read handler only while the limit is on', async () => {
   });
 });
 
+it('calendar changes that inspect an existing event respect the pasted-only boundary', async () => {
+ await withDo('scope-calendar-change',async sql=>{
+  const store=new SourceScopeStore(sql);store.set('pasted_only',owner,NOW);let calls=0;
+  const [handler]=guardExternalReads(store,[{name:'propose_calendar_change',handle:async(_args:unknown)=>{calls++;return {ok:true};}}]);
+  expect(await handler!.handle({action:'move',event_id:'event'})).toMatchObject({ok:false,code:'forbidden'});
+  expect(await handler!.handle({action:'create'})).toMatchObject({ok:true});expect(calls).toBe(1);
+ });
+});
+
 it('delegate children: every child tool is either denied under the limit or content-free, and the guard survives the child filter', async () => {
   await withDo('scope-child', async (sql) => {
     const s = new SourceScopeStore(sql);

@@ -45,6 +45,7 @@ export type GetHealthArgs = z.infer<typeof getHealthArgsSchema>;
 
 // 'query_calendar' is the ADR-0040 rename of the legacy schedule read.
 export const queryCalendarArgsSchema = z.strictObject({
+  connection_id: z.string().min(1).max(300).optional(),
   date_range: dateRangeSchema.optional(),
   calendar_id: z.string().min(1).max(254).default('primary'),
   page_token: z.string().min(1).max(4096).optional(),
@@ -76,6 +77,7 @@ export const connectServiceArgsSchema = z.strictObject({
 export type ConnectServiceArgs = z.infer<typeof connectServiceArgsSchema>;
 
 export const getCommunicationArgsSchema = z.strictObject({
+  connection_id: z.string().min(1).max(1024).optional(),
   date_range: dateRangeSchema.optional(),
   limit: z.int().min(1).max(500).default(10),
   page_token: z.string().min(1).optional(),
@@ -86,6 +88,7 @@ export type GetCommunicationArgs = z.infer<typeof getCommunicationArgsSchema>;
 // after:/before: from the date range) and a single-thread body read. Both are read-only;
 // the E1 verification-artifact quarantine runs on results before they reach model context.
 export const searchCommunicationArgsSchema = z.strictObject({
+  connection_id: z.string().min(1).max(1024).optional(),
   query: z.string().min(1),
   date_range: dateRangeSchema.optional(),
   limit: z.int().min(1).max(20).default(10),
@@ -93,6 +96,7 @@ export const searchCommunicationArgsSchema = z.strictObject({
 export type SearchCommunicationArgs = z.infer<typeof searchCommunicationArgsSchema>;
 
 export const readThreadArgsSchema = z.strictObject({
+  connection_id: z.string().min(1).max(1024).optional(),
   thread_id: z.string().min(1),
   limit: z.int().min(1).max(20).default(10),
 });

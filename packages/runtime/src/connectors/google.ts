@@ -33,6 +33,20 @@ export const googleHas = (scopes: readonly string[] | null | undefined, feature:
 export const GOOGLE_CALLBACK_PATH = '/oauth/google/callback';
 
 export type GoogleApp = Readonly<{ clientId: string; clientSecret: string; redirectUri: string }>;
+export class GoogleMailAccountError extends Error {
+  constructor(message: string, readonly reason: 'scope_missing' | 'account_unavailable' | 'selection_required' | 'reply_invalid' = 'reply_invalid') { super(message); }
+}
+
+// Resolve only within the current owner account set; mail never falls through to another account.
+export const googleAccountCandidates = <T extends { id: string; scopes: readonly string[] | null }>(accounts: readonly T[], feature: GoogleFeature, connectionId?: string): readonly T[] => {
+  const selected = connectionId ? accounts.filter(account => account.id === connectionId) : accounts;
+  if (connectionId && !selected.length) throw new GoogleMailAccountError('The selected Google account is disconnected; no other account was used.', 'account_unavailable');
+  const eligible = selected.filter(account => googleHas(account.scopes, feature));
+  if (selected.length && !eligible.length && (connectionId || feature === 'mail')) throw new GoogleMailAccountError('The selected Google account lacks the required scopes; no other account was used.', 'scope_missing');
+  if (feature === 'mail' && !connectionId && eligible.length > 1) throw new GoogleMailAccountError('Multiple Google mail accounts are connected. Read connect_service and supply the intended connection_id.', 'selection_required');
+  return eligible;
+};
+
 export type GoogleTokens = Readonly<{ refresh_token: string; email?: string; scopes?: readonly string[] | null }>;
 type Fetch = typeof fetch;
 
@@ -125,7 +139,7 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
   return { refresh_token: result.refresh_token, scopes: (result.scope ?? '').split(' ').filter(Boolean), ...(claims.email ? { email: claims.email } : {}) };
 }
 
-export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string;
+export type CalendarItem = Readonly<{ operation_tag?: string; id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string;
   status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[] }>;
 
 // Provider-internal etags are unnecessary in model-facing context. Keep them in the
@@ -170,8 +184,8 @@ export type CalendarChange = Omit<CalendarItem, 'status'> & Readonly<{ status: s
 export type MailItem = Readonly<{ id: string; thread_id: string; from: string; subject: string; snippet: string; at: string }>;
 // A1: a thread-read message carries the decoded body; the list projection (MailItem) stays
 // snippet-only so 'what is new' scans never pull bodies into a turn.
-export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string }>;
-export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string }>;
+export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string; message_id?: string; references?: string }>;
+export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string; inReplyTo?: string; references?: string; from?: string }>;
 
 // Canonical MIME for the send rail: fixed header order, CRLF, no display names. The digest the
 // owner approves binds these exact bytes; Message-ID (set by us) is the reconciliation handle
@@ -179,11 +193,15 @@ export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[
 export const buildMime = (input: DraftInput & { messageId?: string }): string => {
   const clean = (value: string) => value.replace(/[\r\n]+/g, ' ');
   const headers = [
+    ...(input.from ? [`From: ${clean(input.from)}`] : []),
     `To: ${clean(input.to.join(', '))}`,
     ...(input.cc?.length ? [`Cc: ${clean(input.cc.join(', '))}`] : []),
     ...(input.bcc?.length ? [`Bcc: ${clean(input.bcc.join(', '))}`] : []),
     `Subject: ${clean(input.subject)}`,
-    ...(input.messageId ? [`Message-ID: ${input.messageId}`, 'MIME-Version: 1.0'] : []),
+    ...(input.inReplyTo ? [`In-Reply-To: ${clean(input.inReplyTo)}`] : []),
+    ...(input.references ? [`References: ${clean(input.references)}`] : []),
+    ...(input.messageId ? [`Message-ID: ${clean(input.messageId)}`] : []),
+    'MIME-Version: 1.0',
     'Content-Type: text/plain; charset="UTF-8"',
   ];
   return `${headers.join('\r\n')}\r\n\r\n${input.body}`;
@@ -227,10 +245,10 @@ export type GoogleClient = Readonly<{
   events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<readonly CalendarItem[]>;
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
   sendRaw(raw: string, threadId?: string): Promise<Readonly<{ message_id: string; thread_id?: string }>>;
-  findSentByMessageId(messageId: string): Promise<boolean>;
+  findSentByMessageId(messageId: string, threadId?: string): Promise<boolean>;
   event(id: string): Promise<CalendarItem>;
-  createEvent(input: Readonly<{ title: string; start: string; end: string }>): Promise<CalendarItem>;
-  moveEvent(id: string, start: string, end: string, etag?: string): Promise<CalendarItem>;
+  createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string; operation_tag?: string }>): Promise<CalendarItem>;
+  moveEvent(id: string, start: string, end: string, etag?: string, operation_tag?: string): Promise<CalendarItem>;
   cancelEvent(id: string, etag?: string): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
   mailPage(query:string,limit:number,pageToken?:string):Promise<Readonly<{messages:readonly MailItem[];next_page_token:string|null;result_size_estimate:number|null}>>;
@@ -297,6 +315,8 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     return json;
   };
   const EVENTS = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+  // Undo may restore an all-day endpoint after a timed move; clear its opposite representation.
+  const endpoint = (at: string) => /^\d{4}-\d\d-\d\d$/.test(at) ? {date:at,dateTime:null} : {dateTime:at,date:null};
   const match = (etag?: string): Record<string, string> => (etag ? { 'if-match': etag } : {});
   const send = async (url: string, method: string, body: unknown, etag?: string) =>
     toItem(await call(url, { method, headers: { 'content-type': 'application/json', ...match(etag) }, body: JSON.stringify(body) }) as unknown as GoogleEvent);
@@ -326,8 +346,8 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       if (!validCalendarEvent(value) || value.id !== id) throw new Error('invalid Calendar event response');
       return toItem(value);
     },
-    createEvent: ({ title, start, end }) => send(EVENTS, 'POST', { summary: title, start: { dateTime: start }, end: { dateTime: end } }),
-    moveEvent: (id, start, end, etag) => send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { start: { dateTime: start }, end: { dateTime: end } }, etag),
+    createEvent: ({ title, start, end, id, operation_tag }) => send(EVENTS, 'POST', { ...(id ? {id} : {}), summary: title, start: { dateTime: start }, end: { dateTime: end }, ...(operation_tag ? {extendedProperties:{private:{waldoApproval:operation_tag}}} : {}) }),
+    moveEvent: (id, start, end, etag, operation_tag) => send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { start: endpoint(start), end: endpoint(end), ...(operation_tag ? {extendedProperties:{private:{waldoApproval:operation_tag}}} : {}) }, etag),
     async cancelEvent(id, etag) {
       await call(`${EVENTS}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: match(etag) });
     },
@@ -399,12 +419,14 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     // back to the snippet so the model still sees something.
     async readThread(threadId, limit) {
       const json = await call(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`) as { messages?: GmailFullMessage[] };
-      return (json.messages ?? []).slice(0, limit).map((message) => {
+      return (json.messages ?? []).slice(-limit).map((message) => {
         const header = (name: string) => message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
         return {
           id: message.id ?? '', from: header('From'), subject: header('Subject'),
           at: new Date(Number(message.internalDate ?? 0)).toISOString(),
           body: threadBody(message.payload) || (message.snippet ?? ''),
+          ...(header('Message-ID') ? { message_id: header('Message-ID') } : {}),
+          ...(header('References') ? { references: header('References') } : {}),
         };
       });
     },
@@ -440,12 +462,15 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       }) as { id: string; threadId?: string };
       return { message_id: json.id, ...(json.threadId ? { thread_id: json.threadId } : {}) };
     },
-    async findSentByMessageId(messageId) {
+    async findSentByMessageId(messageId, threadId) {
       const list = new URL('https://gmail.googleapis.com/gmail/v1/users/me/messages');
       const bare = messageId.replace(/^<|>$/g, '');
       list.search = new URLSearchParams({ q: `in:sent rfc822msgid:${bare}`, maxResults: '1' }).toString();
       const { messages = [] } = await call(list.toString()) as { messages?: { id: string }[] };
-      return messages.length > 0;
+      if (!messages[0]?.id) return false;
+      const found = await call(`${GMAIL}/${encodeURIComponent(messages[0].id)}?format=metadata&metadataHeaders=Message-ID`) as { id?: string; threadId?: string; labelIds?: string[]; payload?: { headers?: { name: string; value: string }[] } };
+      const observed = found.payload?.headers?.find(header => header.name.toLowerCase() === 'message-id')?.value;
+      return found.id === messages[0].id && found.labelIds?.includes('SENT') === true && observed === messageId && (!threadId || found.threadId === threadId);
     },
   };
 }
@@ -488,6 +513,7 @@ const toItem = (event: GoogleEvent): CalendarItem => ({
   ...(event.location ? { location: event.location } : {}),
   ...(event.description?.trim() ? { description: event.description.trim().slice(0, 2000) } : {}),
   ...(event.attendees?.length ? { attendees: event.attendees.length } : {}),
+  ...(typeof event.extendedProperties?.private?.waldoApproval === 'string' ? {operation_tag:event.extendedProperties.private.waldoApproval} : {}),
   ...(event.etag ? { etag: event.etag } : {}),
   ...(['confirmed', 'tentative', 'cancelled'].includes(event.status ?? '') ? { status: event.status as CalendarItem['status'] } : {}),
   ...(typeof event.updated === 'string' && validCalendarInstant(event.updated) ? { updated: event.updated } : {}),
@@ -498,6 +524,7 @@ const toItem = (event: GoogleEvent): CalendarItem => ({
 });
 
 type GoogleEvent = {
+  extendedProperties?: {private?: {waldoApproval?: string}};
   id: string; etag?: string; status?: string; summary?: string; location?: string; description?: string; created?: string; updated?: string; recurringEventId?: string; originalStartTime?: { dateTime?: string; date?: string }; htmlLink?: string;
   start: { dateTime?: string; date?: string }; end: { dateTime?: string; date?: string };
   attendees?: { self?: boolean; responseStatus?: string; displayName?: string }[];
