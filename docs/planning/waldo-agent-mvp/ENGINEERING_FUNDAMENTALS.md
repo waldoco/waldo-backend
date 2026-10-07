@@ -21,6 +21,10 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 ## Checklist
 
+- [ ] Adapter-normalized owner messages pass the actual shared parser, including authenticated sender fields; direct command and mocked-turn success cannot establish ordinary text ingress.
+- [ ] A post-issue final-send failure reaches the channel admission uncertainty path, never an unconditional retry notice or answered receipt. Cover the actual DO/listener boundary, retained message dedup and no responder replay.
+- [ ] Transport deadlines race response-body parsing as well as fetch even if the body ignores abort; no late parsing may turn timeout into acknowledged delivery.
+
 - [ ] Topic forgetting selects bounded exact source clauses before marker destruction; mixed-topic facts survive, fresh-source changes keep coverage incomplete, and literal retry cannot settle unproved coverage
 - [ ] Canonical forget-only cleanup is owner-bound and never admits legacy claim writes; incomplete recall preserves current input, live tools, security materials and ACL limits
 
@@ -138,6 +142,8 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 | Date | Bug | Class | Test added | Checklist line |
 |---|---|---|---|---|
+| 2026-10-07 | WhatsApp normalized ordinary text omitted required is_bot:false and silently dropped before the shared listener; direct /stop and mocked turn tests masked it | Ingress adapter integration | whatsapp-ingress.test.ts actual parser acceptance and whatsapp-owner-do-failure-visible.test.ts actual DO/listener path | Normalized messages pass the actual parser, not just direct commands |
+| 2026-10-07 | WhatsApp uncertain final send attempted retry wording and resolved failed, bypassing the outer check-first notice; JSON body could remain hung after abort | Delivery uncertainty / deadlines, pre-existing | telegram-listener.test.ts final-send RED; whatsapp-owner-do-failure-visible.test.ts one check-first notice plus retained wamid/no responder replay; whatsapp-presentation.test.ts stalled JSON RED | Post-issue failure reaches admission uncertainty, body parsing races the same deadline |
 | 2026-10-07 | Proposed diagnostic helper disagreed with admitted defaults and exempt tools; owner-turn refusal described held mail as absent when readiness denied it | Diagnostic correctness | task-source-missing.test.ts new-API default/exception/connector/workspace coverage; sealed owner-do-ingress-isolation.test.ts pending and held-mail narrowing wording RED, settled missing-mail and unready default-read controls | Diagnostics follow unchanged admission, distinguish unsettled scope from absent membership, and never imply ordinary task text approves a pending decision |
 | 2026-10-05 | Calendar Undo discarded applied etags and overwrote/deleted later owner edits; a delayed duplicate error could downgrade confirmed Undo | Concurrency | approvals.test.ts actual worker desk create/move preservation RED, conditional-race/versionless/repeated/provider-failure matrix and late duplicate uncertainty RED | Calendar Undo retains the applied response etag and never promotes a newer version into permission; confirmed Undo receipts survive duplicate errors |
 | 2026-10-01 | Dashboard shell returned plain-text 401 before React could expose login recovery; HEAD used a method the overview read rejects | Routing / authentication | dashboard-static.test.ts and dashboard-static-worker.test.ts: fixed signin redirect, root/alias/HEAD, legacy and ticket/JSON/receipt exclusions | Console entry preserves protected routes and receipts; HEAD uses GET auth |

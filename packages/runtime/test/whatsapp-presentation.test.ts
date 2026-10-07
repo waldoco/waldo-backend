@@ -31,3 +31,14 @@ it('bounds an uncertain WhatsApp send, with no retry or fallback after network i
     expect(vi.getTimerCount()).toBe(0);
   } finally {vi.useRealTimers();}
 },2000);
+it('bounds stalled WhatsApp response JSON even when the body ignores abort, without a second POST',async()=>{
+ vi.useFakeTimers();
+ try{
+  const graph=vi.fn(async()=>({ok:true,json:()=>new Promise(()=>{})}) as unknown as Response);
+  const {createWhatsAppCaller}=await import('../src/channels/whatsapp-api');
+  const pending=createWhatsAppCaller('fictional-token','fixture-phone',graph as typeof fetch)({to:'15550001111',type:'text',text:{body:'frozen'}});
+  const rejected=expect(pending).rejects.toThrow(/timed out/);
+  await vi.advanceTimersByTimeAsync(15001);await rejected;
+  expect(graph).toHaveBeenCalledTimes(1);expect(vi.getTimerCount()).toBe(0);
+ }finally{vi.useRealTimers();}
+},2000);

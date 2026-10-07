@@ -9,12 +9,12 @@ describe('whatsapp ingress normalization', () => {
       { id: 'wamid.1', from: '15550001111', type: 'text', text: { body: 'hello waldo' } },
     ], '15550001111', 0);
     expect(seq).toBe(1);
-    expect(updates).toEqual([{ update_id: WA_UPDATE_BASE + 1, message: { from: { id: 15550001111 }, chat: { id: 15550001111, type: 'private' }, text: 'hello waldo' } }]);
+    expect(updates).toEqual([{ update_id: WA_UPDATE_BASE + 1, message: { from: { id: 15550001111, is_bot:false }, chat: { id: 15550001111, type: 'private' }, text: 'hello waldo' } }]);
   });
 
   it('an approval reply synthesizes the callback_query the approval desk expects', () => {
     const { updates } = whatsappIngressUpdates([{ id: 'wamid.2', from: '15550001111', type: 'text', text: { body: 'a:p12' } }], '15550001111', 0);
-    expect(updates[0]).toMatchObject({ callback_query: { from: { id: 15550001111 }, data: 'a:p12' } });
+    expect(updates[0]).toMatchObject({ callback_query: { from: { id: 15550001111, is_bot:false }, data: 'a:p12' } });
   });
 
   it('E1: a verification artifact in inbound text is redacted before the turn exists', () => {
@@ -96,7 +96,7 @@ describe('whatsapp photos (A6)', () => {
     expect(updates[0]).toEqual({
       update_id: WA_UPDATE_BASE + 1,
       message: {
-        from: { id: 15550001111 },
+        from: { id: 15550001111, is_bot:false },
         chat: { id: 15550001111, type: 'private' },
         photo: [{ file_id: 'media-p1' }],
         caption: 'log lunch: dal, rice',
@@ -115,7 +115,7 @@ describe('whatsapp photos (A6)', () => {
     expect(updates[0]).toEqual({
       update_id: WA_UPDATE_BASE + 5,
       message: {
-        from: { id: 15550001111 },
+        from: { id: 15550001111, is_bot:false },
         chat: { id: 15550001111, type: 'private' },
         photo: [{ file_id: 'media-p2' }],
       },
@@ -140,7 +140,7 @@ describe('whatsapp voice notes (W4)', () => {
     expect(updates[0]).toEqual({
       update_id: WA_UPDATE_BASE + 1,
       message: {
-        from: { id: 15550001111 },
+        from: { id: 15550001111, is_bot:false },
         chat: { id: 15550001111, type: 'private' },
         voice: { file_id: 'media-1', mime_type: 'audio/ogg; codecs=opus' },
       },
@@ -203,4 +203,11 @@ describe('whatsapp voice notes (W4)', () => {
       expect(map.size).toBe(1);
     });
   });
+});
+
+it('ordinary normalized WhatsApp text is accepted by the actual shared polling schema',async()=>{
+ const {TelegramPollingAdapter}=await import('../src/channels/telegram-polling');
+ const {updates}=whatsappIngressUpdates([{from:'15550001111',id:'wamid.normalized',type:'text',text:{body:'Read supplied material.'}}],'15550001111',0);
+ const polled=await new TelegramPollingAdapter({getUpdates:async()=>updates}).poll(0);
+ expect(polled.accepted).toHaveLength(1);expect(polled.dropped).toBe(0);expect(polled.accepted[0]?.text).toBe('Read supplied material.');
 });

@@ -217,7 +217,7 @@ describe('host-selected compatibility surface traces', () => {
 it('failed WhatsApp model span and final failure retain WhatsApp trace', async () => {
   const { api } = recorder(); const entries: Array<{ trace: string; hop: string; ok: boolean }> = [];
   const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, surface: 'whatsapp', api, respond: async (_turn, time) => time('fixture_model', async () => { throw Error('fixture failure'); }), saveOffset: async () => undefined, log: entry => entries.push(entry) });
-  await expect(listener.handle({ updateId: 12, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'hi' })).resolves.toBe('failed');
+  await expect(listener.handle({ updateId: 12, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'hi' })).rejects.toThrow('fixture failure');
   expect(entries.every(entry => entry.trace === 'whatsapp-12')).toBe(true);
   expect(entries.some(entry => entry.hop === 'fixture_model' && !entry.ok)).toBe(true);
   expect(entries.some(entry => entry.hop === 'turn' && !entry.ok)).toBe(true);
@@ -232,4 +232,11 @@ it('renders WhatsApp final directly as guarded plain text, with no Telegram HTML
     const payload=queued?queueFinal.mock.calls[0]![1]:calls.find(([kind])=>kind==='send')![1];
     expect(payload).toEqual({chat_id:OWNER,text});
   }
+});
+it('WhatsApp actual listener propagates uncertain final send without retry wording or second send',async()=>{
+ let effects=0;const sent:string[]=[];
+ const api={...recorder().api,sendMessage:async(payload:{text:string})=>{sent.push(payload.text);throw Error('uncertain post-issue');}};
+ const listener=new TelegramOwnerListener({surface:'whatsapp',ownerTelegramId:OWNER,api,respond:async()=>{effects++;return 'Saved result.';},saveOffset:async()=>undefined});
+ await expect(listener.handle({updateId:9000000000020,messageId:null,senderId:OWNER,chatId:OWNER,sentAt:null,text:'save result'})).rejects.toThrow('uncertain post-issue');
+ expect(effects).toBe(1);expect(sent).toEqual(['Saved result.']);
 });

@@ -9,7 +9,7 @@ vi.mock('openai', () => ({ default: class {
   responses = { create: async () => ({ id: 'fixture', output_text: '{}', output: [], usage: { input_tokens: 1, output_tokens: 1 } }) };
 } }));
 
-const harness = async (name: string, work: (instance: TelegramOwnerDO, state: DurableObjectState, turn: ReturnType<typeof vi.fn>, sent: string[]) => Promise<void>) => {
+const harness = async (name: string, work: (instance: TelegramOwnerDO, state: DurableObjectState, turn: ReturnType<typeof vi.fn>, sent: string[]) => Promise<void>,mockTurn=true) => {
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const sent: string[] = [];
     const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
@@ -19,7 +19,8 @@ const harness = async (name: string, work: (instance: TelegramOwnerDO, state: Du
       ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key',
       WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id',
     });
-    const turn = vi.spyOn(instance as unknown as { turn(): Promise<void> }, 'turn').mockImplementation(async () => undefined);
+    const turn = vi.spyOn(instance as unknown as { turn(): Promise<void> }, 'turn');
+    if(mockTurn)turn.mockImplementation(async()=>undefined);
     try { await work(instance, state, turn as never, sent); } finally { await state.storage.deleteAlarm(); turn.mockRestore(); graph.mockRestore(); }
   });
 };
@@ -80,4 +81,26 @@ it('a fault between two messages in one payload says the first may be partly han
     expect(sent.filter(body => body.includes(WHATSAPP_UNSTARTED_NOTICE))).toHaveLength(0);
     expect(state.storage.kv.get('wamid:wamid.mid.A')).toBeDefined();
   });
+});
+
+it('actual WhatsApp DO turn and listener propagate uncertain final issue to one check-first notice without replay',async()=>{
+ await harness('whatsapp-actual-final-uncertainty',async(instance,state,turn,sent)=>{
+  await state.storage.deleteAll();
+  const {TelegramOwnerListener}=await import('../src/channels/telegram-listener');
+  const {whatsappTelegramShim}=await import('../src/channels/whatsapp-api');let effects=0;
+  const call=whatsappTelegramShim('fictional-token','fictional-phone-id','15550001111',async(_url,init)=>{
+   const text=JSON.parse(String(init?.body)).text.body;sent.push(text);
+   if(text==='Saved result.')throw Error('post-issue unknown');
+   return Response.json({messages:[{id:'wamid.notice'}]});
+  });
+  const api={sendMessage:(payload:any)=>call('sendMessage',payload),setMessageReaction:async()=>undefined,sendChatAction:async()=>undefined};
+  const listener=new TelegramOwnerListener({surface:'whatsapp',ownerTelegramId:15550001111,api,respond:async()=>{effects++;return 'Saved result.';},saveOffset:offset=>state.storage.put('wa_offset',offset)});
+  const setup=vi.spyOn(instance as any,'setup').mockReturnValue({listener,api,owner:15550001111,call,ready:Promise.resolve(),log:()=>{},control:{absorbed:()=>false}});
+  try{
+   await post(instance,'wamid.actual-uncertain').catch(()=>undefined);
+   expect(sent).toEqual(['Saved result.',WHATSAPP_PARTIAL_NOTICE]);expect(effects).toBe(1);
+   expect(state.storage.kv.get('wamid:wamid.actual-uncertain')).toBeDefined();
+   await post(instance,'wamid.actual-uncertain');expect(effects).toBe(1);expect(sent).toHaveLength(2);
+  }finally{setup.mockRestore();}
+ },false);
 });

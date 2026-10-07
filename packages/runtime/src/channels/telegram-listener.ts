@@ -166,7 +166,12 @@ export class TelegramOwnerListener {
       const failure = error instanceof TurnTimeout
         ? 'That took too long. In-flight changes may still finish. Try again, or split it into smaller asks.'
         : this.options.failureText ?? 'Sorry - I hit a problem answering that. Please try again in a moment.';
-      if (turn.runScope) throw error;
+      // WhatsApp's outer admission owns the fixed check-first notice. Do not
+      // turn an uncertain post-effect send into retry wording or a second send.
+      if (turn.runScope || this.options.surface === 'whatsapp') {
+        log('turn',now()-started,false,error instanceof Error?error.message:String(error),turnFailureCode(error));
+        throw error;
+      }
       await api.sendMessage({ chat_id, text: failure }).catch(() => undefined);
       await react('failed', this.options.failedEmoji ?? '😢');
       log('turn', now() - started, false, error instanceof Error ? error.message : String(error), turnFailureCode(error));

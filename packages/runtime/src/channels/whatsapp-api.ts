@@ -12,18 +12,19 @@ export const WHATSAPP_GRAPH_VERSION = 'v21.0';
 export const createWhatsAppCaller = (token: string, phoneNumberId: string, fetcher: typeof fetch = fetch): WhatsAppCall =>
   async (body) => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), WHATSAPP_API_TIMEOUT_MS);
+    let timer:ReturnType<typeof setTimeout>;
+    const timeout=new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new Error('whatsapp send timed out; delivery uncertain'));},WHATSAPP_API_TIMEOUT_MS);});
     try {
-      const response = await fetcher(`https://graph.facebook.com/${WHATSAPP_GRAPH_VERSION}/${phoneNumberId}/messages`, {
+      const response = await Promise.race([fetcher(`https://graph.facebook.com/${WHATSAPP_GRAPH_VERSION}/${phoneNumberId}/messages`, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ messaging_product: 'whatsapp', ...body }),
         signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`whatsapp ${response.status}: ${(await response.text()).slice(0, 200)}`);
-      return await response.json();
+      }),timeout]);
+      if (!response.ok) throw new Error(`whatsapp ${response.status}: ${(await Promise.race([response.text(),timeout])).slice(0, 200)}`);
+      return await Promise.race([response.json(),timeout]);
     } finally {
-      clearTimeout(timer);
+      clearTimeout(timer!);
     }
   };
 
@@ -102,7 +103,7 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
       const media = audio.voice === false
         ? { audio: { file_id: audio.id, ...(audio.mime_type ? { mime_type: audio.mime_type } : {}) } }
         : { voice: { file_id: audio.id, ...(audio.mime_type ? { mime_type: audio.mime_type } : {}) } };
-      updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum }, chat: { id: ownerNum, type: 'private' }, ...media } });
+      updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, ...media } });
       continue;
     }
     if (message.type === 'image' && message.image?.id) {
@@ -113,7 +114,7 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
       updates.push({
         update_id: WA_UPDATE_BASE + seq,
         message: {
-          from: { id: ownerNum }, chat: { id: ownerNum, type: 'private' },
+          from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' },
           photo: [{ file_id: image.id }],
           ...(q === null ? {} : { caption: q.kinds.length === 0 ? caption : onlyArtifacts(q) ? `[quarantined: ${q.kinds.join('/')} artifact - see your WhatsApp thread]` : q.text }),
         },
@@ -129,12 +130,12 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
     // code or link. The original stays owner-inspectable in their own WhatsApp thread. Approval
     // replies are channel commands that can never carry an artifact, so they skip the filter.
     if (/^([aseu]):(\S+)$/.exec(text)) {
-      updates.push({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum }, data: text, message: { message_id: 0, chat: { id: ownerNum } } } });
+      updates.push({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum, is_bot: false }, data: text, message: { message_id: 0, chat: { id: ownerNum } } } });
       continue;
     }
     const q = quarantineArtifacts(text);
     const clean = q.kinds.length === 0 ? text : onlyArtifacts(q) ? `[quarantined: ${q.kinds.join('/')} artifact - see your WhatsApp thread]` : q.text;
-    updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum }, chat: { id: ownerNum, type: 'private' }, text: clean } });
+    updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, text: clean } });
   }
   return { updates, seq };
 };

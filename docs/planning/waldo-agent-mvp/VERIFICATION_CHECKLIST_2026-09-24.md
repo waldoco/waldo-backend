@@ -94,3 +94,10 @@ connect_issued (ticket minted, channel=telegram|console) -> /c/<ticket> resolve 
 ### S3 - /c/<ticket> connect links
 channels/connect-link.ts: worker route resolves ticket -> signed connect_session_resolve -> DO beginSession mints consent at click time -> 302 (no-store, no-referrer). DO connectUrl now issues tickets (chat carries only /c/<ticket>); consent attempts minted from a session carry the ticket hash and complete the session on linked. Egress guard pattern list already covers /c/<22-char> links. Tests: 7 route tests (malformed/unknown/expired/completed/ok-302/DO-failure + hash determinism), 1 consent session-field test.
 - [ ] LIVE: P3+ on next deploy - the connect button carries a /c/ link; tail shows connect_issued -> connect_link ok -> connect_begin -> oauth hops -> connect_completed
+
+## 2026-10-07 common/WhatsApp candidate, source-only
+
+- Candidate common lifecycle/fence, WhatsApp link/plain-text/no-op/timeout and Telegram progressive-skill path are not pushed, deployed or live-verified. Focused fence review is not full-head clearance. Browser monetary WIP is excluded from publication.
+- WhatsApp review follow-up: normalized text now carries required authenticated human sender field; actual local DO -> shared listener -> uncertain final send reaches one fixed check-first notice, retained wamid denies responder replay. One 15s deadline covers fetch and JSON even if abort is ignored. Tests/types only; no Meta send/ACK/status/service-window receipt.
+- After reviewed exact-head CI and permitted staging publication, verify one real ordinary WhatsApp text reaches the responder, then a controlled delivery failure gives truthful uncertainty without a replay invitation. Native ACK and provider status are separate checks, not inferred from send success.
+- Skill list/load has connected Telegram reconstruction evidence only. WhatsApp/console/background canonical skill execution is UNPROVEN; do not mark all-surface shared lifecycle complete.
