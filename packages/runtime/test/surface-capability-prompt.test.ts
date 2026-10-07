@@ -22,3 +22,12 @@ it('reviewed-skill safety wrapper does not restore false surface delivery promis
  expect(prompt).not.toContain('Do it / Modify / Not now buttons');
  expect(prompt).toContain('Apply existing tool and approval checks');
 });
+
+it('grounds continuation and file handoff in supplied shared receipts without claiming missing native delivery',()=>{
+ const prompt=messagingSystemPrompt([],{surface:'whatsapp',delivery:{text:true,approval:'text_callback',reactions:false,attachments:false},commands:[]});
+ expect(prompt).toContain('Continue from the supplied shared task');
+ expect(prompt).toContain('do not ask the owner to retell');
+ expect(prompt).toContain('If shared context is unavailable');
+ expect(prompt).toContain('Provider acceptance is not confirmed delivery');
+ expect(prompt).toContain('Keep exact artifact links');
+});

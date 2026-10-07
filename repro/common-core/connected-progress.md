@@ -203,3 +203,8 @@ Parent relays Dalda hosted pinned staging common_owner_authority absent and hist
 - RED current caller hangs on post-issue fetch; GREEN 15-second AbortController bound through response JSON, finally clears timer, one attempt/no fallback. First test fault itself assumed signal existed, corrected to optional signal before RED timeout.
 - Centralized pinned v21.0 Graph version for send/media lookup, unchanged version. No new API capability/feature compatibility claim.
 - 46 WhatsApp guards and worker/integration types; source only, no provider send. Provider native ACK/status/window, physical original input IDs and all-call spend still open.
+
+## 2026-10-07 receipt-grounded surface prompt
+- Added continuation behavior only when shared task/decisions/execution/file receipts are supplied, no retell of available context, explicit missing-context/uncertain-effect response.
+- Verified artifact links for no-attachment surfaces; no link invention/access widening or fake native selection authority. Acceptance versus delivery distinction and actual retained follow-up requirement.
+- RED missing prompt rules; GREEN19 messaging/surface guards. Prompt behavior only, not canonical shared background lifecycle or native delivery proof.

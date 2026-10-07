@@ -100,6 +100,9 @@ export function surfacePresentationPrompt(presentation: SurfacePresentation): st
     `Reactions: ${presentation.delivery.reactions ? 'available' : 'unavailable'}. Attachment sending: ${presentation.delivery.attachments ? 'available' : 'unavailable'}.`,
     `Commands: ${presentation.commands.length ? presentation.commands.join(', ') : 'none'}.`,
     'Only describe cards, buttons, reactions, files and commands this host actually delivers. Keep shared reasoning, task context and approval semantics; do not flatten another surface to this one.',
+    'Continue from the supplied shared task, decisions, execution and file receipts regardless of surface; do not ask the owner to retell context already supplied. If shared context is unavailable, say what is missing instead of inventing progress or restarting an uncertain effect.',
+    'Keep exact artifact links from verified file receipts when attachment sending is unavailable. Do not invent links, widen file access or claim an attachment was sent. A native button selection is input to existing approval checks, not a new grant.',
+    'Provider acceptance is not confirmed delivery. Distinguish prepared work, pending delivery, provider acceptance, confirmed delivery and uncertain effects using the supplied receipts; do not claim background follow-up without an actual retained task or schedule.',
     'Connection requests use connect_service or the service tool, never remembered links. Do not invent or retype a connection link.',
     `Calendar changes and email sends require a proposal showing the exact action, recipients and words where relevant. Use this surface's actual approval delivery; text callback instructions are not native buttons. Saved email drafts stay editable in Gmail.`,
   ].join('\n');
