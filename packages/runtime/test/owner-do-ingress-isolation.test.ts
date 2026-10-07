@@ -19,7 +19,7 @@ vi.mock('../src/channels/telegram-owner-do', async load => {
     constructor(state: DurableObjectState, bindings: typeof env) {
       const subject = [81101, 81102, 81103, 81104, 81105].find(value => bindings.TELEGRAM_OWNER_DO!.idFromName(`hermetic-owner-${value}`).toString() === state.id.toString());
       const host = subject === undefined ? undefined : admittedOwnerHost(`hermetic-owner-${subject}`, String(subject),
-        new OpenAIResponsesAdapter({ apiKey: bindings.OPENAI_API_KEY }), ['get_communication', 'propose_calendar_change']);
+        new OpenAIResponsesAdapter({ apiKey: bindings.OPENAI_API_KEY }), subject===81105?['workspace_write','workspace_list','workspace_read']:['get_communication', 'propose_calendar_change']);
       const digest=`sha256:${'d'.repeat(64)}`;
       const executionBinding={provider:{category:'provider' as const,id:'fixture_model_provider',version:'1.0.0',modelRef:'gpt-6-luna',manifest:{id:'fixture_provider_manifest',version:'1.0.0',digest}},environment:{category:'execution_environment' as const,id:'fixture_registered_host',version:'1.0.0',environmentKind:'local' as const,manifest:{id:'fixture_environment_manifest',version:'1.0.0',digest}}};
       super(state, subject === 81105 ? bindings : {...bindings, SUPABASE_PROJECT_URL: undefined}, { mode: 'canonical', host:host && subject===81105?{...host,executionBinding}:host });
@@ -29,6 +29,7 @@ vi.mock('../src/channels/telegram-owner-do', async load => {
 
 const outbox: { method: string; body: Record<string, unknown> }[] = [];
 const modelInputs: unknown[] = [];
+let commonWorkspaceJourney=false;
 let onFixtureReply: (() => Promise<void>) | undefined;
 const unexpectedFetches: string[] = [];
 let sourceWorld: IsolatedSourceWorld | null = null;
@@ -64,6 +65,17 @@ vi.mock('openai', () => ({
       modelInputs.push(body);
       const name = (body as { text?: { format?: { name?: string } } }).text?.format?.name;
       if (!name && onFixtureReply) { const hook = onFixtureReply; onFixtureReply = undefined; await hook(); }
+      if(!name&&commonWorkspaceJourney&&JSON.stringify(body).includes('Approval delivery: native_buttons')){
+        const nativeInput=(body as {input?:unknown}).input;const items=Array.isArray(nativeInput)?nativeInput:[];
+        const result=(id:string)=>{const row=items.find((item:any)=>item.type==='function_call_output'&&item.call_id===id) as {output:string}|undefined;return row?JSON.parse(row.output):undefined;};
+        const revised=JSON.stringify(body).includes('Make that checklist shorter');
+        const create=result('common-write');const listed=result('common-list');const read=result('common-read');
+        let call:Record<string,unknown>|undefined;
+        if(!listed)call={name:'workspace_list',arguments:'{}',call_id:'common-list'};
+        else if(!create)call={name:'workspace_write',arguments:JSON.stringify({path:'checklist.md',text:revised?'Short checklist: verify bytes.':'Private checklist: prepare notes and verify saved bytes.',mime:'text/markdown',expected_revision:revised?listed.data.files.find((f:any)=>f.path==='checklist.md').revision:0}),call_id:'common-write'};
+        else if(!read)call={name:'workspace_read',arguments:JSON.stringify({file_id:create.data.file_id,revision:create.data.revision}),call_id:'common-read'};
+        return {id:`fixture-${modelInputs.length}`,output_text:call?'':'Private checklist saved and read back.',output:call?[{type:'function_call',...call}]:[],usage:{input_tokens:1,output_tokens:1,input_tokens_details:{cached_tokens:0}}};
+      }
       const text = name === 'task_source_scope' ? typeof taskDecision === 'string' ? taskDecision : JSON.stringify(taskDecision) : name === 'claim_ops'
         ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}'
         : 'Synthetic answer from the model adapter.';
@@ -1065,12 +1077,18 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
   const {responsibilityOwnerRootName}=await import('../src/index');
   const root=env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName(await responsibilityOwnerRootName(owner)));
   vi.stubGlobal('fetch',async(input: RequestInfo|URL,init?: RequestInit)=>{
+    if(String(input)==='https://common-source.fixture.invalid/rest/v1/rpc/workspace_owner_binding'){
+      const args=JSON.parse(String(init?.body));
+      if(args.p_do_name!=='hermetic-owner-81105'||args.p_do_id!==doStub(81105).id.toString())throw Error('fixture workspace locator mismatch');
+      return Response.json({owner_id:'10000000-0000-0000-0000-000000081105',environment:args.p_environment,namespace:args.p_namespace,do_name:args.p_do_name,do_id:args.p_do_id,state_version:0,mapping_version:1});
+    }
     if(String(input)!=='https://common-source.fixture.invalid/rest/v1/rpc/common_owner_authority')throw Error('unexpected synthetic fetch');
     const args=JSON.parse(String(init?.body));
     if(args.p_provider!=='telegram'||args.p_subject!=='81105'||args.p_do_name!=='hermetic-owner-81105')throw Error('fixture locator mismatch');
     return Response.json({owner_id:'10000000-0000-0000-0000-000000081105',auth_user_id:authUser,
       presence_id:'20000000-0000-0000-0000-000000081105',do_name:args.p_do_name,provider:args.p_provider,subject:args.p_subject,state_version:0,admission_revision:'9007199254740993'});
   });
+  commonWorkspaceJourney=true;
   try{
     await send(81105,'Prepare a private checklist from the supplied notes.',997001);
     const replyPrompts=modelInputs.filter(body=>JSON.stringify(body).includes('Approval delivery: native_buttons'));
@@ -1129,11 +1147,21 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
       expect(state.storage.sql.exec('SELECT revision FROM work_units').one().revision).toBe(3);
       expect(state.storage.sql.exec('SELECT count(*) AS n FROM presence_sessions').one().n).toBe(0);
     });
+    await runInDurableObject(doStub(81105),async(_instance,state)=>{
+      const manifest=JSON.parse(state.storage.sql.exec<{state_json:string}>('SELECT state_json FROM workspace_manifest').one().state_json) as import('@waldo/workspace').WorkspaceState;
+      expect(manifest.files).toHaveLength(1);expect(manifest.files[0]?.revision).toBe(2);
+      expect(manifest.operations.filter(op=>op.status==='committed')).toHaveLength(2);
+      const {workspaceOwnerHost}=await import('../src/channels/workspace-host');
+      const store=await workspaceOwnerHost(env,state.storage,state.id.toString(),'hermetic-owner-81105');
+      const exported=await store.export(manifest.files[0]!.file_id,2);
+      expect(new TextDecoder().decode(exported.bytes)).toBe('Short checklist: verify bytes.');
+      expect(exported.meta.sha256).toBe([...new Uint8Array(await crypto.subtle.digest('SHA-256',exported.bytes))].map(b=>b.toString(16).padStart(2,'0')).join(''));
+    });
     const receipts=await runInDurableObject(root,(_instance,state)=>[...state.storage.kv.list<unknown>({prefix:'common-execution:'})]);
     expect(receipts).toHaveLength(2);
     await runInDurableObject(root,(_instance,state)=>{
       const rows=state.storage.sql.exec<{kind:string}>('SELECT kind FROM execution_observations').toArray();
-      expect(rows.filter(row=>row.kind==='activity')).toHaveLength(4);
+      expect(rows.filter(row=>row.kind==='activity')).toHaveLength(28);
       expect(rows.filter(row=>row.kind==='ended')).toHaveLength(2);
     });
     // Separate interrupted-host fixture: original request and provider intent survive root eviction.
@@ -1200,6 +1228,7 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
       expect(state.storage.kv.get<{state:string}>(key)?.state).toBe('settled');
     });
   }finally{
+    commonWorkspaceJourney=false;
     vi.unstubAllGlobals();
     await runInDurableObject(doStub(81105),async(_instance,state)=>{await state.storage.deleteAlarm();});
     await runInDurableObject(root,async(_instance,state)=>{await state.storage.deleteAlarm();});
