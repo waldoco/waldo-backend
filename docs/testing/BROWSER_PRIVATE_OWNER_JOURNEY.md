@@ -1,4 +1,6 @@
-# Private owner browser: local preparation
+# Private owner browser: historical synthetic preparation
+
+Historical record of the earlier synthetic AES helper journey. The current serving source uses existing Supabase Vault directly and includes owner-host/console/alarm integration; see [current integration status](BROWSER_PRIVATE_INTEGRATION_STATUS.md). The key and unwired dependencies described below do not apply to that current serving path. No live acceptance is implied by either record.
 
 This isolated candidate consumes the existing AES-GCM state custody, site filter,
 private-session runner and Cloudflare launcher. It is a concrete trusted-host
