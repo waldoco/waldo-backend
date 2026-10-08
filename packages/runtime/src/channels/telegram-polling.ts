@@ -51,7 +51,7 @@ const replyProvenance = (
   senderId: number,
   chatType: string,
 ): NonNullable<ReplyContext['provenance']> => {
-  const forwarded = ['forward_origin', 'forward_date', 'forward_from', 'forward_sender_name'].some(key => key in reply);
+  const forwarded = ['forward_origin', 'forward_date', 'forward_from', 'forward_sender_name', 'is_automatic_forward'].some(key => key in reply);
   if (forwarded || reply.from === undefined) return { author: 'other', forwarded };
   if (reply.from.is_bot && chatType === 'private') return { author: 'waldo', forwarded };
   if (!reply.from.is_bot && reply.from.id === senderId) return { author: 'owner', forwarded };
