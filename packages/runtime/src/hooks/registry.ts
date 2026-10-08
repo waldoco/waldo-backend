@@ -423,6 +423,8 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
     }
 
     if (taintGateBlocksDirectExecution(tool.data, sourceTaint.data)) {
+      // Shadow log (7 days, then delete with the shadow code): old verdict was always a hard block.
+      console.warn(JSON.stringify({ hop: 'send_guard_shadow', ms: 0, ok: true, detail: JSON.stringify({ tool: tool.data, old: 'block', new: TAINT_APPROVAL_TOOLS.includes(tool.data) ? 'propose' : 'block', taint: sourceTaint.data }) }));
       return TAINT_APPROVAL_TOOLS.includes(tool.data)
         ? halt(TAINT_NEEDS_APPROVAL_REASON, 'forbidden')
         : halt('external-tainted privileged action blocked', 'forbidden');
