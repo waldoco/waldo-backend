@@ -11,6 +11,7 @@ import {
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
+import { MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop } from '../conversation/tool-loop';
 import { receiptLine } from '../hooks/receipt-line';
@@ -229,7 +230,7 @@ export const createOwnerResponder = (
     const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
     const admittedGateway: LLMGatewayAdapter = skills || backgroundCurrent ? { complete: async request => {
       await assertCurrent();
-      if (transientDecision && (request.context !== 'full_context' || new TextEncoder().encode(JSON.stringify(request.request)).byteLength > 32_768)) throw new Error('background decision context bound');
+      if (transientDecision && (request.context !== 'full_context' || new TextEncoder().encode(JSON.stringify(request.request)).byteLength > MODEL_CONTEXT_MAX_CHARS)) throw new Error('background decision context bound');
       if (!transientDecision && skills && expectedProcedure !== undefined) await skills.assertProcedureCurrent(expectedProcedure, CANARIES);
       const result = await adapter.complete(request);
       await assertCurrent();
