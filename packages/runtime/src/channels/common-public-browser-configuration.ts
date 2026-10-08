@@ -5,6 +5,7 @@ import {commonOwnerAuthority} from '../identity/common-owner-authority';
 import type {CommonBrowserConfiguration,CommonBrowserGrant} from './common-browser-host';
 import type {CloudflareBrowserSdkLoader} from './public-fixture-browser';
 import type {TelegramWebhookEnv} from './telegram-webhook';
+import {COMMON_BROWSER_MONTH_CEILING_MICROUSD} from './common-staging-registration';
 
 // Deployment/test host policy must be supplied within owner-approved testing scope.
 // This module does not create an owner decision, widen fixture authorization or enable BROWSER.
@@ -96,6 +97,10 @@ export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramW
     ledger.reserveCleanup(`browser-cleanup:${grant.taskId}`,spend.allocationMicrousd,3,()=>{
      physical();const row=read();
      if(row.allocations>=policy.maxAllocations||row.reservedBrowserMs+reserve>policy.maxReservedBrowserMs)throw Error('common public browser allocation budget unavailable');
+     // The monthly browser ceiling is per owner storage and billing month (UTC), summed across every policy ref.
+     const month=`common-public-browser-month:${new Date(now()).toISOString().slice(0,7)}`,spent=storage.kv.get<number>(month)??0;
+     if(!Number.isSafeInteger(spent)||spent<0||spent+spend.allocationMicrousd>COMMON_BROWSER_MONTH_CEILING_MICROUSD)throw Error('common public browser monthly budget unavailable');
+     storage.kv.put(month,spent+spend.allocationMicrousd);
      storage.kv.put(key,{...row,allocations:row.allocations+1,reservedBrowserMs:row.reservedBrowserMs+reserve});
     });
   },
