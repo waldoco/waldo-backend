@@ -14,11 +14,13 @@ describe('A-7: health free text in external content is redacted, not denied', ()
       payload: { subject: '[health value withheld] for FY 2025-26', body: 'Hi Shivansh, your [health value withheld] is attached. Thanks, HR' },
     });
     if (result.ok) expect(result.redactions).toContainEqual({ kind: 'health_value', count: 2 });
+    if (result.ok) for (const raw of ['Form 16']) for (const form of [raw, encodeURIComponent(raw), JSON.stringify(raw).slice(1, -1)]) expect(JSON.stringify(result.payload)).not.toContain(form);
   });
 
   it('withholds only the span in a web page that mentions a reading', () => {
     const result = run({ page: 'Average HRV 52 ms in athletes. Read more below.' }, 'internal_context', 'external');
     expect(result).toMatchObject({ ok: true, payload: { page: 'Average [health value withheld] ms in athletes. Read more below.' } });
+    if (result.ok) for (const raw of ['HRV 52']) for (const form of [raw, encodeURIComponent(raw), JSON.stringify(raw).slice(1, -1)]) expect(JSON.stringify(result.payload)).not.toContain(form);
   });
 
   it('still denies the same payload at a third-party egress destination', () => {
