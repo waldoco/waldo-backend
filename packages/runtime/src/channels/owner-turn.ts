@@ -563,7 +563,7 @@ export const createOwnerResponder = (
       try {
         const media = turn.attachment || turn.mediaNote ? { attachment: turn.attachment, note: turn.mediaNote } : undefined;
         pending = ownerTurnAttachments(turn);
-        activeOwnerTurn = turn;
+        activeOwnerTurn = { ...turn, memoryWrites };
         turnReplyContext = await quoteContext(turn.replyTo);
         turnReplyOwnAuthored = turn.replyTo?.provenance !== undefined && turn.replyTo.provenance.author !== 'other' && !turn.replyTo.provenance.forwarded;
         const said = [turn.text, media?.note].filter(Boolean).join('\n');

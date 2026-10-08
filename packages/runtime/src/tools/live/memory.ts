@@ -108,13 +108,22 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         // Hide retained history before deleting the only claim-to-source link. A failed
         // cleanup is a failed tool, not an invented completion receipt.
         await deps.hideHistory([...texts], ctx); await ready(ctx);
+        let incomplete = false;
         const commit = () => {
           for (const text of texts) store.barrier(text, now());
           for (const id of selected.keys()) store.forget(id);
+          // Derived stores (cards, notes, goals, loops, runs, blocks, inbox, topic index) are purged in the same commit as the claim.
+          // A purge that cannot verify clean leaves the pending row, so the next turn retries it and this call reports incomplete.
+          const topics = args.topic ? [args.topic] : [], ids = [...selected.keys()];
+          if (ids.length || topics.length) {
+            const purge = store.purge(ids, now(), topics);
+            if (purge.ready) store.settle(ids, topics); else incomplete = true;
+          }
           if (args.topic) for (const held of [...store.pendingTopics(), ...store.incompleteTopics()]) if (carriesTopic(held, args.topic) || carriesTopic(args.topic, held)) store.finishPendingTopic(held);
         };
         const atomic = () => deps.transaction ? deps.transaction(commit) : commit();
         if (ctx.runScope) ctx.runScope.commit(atomic); else atomic();
+        if (incomplete) return fail('Memory cleanup is incomplete; it will be retried on the next turn.');
         return success({ removed_ids: [...selected.keys()], scope_note: args.scope_note, scope: 'removed from memory and recall; copies in older chat history are hidden; backups expire per retention' });
       } },
   ];
