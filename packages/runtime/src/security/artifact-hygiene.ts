@@ -39,8 +39,10 @@ const PATTERNS: ReadonlyArray<{ kind: ArtifactKind; re: RegExp }> = [
     kind: 'otp',
     re: new RegExp(String.raw`\b[\w-]*\s?(?:verification|one[- ]?time|login|log[- ]?in|sign[- ]?in|security|authentication|confirmation|access)\s+(?:code|passcode|pin|otp)\b\s*(?:is|:|-)?\s*#?\s*` + CODE + String.raw`\b`, 'gi'),
   },
-  // "your code is 123456", "OTP: 123456" - the bare form, no vendor adjective needed.
-  { kind: 'otp', re: new RegExp(String.raw`\b(?:code|otp|passcode)\b\s*(?:is|:)?\s*#?\s*` + CODE + String.raw`\b`, 'gi') },
+  // "OTP: 123456", "passcode is 123456" - the bare form, no vendor adjective needed. Bare "code" is
+  // not here: "postal code: 560001" and "error code 5001" are not credentials. "verification code",
+  // "login code" etc. stay covered by the vendor-adjective pattern above.
+  { kind: 'otp', re: new RegExp(String.raw`\b(?:otp|passcode)\b\s*(?:is|:)?\s*#?\s*` + CODE + String.raw`\b`, 'gi') },
   // Google's SMS/mail prefix form runs first: "G-123456 is your Google verification code" would
   // otherwise lose its prefix to the generic "is your" pattern below before extraction sees it.
   { kind: 'otp', re: new RegExp(String.raw`\bG-\d{6}\b`, 'g') },

@@ -76,15 +76,16 @@ export type ArtifactRelay = (from: string, artifacts: readonly ExtractedArtifact
 // without the code ever entering model context, episodes, or traces. The tool result carries only
 // the marker; a failed or absent relay falls back to the source-app copy, never a false claim.
 const relayThreadMessage = async <T extends { subject: string; body: string; from: string }>(item: T, relay: ArtifactRelay | undefined): Promise<T & { quarantined?: readonly ArtifactKind[] }> => {
-  const extracted = extractArtifacts(`${item.subject}
-${item.body}`);
-  if (extracted.artifacts.length === 0) return item;
-  const kinds = [...new Set(extracted.artifacts.map((artifact) => artifact.kind))].sort();
-  const relayed = relay !== undefined && await relay(item.from, extracted.artifacts).then(() => true, () => false);
-  const marker = relayed
-    ? `[${kinds.join('/')} artifact - sent to the owner in a separate message]`
-    : kinds.map(artifactMarker).join(' ');
-  return { ...item, subject: marker, body: marker, quarantined: kinds };
+  const subject = extractArtifacts(item.subject);
+  const body = extractArtifacts(item.body);
+  const artifacts = [...subject.artifacts, ...body.artifacts.filter((b) => !subject.artifacts.some((s) => s.value === b.value))];
+  if (artifacts.length === 0) return item;
+  const kinds = [...new Set(artifacts.map((artifact) => artifact.kind))].sort();
+  const relayed = relay !== undefined && await relay(item.from, artifacts).then(() => true, () => false);
+  // Only the matched spans are replaced; the rest of subject and body stays readable. A failed or
+  // absent relay keeps the source-app marker, never a false sent claim.
+  const relayedMarker = (text: string): string => kinds.reduce((t, kind) => t.replaceAll(artifactMarker(kind), `[${kind} artifact - sent to the owner in a separate message]`), text);
+  return { ...item, subject: relayed ? relayedMarker(subject.text) : subject.text, body: relayed ? relayedMarker(body.text) : body.text, quarantined: kinds };
 };
 
 export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay) => [
