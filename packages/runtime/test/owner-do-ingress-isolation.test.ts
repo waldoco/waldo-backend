@@ -627,7 +627,7 @@ describe('real owner-DO ingress in a sealed test world', () => {
     expect(sourceWorld.outbox('a@example.invalid')).toEqual([]);
     expect(sourceWorld.outbox('b@example.invalid')).toEqual([]);
     expect((await callback(81101, 81101, approve, update + 1)).status).toBe(200);
-    expect(sourceWorld.outbox('a@example.invalid')).toEqual([expect.objectContaining({ kind: 'calendar.create', target: 'primary', payload: { title: 'Fixture meeting', start: '2026-10-01T10:00:00+05:30', end: '2026-10-01T10:30:00+05:30' } })]);
+    expect(sourceWorld.outbox('a@example.invalid')).toEqual([expect.objectContaining({ kind: 'calendar.create', target: 'primary', payload: { title: 'Fixture meeting', start: '2026-10-01T10:00:00+05:30', end: '2026-10-01T10:30:00+05:30', id: expect.stringMatching(/^[0-9a-f]{32,64}$/) } })]);
     expect(sourceWorld.outbox('b@example.invalid')).toEqual([]);
     expect(sourceWorld.providerCalendarReadback('a@example.invalid')).toEqual([expect.objectContaining({ title: 'Fixture meeting', start: '2026-10-01T10:00:00+05:30' })]);
     expect(sourceWorld.providerCalendarReadback('b@example.invalid')).toEqual([]);

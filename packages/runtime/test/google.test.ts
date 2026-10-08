@@ -270,7 +270,7 @@ describe('gmail send rail bytes', () => {
     expect(await client.sendRaw(raw, 't1')).toEqual({ message_id: 'sent1', thread_id: 't1' });
     const sendCall = calls.find((c) => c.url.includes('/messages/send'))!;
     expect(JSON.parse(String(sendCall.init!.body))).toEqual({ raw: 'xJ7', threadId: 't1' });
-    expect(await client.findSentByMessageId('<m1@waldo-send>')).toBe(true);
+    expect(await client.findSentByMessageId('<m1@waldo-send>')).toEqual({ message_id: 'sent1' });
     // Regression: the approved bytes are base64url MIME (google 400 'Base64 decoding failed'
     // when unencoded MIME text crosses messages/send). The tool binds exactly these bytes.
     const wire = b64url(new TextEncoder().encode(buildMime({ to: ['a@x.test'], subject: 'Hi', body: 'b', messageId: '<m2@waldo-send>' })));

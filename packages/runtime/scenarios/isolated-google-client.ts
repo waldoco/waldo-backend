@@ -71,7 +71,7 @@ export const isolatedGoogleClient = (world: IsolatedSourceWorld, owner: string):
   tasks: async (status: TaskStatusFilter, limit) => world.list(owner, 'tasks')
     .filter((row) => status === 'all' || (status === 'done' ? row.status === 'done' : row.status === 'todo'))
     .slice(0, limit).map((row) => copy<TaskItem>(row)),
-  draft: async () => rejectEffect(), sendRaw: async () => rejectEffect(), findSentByMessageId: async () => rejectRead(),
+  draft: async () => rejectEffect(), sendRaw: async () => rejectEffect(), findSentByMessageId: async () => rejectRead(), findDraftByMessageId: async () => rejectRead(),
   createEvent: async () => rejectEffect(), moveEvent: async () => rejectEffect(), cancelEvent: async () => rejectEffect(),
 });
 

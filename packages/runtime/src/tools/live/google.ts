@@ -1,3 +1,4 @@
+import { ownerEffectOperationRef, type OwnerEffectLedger } from '../../channels/owner-effect-ledger';
 import { taskSourceClient } from '../task-source-io';
 import { availabilityWindows } from './availability';
 import type { ProxyIntent } from '../../connectors/proxy-intent';
@@ -18,7 +19,7 @@ export type GoogleAccess = Readonly<{
 }>;
 
 export type EffectDesk = Readonly<{
-  propose(proposal: ProposeCalendarChangeArgs, turnKey?: string): Promise<string>;
+  propose(proposal: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string): Promise<string>;
   proposeSendEmail(proposal: EmailSendProposal): Promise<string>;
   record(kind: string, summary: string, payload: unknown): void;
 }>;
@@ -97,7 +98,7 @@ const relayThreadMessage = async <T extends { subject: string; body: string; fro
   return { ...item, subject: relayed ? relayedMarker(subject.text) : subject.text, body: relayed ? relayedMarker(body.text) : body.text, quarantined: kinds };
 };
 
-export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay) => [
+export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger) => [
   {
     name: 'query_calendar',
     description: "Read a bounded page from one connected Google account and calendar (primary by default), now through the next 24 hours by default. Inspect coverage and next_page_token. Continue with the exact explicit date_range, calendar_id, limit and include_declined. Each result contains only its current page: an exhausted continuation does not make that result a complete window. Legacy adapters report unknown account and incomplete coverage. This is event enumeration, not availability.",
@@ -229,7 +230,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     mutates_state: true,
     async handle(args: ProposeCalendarChangeArgs, ctx?: ToolDispatcherContext) {
       const result = await withGoogle(google, 'calendar', ctx, async client => ({
-        proposal_id: await desk.propose({...args, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId),
+        proposal_id: await desk.propose({...args, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx)),
         status: 'sent to the owner with Do it / Modify / Not now buttons', applied: false,
       }), args.account);
       return result.ok ? {...result, source_taint:null} : result;
@@ -243,18 +244,20 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     autonomy_gated: false,
     requires_connector: true,
     mutates_state: true,
-    // The draft receipt is a mutation ack, not provider-controlled content, so the result is
-    // restamped taint-null: EXTERNAL_ORIGIN_TOOLS covers reads, and the dispatcher rejects a
-    // mismatched stamp ('external' here made every draft result unparseable, 2026-09-25).
     handle: async (args: DraftEmailArgs, ctx?: ToolDispatcherContext) => {
       if (!ctx?.turnId || !ctx.toolCallId) return { ok: false as const, code: 'rejected' as const, error: 'Draft invocation identity is unavailable.' };
       const intent = { id: `draft:${await sha256Hex(JSON.stringify([ctx.authenticatedUserId,ctx.turnId,ctx.toolCallId]))}` };
       const access: GoogleAccess = { client: (feature, _intent, guard, account) => google.client(feature,intent,guard,account) };
       const result = await withGoogle(access, 'mail', ctx, async (client) => {
-        const draft = await client.draft({
+        const input = {
           to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
           subject: args.subject, body: args.body_markdown, ...(args.reply_to_thread_id ? { threadId: args.reply_to_thread_id } : {}),
-        });
+          messageId: `<${intent.id.slice(6)}@waldo-draft>`,
+        };
+        const draft = effects ? (await effects.execute({ operationId: intent.id, owner_ref: ctx.authenticatedUserId, tool: 'draft_email', payload: input }, {
+          dispatch: async () => { const result = await client.draft(input); return { provider_id: result.draft_id, result }; },
+          reconcile: async () => { const result = await client.findDraftByMessageId?.(input.messageId); return result ? { status: 'done', receipt: { provider_id: result.draft_id, result } } : { status: 'unknown' }; },
+        })).result as Awaited<ReturnType<GoogleClient['draft']>> : await client.draft(input);
         desk.record('email_draft', `Drafted "${args.subject}" to ${args.to.join(', ')}`, draft);
         return { ...draft, sent: false };
       }, args.account);
@@ -292,6 +295,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       })));
       try {
         const proposal_id = await desk.proposeSendEmail({
+          operation_ref: await ownerEffectOperationRef(ctx),
           to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
           subject: args.subject, body: args.body_markdown,
           ...(gate.data.account.email ? {account:gate.data.account.email} : {}),

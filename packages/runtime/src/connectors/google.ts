@@ -172,7 +172,7 @@ export type MailItem = Readonly<{ id: string; thread_id: string; from: string; s
 // A1: a thread-read message carries the decoded body; the list projection (MailItem) stays
 // snippet-only so 'what is new' scans never pull bodies into a turn.
 export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string }>;
-export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string }>;
+export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string; messageId?: string }>;
 
 // Canonical MIME for the send rail: fixed header order, CRLF, no display names. The digest the
 // owner approves binds these exact bytes; Message-ID (set by us) is the reconciliation handle
@@ -226,11 +226,12 @@ export type GoogleClient = Readonly<{
   calendarPage?(calendarId: string, from: string, to: string, limit: number, includeDeclined: boolean, pageToken?: string): Promise<CalendarPage>;
   freeBusy(from:string,to:string,calendarIds:readonly string[],timezone:string):Promise<FreeBusyResult>;
   events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<readonly CalendarItem[]>;
+  findDraftByMessageId?(messageId: string): Promise<Readonly<{ draft_id: string; message_id?: string }> | null>;
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
   sendRaw(raw: string, threadId?: string): Promise<Readonly<{ message_id: string; thread_id?: string }>>;
-  findSentByMessageId(messageId: string): Promise<boolean>;
+  findSentByMessageId(messageId: string): Promise<boolean | Readonly<{ message_id: string }>>;
   event(id: string): Promise<CalendarItem>;
-  createEvent(input: Readonly<{ title: string; start: string; end: string }>): Promise<CalendarItem>;
+  createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string }>): Promise<CalendarItem>;
   moveEvent(id: string, start: string, end: string, etag?: string): Promise<CalendarItem>;
   cancelEvent(id: string, etag?: string): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
@@ -245,7 +246,7 @@ export type GoogleClient = Readonly<{
 // Single source for the connector-proxy allowlist: the runtime's vault client and the Supabase
 // connector-proxy Edge Function both build from this list, so a method added to GoogleClient but
 // missed here fails `satisfies` / the parity test instead of breaking live calls on Vault installs.
-export const GOOGLE_METHODS = ['calendarPage','mailPage','freeBusy', 'events', 'draft', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent'] as const satisfies readonly (keyof GoogleClient)[];
+export const GOOGLE_METHODS = ['calendarPage','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent'] as const satisfies readonly (keyof GoogleClient)[];
 export type GoogleMethod = (typeof GOOGLE_METHODS)[number];
 
 const b64urlDecode = (data: string): string => {
@@ -361,7 +362,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       if (!validCalendarEvent(value) || value.id !== id) throw new Error('invalid Calendar event response');
       return toItem(value);
     },
-    createEvent: ({ title, start, end }) => send(EVENTS, 'POST', { summary: title, start: { dateTime: start }, end: { dateTime: end } }),
+    createEvent: ({ title, start, end, id }) => send(EVENTS, 'POST', { ...(id ? { id } : {}), summary: title, start: { dateTime: start }, end: { dateTime: end } }),
     moveEvent: (id, start, end, etag) => send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { start: { dateTime: start }, end: { dateTime: end } }, etag),
     async cancelEvent(id, etag) {
       await call(`${EVENTS}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: match(etag) });
@@ -459,6 +460,12 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       }) as { id: string; message?: { id?: string; threadId?: string } };
       return { draft_id: json.id, ...(json.message?.id ? { message_id: json.message.id } : {}), ...(json.message?.threadId ? { thread_id: json.message.threadId } : {}) };
     },
+    async findDraftByMessageId(messageId) {
+      const list = new URL('https://gmail.googleapis.com/gmail/v1/users/me/drafts');
+      list.search = new URLSearchParams({ q: `rfc822msgid:${messageId}`, maxResults: '1' }).toString();
+      const { drafts = [] } = await call(list.toString()) as { drafts?: { id: string; message?: { id: string } }[] };
+      return drafts[0] ? { draft_id: drafts[0].id, ...(drafts[0].message ? { message_id: drafts[0].message.id } : {}) } : null;
+    },
     async sendRaw(raw, threadId) {
       const json = await call('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -471,7 +478,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       const bare = messageId.replace(/^<|>$/g, '');
       list.search = new URLSearchParams({ q: `in:sent rfc822msgid:${bare}`, maxResults: '1' }).toString();
       const { messages = [] } = await call(list.toString()) as { messages?: { id: string }[] };
-      return messages.length > 0;
+      return messages[0] ? { message_id: messages[0].id } : false;
     },
   };
 }

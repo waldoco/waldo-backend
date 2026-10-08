@@ -1,3 +1,4 @@
+import { ownerEffectOperationRef } from '../../channels/owner-effect-ledger';
 // The tool ran and rejected the call (MCP isError, SEP-1303): deterministic, model-correctable.
 class ToolExecutionError extends Error {}
 
@@ -117,14 +118,14 @@ export const callMcpToolHandler = (serversRaw: string | undefined, desk?: McpDes
   schema: callMcpToolArgsSchema,
   trigger_allowlist: allowlist('call_mcp_tool'),
   autonomy_gated: false,
-  handle: async ({ server, tool, args }: CallMcpToolArgs): Promise<ToolResult<unknown>> => {
+  handle: async ({ server, tool, args }: CallMcpToolArgs, ctx?: ToolDispatcherContext): Promise<ToolResult<unknown>> => {
     const servers = mcpServers(serversRaw);
     const found = servers.find((s) => s.name === server);
     if (!found) {
       return { ok: false, code: 'not_found', error: servers.length ? `Unknown MCP server "${server}". Configured: ${servers.map((s) => s.name).join(', ')}` : 'No MCP servers are configured on this Waldo yet.', source_taint: 'external' };
     }
     if (desk) {
-      const proposal_id = await desk.proposeMcpCall({ server, tool, args });
+      const proposal_id = await desk.proposeMcpCall({ server, tool, args, operation_ref: await ownerEffectOperationRef(ctx) });
       // call_mcp_tool is external-origin by contract: the stamp holds even though nothing
       // external ran yet (the dispatcher rejects a null stamp on this tool).
       return { ok: true, data: { proposal_id, status: 'sent to the owner with Do it / Not now buttons', applied: false }, source_taint: 'external' };

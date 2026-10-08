@@ -1,3 +1,4 @@
+import { ownerEffectOperationRef } from '../../channels/owner-effect-ledger';
 import {
   sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type SendMessageArgs, type ToolHandler, type ToolName, type ToolResult,
@@ -21,8 +22,9 @@ export const sendMessageHandler = (desk: MessageDesk): ToolHandler<SendMessageAr
   trigger_allowlist: allowlist('send_message'),
   autonomy_gated: false,
   mutates_state: true,
-  handle: async (args: SendMessageArgs): Promise<ToolResult<unknown>> => {
+  handle: async (args: SendMessageArgs, ctx?: ToolDispatcherContext): Promise<ToolResult<unknown>> => {
     const proposal_id = await desk.proposeSendMessage({
+      operation_ref: await ownerEffectOperationRef(ctx),
       channel: args.channel,
       content: args.content,
       idempotency_key: args.idempotency_key,
