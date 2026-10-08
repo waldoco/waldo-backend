@@ -107,22 +107,6 @@
       "vectorize": [
         { "binding": "VECTORIZE", "index_name": "waldo-recall" }
       ]
-    },
-    // Throwaway S0 network-block worker. Its only binding is BROWSER; the owner-facing staging
-    // worker stays unbound until a passing S0 result is recorded (guard-wrangler-local-bindings).
-    "s0": {
-      "name": "waldo-s0-staging",
-      "main": "src/s0-worker.ts",
-      "compatibility_flags": ["nodejs_compat"],
-      "vars": { "WALDO_ENVIRONMENT": "staging" },
-      "browser": { "binding": "BROWSER" },
-      "ratelimits": [
-        {
-          "name": "RESPONSIBILITY_RATE_LIMITER",
-          "namespace_id": "1001",
-          "simple": { "limit": 120, "period": 60 }
-        }
-      ]
     }
   },
   "migrations": [

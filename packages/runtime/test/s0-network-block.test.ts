@@ -16,3 +16,10 @@ it('is invisible without staging, a token, a binding and the exact bearer', asyn
   for (const [r, e] of [[req('Bearer t0ken'), { ...env, WALDO_ENVIRONMENT: 'production' }], [req('Bearer t0ken'), { ...env, S0_TOKEN: undefined }], [req('Bearer t0ken'), { ...env, BROWSER: undefined }], [req(), env], [req('Bearer wrong'), env], [req('Bearer t0ken', 'GET'), env]] as const)
     expect((await handleS0(r, e, sdk)).status).toBe(404);
 });
+
+it('a probe that merely timed out is not accepted as a network block, and the deadline sums under 60s', async () => {
+  const mod = await import('../src/channels/s0-network-block');
+  const timedOut = mod.S0_BLOCKED_PROBES.map(url => ({ url, reached: false, detail: 'blocked:TimeoutError: signal timed out' }));
+  expect(mod.evaluateS0(true, timedOut, true, 5).passed).toBe(false);
+  expect(mod.S0_TOTAL_DEADLINE_MS).toBe(60_000);
+});

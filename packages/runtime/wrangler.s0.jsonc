@@ -1,0 +1,12 @@
+// Throwaway S0 network-block worker. A separate config on purpose: named wrangler environments
+// inherit top-level assets, so an env would ship the dashboard. Only a BROWSER binding here; the
+// owner-facing staging worker stays unbound until a passing S0 result is recorded.
+// Deploy: wrangler deploy --config wrangler.s0.jsonc (operator sets S0_TOKEN as a secret).
+{
+  "name": "waldo-s0-staging",
+  "main": "src/s0-worker.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": { "WALDO_ENVIRONMENT": "staging" },
+  "browser": { "binding": "BROWSER" }
+}

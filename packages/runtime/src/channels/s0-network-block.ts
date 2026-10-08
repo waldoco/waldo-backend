@@ -14,29 +14,45 @@ export type S0PageLike = Readonly<{ gotoAllowed: () => Promise<boolean>; probe: 
 
 // Pure decision: pass only if the allowed host loaded and every off-host probe failed.
 export const evaluateS0 = (allowedLoaded: boolean, probes: readonly S0Probe[], terminated: boolean, sessionMs: number): S0Result =>
-  ({ passed: allowedLoaded && terminated && probes.length === S0_BLOCKED_PROBES.length && probes.every(p => !p.reached), allowedLoaded, probes, terminated, sessionMs });
+  ({ passed: allowedLoaded && terminated && probes.length === S0_BLOCKED_PROBES.length && probes.every(p => !p.reached && !p.detail.includes('TimeoutError')), allowedLoaded, probes, terminated, sessionMs });
 
+export const S0_TOTAL_DEADLINE_MS = 60_000;
+const S0_PROBE_TIMEOUT_MS = 5_000;
+const S0_WORK_BUDGET_MS = 40_000;
+const S0_CLEANUP_BUDGET_MS = 12_000;
+const within = <T>(work: Promise<T>, ms: number): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Error('s0 deadline')), ms); })]).finally(() => clearTimeout(timer));
+};
+
+// Hard ceiling: work is cut at 40s, cleanup at 12s, so the whole run stays under 60s. A client
+// timeout is never treated as closure: `terminated` is true only when the provider session list no
+// longer contains the session after Browser.close.
 export async function runS0(binding: BrowserWorker, loadSdk: CloudflareBrowserSdkLoader): Promise<S0Result> {
-  const started = Date.now(), sdk = await loadSdk();
-  const session = await sdk.acquire(binding, cloudflareBrowserGuardOptions([S0_ALLOWED_HOST], 10000));
+  const started = Date.now(), sdk = await within(loadSdk(), 10_000);
+  const session = await within(sdk.acquire(binding, cloudflareBrowserGuardOptions([S0_ALLOWED_HOST], 10000)), 15_000);
   const id = session.sessionId;
   let browser: Awaited<ReturnType<typeof sdk.connect>> | undefined, allowedLoaded = false, terminated = false;
   const probes: S0Probe[] = [];
   try {
-    browser = await sdk.connect(binding, { sessionId: id, persistent: true } as never);
-    const page = await (await browser.newContext({ serviceWorkers: 'block' })).newPage();
-    page.setDefaultTimeout(10000);
-    const response = await page.goto(`https://${S0_ALLOWED_HOST}/`, { waitUntil: 'domcontentloaded', timeout: 10000 });
-    allowedLoaded = !!response && response.status() < 400;
-    for (const url of S0_BLOCKED_PROBES) {
-      const detail = await page.evaluate(async (target: string) => {
-        try { const r = await fetch(target, { mode: 'no-cors', cache: 'no-store' } as RequestInit); return `reached:${r.type}`; } catch (e) { return `blocked:${String(e).slice(0, 60)}`; }
-      }, url);
-      probes.push({ url, reached: detail.startsWith('reached:'), detail });
-    }
-  } finally {
-    try { browser ??= await sdk.connect(binding, { sessionId: id, persistent: true } as never); const cdp = await browser.newBrowserCDPSession(); await cdp.send('Browser.close'); } catch { /* termination can disconnect first */ }
-    try { terminated = !(await sdk.sessions(binding)).some(s => s.sessionId === id); } catch { /* unconfirmed stays false */ }
+    await within((async () => {
+      browser = await sdk.connect(binding, { sessionId: id, persistent: true } as never);
+      const page = await (await browser.newContext({ serviceWorkers: 'block' })).newPage();
+      page.setDefaultTimeout(10000);
+      const response = await page.goto(`https://${S0_ALLOWED_HOST}/`, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      allowedLoaded = !!response && response.status() < 400;
+      for (const url of S0_BLOCKED_PROBES) {
+        const detail = await page.evaluate(async ({ target, timeoutMs }: { target: string; timeoutMs: number }) => {
+          try { const r = await fetch(target, { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) } as RequestInit); return `reached:${r.type}`; } catch (e) { return `blocked:${String(e).slice(0, 60)}`; }
+        }, { target: url, timeoutMs: S0_PROBE_TIMEOUT_MS });
+        // A probe that only timed out is not proof of a block.
+        probes.push({ url, reached: detail.startsWith('reached:'), detail });
+      }
+    })(), S0_WORK_BUDGET_MS);
+  } catch { /* an incomplete run fails the pass check below */ }
+  finally {
+    try { await within((async () => { browser ??= await sdk.connect(binding, { sessionId: id, persistent: true } as never); const cdp = await browser.newBrowserCDPSession(); await cdp.send('Browser.close'); })(), S0_CLEANUP_BUDGET_MS / 2); } catch { /* termination can disconnect first */ }
+    try { terminated = !(await within(sdk.sessions(binding), S0_CLEANUP_BUDGET_MS / 2)).some(s => s.sessionId === id); } catch { /* unconfirmed stays false */ }
   }
   return evaluateS0(allowedLoaded, probes, terminated, Date.now() - started);
 }
