@@ -161,6 +161,21 @@ describe('OpenAIResponsesAdapter', () => {
     expect(sent).toMatchObject({ max_output_tokens: 32, reasoning: { effort: 'low', summary: 'auto' } });
   });
 
+  it('a reasoning-only reply is asked for once more, and fails only when the second is also empty', async () => {
+    const empty = { id: 'resp_e', status: 'completed', output_text: '', output: [{ type: 'reasoning', summary: [] }], usage: { input_tokens: 4, output_tokens: 2 } };
+    const good = { id: 'resp_g', status: 'completed', output_text: 'Here is your plan.', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Here is your plan.' }] }], usage: { input_tokens: 4, output_tokens: 3 } };
+    const run = async (replies: unknown[]) => {
+      let calls = 0;
+      const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => replies[calls++] as never) });
+      return { result: await adapter.complete(gatewayRequest()), calls };
+    };
+    const recovered = await run([empty, good]);
+    expect(recovered.calls).toBe(2);
+    expect(recovered.result).toMatchObject({ ok: true, data: { text: 'Here is your plan.' } });
+    const failed = await run([empty, empty]);
+    expect(failed.calls).toBe(2);
+    expect(failed.result).toEqual({ ok: false, code: 'invalid_args', error: 'OpenAI returned empty output' });
+  });
   it('an incomplete response with partial text is delivered with truncated: true', async () => {
     const adapter = new OpenAIResponsesAdapter({
       apiKey: 'test-key',
