@@ -19,9 +19,7 @@ owner monthly browser envelope. These are per-owner checks, not account-wide cap
 The host resolves `common_owner_authority` using the existing physical DO name and
 Telegram subject, checks the current physical binding again after that await, and
 pins the immutable template, derived registration and custody digest in that
-owner's existing DO. Its existing spend ledger reserves the first model call before
-provider I/O. The quote covers Luna; unpriced model overrides are refused before
-provider I/O. Concurrent calls share one metered wrapper. Task sessions still live
+owner's existing DO. Directory admission remains required before model I/O. Ordinary model work before a browser allocation uses the existing model path independently of browser registration expiry. Once this run holds an allocation or retained task history, its browser ledger reserves model calls before provider I/O. That quote covers Luna; unpriced models in a funded browser run are refused before provider I/O. Concurrent calls share one metered wrapper. Task sessions still live
 under `common-browser:<taskId>` and expire or close through the existing cleanup
 host. No new state host or approval ledger is introduced.
 

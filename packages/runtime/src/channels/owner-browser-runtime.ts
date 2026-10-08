@@ -117,6 +117,16 @@ export function ownerBrowserRuntime(options: Readonly<{
           if (!scope || !supplied || scope.runId !== supplied.runId || scope.attempt !== supplied.attempt
             || scope.admit !== supplied.admit || scope.commit !== supplied.commit || scope.deadline !== supplied.deadline) throw new ClosedRunError();
           scope.admit();
+          // Directory admission is independent of browser policy. A retained task
+          // record keeps funded model history metered after host reconstruction,
+          // including uncertain/closed records; it never restarts physical ordinals.
+          const funded = () => active?.scope === scope || options.storage.kv.get(`common-browser:${scope.runId}`) !== undefined;
+          if (!funded()) {
+            await assertOwner(); scope.admit();
+            if (options.activeScope() !== scope) throw new ClosedRunError();
+            // Allocation may have appeared while directory authority was pending.
+            if (!funded()) return gateway.complete(request);
+          }
           // The reused quote covers Luna only; a model override needs its own priced envelope.
           if (request.request.model !== WALDO_CHAT_MODEL) throw Error('automatic browser model price unavailable');
           const config = await automatic.configuration();

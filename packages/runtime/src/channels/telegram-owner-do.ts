@@ -73,6 +73,9 @@ import { browserOwnerAuthority } from './browser-owner-authority';
 import { browserTaskSourceCustody } from './browser-task-source';
 import { browserTaskHandler, browserTaskApprovalBridge } from '../tools/live/browser-task';
 import { ownerBrowserRuntime } from './owner-browser-runtime';
+import { commonOwnerAuthority } from '../identity/common-owner-authority';
+import type { PrivateBrowserRegistration } from './owner-private-browser-host';
+import { PRIVATE_BROWSER_DUE } from './owner-private-browser-host';
 import { COMMON_BROWSER_DUE } from './common-browser-host';
 import { browserPublicReadConfiguration } from './browser-public-read-configuration';
 import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../tools/live/browser';
@@ -196,10 +199,22 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly makeBrowserHost: (config?: BrowserOwnerConfiguration) => ReturnType<typeof browserOwnerHost>;
   private readonly browserReady: Promise<void>;
   private readonly browserTrial: BrowserTrialPreparation | undefined;
-  constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, browserConfiguration?: BrowserOwnerConfiguration, browserTrial?: BrowserTrialPreparation) {
+  constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, browserConfiguration?: BrowserOwnerConfiguration, browserTrial?: BrowserTrialPreparation, privateBrowser?: Omit<PrivateBrowserRegistration, 'deliverToOwner' | 'custody'> & Partial<Pick<PrivateBrowserRegistration, 'custody'>>) {
     super(ctx, env);
     this.browserTrial = browserTrial;
-    this.ownerBrowser = ownerBrowserRuntime({ env, storage: ctx.storage, actualDoId: ctx.id.toString(), activeScope: () => this.activeScope });
+    this.ownerBrowser = ownerBrowserRuntime({ env, storage: ctx.storage, actualDoId: ctx.id.toString(), activeScope: () => this.activeScope,
+      ...(privateBrowser ? { privateBrowser: { ...privateBrowser, deliverToOwner: async (ownerId: string, url: string) => {
+        const doName = ctx.storage.kv.get<string>('do_name'), subject = ctx.storage.kv.get<string>('telegram_subject');
+        const directory = commonOwnerAuthority(env);
+        const physical = () => { if (!doName || !subject || ctx.storage.kv.get('do_name') !== doName || ctx.storage.kv.get('telegram_subject') !== subject
+          || !Number.isSafeInteger(Number(subject)) || Number(subject) < 1 || ctx.storage.kv.get('telegram_unlinked') === true || env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== ctx.id.toString()) throw new ClosedRunError(); };
+        physical(); const owner = await directory.resolve('telegram', subject!, doName!); physical();
+        if (!owner || owner.directoryOwnerId !== ownerId) throw new ClosedRunError();
+        const payload = { chat_id: Number(subject), text: 'Complete your browser sign-in.', reply_markup: { inline_keyboard: [[{ text: 'Open browser', url }]] }, link_preview_options: { is_disabled: true } };
+        const receipt = await this.setup().api.sendMessage(payload) as { message_id?: unknown; chat?: { id?: unknown; type?: unknown }; reply_markup?: { inline_keyboard?: { url?: unknown }[][] } } | undefined;
+        if (!receipt || !Number.isSafeInteger(receipt.message_id) || Number(receipt.message_id) < 1 || Number(receipt.chat?.id) !== Number(subject) || receipt.chat?.type !== 'private' || receipt.reply_markup?.inline_keyboard?.[0]?.[0]?.url !== url) throw Error('browser owner delivery unconfirmed');
+        physical(); await directory.assertCurrent(owner); physical();
+      } } } : {}) });
     const makeBrowserHost = this.makeBrowserHost = (config?: BrowserOwnerConfiguration) => browserOwnerHost({ storage: ctx.storage, config, now: Date.now, newId: () => crypto.randomUUID(),
       physical: () => { const doName = ctx.storage.kv.get<string>('do_name'); return { doName, subject: ctx.storage.kv.get<string>('telegram_subject'), matches: Boolean(doName && env.TELEGRAM_OWNER_DO && env.TELEGRAM_OWNER_DO.idFromName(doName).toString() === ctx.id.toString() && ctx.storage.kv.get<boolean>('telegram_unlinked') !== true) }; },
       approved: (approval, proposal) => {
@@ -755,6 +770,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     const session = await access.session(sessionCookie(request));
     if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401, headers: overviewRoute ? DASHBOARD_OVERVIEW_HEADERS : undefined });
+    if (url.pathname === '/console/browser/saved') return this.ownerBrowser.privateControl(request, session.csrf);
     if (url.pathname === BROWSER_TRIAL_PATH) {
       const doName = this.ctx.storage.kv.get<string>('do_name') ?? '', subject = this.ctx.storage.kv.get<string>('telegram_subject') ?? '';
       const result = await browserTrialConsent(request, { storage: this.ctx.storage, csrf: session.csrf, trial: this.browserTrial, limiter: this.env.RESPONSIBILITY_RATE_LIMITER, ownerScope: this.ctx.id.toString(),
@@ -1036,7 +1052,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           || this.ctx.storage.kv.get<boolean>('telegram_unlinked') === true
           || !this.env.TELEGRAM_OWNER_DO || this.env.TELEGRAM_OWNER_DO.idFromName(doName).toString() !== this.ctx.id.toString()) {
           if (Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity,
-            this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity) <= Date.now()) this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()]));
+            this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity, this.ctx.storage.kv.get<number>(PRIVATE_BROWSER_DUE) ?? Infinity) <= Date.now()) this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()]));
           await rearmSharedAlarm(this.ctx.storage, null, Date.now(), 30_000);
           return;
         }
@@ -1057,7 +1073,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       try { await this.notifyUncertainRecovery(); } catch { console.error('uncertainty notice deferred to host recovery'); }
       const dueInbox = (await this.inbox.records()).some(r => r.state === 'admitted');
       const dueTransport = finals.some(r => r.status === 'attempting' || (r.status === 'pending' && r.dueAt <= Date.now()) || (r.status !== 'pending' && !r.settled));
-      const browserDue = Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity, this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity);
+      const browserDue = Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity, this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity, this.ctx.storage.kv.get<number>(PRIVATE_BROWSER_DUE) ?? Infinity);
       const readyKinds = [dueInbox, dueTransport, scheduler.hasDue(), browserDue !== undefined && browserDue !== null && browserDue <= Date.now()];
       const last = this.ctx.storage.kv.get<number>('owner_alarm_last_v1') ?? 2;
       let selected = -1;

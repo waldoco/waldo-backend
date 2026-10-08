@@ -165,7 +165,7 @@ export function ownerPrivateBrowserHost(options: Readonly<{
     },
     matches(url: string) { try { return row()?.binding.siteOrigin === new URL(url).origin; } catch { return false; } },
     async control(request: Request, csrf: string): Promise<Response> {
-      if (options.environment !== 'staging') return reply({ error: 'not_configured' }, 404);
+      if (options.environment !== 'staging' || !registration && !row()) return reply({ error: 'not_configured' }, 404);
       try {
         const owner = await options.assertOwner();
         const retained = row();

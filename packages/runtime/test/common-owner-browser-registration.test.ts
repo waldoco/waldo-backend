@@ -7,12 +7,12 @@ import { WALDO_CHAT_MODEL } from '@waldo/contracts';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { commonSpendReservation } from '../src/channels/common-spend-reservation';
 
-const directory = vi.hoisted(() => ({ owner: '10000000-0000-0000-0000-000000000001', custody: 'a'.repeat(64), present: true }));
+const directory = vi.hoisted(() => ({ owner: '10000000-0000-0000-0000-000000000001', custody: 'a'.repeat(64), present: true, wait: undefined as Promise<void> | undefined, entered: undefined as (() => void) | undefined }));
 const provider = vi.hoisted(() => ({ calls: [] as unknown[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: unknown) => { provider.calls.push(input); return { id: 'fake-response', output: [], output_text: 'Read complete.', usage: { input_tokens: 1, output_tokens: 1 } }; } }; } }));
-vi.mock('../src/identity/common-owner-authority', () => ({ commonOwnerAuthority: () => ({ resolve: async (_provider: string, subject: string, doName: string) => directory.present ? { directoryOwnerId: directory.owner, custodyDigest: directory.custody, subject, doName } : null }) }));
+vi.mock('../src/identity/common-owner-authority', () => ({ commonOwnerAuthority: () => ({ resolve: async (_provider: string, subject: string, doName: string) => { const wait = directory.wait; directory.wait = undefined; if (wait) { directory.entered?.(); await wait; } return directory.present ? { directoryOwnerId: directory.owner, custodyDigest: directory.custody, subject, doName } : null; } }) }));
 registerCommonBrowserSdk(commonBrowserMeteredFixtureLoader);
-beforeEach(() => { directory.owner = '10000000-0000-0000-0000-000000000001'; directory.custody = 'a'.repeat(64); directory.present = true; provider.calls = []; commonBrowserFixture.reset(); });
+beforeEach(() => { directory.owner = '10000000-0000-0000-0000-000000000001'; directory.custody = 'a'.repeat(64); directory.present = true; directory.wait = undefined; directory.entered = undefined; provider.calls = []; commonBrowserFixture.reset(); });
 const setup = () => {
   const rows = new Map<string, any>([['do_name', 'automatic-owner'], ['telegram_subject', '81101']]);
   let alarm: number | null = null;
@@ -39,52 +39,51 @@ it('automatically derives the registered browser owner from current directory au
 
 const request = (scope: RunEffectScope) => ({ runScope: scope, request: { model: WALDO_CHAT_MODEL, max_tokens: 16, system: 'Fixture', messages: [] }, route: { provider: 'openai', model: WALDO_CHAT_MODEL, cache: 'none', max_tokens: 16 }, step: { provider: 'openai', model: WALDO_CHAT_MODEL }, context: 'full_context', fallback_step: 'configured_model', headers: {} }) as unknown as LLMGatewayRequest;
 
-it('removing automatic registration keeps the selected owner fail closed before any new model I/O', async () => {
-  provider.calls = [];
-  const fixture = setup(), gateway = fixture.runtime().gateway()!;
-  expect(await gateway.complete(request(fixture.scope))).toMatchObject({ ok: true });
-  expect(provider.calls).toHaveLength(1);
-  const retained = structuredClone([...fixture.rows]);
+const allocate = async (fixture: ReturnType<typeof setup>, runtime: ReturnType<ReturnType<typeof setup>['runtime']>) => {
+  expect(await runtime.read({ name: 'browse_page' } as never).handle({ provider: 'cloudflare_playwright', url: 'https://example.com/a', instruction: 'Read' },
+    { authenticatedUserId: 'owner', runScope: fixture.scope, turnId: 'funded-turn', toolCallId: 'funded-call', egressAllowlist: ['*'] } as never)).toMatchObject({ ok: true });
+};
+it('removing registration cannot bypass a funded run model meter after reconstruction', async () => {
+  const fixture = setup(), runtime = fixture.runtime(); await allocate(fixture, runtime);
+  expect(await runtime.gateway()!.complete(request(fixture.scope))).toMatchObject({ ok: true });
+  expect(provider.calls).toHaveLength(1); const retained = structuredClone([...fixture.rows]);
   fixture.env.COMMON_BROWSER_REGISTRATION = '';
-  const reconstructed = fixture.runtime().gateway();
-  expect(reconstructed).toBeDefined();
-  await expect(reconstructed!.complete(request(fixture.scope))).rejects.toThrow();
-  expect(provider.calls).toHaveLength(1);
-  expect([...fixture.rows]).toEqual(retained);
+  await expect(fixture.runtime().gateway()!.complete(request(fixture.scope))).rejects.toThrow();
+  expect(provider.calls).toHaveLength(1); expect([...fixture.rows]).toEqual(retained);
 });
-
-it('concurrent first model calls share physical ordinals and reconstruction cannot replay or refill an exhausted allowance', async () => {
-  const fixture = setup(); fixture.operator.spend.maxCalls = 2;
+it('concurrent funded model calls share ordinals and reconstruction cannot refill exhausted allowance', async () => {
+  const fixture = setup(); fixture.operator.spend.maxCalls = 20;
   fixture.env.COMMON_BROWSER_REGISTRATION = JSON.stringify(fixture.operator);
-  const gateway = fixture.runtime().gateway()!;
+  const runtime = fixture.runtime(); await allocate(fixture, runtime);
+  const ledger = [...fixture.rows].find(([key]) => key.startsWith('common-spend:'))![1];
+  const callSlots = ledger.policy.maxCalls - ledger.calls.length - ledger.cleanup.reduce((sum: number, item: any) => sum + item.maxCalls, 0);
+  expect(callSlots).toBeGreaterThanOrEqual(2); const gateway = runtime.gateway()!;
   expect(await Promise.all([gateway.complete(request(fixture.scope)), gateway.complete(request(fixture.scope))])).toEqual([expect.objectContaining({ ok: true }), expect.objectContaining({ ok: true })]);
-  expect(provider.calls).toHaveLength(2);
-  await expect(gateway.complete(request(fixture.scope))).rejects.toThrow('call limit');
+  const charged = [...fixture.rows].find(([key]) => key.startsWith('common-spend:'))![1].calls.filter((call: any) => call.id.startsWith('model:'));
+  expect(charged).toHaveLength(2); expect(new Set(charged.map((call: any) => call.id)).size).toBe(2);
+  expect(charged[0].upperBoundMicrousd).toBe(charged[1].upperBoundMicrousd);
+  const slots = Math.min(callSlots, Math.floor((ledger.policy.limitMicrousd - ledger.reservedMicrousd) / charged[0].upperBoundMicrousd));
+  expect(slots).toBeGreaterThanOrEqual(2);
+  for (let issued = 2; issued < slots; issued++) expect(await gateway.complete(request(fixture.scope))).toMatchObject({ ok: true });
+  await expect(gateway.complete(request(fixture.scope))).rejects.toThrow('limit');
   const retained = structuredClone([...fixture.rows]);
   await expect(fixture.runtime().gateway()!.complete(request(fixture.scope))).rejects.toThrow();
   fixture.operator.spend.maxCalls = 100; fixture.operator.policy.ref = 'fresh-looking-policy';
   fixture.env.COMMON_BROWSER_REGISTRATION = JSON.stringify(fixture.operator);
   await expect(fixture.runtime().gateway()!.complete(request(fixture.scope))).rejects.toThrow('reconciliation');
-  expect(provider.calls).toHaveLength(2); expect([...fixture.rows]).toEqual(retained);
+  expect(provider.calls).toHaveLength(slots); expect([...fixture.rows]).toEqual(retained);
 });
-
-it('unpriced models and missing, changed or unlinked directory authority cannot issue a model call', async () => {
-  const fixture = setup(), gateway = fixture.runtime().gateway()!;
-  const input = request(fixture.scope);
+it('unpriced models and missing, changed or unlinked authority cannot issue funded model calls', async () => {
+  const fixture = setup(), runtime = fixture.runtime(); await allocate(fixture, runtime);
+  const gateway = runtime.gateway()!, input = request(fixture.scope), original = structuredClone([...fixture.rows]);
   await expect(gateway.complete({ ...input, request: { ...input.request, model: 'unpriced-model' as never } })).rejects.toThrow('price unavailable');
-  expect(fixture.rows.has('common_owner_browser_registration_v1')).toBe(false);
-  directory.present = false;
-  await expect(gateway.complete(input)).rejects.toThrow('authority unavailable');
-  expect(provider.calls).toHaveLength(0);
-  directory.present = true;
-  expect(await gateway.complete(input)).toMatchObject({ ok: true });
-  const retained = structuredClone([...fixture.rows]);
-  directory.custody = 'b'.repeat(64);
-  await expect(gateway.complete(input)).rejects.toThrow('reconciliation');
-  expect([...fixture.rows]).toEqual(retained);
+  expect([...fixture.rows]).toEqual(original); directory.present = false;
+  await expect(gateway.complete(input)).rejects.toThrow('authority unavailable'); expect(provider.calls).toHaveLength(0);
+  directory.present = true; expect(await gateway.complete(input)).toMatchObject({ ok: true });
+  const retained = structuredClone([...fixture.rows]); directory.custody = 'b'.repeat(64);
+  await expect(gateway.complete(input)).rejects.toThrow('reconciliation'); expect([...fixture.rows]).toEqual(retained);
   fixture.rows.set('telegram_unlinked', true);
-  await expect(gateway.complete(input)).rejects.toThrow('owner unavailable');
-  expect(provider.calls).toHaveLength(1);
+  await expect(gateway.complete(input)).rejects.toThrow('owner unavailable'); expect(provider.calls).toHaveLength(1);
 });
 
 it('cleanup survives registration removal and unlink without funding another session', async () => {
@@ -104,18 +103,20 @@ it('manual registration spend cannot be bypassed by switching to an automatic po
   const fixture = setup();
   commonSpendReservation(fixture.storage, { ref: 'manual-owner-policy', ownerId: `prn_${directory.owner.replaceAll('-', '')}`, validUntil: fixture.operator.spend.validUntil, limitMicrousd: 10000000, maxCalls: 100 }, Date.now, () => {}).reserve('already-reserved', 10000000);
   const retained = structuredClone([...fixture.rows]);
-  await expect(fixture.runtime().gateway()!.complete(request(fixture.scope))).rejects.toThrow('reconciliation');
+  expect(await fixture.runtime().read({ name: 'browse_page' } as never).handle({ provider: 'cloudflare_playwright', url: 'https://example.com/a', instruction: 'Read' }, { authenticatedUserId: 'owner', runScope: fixture.scope, turnId: 'turn', toolCallId: 'call', egressAllowlist: ['*'] } as never)).toMatchObject({ ok: false });
   expect(provider.calls).toHaveLength(0); expect(commonBrowserFixture.allocations).toBe(0);
   expect([...fixture.rows]).toEqual(retained);
 });
 
-it('an expired operator window cannot poison owner admission or issue a model call', async () => {
+it('an expired operator denies browser work while ordinary admitted model work stays available', async () => {
   const fixture = setup();
   fixture.operator.policy.expiresAt = Date.now() - 1;
   fixture.operator.spend.validUntil = fixture.operator.policy.expiresAt;
   fixture.env.COMMON_BROWSER_REGISTRATION = JSON.stringify(fixture.operator);
-  await expect(fixture.runtime().gateway()!.complete(request(fixture.scope))).rejects.toThrow();
-  expect(provider.calls).toHaveLength(0);
+  const runtime = fixture.runtime();
+  expect(await runtime.gateway()!.complete(request(fixture.scope))).toMatchObject({ ok: true });
+  expect(await runtime.read({ name: 'browse_page' } as never).handle({ provider: 'cloudflare_playwright', url: 'https://example.com/a', instruction: 'Read' }, { authenticatedUserId: 'owner', runScope: fixture.scope, turnId: 'turn', toolCallId: 'call', egressAllowlist: ['*'] } as never)).toMatchObject({ ok: false });
+  expect(provider.calls).toHaveLength(1); expect(commonBrowserFixture.allocations).toBe(0);
   expect(fixture.rows.has('common_owner_browser_registration_v1')).toBe(false);
 });
 
@@ -128,4 +129,19 @@ it('a malformed operator update denies new work but cannot strand retained funde
   runtime.stop(); await fixture.runtime().maintain();
   expect(commonBrowserFixture.allocations).toBe(1); expect(commonBrowserFixture.ends).toBe(1);
   expect(provider.calls).toHaveLength(0);
+});
+
+it('meters a browser allocation created while ordinary model authority is pending', async () => {
+  const fixture = setup(), runtime = fixture.runtime();
+  let release!: () => void;
+  const entered = new Promise<void>(resolve => { directory.entered = resolve; });
+  directory.wait = new Promise<void>(resolve => { release = resolve; });
+  const model = runtime.gateway()!.complete(request(fixture.scope));
+  await entered;
+  await allocate(fixture, runtime);
+  release();
+  expect(await model).toMatchObject({ ok: true });
+  const ledger = [...fixture.rows].find(([key]) => key.startsWith('common-spend:'))![1];
+  expect(ledger.calls.filter((call: any) => call.id.startsWith('model:'))).toHaveLength(1);
+  expect(provider.calls).toHaveLength(1);
 });

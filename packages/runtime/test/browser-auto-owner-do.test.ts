@@ -113,7 +113,8 @@ it('one explicit bounded operator policy serves two existing owners and a newly 
         const records = [...state.storage.kv.list<any>({ prefix: 'common-browser:' })].map(([, row]) => row);
         expect(records).toHaveLength(1); expect(records[0]).toMatchObject({ cleanup: 'closed', session: { state: 'ended' } });
         const ledgers = [...state.storage.kv.list<any>({ prefix: 'common-spend:' })].map(([, row]) => row);
-        expect(ledgers).toHaveLength(1); expect(ledgers[0].calls[0]?.id).toMatch(/^model:/);
+        expect(ledgers).toHaveLength(1); expect(ledgers[0].calls[0]?.id).toMatch(/^browser:/);
+        expect(ledgers[0].calls.some((call:any)=>call.id.startsWith('model:'))).toBe(true);
         expect(ledgers[0].policy.ownerId).toBe(`prn_${owner.id.replaceAll('-', '')}`);
         expect(ledgers[0].reservedMicrousd).toBeLessThanOrEqual(10000000);
         receipts.push({ ownerId: records[0].session.ownerId, handle: outputs[0].data.session_handle, ref: ledgers[0].policy.ref, reserved: ledgers[0].reservedMicrousd });

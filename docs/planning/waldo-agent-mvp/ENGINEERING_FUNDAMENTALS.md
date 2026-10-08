@@ -589,3 +589,13 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] Recheck owner authority and expiry immediately before signed state I/O and after delayed responses; local revocation cannot revive a saved generation.
 
 | 2026-10-08 | Browser source migration44 invalidated staging preflight's pinned43-entry manifest | Data and migrations / source review | staging-migration-preflight.test.mjs actual manifest44 versus43 RED, updated terminal version and exact SQL digest GREEN | Update canonical migration lists and staged source manifest pins together; no migration application implied |
+
+| 2026-10-08 | Candidate integration exposed unmocked background day-plan model transport in the dashboard forget fixture; shared private console/alarm hooks were absent; unconfigured console resolved custody | Browser integration / fixture isolation | Immutable pre-Vault/base comparisons; original assertions and5s deadline preserved under fake OpenAI transport; real ownerDO console and sole-alarm red then green; unconfigured console404/no custody read RED to GREEN | Storage tests deny model transport. Dark private registration performs no state lookup; Core-cleared shared hooks preserve exact consent/delivery and sole-alarm authority |
+
+| 2026-10-08 | Automatic-registration browser branch reapplied model price/policy checks before any allocation, conflicting with merged Core expiry fix | Browser metering / reconciliation | browser-automatic-model-availability.test.ts invalid registration+ordinary model RED to GREEN; funded browser suites preserve existing admission and spend checks | Apply browser-specific model pricing only to the run holding a browser allocation; ordinary/background model authority remains on the existing model path |
+
+- [ ] Automatic browser metering keeps current directory/run admission for ordinary model calls. Persisted matching task records retain funded model history across reconstruction; changed registrations, expired grants, exhausted money/call caps and reused physical ordinals cannot switch that run to an unmetered path.
+
+| 2026-10-08 | Model funding snapshot before directory await missed a concurrently created browser allocation | Browser metering / async admission | common-owner-browser-registration.test.ts deferred-authority allocation yields missing model reservation RED then one reservation GREEN | Recheck persisted and active funding immediately before choosing the transport; an awaited authority check cannot freeze budget state |
+
+- [ ] A browser allocation appearing during ordinary model authority resolution must route that call through the funded meter. Test deferred directory resolution with actual fake browser allocation and exact reservation count.
