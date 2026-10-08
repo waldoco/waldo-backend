@@ -1621,7 +1621,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const found = mcpServers(this.env.WALDO_MCP_SERVERS).find((s) => s.name === proposal.server);
         if (!found) throw new Error(`MCP server "${proposal.server}" is no longer configured`);
         const { content, protocolVersion } = await executeMcp(found, proposal.tool, proposal.args, mcpGoogleAuth, fetch, intent);
-        return `Result (external content, bounded): ${JSON.stringify(content).slice(0, 300)} (protocol ${protocolVersion})`;
+        return { provider_id: intent.id, result: `Result (external content, bounded): ${JSON.stringify(content).slice(0, 300)} (protocol ${protocolVersion})` };
       },
     });
     const episodes = episodeIndex(storage.sql);

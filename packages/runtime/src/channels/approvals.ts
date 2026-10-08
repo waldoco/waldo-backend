@@ -113,9 +113,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     deps.call('sendMessage', { chat_id: deps.owner, text, ...(buttons ? { reply_markup: { inline_keyboard: [buttons.map(([label, data]) => ({ text: label, callback_data: data }))] } } : {}) });
 
   // A card the owner never saw cannot be approved: a blocked send (no message returned) leaves the row unconfirmed and fails the proposal.
-  const sayCard = async (id: string, text: string, buttons?: [string, string][]) => {
+  const sayCard = async (id: string, text: string, buttons?: [string, string][], approvable = true) => {
     if ((await say(text, buttons)) == null) throw new Error('Approval card not confirmed');
-    sql.exec("UPDATE ledger SET status = 'open' WHERE id = ? AND status = 'card_unconfirmed'", id);
+    sql.exec("UPDATE ledger SET status = ? WHERE id = ? AND status = 'card_unconfirmed'", approvable ? 'open' : 'review_only', id);
   };
 
   const describeBrowser = (p: BrowserSubmitProposal) => {
@@ -149,8 +149,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
   // ADR-0054 exactly-once: a second approval of the same idempotency key collapses onto the
   // first send instead of double-delivering.
-  const alreadySent = (key: string, selfId: string) =>
-    sql.exec<{ id: string }>("SELECT id FROM ledger WHERE kind = 'message_send' AND status = 'done' AND id != ? AND json_extract(payload_json, '$.idempotency_key') = ? LIMIT 1", selfId, key).toArray().length > 0;
+  const keyHolder = (key: string, selfId: string) =>
+    sql.exec<{ id: string; status: string; payload_json: string }>("SELECT id, status, payload_json FROM ledger WHERE kind = 'message_send' AND status IN ('done', 'uncertain') AND id != ? AND json_extract(payload_json, '$.idempotency_key') = ? LIMIT 1", selfId, key).toArray()[0];
   const expired = (entry: LedgerRow, p: Stored) =>
     (entry.kind === 'browser_submit' && (p as unknown as BrowserSubmitProposal).approvalExpiresAt !== undefined && (!Number.isSafeInteger((p as unknown as BrowserSubmitProposal).approvalExpiresAt) || deps.now() >= (p as unknown as BrowserSubmitProposal).approvalExpiresAt!)) ||
     deps.now() - entry.created_at > (entry.kind === 'browser_submit' ? BROWSER_SUBMIT_TTL_MS : PROPOSAL_TTL_MS) || (entry.kind !== 'browser_submit' && p.start !== undefined && Date.parse(p.start) <= deps.now());
@@ -198,7 +198,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       return { toast: 'Not now', message: 'Left it. Nothing changed.' };
     }
     if (deps.effects?.isActive(`${operationRef}:${action === 'u' ? 'undo' : 'apply'}`)) return { toast: 'Already handled.', message: 'Already handled.' };
-    const recovering = action === 'a' && entry?.status === 'uncertain' && deps.effects?.get(`${operationRef}:apply`) !== null && deps.effects?.get(`${operationRef}:apply`) !== undefined;
+    // An uncertain row with no effect record never reached dispatch (the record is written before the provider call), so it is safe to run again; a record sends it through reconcile instead.
+    const recovering = action === 'a' && entry?.status === 'uncertain' && deps.effects !== undefined;
     if (!entry || (entry.status !== expected && !recovering)) return { toast: 'Already handled.', message: 'Already handled.' };
     const proposal = JSON.parse(entry.payload_json) as Stored;
     try {
@@ -249,7 +250,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
               } else outcome = await deps.browserSubmit(bp, id);
             } catch (error) {
               deps.log({ trace, hop: 'browser_effect_unknown', ms: 0, ok: false, error: String(error) });
-              outcome ??= { status: 'uncertain', message: 'The browser outcome is unknown. Check the result before retrying.' };
+              outcome = { status: 'uncertain', message: 'The browser outcome is unknown. Check the result before retrying.' };
             }
             if (!outcome || typeof outcome !== 'object' || typeof outcome.message !== 'string' || !outcome.message.trim()) {
               outcome = { status: 'uncertain', message: 'The browser outcome is unknown. Check the result before retrying.' };
@@ -318,10 +319,23 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           out = { toast: "Can't be undone", message: 'A sent message cannot be undone. Nothing was reversed.' };
         } else if (!deps.sendMessage) {
           out = { toast: 'Messaging is not set up', message: 'I could not send that because messaging is not set up on this Waldo yet.' };
-        } else if (alreadySent(mp.idempotency_key, id)) {
-          setStatus(id, 'done');
-          out = { toast: 'Already sent', message: `That exact message already went out once, so nothing was sent twice: ${describeMessage(mp)}` };
+        } else if (!recovering && (() => { const holder = keyHolder(mp.idempotency_key, id); if (!holder) return false; const held = JSON.parse(holder.payload_json) as MessageSendProposal; return held.channel !== mp.channel || held.content !== mp.content ? 'conflict' : holder.status; })()) {
+          const holder = keyHolder(mp.idempotency_key, id)!;
+          const held = JSON.parse(holder.payload_json) as MessageSendProposal;
+          if (held.channel !== mp.channel || held.content !== mp.content) {
+            setStatus(id, 'failed');
+            out = { toast: 'Key already used', message: 'A different message already used this send key, so nothing was sent. Ask me again and I will prepare a fresh one.' };
+          } else {
+            setStatus(id, holder.status === 'done' ? 'done' : 'skipped');
+            out = holder.status === 'done'
+              ? { toast: 'Already sent', message: `That exact message already went out once, so nothing was sent twice: ${describeMessage(mp)}` }
+              : { toast: 'Already handled.', message: 'That message is already being sent or its outcome is unknown. Nothing was sent again.' };
+          }
         } else {
+          if (!recovering) {
+            sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
+            if (sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed !== 1) return { toast: 'Already handled.', message: 'Already handled.' };
+          }
           try {
             await effect(`${operationRef}:apply`, 'send_message', mp, async () => { const sent = await deps.sendMessage!(mp); if (deps.effects && !sent?.provider_id) throw new EffectUnknownError(); return { provider_id: sent?.provider_id ?? mp.idempotency_key, result: null }; }, async () => ({ status: 'unknown' }));
             setStatus(id, 'done');
@@ -362,7 +376,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           }, async () => {
             try {
               const current = await client.event(eventId);
-              if (proposal.action !== 'cancel' && (proposal.action !== 'create' || current.title === proposal.title) && current.start === proposal.start && current.end === proposal.end && current.etag
+              if (proposal.action !== 'cancel' && current.status !== 'cancelled' && (proposal.action !== 'create' || current.title === proposal.title) && current.start === proposal.start && current.end === proposal.end && current.etag
                 && (!proposal.seen_etag || current.etag !== proposal.seen_etag)) {
                 // A recovered move cannot invent the previous event version for Undo.
                 return { status: 'done', receipt: { provider_id: current.id, result: proposal.action === 'create' ? { op: 'cancel', id: current.id, applied_etag: current.etag } : null } };
@@ -471,7 +485,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'message_send', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
       const text = `Send this message on ${payload.channel}?\n\n${reviewMessage(payload)}`;
       await sayCard(id, text.length <= REVIEW_BUDGET ? text : unreviewable('Send this message?', summary),
-        text.length <= REVIEW_BUDGET ? [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]]);
+        text.length <= REVIEW_BUDGET ? [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]], text.length <= REVIEW_BUDGET);
       return id;
     },
     async proposeMcpCall(payload) {
@@ -480,7 +494,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'mcp_call', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
       const text = `Run this MCP tool? ${summary}\n\nArgs:\n${JSON.stringify(payload.args, null, 2)}`;
       await sayCard(id, text.length <= REVIEW_BUDGET ? text : unreviewable('Run this MCP tool?', summary),
-        text.length <= REVIEW_BUDGET ? [['Do it', `a:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]]);
+        text.length <= REVIEW_BUDGET ? [['Do it', `a:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]], text.length <= REVIEW_BUDGET);
       return id;
     },
     async propose(p, operationRef) {
@@ -502,7 +516,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     pending(now) {
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'open' ORDER BY created_at").toArray();
       const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
-      const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'review_only' ORDER BY created_at").toArray();
+      const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'review_only' ORDER BY created_at").toArray();
       const undoable = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'done' AND undo_json IS NOT NULL AND decided_at IS NOT NULL ORDER BY decided_at DESC LIMIT 5").toArray();
       const review = (r: LedgerRow): ApprovalReview | null => {
         try {
@@ -553,7 +567,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     ledger(reminders) {
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();
       const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'browser_submit', 'message_send', 'mcp_call', 'calendar_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
-      const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'review_only' ORDER BY created_at").toArray();
+      const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'review_only' ORDER BY created_at").toArray();
       const done = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status NOT IN ('open', 'changing', 'card_unconfirmed', 'review_only') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
       const lines = [
         'Open',
