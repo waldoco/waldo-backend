@@ -201,6 +201,8 @@ export const createOwnerResponder = (
       ...(metadataOnly ? {} : { text: { input, output: response!.text || JSON.stringify(response!.tool_calls), ...(reasoning ? { reasoning } : {}) } }),
     });
     if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.destination, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);
+    // A reply cut off by the model's length limit would otherwise read as a finished thought.
+    if (purpose === 'reply' && response!.truncated && !response!.tool_calls?.length) return { ...response!, text: `${response!.text}\n\n(I stopped early: that reply hit my length limit. Ask me to continue.)` };
     return response!;
   };
   const ask = async (...args: Parameters<typeof complete>) => (await complete(...args)).text;
