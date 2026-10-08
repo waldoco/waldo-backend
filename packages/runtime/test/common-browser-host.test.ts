@@ -58,7 +58,7 @@ it('stop during provider acquire preserves cleanup fence when exact provider ID 
  const f=fixture();commonBrowserFixture.onAcquire=()=>revokeCommonBrowsers(f.storage,Date.now());
  const host=f.host();expect(await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx)).toMatchObject({ok:false});
  const row=f.rows.get('common-browser:fixture-task') as any;
- expect(row).toMatchObject({cleanup:'pending',allocation:'observed',session:{providerSessionId:'fixture-retained-provider'}});
+ expect(row).toMatchObject({cleanup:'closed',allocation:'observed',session:{providerSessionId:'fixture-retained-provider'}});
  expect(commonBrowserFixture.ends).toBe(1);expect(host.attachments()).toHaveLength(0);expect(commonBrowserFixture.allocations).toBe(1);
 });
 

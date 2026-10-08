@@ -9,6 +9,8 @@ export type TelegramWebhookEnv = Readonly<{
   // Held off until connected common-task execution and recovery acceptance.
   COMMON_OWNER_TASKS?: string;
   COMMON_OWNER_DO_NAME?: string;
+  // Non-secret staging registration JSON for the common public browser (policy, billing identity, spend caps).
+  COMMON_BROWSER_REGISTRATION?: string;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
   WALDO_OWNER_TELEGRAM_ID?: string;

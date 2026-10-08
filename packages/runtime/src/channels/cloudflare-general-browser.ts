@@ -13,7 +13,7 @@ export class GeneralBrowserError extends Error {
   cleanup_failed?: true;
   constructor(readonly code: 'rejected' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
 }
-type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number }>;
+type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; cleanupBinding?(providerSessionId:string):BrowserWorker; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number }>;
 type Navigation = Readonly<{ goto(page: Page, url: string): Promise<void>; finish(page: Page): Promise<void>; pending(page: Page): boolean; dispatched(): void }>;
 
 // The owner host owns the durable checkpoint, authority and serialization. This
@@ -181,14 +181,15 @@ export function cloudflareGeneralBrowser(options: Options) {
     let browser: Browser | undefined;
     try {
       const sdk = await step(() => options.loadSdk());
-      if (!(await step(() => sdk.sessions(binding))).some(row => row.sessionId === id)) return;
+      const cleanupBinding=options.cleanupBinding?.(id)??binding;
+      if (!(await step(() => sdk.sessions(cleanupBinding))).some(row => row.sessionId === id)) return;
       try {
         const connectOptions = { sessionId: id, persistent: true };
-        browser = await step(() => sdk.connect(binding, connectOptions), late => { void late.close().catch(() => {}); });
+        browser = await step(() => sdk.connect(cleanupBinding, connectOptions), late => { void late.close().catch(() => {}); });
         const cdp = await step(() => browser!.newBrowserCDPSession());
         await step(() => cdp.send('Browser.close'));
       } catch { /* termination may sever the connection before acknowledgement */ }
-      if ((await step(() => sdk.sessions(binding))).some(row => row.sessionId === id)) throw new GeneralBrowserError('cleanup_unconfirmed');
+      if ((await step(() => sdk.sessions(cleanupBinding))).some(row => row.sessionId === id)) throw new GeneralBrowserError('cleanup_unconfirmed');
     } catch { throw new GeneralBrowserError('cleanup_unconfirmed'); }
     finally {
       if (browser) await cleanup(release => release(async () => { try { await browser!.close(); } catch { /* physical readback remains authoritative */ } }));
@@ -197,7 +198,8 @@ export function cloudflareGeneralBrowser(options: Options) {
   return {
     async start(allowedDomains: readonly string[], lifetimeMs: number,
       beforeAllocate: (allocation: Readonly<{ allowedDomains: readonly string[]; lifetimeMs: number }>) => Promise<void>,
-      recordAllocation: (providerSessionId: string) => Promise<void>): Promise<string> {
+      recordAllocation: (providerSessionId: string) => Promise<void>,
+      recordTermination?: () => void): Promise<string> {
       let id: string | undefined;
       try {
         const domains = [...allowedDomains], guard = cloudflareBrowserGuardOptions(domains, lifetimeMs);
@@ -213,7 +215,7 @@ export function cloudflareGeneralBrowser(options: Options) {
         await recordAllocation(id); await hostAdmit();
         return id;
       } catch (error) {
-        if (id) await terminateId(id);
+        if (id) {await terminateId(id);recordTermination?.();}
         if (error instanceof GeneralBrowserError) throw error;
         throw new GeneralBrowserError('provider_unavailable');
       }

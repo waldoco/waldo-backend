@@ -71,7 +71,20 @@ for (const [envName, envCfg] of Object.entries(cfg?.env ?? {})) {
 // 4. The staging browser binding stays OFF in source until the network-side block is proven
 //    (owner decision 2026-10-06, S0 live test). An enabled binding here ships on the next
 //    Workers Builds promote. Turn it on only in the PR that records a passing S0 run.
-if (staging?.browser !== undefined) bad.push('env.staging must not bind a browser until the S0 network-block test passes');
+// The record is the checked-in result of the S0 run on the throwaway env.s0 worker.
+let s0Record;
+try { s0Record = JSON.parse(readFileSync(path.replace(/wrangler\.jsonc$/, 's0-result.json'), 'utf8')); } catch { /* none recorded */ }
+const s0Passed = s0Record?.passed === true && s0Record?.allowedLoaded === true && s0Record?.terminated === true
+  && Array.isArray(s0Record?.probes) && s0Record.probes.length >= 3 && s0Record.probes.every((p) => p?.reached === false) && s0Record?.worker === 'waldo-s0-staging';
+if (staging?.browser !== undefined && !s0Passed) bad.push('env.staging must not bind a browser until the S0 network-block test passes and packages/runtime/s0-result.json records it');
+// The S0 worker has its own config (named envs would inherit the dashboard assets). It may bind only a browser.
+const s0Cfg = (() => { try { return JSON.parse(readFileSync(path.replace(/wrangler\.jsonc$/, 'wrangler.s0.jsonc'), 'utf8').replace(/\/\/[^\n]*/g, '').replace(/,(\s*[}\]])/g, '$1')); } catch { return undefined; } })();
+if (cfg?.env?.s0) bad.push('env.s0 must not exist in wrangler.jsonc: use wrangler.s0.jsonc (named envs inherit assets)');
+if (s0Cfg) {
+  if (s0Cfg.name !== 'waldo-s0-staging') bad.push('wrangler.s0.jsonc name must be waldo-s0-staging');
+  for (const k of Object.keys(s0Cfg)) if (!['name', 'main', 'compatibility_date', 'compatibility_flags', 'vars', 'browser'].includes(k)) bad.push(`wrangler.s0.jsonc must not set ${k}`);
+  if (s0Cfg.vars?.WALDO_ENVIRONMENT !== 'staging') bad.push('wrangler.s0.jsonc WALDO_ENVIRONMENT must be staging');
+}
 
 if (bad.length) {
   process.stderr.write(`guard-wrangler-local-bindings: ${bad.join('; ')}\n`);

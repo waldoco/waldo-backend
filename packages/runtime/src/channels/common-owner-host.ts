@@ -1,6 +1,7 @@
 import {commonOwnerActivation} from './common-owner-activation';
 import {commonOwnerTools} from './common-owner-tool-policy';
 import {commonPublicBrowserConfiguration} from './common-public-browser-configuration';
+import {commonBrowserSdk,commonStagingRegistration} from './common-staging-registration';
 import { WALDO_CHAT_MODEL, recallResultSchema, TOOL_PERMISSIONS, type ToolName } from '@waldo/contracts';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import { OpenAIResponsesAdapter } from '../llm/openai';
@@ -46,7 +47,8 @@ export function commonOwnerHost(env:TelegramWebhookEnv,storage:DurableObjectStor
   };
   currentMaterials={snapshotRef:snapshot.snapshot_ref,source:load};return deps;
  };
- const browser=commonPublicBrowserConfiguration({env,storage,actualDoId});
+ const registered=commonStagingRegistration(env),sdk=commonBrowserSdk();
+ const browser=commonPublicBrowserConfiguration({env,storage,actualDoId,...(registered&&sdk?{policy:registered.policy,spend:registered.spend,loadSdk:sdk}:{})});
  const tools=()=>TOOL_PERMISSIONS.user_message.filter(name=>commonOwnerTools({googleConnected:(storage.kv.get<readonly unknown[]>('google:accounts')??[]).length>0,driveReads:env.DRIVE_READS==='1',publicSearch:!!env.BRAVE_SEARCH_API_KEY,browser:!!browser}).includes(name));
  return {
   environment:env.WALDO_ENVIRONMENT,namespace:env.WALDO_OWNER_DO_NAMESPACE??'',
