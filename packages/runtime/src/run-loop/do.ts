@@ -79,6 +79,7 @@ import {
   type TriggerType,
   type WebSearchArgs,
   type WriteTaskArgs,
+  MODEL_CONTEXT_MAX_CHARS,
   type WorkUnitPlanningTurnResultV03,
   type WorkUnitPlanningCancelResultV03,
 } from '@waldo/contracts';
@@ -191,8 +192,8 @@ const LOCAL_INGRESS_MAX_REQUESTS_PER_WINDOW = 32;
 const RESPONSIBILITY_INGRESS_RATE_WINDOW_MS = 60_000;
 const RESPONSIBILITY_INGRESS_MAX_REQUESTS_PER_WINDOW = 60;
 const RESPONSIBILITY_OWNER_MAX_REQUESTS_PER_WINDOW = 240;
-const TRUSTED_V2_SYNTHESIS_MESSAGE_MAX_UTF8_BYTES = 32_768;
-const REPLAY_ARTIFACT_MAX_UTF8_BYTES = 32_768;
+const TRUSTED_V2_SYNTHESIS_MESSAGE_MAX_UTF8_BYTES = MODEL_CONTEXT_MAX_CHARS;
+const REPLAY_ARTIFACT_MAX_UTF8_BYTES = MODEL_CONTEXT_MAX_CHARS;
 const REPLAY_ARTIFACT_MAX_NODES = 1_024;
 
 type PreparedTrustedEffect<T extends TrustedRunV2PendingEffect> = Readonly<{
@@ -5378,8 +5379,8 @@ function normaliseTrustedCompositionResult(value: unknown): TrustedCompositionRe
   if (
     typeof prompt !== 'string' ||
     prompt.length === 0 ||
-    prompt.length > 32_768 ||
-    utf8ByteLengthWithinLimit(prompt, 32_768) === null
+    prompt.length > MODEL_CONTEXT_MAX_CHARS ||
+    utf8ByteLengthWithinLimit(prompt, MODEL_CONTEXT_MAX_CHARS) === null
   ) {
     return fail();
   }

@@ -9,7 +9,7 @@ import {
   type TrustedInvocationEnvelope,
 } from '@waldo/contracts';
 import { sanitiseVerifyOnly } from '../scribe/sanitiser';
-import { sanitiseInputSchema, sanitiseResultSchema, type SanitisationFailureSource, type SanitiseFailureReason } from '@waldo/contracts';
+import { MODEL_CONTEXT_MAX_CHARS, sanitiseInputSchema, sanitiseResultSchema, type SanitisationFailureSource, type SanitiseFailureReason } from '@waldo/contracts';
 import { sha256Prefixed } from './canonical';
 import { FailClosed } from './faults';
 import type {
@@ -19,7 +19,7 @@ import type {
   RuntimeContextMaterials,
 } from './types';
 
-const MAX_PROMPT_BYTES = 32_768;
+const MAX_PROMPT_BYTES = MODEL_CONTEXT_MAX_CHARS;
 const MAX_NARRATIVE_TEXT_CHARS = 2_000;
 const MAX_NARRATIVE_ITEMS = 8;
 const MAX_NARRATIVE_ITEM_CHARS = 300;
