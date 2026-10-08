@@ -889,3 +889,15 @@ it('a complete model reply carries no stop note', async () => {
   expect((await runInDurableObject(stub(name), (_i, state) => scanKv(state.storage, 'I stopped early'))).length).toBe(0);
   expect((await runInDurableObject(stub(name), (_i, state) => scanKv(state.storage, 'Done'))).length).toBeGreaterThan(0);
 });
+
+it('HELD-TEXT after forget_memory the next turn on the same live instance sends the model no copy of the forgotten text', async () => {
+  const name = 'memory-do-held-text';
+  const secret = 'QWX-OCELOT-7730';
+  seen.outputs.push(tool('remember', { kind: 'fact', text: `The locker code is ${secret}`, evidence_quote: secret }), []);
+  await turn(name, 1, `Remember that the locker code is ${secret}`);
+  seen.outputs.push(tool('forget_memory', { topic: secret, scope_note: 'locker code' }), []);
+  await turn(name, 2, `Forget ${secret}`);
+  seen.inputs.length = 0;
+  await turn(name, 3, 'What time is my standup?');
+  expect(seen.inputs.filter(input => input.includes(secret))).toEqual([]);
+});
