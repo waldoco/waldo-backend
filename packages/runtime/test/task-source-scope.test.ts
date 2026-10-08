@@ -366,8 +366,8 @@ it('a confirmed retry that narrows is kept as a narrowing', () => run('task-defa
   expect((await cap.classify(decision('retain'))).snapshot.sources).toEqual(['workspace', 'web']);
 }));
 
-it('legacy rows: the baseline and the full set take the defaults, any other ready scope stays narrowed', () => run('task-defaults-migrate', async (sql, scope) => {
-  for (const [sources, ready, expectNarrowed] of [['["workspace","web"]', 1, 0], [JSON.stringify(TASK_SOURCE_FAMILIES), 1, 0], ['["workspace"]', 1, 1], ['[]', 1, 1], ['["workspace"]', 0, 1]] as const) {
+it('legacy rows: the baseline, the full set and any UNREADY scope take the defaults (an unsettled task is no owner choice); any other ready scope stays narrowed', () => run('task-defaults-migrate', async (sql, scope) => {
+  for (const [sources, ready, expectNarrowed] of [['["workspace","web"]', 1, 0], [JSON.stringify(TASK_SOURCE_FAMILIES), 1, 0], ['["workspace"]', 1, 1], ['[]', 1, 1], ['["workspace"]', 0, 0], ['["local","web"]', 0, 0]] as const) {
     sql.exec('DROP TABLE IF EXISTS owner_task_source_scope');
     legacyTable(sql, sources, ready);
     owned(sql, scope);
@@ -559,4 +559,14 @@ it('an owner restriction or pending card is detected read-only so the owner stay
   await cap2.classify(decision('restrict', ['mail']));
   expect(legacyOwnerRestriction(sql)).toBe(true);
   expect(sql.exec('SELECT owner_key FROM owner_task_source_scope').toArray().length).toBe(1);
+}));
+
+it('an EXPIRED pending card no longer blocks the defaults (stale cards must not wedge the owner chat)', () => run('task-pending-expired', async (sql, scope) => {
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, { inputRef: 'r1', text: 'read my mail' }, ['web', 'mail']);
+  await cap.classify(JSON.stringify({ decision: 'new', sources: ['calendar'], evidence: 'check my diary' }), 'r1', 'read my mail');
+  const row = sql.exec<{ pending_json: string }>('SELECT pending_json FROM owner_task_source_scope').one();
+  sql.exec('UPDATE owner_task_source_scope SET pending_json = ?', JSON.stringify({ ...JSON.parse(row.pending_json), expiresAt: Date.now() - 1000 }));
+  const snapshot = await cap.current();
+  expect(snapshot.defaults).toEqual(['web', 'mail']);
+  expect(taskSourceAllowed(snapshot, { name: 'search_communication', requires_connector: true } as never)).toBe(true);
 }));

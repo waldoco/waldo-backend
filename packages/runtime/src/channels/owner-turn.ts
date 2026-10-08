@@ -342,7 +342,7 @@ export const createOwnerResponder = (
     await assertCurrent();
     const admitted = await sourceScope.classify(raw, traceId, ownerText);
     sourceSnapshot = admitted.snapshot;
-    log({ trace: traceId, hop: 'task_source_custody', ms: 0, ok: sourceSnapshot.ready, code: admitted.decodeReason ? `${admitted.outcome}:${admitted.decodeReason}` : admitted.outcome, detail: JSON.stringify({ outcome: admitted.outcome, ...(admitted.decodeReason ? { decode: admitted.decodeReason } : {}), ready_before: previous.ready, ready_after: sourceSnapshot.ready, new_task: previous.taskId !== sourceSnapshot.taskId, proposed: !!admitted.proposal, sources_before: previous.sources, sources_after: sourceSnapshot.sources }) });
+    log({ trace: traceId, hop: 'task_source_custody', ms: 0, ok: sourceSnapshot.ready, code: admitted.decodeReason ? `${admitted.outcome}:${admitted.decodeReason}` : admitted.outcome, detail: JSON.stringify({ outcome: admitted.outcome, ...(admitted.decodeReason ? { decode: admitted.decodeReason } : {}), ready_before: previous.ready, ready_after: sourceSnapshot.ready, new_task: previous.taskId !== sourceSnapshot.taskId, proposed: !!admitted.proposal, sources_before: previous.sources, sources_after: sourceSnapshot.sources, defaults_before: previous.defaults ?? null, defaults_after: sourceSnapshot.defaults ?? null }) });
     sourceSteeringRevision = classifiedSteering;
     binding?.adapter.setTaskSources(sourceSnapshot);
     if (admitted.proposal && sourceScope.propose) {

@@ -45,7 +45,7 @@ const initialise = (sql: SqlStorage) => { createTable(sql); withNarrowedColumn(s
 // narrowed = the owner explicitly chose or narrowed this task's sources; host defaults never override that.
 const withNarrowedColumn = (sql: SqlStorage) => { if (!sql.exec<{ name: string }>('PRAGMA table_info(owner_task_source_scope)').toArray().some(column => column.name === 'narrowed')) { sql.exec('ALTER TABLE owner_task_source_scope ADD COLUMN narrowed INTEGER NOT NULL DEFAULT 0');
   // Legacy rows: [workspace,web] is treated as the classifier baseline by owner ruling (4:57-4:58 PM, relayed by main), not provable as baseline: it may have been an owner choice, and widening it pre-deploy is intended. That row and the unrestricted full set take the defaults; any other stored scope, ready or not, was a restriction and stays narrowed.
-  sql.exec(`UPDATE owner_task_source_scope SET narrowed = 1 WHERE sources_json NOT IN ('["workspace","web"]', ?)`, JSON.stringify(TASK_SOURCE_FAMILIES)); } };
+  sql.exec(`UPDATE owner_task_source_scope SET narrowed = 1 WHERE ready = 1 AND sources_json NOT IN ('["workspace","web"]', ?)`, JSON.stringify(TASK_SOURCE_FAMILIES)); } };
 // Read-only families the owner's own chat uses by default: his own memory (local) and workspace, the public web, and the Google families once Google is connected.
 // Sends, calendar writes, spending and other effects keep their own approval desks.
 export const ownerReadSources = (googleAccounts: readonly unknown[]): readonly TaskSourceFamily[] => googleAccounts.length ? ['local', 'workspace', 'web', 'mail', 'calendar', 'contacts', 'tasks', 'drive'] : ['local', 'workspace', 'web'];
@@ -79,7 +79,16 @@ export const createTaskSourceScope = (sql: SqlStorage, ownerKey: string, scope: 
   // Read-only families the owner's own chat may use by default (the host sets them when the owner connected them).
   // They apply on a retained task until the owner explicitly chooses or narrows sources; they never override that.
   // A pending owner confirmation card means the owner is deciding: nothing is read around it, defaults included.
-  const hasPending = () => sql.exec<{ pending_json: string | null }>('SELECT pending_json FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).one().pending_json !== null;
+  // An expired card (30-minute proposal window) no longer holds the owner chat: it is cleared on read instead of wedging every later turn.
+  const hasPending = () => {
+    const raw = sql.exec<{ pending_json: string | null }>('SELECT pending_json FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).one().pending_json;
+    if (raw === null) return false;
+    let expiresAt = Infinity;
+    try { const parsed = JSON.parse(raw) as { expiresAt?: unknown }; if (typeof parsed.expiresAt === 'number') expiresAt = parsed.expiresAt; } catch { /* unreadable card: treat as live */ }
+    if (expiresAt > Date.now()) return true;
+    console.warn(JSON.stringify({ hop: 'task_source_pending_expired', owner: ownerKey.slice(0, 8) }));
+    return false;
+  };
   const isNarrowed = () => sql.exec<{ narrowed: number }>('SELECT narrowed FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).one().narrowed === 1;
   // Private host supplies admitted bytes and occurrence; the classifier cannot construct this witness.
   const instruction = ownerInput && Object.freeze({ ...ownerInput, quotedRanges: ownerInput.quotedRanges?.map(range => Object.freeze({ ...range })) });
