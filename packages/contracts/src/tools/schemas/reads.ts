@@ -45,6 +45,7 @@ export type GetHealthArgs = z.infer<typeof getHealthArgsSchema>;
 
 // 'query_calendar' is the ADR-0040 rename of the legacy schedule read.
 export const queryCalendarArgsSchema = z.strictObject({
+  account: z.email().optional(),
   date_range: dateRangeSchema.optional(),
   calendar_id: z.string().min(1).max(254).default('primary'),
   page_token: z.string().min(1).max(4096).optional(),
@@ -76,6 +77,7 @@ export const connectServiceArgsSchema = z.strictObject({
 export type ConnectServiceArgs = z.infer<typeof connectServiceArgsSchema>;
 
 export const getCommunicationArgsSchema = z.strictObject({
+  account: z.email().optional(),
   date_range: dateRangeSchema.optional(),
   limit: z.int().min(1).max(500).default(10),
   page_token: z.string().min(1).optional(),
@@ -86,6 +88,8 @@ export type GetCommunicationArgs = z.infer<typeof getCommunicationArgsSchema>;
 // after:/before: from the date range) and a single-thread body read. Both are read-only;
 // the E1 verification-artifact quarantine runs on results before they reach model context.
 export const searchCommunicationArgsSchema = z.strictObject({
+  account: z.email().optional(),
+  cursor: z.string().min(1).max(4096).optional(),
   query: z.string().min(1),
   date_range: dateRangeSchema.optional(),
   limit: z.int().min(1).max(20).default(10),
@@ -93,6 +97,8 @@ export const searchCommunicationArgsSchema = z.strictObject({
 export type SearchCommunicationArgs = z.infer<typeof searchCommunicationArgsSchema>;
 
 export const readThreadArgsSchema = z.strictObject({
+  account: z.email().optional(),
+  cursor: z.string().min(1).max(4096).optional(),
   thread_id: z.string().min(1),
   limit: z.int().min(1).max(20).default(10),
 });
@@ -104,6 +110,7 @@ export const taskStatusFilterSchema = z.enum(['todo', 'in_progress', 'done', 'al
 export type TaskStatusFilter = z.infer<typeof taskStatusFilterSchema>;
 
 export const getTasksArgsSchema = z.strictObject({
+  account: z.email().optional(),
   status: taskStatusFilterSchema.default('todo'),
   limit: z.int().min(1).max(100).default(20),
 });
@@ -112,6 +119,7 @@ export type GetTasksArgs = z.infer<typeof getTasksArgsSchema>;
 // Drive reads over the REST adapter (explicit, no MCP). The query is a typed field the edge turns into
 // a Drive query; the model never writes Drive query syntax. file_id is a closed id shape, not free text.
 export const readDriveArgsSchema = z.strictObject({
+  account: z.email().optional(),
   action: z.enum(['recent', 'search', 'get', 'content']),
   name_contains: z.string().min(1).max(200).optional(),
   file_id: z.string().regex(/^[A-Za-z0-9_-]{10,128}$/).optional(),
@@ -279,6 +287,7 @@ export type CallMcpToolResult = z.infer<typeof callMcpToolResultSchema>;
 
 // Explicit provider availability, not a calendar-event pagination heuristic.
 export const queryAvailabilityArgsSchema=z.strictObject({
+ account:z.email().optional(),
  date_range:z.strictObject({from:iso8601Schema,to:iso8601Schema}).refine(r=>Date.parse(r.from)<Date.parse(r.to),'range must advance'),
  calendar_ids:z.array(z.string().min(1).max(254)).min(1).max(50).default(['primary']).refine(ids=>new Set(ids).size===ids.length,'duplicate calendar IDs'),
  duration_minutes:z.int().min(1).max(1440),

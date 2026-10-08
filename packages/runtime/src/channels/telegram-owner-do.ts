@@ -1525,7 +1525,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: vault ? 'moved to vault' : 'moved to account list' });
       },
       // The first healthy account whose grant covers the feature serves it.
-      async client(feature: GoogleFeature = 'calendar', intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>) {
+      async client(feature: GoogleFeature = 'calendar', intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>, selectedAccount?: string) {
         const app = await googleApp();
         if (!app) {if(intent)throw new ProxyIntentError('intent_unavailable');return null;}
         await google.migrate();
@@ -1534,7 +1534,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const probes = (await storage.get<Record<string, number>>('google:probes')) ?? {};
         const circuit = googleCircuit({ failing, probes, now: Date.now(), ids: all.map((account) => account.id) });
         if (circuit.probe.length) await storage.put('google:probes', { ...probes, ...Object.fromEntries(circuit.probe.map((id) => [id, Date.now()])) });
-        const fit = all.filter((account) => circuit.usable.includes(account.id) && googleHas(account.scopes, feature)).map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
+        const fit = all.filter((account) => circuit.usable.includes(account.id) && googleHas(account.scopes, feature) && (!selectedAccount || account.email.toLowerCase() === selectedAccount.toLowerCase())).map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
         const account = pinProxyIntentRoute(storage.sql,intent,`google:${feature}`,fit,fit.find((candidate) => !failing[candidate.id]) ?? fit[0]);
         if (!account) { if (circuit.skipped.length) log({ trace: `google:${Date.now()}`, hop: 'google_circuit_open', ms: 0, ok: false, detail: `${circuit.skipped.length} account(s) need reconnect; next probe within 6h` }); return null; }
         const metadata = { connection_id: account.id, email: account.email };
@@ -1644,7 +1644,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       return this.browserTasks.resolve(this.browserTasks.principal, source);
     } });
     const desk = approvalDesk(storage.sql, {
-      call: routedCall, owner, google: (intent,feature) => google.client(feature??'calendar',intent), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
+      call: routedCall, owner, google: (intent,feature,account) => google.client(feature??'calendar',intent,undefined,account), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
       timezone: clock.timezone, log,
       reviewUrl: async () => {
         const origin = await storage.get<string>('origin');
