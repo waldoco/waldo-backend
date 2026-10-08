@@ -52,6 +52,7 @@ const TABLES: Record<string, Row> = {
   ledger: gap('summary and payload JSON'), event_admissions: gap('delivery body'), trace_log: gap('note column; trace sinks not verified'), journal: gap('run journal; only a partial reference in purge, not shown covered'),
   claim_recall: gap('FTS index kept in step with claims by triggers (content=claims); no test checks the index for a marker after a purge'),
   constellation_edges: gap('ids plus a relation label; node removal drops its edges per purge comments, no test checks edges'),
+  responsibilities: gap('title, intent and closing evidence text; a literal forget does not reach it yet'), responsibility_items: gap('step title and worker result text; a literal forget does not reach it yet'),
   proactivity: gap('settings JSON, not inspected'), watch_state: gap('key and value, not inspected'), proxy_intent_routes: gap('purpose text, not inspected'), workspace_manifest: gap('state JSON with file names'),
   runtime_runs: gap(TEXT_JSON), runtime_invocation_v2: gap(TEXT_JSON), runtime_journal: gap(TEXT_JSON), runtime_trace: gap(TEXT_JSON),
   // Product-schema tables (do-schema.ts), none wired to purge

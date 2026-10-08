@@ -82,12 +82,12 @@ describe('delegate_task (subagent orchestration v1)', () => {
     expect(handback).toMatchObject({ ok: true, data: { status: 'completed', summary: 'found stuff about: research cursor pagination' } });
   });
 
-  it('refuses a fourth spawn in one turn (owner-delegated max 3) as a normal failed round', async () => {
+  it('refuses a spawn past the per-turn cap as a normal failed round', async () => {
     const delegate = delegateTaskHandler(async () => ({ exit: 'completed' as const, text: 'done' }));
     const outputs: string[] = [];
     let n = 0;
     await runToolLoop({
-      handlers: [delegate], ctx, maxSteps: 10,
+      handlers: [delegate], ctx, maxSteps: 25,
       onTool: (event) => outputs.push(event.output),
       step: async (tools) => {
         n += 1;
