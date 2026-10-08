@@ -13,6 +13,7 @@ Scope of `forget_memory`, by store. The receipt returned to the owner must match
 
 - Telegram chat history: Waldo cannot delete messages already in the Telegram chat. The receipt says so.
 - trace_log.note and runtime_trace.detail_json: diagnostic logs, tracked as gaps in forget-store-table. They hold hop names and notes, not message bodies.
-- Backups and archives (R2 objects, database backups): not rewritten. They expire per retention.
-- Supabase rows (identity, connections): hold no memory text; not touched.
+- Backups and archives (R2 objects, database backups): not rewritten. Retention not verified against code.
+- Supabase rows (identity, connections): NOT VERIFIED. Believed to hold no memory text; not audited.
+- R2 working-artifact bodies: NOT VERIFIED. They can carry owner text; forget does not touch them.
 - Sent outbox rows that were already delivered: not recalled from Telegram.
