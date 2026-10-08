@@ -181,6 +181,7 @@ export const redactionKindSchema = z.enum([
   'address',
   'credit_card',
   'instruction_pattern',
+  'health_value',
 ]);
 export type RedactionKind = z.infer<typeof redactionKindSchema>;
 

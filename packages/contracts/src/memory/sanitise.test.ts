@@ -242,6 +242,7 @@ describe('redaction', () => {
       'address',
       'credit_card',
       'instruction_pattern',
+      'health_value',
     ]);
   });
 

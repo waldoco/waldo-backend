@@ -616,6 +616,28 @@ function containsForbiddenHealth(
   return { invalid: visited.invalid || nestedInvalid, matched: visited.matched };
 }
 
+const HEALTH_SPAN_MARKER = '[health value withheld]';
+
+// ADR-0081 free-text scan on external content headed to the model (internal_context): the span
+// is withheld and the read continues. Every other destination still denies in containsForbiddenHealth.
+function redactExternalHealthSpans(
+  payload: JsonValue,
+  redactions: Redaction[],
+): { invalid: boolean; payload: JsonValue; redactions: Redaction[] } {
+  const counts = new Map<RedactionKind, number>();
+  const patterns = [...RAW_SENSOR_PATTERNS, ...DERIVED_SCORE_PATTERNS, ...HEALTH_FREE_TEXT];
+  const transformed = transformJsonStrings(payload, (text) =>
+    patterns.reduce((output, pattern) => replaceAndCount(output, pattern, HEALTH_SPAN_MARKER, 'health_value', counts), text),
+  );
+  if (transformed.invalid) return { invalid: true, payload, redactions };
+  const count = counts.get('health_value') ?? 0;
+  return {
+    invalid: false,
+    payload: transformed.payload,
+    redactions: count === 0 ? redactions : [...redactions, { kind: 'health_value', count }],
+  };
+}
+
 function increment(counts: Map<RedactionKind, number>, kind: RedactionKind, count = 1): void {
   counts.set(kind, (counts.get(kind) ?? 0) + count);
 }
@@ -1044,12 +1066,22 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
   if (secret === 'invalid_payload') return deny('size_cap', secret);
   if (secret !== undefined) return deny('canary_token', secret);
 
-  const health = containsForbiddenHealth(input);
+  // External content to the model: withhold matched health spans, then the unchanged scan below
+  // still denies structured health correlation.
+  const withheld =
+    input.source_taint === 'external' && input.destination === 'internal_context'
+      ? redactExternalHealthSpans(input.payload, [])
+      : { invalid: false, payload: input.payload, redactions: [] as Redaction[] };
+  if (withheld.invalid) return deny('size_cap', 'invalid_payload');
+  const scanned = { ...input, payload: withheld.payload };
+
+  const health = containsForbiddenHealth(scanned);
   if (health.invalid) return deny('size_cap', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
 
-  const pii = redactPii(input.payload, input.destination, input.source_taint, input.canary_tokens);
+  const pii = redactPii(scanned.payload, input.destination, input.source_taint, input.canary_tokens);
   if (pii.invalid) return deny('size_cap', 'invalid_payload');
+  pii.redactions.unshift(...withheld.redactions);
 
   const instructions = inspectsInstructions(input) ? inspectInstructions(pii.payload, pii.redactions) : { payload: pii.payload, redactions: pii.redactions };
   if ('ok' in instructions) return instructions;

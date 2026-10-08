@@ -230,8 +230,8 @@ describe('Scribe sanitiser', () => {
     });
   });
 
-  it.each(CATEGORICAL_FREE_TEXT_HEALTH)('still denies provider-payload categorical health text: %j', (payload) => {
-    expect(inspectExternal(payload)).toEqual({
+  it.each(CATEGORICAL_FREE_TEXT_HEALTH)('still denies provider-payload categorical health text at egress: %j', (payload) => {
+    expect(inspectExternal(payload, 'send_message')).toEqual({
       ok: false,
       check: 'health_value',
       reason: 'health_value_leak',
@@ -481,17 +481,22 @@ describe('Scribe sanitiser', () => {
     });
   });
 
-  it.each(HEALTH_FREE_TEXT_FORMS)('still denies provider-payload health free-text: %s', (payload) => {
-    expect(inspectExternal(payload)).toEqual({
+  it.each(HEALTH_FREE_TEXT_FORMS)('still denies provider-payload health free-text at egress: %s', (payload) => {
+    expect(inspectExternal(payload, 'send_message')).toEqual({
       ok: false,
       check: 'health_value',
       reason: 'health_value_leak',
     });
-    expect(inspectExternal({ note: payload })).toEqual({
-      ok: false,
-      check: 'health_value',
-      reason: 'health_value_leak',
-    });
+  });
+
+  // A-7: external content headed to the model is redacted, not denied (see scribe-health-redact.test.ts).
+  it.each(HEALTH_FREE_TEXT_FORMS)('withholds provider-payload health free-text at internal_context: %s', (payload) => {
+    const result = inspectExternal({ note: payload });
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) {
+      expect(JSON.stringify(result.payload)).toContain('[health value withheld]');
+      expect(result.redactions.some((r) => r.kind === 'health_value')).toBe(true);
+    }
   });
 
   // Direction A completion (owner ruling 2026-09-28, confirmed on his own channel): the owner's
@@ -695,7 +700,7 @@ describe('Scribe sanitiser', () => {
       check: 'health_value',
       reason: 'health_value_leak',
     });
-    expect(inspectExternal('CRS 85')).toEqual({
+    expect(inspectExternal('CRS 85', 'send_message')).toEqual({
       ok: false,
       check: 'health_value',
       reason: 'health_value_leak',
