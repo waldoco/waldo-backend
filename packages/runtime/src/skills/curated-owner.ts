@@ -29,6 +29,7 @@ export function byteUpperBoundSkillBudget(): ResolvedSkillBudget {
 export type CuratedSkillTurn = Readonly<{
  owner: string; custodyKey?: string; turnId: string; trigger: TriggerType; ownerText: string;
  assertCurrent(): Promise<void>;
+ assertDispatch?(): Promise<void>;
 }>;
 type Result = { ok: true; source_taint: null; data: { name: string; version: number; enabled: boolean; source: string } }
  | { ok: false; code: 'rejected'; error: string };
