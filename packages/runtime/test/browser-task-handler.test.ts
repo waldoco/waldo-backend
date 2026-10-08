@@ -118,3 +118,16 @@ it.each(['scroll','read','wait'] as const)('only landed %s produces a host-local
  expect(result.ok).toBe(true);
  if(result.ok){const data=result.data as Record<string,unknown>;expect(typeof data.browser_action_session_handle).toBe(operation==='scroll'?'string':'undefined');expect(JSON.stringify(result)).not.toContain('PRIVATE_PROVIDER_ID');}
 });
+
+ it.each([{operation:'open_tab',url:'https://fixture.example/other'},{operation:'switch_tab',tab_ref:'tab-one'},{operation:'close_tab',tab_ref:'tab-one'},{operation:'screenshot'},{operation:'upload',element_ref:'file',file_id:'00000000-0000-4000-8000-000000000001',revision:1}])('legacy task host refuses native-only command $operation before resolving or proposing',async command=>{
+ let resolutions=0,cards=0,legacy=0;
+ const handler=browserTaskHandler({legacy:{...browseActHandler(undefined,undefined,undefined),handle:async()=>{legacy++;return {ok:true,data:{},source_taint:'external'};}},host:async()=>{resolutions++;return {pageUrl:'https://fixture.example/form',propose:async()=>({})} as never;},propose:async()=>{cards++;return 'unexpected';}});
+ expect(await handler.handle(browseActArgsSchema.parse({url:'https://fixture.example/form',task:'native command',command}),context)).toMatchObject({ok:false,code:'rejected'});
+ expect({resolutions,cards,legacy}).toEqual({resolutions:0,cards:0,legacy:0});
+ });
+ it('legacy submit cannot allocate a paid alternative for a common browser approval',async()=>{
+ let calls=0;
+ const proposal={url:'https://fixture.example/form',action:{selector:'file',method:'click',description:'Select file'},binding:{},steps:[],commonBrowser:{version:1,taskId:'task',sessionHandle:'handle',revision:1,actionDigest:'digest',elementRef:'file',file:{}}} as unknown as BrowserSubmitProposal;
+ expect(await executeBrowserSubmit('key','project',undefined,proposal,(async()=>{calls++;throw Error('must not call');}) as typeof fetch)).toMatchObject({status:'rejected'});
+ expect(calls).toBe(0);
+ });

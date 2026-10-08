@@ -29,7 +29,7 @@ let processHandle, processExit, observer;
 // This watchdog controls only the synthetic local process, not provider/task budgets.
 const watchdog = setTimeout(() => processHandle?.kill('SIGKILL'), Math.max(0, probeDeadline - Date.now()));
 try {
-  processHandle = spawn(executablePath, ['--headless', '--disable-background-networking', '--disable-component-update', '--disable-default-apps', '--disable-extensions', '--disable-sync', '--metrics-recording-only', '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  processHandle = spawn(executablePath, ['--headless', '--disable-background-networking', '--disable-component-update', '--disable-default-apps', '--disable-extensions','--disable-component-extensions-with-background-pages','--disable-features=MediaRouter', '--disable-sync', '--metrics-recording-only', '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
   processExit = new Promise(resolve => processHandle.once('exit', resolve));
   await withinHarness(() => new Promise((resolve, reject) => {
     let stderr = '';
@@ -48,7 +48,7 @@ try {
     connect: async (_binding, options) => {
       assert.deepEqual(options, { sessionId: providerSessionId, persistent: true });
       const connection = await withinHarness(() => chromium.connectOverCDP(endpoint)); connections.push(connection);
-      assert.equal(connection.contexts().length, 1); return connection;
+      assert.equal(connection.contexts().length, 1);if(connection.contexts()[0].serviceWorkers().length)throw Error('Local fixture has pre-existing service workers: '+JSON.stringify(connection.contexts()[0].serviceWorkers().map(worker=>worker.url())));return connection;
     }, sessions,
     acquire: async () => { throw Error('No allocation or replacement is allowed'); },
   };
@@ -88,6 +88,27 @@ try {
   await assert.rejects(driver.act(session, cancelled, { operation: 'click', element_ref: cancelled.observation.elements.find(element => element.name === 'Continue').ref }, async () => { admitted = false; }), error => error.code === 'rejected');
   await detached();
   const before = connections.length; await assert.rejects(driver.observe(session), error => error.code === 'rejected'); assert.equal(connections.length, before);
+  // Serving-mode lifecycle: the dedicated context survives only this retained
+  // connection. A fresh owner turn re-admits it; idle HTTP effects are refused.
+  let turnAdmitted=true;
+  const retainedDriver=cloudflareGeneralBrowser({ownerId:session.ownerId,binding:{},loadSdk:async()=>sdk,publicRead:true,retainConnection:true,now:Date.now,deadline:()=>session.expiresAt,
+    admit:async()=>{if(!turnAdmitted)throw Error('No owner turn admitted');},maxScreenshotBytes:1024*1024,authorizeRequest:async(url,method)=>new URL(url).origin===origin&&method==='GET'});
+  const retainedFirst=await retainedDriver.navigate(session,origin+'/one');useful(retainedFirst,'Useful public tab One');
+  const retainedFilled=await retainedDriver.act(session,retainedFirst,{operation:'fill',element_ref:retainedFirst.observation.elements.find(element=>element.name==='Note').ref,value:'Across owner turns'},async()=>{});
+  const liveConnection=connections.at(-1),liveContext=liveConnection.contexts().find(context=>context!==liveConnection.contexts()[0]);
+  assert(liveContext);assert.equal(liveConnection.contexts().length,2);
+  turnAdmitted=false;
+  assert.equal(await liveContext.pages()[0].evaluate(async()=>{try{await fetch('/forbidden',{method:'POST',body:'Must not send'});return 'sent';}catch{return 'blocked';}}),'blocked');
+  turnAdmitted=true;
+  const secondTurn=await retainedDriver.observe(session,retainedFilled.observation.tab_ref);assert.equal(secondTurn.state.elements.find(element=>element.name==='Note').value,'Across owner turns');
+  // A real CDP disconnect disposes the dedicated context and its documents.
+  await liveConnection.close();
+  const lostObserver=await withinHarness(()=>chromium.connectOverCDP(endpoint));
+  assert.equal(lostObserver.contexts().length,1);assert.equal(lostObserver.contexts()[0].pages().length,0);await lostObserver.close();
+  await assert.rejects(retainedDriver.observe(session,secondTurn.observation.tab_ref),error=>error.code==='session_lost');
+  assert.equal((await sessions()).length,1);
+  const recovered=await retainedDriver.navigate(session,origin+'/one');assert.notEqual(recovered.targetId,secondTurn.targetId);assert.equal(recovered.state.elements.find(element=>element.name==='Note').value,'original');
+  await retainedDriver.disconnect();assert(connections.every(connection=>!connection.isConnected()));
   // CDP command acknowledgement can precede actual local process shutdown.
   // Preserve the driver's conservative uncertainty, then explicitly exercise
   // absence confirmation after the actual operating-system process exit event.
@@ -101,6 +122,6 @@ try {
   assert.deepEqual(await sessions(), []); assert.equal(processHandle.exitCode, 0);
   await assert.rejects(chromium.connectOverCDP(endpoint, { timeout: 1000 }));
   assert(connections.every(connection => !connection.isConnected()));
-  assert.deepEqual(requests, ['/one', '/two']);
-  process.stdout.write(JSON.stringify({ localOnly: true, provider: false, realCDPDisconnectReconnect: true, exactNativeUploadBytes: true, uploadSelectionOnly: true, retainedTabs: 2, retainedInput: true, usefulTextAndPng: true, secondTurnObservationAction: true, staleRejected: true, authorityCancellationBeforeEffect: true, exactPhysicalClosure: true, actualProcessExit: true, initialCleanupConfirmed, explicitAbsenceConfirmation: true, connections: connections.length, screenshotBytes: [first.image.bytes.length, second.image.bytes.length, acted.image.bytes.length] }) + '\n');
+  assert.deepEqual(requests, ['/one','/two','/one','/one']);
+  process.stdout.write(JSON.stringify({ localOnly: true, provider: false, realCDPDisconnectReconnect: true, exactNativeUploadBytes: true, uploadSelectionOnly: true, retainedTabs: 2, retainedInput: true, usefulTextAndPng: true, secondTurnObservationAction: true, staleRejected: true, authorityCancellationBeforeEffect: true, disposableContextAcrossOwnerTurns:true,idlePostBlocked:true,actualCDPDetachDisposesDocuments:true,lostRefsRejected:true,samePaidSessionFreshContextRecovery:true,exactPhysicalClosure: true, actualProcessExit: true, initialCleanupConfirmed, explicitAbsenceConfirmation: true, connections: connections.length, screenshotBytes: [first.image.bytes.length, second.image.bytes.length, acted.image.bytes.length] }) + '\n');
 } finally { clearTimeout(watchdog); if (processHandle?.pid && processHandle.exitCode === null) { processHandle.kill('SIGKILL'); await processExit; } await observer?.close().catch(() => {}); await new Promise(resolve => server.close(resolve)); await rm(profile, { recursive: true, force: true }); }

@@ -29,7 +29,7 @@ it('one explicit bounded operator policy serves two existing owners and a newly 
       await binding.fetch(`http://fake.host/v1/devtools/browser?keep_alive=${options.keep_alive}`, { method: 'POST' });
       const id = `private-provider-${crypto.randomUUID()}`, subject = proof.subject;
       const row = { subject, pages: [] as any[], context: undefined as any };
-      row.context = { serviceWorkers: () => [], addInitScript: async () => {}, routeWebSocket: async () => {}, pages: () => row.pages.slice(), route: async () => {}, unroute: async () => {},
+      row.context = { close:async()=>{row.pages=[];},serviceWorkers: () => [], addInitScript: async () => {}, routeWebSocket: async () => {}, pages: () => row.pages.slice(), route: async () => {}, unroute: async () => {},
         newCDPSession: async (page: any) => ({ send: async () => ({ targetInfo: { targetId: page.id } }), detach: async () => {} }),
         newPage: async () => {
           let url = 'about:blank';
@@ -42,7 +42,7 @@ it('one explicit bounded operator policy serves two existing owners and a newly 
     connect: async (binding: any, options: any) => {
       await binding.fetch(`http://fake.host/v1/devtools/browser/${options.sessionId}?persistent=true`, { headers: { upgrade: 'websocket' } });
       const row = sessions.get(options.sessionId); if (!row) throw Error('No retained fake session');
-      return { contexts: () => [row.context], close: async () => {}, newBrowserCDPSession: async () => ({ send: async () => { sessions.delete(options.sessionId); ended.push(options.sessionId); } }) };
+      return { contexts: () => [row.context],newContext:async()=>row.context, close: async () => {}, newBrowserCDPSession: async () => ({ send: async () => { sessions.delete(options.sessionId); ended.push(options.sessionId); } }) };
     },
     sessions: async (binding: any) => { await binding.fetch('http://fake.host/v1/sessions'); return [...sessions.keys()].map(sessionId => ({ sessionId })); }, endpointURLString: () => '',
   } as never);
@@ -111,7 +111,9 @@ it('one explicit bounded operator policy serves two existing owners and a newly 
         expect(JSON.stringify(final)).not.toContain('private-provider-');
         expect(proof.delivered.some(row => Number(row.subject) === owner.subject && row.text === `Owner ${owner.subject} read A/B/A.`)).toBe(true);
         const records = [...state.storage.kv.list<any>({ prefix: 'common-browser:' })].map(([, row]) => row);
-        expect(records).toHaveLength(1); expect(records[0]).toMatchObject({ cleanup: 'closed', session: { state: 'ended' } });
+        expect(records).toHaveLength(1); expect(records[0]).toMatchObject({session:{state:'active'}});
+        await send('/stop');
+        await vi.waitFor(()=>expect(state.storage.kv.get<any>(`common-browser:${records[0].grant.taskId}`)).toMatchObject({cleanup:'closed',session:{state:'ended'}}));
         const ledgers = [...state.storage.kv.list<any>({ prefix: 'common-spend:' })].map(([, row]) => row);
         expect(ledgers).toHaveLength(1); expect(ledgers[0].calls[0]?.id).toMatch(/^browser:/);
         expect(ledgers[0].calls.some((call:any)=>call.id.startsWith('model:'))).toBe(true);

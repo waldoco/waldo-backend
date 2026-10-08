@@ -157,3 +157,31 @@ it('default serving reads close documents and reject retained interactions witho
  expect(await host.actionHandler.handle({url:first.data.url,task:'Set note',max_actions:1,command:{operation:'type',element_ref:first.data.elements[0].ref,value:'Unavailable',intent:'read'}},f.ctx)).toMatchObject({ok:false});
  expect(commonBrowserFixture.effects).toBe(0);await host.cancel();
 });
+
+it('near-full pending upload evidence cannot prevent exact cancellation cleanup',async()=>{
+ const f=fixture(),host=f.host();await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read'},f.ctx);
+ const key='common-browser:fixture-task',row=f.rows.get(key) as any;
+ row.pending={state:'prepared',payload:{url:row.observation.observation.url,action:{selector:row.observation.observation.elements[1].ref,method:'native_upload',description:''},binding:{},steps:[]}};
+ row.pending.payload.action.description='x'.repeat(131070-new TextEncoder().encode(JSON.stringify(row)).byteLength);
+ f.rows.set(key,row);expect(new TextEncoder().encode(JSON.stringify(row)).byteLength).toBe(131070);
+ await host.cancel();expect(commonBrowserFixture.ends).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(0);
+ expect(f.rows.get(key)).toMatchObject({cleanup:'closed',observation:undefined,pending:undefined,tabs:[]});
+});
+
+ it.each(['goto','open_tab','close_tab'] as const)('durably fences failed %s readback before any replay',async operation=>{
+ const f=fixture(),host=f.host();let first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read'},f.ctx) as any;
+ if(operation==='close_tab')first=await host.actionHandler.handle({url:first.data.url,task:'Open B',max_actions:1,command:{operation:'open_tab',url:'https://public-pages.fixture.invalid/b'}},f.ctx) as any;
+ const command=operation==='close_tab'?{operation,tab_ref:first.data.tabs[0].ref}:{operation,url:'https://public-pages.fixture.invalid/b'};
+ const args={url:first.data.url,task:'Native change',command} as any;
+ if(operation==='close_tab')commonBrowserFixture.onClose=()=>{commonBrowserFixture.onClose=undefined;throw Error('lost close acknowledgement');};else commonBrowserFixture.onGoto=()=>{throw Error('lost navigation acknowledgement');};
+ expect(await host.actionHandler.handle(args,f.ctx)).toMatchObject({ok:false});
+ expect(f.rows.get('common-browser:fixture-task')).toMatchObject({action:{state:'uncertain'}});
+ const count=operation==='close_tab'?commonBrowserFixture.tabCloses:commonBrowserFixture.navigations;
+ commonBrowserFixture.onGoto=undefined;commonBrowserFixture.onClose=undefined;
+ const observed=await host.handler.handle({url:first.data.url,instruction:'Observe changed state'},f.ctx) as any;
+ expect(observed).toMatchObject({ok:true,data:{action_outcome:'uncertain'}});
+ const afterRead=operation==='close_tab'?commonBrowserFixture.tabCloses:commonBrowserFixture.navigations;
+ expect(afterRead).toBeGreaterThanOrEqual(count);
+ expect(await host.actionHandler.handle({...args,url:observed.data.url},f.ctx)).toMatchObject({ok:false});
+ expect(operation==='close_tab'?commonBrowserFixture.tabCloses:commonBrowserFixture.navigations).toBe(afterRead);await host.cancel();
+ });

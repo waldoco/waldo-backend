@@ -48,7 +48,7 @@ allocation connection is a remaining dependency; this slice does not claim one.
 No live calls, deployment, credentials, plan changes or registration updates are
 part of this implementation.
 
-The existing public-read restrictions still apply. The separate private source path now connects existing Vault sign-in state, human handoff and verified native download retrieval; see BROWSER_PRIVATE_INTEGRATION_STATUS.md. Live acceptance, complete screenshot delivery and private upload remain outstanding.
+The existing public-read restrictions still apply. The separate private source path now connects existing Vault sign-in state, human handoff and verified native download retrieval; see BROWSER_PRIVATE_INTEGRATION_STATUS.md. Common serving actions, owner workspace screenshots and approved native file selection are now wired; see BROWSER_NATIVE_UPLOAD_PREPARATION.md. Live acceptance, general form sends, Telegram inline images and private serving activation remain outstanding.
 
 ## Provider evidence checked 2026-10-08
 
@@ -85,4 +85,6 @@ npx tsc --project tsconfig.integration.json --noEmit
 
 Tests seal provider/model/channel/directory I/O with fakes. No staging/live claim is
 made by local pass results. Keep the separate #935 ingress harness repair out of the
-browser feature diff; publish #929 only against Core's coordinated base.
+browser feature diff; preserve merged Core owner-loop/CPU changes on the freshly rebased beta base.
+
+The current continuation path retains one disposable connected context across admitted owner turns; finish clears run authority/attachments rather than closing the session. The original deadline and paid reservation remain fixed. After detach/eviction, old document refs and pending approvals fail; explicit recovery recreates a document in the same paid session. Model metering follows the actual admitted run-to-task link and does not capture unrelated chat.

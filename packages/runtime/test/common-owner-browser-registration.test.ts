@@ -22,8 +22,9 @@ const setup = () => {
   const binding = { fetch: vi.fn(async () => new Response('{}')) };
   const env = { WALDO_ENVIRONMENT: 'staging', COMMON_BROWSER_REGISTRATION: JSON.stringify(operator), OPENAI_API_KEY: 'synthetic-model-key', BROWSER: binding, TELEGRAM_OWNER_DO: { idFromName: (name: string) => ({ toString: () => name === 'automatic-owner' ? 'physical-owner' : 'foreign' }) } };
   const scope: RunEffectScope = { runId: crypto.randomUUID(), attempt: crypto.randomUUID(), deadline: now + 60000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() };
-  const runtime = () => ownerBrowserRuntime({ env: env as never, storage, actualDoId: 'physical-owner', activeScope: () => scope });
-  return { rows, storage, operator, binding, env, scope, runtime };
+  let activeScope=scope;
+  const runtime = () => ownerBrowserRuntime({ env: env as never, storage, actualDoId: 'physical-owner', activeScope: () => activeScope });
+  return { rows, storage, operator, binding, env, scope, runtime,activate:(next:RunEffectScope)=>{activeScope=next;} };
 };
 
 it('automatically derives the registered browser owner from current directory authority, without a selected subject in operator policy', async () => {
@@ -34,7 +35,11 @@ it('automatically derives the registered browser owner from current directory au
   expect(commonBrowserFixture.allocations).toBe(1);
   expect(fallback).not.toHaveBeenCalled();
   await runtime.finish(fixture.scope);
-  expect(commonBrowserFixture.ends).toBe(1);
+  expect(commonBrowserFixture.ends).toBe(0);expect(commonBrowserFixture.pages).toHaveLength(1);
+  expect(runtime.attachments(fixture.scope)).toHaveLength(0);
+  expect(await runtime.read({name:'browse_page'} as never).handle({provider:'cloudflare_playwright',url:'https://example.com/a',instruction:'No renewed scope'}, {authenticatedUserId:'owner',runScope:fixture.scope,turnId:'idle',toolCallId:'idle'} as never)).toMatchObject({ok:false});
+  expect(commonBrowserFixture.allocations).toBe(1);
+  runtime.stop();await runtime.maintain();expect(commonBrowserFixture.ends).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(0);
 });
 
 const request = (scope: RunEffectScope) => ({ runScope: scope, request: { model: WALDO_CHAT_MODEL, max_tokens: 16, system: 'Fixture', messages: [] }, route: { provider: 'openai', model: WALDO_CHAT_MODEL, cache: 'none', max_tokens: 16 }, step: { provider: 'openai', model: WALDO_CHAT_MODEL }, context: 'full_context', fallback_step: 'configured_model', headers: {} }) as unknown as LLMGatewayRequest;
@@ -144,4 +149,14 @@ it('meters a browser allocation created while ordinary model authority is pendin
   const ledger = [...fixture.rows].find(([key]) => key.startsWith('common-spend:'))![1];
   expect(ledger.calls.filter((call: any) => call.id.startsWith('model:'))).toHaveLength(1);
   expect(provider.calls).toHaveLength(1);
+});
+
+it('a retained browser does not meter an unrelated run without explicit browser admission',async()=>{
+ const f=setup(),runtime=f.runtime();await allocate(f,runtime);await runtime.finish(f.scope);
+ const before=structuredClone([...f.rows].find(([key])=>key.startsWith('common-spend:'))![1]);
+ const unrelated={...f.scope,runId:crypto.randomUUID(),attempt:crypto.randomUUID()};f.activate(unrelated);
+ expect(await runtime.gateway()!.complete(request(unrelated))).toMatchObject({ok:true});
+ expect([...f.rows].find(([key])=>key.startsWith('common-spend:'))![1]).toEqual(before);
+ expect(f.rows.get(`common-browser-run:${unrelated.runId}`)).toBeUndefined();
+ runtime.stop();await runtime.maintain();expect(commonBrowserFixture.ends).toBe(1);
 });

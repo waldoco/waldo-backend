@@ -20,6 +20,8 @@ export function browserTaskHandler(options: Readonly<{
     description: 'Browse a public page. Controlled synthetic commands are goto, click, type, scroll, read and wait with observed element refs. Native submit and Enter stop for owner approval. inspect, fill, prepare_submit, verify and cancel remain supported. Final submit always needs the owner approval desk; typed commands never fall back to a fresh browser.',
     async handle(args, context) {
       if (!args.command) return options.legacy.handle(args, context);
+      // Native common-host commands must never become synthetic submit proposals.
+      if (!['goto', 'click', 'type', 'scroll', 'read', 'wait', 'inspect', 'fill', 'prepare_submit', 'verify', 'cancel'].includes(args.command.operation)) return rejected('This browser host does not support that native command.');
       let unpublishedNativeHost: BrowserTaskHost | undefined;
       try {
         const source = context.assertTaskSourceCurrent;

@@ -296,7 +296,7 @@ export const executeBrowserSubmit = async (
   const rejected = (message: string): BrowserSubmitOutcome => ({ status: 'rejected', message });
   const uncertain = (message: string): BrowserSubmitOutcome => ({ status: 'uncertain', message });
   let actAttempted = false;
-  if (proposal.continuation) return rejected('This prepared browser task requires its configured continuation host. Nothing was submitted.');
+  if (proposal.continuation || proposal.commonBrowser) return rejected('This prepared browser task requires its configured continuation host. Nothing was submitted.');
   if (!apiKey || !projectId) return rejected('Browsing is not set up on this Waldo yet, so nothing happened.');
   const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json', ...(modelApiKey ? { 'x-model-api-key': modelApiKey } : {}) };
   const call = (path: string, body: object) => fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });

@@ -13,12 +13,7 @@ loop never treats page text or model arguments as action evidence. Provider sess
 IDs remain private. A receipt records action progress, not task completion or an
 external effect receipt.
 
-The current common public-read host has no action path in its retained session.
-Reading A, reading B, then making the identical A call therefore yields two useful
-reads and `repeat_refusal` for the third. A different read request can still use
-that retained session. A mutation in another browser session or another tool does
-not reopen the identical retained read. Ordinary non-retained read/mutation cache
-behavior and cached settled failures remain as before.
+The common serving host now issues the same progress receipt after an observed native action in the matching session. A repeated same-URL read observes the retained document instead of reloading it. Read, inspect, screenshot and switch_tab are observation-only; they do not unlock a repeat. An explicit owner-local session_handle can resume a later admitted turn under the original grant. Document state lasts while the disposable CDP context remains connected; eviction/disconnect loses it and requires explicit fresh-document recovery. See [serving lifecycle and acceptance](BROWSER_NATIVE_UPLOAD_PREPARATION.md).
 
 Adversarial regression checklist:
 

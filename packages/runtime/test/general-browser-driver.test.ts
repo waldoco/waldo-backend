@@ -20,8 +20,8 @@ function harness(controlTag = 'a', inputType = 'text') {
   };
   page();
   let routeHandler: ((route: any) => Promise<void>) | undefined;
-  const context = { serviceWorkers:()=>[], addInitScript:async()=>{calls.push('block-service-workers');}, routeWebSocket:async(_:string,handler:any)=>{await handler({close:()=>{calls.push('block-websocket');}});}, pages: () => [...pages], newPage: async () => page(), route: async (_: string, handler: (route: any) => Promise<void>) => { routeHandler = handler; }, unroute: async () => {}, newCDPSession: async (p: any) => ({ send: async () => ({ targetInfo: { targetId: p.id } }), detach: async () => {} }) };
-  const browser = { contexts: () => [context], newContext: async () => { throw Error('disposeOnDetach context would lose tabs'); }, close: async () => { calls.push('release'); }, newBrowserCDPSession: async () => ({ send: async () => { ended = true; } }) };
+  const context = { close:async()=>{await Promise.all(pages.map(page=>page.close()));}, serviceWorkers:()=>[], addInitScript:async()=>{calls.push('block-service-workers');}, routeWebSocket:async(_:string,handler:any)=>{await handler({close:()=>{calls.push('block-websocket');}});}, pages: () => [...pages], newPage: async () => page(), route: async (_: string, handler: (route: any) => Promise<void>) => { routeHandler = handler; }, unroute: async () => {}, newCDPSession: async (p: any) => ({ send: async () => ({ targetInfo: { targetId: p.id } }), detach: async () => {} }) };
+  const browser = { contexts: () => [context], newContext: async () => { calls.push('new-disposable-context'); return context; }, close: async () => { calls.push('release'); }, newBrowserCDPSession: async () => ({ send: async () => { ended = true; } }) };
   const sdk = { acquire: async () => { calls.push('acquire'); return { sessionId: session.providerSessionId }; }, connect: async (_: unknown, options: any) => { expect(options).toEqual({ sessionId: session.providerSessionId, persistent: true }); if (ended) throw Error('session ended'); calls.push('attach'); return browser; }, sessions: async () => ended ? [] : [{ sessionId: session.providerSessionId }] };
   return { calls, pages, sdk, browser, context, route: (route: any) => routeHandler!(route), humanChange: () => { changed = true; } };
 }
@@ -116,7 +116,7 @@ it('keeps an admitted public interaction connection guarded until explicit disco
   const filled = await driver.act(session, first, { operation: 'fill', element_ref: first.observation.elements[0]!.ref, value: 'Admitted form value' }, async () => {});
   expect(filled.state.elements[0]!.value).toBe('Admitted form value');
   expect(f.calls.filter(call => call === 'attach')).toHaveLength(1); expect(f.calls).not.toContain('release');
-  expect(f.calls).toContain('block-service-workers'); expect(f.calls).toContain('block-websocket');
+  expect(f.calls).toContain('block-service-workers'); expect(f.calls).toContain('block-websocket'); expect(f.calls.filter(call=>call==='new-disposable-context')).toHaveLength(1);
   await driver.disconnect();
   expect(f.pages).toHaveLength(0); expect(f.calls.filter(call => call === 'release')).toHaveLength(1);
   expect(await f.sdk.sessions()).toHaveLength(1);

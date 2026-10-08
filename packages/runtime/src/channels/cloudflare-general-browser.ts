@@ -25,7 +25,7 @@ export type GeneralBrowserUploadFile = Readonly<{ file_id: string; revision: num
 export function cloudflareGeneralBrowser(options: Options) {
   if (!options.ownerId || !Number.isSafeInteger(options.maxScreenshotBytes) || options.maxScreenshotBytes <= 0) throw new GeneralBrowserError('rejected');
   if (options.retainConnection && !options.publicRead) throw new GeneralBrowserError('rejected');
-  let connected: Readonly<{ browser: Browser; sessionKey: string }> | undefined;
+  let connected: Readonly<{ browser: Browser; context: BrowserContext; sessionKey: string }> | undefined;
   let documentFailure: GeneralBrowserError | undefined;
   const invalidDocuments = new Set<Page>();
   let guardedContext: BrowserContext | undefined;
@@ -114,7 +114,8 @@ export function cloudflareGeneralBrowser(options: Options) {
       // authority has expired, finally can still release its guarded documents.
       if (connected && connected.sessionKey === connectionKey(session)) {
         browser = connected.browser;
-        context = browser.contexts()[0];
+        context = connected.context;
+        if(browser.isConnected?.()===false)throw new GeneralBrowserError('session_lost');
       }
       await admit(session);
       if (documentFailure) throw documentFailure;
@@ -126,13 +127,23 @@ export function cloudflareGeneralBrowser(options: Options) {
         // Runtime 1.3.6 supports persistent, although its declaration omits it.
         const connectOptions = { sessionId: session.providerSessionId, persistent: true };
         browser = await sdk.connect(binding, connectOptions); await admit(session);
-        if (options.retainConnection) connected = { browser, sessionKey: connectionKey(session) };
+
       }
-      // newContext uses disposeOnDetach:true. Reuse the dedicated session's
-      // persistent default context rather than recreating an incognito context.
-      const contexts = browser.contexts();
-      if (contexts.length !== 1) throw new GeneralBrowserError('session_lost');
-      context = contexts[0]!;
+      if (!context) {
+        const contexts = browser.contexts();
+        if (contexts.length !== 1) throw new GeneralBrowserError('session_lost');
+        context = contexts[0]!;
+        if (options.retainConnection) {
+          // SDK1.3.6 creates this context with CDP disposeOnDetach:true. Running
+          // documents never outlive the connection in the persistent default
+          // context. A recreated host cannot reuse lost document handles.
+          if (context.serviceWorkers().length) throw new GeneralBrowserError('session_lost');
+          await cleanup(step => step(() => Promise.all(context!.pages().map(page => page.close()))));
+          await admit(session);
+          context = await browser.newContext({serviceWorkers:'block'}); await admit(session);
+          connected = {browser,context,sessionKey:connectionKey(session)};
+        }
+      }
       if(options.publicRead&&guardedContext!==context){
         if(!await prepareGeneralPublicRead(context)){await terminateId(session.providerSessionId);throw new GeneralBrowserError('session_lost');}
         await admit(session);
@@ -238,6 +249,7 @@ export function cloudflareGeneralBrowser(options: Options) {
     }
   });
   return {
+    hasRetainedConnection:()=>connected!==undefined,
     async disconnect(): Promise<void> {
       const retained = connected; connected = undefined; guardedContext=undefined;
       if (!retained) return;
@@ -251,6 +263,7 @@ export function cloudflareGeneralBrowser(options: Options) {
           if (contexts.some(context => context.pages().length || context.serviceWorkers().length)) throw new GeneralBrowserError('cleanup_unconfirmed');
         });
       } catch { failure = new GeneralBrowserError('cleanup_unconfirmed'); }
+      try { await cleanup(step => step(() => retained.context.close())); } catch { failure ??= new GeneralBrowserError('cleanup_unconfirmed'); }
       try { await cleanup(step => step(() => retained.browser.close())); }
       catch { failure ??= new GeneralBrowserError('cleanup_unconfirmed'); failure.release_failed = true; }
       if (failure) throw failure;

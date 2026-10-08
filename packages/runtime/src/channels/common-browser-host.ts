@@ -6,11 +6,17 @@ import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { TaskSourceSnapshot } from './task-source-scope';
 import { PUBLIC_WEB_ORIGIN, isPublicWebUrl } from './public-web-policy';
 import type { GeneralSnapshot, GeneralActionSnapshot } from './general-browser-observation';
+import {LIMITS} from '@waldo/workspace';
+import type {workspaceOwnerHost} from './workspace-host';
+import type {BrowserSubmitProposal} from './approvals';
+import type {BrowserSubmitOutcome} from '../tools/live/browser';
+import {generalDigest} from './general-browser-observation';
+import {browserScreenshotToWorkspace} from './browser-screenshot-workspace';
 import type { GeneralBrowserAction } from './general-browser-actions';
 export type CommonBrowserGrant = Readonly<{ ref:string;taskId:string;ownerId:string;expiresAt:number;allowedOrigins:readonly string[];maxScreenshotBytes:number;lifetimeMs:number }>;
 // Private registered host capability. Neither model arguments nor environment switches mint it.
 export type CommonBrowserConfiguration = Readonly<{
- // Trusted preparation only; default serving reads close documents on detach.
+ // Trusted owner runtime capability; direct hosts default to close-before-detach.
  retainInteractions?:true;
  binding:BrowserWorker;loadSdk:CloudflareBrowserSdkLoader;
  bindingForOperation?(grant:CommonBrowserGrant,operationId:string):BrowserWorker;
@@ -26,7 +32,7 @@ export type CommonBrowserConfiguration = Readonly<{
 export const COMMON_BROWSER_CHECKPOINT_BYTES=128*1024;
 const encodedCheckpointBytes=(record:BrowserRecord)=>new TextEncoder().encode(JSON.stringify(record)).byteLength;
 export const COMMON_BROWSER_DUE='common_browser_due_v1';
-type BrowserRecord={grant:CommonBrowserGrant;session:BrowserSession;tabs:Readonly<{url:string;ref:string}>[];allocation:'prepared'|'observed';observation?:GeneralActionSnapshot;action?:Readonly<{digest:string;state:'prepared'|'observed'|'uncertain'}>;cleanup?:'pending'|'closed';cleanupFailed?:boolean};
+type BrowserRecord={grant:CommonBrowserGrant;session:BrowserSession;tabs:Readonly<{url:string;ref:string}>[];allocation:'prepared'|'observed';observation?:GeneralActionSnapshot;action?:Readonly<{digest:string;state:'prepared'|'observed'|'uncertain'}>;pending?:{payload:BrowserSubmitProposal;approvalRef?:string;state:'prepared'|'claimed'|'selected'|'denied'|'uncertain'};cleanup?:'pending'|'closed';cleanupFailed?:boolean};
 const sameSession=(a:BrowserRecord,b:BrowserRecord)=>a.session.id===b.session.id&&a.session.generation===b.session.generation&&a.session.providerSessionId===b.session.providerSessionId&&JSON.stringify(a.grant)===JSON.stringify(b.grant);
 const publishCleanup=(storage:DurableObjectStorage,key:string,expected:BrowserRecord,closed:boolean)=>storage.transactionSync(()=>{
  const current=storage.kv.get<BrowserRecord>(key);
@@ -35,6 +41,8 @@ const publishCleanup=(storage:DurableObjectStorage,key:string,expected:BrowserRe
 });
 export function commonBrowserHost(options:Readonly<{
  storage:DurableObjectStorage;config:CommonBrowserConfiguration;ownerId:string;egressAllowlist?:readonly string[];
+ files?(assertCurrent:()=>Promise<void>,ownerId:string):Promise<{workspace:Awaited<ReturnType<typeof workspaceOwnerHost>>;origin:string}>;
+ propose?(payload:BrowserSubmitProposal,ctx:ToolDispatcherContext):Promise<string>;
  source():TaskSourceSnapshot;assertCurrent():Promise<void>;deadline():number;now():number;
 }>) {
  let images:LLMAttachment[]=[];
@@ -87,7 +95,7 @@ export function commonBrowserHost(options:Readonly<{
   async handle(args,ctx){
    try{
     await ctx.assertTaskSourceCurrent?.();const grant=await granted();
-    if(args.provider&&args.provider!=='cloudflare_playwright'||ctx.authenticatedUserId!==options.ownerId||(!isPublicWebUrl(args.url,options.egressAllowlist)||!grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)&&!grant.allowedOrigins.includes(new URL(args.url).origin)))throw Error('common browser target rejected');
+    if(args.provider&&args.provider!=='cloudflare_playwright'||ctx.authenticatedUserId!==options.ownerId||args.session_handle&&options.storage.kv.get<Record>(key(grant.taskId))?.session.id!==args.session_handle||(!isPublicWebUrl(args.url,options.egressAllowlist)||!grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)&&!grant.allowedOrigins.includes(new URL(args.url).origin)))throw Error('common browser target rejected');
     if(options.config.bindingForOperation&&(!ctx.turnId||!ctx.toolCallId))throw Error('common browser operation identity unavailable');
     const driver=executionDriver(grant,ctx);const storageKey=key(grant.taskId);let record=options.storage.kv.get<Record>(storageKey);
     if(record&&(JSON.stringify(record.grant)!==JSON.stringify(grant)||record.session.ownerId!==options.ownerId||record.cleanup||record.allocation!=='observed'))throw Error('common browser retained identity uncertain');
@@ -99,47 +107,95 @@ export function commonBrowserHost(options:Readonly<{
     // Trusted interaction preparation can retain the guarded connection in a
     // turn; default serving reads close documents before disconnect. Stop
     // terminates the exact separately funded session in either mode.
-    const observed=await driver.navigate(record.session,args.url);
-    return await publishObservation(grant,record,observed,ctx);
+    const recovering=!!record.observation&&!driver.hasRetainedConnection();
+    const observed=record.observation?.observation.url===args.url&&driver.hasRetainedConnection()?await driver.observe(record.session,record.observation.observation.tab_ref):await driver.navigate(record.session,args.url);
+    const published=await publishObservation(grant,record,observed,ctx);
+    return {...published,data:{...published.data,...(recovering?{document_state:'recreated',previous_document_lost:true}:{})}};
    }catch(error){return {ok:false,code:'rejected',error:'Public browser read is unavailable or uncertain. Inspect retained task state before retrying; no successful read is claimed.'+(error instanceof GeneralBrowserError?' Browser diagnostic: '+JSON.stringify({browser_code:error.code,...(error.diagnostic?{diagnostic:error.diagnostic}:{}),...(error.cleanup_failed?{cleanup_failed:true}:{}),...(error.release_failed?{release_failed:true}:{})}):''),source_taint:'external'};}
   }};
- const actionHandler:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>={name:'browse_act',description:'Interact with the current Cloudflare public page using observed refs: goto, read, inspect, type, click, scroll. Page writes and native submits require the owner approval path. Unknown outcomes block repeated effects; read evidence before deciding what completed.',schema:browseActArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_act')),autonomy_gated:false,
+ const actionHandler:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>={name:'browse_act',description:'Interact with the current Cloudflare public page using observed refs: goto, read, inspect, type, click, scroll. File selection requires owner approval; page sends and native submits are refused. Unknown outcomes block repeated effects; read evidence before deciding what completed.',schema:browseActArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_act')),autonomy_gated:false,
   async handle(args,ctx){let storageKey:string|undefined,digest:string|undefined;
    try{
     if(options.config.retainInteractions!==true)throw Error('retained interaction capability unavailable');
     await ctx.assertTaskSourceCurrent?.();const grant=await granted();storageKey=key(grant.taskId);
     let record=options.storage.kv.get<Record>(storageKey);
-    if(ctx.authenticatedUserId!==options.ownerId||!args.command||!record||record.cleanup||record.allocation!=='observed'||JSON.stringify(record.grant)!==JSON.stringify(grant)||!record.observation||args.url!==record.observation.observation.url)throw Error('current browser observation unavailable');
+    if(ctx.authenticatedUserId!==options.ownerId||!args.command||!record||args.session_handle&&record.session.id!==args.session_handle||record.cleanup||record.allocation!=='observed'||JSON.stringify(record.grant)!==JSON.stringify(grant)||!record.observation||args.url!==record.observation.observation.url)throw Error('current browser observation unavailable');
     const command=args.command;
     if(command.operation==='cancel'){await api.cancel();return {ok:true,data:{ended:true},source_taint:'external'};}
+    if(command.operation==='upload'){
+      if(record.pending&&['prepared','claimed','uncertain'].includes(record.pending.state)||record.action?.state==='prepared'||record.action?.state==='uncertain'||!options.files||!options.propose)throw Error('browser upload custody unavailable');
+      const before=record.observation,element=before.state.elements[before.observation.elements.findIndex(row=>row.ref===command.element_ref)];
+      if(!element||element.tag!=='input'||element.type!=='file'||element.disabled)throw Error('native upload input unavailable');
+      const driver=executionDriver(grant,ctx),current=await driver.observe(record.session,before.observation.tab_ref);if(current.digest!==before.digest)throw Error('browser upload observation changed');
+      const {workspace}=await options.files(async()=>{await checked();},options.ownerId),meta=await workspace.stat(command.file_id);await checked();
+      if(!meta||meta.revision!==command.revision||meta.byte_size>LIMITS.fileBytes)throw Error('approved file revision unavailable');
+      const file={file_id:meta.file_id,revision:meta.revision,name:meta.path.split('/').at(-1)!,mime_type:meta.mime,byte_size:meta.byte_size,sha256:meta.sha256};
+      const actionDigest=await generalDigest(JSON.stringify({revision:before.observation.revision,operation:'upload',element_ref:command.element_ref,file}));
+      const payload:BrowserSubmitProposal={url:before.observation.url,action:{selector:command.element_ref,method:'native_upload',description:`Select owner file ${file.name} in ${element.name||'the observed file input'}; this does not submit it`},binding:{file_id:file.file_id,revision:String(file.revision),mime:file.mime_type,bytes:String(file.byte_size),sha256:file.sha256,session:record.session.id},steps:[],approvalExpiresAt:Math.min(record.session.expiresAt,grant.expiresAt),commonBrowser:{version:1,taskId:grant.taskId,sessionHandle:record.session.id,revision:before.observation.revision,actionDigest,elementRef:command.element_ref,file}};
+      const proposed={...record,pending:{payload,state:'prepared' as const}};
+      if(encodedCheckpointBytes(proposed)>COMMON_BROWSER_CHECKPOINT_BYTES-1024)throw new GeneralBrowserError('observation_oversize');
+      save(proposed,storageKey);
+      const approvalRef=await options.propose(payload,ctx);await checked();
+      options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(!latest||latest.cleanup||!sameSession(latest,record!)||latest.pending?.payload.commonBrowser?.actionDigest!==actionDigest||latest.pending.state!=='prepared')throw Error('browser upload proposal changed');save({...latest,pending:{...latest.pending,approvalRef}},storageKey!);});
+      return {ok:true,data:{stopped:'approval_pending',proposal_id:approvalRef,session_handle:record.session.id,file_id:file.file_id,revision:file.revision,sha256:file.sha256},source_taint:'external'};
+    }
     const driver=executionDriver(grant,ctx),before=record.observation;
     if(images.length>=4)throw Error('common browser image budget exhausted');
     let observed:GeneralSnapshot;
-    if(command.operation==='read'||command.operation==='inspect')observed=await driver.observe(record.session,before.observation.tab_ref);
+    if(command.operation==='read'||command.operation==='inspect'||command.operation==='screenshot'||command.operation==='switch_tab')observed=await driver.observe(record.session,command.operation==='switch_tab'?command.tab_ref:before.observation.tab_ref);
     else {
-     if(record.action?.state==='prepared'||record.action?.state==='uncertain')throw Error('prior browser effect uncertain');
+     if(record.pending&&['prepared','claimed','uncertain'].includes(record.pending.state)||record.action?.state==='prepared'||record.action?.state==='uncertain')throw Error('prior browser effect uncertain');
      if('intent' in command&&command.intent==='send')throw Error('browser approval required');
-     if(command.operation==='goto')observed=await driver.navigate(record.session,command.url,before.observation.tab_ref);
+     const prepare=async(prepared:string)=>{
+       await checked();await options.config.assertGrantCurrent(grant);await ctx.assertTaskSourceCurrent?.();
+       options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(!latest||latest.cleanup||!sameSession(latest,record!)||latest.observation?.observation.revision!==before.observation.revision||latest.action?.state==='prepared'||latest.action?.state==='uncertain')throw Error('browser effect custody changed');save({...latest,action:{digest:prepared,state:'prepared'}},storageKey!);digest=prepared;});
+     };
+     if(command.operation==='open_tab'){await prepare(await generalDigest(JSON.stringify({revision:before.observation.revision,...command})));observed=await driver.openTab(record.session,command.url);}
+     else if(command.operation==='close_tab'){await driver.closeTab(record.session,command.tab_ref,prepare);observed=await driver.observe(record.session);}
+     else if(command.operation==='goto'){await prepare(await generalDigest(JSON.stringify({revision:before.observation.revision,...command})));observed=await driver.navigate(record.session,command.url,before.observation.tab_ref);}
      else {
       const action:GeneralBrowserAction|undefined=command.operation==='click'?{operation:'click',element_ref:command.element_ref}:command.operation==='type'?command.key?{operation:'press',element_ref:command.element_ref,key:command.key}:{operation:'fill',element_ref:command.element_ref,value:command.value!}:command.operation==='scroll'?{operation:'scroll',delta:command.delta}:undefined;
       if(!action)throw Error('unsupported current browser command');
       const element=action.operation==='scroll'?undefined:before.state.elements[before.observation.elements.findIndex(row=>row.ref===action.element_ref)];
       if(element?.inForm&&(action.operation==='press'&&action.key==='Enter'||action.operation==='click'&&(element.tag==='button'&&element.type!=='button'||element.tag==='input'&&['submit','image'].includes(element.type))))throw Error('native browser submit approval required');
-      observed=await driver.act(record.session,before,action,async prepared=>{
-       await checked();await options.config.assertGrantCurrent(grant);await ctx.assertTaskSourceCurrent?.();
-       options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(!latest||latest.cleanup||!sameSession(latest,record!)||latest.observation?.observation.revision!==before.observation.revision||latest.action?.state==='prepared'||latest.action?.state==='uncertain')throw Error('browser effect custody changed');digest=prepared;save({...latest,action:{digest:prepared,state:'prepared'}},storageKey!);});
-      });
+      observed=await driver.act(record.session,before,action,prepare);
      }
     }
     if(digest){const completed=digest;options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(latest?.action?.digest===completed)save({...latest,action:{digest:completed,state:'observed'}},storageKey!);});}
-    return await publishObservation(grant,record,observed,ctx);
+    const published=await publishObservation(grant,record,observed,ctx);
+    if(command.operation==='screenshot'){
+      if(!options.files)throw Error('owner screenshot storage unavailable');
+      const files=await options.files(async()=>{await checked();},options.ownerId);
+      const receipt=await browserScreenshotToWorkspace({...files,image:observed.image.bytes,maxScreenshotBytes:grant.maxScreenshotBytes,operationId:crypto.randomUUID(),deadline:Math.min(record.session.expiresAt,options.deadline()),now:options.now,assertCurrent:async()=>{await checked();}});
+      return {...published,data:{...published.data,screenshot:receipt}};
+    }
+    return {...published,data:{...published.data,...(!['read','inspect','screenshot','switch_tab'].includes(command.operation)?{browser_action_session_handle:record.session.id}:{})}};
    }catch(error){
     if(storageKey&&digest){const failed=digest;options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(latest?.action?.digest===failed)save({...latest,action:{digest:failed,state:'uncertain'}},storageKey!);});}
     return {ok:false,code:'rejected',error:'The public browser action was rejected or its outcome is uncertain. No replacement browser or unapproved page write was allowed. Inspect the current page before retrying.'+(error instanceof GeneralBrowserError?' Browser diagnostic: '+JSON.stringify({browser_code:error.code,...(error.diagnostic?{diagnostic:error.diagnostic}:{}),...(error.cleanup_failed?{cleanup_failed:true}:{}),...(error.release_failed?{release_failed:true}:{})}):''),source_taint:'external'};
    }
   }};
- const api={handler,actionHandler,attachments:()=>[...images],async cancel(){images=[];const task=snapshot();const record=options.storage.kv.get<Record>(key(task.taskId));if(!record||record.cleanup==='closed')return;
-  save({...record,cleanup:'pending'},key(task.taskId));
+ const api={handler,actionHandler,
+ async deny(payload:BrowserSubmitProposal){const row=options.storage.kv.get<Record>(key(snapshot().taskId));if(row?.pending?.state==='prepared'&&JSON.stringify(row.pending.payload)===JSON.stringify(payload))save({...row,pending:{...row.pending,state:'denied'}},key(snapshot().taskId));},
+ async submit(payload:BrowserSubmitProposal,approvalRef:string,assertApproval:()=>Promise<void>):Promise<BrowserSubmitOutcome>{
+  const storageKey=key(snapshot().taskId);let claimed=false;
+  try{
+   await assertApproval();const grant=await granted(),record=options.storage.kv.get<Record>(storageKey),prepared=payload.commonBrowser;
+   if(!record||record.cleanup||!record.observation||!prepared||prepared.version!==1||prepared.taskId!==grant.taskId||prepared.sessionHandle!==record.session.id||prepared.revision!==record.observation.observation.revision||!payload.approvalExpiresAt||payload.approvalExpiresAt<=options.now()||record.pending?.state!=='prepared'||record.pending.approvalRef!==approvalRef||JSON.stringify(record.pending.payload)!==JSON.stringify(payload)||!execution?.driver.hasRetainedConnection()||!options.files)throw Error('browser approval unavailable');
+   const uploaded=await execution.driver.upload(record.session,record.observation,prepared.elementRef,prepared.file,async digest=>{
+    if(digest!==prepared.actionDigest)throw Error('browser approval digest changed');await assertApproval();await checked();
+    options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey);if(!latest||latest.cleanup||!sameSession(latest,record)||latest.pending?.state!=='prepared'||latest.pending.approvalRef!==approvalRef||JSON.stringify(latest.pending.payload)!==JSON.stringify(payload))throw Error('browser approval already consumed');claimed=true;save({...latest,pending:{...latest.pending,state:'claimed'},action:{digest,state:'prepared'}},storageKey);});
+    const {workspace}=await options.files!(async()=>{await checked();},options.ownerId),retrieved=await workspace.export(prepared.file.file_id,prepared.file.revision,LIMITS.fileBytes);await assertApproval();await checked();
+    if(retrieved.meta.sha256!==prepared.file.sha256||retrieved.meta.byte_size!==prepared.file.byte_size||retrieved.meta.mime!==prepared.file.mime_type||retrieved.meta.path.split('/').at(-1)!==prepared.file.name)throw Error('approved file changed');return retrieved.bytes;
+   });
+   await assertApproval();const latest=options.storage.kv.get<Record>(storageKey);if(!latest||latest.pending?.state!=='claimed'||latest.pending.approvalRef!==approvalRef)throw Error('browser approval custody changed');
+   const {image:_,...observation}=uploaded.snapshot;
+   save({...latest,observation,action:{digest:prepared.actionDigest,state:'observed'},pending:{...latest.pending,state:'selected'}},storageKey);
+   return {status:'acknowledged_unverified',message:`The browser selected ${prepared.file.name} (${uploaded.receipt.byte_size} bytes, SHA256 ${uploaded.receipt.sha256}). Website acceptance and task completion are not verified.`};
+  }catch(error){if(claimed){const latest=options.storage.kv.get<Record>(storageKey);if(latest?.pending&&latest.pending.approvalRef===approvalRef)save({...latest,pending:{...latest.pending,state:'uncertain'},action:{digest:latest.pending.payload.commonBrowser!.actionDigest,state:'uncertain'}},storageKey);}return {status:claimed?'uncertain':'rejected',message:claimed?'The file selection outcome is uncertain. Inspect the page before retrying.':'The exact approved file or retained browser is unavailable. No file was selected.'};}
+ },
+resetAttachments(){images=[];},sessionHandle:()=>options.storage.kv.get<Record>(key(snapshot().taskId))?.session.id,attachments:()=>[...images],async cancel(){images=[];const task=snapshot();const record=options.storage.kv.get<Record>(key(task.taskId));if(!record||record.cleanup==='closed')return;
+  save({...record,observation:undefined,pending:undefined,tabs:[],cleanup:'pending'},key(task.taskId));
   if(record.session.providerSessionId==='pending')throw Error('common browser allocation uncertain');
   try{await execution?.driver.disconnect();}catch{/* Exact physical termination below is the authoritative cleanup. */}finally{execution=undefined;}
   // Cleanup does not depend on a still-live execution lease.
@@ -151,7 +207,7 @@ export function commonBrowserHost(options:Readonly<{
 // Expiry cleanup uses retained provider identity without reviving execution or allocating.
 // A failed physical termination stays explicitly unresolved, never an endless I/O retry.
 export async function maintainCommonBrowsers(storage:DurableObjectStorage,config:CommonBrowserConfiguration,now:number){
- for(const [key,row] of storage.kv.list<BrowserRecord>({prefix:'common-browser:'})) {
+ for(const [key,row] of [...storage.kv.list<BrowserRecord>({prefix:'common-browser:'})]) {
   if(row.cleanup==='closed'||row.cleanupFailed||row.session.expiresAt>now&&row.cleanup!=='pending')continue;
   storage.transactionSync(()=>storage.kv.put(key,{...row,cleanup:'pending'}));
   try {
@@ -170,7 +226,7 @@ export async function maintainCommonBrowsers(storage:DurableObjectStorage,config
 export function revokeCommonBrowsers(storage:DurableObjectStorage,now:number){
  storage.transactionSync(()=>{
   let pending=false;
-  for(const [key,row] of storage.kv.list<BrowserRecord>({prefix:'common-browser:'}))if(row.cleanup!=='closed'){
+  for(const [key,row] of [...storage.kv.list<BrowserRecord>({prefix:'common-browser:'})])if(row.cleanup!=='closed'){
    storage.kv.put(key,{...row,cleanup:'pending'});if(!row.cleanupFailed)pending=true;
   }
   storage.kv.put(COMMON_BROWSER_DUE,pending?now:null);

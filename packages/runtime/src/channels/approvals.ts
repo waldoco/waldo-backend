@@ -32,6 +32,7 @@ export type BrowserSubmitProposal = Readonly<{
   continuation?: BrowserTaskContinuation;
   request?: Readonly<{ url: string; method: 'POST'; fields: readonly string[] }>;
   approvalExpiresAt?: number;
+  commonBrowser?: Readonly<{version:1;taskId:string;sessionHandle:string;revision:string;actionDigest:string;elementRef:string;file:import('./cloudflare-general-browser').GeneralBrowserUploadFile}>;
 }>;
 const BROWSER_SUBMIT_TTL_MS = 30 * 60_000;
 
@@ -254,7 +255,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
               } else outcome = await deps.browserSubmit(bp, id);
             } catch (error) {
               deps.log({ trace, hop: 'browser_effect_unknown', ms: 0, ok: false, error: String(error) });
-              outcome = { status: 'uncertain', message: 'The browser outcome is unknown. Check the result before retrying.' };
+              if(outcome?.status!=='acknowledged_unverified')outcome = { status: 'uncertain', message: 'The browser outcome is unknown. Check the result before retrying.' };
             }
             if (!outcome || typeof outcome !== 'object' || typeof outcome.message !== 'string' || !outcome.message.trim()) {
               outcome = { status: 'uncertain', message: 'The browser outcome is unknown. Check the result before retrying.' };
@@ -438,7 +439,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const id = `p${deps.newId()}`;
       const summary = describeBrowser(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'browser_submit', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
-      await sayCard(id, `Approve this browser action? ${summary}`, [['Do it', `a:${id}`], ['Not now', `s:${id}`]]);
+      const review=`Approve this browser action? ${summary}`;
+      const approvable=review.length<=REVIEW_BUDGET;
+      await sayCard(id,approvable?review:unreviewable('Approve this browser action?',summary),approvable?[['Do it',`a:${id}`],['Not now',`s:${id}`]]:undefined,approvable);
       return id;
     },
     async proposeSendEmail(payload) {
