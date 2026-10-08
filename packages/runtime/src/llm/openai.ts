@@ -111,7 +111,8 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
 function responsesInput(request: LLMGatewayRequest['request']): OpenAI.Responses.ResponseCreateParams['input'] {
   // Real roles: a flattened "user: ..." blob hid who said what, so "that one" could not resolve (PR 1 item 3).
   const turns = request.messages.map((message) => ({ role: message.role, content: message.content }));
-  if (!request.attachments && !request.tool_turns) return turns;
+  // One plain user message stays a plain string (single-shot callers such as selectors and writers parse it as text).
+  if (!request.attachments && !request.tool_turns) return turns.length === 1 && turns[0]!.role === 'user' ? turns[0]!.content : turns;
   const lastUser = turns.map((turn) => turn.role).lastIndexOf('user');
   const files = (request.attachments ?? []).map((file): OpenAI.Responses.ResponseInputContent => {
     const data = `data:${file.mime_type};base64,${file.data_base64}`;
