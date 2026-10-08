@@ -652,6 +652,16 @@ describe('hook registry', () => {
     expect((result.response as { tool_calls: { arguments: string }[] }).tool_calls[0]!.arguments).toBe(args);
   });
 
+  it('passes a long reply through in chunks instead of failing the turn, and still catches a canary in a late chunk (PR 1 item 5)', async () => {
+    const ctx = runtimeCtx({ sanitise });
+    const text = 'A long answer sentence. '.repeat(400);
+    expect(text.length).toBeGreaterThan(8_000);
+    const response = (t: string) => ({ model: ROSTER.fallback, text: t, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 });
+    const ok = await runHooks('PostLLMCall', { event: 'PostLLMCall', response: response(text), tokens_in: 1, tokens_out: 1 }, ctx);
+    expect((ok as { response: { text: string } }).response.text).toBe(text);
+    await expect(runHooks('PostLLMCall', { event: 'PostLLMCall', response: response(`${text}${validCanaries[0]}`), tokens_in: 1, tokens_out: 1 }, ctx)).rejects.toThrow();
+  });
+
   it('still halts fail-closed when a canary hides inside tool-call arguments', async () => {
     const ctx = runtimeCtx({ sanitise });
     await expect(

@@ -15,6 +15,7 @@ import type {
   TriggerType,
 } from '@waldo/contracts';
 import {
+  SANITISE_DESTINATION_POLICIES,
   DEFAULT_HOOK_TIMEOUT_MS,
   POST_TOOL_USE_PRIORITIES,
   PRE_TOOL_USE_PRIORITIES,
@@ -766,6 +767,16 @@ async function sanitiseHookPayload(
     if (response !== null && typeof response === 'object' && !Array.isArray(response)
         && Array.isArray((response as { tool_calls?: unknown }).tool_calls)) {
       const { tool_calls: toolCalls, ...textResponse } = response as { tool_calls: unknown[] } & Record<string, unknown>;
+      const longText = longReplyText(textResponse, destination);
+      if (longText !== undefined) {
+        const chunked = await sanitiseLongText(longText, ctx, destination, sourceTaint.data);
+        if (!chunked.ok) return chunked.result;
+        for (const call of toolCalls) {
+          const checked = await checkExecutableArgs(call, ctx, 'internal_context', sourceTaint.data);
+          if (!checked.ok) return checked;
+        }
+        return { ok: true, payload: { ...payload, response: { ...textResponse, text: chunked.text, tool_calls: toolCalls } } };
+      }
       const sanitized = await sanitiseCandidate(textResponse, ctx, destination, sourceTaint.data);
       if (!sanitized.ok) return sanitized.result;
       for (const call of toolCalls) {
@@ -774,6 +785,11 @@ async function sanitiseHookPayload(
         if (!checked.ok) return checked;
       }
       return { ok: true, payload: { ...payload, response: { ...(sanitized.payload as Record<string, unknown>), tool_calls: toolCalls } } };
+    }
+    const longText = longReplyText(response, destination);
+    if (longText !== undefined) {
+      const chunked = await sanitiseLongText(longText, ctx, destination, sourceTaint.data);
+      return chunked.ok ? { ok: true, payload: { ...payload, response: { ...(response as Record<string, unknown>), text: chunked.text } } } : chunked.result;
     }
     const sanitized = await sanitiseCandidate(response, ctx, destination, sourceTaint.data);
     return sanitized.ok
@@ -799,6 +815,32 @@ async function checkExecutableArgs(
   if (!checked.ok) return checked.result;
   if (allowedRedactions && checked.redactions.some(redaction => !allowedRedactions.has(redaction.kind))) return halt('exact edit requires a privacy-safe field', 'forbidden');
   return ok();
+}
+
+// PR 1 item 5: a reply longer than the owner_reply cap is sanitised in cap-sized chunks (plus a window over every seam so a
+// token split at a boundary is still seen) instead of failing the whole turn as oversize. Every chunk still crosses the scribe.
+// A response object whose only oversize field is its text, for a destination that is owner-bound prose.
+function longReplyText(response: unknown, destination: SanitiseDestination): string | undefined {
+  if (destination !== 'owner_reply' || response === null || typeof response !== 'object' || Array.isArray(response)) return undefined;
+  const text = (response as { text?: unknown }).text;
+  return typeof text === 'string' && text.length > SANITISE_DESTINATION_POLICIES.owner_reply.max_chars ? text : undefined;
+}
+async function sanitiseLongText(text: string, ctx: HookRuntimeContext, destination: SanitiseDestination, sourceTaint: SourceTaint): Promise<{ ok: true; text: string } | { ok: false; result: HookResult }> {
+  const cap = SANITISE_DESTINATION_POLICIES[destination].max_chars;
+  const size = Math.max(256, cap - 256);
+  const chunks: string[] = [];
+  for (let at = 0; at < text.length; at += size) chunks.push(text.slice(at, at + size));
+  const out: string[] = [];
+  for (const chunk of chunks) {
+    const checked = await sanitiseCandidate(chunk, ctx, destination, sourceTaint);
+    if (!checked.ok) return checked;
+    out.push(String(checked.payload));
+  }
+  for (let at = size; at < text.length; at += size) {
+    const seam = await sanitiseCandidate(text.slice(Math.max(0, at - 128), at + 128), ctx, destination, sourceTaint);
+    if (!seam.ok) return seam;
+  }
+  return { ok: true, text: out.join('') };
 }
 
 async function sanitiseCandidate(
