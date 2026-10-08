@@ -13,7 +13,9 @@ import type { GoogleClient } from '../src/connectors/google';
 import type { TurnLogEntry } from '../src/channels/telegram-listener';
 import type { OwnerClock } from '../src/tools/live/get-context';
 import { scriptedGateway } from '../src/testing/scripted-gateway';
-import type { Scenario } from './types';
+import { durableConversationStore } from '../src/channels/conversation-store';
+import type { LLMGatewayRequest } from '../src/llm/provider';
+import type { ModelInputAssert, Scenario } from './types';
 
 const sqlite = (): SqlStorage => {
   const db = new DatabaseSync(':memory:');
@@ -23,6 +25,21 @@ const sqlite = (): SqlStorage => {
       return { toArray: () => rows, one: () => { if (!rows[0]) throw new Error('no rows'); return rows[0]; }, [Symbol.iterator]: () => rows[Symbol.iterator](), columnNames: [], rowsRead: rows.length, rowsWritten: 0, raw: () => rows.map(Object.values)[Symbol.iterator](), next: () => ({ done: true, value: undefined }) };
     },
   } as unknown as SqlStorage;
+};
+
+// Map-backed stand-in for the owner DO's key-value storage, enough for durableConversationStore.
+const keyValueStorage = () => {
+  const rows = new Map<string, unknown>();
+  const list = <T>(options?: { prefix?: string }) =>
+    new Map([...rows].filter(([key]) => key.startsWith(options?.prefix ?? '')).sort(([a], [b]) => (a < b ? -1 : 1))) as Map<string, T>;
+  return {
+    async get<T>(key: string) { return rows.get(key) as T | undefined; },
+    async list<T>(options?: { prefix?: string }) { return list<T>(options); },
+    async put(first: string | Record<string, unknown>, value?: unknown) {
+      if (typeof first === 'string') rows.set(first, value);
+      else for (const [key, entry] of Object.entries(first)) rows.set(key, entry);
+    },
+  } as unknown as Parameters<typeof durableConversationStore>[0];
 };
 
 const CLOCK: OwnerClock = { timezone: 'Asia/Kolkata', now: () => new Date('2026-09-24T09:00:00+05:30') };
@@ -41,6 +58,8 @@ export type ScenarioRun = Readonly<{
   tools: readonly string[];
   reminders: readonly StubReminder[];
   connectOffers: readonly ConnectIntent[];
+  // Reply-bearing model requests grouped by owner turn (1-based index = turn - 1); claim_ops excluded.
+  modelRequests: readonly (readonly LLMGatewayRequest[])[];
 }>;
 
 export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
@@ -94,10 +113,12 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: scenario.fixtures?.web ?? [] }, source_taint: 'external' as const }),
   };
   const handlers = [...reminderHandlers(reminders), ...googleHandlers(google as never, { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined }, CLOCK), ...loopHandlers(loops), searchEpisodesHandler(episodeIndex(sql)), web];
-  const responder = createTelegramResponder('scenario-key', undefined, memory, log, {}, CLOCK, handlers as never, WALDO_CHAT_MODEL, false, undefined, async (intent: ConnectIntent) => { connectOffers.push(intent); return true; }, scriptedGateway({ rules: scenario.llm }));
+  const gateway = scriptedGateway({ rules: scenario.llm, ...(scenario.claimOps === undefined ? {} : { claimOps: scenario.claimOps }) });
+  const responder = createTelegramResponder('scenario-key', durableConversationStore(keyValueStorage()), memory, log, {}, CLOCK, handlers as never, WALDO_CHAT_MODEL, false, undefined, async (intent: ConnectIntent) => { connectOffers.push(intent); return true; }, gateway);
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
 
   const replies: string[] = [];
+  const modelRequests: (readonly LLMGatewayRequest[])[] = [];
   let n = 0;
   for (const turn of scenario.turns) {
     n += 1;
@@ -109,16 +130,18 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
       if (turn.startsWith('@remind ')) return responder.remind(`${scenario.id}-${n}`, 1, turn.slice(8), time);
       return responder.respond({ updateId: n, chatId: 1, text: turn } as never, time);
     };
+    const before = gateway.requests().length;
     try {
       replies.push(await turnText());
     } catch (error) {
       replies.push(`[threw] ${error instanceof Error ? error.message : String(error)}`);
     }
+    modelRequests.push(gateway.requests().slice(before).filter((request) => request.request.response_format?.name !== 'claim_ops'));
   }
   // Let the post-turn memory writer settle so its hop lands before assertions run.
   await new Promise((resolve) => setTimeout(resolve, 50));
   const tools = entries.filter((entry) => entry.hop.startsWith('tool_')).map((entry) => entry.hop.slice(5));
-  return { replies, entries, tools, reminders: reminderRows, connectOffers };
+  return { replies, entries, tools, reminders: reminderRows, connectOffers, modelRequests };
 };
 
 export const checkScenario = (scenario: Scenario, run: ScenarioRun): readonly string[] => {
@@ -168,6 +191,7 @@ export const checkScenario = (scenario: Scenario, run: ScenarioRun): readonly st
     if (got.service !== want.service) failures.push(`connect offer ${index + 1} service: expected ${want.service}, got ${got.service}`);
     if (want.reason !== undefined && got.reason !== want.reason) failures.push(`connect offer ${index + 1} reason: expected ${want.reason}, got ${got.reason}`);
   }
+  for (const want of assert.modelInput ?? []) failures.push(...checkModelInput(want, run));
   for (const state of assert.state ?? []) {
     if (state.kind === 'reminder_count' && run.reminders.length !== state.equals) {
       failures.push(`expected ${state.equals} reminders, have ${run.reminders.length}`);
@@ -176,5 +200,25 @@ export const checkScenario = (scenario: Scenario, run: ScenarioRun): readonly st
       failures.push(`no reminder note matched ${state.matches}`);
     }
   }
+  return failures;
+};
+
+// What the model saw on one turn: the last reply-bearing request is the one that produced the
+// reply, so it carries the full history and system prompt the owner turn assembled.
+const checkModelInput = (want: ModelInputAssert, run: ScenarioRun): readonly string[] => {
+  const label = `modelInput turn ${want.turn}`;
+  const requests = run.modelRequests[want.turn - 1] ?? [];
+  const last = requests[requests.length - 1]?.request;
+  if (!last) return [`${label}: the model received no request`];
+  const failures: string[] = [];
+  const text = [last.system ?? '', ...last.messages.map((message) => message.content)].join('\n');
+  for (const needle of want.mustContain ?? []) if (!text.includes(needle)) failures.push(`${label}: model input missing "${needle.slice(0, 80)}"`);
+  for (const needle of want.mustNotContain ?? []) if (text.includes(needle)) failures.push(`${label}: model input contained "${needle.slice(0, 80)}"`);
+  if (want.roles) {
+    const got = last.messages.map((message) => message.role);
+    if (got.join(',') !== want.roles.join(',')) failures.push(`${label}: roles [${got.join(',')}] expected [${want.roles.join(',')}]`);
+  }
+  if (want.systemPresent !== undefined && (last.system !== undefined) !== want.systemPresent) failures.push(`${label}: system prompt ${last.system === undefined ? 'absent' : 'present'}, expected ${want.systemPresent ? 'present' : 'absent'}`);
+  if (want.minMessages !== undefined && last.messages.length < want.minMessages) failures.push(`${label}: ${last.messages.length} messages, expected at least ${want.minMessages}`);
   return failures;
 };
