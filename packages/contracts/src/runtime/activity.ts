@@ -12,6 +12,7 @@ export const activityInputSchema = z.strictObject({
   summary: z.string().min(1).max(500),
   evidenceRef: z.string().min(1).nullable(),
   undoable: z.boolean(),
+  grant_ref: z.string().min(1).optional(),
 });
 export type ActivityInput = z.infer<typeof activityInputSchema>;
 export type ActivityEntry = Readonly<ActivityInput & { seq: number }>;

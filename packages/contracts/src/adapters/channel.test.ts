@@ -266,6 +266,10 @@ describe('messageThreadBinding', () => {
 });
 
 describe('channelSendReceipt', () => {
+  it('cites the standing permission without requiring it on older receipts', () => {
+    expect(channelSendReceiptSchema.parse({ message_id: 'tg-100', sent_at: 100, grant_ref: 'sam-reminders' }).grant_ref).toBe('sam-reminders');
+    expect(channelSendReceiptSchema.safeParse({ message_id: 'tg-100', sent_at: 100, grant_ref: '' }).success).toBe(false);
+  });
   it('accepts a journaled provider receipt', () => {
     expect(
       channelSendReceiptSchema.safeParse({ message_id: 'tg-100', sent_at: 1_700_000_000_000 })

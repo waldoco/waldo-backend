@@ -144,6 +144,7 @@ export type MessageThreadBinding = z.infer<typeof messageThreadBindingSchema>;
 export const channelSendReceiptSchema = z.strictObject({
   message_id: z.string().min(1),
   sent_at: z.int().nonnegative(),
+  grant_ref: z.string().min(1).optional(),
 });
 export type ChannelSendReceipt = z.infer<typeof channelSendReceiptSchema>;
 

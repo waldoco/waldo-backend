@@ -7,6 +7,11 @@ const entry = (overrides: Partial<ActivityInput> = {}): ActivityInput => ({
 });
 
 describe('ActivityLedgerModule', () => {
+  it('cites the standing permission in a completed activity', () => {
+    const ledger = new ActivityLedgerModule();
+    expect(ledger.append('owner-a', entry({ kind: 'completed', grant_ref: 'sam-reminders' })).grant_ref).toBe('sam-reminders');
+    expect(() => ledger.append('owner-a', entry({ entryId: 'e-2', grant_ref: '' }))).toThrow();
+  });
   it('appends an ordered per-owner feed and exposes stop while work is open', () => {
     const ledger = new ActivityLedgerModule();
     ledger.append('owner-a', entry());
