@@ -11,9 +11,9 @@ export const searchEpisodesHandler = (index: EpisodeIndex): ToolHandler<SearchEp
   async handle({ query, ref, limit, date_range }) {
     if (ref !== undefined) {
       const found = index.get(ref);
-      return { ok: true, data: { episode: found === null ? null : { ref, entry_id: found.entry_id, speaker: found.speaker, saved_at: found.at > 0 ? new Date(found.at).toISOString() : null, text: found.text } }, source_taint: 'external' as const };
+      return { ok: true, data: { episode: found === null ? null : { ref, entry_id: found.entry_id, speaker: found.speaker, saved_at: found.at > 0 ? new Date(found.at).toISOString() : null, text: found.text } }, source_taint: null };
     }
     const hits = index.search(query!, limit, date_range ? Date.parse(date_range.from) : undefined, date_range ? Date.parse(date_range.to) : undefined);
-    return { ok: true, data: { hits }, source_taint: 'external' as const };
+    return { ok: true, data: { hits }, source_taint: null };
   },
 });

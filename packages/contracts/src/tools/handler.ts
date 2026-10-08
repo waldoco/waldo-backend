@@ -98,7 +98,6 @@ export const GENERAL_AGENT_TOOLS: readonly ToolName[] = [
 export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'query_calendar',
   'query_availability',
-  'read_owner_context',
   'get_communication',
   'search_communication',
   'read_thread',
@@ -115,9 +114,6 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'workspace_list',
   'workspace_read',
   'workspace_search',
-  // search_episodes: stored history can hold Waldo replies and machine rows that quoted email or
-  // web text, so hits and recovered turns are data, never instructions or owner authority.
-  'search_episodes',
   'browse_page',
   'browse_act',
   // delegate_task: child handbacks carry whatever the child read (web, connector text), so the

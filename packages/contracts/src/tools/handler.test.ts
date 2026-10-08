@@ -260,7 +260,6 @@ describe('external-origin tool classification — ADR-0049', () => {
     expect(EXTERNAL_ORIGIN_TOOLS).toEqual([
       'query_calendar',
       'query_availability',
-      'read_owner_context',
       'get_communication',
       'search_communication',
       'read_thread',
@@ -276,7 +275,6 @@ describe('external-origin tool classification — ADR-0049', () => {
       'workspace_list',
       'workspace_read',
       'workspace_search',
-      'search_episodes',
       'browse_page',
       'browse_act',
       'delegate_task',
