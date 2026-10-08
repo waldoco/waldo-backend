@@ -630,7 +630,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (direct) await this.inbox.transition(row.id, attempt, 'completed', 'direct_path_returned');
       const final = this.setup().finalOutbox.records().find(r => r.inbox?.runId === runId);
       if (!final && !direct) await this.inbox.transition(row.id, attempt, 'quarantined', 'no_final_effects_uncertain');
-    } catch {
+    } catch (error) {
+      // The owner-facing copy stays generic; the cause must not vanish. Error class plus a short message only
+      // (no owner text, no stack), so a staging operator can tell a root rejection from a closed run.
+      console.error(JSON.stringify({ hop: 'run_failed', reason: 'execution_uncertain', run: runId, error: error instanceof Error ? error.name : typeof error, detail: error instanceof Error ? error.message.slice(0, 160) : '' }));
       await this.inbox.transition(row.id, attempt, 'quarantined', 'execution_uncertain');
     } finally {
       clearTimeout(timeout);
