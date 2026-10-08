@@ -11,11 +11,11 @@ const fixture=()=>{
  const ctx={authenticatedUserId:'fixture-owner',assertTaskSourceCurrent:async()=>{if(!live)throw Error('withdrawn');}} as never;
  return {host,storage,grant,config,ctx,rows,revoke:()=>{live=false;}};
 };
-it('retains exact grant/session and two tabs after host reconstruction with native image bytes only',async()=>{
+it('retains exact grant/session while closing active pages after host reconstruction with native image bytes only',async()=>{
  const f=fixture();const one=f.host();expect(await one.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx)).toMatchObject({ok:true,source_taint:'external'});
  expect(one.attachments()[0]?.data_base64).toMatch(/^iVBOR/);
  const two=f.host();expect(await two.handler.handle({url:'https://public-pages.fixture.invalid/b',instruction:'Read B.'},f.ctx)).toMatchObject({ok:true,data:{tabs:expect.any(Array)}});
- expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(2);
+ expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(0);
 });
 it('changed grant and pending allocation refuse replacement allocation',async()=>{
  const f=fixture();await f.host().handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx);
@@ -58,7 +58,7 @@ it('stop during provider acquire preserves cleanup fence when exact provider ID 
  const f=fixture();commonBrowserFixture.onAcquire=()=>revokeCommonBrowsers(f.storage,Date.now());
  const host=f.host();expect(await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx)).toMatchObject({ok:false});
  const row=f.rows.get('common-browser:fixture-task') as any;
- expect(row).toMatchObject({cleanup:'pending',allocation:'observed',session:{providerSessionId:'fixture-retained-provider'}});
+ expect(row).toMatchObject({cleanup:'closed',allocation:'observed',session:{providerSessionId:'fixture-retained-provider'}});
  expect(commonBrowserFixture.ends).toBe(1);expect(host.attachments()).toHaveLength(0);expect(commonBrowserFixture.allocations).toBe(1);
 });
 
@@ -84,4 +84,18 @@ it('registered dispatcher and post hooks preserve provider402 to model-bound res
  const ctx={authenticatedUserId:'fixture-owner',assertTaskSourceCurrent:async()=>{},trigger:'user_message',egressAllowlist:['public-pages.fixture.invalid'],session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:Date.now()}),hasApproval:()=>true,sourceTaint:null,toolArgSourceTaint:null,sanitise:(await import('../src/scribe/sanitiser')).sanitise} as never;
  const result=await dispatchTool({id:'fixture402',name:'browse_page',args:{url:'https://public-pages.fixture.invalid/a',instruction:'Read.'}},ctx,{handlers:[f.host().handler]});
  expect(result).toMatchObject({ok:false,reason:'tool_result_error',source_taint:'external'});expect(JSON.stringify(result)).toContain('402');expect(JSON.stringify(result)).toContain('usage_limit');expect(JSON.stringify(result)).toContain('request-123');
+});
+
+it('finite grants cannot bypass the established private-network boundary',async()=>{
+ const f=fixture();(f.grant as {allowedOrigins:readonly string[]}).allowedOrigins=['https://127.0.0.1'];
+ expect(await f.host().handler.handle({url:'https://127.0.0.1/private',instruction:'Read.',provider:'cloudflare_playwright'},f.ctx)).toMatchObject({ok:false});
+ expect(commonBrowserFixture.allocations).toBe(0);
+});
+
+it('read result exposes the real retained session handle across fresh host reads',async()=>{
+ const f=fixture(),first=await f.host().handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx) as any;
+ const retained=f.rows.get('common-browser:fixture-task') as any;
+ expect(first.data.session_handle).toBe(retained.session.id);
+ const second=await f.host().handler.handle({url:'https://public-pages.fixture.invalid/b',instruction:'Read.'},f.ctx) as any;
+ expect(second.data.session_handle).toBe(first.data.session_handle);expect(commonBrowserFixture.allocations).toBe(1);
 });

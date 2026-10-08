@@ -102,3 +102,19 @@ it.each(['desk', 'source'] as const)('closes an unpublished native hold when %s 
   expect(await handler.handle(browseActArgsSchema.parse({ url: host.pageUrl, task: 'read', command: { operation: 'click', element_ref: '#submit', intent: 'read' } }), guardedContext)).toMatchObject({ ok: false });
   expect(posts).toBe(0); expect(closes).toBe(1); expect(alive).toBe(false); expect(row).toMatchObject({ phase: 'closed', session: { state: 'ended' } });
 });
+
+it.each(['scroll','read','wait'] as const)('only landed %s produces a host-local action session receipt',async operation=>{
+ const {browserTaskContinuity}=await import('../src/channels/browser-task-continuity');
+ const {syntheticCommandAdapter}=await import('../src/channels/browser-synthetic-commands');
+ let row:unknown=null,alive=false;
+ const driver=syntheticCommandAdapter({origin:'https://fixture.example',pageUrl:'https://fixture.example/form',runId:'run',submitRef:'#submit',transport:{
+  start:async()=>{alive=true;return 'PRIVATE_PROVIDER_ID';},observe:async()=>({url:'https://fixture.example/form',text:'Fixture',elements:[{ref:'value',tag:'input',type:'text',field:'value',inForm:true},{ref:'#submit',tag:'button',type:'submit',inForm:true}],form:{action:'https://fixture.example/submit',method:'POST',values:{value:'synthetic'}}}),execute:async()=>{},close:async()=>{alive=false;},absent:async()=>!alive,verify:async()=>null,
+ }});
+ const host=browserTaskContinuity({enabled:true,ownerId:'owner-a',taskId:'run',manifestDigest:`sha256:${'a'.repeat(64)}`,driver,now:()=>100,newId:()=>crypto.randomUUID(),admit:async()=> 'grant',store:{exclusive:work=>work(),load:async()=>row,save:async value=>{row=value;}}});
+ const handler=browserTaskHandler({legacy:browseActHandler(undefined,undefined,undefined),host:async()=>host,propose:async()=> 'unused'});
+ const command=operation==='scroll'?{operation,delta:400,intent:'read'}:operation==='wait'?{operation,milliseconds:0,intent:'read'}:{operation,intent:'read'};
+ const parsed=browseActArgsSchema.parse({url:host.pageUrl,task:'Synthetic command',command});
+ const result=await handler.handle(parsed,context);
+ expect(result.ok).toBe(true);
+ if(result.ok){const data=result.data as Record<string,unknown>;expect(typeof data.browser_action_session_handle).toBe(operation==='scroll'?'string':'undefined');expect(JSON.stringify(result)).not.toContain('PRIVATE_PROVIDER_ID');}
+});

@@ -155,7 +155,7 @@ export function browserTaskContinuity(options: Readonly<{
         const currentGrant = await grant(record, 'act', { actionDigest, stateDigest: snapshot.stateDigest });
         const counted = { ...record, phase: 'active' as const, proposal: null, steps: record.steps + 1 }; await save(counted);
         await cleanupOnFailure(() => issue(counted, 'act', { actionRef: field, actionDigest, approvalRef: currentGrant }, () => options.driver.fill(record.session.providerSessionId, field, value, snapshot.stateDigest, async () => { await grant(counted, 'act', { actionDigest, stateDigest: snapshot.stateDigest }); }, undefined, () => assertCurrent(counted))));
-        return observation(counted);
+        return { ...await observation(counted), actionSessionHandle: record.session.id };
       });
     },
     async validateProposal(authenticatedOwner: string, reference: BrowserTaskContinuation, payload: { url: string; action: { selector: string; method?: string; arguments?: string[] }; binding: Readonly<Record<string, string>>; request?: FixtureObservation['action']; approvalExpiresAt?: number }) { identity(authenticatedOwner); return options.store.exclusive(async () => { const record = await get(), proposal = record.proposal; return proposal !== null && proposal.id === reference.proposalId && proposal.scopeDigest === reference.scopeDigest && proposal.scopeDigest === await scopeDigest(record) && reference.taskRef === options.taskId && payload.url === proposal.url && JSON.stringify(payload.request) === JSON.stringify(proposal.request) && payload.approvalExpiresAt === proposal.approvalExpiresAt && payload.action.selector === proposal.actionRef && payload.action.method === 'click' && (payload.action.arguments?.length ?? 0) === 0 && await fixtureDigest(Object.entries(payload.binding).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) === proposal.bindingDigest; }); },
@@ -192,13 +192,13 @@ export function browserTaskContinuity(options: Readonly<{
         const counted = { ...record, steps: record.steps + 1 }; await save(counted);
         const outcome = await cleanupOnFailure(() => options.driver.command!(record.session.providerSessionId, command, snapshot.stateDigest, async () => { await grant(counted, 'act', { stateDigest: snapshot.stateDigest }); }, undefined, () => assertCurrent(counted)));
         if (!outcome.held && ['type', 'click', 'goto'].includes(command.operation)) await save({ ...counted, phase: 'active', proposal: null });
-        return outcome;
+        return { ...outcome, ...(!outcome.held && ['type','click','goto','scroll'].includes(command.operation) ? {actionSessionHandle:record.session.id} : {}) };
       });
       const proposeWithCleanup = async () => {
         try { return await this.propose(authenticatedOwner); }
         catch (cause) { await options.store.exclusive(() => cleanupAfterFailure(cause)); throw cause; }
       };
-      return result.held && result.nativeSubmit === false ? { held: true as const, reason: result.reason ?? 'declared_send_unsupported' as const } : result.held ? { held: true as const, proposal: await proposeWithCleanup() } : { held: false as const, snapshot: await this.inspect(authenticatedOwner) };
+      return result.held && result.nativeSubmit === false ? { held: true as const, reason: result.reason ?? 'declared_send_unsupported' as const } : result.held ? { held: true as const, proposal: await proposeWithCleanup() } : { held: false as const, snapshot: await this.inspect(authenticatedOwner), ...(result.actionSessionHandle ? {actionSessionHandle:result.actionSessionHandle} : {}) };
     },
     async cancel(authenticatedOwner: string) { identity(authenticatedOwner); return options.store.exclusive(async () => end(await get())); },
     async reconcile(authenticatedOwner: string): Promise<BrowserSubmitOutcome> { identity(authenticatedOwner); return options.store.exclusive(async () => readback(await get())); },

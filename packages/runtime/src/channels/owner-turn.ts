@@ -87,7 +87,7 @@ const MAX_TOOL_ROUNDS = 25;
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
-export type OwnerSkillHost = Readonly<{ prepare(turn: OwnerTurnEnvelope, contextOwnerId: string, scope: RunEffectScope): Promise<OwnerSkillCapability | undefined> }>;
+export type OwnerSkillHost = Readonly<{ browserAttachments?(scope?: RunEffectScope): readonly LLMAttachment[]; prepare(turn: OwnerTurnEnvelope, contextOwnerId: string, scope: RunEffectScope): Promise<OwnerSkillCapability | undefined> }>;
 type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability }>;
 
 export const createOwnerResponder = (
@@ -592,11 +592,13 @@ export const createOwnerResponder = (
             const after = [...(ordersSection ? [ordersSection] : []), ...(loopsSection ? [loopsSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
             return withOwnerSkillProcedures([...before, ...memoryPart, ...after].join('\n\n'), wrapped, surfacePresentation);
           };
+          const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
+          const attachments = [...(pending ?? []), ...browserImages];
           return complete(trace, 'reply',
           unboundSystem(),
           entries,
           undefined,
-          pending,
+          attachments.length ? attachments : undefined,
           tools,
           turns.slice(admittedToolTurnsFrom),
           );
@@ -862,7 +864,7 @@ export const createOwnerResponder = (
       if (turn.runScope && privateRunScope !== turn.runScope) {
         const capturedTurn = { ...turn, memoryWrites };
         const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}) });
+        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}) });
         control.route(scoped.control);
         try { return await scoped.respond(capturedTurn, time); }
         finally { control.unroute(scoped.control); }

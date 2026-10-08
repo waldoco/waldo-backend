@@ -11,9 +11,20 @@ const page=()=>{
   screenshot:async()=>image.slice(),close:async()=>{commonBrowserFixture.pages=commonBrowserFixture.pages.filter(row=>row!==p);}};
  commonBrowserFixture.pages.push(p);return p;
 };
-const context={pages:()=>commonBrowserFixture.pages.slice(),newPage:async()=>page(),route:async()=>{},unroute:async()=>{},newCDPSession:async(p:any)=>({send:async()=>({targetInfo:{targetId:p.id}}),detach:async()=>{}})};
+const context={serviceWorkers:()=>[],addInitScript:async()=>{},routeWebSocket:async()=>{},pages:()=>commonBrowserFixture.pages.slice(),newPage:async()=>page(),route:async()=>{},unroute:async()=>{},newCDPSession:async(p:any)=>({send:async()=>({targetInfo:{targetId:p.id}}),detach:async()=>{}})};
 export const commonBrowserFixtureLoader:CloudflareBrowserSdkLoader=async()=>({
  acquire:async()=>{ended=false;commonBrowserFixture.allocations++;if(!commonBrowserFixture.pages.length)page();await commonBrowserFixture.onAcquire?.();return {sessionId:'fixture-retained-provider'};},
  connect:async()=>{if(ended)throw Error('fixture session ended');commonBrowserFixture.attachments++;return {contexts:()=>[context],close:async()=>{},newBrowserCDPSession:async()=>({send:async()=>{await commonBrowserFixture.onTerminate?.();ended=true;commonBrowserFixture.ends++;}})};},
  sessions:async()=>ended?[]:[{sessionId:'fixture-retained-provider'}],endpointURLString:()=>'',
 } as never);
+
+// Provider-shaped transport fixture: unlike the original in-memory SDK, every
+// acquire, attach and sessions call crosses the host's real binding wrapper.
+export const commonBrowserMeteredFixtureLoader:CloudflareBrowserSdkLoader=async()=>{
+ const sdk=await commonBrowserFixtureLoader();
+ return {...sdk,
+  acquire:async(binding:any,options:any)=>{await binding.fetch(`http://fake.host/v1/devtools/browser?keep_alive=${options.keep_alive}`,{method:'POST'});return sdk.acquire(binding,options);},
+  connect:async(binding:any,options:any)=>{await binding.fetch(`http://fake.host/v1/devtools/browser/${options.sessionId}?persistent=true`,{headers:{upgrade:'websocket'}});return sdk.connect(binding,options);},
+  sessions:async(binding:any)=>{await binding.fetch('http://fake.host/v1/sessions');return sdk.sessions(binding);},
+ } as never;
+};

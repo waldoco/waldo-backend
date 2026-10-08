@@ -20,10 +20,10 @@ function harness(controlTag = 'a') {
   };
   page();
   let routeHandler: ((route: any) => Promise<void>) | undefined;
-  const context = { pages: () => [...pages], newPage: async () => page(), route: async (_: string, handler: (route: any) => Promise<void>) => { routeHandler = handler; }, unroute: async () => {}, newCDPSession: async (p: any) => ({ send: async () => ({ targetInfo: { targetId: p.id } }), detach: async () => {} }) };
+  const context = { serviceWorkers:()=>[], addInitScript:async()=>{calls.push('block-service-workers');}, routeWebSocket:async(_:string,handler:any)=>{await handler({close:()=>{calls.push('block-websocket');}});}, pages: () => [...pages], newPage: async () => page(), route: async (_: string, handler: (route: any) => Promise<void>) => { routeHandler = handler; }, unroute: async () => {}, newCDPSession: async (p: any) => ({ send: async () => ({ targetInfo: { targetId: p.id } }), detach: async () => {} }) };
   const browser = { contexts: () => [context], newContext: async () => { throw Error('disposeOnDetach context would lose tabs'); }, close: async () => { calls.push('release'); }, newBrowserCDPSession: async () => ({ send: async () => { ended = true; } }) };
   const sdk = { acquire: async () => { calls.push('acquire'); return { sessionId: session.providerSessionId }; }, connect: async (_: unknown, options: any) => { expect(options).toEqual({ sessionId: session.providerSessionId, persistent: true }); if (ended) throw Error('session ended'); calls.push('attach'); return browser; }, sessions: async () => ended ? [] : [{ sessionId: session.providerSessionId }] };
-  return { calls, pages, sdk, browser, route: (route: any) => routeHandler!(route), humanChange: () => { changed = true; } };
+  return { calls, pages, sdk, browser, context, route: (route: any) => routeHandler!(route), humanChange: () => { changed = true; } };
 }
 it('navigates a public page, returns actual image bytes, and retains two tabs across detached owner turns', async () => {
   const f = harness();
@@ -278,4 +278,22 @@ it.each(['cdp','send','absence'])('attempts release for already-held attachment 
  if(phase==='absence'){const original=f.sdk.sessions;f.sdk.sessions=async()=>++lists===1?original():never();}
  const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>1,cleanupTimeoutMs:20,admit:async()=>{},authorizeRequest:async()=>false,maxScreenshotBytes:1024});
  await expect(driver.terminate({...session,expiresAt:1})).rejects.toMatchObject({code:'cleanup_unconfirmed'});expect(f.calls).toContain('release');expect(f.calls).not.toContain('acquire');
+});
+
+it('read-only lifecycle blocks worker registration/websockets and closes pages before releasing the retained browser',async()=>{
+ const f=harness();const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>60000,admit:async()=>{},authorizeRequest:async()=>true,maxScreenshotBytes:1024,publicRead:true} as never);
+ const first=await driver.navigate(session,'https://docs.example/index');expect(first.observation.text).toContain('Compare Browser Run');
+ expect(f.calls).toContain('block-service-workers');expect(f.calls).toContain('block-websocket');expect(f.pages).toHaveLength(0);expect(await f.sdk.sessions()).toHaveLength(1);
+ const second=await driver.navigate(session,'https://docs.example/reuse');expect(second.observation.url).toBe('https://docs.example/reuse');expect(f.pages).toHaveLength(0);expect(f.calls).not.toContain('acquire');
+});
+
+it('read-only lifecycle terminates a retained context with pre-existing workers without replacement',async()=>{
+ const f=harness();f.context.serviceWorkers=()=>[{} as never];
+ const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>60000,admit:async()=>{},authorizeRequest:async()=>true,maxScreenshotBytes:1024,publicRead:true});
+ await expect(driver.navigate(session,'https://docs.example/index')).rejects.toMatchObject({code:'session_lost'});expect(f.calls).not.toContain('navigate');expect(f.calls).not.toContain('acquire');expect(await f.sdk.sessions()).toEqual([]);expect(f.calls).toContain('release');
+});
+it('failed page shutdown ends the owned browser and returns uncertainty rather than successful content',async()=>{
+ const f=harness();f.pages[0].close=async()=>{throw Error('local page would stay active');};
+ const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>60000,admit:async()=>{},authorizeRequest:async()=>true,maxScreenshotBytes:1024,publicRead:true});
+ await expect(driver.navigate(session,'https://docs.example/index')).rejects.toMatchObject({code:'cleanup_unconfirmed'});expect(await f.sdk.sessions()).toEqual([]);expect(f.calls).toContain('release');expect(f.calls).not.toContain('acquire');
 });
