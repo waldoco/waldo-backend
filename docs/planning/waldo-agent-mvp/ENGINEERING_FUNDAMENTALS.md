@@ -587,3 +587,5 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 
 - [ ] Browser state removal outages still terminate the exact prepaid provider session. Retained remote removal pauses automatic recovery, disables account access, and presents truthful owner retry UI; no duplicate cleanup allocation or privileged polling.
 - [ ] Recheck owner authority and expiry immediately before signed state I/O and after delayed responses; local revocation cannot revive a saved generation.
+
+| 2026-10-08 | Browser source migration44 invalidated staging preflight's pinned43-entry manifest | Data and migrations / source review | staging-migration-preflight.test.mjs actual manifest44 versus43 RED, updated terminal version and exact SQL digest GREEN | Update canonical migration lists and staged source manifest pins together; no migration application implied |
