@@ -161,6 +161,39 @@ describe('OpenAIResponsesAdapter', () => {
     expect(sent).toMatchObject({ max_output_tokens: 32, reasoning: { effort: 'low', summary: 'auto' } });
   });
 
+  it('a reasoning-only reply is asked for once more, and fails only when the second is also empty', async () => {
+    const empty = { id: 'resp_e', status: 'completed', output_text: '', output: [{ type: 'reasoning', summary: [] }], usage: { input_tokens: 4, output_tokens: 2 } };
+    const good = { id: 'resp_g', status: 'completed', output_text: 'Here is your plan.', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Here is your plan.' }] }], usage: { input_tokens: 4, output_tokens: 3 } };
+    const run = async (replies: unknown[]) => {
+      let calls = 0;
+      const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => replies[calls++] as never) });
+      return { result: await adapter.complete(gatewayRequest()), calls };
+    };
+    const recovered = await run([empty, good]);
+    expect(recovered.calls).toBe(2);
+    expect(recovered.result).toMatchObject({ ok: true, data: { text: 'Here is your plan.' } });
+    const failed = await run([empty, empty]);
+    expect(failed.calls).toBe(2);
+    expect(failed.result).toEqual({ ok: false, code: 'invalid_args', error: 'OpenAI returned empty output' });
+  });
+  it('parallel tool calls in one round are replayed once each, not once from the model output and again per call', async () => {
+    let sent: Array<{ type?: string; call_id?: string }> = [];
+    const adapter = new OpenAIResponsesAdapter({
+      apiKey: 'test-key',
+      client: client(async (body: { input: unknown }) => { sent = body.input as typeof sent; return { id: 'r', status: 'completed', output_text: 'ok', output: [], usage: { input_tokens: 1, output_tokens: 1 } } as never; }),
+    });
+    const input = gatewayRequest();
+    const fc = (n: number) => ({ type: 'function_call', id: `fc_${n}`, call_id: `c${n}`, name: 'tool', arguments: '{}' });
+    const call = (n: number) => ({ call_id: `c${n}`, name: 'tool', arguments: '{}' });
+    await adapter.complete({ ...input, request: { ...input.request, tool_turns: [
+      { call: call(1), output: 'o1', prior_items: [{ type: 'reasoning', id: 'rs_1', summary: [] }, fc(1), fc(2), fc(3)] },
+      { call: call(2), output: 'o2' },
+      { call: call(3), output: 'o3' },
+    ] } as never });
+    const calls = sent.filter(item => item.type === 'function_call').map(item => item.call_id);
+    expect(calls).toEqual(['c1', 'c2', 'c3']);
+    expect(sent.filter(item => item.type === 'function_call_output').map(item => item.call_id)).toEqual(['c1', 'c2', 'c3']);
+  });
   it('an incomplete response with partial text is delivered with truncated: true', async () => {
     const adapter = new OpenAIResponsesAdapter({
       apiKey: 'test-key',
