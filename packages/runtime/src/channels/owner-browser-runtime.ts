@@ -72,7 +72,17 @@ export function ownerBrowserRuntime(options: Readonly<{
     },
     gateway() {
       const config = configuration();
-      return config?.meterGateway?.(new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY! }));
+      const base = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY! });
+      const metered = config?.meterGateway?.(base);
+      if (!metered) return undefined;
+      // Only a run that holds a browser allocation is metered. An expired or used-up registration denies browser allocations, never ordinary model calls.
+      return new Proxy(base, { get(target, key) {
+        if (key !== 'complete') { const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value; }
+        return (request: { runScope?: RunEffectScope }) => {
+          const scope = request.runScope;
+          return active && scope && active.scope.runId === scope.runId && active.scope.attempt === scope.attempt ? metered.complete(request as never) : target.complete(request as never);
+        };
+      } });
     },
     attachments(scope?: RunEffectScope): readonly LLMAttachment[] {
       return active && scope === active.scope ? active.host.attachments() : [];
