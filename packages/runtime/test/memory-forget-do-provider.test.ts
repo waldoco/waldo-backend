@@ -930,3 +930,12 @@ it('HELDCOST a held topic with a large claim store reads the purge tables a boun
   await turn(name, 1, 'What time is my standup?');
   expect(reads()).toBeLessThan(200);
 });
+
+it('CPHASE a model call records content-free phase hops around the gateway', async () => {
+  const name = 'memory-do-complete-phase';
+  await turn(name, 1, 'What time is my standup?');
+  await runInDurableObject(stub(name), (_i, state) => {
+    const rows = state.storage.sql.exec<{ code: string }>("SELECT note AS code FROM trace_log WHERE hop = 'complete_phase'").toArray().map(row => row.code);
+    expect(rows).toEqual(expect.arrayContaining(['reply:enter', 'reply:gateway_call', 'reply:gateway_return']));
+  });
+});
