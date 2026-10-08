@@ -91,6 +91,7 @@ export type DraftDocumentArgs = z.infer<typeof draftDocumentArgsSchema>;
 // Drafts carry no approval rail; sends do. Tool args carry bare addresses: display-name
 // forms are the adapter's inbound draft shape, never the model's outbound one.
 export const draftEmailArgsSchema = z.strictObject({
+  account: z.email().optional(),
   to: z.array(z.email()).min(1).max(50),
   cc: z.array(z.email()).max(50).optional(),
   bcc: z.array(z.email()).max(50).optional(),
@@ -116,6 +117,7 @@ export type FormZonePreference = z.infer<typeof formZonePreferenceSchema>;
 
 // Sending invites is connector_write (ADR-0018) — proposals always confirm, even at L3.
 export const proposeScheduleArgsSchema = z.strictObject({
+  account: z.email().optional(),
   attendees: z.array(z.email()).min(1).max(50),
   duration_min: z.int().min(15).max(480),
   title: z.string().min(1).max(200),
@@ -130,6 +132,7 @@ export const sheetWriteModeSchema = z.enum(['overwrite', 'append']);
 export type SheetWriteMode = z.infer<typeof sheetWriteModeSchema>;
 
 export const writeSheetCellArgsSchema = z.strictObject({
+  account: z.email().optional(),
   sheet_id: z.string().min(1),
   // A1 notation, e.g. "Sheet1!A5"; single-cell-ness is provider-checked (ADR-0026).
   range: z.string().min(1).max(100),

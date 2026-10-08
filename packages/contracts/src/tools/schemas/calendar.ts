@@ -4,6 +4,7 @@ import { iso8601Schema } from '../../core/error';
 // A proposed change to the owner's own calendar (owner queue slice 3). Proposal only: the
 // write happens after the owner approves it.
 export const proposeCalendarChangeArgsSchema = z.strictObject({
+  account: z.email().optional(),
   action: z.enum(['create', 'move', 'cancel']),
   event_id: z.string().min(1).max(200).optional().describe('Required for move and cancel; from query_calendar.'),
   title: z.string().min(1).max(200).optional(),

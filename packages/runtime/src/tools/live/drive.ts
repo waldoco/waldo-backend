@@ -30,12 +30,13 @@ export const readDriveHandler = (google: GoogleAccess, enabled = false, contentE
   handle: async (args: ReadDriveArgs, ctx): Promise<ToolResult<unknown>> => {
     if (!enabled) return { ok: false, code: 'forbidden', error: 'Drive reads are not enabled on this Waldo yet.', source_taint: 'external' };
     if (args.action === 'content' && !contentEnabled) return { ok: false, code: 'forbidden', error: 'Drive content reads are not enabled on this Waldo yet.', source_taint: 'external' };
-    const connected = await google.client('drive', undefined, ctx?.assertTaskSourceCurrent);
+    const connected = await google.client('drive', undefined, ctx?.assertTaskSourceCurrent, args.account);
     const client = connected && taskSourceClient(connected, ctx);
     if (client === null) return { ok: false, code: 'auth_failed', error: CONNECT_SENT_TEXT, source_taint: 'external', connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: 'drive' } };
     const pageSize = args.page_size;
     try {
-      const account = client.account;
+      const account = client.account ?? {connection_id:null,email:null};
+      if (args.account && account.email?.toLowerCase() !== args.account.toLowerCase()) throw new Error('Selected Google account is unavailable; no other account was used');
       if (args.action === 'content') {
         if (!account?.connection_id || account.connection_id !== args.connection_id || !client.driveReadFileContent) return { ok: false, code: 'rejected', error: 'The selected Google account is no longer available. Read current metadata again.', source_taint: 'external' };
         const content = await client.driveReadFileContent({ fileId: args.file_id!, expectedModifiedTime: args.expected_modified_time! });

@@ -1,3 +1,4 @@
+import { Parser } from 'htmlparser2';
 // Google connector for the owner's own accounts: OAuth offline grants, Calendar reads and Gmail.
 // Consent asks once for the combined set (owner ruling 2026-09-24 13:31, reversing W3's per-feature asks):
 // calendar + mail + tasks in a single dialog. Scope is not permission: each tool still gates its own effects.
@@ -237,13 +238,14 @@ export type GoogleClient = Readonly<{
   newMail(since: number, limit: number): Promise<readonly MailItem[]>;
   searchMail(query: string, limit: number): Promise<readonly MailItem[]>;
   readThread(threadId: string, limit: number): Promise<readonly ThreadMessage[]>;
+  threadPage?(threadId: string, limit: number, cursor?: string): Promise<Readonly<{messages: readonly ThreadMessage[]; cursor: string | null}>>;
   tasks(status: TaskStatusFilter, limit: number): Promise<readonly TaskItem[]>;
 }>;
 
 // Single source for the connector-proxy allowlist: the runtime's vault client and the Supabase
 // connector-proxy Edge Function both build from this list, so a method added to GoogleClient but
 // missed here fails `satisfies` / the parity test instead of breaking live calls on Vault installs.
-export const GOOGLE_METHODS = ['calendarPage','mailPage','freeBusy', 'events', 'draft', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail', 'searchMail', 'readThread', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent'] as const satisfies readonly (keyof GoogleClient)[];
+export const GOOGLE_METHODS = ['calendarPage','mailPage','freeBusy', 'events', 'draft', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent'] as const satisfies readonly (keyof GoogleClient)[];
 export type GoogleMethod = (typeof GOOGLE_METHODS)[number];
 
 const b64urlDecode = (data: string): string => {
@@ -253,16 +255,28 @@ const b64urlDecode = (data: string): string => {
 
 // Thread bodies enter model context only through the E1 verification-artifact quarantine
 // (tools/live/google.ts); this cap is the second wall - a huge body never floods a turn.
-const BODY_CAP = 4000;
+const BODY_CAP = 32_000;
 type GmailPayload = Readonly<{ mimeType?: string; body?: { data?: string }; parts?: GmailPayload[]; headers?: { name: string; value: string }[] }>;
 type GmailFullMessage = Readonly<{ id?: string; snippet?: string; internalDate?: string; payload?: GmailPayload }>;
+const htmlText = (html: string): string => {
+  const blocks = new Set(['p', 'div', 'br', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'section', 'article', 'hr']);
+  let suppressed = 0;
+  const chunks: string[] = [];
+  const boundary = () => { if (!suppressed && chunks.length && chunks.at(-1) !== '\n') chunks.push('\n'); };
+  new Parser({
+    onopentag(name) { if (name === 'script' || name === 'style') suppressed++; else if (blocks.has(name)) boundary(); },
+    ontext(text) { if (!suppressed) chunks.push(text); },
+    onclosetag(name) { if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) boundary(); },
+  }, { decodeEntities: true }).end(html);
+  return chunks.join('').trim();
+};
 const threadBody = (payload: GmailPayload | undefined): string => {
-  const plain = (part: GmailPayload): string => {
-    if (part.mimeType === 'text/plain' && part.body?.data) return b64urlDecode(part.body.data);
-    for (const child of part.parts ?? []) { const text = plain(child); if (text) return text; }
+  const partText = (part: GmailPayload, mime: string): string => {
+    if (part.mimeType === mime && part.body?.data) return b64urlDecode(part.body.data);
+    for (const child of part.parts ?? []) { const text = partText(child, mime); if (text.trim()) return text; }
     return '';
   };
-  return (payload ? plain(payload) : '').trim().slice(0, BODY_CAP);
+  return (payload ? partText(payload, 'text/plain').trim() || htmlText(partText(payload, 'text/html')) : '').trim().slice(0, BODY_CAP);
 };
 
 // Single-shot access-token mint for callers that need a raw bearer (Google-auth MCP servers on
@@ -312,6 +326,27 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     const header = (name: string) => message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
     return { id, thread_id: message.threadId ?? '', from: header('From'), subject: header('Subject'), snippet: message.snippet ?? '', at: new Date(Number(message.internalDate ?? 0)).toISOString() };
   }));
+  const threadPage = async (threadId: string, limit: number, cursor?: string): Promise<Readonly<{messages:readonly ThreadMessage[];cursor:string|null}>> => {
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw new Error('invalid thread page limit');
+      const json = await call(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`) as { messages?: GmailFullMessage[] };
+      if (!json || !Array.isArray(json.messages)) throw new Error('invalid Gmail thread response');
+      const ids = json.messages.map(message => message.id);
+      const binding = await sha256Hex(JSON.stringify([account, threadId, ids]));
+      let offset = 0;
+      if (cursor) {
+        try {
+          const decoded = JSON.parse(b64urlDecode(cursor)) as {binding: string; offset: number};
+          if (decoded.binding !== binding || !Number.isSafeInteger(decoded.offset) || decoded.offset < 1 || decoded.offset >= ids.length) throw new Error();
+          offset = decoded.offset;
+        } catch { throw new Error('invalid thread cursor or thread changed; read the first page again'); }
+      }
+      const messages = json.messages.slice(offset, offset + limit).map(message => {
+        const header = (name: string) => message.payload?.headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
+        return { id: message.id ?? '', from: header('From'), subject: header('Subject'), at: new Date(Number(message.internalDate ?? 0)).toISOString(), body: threadBody(message.payload) || (message.snippet ?? '').slice(0, BODY_CAP) };
+      });
+      const next = offset + messages.length;
+      return {messages, cursor: next < ids.length ? b64url(new TextEncoder().encode(JSON.stringify({binding,offset:next}))) : null};
+  };
   return {
     account,
     freeBusy:async(from,to,calendarIds,timezone)=>{
@@ -395,19 +430,10 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     async searchMail(query, limit) {
       return mailItems(await listIds(query, limit));
     },
-    // A1: one thread with bodies decoded. text/plain wins; an HTML-only or empty body falls
-    // back to the snippet so the model still sees something.
     async readThread(threadId, limit) {
-      const json = await call(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`) as { messages?: GmailFullMessage[] };
-      return (json.messages ?? []).slice(0, limit).map((message) => {
-        const header = (name: string) => message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
-        return {
-          id: message.id ?? '', from: header('From'), subject: header('Subject'),
-          at: new Date(Number(message.internalDate ?? 0)).toISOString(),
-          body: threadBody(message.payload) || (message.snippet ?? ''),
-        };
-      });
+      return (await threadPage(threadId, limit)).messages;
     },
+    threadPage,
     async tasks(status, limit) {
       const url = new URL('https://tasks.googleapis.com/tasks/v1/lists/@default/tasks');
       // Google Tasks has no in-progress state: todo and in_progress both read the open list;
