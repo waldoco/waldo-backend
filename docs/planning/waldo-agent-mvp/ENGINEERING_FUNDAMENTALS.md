@@ -614,4 +614,8 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 
 - [ ] Browser uploads bind owner/session/observation and immutable workspace file revision, byte size and SHA into existing approval evidence before native setInputFiles. Withdrawn authority, stale targets and changed bytes dispatch nothing; post-dispatch verification failure is uncertain without replay.
 
+| 2026-10-08 | Retained interaction rejected authority before assigning its existing connection to cleanup; a naive command adapter also changed pixel scroll into a viewport scroll | Browser interaction / lifecycle and command fidelity | general-browser-driver.test.ts withdrawn-first-admission leaves documents RED then closes them GREEN; exact225pixel scroll RED then GREEN; common-browser-host.test.ts native read/type/read and uncertainty no-replay | Capture only the exact retained connection for cleanup before admission, preserve request guards throughout the admitted turn, close documents before disconnect, and retain existing typed command semantics |
+
+- [ ] Normal browser interactions use the existing funded provider identity, durably consume observations before effects, and preserve uncertain intent across reobservation. Native submit/send waits for owner approval. Actual dispatcher and owner-turn cleanup tests must accompany serving registration.
+
 - [ ] Native download origin is checked before stream/import, hostile filenames cannot escape operation folders, and authenticated HTML retrieval remains attachment+nosniff. Owner-wide count/aggregate retained-byte quotas apply to every import; retrieval URL uses owner-console origin.

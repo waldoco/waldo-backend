@@ -5,7 +5,7 @@ import type { Browser, BrowserContext, BrowserWorker, Page } from '@cloudflare/p
 import { browserSessionSchema, type BrowserSession } from '@waldo/contracts';
 import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
 import { cloudflareBrowserGuardOptions } from './cloudflare-browser-adapter';
-import { generalDigest, generalPageState, type GeneralSnapshot } from './general-browser-observation';
+import { generalDigest, generalPageState, type GeneralSnapshot, type GeneralActionSnapshot } from './general-browser-observation';
 import { parseGeneralBrowserAction, type GeneralBrowserAction } from './general-browser-actions';
 export type { GeneralBrowserAction } from './general-browser-actions';
 import { generalBrowserDiagnostic, type GeneralBrowserDiagnostic } from './general-browser-diagnostic';
@@ -16,7 +16,7 @@ export class GeneralBrowserError extends Error {
   cleanup_failed?: true;
   constructor(readonly code: 'rejected' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
 }
-type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; cleanupBinding?(providerSessionId:string):BrowserWorker; publicRead?:boolean; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number }>;
+type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; cleanupBinding?(providerSessionId:string):BrowserWorker; publicRead?:boolean; retainConnection?:boolean; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number }>;
 type Navigation = Readonly<{ goto(page: Page, url: string): Promise<void>; finish(page: Page): Promise<void>; pending(page: Page): boolean; dispatched(): void }>;
 export type GeneralBrowserUploadFile = Readonly<{ file_id: string; revision: number; name: string; mime_type: string; byte_size: number; sha256: string }>;
 
@@ -24,6 +24,9 @@ export type GeneralBrowserUploadFile = Readonly<{ file_id: string; revision: num
 // driver never allocates on attach failure and never creates a second ledger.
 export function cloudflareGeneralBrowser(options: Options) {
   if (!options.ownerId || !Number.isSafeInteger(options.maxScreenshotBytes) || options.maxScreenshotBytes <= 0) throw new GeneralBrowserError('rejected');
+  if (options.retainConnection && !options.publicRead) throw new GeneralBrowserError('rejected');
+  let connected: Readonly<{ browser: Browser; sessionKey: string }> | undefined;
+  const connectionKey = (session: BrowserSession) => JSON.stringify([session.ownerId, session.id, session.generation, session.providerSessionId]);
   const cleanupTimeoutMs = options.cleanupTimeoutMs ?? 10000;
   if (!Number.isSafeInteger(cleanupTimeoutMs) || cleanupTimeoutMs <= 0 || cleanupTimeoutMs > 10000) throw new GeneralBrowserError('rejected');
   // A single cleanup budget, independent of expired action authority. Each
@@ -104,11 +107,23 @@ export function cloudflareGeneralBrowser(options: Options) {
       dispatched: () => { mutationDispatched = true; },
     };
     try {
+      // Capture only an exact existing connection before admission; if that
+      // authority has expired, finally can still release its guarded documents.
+      if (connected && connected.sessionKey === connectionKey(session)) {
+        browser = connected.browser;
+        context = browser.contexts()[0];
+      }
       await admit(session);
-      const sdk = await options.loadSdk(); await admit(session);
-      // Runtime 1.3.6 supports persistent, although its declaration omits it.
-      const connectOptions = { sessionId: session.providerSessionId, persistent: true };
-      browser = await sdk.connect(binding, connectOptions); await admit(session);
+      if (connected) {
+        if (connected.sessionKey !== connectionKey(session)) throw new GeneralBrowserError('session_lost');
+        browser = connected.browser;
+      } else {
+        const sdk = await options.loadSdk(); await admit(session);
+        // Runtime 1.3.6 supports persistent, although its declaration omits it.
+        const connectOptions = { sessionId: session.providerSessionId, persistent: true };
+        browser = await sdk.connect(binding, connectOptions); await admit(session);
+        if (options.retainConnection) connected = { browser, sessionKey: connectionKey(session) };
+      }
       // newContext uses disposeOnDetach:true. Reuse the dedicated session's
       // persistent default context rather than recreating an incognito context.
       const contexts = browser.contexts();
@@ -152,7 +167,7 @@ export function cloudflareGeneralBrowser(options: Options) {
       }
       // Anonymous reads retain browser cookies/context, not running documents.
       // Closing all pages prevents polling and sockets from surviving detachment.
-      if(options.publicRead&&context)try{
+      if(options.publicRead&&context&&(!options.retainConnection||primary))try{
         await cleanup(async step=>{await step(()=>Promise.all(context!.pages().map(page=>page.close())));if(context!.pages().length||context!.serviceWorkers().length)throw new GeneralBrowserError('cleanup_unconfirmed');});
       }catch{
         try{await terminateId(session.providerSessionId);}catch{if(primary)primary.cleanup_failed=true;}
@@ -160,7 +175,7 @@ export function cloudflareGeneralBrowser(options: Options) {
         pageCleanupFailed=true;
       }
       // Release this connection; physical browser termination is separate.
-      if (browser) try { await cleanup(step => step(() => browser!.close())); } catch {
+      if (browser&&(!options.retainConnection||primary)) try { connected=undefined; await cleanup(step => step(() => browser!.close())); } catch {
         if (primary) primary.release_failed = true;
         else {
           const failure = new GeneralBrowserError(mutationDispatched ? 'outcome_uncertain' : 'provider_unavailable');
@@ -214,6 +229,23 @@ export function cloudflareGeneralBrowser(options: Options) {
     }
   });
   return {
+    async disconnect(): Promise<void> {
+      const retained = connected; connected = undefined;
+      if (!retained) return;
+      // Leaving a turn disconnects only after closing active documents. Current
+      // authority still guards requests while model calls wait between actions.
+      let failure: GeneralBrowserError | undefined;
+      try {
+        await cleanup(async step => {
+          const contexts = retained.browser.contexts();
+          await step(() => Promise.all(contexts.flatMap(context => context.pages()).map(page => page.close())));
+          if (contexts.some(context => context.pages().length || context.serviceWorkers().length)) throw new GeneralBrowserError('cleanup_unconfirmed');
+        });
+      } catch { failure = new GeneralBrowserError('cleanup_unconfirmed'); }
+      try { await cleanup(step => step(() => retained.browser.close())); }
+      catch { failure ??= new GeneralBrowserError('cleanup_unconfirmed'); failure.release_failed = true; }
+      if (failure) throw failure;
+    },
     async start(allowedDomains: readonly string[] | 'public', lifetimeMs: number,
       beforeAllocate: (allocation: Readonly<{ allowedDomains: readonly string[] | 'public'; lifetimeMs: number }>) => Promise<void>,
       recordAllocation: (providerSessionId: string) => Promise<void>,
@@ -238,7 +270,7 @@ export function cloudflareGeneralBrowser(options: Options) {
         throw new GeneralBrowserError('provider_unavailable');
       }
     },
-    act: (session: BrowserSession, snapshot: GeneralSnapshot, input: GeneralBrowserAction, beforeAction: (actionDigest: string) => Promise<void>) => attached(session, async (_, context, navigation) => {
+    act: (session: BrowserSession, snapshot: GeneralActionSnapshot, input: GeneralBrowserAction, beforeAction: (actionDigest: string) => Promise<void>) => attached(session, async (_, context, navigation) => {
       const action = parseGeneralBrowserAction(input);
       if (!action) throw new GeneralBrowserError('rejected');
       if (snapshot.ownerId !== session.ownerId || snapshot.sessionId !== session.id || snapshot.generation !== session.generation) throw new GeneralBrowserError('stale_observation');
@@ -263,8 +295,8 @@ export function cloudflareGeneralBrowser(options: Options) {
       navigation.dispatched();
       try {
         if (action.operation === 'scroll') {
-          const x = action.direction === 'left' ? -snapshot.state.width : action.direction === 'right' ? snapshot.state.width : 0;
-          const y = action.direction === 'up' ? -snapshot.state.height : action.direction === 'down' ? snapshot.state.height : 0;
+          const x = 'delta' in action ? 0 : action.direction === 'left' ? -snapshot.state.width : action.direction === 'right' ? snapshot.state.width : 0;
+          const y = 'delta' in action ? action.delta : action.direction === 'up' ? -snapshot.state.height : action.direction === 'down' ? snapshot.state.height : 0;
           await page.evaluate(({ x, y }) => (globalThis as any).scrollBy(x, y), { x, y });
         } else {
           const locator = page.locator(element!.selector);
@@ -282,7 +314,7 @@ export function cloudflareGeneralBrowser(options: Options) {
       }
       catch { throw new GeneralBrowserError('outcome_uncertain'); }
     }),
-    upload: (session: BrowserSession, snapshot: GeneralSnapshot, reference: string, file: GeneralBrowserUploadFile,
+    upload: (session: BrowserSession, snapshot: GeneralActionSnapshot, reference: string, file: GeneralBrowserUploadFile,
       approvedFile: (actionDigest: string) => Promise<Uint8Array>) => {
       file = Object.freeze({ ...file });
       return attached(session, async (_, context, navigation) => {

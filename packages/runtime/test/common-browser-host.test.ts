@@ -11,11 +11,12 @@ const fixture=()=>{
  const ctx={authenticatedUserId:'fixture-owner',assertTaskSourceCurrent:async()=>{if(!live)throw Error('withdrawn');}} as never;
  return {host,storage,grant,config,ctx,rows,revoke:()=>{live=false;}};
 };
-it('retains exact grant/session while closing active pages after host reconstruction with native image bytes only',async()=>{
+it('retains exact grant/session and guarded documents after host reconstruction with native image bytes only',async()=>{
  const f=fixture();const one=f.host();expect(await one.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx)).toMatchObject({ok:true,source_taint:'external'});
  expect(one.attachments()[0]?.data_base64).toMatch(/^iVBOR/);
  const two=f.host();expect(await two.handler.handle({url:'https://public-pages.fixture.invalid/b',instruction:'Read B.'},f.ctx)).toMatchObject({ok:true,data:{tabs:expect.any(Array)}});
- expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(0);
+ expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(1);
+ await two.cancel();expect(commonBrowserFixture.pages).toHaveLength(0);expect(commonBrowserFixture.ends).toBe(1);
 });
 it('changed grant and pending allocation refuse replacement allocation',async()=>{
  const f=fixture();await f.host().handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx);
@@ -98,4 +99,41 @@ it('read result exposes the real retained session handle across fresh host reads
  expect(first.data.session_handle).toBe(retained.session.id);
  const second=await f.host().handler.handle({url:'https://public-pages.fixture.invalid/b',instruction:'Read.'},f.ctx) as any;
  expect(second.data.session_handle).toBe(first.data.session_handle);expect(commonBrowserFixture.allocations).toBe(1);
+});
+it('normal browser host reads, types into an observed public input, reobserves and terminates one allocation',async()=>{
+ const f=fixture(),host=f.host();
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.',provider:'cloudflare_playwright'},f.ctx) as any;
+ const filled=await host.actionHandler.handle({url:first.data.url,task:'Set the note',max_actions:1,command:{operation:'type',element_ref:first.data.elements[0].ref,value:'Owner note',intent:'read'}},f.ctx);
+ expect(filled).toMatchObject({ok:true,data:{field_values:[{name:'Note',value:'Owner note'}],session_handle:first.data.session_handle}});
+ const read=await host.actionHandler.handle({url:first.data.url,task:'Check the note',max_actions:1,command:{operation:'read',intent:'read'}},f.ctx);
+ expect(read).toMatchObject({ok:true,data:{field_values:[{name:'Note',value:'Owner note'}]}});
+ expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.attachments).toBe(1);
+ await host.cancel();expect(commonBrowserFixture.pages).toHaveLength(0);expect(commonBrowserFixture.ends).toBe(1);
+});
+it('uncertain native effects survive reobservation and cannot dispatch again',async()=>{
+ const f=fixture(),host=f.host();const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx) as any;
+ commonBrowserFixture.onFill=()=>{throw Error('lost native acknowledgement');};
+ const command={url:first.data.url,task:'Set note',max_actions:1,command:{operation:'type',element_ref:first.data.elements[0].ref,value:'Owner note',intent:'read'}} as const;
+ expect(await host.actionHandler.handle(command,f.ctx)).toMatchObject({ok:false});expect(commonBrowserFixture.effects).toBe(1);
+ const observed=await host.handler.handle({url:first.data.url,instruction:'Inspect current state.'},f.ctx) as any;
+ expect(observed).toMatchObject({ok:true,data:{action_outcome:'uncertain'}});
+ expect(await host.actionHandler.handle({...command,command:{...command.command,element_ref:observed.data.elements[0].ref}},f.ctx)).toMatchObject({ok:false});
+ expect(commonBrowserFixture.effects).toBe(1);expect(commonBrowserFixture.allocations).toBe(1);await host.cancel();
+});
+it('native form Enter and declared sends wait for owner approval without native dispatch',async()=>{
+ const f=fixture(),host=f.host();commonBrowserFixture.form=true;
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx) as any;
+ for(const command of [{operation:'type',element_ref:first.data.elements[0].ref,key:'Enter',intent:'read'},{operation:'type',element_ref:first.data.elements[0].ref,value:'Owner note',intent:'send'}] as const)
+  expect(await host.actionHandler.handle({url:first.data.url,task:'Update form',max_actions:1,command},f.ctx)).toMatchObject({ok:false});
+ expect(commonBrowserFixture.effects).toBe(0);await host.cancel();
+});
+it('registered dispatcher uses the existing host for native field observation and interaction',async()=>{
+ const f=fixture(),host=f.host();const {dispatchTool}=await import('../src/tools/dispatcher');const {buildSessionState}=await import('@waldo/contracts');
+ const ctx={...f.ctx as any,trigger:'user_message',egressAllowlist:['public-pages.fixture.invalid'],session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:Date.now()}),hasApproval:()=>true,sourceTaint:null,toolArgSourceTaint:null,sanitise:(await import('../src/scribe/sanitiser')).sanitise} as never;
+ const handlers=[host.handler,host.actionHandler];
+ const first=await dispatchTool({id:'native-read',name:'browse_page',args:{url:'https://public-pages.fixture.invalid/a',instruction:'Read the note input.',provider:'cloudflare_playwright'}},ctx,{handlers}) as any;
+ expect(first).toMatchObject({ok:true});
+ const acted=await dispatchTool({id:'native-type',name:'browse_act',args:{url:first.data.url,task:'Set the note',max_actions:1,command:{operation:'type',element_ref:first.data.elements[0].ref,value:'Exact owner note',intent:'read'}}},ctx,{handlers});
+ expect(acted).toMatchObject({ok:true,data:{field_values:[{value:'Exact owner note'}]},source_taint:'external'});
+ expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.effects).toBe(1);await host.cancel();
 });

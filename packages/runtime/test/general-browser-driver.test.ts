@@ -109,6 +109,26 @@ it('navigates a public page, returns actual image bytes, and retains two tabs ac
   await driver.terminate(session);
   expect(await f.sdk.sessions()).toEqual([]);
 });
+it('keeps an admitted public interaction connection guarded until explicit disconnect closes documents', async () => {
+  const f = harness('input');
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024, publicRead: true, retainConnection: true });
+  const first = await driver.navigate(session, 'https://docs.example/index');
+  const filled = await driver.act(session, first, { operation: 'fill', element_ref: first.observation.elements[0]!.ref, value: 'Admitted form value' }, async () => {});
+  expect(filled.state.elements[0]!.value).toBe('Admitted form value');
+  expect(f.calls.filter(call => call === 'attach')).toHaveLength(1); expect(f.calls).not.toContain('release');
+  expect(f.calls).toContain('block-service-workers'); expect(f.calls).toContain('block-websocket');
+  await driver.disconnect();
+  expect(f.pages).toHaveLength(0); expect(f.calls.filter(call => call === 'release')).toHaveLength(1);
+  expect(await f.sdk.sessions()).toHaveLength(1);
+});
+it('withdrawal before a retained interaction releases its existing connection and documents', async () => {
+  const f = harness(); let live = true;
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => { if (!live) throw Error('withdrawn'); }, authorizeRequest: async () => true, maxScreenshotBytes: 1024, publicRead: true, retainConnection: true });
+  await driver.navigate(session, 'https://docs.example/index'); live = false;
+  await expect(driver.observe(session)).rejects.toMatchObject({ code: 'rejected' });
+  expect(f.pages).toHaveLength(0); expect(f.calls.filter(call => call === 'release')).toHaveLength(1);
+  expect(f.calls.filter(call => call === 'attach')).toHaveLength(1);
+});
 it('dispatches typed fill and returns changed field state', async () => {
   const f = harness('input');
   const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
@@ -130,6 +150,12 @@ it('selects, presses keys and scrolls without accepting model-authored code', as
   await driver.act(session, pressed, { operation: 'scroll', direction: 'down' }, async () => {});
   expect(f.calls).toContain('scroll:{"x":0,"y":720}');
   await expect(driver.act(session, pressed, { operation: 'evaluate', code: 'steal()' } as never, async () => {})).rejects.toMatchObject({ code: 'rejected' });
+});
+it('preserves the existing typed command pixel scroll amount',async()=>{
+ const f=harness();const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>60000,admit:async()=>{},authorizeRequest:async()=>true,maxScreenshotBytes:1024});
+ const first=await driver.navigate(session,'https://docs.example/index');
+ await driver.act(session,first,{operation:'scroll',delta:225} as never,async()=>{});
+ expect(f.calls).toContain('scroll:{"x":0,"y":225}');
 });
 it('withdraws authority before an effect and rejects foreign owner and expired reads', async () => {
   const f = harness(); let revoked = false;
