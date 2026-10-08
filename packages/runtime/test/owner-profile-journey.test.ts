@@ -61,14 +61,18 @@ it('active and promoted owner facts are ordered newest-first together', async ()
   });
 });
 
-it('one oversized recalled claim does not hide a smaller one that fits; the omission count is exact', async () => {
+it('long evidence stays out of the profile, both short facts fit, and query text cannot inject recall', async () => {
   await withStore('recall-skip-oversized', (store) => {
     store.add({ kind: 'fact', text: 'zebra note small', source: 'stated', evidence: 'owner, tg-1: "short"', origin: 'owner', source_ref: 'owner, tg-1' }, AT);
     store.add({ kind: 'fact', text: 'zebra note huge', source: 'stated', evidence: `owner, tg-2: "${'x'.repeat(50_000)}"`, origin: 'owner', source_ref: 'owner, tg-2' }, AT);
     const prompt = turnMemoryPrompt(store, 'zebra note', 4_000);
-    expect(prompt.slice(prompt.indexOf('<relevant_claims>')), 'the small claim that fits is shown').toContain('zebra note small');
+    expect(profile(prompt)).toContain('zebra note small');
+    expect(profile(prompt)).toContain('zebra note huge');
+    expect(prompt).not.toContain('<relevant_claims>');
+    expect(prompt).toBe(turnMemoryPrompt(store, 'unrelated query', 4_000));
     expect(prompt).not.toContain('x'.repeat(100));
-    expect(prompt).toContain('(1 matching claims are too long to show here');
+    expect(prompt).not.toContain('matching claims are too long');
+    expect(prompt).not.toContain('older owner facts are not shown');
     expect(prompt.length).toBeLessThanOrEqual(4_000);
   });
 });

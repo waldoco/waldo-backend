@@ -17,10 +17,10 @@ describe('a topic-only forget keeps its retry state until the caller settles it'
       episodes.add('tg-1', 'owner', 'Posterbot standup moved to 09:10 UTC', 1);
       const calls: Array<{ texts: readonly string[]; topics: readonly string[] }> = [];
       const onPurged = (texts: readonly string[], _ids: readonly number[], topics: readonly string[] = []) => { calls.push({ texts, topics }); };
-      applyClaimOps(store, ops({ forget_topic: 'Posterbot' }), AT, 'owner, tg-2', onPurged, { owner: 'forget Posterbot' });
+      applyClaimOps(store, ops({ forget_topic: 'Posterbot' }), AT, 'owner, tg-2', onPurged, { owner: 'forget Posterbot' }, true);
       // The caller's KV stores did not verify clean, so it does not settle: the topic stays pending.
       expect(store.pendingTopics()).toEqual(['Posterbot']);
-      // A copy survives somewhere written after the first pass; a later turn with no forget intent retries the pending topic.
+      // Previously authorized cleanup retries pending work without deriving new permission from prose.
       episodes.add('tg-3', 'owner', 'Posterbot again', 2);
       applyClaimOps(store, ops({}), AT, 'owner, tg-4', onPurged, { owner: 'what is for lunch' });
       expect(sql.exec<{ text: string }>('SELECT text FROM episodes').toArray().map((r) => r.text).join(' ')).not.toMatch(/posterbot/i);
@@ -36,7 +36,7 @@ describe('a topic-only forget keeps its retry state until the caller settles it'
   it('without a KV consumer, SQL verification settles the topic at once', async () => {
     await run('forget-topic-pending-nokv', (sql, tx) => {
       const store = claimStore(sql, tx);
-      applyClaimOps(store, ops({ forget_topic: 'Posterbot' }), AT, 'owner, tg-2', undefined, { owner: 'forget Posterbot' });
+      applyClaimOps(store, ops({ forget_topic: 'Posterbot' }), AT, 'owner, tg-2', undefined, { owner: 'forget Posterbot' }, true);
       expect(store.pendingTopics()).toEqual([]);
     });
   });
@@ -54,7 +54,7 @@ describe('a topic-only forget keeps its retry state until the caller settles it'
       const episodes = episodeIndex(rawSql);
       episodes.add('tg-1', 'owner', 'Posterbot standup moved to 09:10 UTC', 1);
       let outcome: { purgeIncomplete: readonly string[] } | undefined;
-      applyClaimOps(store, ops({ forget_topic: 'Posterbot' }), AT, 'owner, tg-2', undefined, { owner: 'forget Posterbot' }, undefined, (o) => { outcome = o; });
+      applyClaimOps(store, ops({ forget_topic: 'Posterbot' }), AT, 'owner, tg-2', undefined, { owner: 'forget Posterbot' }, true, (o) => { outcome = o; });
       // The source words are still there, the result is explicitly not complete, and nothing was settled.
       expect(rawSql.exec<{ text: string }>('SELECT text FROM episodes').toArray()[0]!.text).toMatch(/posterbot/i);
       expect(outcome?.purgeIncomplete).toContain('pending_topic(failed)');

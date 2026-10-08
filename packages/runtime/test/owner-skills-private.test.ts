@@ -346,7 +346,7 @@ it("an active skill plus a large owner profile keeps the final system prompt und
   expect(system.length, "final wrapped system prompt stays under the window-sized cap or the sanitiser drops it whole").toBeLessThanOrEqual(MODEL_CONTEXT_MAX_CHARS);
 });
 
-it("recalled claims with very long evidence cannot push the system prompt over the sanitiser limit; omissions are stated", async () => {
+it("profile excludes long evidence and retains every short fact without unsolicited recall", async () => {
   captured.systems = [];
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName("recall-long-evidence")), async (_i, state) => {
     const memory = claimStore(state.storage.sql);
@@ -358,5 +358,9 @@ it("recalled claims with very long evidence cannot push the system prompt over t
   const system = captured.systems[0];
   expect(system, "system prompt reached the model (not dropped whole)").toBeDefined();
   expect(system!.length).toBeLessThanOrEqual(MODEL_CONTEXT_MAX_CHARS);
-  expect(system!, "recalled claims that do not fit are counted").toMatch(/\d+ matching claims are too long to show here/);
+  for (let i = 0; i < 8; i++) expect(system!).toContain(`hello greeting note ${i}`);
+  expect(system!).not.toContain("x".repeat(100));
+  expect(system!).not.toContain("<relevant_claims>");
+  expect(system!).not.toContain("matching claims are too long");
+  expect(system!).not.toContain("older owner facts are not shown");
 });

@@ -1,84 +1,58 @@
 import { env, runInDurableObject } from 'cloudflare:test';
-import { expect, it, vi } from 'vitest';
-
-const seen = vi.hoisted(() => ({ writerModels: [] as string[], writerInputs: [] as string[], replyModels: [] as string[], replyInputs: [] as string[], addOp: '' }));
+import { beforeEach, expect, it, vi } from 'vitest';
+const seen = vi.hoisted(() => ({ inputs: [] as string[], outputs: [] as unknown[][] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
-  const b = body as { model: string; text?: { format?: { type: string } } };
-  const writer = b.text?.format?.type === 'json_schema';
-  if (writer) { seen.writerModels.push(b.model); seen.writerInputs.push(JSON.stringify(body)); } else { seen.replyModels.push(b.model); seen.replyInputs.push(JSON.stringify(body)); }
-  return { id: 'fixture', output_text: writer ? seen.addOp : 'pong', output: [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
+  seen.inputs.push(JSON.stringify(body));
+  return { id: 'fixture', output_text: 'pong', output: seen.outputs.shift() ?? [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
 } }; } }));
 const { createOwnerResponder } = await import('../src/channels/owner-turn');
 const { claimStore } = await import('../src/memory/claims');
-const { OPENAI_GPT_6_LUNA_MODEL } = await import('@waldo/contracts');
-
-// Owner-turn path, model-call fixture (synthetic values, scripted writer output, mocked provider):
-// owner message -> writer call (model + input) -> applyClaimOps -> next turn's reply prompt.
-// Not covered: a real writer model deciding what to record; no live provider.
-const SAID = 'my HbA1c was 9.1 last week and I take metformin 500mg';
-const SAID_LAB = 'my HbA1c was 9.1 last week';
-const op = (evidence: string, text = 'HbA1c was 9.1 last week; takes metformin 500mg') => JSON.stringify({ add: [{ kind: 'health', text, source: 'stated', evidence, touches_forgotten: false }], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null });
-
-const NOOP = JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null });
-const system = (): string => (JSON.parse(seen.replyInputs.at(-1)!) as { instructions: string }).instructions;
-const session = async (name: string, firstOp: string, said: string, work: (r: { store: ReturnType<typeof claimStore>; hops: string[]; turn2: () => Promise<void> }) => void | Promise<void>) => {
-  seen.writerInputs = []; seen.writerModels = []; seen.replyInputs = [];
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_i, state) => {
-    const store = claimStore(state.storage.sql);
-    const hops: string[] = [];
-    const responder = createOwnerResponder('fixture', undefined, store as never, (entry) => { const e = entry as { hop: string; ok?: boolean; code?: string }; hops.push(`${e.hop}:${e.ok === true}:${e.code ?? ''}`); });
-    const turn = (traceId: string, text: string) => responder.respond({ traceId, conversationRef: 'owner', surface: 'telegram', text }, (_n, work) => work());
-    seen.addOp = firstOp;
-    await turn('tg-1', `I should note ${said}`);
-    await work({ store, hops, turn2: async () => { seen.addOp = NOOP; await turn('tg-2', 'what was my HbA1c?'); } });
+const { memoryHandlers } = await import('../src/tools/live/memory');
+beforeEach(() => { seen.inputs = []; seen.outputs = []; });
+const SAID = 'my HbA1c was 9.1 last week';
+const tool = (name: string, args: unknown) => [{ type: 'function_call', call_id: name, name, arguments: JSON.stringify(args) }];
+const session = (name: string, work: (store: ReturnType<typeof claimStore>, turn: (text: string) => Promise<string>) => Promise<void>) =>
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_i, state) => {
+    const store = claimStore(state.storage.sql, fn => state.storage.transactionSync(fn));
+    const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
+    const responder = createOwnerResponder('fixture', undefined, store, undefined, undefined, tools);
+    let id = 0;
+    await work(store, text => responder.respond({ traceId: `tg-${++id}`, conversationRef: 'owner', surface: 'telegram', text }, (_n, fn) => fn()));
   });
-};
 
-it('a lab-value-only claim is stored by the real writer path and the next turn reply prompt carries the claim (mocked reply, no answer or reliance shown)', async () => {
-  let stored: Array<{ kind: string; source: string; evidence: string }> = [];
-  let memorySection = '';
-  let ownerSection = '';
-  let noopWriterCalls = -1;
-  let memoryIndex = -1;
-  let storedAfter: string[] = [];
-  await session('owner-turn-health-lab', op(`owner, tg-1: "${SAID_LAB}"`, 'HbA1c was 9.1 last week'), SAID_LAB, async ({ store, turn2 }) => {
-    stored = store.claims().map((c) => ({ kind: c.kind, source: c.source, evidence: c.evidence }));
-    const before = seen.writerInputs.length;
-    await turn2();
-    noopWriterCalls = seen.writerInputs.length - before;
-    const sys = system();
-    memoryIndex = sys.indexOf('Owner memory');
-    memorySection = sys.slice(memoryIndex);
-    storedAfter = store.claims().map((c) => c.text);
-    ownerSection = sys;
+it('the main model remembers a grounded lab value, returns a receipt and explicitly recalls it on the next turn', async () => {
+  await session('owner-turn-health-lab', async (store, turn) => {
+    seen.outputs.push(tool('remember', { kind: 'health', text: 'HbA1c was 9.1 last week', evidence_quote: SAID }), []);
+    expect(await turn(SAID)).toContain('memory stored');
+    expect(seen.inputs).toHaveLength(2);
+    expect(store.claims()).toMatchObject([{ text: 'HbA1c was 9.1 last week', kind: 'health', source: 'stated', origin: 'owner', evidence: SAID, source_ref: 'owner, tg-1' }]);
+    seen.outputs.push(tool('read_memory', { query: 'HbA1c' }), []);
+    expect(await turn('what was my HbA1c?')).toBe('pong');
+    expect(seen.inputs).toHaveLength(4);
+    expect(seen.inputs.at(-1)).toContain('HbA1c was 9.1 last week');
+    expect(seen.inputs.at(-1)).toContain('context_only_not_action_approval');
+    expect(store.claims()).toHaveLength(1);
+    for (const input of seen.inputs) expect(input).not.toContain('claim_ops');
+    const system = JSON.parse(seen.inputs[2]!).instructions as string;
+    expect(system).toContain('HbA1c was 9.1 last week');
+    expect(system).not.toContain('<relevant_claims>');
   });
-  expect(stored).toEqual([{ kind: 'health', source: 'stated', evidence: `owner, tg-1: "${SAID_LAB}"` }]);
-  expect(memoryIndex).toBeGreaterThanOrEqual(0);
-  expect(storedAfter).toEqual(['HbA1c was 9.1 last week']); // stored text after the second (no-op) turn
-  expect(noopWriterCalls).toBe(1); // turn 2's writer ran and was a strict no-op
-  expect(memorySection).toContain('HbA1c was 9.1 last week'); // system prompt memory section, from the store
-  expect(ownerSection).not.toContain('Answer again');
 });
 
-// Characterisation: the writer proposes a lab value whose evidence the owner never said. Through
-// the real owner turn the claim is stored as inferred (not stated) and the next reply's system
-// prompt carries it with that label. Whether such a claim should be recallable is not decided here.
-it('an invented lab-only claim (evidence not in the owner message) is stored as inferred and reaches the next reply prompt', async () => {
-  let stored: Array<{ source: string; origin: string | null | undefined; text: string }> = [];
-  let memorySection = '';
-  let memoryIndex = -1;
-  await session('owner-turn-health-invented', op('owner, tg-1: "my HbA1c was 7.2 last month"', 'HbA1c was 7.2 last month'), 'I felt tired today', async ({ store, turn2 }) => {
-    stored = store.claims().map((c) => ({ source: c.source, origin: (c as { origin?: string | null }).origin, text: c.text }));
-    await turn2();
-    const sys = system();
-    memoryIndex = sys.indexOf('Owner memory');
-    memorySection = sys.slice(memoryIndex);
+it('an invented lab quote is rejected in the main loop and cannot reach subsequent memory recall', async () => {
+  await session('owner-turn-health-invented', async (store, turn) => {
+    seen.outputs.push(tool('remember', { kind: 'health', text: 'HbA1c was 7.2 last month', evidence_quote: 'my HbA1c was 7.2 last month' }), []);
+    expect(await turn('I felt tired today')).toContain('memory stored (failed)');
+    expect(seen.inputs).toHaveLength(2);
+    expect(seen.inputs[1]).toContain('not grounded');
+    expect(store.allClaims()).toEqual([]);
+    seen.outputs.push(tool('read_memory', { query: 'HbA1c' }), []);
+    await turn('what was my HbA1c?');
+    expect(seen.inputs).toHaveLength(4);
+    expect(JSON.parse(seen.inputs[2]!).instructions).not.toContain('7.2');
+    expect(seen.inputs.at(-1)).not.toContain('7.2');
+    expect(seen.inputs.at(-1)).toContain('context_only_not_action_approval');
+    expect(store.allClaims()).toEqual([]);
+    for (const input of seen.inputs) expect(input).not.toContain('claim_ops');
   });
-  expect(memoryIndex).toBeGreaterThanOrEqual(0);
-  expect(stored.map((c) => [c.source, c.text])).toEqual([['inferred', 'HbA1c was 7.2 last month']]);
-  expect(memorySection).toContain('HbA1c was 7.2 last month');
-  expect(memorySection).toContain('source="inferred" provenance="provisional"');
-  expect(stored[0]!.origin).toBe('agent');
-  // The writer's quote is rendered, but labelled from the code-written origin (agent).
-  expect(memorySection).toContain('evidence (writer-stated quote; at admission it matched neither the owner\'s nor the shared content checked then): owner, tg-1: "my HbA1c was 7.2 last month"');
 });

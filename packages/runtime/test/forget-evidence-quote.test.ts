@@ -19,7 +19,8 @@ describe('forgetting a claim also redacts the owner words it was grounded on', (
       episodes.add('tg-1', 'owner', 'My Zebra Code Word Is Plum, remember it', 1);
       episodes.add('tg-2', 'owner', 'unrelated lunch plan', 2);
       const id = store.claims()[0]!.id;
-      applyClaimOps(store, ops({ forget_claims: [id] }), AT, 'owner, tg-3', undefined, { owner: 'forget my code word' });
+      applyClaimOps(store, ops({ forget_claims: [id] }), AT, 'owner, tg-3', undefined, { owner: 'forget my code word' }, true);
+      expect(store.claims()).toEqual([]);
       const texts = sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY rowid').toArray().map((r) => r.text);
       expect(texts.join(' ')).not.toMatch(/zebra code word/i);
       expect(texts[0]).toContain(FORGOTTEN);
@@ -33,7 +34,8 @@ describe('forgetting a claim also redacts the owner words it was grounded on', (
       store.add({ kind: 'fact', text: 'Owner is polite', source: 'inferred', evidence: 'saw "thank you very much" in a note', origin: 'agent' }, AT);
       episodes.add('tg-1', 'owner', 'Thank you very much for the lift', 1);
       const id = store.claims()[0]!.id;
-      applyClaimOps(store, ops({ forget_claims: [id] }), AT, 'owner, tg-3', undefined, { owner: 'forget that I am polite' });
+      applyClaimOps(store, ops({ forget_claims: [id] }), AT, 'owner, tg-3', undefined, { owner: 'forget that I am polite' }, true);
+      expect(store.claims()).toEqual([]);
       expect(sql.exec<{ text: string }>('SELECT text FROM episodes').toArray()[0]!.text).toBe('Thank you very much for the lift');
     });
   });
@@ -44,7 +46,8 @@ describe('forgetting a claim also redacts the owner words it was grounded on', (
       store.add({ kind: 'fact', text: 'Owner likes tea', source: 'stated', evidence: 'owner agreed', origin: 'owner' }, AT);
       episodes.add('tg-1', 'owner', 'the owner agreed to lunch', 1);
       const id = store.claims()[0]!.id;
-      applyClaimOps(store, ops({ forget_claims: [id] }), AT, 'owner, tg-3', undefined, { owner: 'forget that I like tea' });
+      applyClaimOps(store, ops({ forget_claims: [id] }), AT, 'owner, tg-3', undefined, { owner: 'forget that I like tea' }, true);
+      expect(store.claims()).toEqual([]);
       expect(sql.exec<{ text: string }>('SELECT text FROM episodes').toArray()[0]!.text).toBe('the owner agreed to lunch');
     });
   });
