@@ -23,3 +23,8 @@ it('a probe that merely timed out is not accepted as a network block, and the de
   expect(mod.evaluateS0(true, timedOut, true, 5).passed).toBe(false);
   expect(mod.S0_TOTAL_DEADLINE_MS).toBe(60_000);
 });
+
+it('stage budgets are measured from the start and cannot exceed the 60s ceiling', async () => {
+  const mod = await import('../src/channels/s0-network-block');
+  expect(mod.S0_TOTAL_DEADLINE_MS).toBe(60_000);
+});

@@ -18,19 +18,20 @@ export const evaluateS0 = (allowedLoaded: boolean, probes: readonly S0Probe[], t
 
 export const S0_TOTAL_DEADLINE_MS = 60_000;
 const S0_PROBE_TIMEOUT_MS = 5_000;
-const S0_WORK_BUDGET_MS = 40_000;
+const S0_WORK_CUTOFF_MS = 46_000; // absolute from start; plus 12s cleanup stays under 60s
 const S0_CLEANUP_BUDGET_MS = 12_000;
 const within = <T>(work: Promise<T>, ms: number): Promise<T> => {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Error('s0 deadline')), ms); })]).finally(() => clearTimeout(timer));
 };
 
-// Hard ceiling: work is cut at 40s, cleanup at 12s, so the whole run stays under 60s. A client
+// Hard ceiling measured from start: load 10s, acquire 25s, all page work 46s, then cleanup 12s, so the run stays under 60s. A client
 // timeout is never treated as closure: `terminated` is true only when the provider session list no
 // longer contains the session after Browser.close.
 export async function runS0(binding: BrowserWorker, loadSdk: CloudflareBrowserSdkLoader): Promise<S0Result> {
-  const started = Date.now(), sdk = await within(loadSdk(), 10_000);
-  const session = await within(sdk.acquire(binding, cloudflareBrowserGuardOptions([S0_ALLOWED_HOST], 10000)), 15_000);
+  const started = Date.now(), left = (cutoff: number) => Math.max(1, started + cutoff - Date.now());
+  const sdk = await within(loadSdk(), left(10_000));
+  const session = await within(sdk.acquire(binding, cloudflareBrowserGuardOptions([S0_ALLOWED_HOST], 10000)), left(25_000));
   const id = session.sessionId;
   let browser: Awaited<ReturnType<typeof sdk.connect>> | undefined, allowedLoaded = false, terminated = false;
   const probes: S0Probe[] = [];
@@ -48,7 +49,7 @@ export async function runS0(binding: BrowserWorker, loadSdk: CloudflareBrowserSd
         // A probe that only timed out is not proof of a block.
         probes.push({ url, reached: detail.startsWith('reached:'), detail });
       }
-    })(), S0_WORK_BUDGET_MS);
+    })(), left(S0_WORK_CUTOFF_MS));
   } catch { /* an incomplete run fails the pass check below */ }
   finally {
     try { await within((async () => { browser ??= await sdk.connect(binding, { sessionId: id, persistent: true } as never); const cdp = await browser.newBrowserCDPSession(); await cdp.send('Browser.close'); })(), S0_CLEANUP_BUDGET_MS / 2); } catch { /* termination can disconnect first */ }
