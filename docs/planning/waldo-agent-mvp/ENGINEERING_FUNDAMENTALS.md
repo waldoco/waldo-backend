@@ -574,3 +574,9 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 | Multi-part ACK persistence errors were caught as transport errors and could resolve without surfacing the storage fault | heartbeat-outbox.test.ts crash persistence; cap-size-limits.test.ts three-part ACK failure and middle-part response loss | Persist attempting before every part, propagate storage faults, quarantine uncertainty without resend |
 
 - Health span withholding must leave JSON-encoded object/array correlation intact for the existing health denial scan; cover raw and wrapped JSON strings as well as unencoded structured measurements.
+
+### Common host bootstrap independence
+
+- [ ] Exercise signed common-owner source/execution RPCs with the serving binding profile, without local-only or unused legacy provider bindings. Keep local ingress and legacy provider guards closed, and preserve common lease wakes when persisted legacy work fails.
+
+| 2026-10-08 | Eager legacy RunLoop provider resolution prevented signed common-owner RPCs from constructing when staging had no WALDO_ENV | Runtime composition / serving binding profile | common-run-loop-bootstrap.test.ts reproduces exact constructor error, then source replay and execution receipt settlement across eviction; invalid authority/local seams and legacy dispatch controls | Shared coordinator/scheduler construction must not initialize an unrelated provider; legacy resolver guards remain unchanged |

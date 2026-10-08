@@ -49,6 +49,10 @@ jobs:
       - name: Verify (core)
         run: node scripts/guards/guard-package-manager.mjs && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:supabase:session-revocation && pnpm verify:guards
 
+      - name: Native-profile common RunLoop bootstrap (fictional authority, no legacy provider)
+        working-directory: packages/runtime
+        run: pnpm exec vitest run --config vitest.common-bootstrap.config.ts
+
       # Required scenario gate: the main vitest config excludes the scenario harness, so the
       # shards above never run it. This step is the only CI coverage for the scenario suite.
       - name: Runtime scenarios

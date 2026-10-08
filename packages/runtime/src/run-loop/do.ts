@@ -129,7 +129,7 @@ import {
 } from '../run-journal/outbox-runtime';
 import type { GovernorDecision, SetLoopKillFlagInput } from '../loop-governor/governor';
 import { Scheduler, type ScheduleExecutors } from '../scheduler/multiplexer';
-import type { Deps } from '../seams/deps';
+import { productionDeps, type Deps } from '../seams/deps';
 import { prepareWithScribe, type StrictSchema } from '../scribe/prepare';
 import {
   dispatchTool,
@@ -342,12 +342,12 @@ const deliveryTextSchema: StrictSchema<string> = {
 };
 
 export class RunLoopDO extends DurableObject<Cloudflare.Env> {
-  private adapters: RunLoopAdapters;
+  #resolvedAdapters: RunLoopAdapters | undefined;
   private deps: Deps;
   private readonly envBindings: Cloudflare.Env;
   private readonly scheduler: Scheduler;
-  private journalOutbox: RunJournalOutbox;
-  private llm: RuntimeLLMProvider;
+  #resolvedJournalOutbox: RunJournalOutbox | undefined;
+  #resolvedLlm: RuntimeLLMProvider | undefined;
   private readonly waldoCoordinator: WaldoCoordinator;
   private readonly workUnitExecutionBridge: WorkUnitExecutionBridge | null;
   private testCircuitBreaker: CircuitBreaker | undefined;
@@ -371,11 +371,8 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     ensureRunLoopSchema(ctx.storage);
     provisionDoSchema(ctx.storage);
     this.envBindings = env;
-    this.adapters = resolveRunLoopAdapters(env);
-    this.deps = this.adapters.deps;
+    this.deps = productionDeps();
     this.scheduler = new Scheduler(ctx.storage.sql, ctx.storage, this.deps);
-    this.journalOutbox = this.#createJournalOutbox(this.adapters.sink);
-    this.llm = new RuntimeLLMProvider({ gateway: this.adapters.gateway });
     if (isLocalRunLoopEnvironment(env.WALDO_ENV)) {
       const coordinatorNow = () => new Date(this.deps.now()).toISOString();
       this.waldoCoordinator = new WaldoCoordinator(ctx.storage, {
@@ -401,6 +398,32 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       this.waldoCoordinator = new WaldoCoordinator(ctx.storage);
       this.workUnitExecutionBridge = null;
     }
+  }
+
+  // Common host RPCs use their signed registered execution binding. Resolve the
+  // separate legacy provider only when a legacy path needs it; its guards still apply.
+  get #adapters(): RunLoopAdapters {
+    return this.#resolvedAdapters ??= resolveRunLoopAdapters(this.envBindings, { deps: this.deps });
+  }
+
+  set #adapters(value: RunLoopAdapters) {
+    this.#resolvedAdapters = value;
+  }
+
+  get #journalOutbox(): RunJournalOutbox {
+    return this.#resolvedJournalOutbox ??= this.#createJournalOutbox(this.#adapters.sink);
+  }
+
+  set #journalOutbox(value: RunJournalOutbox) {
+    this.#resolvedJournalOutbox = value;
+  }
+
+  get #llm(): RuntimeLLMProvider {
+    return this.#resolvedLlm ??= new RuntimeLLMProvider({ gateway: this.#adapters.gateway });
+  }
+
+  set #llm(value: RuntimeLLMProvider) {
+    this.#resolvedLlm = value;
   }
 
   async __waldoCaptureResponsibilityForTest(
@@ -803,7 +826,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       }),
       sourceTaint: 'external',
       toolArgSourceTaint: null,
-      ...this.adapters.safety,
+      ...this.#adapters.safety,
     };
     let prepared: Readonly<{
       effect: import('../llm/provider').TrustedProviderEffect;
@@ -817,7 +840,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     let result: Awaited<ReturnType<RuntimeLLMProvider['completeTrusted']>>;
     try {
       result = prepared === null
-        ? await this.llm.completeTrusted({
+        ? await this.#llm.completeTrusted({
           trigger: 'work_unit_plan',
           renderRequest: () => ({
             system: [
@@ -856,7 +879,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
             return next.effect;
           },
           }, ctx)
-        : await this.llm.reconcileTrusted(prepared.effect, ctx);
+        : await this.#llm.reconcileTrusted(prepared.effect, ctx);
     } catch (error) {
       if (prepared !== null) {
         this.waldoCoordinator.markPlanningProviderAmbiguous(
@@ -918,33 +941,33 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   __runLoopSetTestOverrides(overrides: RunLoopTestOverrides): void {
     this.#assertLocalTestSeam();
     this.testCircuitBreaker = overrides.circuitBreaker ?? this.testCircuitBreaker;
-    this.adapters = {
-      ...this.adapters,
-      gateway: overrides.gateway ?? this.adapters.gateway,
-      sink: overrides.sink ?? this.adapters.sink,
-      spend: overrides.spend === null ? undefined : (overrides.spend ?? this.adapters.spend),
-      spendReader: overrides.spendReader ?? this.adapters.spendReader,
-      providerMode: overrides.providerMode ?? this.adapters.providerMode,
+    this.#adapters = {
+      ...this.#adapters,
+      gateway: overrides.gateway ?? this.#adapters.gateway,
+      sink: overrides.sink ?? this.#adapters.sink,
+      spend: overrides.spend === null ? undefined : (overrides.spend ?? this.#adapters.spend),
+      spendReader: overrides.spendReader ?? this.#adapters.spendReader,
+      providerMode: overrides.providerMode ?? this.#adapters.providerMode,
       deliveryTextFallback:
-        overrides.deliveryTextFallback ?? this.adapters.deliveryTextFallback,
-      contextComposer: overrides.contextComposer ?? this.adapters.contextComposer,
-      replayArtifacts: overrides.replayArtifacts ?? this.adapters.replayArtifacts,
-      trustedToolHandlers: overrides.trustedToolHandlers ?? this.adapters.trustedToolHandlers,
+        overrides.deliveryTextFallback ?? this.#adapters.deliveryTextFallback,
+      contextComposer: overrides.contextComposer ?? this.#adapters.contextComposer,
+      replayArtifacts: overrides.replayArtifacts ?? this.#adapters.replayArtifacts,
+      trustedToolHandlers: overrides.trustedToolHandlers ?? this.#adapters.trustedToolHandlers,
       safety: {
-        ...this.adapters.safety,
-        rateLimitCheck: overrides.rateLimitCheck ?? this.adapters.safety.rateLimitCheck,
+        ...this.#adapters.safety,
+        rateLimitCheck: overrides.rateLimitCheck ?? this.#adapters.safety.rateLimitCheck,
       },
     };
-    this.journalOutbox = this.#createJournalOutbox(this.adapters.sink);
-    this.llm = new RuntimeLLMProvider({
-      gateway: this.adapters.gateway,
+    this.#journalOutbox = this.#createJournalOutbox(this.#adapters.sink);
+    this.#llm = new RuntimeLLMProvider({
+      gateway: this.#adapters.gateway,
       circuitBreaker: this.testCircuitBreaker,
     });
   }
 
   __runLoopSetKillFlag(input: SetLoopKillFlagInput): void {
     this.#assertLocalTestSeam();
-    this.journalOutbox.setLoopKillFlag(input);
+    this.#journalOutbox.setLoopKillFlag(input);
   }
 
   async __runLoopIngestExternalToolResultForTest(runId: string): Promise<DispatchToolResult> {
@@ -1154,7 +1177,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       return existingRunId;
     }
 
-    const runId = this.journalOutbox.startRun({
+    const runId = this.#journalOutbox.startRun({
       userId: ingress.value.user_id,
       trigger: TRIGGER,
       occurrenceAt: parsed.occurrenceAt,
@@ -1316,7 +1339,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
         invocationFormat: 'invocation_contract_v2',
         trustedSnapshotBinding: snapshotBinding,
       });
-      this.journalOutbox.openTrustedInvocationInCurrentTransaction({
+      this.#journalOutbox.openTrustedInvocationInCurrentTransaction({
         runId: newRunId,
         invocation,
         ownerScope,
@@ -1439,8 +1462,11 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
 
   override async alarm(): Promise<void> {
     await this.#reconcileCommonExecutionTimeouts();
-    await this.scheduler.dispatchDue(this.#scheduleExecutors());
-    await this.#rearmCommonExecutionTimeouts();
+    try {
+      await this.scheduler.dispatchDue(this.#scheduleExecutors());
+    } finally {
+      await this.#rearmCommonExecutionTimeouts();
+    }
   }
 
   async #rearmCommonExecutionTimeouts() {
@@ -1758,14 +1784,14 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
           break;
         case 'GATED':
           try {
-            await this.journalOutbox.tickRun(run.run_id);
+            await this.#journalOutbox.tickRun(run.run_id);
           } catch (error) {
             const scribeReason = scribeFailureReasonFromError(error);
             if (scribeReason === null) throw error;
             run = this.#failFromScribe(run.run_id, 'outbox', scribeReason);
             break;
           }
-          if (this.journalOutbox.readRunState(run.run_id) === 'FAILED') {
+          if (this.#journalOutbox.readRunState(run.run_id) === 'FAILED') {
             run = this.#failFromScribe(run.run_id, 'outbox', 'invalid_payload');
             break;
           }
@@ -1821,7 +1847,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     // Validate the reduced delivery journal even when the runtime FSM is already terminal. A
     // terminal V2 row must never hide a corrupted completion mode or outbox invariant merely
     // because no further effect is scheduled.
-    this.journalOutbox.validateTrustedRun(runId);
+    this.#journalOutbox.validateTrustedRun(runId);
     if (run.state === 'DONE' || run.state === 'FAILED') return;
     let ctx: HookRuntimeContext | null = null;
 
@@ -1832,7 +1858,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       // invocation-start hooks, or circuit checks. Receipt settlement still applies its governed
       // post-effect safety hooks, but cannot be blocked by a new rate-limit/session rebuild.
       if (state.pending_effect !== null) {
-        if (this.journalOutbox.readRunState(run.run_id) !== 'GOVERNOR_ADMITTED') {
+        if (this.#journalOutbox.readRunState(run.run_id) !== 'GOVERNOR_ADMITTED') {
           run = this.#failTrustedRun(run.run_id, 'replay:artifact_invalid');
           break;
         }
@@ -1871,7 +1897,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       // This lane has no production-grade replay/artifact owner or configured real sink yet.
       // Once a run has entered the V2 lane, gateway mode is therefore closed before *any* resumed
       // provider, tool, or delivery effect—not just before a fresh plan request.
-      if (this.adapters.providerMode === 'gateway' && run.state !== 'DELIVERED') {
+      if (this.#adapters.providerMode === 'gateway' && run.state !== 'DELIVERED') {
         run = this.#failTrustedRun(run.run_id, 'llm:spend_state_unavailable');
         break;
       }
@@ -1901,7 +1927,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
         case 'PENDING': {
           let admission: GovernorDecision;
           try {
-            admission = this.journalOutbox.admitTrustedInvocation(run.run_id, invocation);
+            admission = this.#journalOutbox.admitTrustedInvocation(run.run_id, invocation);
           } catch (error) {
             const scribeReason = scribeFailureReasonFromError(error);
             if (scribeReason === null) throw error;
@@ -1960,14 +1986,14 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
           break;
         case 'GATED':
           try {
-            await this.journalOutbox.tickRun(run.run_id);
+            await this.#journalOutbox.tickRun(run.run_id);
           } catch (error) {
             const scribeReason = scribeFailureReasonFromError(error);
             if (scribeReason === null) throw error;
             run = this.#failTrustedRun(run.run_id, `scribe:${scribeReason}`);
             break;
           }
-          if (this.journalOutbox.readRunState(run.run_id) === 'FAILED') {
+          if (this.#journalOutbox.readRunState(run.run_id) === 'FAILED') {
             run = this.#failTrustedRun(run.run_id, 'scribe:invalid_payload');
             break;
           }
@@ -2022,8 +2048,8 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
         // This is a deterministic immutable receipt context, never a new invocation session.
         started_at: invocation.accepted_at,
       }),
-      hasApproval: this.adapters.safety.hasApproval,
-      sanitise: this.adapters.safety.sanitise,
+      hasApproval: this.#adapters.safety.hasApproval,
+      sanitise: this.#adapters.safety.sanitise,
       sourceTaint,
       toolArgSourceTaint: sourceTaint,
     };
@@ -2044,7 +2070,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   }
 
   async #composeTrustedV2(state: TrustedRunV2State): Promise<TrustedCompositionResult> {
-    const composer = this.adapters.contextComposer;
+    const composer = this.#adapters.contextComposer;
     if (composer === undefined) {
       return { ok: false, failure: { code: 'materials_unavailable' } };
     }
@@ -2121,7 +2147,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     // There is no real durable source/artifact owner or configured real sink. Gateway mode is
     // therefore deliberately closed before an external provider request, even if a future test
     // override happens to inject a Composer.
-    if (this.adapters.providerMode === 'gateway') {
+    if (this.#adapters.providerMode === 'gateway') {
       return this.#failTrustedRun(run.run_id, 'llm:spend_state_unavailable');
     }
     const preflight = this.#checkGovernorBeforeLlm(run.run_id);
@@ -2145,7 +2171,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     > | null = null;
     let result: Awaited<ReturnType<RuntimeLLMProvider['completeTrusted']>>;
     try {
-      result = await this.llm.completeTrusted(
+      result = await this.#llm.completeTrusted(
         {
           trigger: run.trigger,
           spend: spend.spend,
@@ -2269,7 +2295,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     }
     let result: Awaited<ReturnType<RuntimeLLMProvider['reconcileTrusted']>>;
     try {
-      result = await this.llm.reconcileTrusted({ ...effect, operation: 'reconcile' }, ctx);
+      result = await this.#llm.reconcileTrusted({ ...effect, operation: 'reconcile' }, ctx);
     } catch (error) {
       if (error instanceof TrustedV2IntegrityError) {
         return this.#failTrustedRun(run.run_id, 'replay:artifact_invalid');
@@ -2575,7 +2601,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     }>,
   ): RuntimeRunRecord {
     const settled = this.ctx.storage.transactionSync(() => {
-      const decision = this.journalOutbox.recordTrustedProviderReceiptUsageInCurrentTransaction({
+      const decision = this.#journalOutbox.recordTrustedProviderReceiptUsageInCurrentTransaction({
         runId,
         tokensUsed: governorTokens,
         iterations: 1,
@@ -2613,7 +2639,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     }>,
   ): GovernorDecision {
     return this.ctx.storage.transactionSync(() => {
-      const decision = this.journalOutbox.recordTrustedProviderReceiptUsageInCurrentTransaction({
+      const decision = this.#journalOutbox.recordTrustedProviderReceiptUsageInCurrentTransaction({
         runId,
         tokensUsed: governorTokens,
         iterations: 1,
@@ -2692,7 +2718,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     const failureReason = runtimeRunFailureReasonSchema.parse(input.failureReason);
     let terminal: RuntimeRunRecord | null = null;
     this.ctx.storage.transactionSync(() => {
-      const decision = this.journalOutbox.recordTrustedProviderReceiptUsageInCurrentTransaction({
+      const decision = this.#journalOutbox.recordTrustedProviderReceiptUsageInCurrentTransaction({
         runId: input.run.run_id,
         tokensUsed: accounting.governor_tokens,
         iterations: 1,
@@ -2783,7 +2809,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
           request_digest: effect.request_digest,
           operation: 'reconcile',
         },
-        handlers: this.adapters.trustedToolHandlers ?? [getCrsHandler],
+        handlers: this.#adapters.trustedToolHandlers ?? [getCrsHandler],
       });
     } catch (error) {
       if (error instanceof TrustedV2IntegrityError) {
@@ -2822,7 +2848,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     let decision: GovernorDecision;
     try {
       decision = this.ctx.storage.transactionSync(() => {
-        const observed = this.journalOutbox.recordTrustedToolReceiptObservationInCurrentTransaction({
+        const observed = this.#journalOutbox.recordTrustedToolReceiptObservationInCurrentTransaction({
           runId: run.run_id,
           toolName: effect.tool,
           canonicalParamsHash: effect.args_hash,
@@ -2974,7 +3000,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       try {
         ctx.toolArgSourceTaint = ctx.sourceTaint;
         result = await dispatchTool(call, toolContext(ctx), {
-          handlers: this.adapters.trustedToolHandlers ?? [getCrsHandler],
+          handlers: this.#adapters.trustedToolHandlers ?? [getCrsHandler],
           trustedEffect: {
             prepare: async ({ tool, args }) => {
               const actualArgsHash = await this.deps.sha256Hex(stableJsonStringify(args));
@@ -3060,14 +3086,14 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       try {
         decision = this.ctx.storage.transactionSync(() => {
           const observed = effectSettled
-            ? this.journalOutbox.recordTrustedToolReceiptObservationInCurrentTransaction({
+            ? this.#journalOutbox.recordTrustedToolReceiptObservationInCurrentTransaction({
                 runId: run.run_id,
                 toolName: call.name,
                 canonicalParamsHash: paramsHash,
                 resultHash,
                 success: result.ok,
               })
-            : this.journalOutbox.recordLoopObservationInCurrentTransaction({
+            : this.#journalOutbox.recordLoopObservationInCurrentTransaction({
             runId: run.run_id,
             toolName: call.name,
             canonicalParamsHash: paramsHash,
@@ -3125,8 +3151,8 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   }
 
   #reconcileTrustedGovernorTerminal(runId: string): RuntimeRunRecord | null {
-    if (this.journalOutbox.readRunState(runId) !== 'FAILED') return null;
-    const decision = this.journalOutbox.readGovernorDecision(runId);
+    if (this.#journalOutbox.readRunState(runId) !== 'FAILED') return null;
+    const decision = this.#journalOutbox.readGovernorDecision(runId);
     if (decision?.verdict === 'deny') {
       return this.#failTrustedGovernorDenied(runId, decision);
     }
@@ -3276,7 +3302,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     | { ok: true; calls: RuntimeToolCall[] }
     | { ok: false; reason: 'artifact_unavailable' | 'artifact_invalid' | 'artifact_mismatch' }
   > {
-    if (state.plan === null || this.adapters.replayArtifacts === undefined) {
+    if (state.plan === null || this.#adapters.replayArtifacts === undefined) {
       return { ok: false, reason: 'artifact_unavailable' };
     }
     if (!(await this.#trustedEffectIdentityMatches(runId, state, state.plan.effect))) {
@@ -3291,7 +3317,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     }
     let value: unknown;
     try {
-      value = await this.adapters.replayArtifacts.resolvePlan({
+      value = await this.#adapters.replayArtifacts.resolvePlan({
         iteration: state.plan.iteration,
         plan_ref: state.plan.plan_ref,
         plan_digest: state.plan.plan_digest,
@@ -3330,7 +3356,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
         ? this.#completeTrustedOutput(run, state, replayed.text)
         : this.#failTrustedRun(run.run_id, `replay:${replayed.reason}`);
     }
-    if (this.adapters.providerMode === 'gateway') {
+    if (this.#adapters.providerMode === 'gateway') {
       return this.#failTrustedRun(run.run_id, 'llm_observe:spend_state_unavailable');
     }
     const composition = await this.#composeTrustedV2(state);
@@ -3368,7 +3394,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     > | null = null;
     let result: Awaited<ReturnType<RuntimeLLMProvider['completeTrusted']>>;
     try {
-      result = await this.llm.completeTrusted(
+      result = await this.#llm.completeTrusted(
         {
           trigger: run.trigger,
           spend: spend.spend,
@@ -3383,7 +3409,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
             max_tokens: 256,
             temperature: 0,
           }),
-          renderTemplate: () => this.adapters.deliveryTextFallback,
+          renderTemplate: () => this.#adapters.deliveryTextFallback,
           prepareEffect: async (request) => {
             const prepared = await this.#prepareTrustedProviderEffect(
               run.run_id,
@@ -3572,7 +3598,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     | { ok: true; values: unknown[] }
     | { ok: false; reason: 'artifact_unavailable' | 'artifact_invalid' | 'artifact_mismatch' }
   > {
-    if (this.adapters.replayArtifacts === undefined) {
+    if (this.#adapters.replayArtifacts === undefined) {
       return { ok: false, reason: 'artifact_unavailable' };
     }
     if (!this.#trustedCompletedCheckpointsMatchObservations(runId, state)) {
@@ -3690,7 +3716,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     | { ok: true; value: unknown }
     | { ok: false; reason: 'artifact_unavailable' | 'artifact_invalid' | 'artifact_mismatch' }
   > {
-    if (this.adapters.replayArtifacts === undefined) {
+    if (this.#adapters.replayArtifacts === undefined) {
       return { ok: false, reason: 'artifact_unavailable' };
     }
     const effect = state.tool_effect_witnesses.find(
@@ -3704,7 +3730,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     }
     let value: unknown;
     try {
-      value = await this.adapters.replayArtifacts.resolveToolResult({
+      value = await this.#adapters.replayArtifacts.resolveToolResult({
         result_ref: checkpoint.result_ref,
         result_hash: checkpoint.result_hash,
         snapshot_ref: state.snapshot.snapshot_ref,
@@ -3734,7 +3760,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     | { ok: true; text: string }
     | { ok: false; reason: 'artifact_unavailable' | 'artifact_invalid' | 'artifact_mismatch' }
   > {
-    if (state.synthesis === null || this.adapters.replayArtifacts === undefined) {
+    if (state.synthesis === null || this.#adapters.replayArtifacts === undefined) {
       return { ok: false, reason: 'artifact_unavailable' };
     }
     if (!(await this.#trustedEffectIdentityMatches(runId, state, state.synthesis.effect))) {
@@ -3752,7 +3778,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     }
     let value: unknown;
     try {
-      value = await this.adapters.replayArtifacts.resolveSynthesis({
+      value = await this.#adapters.replayArtifacts.resolveSynthesis({
         result_ref: state.synthesis.result_ref,
         result_digest: state.synthesis.result_digest,
         snapshot_ref: state.snapshot.snapshot_ref,
@@ -3790,7 +3816,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
         CANARY_TOKENS,
       );
       if (!candidate.ok) return this.#failTrustedRun(run.run_id, `scribe:${candidate.reason}`);
-      const egress = this.journalOutbox.checkLoopEgress({ runId: run.run_id, text: candidate.value });
+      const egress = this.#journalOutbox.checkLoopEgress({ runId: run.run_id, text: candidate.value });
       // A reply has no proactive DeliveryGate budget, but its text still crosses the safety and
       // Governor egress boundary. Persist only the decision witness, never the reply text.
       this.#recordTrace(run.run_id, 'egress_checked', {
@@ -3822,11 +3848,11 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     state: TrustedRunV2State,
     text: string,
   ): Promise<RuntimeRunRecord> {
-    const durableState = this.journalOutbox.readRunState(run.run_id);
+    const durableState = this.#journalOutbox.readRunState(run.run_id);
     if (durableState === 'GATED') {
       // DeliveryGate/outbox committed before the runtime FSM in a prior attempt. Its committed
       // evidence is now the authority: do not re-run egress or spend a second gate budget.
-      const gated = await this.journalOutbox.gateRun(run.run_id);
+      const gated = await this.#journalOutbox.gateRun(run.run_id);
       if (gated.state !== 'GATED') {
         return this.#failTrustedRun(run.run_id, 'replay:artifact_invalid');
       }
@@ -3850,7 +3876,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       );
     }
     if (durableState === 'FAILED') {
-      const failed = this.journalOutbox.validateTrustedRun(run.run_id);
+      const failed = this.#journalOutbox.validateTrustedRun(run.run_id);
       if (
         (failed.verdict === 'hold' || failed.verdict === 'drop') &&
         failed.gate_reason !== null
@@ -3868,7 +3894,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
               },
         });
       }
-      const governor = this.journalOutbox.readGovernorDecision(run.run_id);
+      const governor = this.#journalOutbox.readGovernorDecision(run.run_id);
       if (governor?.verdict === 'deny') {
         return this.#failTrustedGovernorDenied(run.run_id, governor);
       }
@@ -3894,7 +3920,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       CANARY_TOKENS,
     );
     if (!sendCandidate.ok) return this.#failTrustedRun(run.run_id, `scribe:${sendCandidate.reason}`);
-    const egress = this.journalOutbox.checkLoopEgress({
+    const egress = this.#journalOutbox.checkLoopEgress({
       runId: run.run_id,
       text: sendCandidate.value,
     });
@@ -3902,7 +3928,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       this.#crashAfterTrustedGovernorDeny();
       return this.#failTrustedGovernorDenied(run.run_id, egress);
     }
-    const gated = await this.journalOutbox.gateRun(run.run_id);
+    const gated = await this.#journalOutbox.gateRun(run.run_id);
     if (gated.verdict === null) throw new Error(`trusted gate did not stamp a verdict for ${run.run_id}`);
     if (gated.verdict === 'hold' || gated.verdict === 'drop') {
       this.#crashAfterTrustedGateTerminal();
@@ -3966,9 +3992,9 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       trigger: run.trigger,
       canaryTokens: CANARY_TOKENS,
       now: this.deps.now,
-      rateLimitCheck: this.adapters.safety.rateLimitCheck,
-      hasApproval: this.adapters.safety.hasApproval,
-      sanitise: this.adapters.safety.sanitise,
+      rateLimitCheck: this.#adapters.safety.rateLimitCheck,
+      hasApproval: this.#adapters.safety.hasApproval,
+      sanitise: this.#adapters.safety.sanitise,
       sourceTaint,
       toolArgSourceTaint: sourceTaint,
     };
@@ -4016,7 +4042,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       return this.#failRun(run.run_id, 'llm:spend_state_unavailable');
     }
 
-    const result = await this.llm.complete(
+    const result = await this.#llm.complete(
       {
         trigger: run.trigger,
         spend: spend.spend,
@@ -4075,7 +4101,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       },
       source_taint: ctx.sourceTaint,
     };
-    const usageDecision = this.journalOutbox.recordLoopUsage({
+    const usageDecision = this.#journalOutbox.recordLoopUsage({
       runId: run.run_id,
       tokensUsed: result.usage.input_tokens + result.usage.output_tokens,
       iterations: 1,
@@ -4116,7 +4142,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       const resultHash = await this.deps.sha256Hex(
         stableJsonStringify(governorObservationResult(result)),
       );
-      const decision = this.journalOutbox.recordLoopObservation({
+      const decision = this.#journalOutbox.recordLoopObservation({
         runId: run.run_id,
         toolName: call.name,
         canonicalParamsHash: paramsHash,
@@ -4163,7 +4189,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     }
 
     const invocationContext = ctx ?? (await this.#rebuildInvocationContext(run));
-    const result = await this.llm.complete(
+    const result = await this.#llm.complete(
       {
         trigger: run.trigger,
         spend: spend.spend,
@@ -4190,7 +4216,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
             temperature: 0,
           };
         },
-        renderTemplate: () => this.adapters.deliveryTextFallback,
+        renderTemplate: () => this.#adapters.deliveryTextFallback,
       },
       invocationContext,
     );
@@ -4209,7 +4235,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       });
     }
 
-    const usageDecision = this.journalOutbox.recordLoopUsage({
+    const usageDecision = this.#journalOutbox.recordLoopUsage({
       runId: run.run_id,
       tokensUsed: result.usage.input_tokens + result.usage.output_tokens,
       iterations: 1,
@@ -4272,7 +4298,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
 
   async #gate(run: RuntimeRunRecord): Promise<RuntimeRunRecord> {
     const scratch = parseScratch(run.scratch_json);
-    const candidateText = scratch.delivery_text ?? this.adapters.deliveryTextFallback;
+    const candidateText = scratch.delivery_text ?? this.#adapters.deliveryTextFallback;
     const outboxCandidate = prepareWithScribe(
       candidateText,
       deliveryTextSchema,
@@ -4303,7 +4329,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       const updated = this.#updateRunScratch(run.run_id, { ...scratch, delivery_text: deliveryText });
       if (updated.state === 'FAILED') return updated;
     }
-    const egressDecision = this.journalOutbox.checkLoopEgress({
+    const egressDecision = this.#journalOutbox.checkLoopEgress({
       runId: run.run_id,
       text: deliveryText,
     });
@@ -4311,7 +4337,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       this.#recordGovernorDenied(run.run_id, egressDecision);
       return this.#failRun(run.run_id, `governor:${egressDecision.reason}`);
     }
-    const gated = await this.journalOutbox.gateRun(run.run_id);
+    const gated = await this.#journalOutbox.gateRun(run.run_id);
     if (gated.verdict === null) {
       throw new Error(`gate did not stamp a verdict for ${run.run_id}`);
     }
@@ -4494,7 +4520,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     );
     this.#writeTrustedV2StateInCurrentTransaction(runId, checked, at);
     if (options.completeNonProactive) {
-      this.journalOutbox.completeTrustedInvocationWithoutProactiveDeliveryInCurrentTransaction(
+      this.#journalOutbox.completeTrustedInvocationWithoutProactiveDeliveryInCurrentTransaction(
         runId,
         checked.record.invocation,
       );
@@ -4569,7 +4595,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       'FAILED',
       at,
     );
-    this.journalOutbox.failTrustedRunInCurrentTransaction(runId);
+    this.#journalOutbox.failTrustedRunInCurrentTransaction(runId);
     if (options.precedingTrace !== undefined) {
       this.#recordTraceInCurrentTransaction(
         runId,
@@ -4825,16 +4851,16 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   }
 
   #admitGovernor(runId: string): GovernorDecision {
-    const legacy = this.journalOutbox.resumeRun(runId);
+    const legacy = this.#journalOutbox.resumeRun(runId);
     if (legacy === null) throw new Error(`admitGovernor: no journal row for ${runId}`);
     if (legacy.state === 'GOVERNOR_ADMITTED') {
-      const decision = this.journalOutbox.readGovernorDecision(runId);
+      const decision = this.#journalOutbox.readGovernorDecision(runId);
       if (decision === null) {
         throw new Error(`admitGovernor: admitted run has no governor decision for ${runId}`);
       }
       return decision;
     }
-    const decision = this.journalOutbox.admitRun(runId);
+    const decision = this.#journalOutbox.admitRun(runId);
     return decision;
   }
 
@@ -4957,7 +4983,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       throw new TrustedV2IntegrityError(`trusted V2 state/runtime mismatch for ${runId}`);
     }
     try {
-      this.journalOutbox.validateTrustedRun(runId, expectedOwnerScope);
+      this.#journalOutbox.validateTrustedRun(runId, expectedOwnerScope);
     } catch (error) {
       if (error instanceof TrustedRunOwnerScopeMismatchError) {
         throw new TrustedV2IntegrityError(`trusted V2 owner scope mismatch for ${runId}`);
@@ -5268,7 +5294,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   }
 
   #checkGovernorBeforeLlm(runId: string): GovernorDecision {
-    return this.journalOutbox.checkLoopUsageBudget({
+    return this.#journalOutbox.checkLoopUsageBudget({
       runId,
       tokensUsed: 0,
       iterations: 1,
@@ -5277,7 +5303,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   }
 
   #checkGovernorBeforeToolEffect(runId: string): GovernorDecision {
-    return this.journalOutbox.checkLoopUsageBudget({
+    return this.#journalOutbox.checkLoopUsageBudget({
       runId,
       tokensUsed: 0,
       iterations: 0,
@@ -5286,14 +5312,14 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   }
 
   async #readSpendBeforeProvider(): Promise<ProviderSpendPreflight> {
-    if (this.adapters.providerMode !== 'gateway') {
-      const configuredSpend = this.adapters.spend;
+    if (this.#adapters.providerMode !== 'gateway') {
+      const configuredSpend = this.#adapters.spend;
       if (configuredSpend === undefined) return { ok: true, spend: undefined };
       const spend = normaliseRouteSpendState(configuredSpend);
       return spend === null ? { ok: false } : { ok: true, spend };
     }
     try {
-      const result = await this.adapters.spendReader?.read();
+      const result = await this.#adapters.spendReader?.read();
       if (ownDataProperty(result, 'ok') !== true) return { ok: false };
       const spend = normaliseRouteSpendState(ownDataProperty(result, 'data'));
       return spend === null ? { ok: false } : { ok: true, spend };
