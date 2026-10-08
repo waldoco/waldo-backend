@@ -37,7 +37,7 @@ adopt a new policy. Owners with prior manual `common-spend:`, browser usage or
 session records are refused until existing counters and exact cleanup obligations
 are reconciled. Keep the prior manual configuration available for its cleanup;
 switching that owner to automatic mode is not a migration. Removal or malformed
-updates to an established automatic policy deny new model/browser I/O, while its
+updates to an established automatic policy deny new browser I/O and funded browser-run model I/O, while its
 retained immutable policy can service only previously funded exact-session cleanup.
 
 Before activating a cohort, an operator must reconcile existing usage with the
@@ -48,9 +48,7 @@ allocation connection is a remaining dependency; this slice does not claim one.
 No live calls, deployment, credentials, plan changes or registration updates are
 part of this implementation.
 
-The existing public-read restrictions still apply. Encrypted durable sign-in state,
-owner human login/MFA/CAPTCHA handoff, owner screenshot delivery and private file
-upload/download receipts remain separate missing product connections.
+The existing public-read restrictions still apply. The separate private source path now connects existing Vault sign-in state, human handoff and verified native download retrieval; see BROWSER_PRIVATE_INTEGRATION_STATUS.md. Live acceptance, complete screenshot delivery and private upload remain outstanding.
 
 ## Provider evidence checked 2026-10-08
 
@@ -68,8 +66,8 @@ upload/download receipts remain separate missing product connections.
 
 ## Local regression checklist
 
-- [x] First model call is reserved; concurrent calls retain distinct physical ordinals.
-- [x] Removed/malformed policy and unpriced model cannot expose unmetered fallback.
+- [x] First model call in a funded browser run is reserved; concurrent calls retain distinct physical ordinals.
+- [x] Removed/malformed policy and unpriced model cannot expose unmetered fallback in funded browser runs.
 - [x] Exhaustion, reconstruction and operator ref changes cannot refill allowance.
 - [x] Prior manual reservations require reconciliation; expired policy does not pin.
 - [x] Changed/unlinked directory custody refuses work; funded cleanup survives removal.
