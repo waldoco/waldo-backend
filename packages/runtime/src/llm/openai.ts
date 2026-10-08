@@ -131,15 +131,25 @@ function responsesInput(request: LLMGatewayRequest['request']): OpenAI.Responses
       ? { role: 'user', content: [{ type: 'input_text', text: turn.content }, ...files] }
       : { role: turn.role, content: turn.content }),
     ...(lastUser === -1 && files.length ? [{ role: 'user' as const, content: files }] : []),
-    ...(request.tool_turns ?? []).flatMap((turn): OpenAI.Responses.ResponseInputItem[] => {
-      const prior = (turn.prior_items ?? []) as unknown as OpenAI.Responses.ResponseInputItem[];
-      const included = prior.some((item) => (item as { type?: string }).type === 'function_call' && (item as { call_id?: string }).call_id === turn.call.call_id);
-      return [
-        ...prior,
-        ...(included ? [] : [{ type: 'function_call' as const, call_id: turn.call.call_id, name: turn.call.name, arguments: turn.call.arguments }]),
-        { type: 'function_call_output' as const, call_id: turn.call.call_id, output: turn.output },
-      ];
-    }),
+    ...(() => {
+      // The model's own output items ride on the first call of a round and already hold every parallel call in it;
+      // a call is replayed from its record only when no earlier item carries its call_id.
+      const replayed = new Set<string>();
+      return (request.tool_turns ?? []).flatMap((turn): OpenAI.Responses.ResponseInputItem[] => {
+        const prior = (turn.prior_items ?? []) as unknown as OpenAI.Responses.ResponseInputItem[];
+        for (const item of prior) {
+          const record = item as { type?: string; call_id?: string };
+          if (record.type === 'function_call' && record.call_id) replayed.add(record.call_id);
+        }
+        const included = replayed.has(turn.call.call_id);
+        replayed.add(turn.call.call_id);
+        return [
+          ...prior,
+          ...(included ? [] : [{ type: 'function_call' as const, call_id: turn.call.call_id, name: turn.call.name, arguments: turn.call.arguments }]),
+          { type: 'function_call_output' as const, call_id: turn.call.call_id, output: turn.output },
+        ];
+      });
+    })(),
   ];
 }
 
