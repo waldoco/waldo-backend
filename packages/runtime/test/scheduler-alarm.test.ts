@@ -492,3 +492,12 @@ it('keeps a persisted common execution deadline when scheduler rearm has no rows
     expect(await state.storage.getAlarm()).toBeNull();
   });
 });
+
+it('preserves the private browser deadline and clears its resolved obligation',async()=>{
+ const stub=freshStub();await runInDurableObject(stub,async(_instance,state)=>{
+  const now=Date.now(),due=now+60000;await state.storage.put('private_browser_due_v1',due);
+  await rearmSharedAlarm(state.storage,null,now);expect(await state.storage.getAlarm()).toBe(due);
+  await rearmSharedAlarm(state.storage,now+120000,now);expect(await state.storage.getAlarm()).toBe(due);
+  await state.storage.put('private_browser_due_v1',null);await rearmSharedAlarm(state.storage,null,now);expect(await state.storage.getAlarm()).toBeNull();
+ });
+});

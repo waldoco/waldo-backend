@@ -2,6 +2,9 @@ import {env,runInDurableObject} from 'cloudflare:test';
 import {expect,it,vi} from 'vitest';
 import {claimStore} from '../src/memory/claims';
 import {TelegramFinalOutbox,FINAL_OUTBOX_KEY} from '../src/channels/telegram-final-outbox';
+// setup() can seed a background day plan. This storage test must never wait on
+// the real model client; preserve the original forget assertions and timeout.
+vi.mock('openai',()=>({default:class{responses={create:async()=>{throw Error('Synthetic forget fixture forbids model I/O');}};}}));
 it.each([false,true])('node forget cleans source-final stores and reports write failure: %s',async(fail)=>{
  const name='console-forget-reconcile-'+crypto.randomUUID();const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
  await runInDurableObject(stub,async(instance,state)=>{
