@@ -541,7 +541,7 @@ it('forgetting a dynamic copy of a fixed safeguard preserves trusted system inst
   await runInDurableObject(stub('forget-fixed-safeguard'), async (_instance, state) => {
     const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
     const kv = durableConversationStore(state.storage);
-    const safeguard = 'Never start a reply with your own name';
+    const safeguard = 'Write your name as Waldo, never WALDO';
     const args: Parameters<typeof createOwnerResponder> = ['fixture', kv, memory];
     args[11] = texts => redactConversationEntries(state.storage, texts, FORGOTTEN);
     const responder = createOwnerResponder(...args);
