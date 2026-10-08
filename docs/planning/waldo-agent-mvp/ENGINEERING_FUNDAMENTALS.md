@@ -599,3 +599,7 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 | 2026-10-08 | Model funding snapshot before directory await missed a concurrently created browser allocation | Browser metering / async admission | common-owner-browser-registration.test.ts deferred-authority allocation yields missing model reservation RED then one reservation GREEN | Recheck persisted and active funding immediately before choosing the transport; an awaited authority check cannot freeze budget state |
 
 - [ ] A browser allocation appearing during ordinary model authority resolution must route that call through the funded meter. Test deferred directory resolution with actual fake browser allocation and exact reservation count.
+
+| 2026-10-08 | Broad runtime run timed out a console card-pin fixture with synthetic key and unmocked boot-model transport; independent standalone rerun passed | Fixture isolation / owner console | dashboard-controls-owner.test.ts explicitly denies OpenAI transport; original8executor assertions and5s timeout preserved,8PASS | All owner-console fixtures that seed setup must seal background provider I/O; a passing standalone rerun does not seal the transport boundary |
+
+- [ ] Console executor fixtures mock the background model boundary even when the assertion concerns only storage, serialization or receipts.

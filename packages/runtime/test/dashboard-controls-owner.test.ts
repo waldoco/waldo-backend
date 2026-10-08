@@ -8,6 +8,8 @@ import {CONTROLS_PATH} from '../src/channels/dashboard-controls';
 import {CONTROL_ACTION_PATH} from '../src/channels/dashboard-control-actions';
 import {MEMORY_CONTROL_PATH} from '../src/channels/dashboard-memory-actions';
 import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH} from '../src/channels/dashboard-owner-controls';
+// Owner console setup seeds a background day plan; executor assertions use no model transport.
+vi.mock('openai',()=>({default:class{responses={create:async()=>{throw Error('Synthetic controls fixture forbids model I/O');}};}}));
 const root='https://telegram-owner';
 const apiHeaders=(token:string)=>({cookie:'waldo_console='+token});
 const seed=(stub:DurableObjectStub)=>runInDurableObject(stub,(instance,state)=>{Object.assign((instance as unknown as {env:Record<string,unknown>}).env,{TELEGRAM_BOT_TOKEN:'123:synthetic',OPENAI_API_KEY:'synthetic-key'});return consoleAccess(state.storage).grant();});
