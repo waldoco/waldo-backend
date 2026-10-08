@@ -13,6 +13,11 @@ it('default deployment/production does not opt into common host or browser',()=>
  expect(commonOwnerHost({...f.env,WALDO_ENVIRONMENT:'production'},f.storage,'physical-id')).toBeUndefined();
  const host=commonOwnerHost(f.env,f.storage,'physical-id')!;expect(host.browser).toBeUndefined();expect(host.executionBinding?.provider.id).toBe('openai_responses');expect(host.executionBinding?.environment.environmentKind).toBe('cloud');
 });
+it('an owner with a legacy source restriction stays off the common host instead of failing every turn',()=>{
+ const f=fixture();const restricted={...f.storage,sql:{exec:(q:string)=>({toArray:()=>/sqlite_master/.test(q)?[{name:'owner_task_source_scope'}]:/table_info/.test(q)?[{name:'narrowed'}]:[{narrowed:1,pending_json:null}]})}} as unknown as DurableObjectStorage;
+ expect(commonOwnerHost(f.env,restricted,'physical-id')).toBeUndefined();
+ expect(commonOwnerHost(f.env,f.storage,'physical-id')).toBeDefined();
+});
 it('actual signed directory projection supplies strict message presence and physical/subject changes deny',async()=>{
  const f=fixture();let calls=0;
  vi.stubGlobal('fetch',async()=>{calls++;return Response.json({owner_id:'10000000-0000-0000-0000-000000081106',auth_user_id:'30000000-0000-0000-0000-000000000006',presence_id:'20000000-0000-0000-0000-000000081106',do_name:'real-host-owner',provider:'telegram',subject:'81106',state_version:0,admission_revision:'9007199254740993'});});

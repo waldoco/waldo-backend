@@ -119,7 +119,7 @@ import { selectTranscriber } from '../llm/transcriber';
 import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
 import { TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
-import { createTaskSourceScope, approveTaskSourceProposal, ownerReadSources, retireLegacyDefaultTaskSources, type OwnerTaskSourceScope } from './task-source-scope';
+import { createTaskSourceScope, approveTaskSourceProposal, ownerReadSources, retireLegacyDefaultTaskSources, legacyOwnerRestriction, type OwnerTaskSourceScope } from './task-source-scope';
 import type { TurnControl } from './turn-control';
 import { turnFailureCode } from './turn-failure-code';
 import type { TelegramWebhookEnv } from './telegram-webhook';
@@ -264,7 +264,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private activeOwnerContext: ReturnType<typeof createOwnerMessageContextAdapter> | undefined;
 
   // One exact-owner decision for the source, proposal and execution paths, same as the host: the global flag alone must not route an unselected owner.
-  private commonActive(): boolean { return commonOwnerActivation(this.env, this.ctx.storage.kv.get<string>('do_name')); }
+  private commonActive(): boolean { return commonOwnerActivation(this.env, this.ctx.storage.kv.get<string>('do_name')) && !legacyOwnerRestriction(this.ctx.storage.sql); }
 
   private async commonTaskSourcesForTurn(turn: import('./owner-turn-envelope').OwnerTurnEnvelope, scope: RunEffectScope, defaults: ReturnType<typeof ownerReadSources>): Promise<OwnerTaskSourceScope> {
     const occurrence = this.activeInbox;

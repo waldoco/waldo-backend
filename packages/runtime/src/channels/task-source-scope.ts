@@ -51,6 +51,13 @@ const withNarrowedColumn = (sql: SqlStorage) => { if (!sql.exec<{ name: string }
 export const ownerReadSources = (googleAccounts: readonly unknown[]): readonly TaskSourceFamily[] => googleAccounts.length ? ['local', 'workspace', 'web', 'mail', 'calendar', 'contacts', 'tasks', 'drive'] : ['local', 'workspace', 'web'];
 // Enabling the common path for an owner: legacy custody that holds only host defaults carries no
 // owner decision and is retired; an explicit owner restriction or pending proposal is never dropped silently.
+// Read-only twin of the retire decision: true when the owner's legacy custody holds an explicit restriction or a pending
+// card. Such an owner stays on the legacy path; the common path never drops that decision and must not fail every turn on it.
+export const legacyOwnerRestriction = (sql: SqlStorage): boolean => {
+  if (!sql.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='owner_task_source_scope'").toArray().length) return false;
+  withNarrowedColumn(sql);
+  return sql.exec<{ narrowed: number; pending_json: string | null }>('SELECT narrowed, pending_json FROM owner_task_source_scope').toArray().some(row => row.narrowed === 1 || row.pending_json !== null);
+};
 export const retireLegacyDefaultTaskSources = (sql: SqlStorage): 'none' | 'retired' | 'owner_restriction' => {
   if (!sql.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='owner_task_source_scope'").toArray().length) return 'none';
   withNarrowedColumn(sql);

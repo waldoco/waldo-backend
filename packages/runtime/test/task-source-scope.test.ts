@@ -547,3 +547,16 @@ it('enabling common retires default legacy custody but never drops an owner rest
   expect(retireLegacyDefaultTaskSources(sql)).toBe('owner_restriction');
   expect(sql.exec('SELECT owner_key FROM owner_task_source_scope').toArray().length).toBe(1);
 }));
+
+it('an owner restriction or pending card is detected read-only so the owner stays on the legacy path', () => run('task-custody-restriction-detect', async (sql, scope) => {
+  const { legacyOwnerRestriction } = await import('../src/channels/task-source-scope');
+  expect(legacyOwnerRestriction(sql)).toBe(false);
+  const cap = createTaskSourceScope(sql, 'owner-one', scope, async () => {}, undefined, ['workspace', 'web']);
+  await cap.current();
+  expect(legacyOwnerRestriction(sql)).toBe(false);
+  expect(sql.exec('SELECT owner_key FROM owner_task_source_scope').toArray().length).toBe(1);
+  const cap2 = createTaskSourceScope(sql, 'owner-one', scope, async () => {});
+  await cap2.classify(decision('restrict', ['mail']));
+  expect(legacyOwnerRestriction(sql)).toBe(true);
+  expect(sql.exec('SELECT owner_key FROM owner_task_source_scope').toArray().length).toBe(1);
+}));
