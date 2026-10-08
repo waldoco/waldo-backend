@@ -94,7 +94,14 @@ export async function runToolLoop(input: Readonly<{
       input.ctx.runScope?.admit();
       const started = Date.now();
       const key = `${call.name}\u0000${call.arguments}`;
-      const previous = seen.get(key);
+      const cached = seen.get(key);
+      // A retained browser revisit observes current page state. Dispatch again so
+      // owner authority and existing provider/spend limits are checked anew.
+      const retainedRead = call.name === 'browse_page' && cached?.ok
+        && typeof cached.data === 'object' && cached.data !== null
+        && 'session_handle' in cached.data && typeof cached.data.session_handle === 'string'
+        && cached.data.session_handle.length > 0;
+      const previous = retainedRead ? undefined : cached;
       // Preserve settled nonretryable failures and mutation failures verbatim.
       // Replaying them performs no I/O; transient reads may retry within the budget.
       const result = previous
