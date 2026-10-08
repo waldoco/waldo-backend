@@ -69,6 +69,8 @@ import { browserTrialConsent, BROWSER_TRIAL_PATH, BROWSER_TRIAL_PENDING_KEY, BRO
 import { browserOwnerAuthority } from './browser-owner-authority';
 import { browserTaskSourceCustody } from './browser-task-source';
 import { browserTaskHandler, browserTaskApprovalBridge } from '../tools/live/browser-task';
+import { ownerBrowserRuntime } from './owner-browser-runtime';
+import { COMMON_BROWSER_DUE } from './common-browser-host';
 import { browserPublicReadConfiguration } from './browser-public-read-configuration';
 import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../tools/live/browser';
 import { webSearchHandler } from '../tools/live/web-search';
@@ -184,6 +186,7 @@ const WHATSAPP_PENDING_PREFIX = 'wa_pending:';
 const WHATSAPP_PENDING_CHECK_MS = 60_000;
 
 export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
+  private readonly ownerBrowser: ReturnType<typeof ownerBrowserRuntime>;
   private browserTasks: ReturnType<typeof browserOwnerHost>;
   private readonly makeBrowserHost: (config?: BrowserOwnerConfiguration) => ReturnType<typeof browserOwnerHost>;
   private readonly browserReady: Promise<void>;
@@ -191,6 +194,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, browserConfiguration?: BrowserOwnerConfiguration, browserTrial?: BrowserTrialPreparation) {
     super(ctx, env);
     this.browserTrial = browserTrial;
+    this.ownerBrowser = ownerBrowserRuntime({ env, storage: ctx.storage, actualDoId: ctx.id.toString(), activeScope: () => this.activeScope });
     const makeBrowserHost = this.makeBrowserHost = (config?: BrowserOwnerConfiguration) => browserOwnerHost({ storage: ctx.storage, config, now: Date.now, newId: () => crypto.randomUUID(),
       physical: () => { const doName = ctx.storage.kv.get<string>('do_name'); return { doName, subject: ctx.storage.kv.get<string>('telegram_subject'), matches: Boolean(doName && env.TELEGRAM_OWNER_DO && env.TELEGRAM_OWNER_DO.idFromName(doName).toString() === ctx.id.toString() && ctx.storage.kv.get<boolean>('telegram_unlinked') !== true) }; },
       approved: (approval, proposal) => {
@@ -346,7 +350,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           const authorization = browserOwnerAuthority(this.ctx.storage).read();
           if (authorization) this.ctx.storage.kv.put('browser_owner_task_revoked_v1', authorization.manifest.runId);
         }
-        await this.browserTasks.revoke(); this.ctx.waitUntil(this.browserReady.then(() => this.browserTasks.stop()));
+        this.ownerBrowser.stop(); await this.browserTasks.revoke(); this.ctx.waitUntil(this.browserReady.then(() => Promise.all([this.browserTasks.stop(), this.ownerBrowser.maintain()])));
       }
       const origin = request.headers.get('x-waldo-origin'); if (origin) this.ctx.storage.kv.put('origin', origin);
       const timezone = request.headers.get('x-waldo-timezone'); if (timezone) this.ctx.storage.kv.put('timezone', timezone);
@@ -1026,7 +1030,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!doName || !subject || !/^\d+$/.test(subject) || !Number.isSafeInteger(Number(subject)) || Number(subject) <= 0
           || this.ctx.storage.kv.get<boolean>('telegram_unlinked') === true
           || !this.env.TELEGRAM_OWNER_DO || this.env.TELEGRAM_OWNER_DO.idFromName(doName).toString() !== this.ctx.id.toString()) {
-          if ((this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity) <= Date.now()) this.ctx.waitUntil(this.browserTasks.maintain());
+          if (Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity,
+            this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity) <= Date.now()) this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()]));
           await rearmSharedAlarm(this.ctx.storage, null, Date.now(), 30_000);
           return;
         }
@@ -1047,14 +1052,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       try { await this.notifyUncertainRecovery(); } catch { console.error('uncertainty notice deferred to host recovery'); }
       const dueInbox = (await this.inbox.records()).some(r => r.state === 'admitted');
       const dueTransport = finals.some(r => r.status === 'attempting' || (r.status === 'pending' && r.dueAt <= Date.now()) || (r.status !== 'pending' && !r.settled));
-      const browserDue = this.ctx.storage.kv.get<number>('browser_owner_task_due_v1');
+      const browserDue = Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity, this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity);
       const readyKinds = [dueInbox, dueTransport, scheduler.hasDue(), browserDue !== undefined && browserDue !== null && browserDue <= Date.now()];
       const last = this.ctx.storage.kv.get<number>('owner_alarm_last_v1') ?? 2;
       let selected = -1;
       for (let n = 1; n <= 4; n++) { const candidate = (last + n) % 4; if (readyKinds[candidate]) { selected = candidate; break; } }
       if (selected < 0) { await scheduler.rearm(); return; }
       this.ctx.storage.kv.put('owner_alarm_last_v1', selected);
-      if (selected === 3) { this.ctx.waitUntil(this.browserTasks.maintain()); await scheduler.rearm(); return; }
+      if (selected === 3) { this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()])); await scheduler.rearm(); return; }
       if (selected === 0) { try { await this.drainInbox(); } finally { await scheduler.rearm(); } return; }
       if (selected === 1) {
         try { await finalOutbox.drain({
@@ -1107,7 +1112,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (update.message?.from?.id !== owner || update.message.chat?.id !== owner || !text) return false;
     const trace = `tg-${update.update_id}`;
     if (text === '/stop') {
-      this.ctx.waitUntil(this.browserTasks.stop());
+      this.ownerBrowser.stop(); this.ctx.waitUntil(Promise.all([this.browserTasks.stop(), this.ownerBrowser.maintain()]));
       const stopping = control.stop();
       log({ trace, hop: 'stop', ms: 0, ok: true, detail: stopping ? 'stopping the running turn' : 'nothing running' });
       void call('sendMessage', { chat_id: owner, text: stopping ? 'Stopping.' : 'Nothing is running right now.' }).catch(() => undefined);
@@ -1242,7 +1247,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       for (const inbound of parsed.accepted) { scope?.admit(); await listener.handle({ ...inbound, ...(scope ? { runScope: scope } : {}) }); }
     } else await listener.pollOnce(new TelegramPollingAdapter({ getUpdates: async () => [update] }, offset), 0);
     } finally {
-      try { await this.browserTasks.finishRun(); }
+      try { await this.ownerBrowser.finish(scope); await this.browserTasks.finishRun(); }
       catch {
         // Cleanup uncertainty cannot replace an already completed owner outcome.
         // Keep the checkpoint and fence further actions; maintenance owns retry.
@@ -1576,10 +1581,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const currentTaskOwnerKey = async () => {
       const currentOwner = resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
-      if (channel !== 'telegram' || owner <= 0 || currentOwner !== owner) throw new ClosedRunError();
+      if (channel !== 'telegram' || owner <= 0 || currentOwner !== owner || identity.get('telegram_unlinked') === true
+        || !identity.get<string>('do_name') || this.env.TELEGRAM_OWNER_DO?.idFromName(identity.get<string>('do_name')!).toString() !== this.ctx.id.toString()) throw new ClosedRunError();
       return `telegram:${this.ctx.id.toString()}:${owner}`;
     };
-    const browserSources = browserTaskSourceCustody(storage.sql, storage.kv);
+    const browserSources = browserTaskSourceCustody(storage.sql, storage.kv, currentTaskOwnerKey);
     const browserApproval = browserTaskApprovalBridge({ ownerId: () => this.browserTasks.principal, host: async (payload, operation) => {
       await this.browserReady;
       if (operation === 'deny') return this.browserTasks.resolve(this.browserTasks.principal);
@@ -1697,17 +1703,17 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await sentOrThrow(api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` }));
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env)), browserTaskHandler({ legacy: browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
+      }), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), this.ownerBrowser.read(browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
         if (!context.assertTaskSourceCurrent) throw Error('browser task source unavailable');
         await context.assertTaskSourceCurrent();
         const ownerKey = await currentTaskOwnerKey(); await context.assertTaskSourceCurrent();
         browserSources.capture(payload, ownerKey);
         const id = await desk.proposeBrowserSubmit(payload); await context.assertTaskSourceCurrent(); return id;
-      }, stopAdmission: async () => { await this.browserTasks.revoke(); } }), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now() }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, undefined, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
+      }, stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now() }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
       (opt) => opt ? openLoopsPrompt(loops, clock.timezone, opt.loopsRoom) : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
-      undefined, channel, channel === 'telegram' ? { prepare: async (turn, contextOwnerId, scope) => {
+      undefined, channel, channel === 'telegram' ? { browserAttachments: scope => this.ownerBrowser.attachments(scope), prepare: async (turn, contextOwnerId, scope) => {
         if (turn.attachment || turn.mediaNote || probeCapture.current !== null) return undefined;
         const occurrence = this.activeInbox;
         const doName = identity.get<string>('do_name');
