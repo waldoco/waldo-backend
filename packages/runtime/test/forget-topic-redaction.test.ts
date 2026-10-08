@@ -29,7 +29,7 @@ describe('forgetting a topic whose claim is already gone', () => {
       const store = claimStore(sql, tx);
       const episodes = episodeIndex(sql);
       episodes.add('tg-1', 'owner', 'Posterbot standup moved to 09:10 UTC', 1);
-      applyClaimOps(store, ops({ forget_topic: 'Posterbot' }), AT, 'owner, tg-3', undefined, { owner: 'please forget my lunch order' });
+      applyClaimOps(store, ops({ forget_topic: 'Posterbot' }), AT, 'owner, tg-3', undefined, { owner: 'please forget my lunch order' }, true);
       const texts = sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY rowid').toArray().map((r) => r.text);
       expect(texts.join(' ')).toMatch(/posterbot/i);
       expect(store.barriers().length).toBe(0);
@@ -40,7 +40,7 @@ describe('forgetting a topic whose claim is already gone', () => {
       const store = claimStore(sql, tx);
       const episodes = episodeIndex(sql);
       episodes.add('tg-1', 'owner', 'Posterbot standup moved to 09:10 UTC', 1);
-      applyClaimOps(store, ops({ forget_topic: 'Posterbot' }), AT, 'owner, tg-3', undefined, { owner: 'Forget POSTERBOT please' });
+      applyClaimOps(store, ops({ forget_topic: 'Posterbot' }), AT, 'owner, tg-3', undefined, { owner: 'Forget POSTERBOT please' }, true);
       const texts = sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY rowid').toArray().map((r) => r.text);
       expect(texts.join(' ')).not.toMatch(/posterbot/i);
       expect(store.barriers().length).toBeGreaterThan(0);
@@ -68,7 +68,7 @@ describe('forgetting by the exact identifier the owner named', () => {
       episodes.add('tg-1', 'owner', 'Remember workshop note DLD-20261002-M3 is Friday', 1);
       episodes.add('tg-1-reply', 'waldo', 'Saved: workshop note DLD-20261002-M3 is Friday.', 2);
       episodes.add('tg-2', 'owner', 'unrelated lunch plan', 3);
-      applyClaimOps(store, ops({ forget_topic: 'DLD-20261002-M3' }), AT, 'owner, tg-3', undefined, { owner: 'forget everything about DLD-20261002-M3' });
+      applyClaimOps(store, ops({ forget_topic: 'DLD-20261002-M3' }), AT, 'owner, tg-3', undefined, { owner: 'forget everything about DLD-20261002-M3' }, true);
       const texts = sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY rowid').toArray().map((r) => r.text);
       expect(texts.join(' ')).not.toContain('DLD-20261002-M3');
       expect(texts).toContain('unrelated lunch plan');

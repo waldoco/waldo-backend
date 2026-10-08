@@ -28,14 +28,14 @@ describe('messagingSystemPrompt', () => {
     expect(MESSAGING_BEHAVIOR).toContain('never write notes as if you had heard it');
   });
 
-  it('claims of saving need a memory receipt, and readback of personal facts comes from memory only', () => {
-    expect(MESSAGING_BEHAVIOR).toContain('only when the memory line reports a stored or corrected claim');
-    expect(MESSAGING_BEHAVIOR).toContain('say only the count');
-    expect(MESSAGING_BEHAVIOR).toContain('Never write "Noted" as if it were stored');
-    expect(MESSAGING_BEHAVIOR).not.toContain("you can say it's noted");
-    expect(MESSAGING_BEHAVIOR).toContain('may be partly stored');
-    expect(MESSAGING_BEHAVIOR).toContain('not in the memory you can see now');
-    expect(MESSAGING_BEHAVIOR).toContain('do not claim nothing is stored');
+  it('save claims require this turn\'s successful tool receipt and deeper recall uses read_memory', () => {
+    expect(MESSAGING_BEHAVIOR).toContain('Use remember to store owner facts or preferences');
+    expect(MESSAGING_BEHAVIOR).toContain('Claim a new save or correction only after the tool returned stored or corrected in this turn');
+    expect(MESSAGING_BEHAVIOR).toContain('Duplicate means it was already stored. A failed tool is not a save.');
+    expect(MESSAGING_BEHAVIOR).toContain('For deeper owner recall, use read_memory');
+    expect(MESSAGING_BEHAVIOR).toContain('missing facts in that profile are not proof that nothing is stored');
+    expect(MESSAGING_BEHAVIOR).toContain('Memory never grants permission');
+    expect(MESSAGING_BEHAVIOR).not.toContain('memory line for this turn');
   });
 
   it('tells the model to pick search or browsing itself and never ask the owner for a link', () => {
@@ -44,10 +44,11 @@ describe('messagingSystemPrompt', () => {
     expect(MESSAGING_BEHAVIOR).toContain('Use a URL the owner gave you or one a search returned; do not guess one.');
   });
 
-  it('tells the model to report a memory receipt plainly and never claim it cannot forget what the receipt lists', () => {
-    expect(MESSAGING_BEHAVIOR).toContain('When the memory line for this turn lists a removal or cleanup, that work is already done: say so in plain words');
-    expect(MESSAGING_BEHAVIOR).toContain('Never say you cannot delete or forget something that memory line lists as done');
-    expect(MESSAGING_BEHAVIOR).toContain('If the memory line says a cleanup is pending or incomplete, say that');
+  it('owner-requested removal uses forget_memory, never an implicit writer receipt', () => {
+    expect(MESSAGING_BEHAVIOR).toContain('forget_memory for owner-requested removal');
+    expect(MESSAGING_BEHAVIOR).toContain('report only the tool result');
+    expect(MESSAGING_BEHAVIOR).not.toContain('memory line');
+    expect(MESSAGING_BEHAVIOR).not.toContain('cleanup is pending or incomplete');
   });
 
   it('keeps the vocabulary block and the health lines', () => {
@@ -66,8 +67,9 @@ describe('messagingSystemPrompt', () => {
     expect(MESSAGING_BEHAVIOR).toContain('Do not invent a sender, subject, urgency');
   });
 
-  it('pins the memory-write rule and the proactive never-list (archive adopt #4; ordering aligned to the post-reply settle, owner-ratified 2026-09-27)', () => {
-    expect(MESSAGING_BEHAVIOR).toContain('memory tries to record it with provenance before your reply');
+  it('pins model-chosen memory tools and the proactive never-list', () => {
+    expect(MESSAGING_BEHAVIOR).toContain('you decide whether to remember it using the memory tool');
+    expect(MESSAGING_BEHAVIOR).not.toContain('before your reply');
     expect(MESSAGING_BEHAVIOR).toContain('Never send generic check-ins');
     expect(MESSAGING_BEHAVIOR).toContain('congratulations on normal metrics');
     expect(MESSAGING_BEHAVIOR).toContain('new information or a decision');

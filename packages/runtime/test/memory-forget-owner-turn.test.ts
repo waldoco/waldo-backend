@@ -1,363 +1,131 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
-
-const seen = vi.hoisted(() => ({ writerOps: [] as string[], replyInputs: [] as string[], writerInputs: [] as string[], replyOutputs: [] as unknown[][], logs: [] as unknown[] }));
+import { claimStore, ground, turnMemoryPrompt } from '../src/memory/claims';
+import { memoryHandlers } from '../src/tools/live/memory';
+import { createOwnerResponder } from '../src/channels/owner-turn';
+const seen = vi.hoisted(() => ({ inputs: [] as string[], outputs: [] as unknown[][] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
-  const b = body as { text?: { format?: { type: string } } };
-  const writer = b.text?.format?.type === 'json_schema';
-  if (writer) seen.writerInputs.push(JSON.stringify(body)); else seen.replyInputs.push(JSON.stringify(body));
-  return { id: 'fixture', output_text: writer ? seen.writerOps.shift() ?? '{}' : 'pong', output: writer ? [] : seen.replyOutputs.shift() ?? [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
+  seen.inputs.push(JSON.stringify(body));
+  return { id: 'fixture', output_text: 'Done', output: seen.outputs.shift() ?? [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
 } }; } }));
-beforeEach(() => { seen.writerOps.length=0; seen.replyInputs.length=0; seen.writerInputs.length=0; seen.replyOutputs.length=0; seen.logs.length=0; });
-const { createOwnerResponder } = await import('../src/channels/owner-turn');
-const { claimStore } = await import('../src/memory/claims');
-const { episodeIndex } = await import('../src/channels/episodes');
-
-const PREF = 'five-minute easy stretch before focus block';
-const ops = (o: Record<string, unknown>) => JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null, ...o });
-
-// Layer: owner-turn fixture (real claimStore in the owner DO, mocked provider, scripted writer).
-// The reply must be told what the memory writer did this turn, from code, so it can neither claim a
-// save nor deny a forget it has no receipt for. Not covered: a live writer or staging.
-const system = (): string => (JSON.parse(seen.replyInputs.at(-1)!) as { instructions: string }).instructions;
-type Redact = (texts: readonly string[]) => Promise<{ rewritten: number; remaining: number }>;
-const session = async (name: string, work: (turn: (id: string, text: string, writer: string) => Promise<void>, store: ReturnType<typeof claimStore>, responder: ReturnType<typeof createOwnerResponder>) => Promise<void>, redact?: Redact, taskContext?: () => Promise<string>, seed?: (sql: SqlStorage) => void) => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_i, state) => {
-    const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
-    seed?.(state.storage.sql);
-    const args: Parameters<typeof createOwnerResponder> = ['fixture', undefined, store as never, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, redact];
-    args[3] = entry => { seen.logs.push(entry); };
-    if(taskContext) args[21]={skills:{handlers:[],metadata:()=>'',prompt:async()=>'',assertProcedureCurrent:async()=>undefined,taskContext}};
-    const responder = createOwnerResponder(...args);
-    await work(async (id, text, writer) => { seen.writerOps.push(writer); await responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text }, (_n, w) => w()); }, store, responder);
-  });
-};
-
-it('selects topic-bearing source clauses before cleanup and tells the later reply only a bounded receipt', async () => {
-  const topic = 'DLD-20261002-M3';
-  const fact = `${topic} workshop preference: Friday at 09:10 UTC`;
-  const seed = (sql: SqlStorage) => {
-    const episodes = episodeIndex(sql);
-    episodes.add('tg-mixed-source', 'owner', `${fact}. Unrelated preference: tea after lunch.`, 1);
-    episodes.add('tg-other-workshop', 'owner', 'Other workshop preference: Friday at 09:10 UTC.', 2);
-  };
-  await session('selective-source-provider', async (turn, store, responder) => {
-    seen.writerOps.push(ops({ forget_topic: topic }));
-    await turn('tg-forget-source', `Forget only ${topic}. Keep unrelated preferences.`, JSON.stringify({ spans: [{ ref: 'episodes:1:text', text: fact }, { ref: 'request:tg-forget-source', text: `Forget only ${topic}.` }], reviewed_refs: ['episodes:1:text', 'request:tg-forget-source'], complete: true }));
-    expect(store.incompleteTopics()).toEqual([]);
-    expect(store.pendingTopics()).toEqual([]);
-    expect(store.forgetSources(topic).sources).toEqual([]);
-    const sourceCall = seen.writerInputs.find(input => input.includes('forget_source_spans'))!;
-    expect(sourceCall).toContain(fact);
-    expect(sourceCall).toContain('tea after lunch');
-    const internalLogs = seen.logs.filter(entry => ['llm_memory', 'llm_forget_source'].includes((entry as { hop: string }).hop));
-    expect(internalLogs.length).toBeGreaterThan(0);
-    expect(JSON.stringify(internalLogs)).not.toContain(fact);
-    expect(internalLogs.every(entry => !('text' in (entry as object)))).toBe(true);
-    await responder.respond({ traceId: 'tg-later-source', conversationRef: 'owner', surface: 'telegram', text: 'Help with the next workshop', memoryWrites: false }, (_n, w) => w());
-    expect(seen.replyInputs.at(-1)).not.toContain('09:10 UTC');
-    // The owner's later-retained forget request may name the topic; its old
-    // preference value must not survive. We do not erase whole history turns.
-  }, undefined, undefined, seed);
-});
-
-it('keeps incomplete coverage durable while current requests and ordinary live tools still work', async () => {
-  const topic = 'DLD-20261002-M3';
-  await session('selective-source-budget', async (turn, store, responder) => {
-    await turn('tg-incomplete', `Forget only ${topic}`, ops({ forget_topic: topic }));
-    expect(store.incompleteTopics()).toEqual([topic]);
-    expect(store.forgetSources(topic).incomplete).toBe(true);
-    expect(system()).toContain('temporarily limited');
-    expect(system()).not.toContain('09:10 UTC');
-    seen.replyOutputs.push([{ type: 'function_call', call_id: 'read-unproved', name: 'read_owner_context', arguments: '{"topic":"workshop"}' }], [{ type: 'function_call', call_id: 'fresh-clock', name: 'get_context', arguments: '{}' }], []);
-    await responder.respond({ traceId: 'tg-current-request', conversationRef: 'owner', surface: 'telegram', text: 'What time is it now?', memoryWrites: false }, (_n, w) => w());
-    expect(seen.logs.some(entry => (entry as { hop: string; ok: boolean }).hop === 'tool_get_context' && (entry as { ok: boolean }).ok)).toBe(true);
-    expect(seen.replyInputs.at(-1)).toContain('What time is it now?');
-    const blockedRead = seen.logs.find(entry => (entry as { hop: string }).hop === 'tool_read_owner_context') as { ok: boolean; code?: string } | undefined;
-    expect(blockedRead, JSON.stringify(blockedRead)).toMatchObject({ ok: true });
-    expect(JSON.stringify(seen.replyInputs.at(-1))).not.toContain('invalid_handler_result');
-    expect(seen.replyInputs.at(-1)).toContain('Recall is temporarily limited');
-    expect(seen.replyInputs.at(-1)).not.toContain('09:10 UTC');
-    expect(store.incompleteTopics()).toEqual([topic]);
-  }, undefined, undefined, sql => {
-    const episodes = episodeIndex(sql);
-    for (let i = 0; i < 65; i++) episodes.add(`tg-matching-${i}`, 'owner', `${topic} workshop preference: Friday at 09:10 UTC`, i);
+beforeEach(() => { seen.inputs.length = 0; seen.outputs.length = 0; });
+const timer = <T>(_name: string, work: () => Promise<T>) => work();
+it('I prefer AI can be remembered by the main model without a writer call', async () => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-loop-tools')), async (_i, state) => {
+    const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
+    seen.outputs.push([{ type: 'function_call', call_id: 'remember-1', name: 'remember', arguments: JSON.stringify({ kind: 'preference', text: 'Prefers AI', evidence_quote: 'AI' }) }], []);
+    const responder = createOwnerResponder('fixture', undefined, store, undefined, undefined, tools);
+    const reply = await responder.respond({ traceId: 'tg-1', conversationRef: 'owner', surface: 'telegram', text: 'I prefer AI' }, timer);
+    expect(seen.inputs).toHaveLength(2);
+    expect(seen.inputs.every(input => !input.includes('claim_ops'))).toBe(true);
+    expect(store.claims()).toMatchObject([{ text: 'Prefers AI', origin: 'owner' }]);
+    expect(reply).toContain('memory stored');
   });
 });
-const add = (text: string, evidence: string) => ops({ add: [{ kind: 'preference', text, source: 'stated', evidence, touches_forgotten: false }] });
-const receiptOf = (sys: string): string => sys.slice(sys.indexOf('Memory this turn'), sys.indexOf('Memory this turn') + 400);
-
-it('the reply is told a claim was stored, and what a forget removed', async () => {
-  await session('forget-live-a', async (turn, store) => {
-    await turn('tg-1', `Test preference: a ${PREF}. Just a demo.`, add(`Prefers a ${PREF}`, `owner, tg-1: "${PREF}"`));
-    expect(store.claims().length).toBe(1);
-    expect(system()).toContain('Memory this turn');
-    expect(receiptOf(system())).toContain('stored 1 new claim');
-    await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1], forget_topic: 'five-minute stretch' }));
-    expect(store.claims().length).toBe(0);
-    expect(receiptOf(system())).toContain('removed 1 claim from stored memory');
-    expect(receiptOf(system())).not.toContain('stored 1');
+it('a pending coffee forget does not remove unrelated history, profile or orders', async () => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-loop-held')), async (_i, state) => {
+    const memory = claimStore(state.storage.sql);
+    memory.add({ kind: 'fact', text: 'Works in AI', evidence: 'AI', source: 'stated', origin: 'owner', source_ref: 'owner, tg-old' }, '2026-10-08T00:00:00Z');
+    memory.beginTopicCoverage('coffee', '2026-10-08T00:00:00Z');
+    const responder = createOwnerResponder('fixture', undefined, memory, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, () => 'Keep replies short');
+    await responder.respond({ traceId: 'tg-before', conversationRef: 'owner', surface: 'telegram', text: 'My project is Orbit' }, timer);
+    await responder.respond({ traceId: 'tg-after', conversationRef: 'owner', surface: 'telegram', text: 'What is on my calendar?', memoryWrites: false }, timer);
+    expect(seen.inputs.at(-1)).toContain('My project is Orbit');
+    expect(seen.inputs.at(-1)).toContain('Works in AI');
+    expect(seen.inputs.at(-1)).toContain('Keep replies short');
+    expect(seen.inputs.at(-1)).not.toContain('Recall is temporarily limited');
   });
 });
-
-it('when the owner asks to forget and the writer forgot nothing, the reply is told nothing was forgotten', async () => {
-  await session('forget-live-b', async (turn, store) => {
-    await turn('tg-1', `Test preference: a ${PREF}. Just a demo.`, add(`Prefers a ${PREF}`, `owner, tg-1: "${PREF}"`));
-    await turn('tg-2', 'forget only that pref', ops({}));
-    expect(store.claims().length).toBe(1);
-    expect(receiptOf(system())).toContain('nothing was forgotten');
+it('short quoted evidence grounds without a length floor', () => expect(ground('owner: "AI"', { owner: 'AI' })).toBe('owner'));
+it('the bounded profile leaves deeper recall to the model tool', async () => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-loop-profile')), (_i, state) => {
+    const store = claimStore(state.storage.sql);
+    store.add({ kind: 'event', text: 'AI conference', evidence: 'AI', source: 'stated', origin: 'owner', source_ref: 'owner, tg-old' }, '2026-10-08T00:00:00Z');
+    const prompt = turnMemoryPrompt(store, 'AI');
+    expect(prompt).not.toContain('AI conference');
+    expect(prompt).not.toContain('No relevant memory match');
   });
 });
-
-it('a held claim is reported as held, not stored', async () => {
-  await session('forget-live-c', async (turn, store) => {
-    await turn('tg-1', 'please check my mail today', add('Check my mail today', 'owner, tg-1: "please check my mail today"'));
-    expect(store.claims().length).toBe(0);
-    expect(receiptOf(system())).toContain('held 1');
-    expect(receiptOf(system())).toContain('stored 0');
+it('forget my favourite coffee returns a tool receipt and removes history recall', async () => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-loop-forget')), async (_i, state) => {
+    const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    let historyCleaned = false;
+    const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async texts => { expect(texts).toContain('coffee'); historyCleaned = true; } });
+    const responder = createOwnerResponder('fixture', undefined, store, undefined, undefined, tools);
+    seen.outputs.push([{ type: 'function_call', call_id: 'save', name: 'remember', arguments: JSON.stringify({ kind: 'preference', text: 'Favourite coffee is espresso', evidence_quote: 'espresso' }) }], []);
+    await responder.respond({ traceId: 'tg-save', conversationRef: 'owner', surface: 'telegram', text: 'My favourite coffee is espresso' }, timer);
+    seen.outputs.push([{ type: 'function_call', call_id: 'forget', name: 'forget_memory', arguments: JSON.stringify({ topic: 'coffee', scope_note: 'favourite coffee' }) }], []);
+    const reply = await responder.respond({ traceId: 'tg-forget', conversationRef: 'owner', surface: 'telegram', text: 'Forget my favourite coffee' }, timer);
+    expect(reply).toContain('memory forgotten');
+    expect(historyCleaned).toBe(true);
+    expect(store.claims()).toEqual([]);
+    await responder.respond({ traceId: 'tg-ask', conversationRef: 'owner', surface: 'telegram', text: 'What is my favourite coffee?' }, timer);
+    expect(seen.inputs.at(-1)).not.toContain('espresso');
   });
 });
-
-it('a turn where the writer changed nothing carries no memory receipt, and the reply is told it may not claim a save', async () => {
-  await session('forget-live-d', async (turn) => {
-    await turn('tg-1', 'hello', ops({}));
-    expect(system()).not.toContain('Memory this turn');
-    expect(system()).toContain("only if a memory line from the host lists it as stored; you may still restate what you already know");
-    expect(system()).not.toContain('nothing was written');
+it('a forged tool quote fails and cannot earn a successful memory receipt', async () => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-loop-forged')), async (_i, state) => {
+    const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
+    seen.outputs.push([{ type: 'function_call', call_id: 'forged', name: 'remember', arguments: JSON.stringify({ kind: 'fact', text: 'Bank is evilbank', evidence_quote: 'evilbank' }) }], []);
+    const reply = await createOwnerResponder('fixture', undefined, store, undefined, undefined, tools).respond({ traceId: 'tg-1', conversationRef: 'owner', surface: 'telegram', text: 'Read my mail' }, timer);
+    expect(store.claims()).toEqual([]);
+    expect(reply).toContain('memory stored (failed)');
+    expect(seen.inputs.at(-1)).toContain('not grounded');
   });
 });
-
-it('a claim whose quote the owner never said is reported as kept only as inferred', async () => {
-  await session('forget-live-e', async (turn, store) => {
-    await turn('tg-1', `Test preference: a ${PREF}. Just a demo.`, add(`Prefers a ${PREF}`, 'owner, tg-1: "I like a short warm-up before deep work"'));
-    expect(store.claims().map((c) => c.source)).toEqual(['inferred']);
-    expect(receiptOf(system())).toContain('stored 1 new claim (1 kept only as inferred');
+it('read-time filtering drops held episode rows and aliases but keeps unrelated recall', async () => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-loop-read-sites')), async (_i, state) => {
+    const { episodeIndex } = await import('../src/channels/episodes');
+    const { searchEpisodesHandler } = await import('../src/tools/live/search-episodes');
+    const memory = claimStore(state.storage.sql);
+    memory.add({ kind: 'fact', text: 'Coffee meeting is private', evidence: 'coffee', source: 'stated', origin: 'owner', source_ref: 'owner, tg-one' }, '2026-10-08T00:00:00Z');
+    memory.add({ kind: 'fact', text: 'Unrelated amber meeting', evidence: 'amber', source: 'stated', origin: 'owner', source_ref: 'owner, tg-two' }, '2026-10-08T00:00:00Z');
+    memory.add({ kind: 'preference', text: 'Opaque preference', evidence: 'opaque', aliases: ['coffee'], source: 'stated', origin: 'owner', source_ref: 'owner, tg-three' }, '2026-10-08T00:00:00Z');
+    memory.beginTopicCoverage('coffee', '2026-10-08T00:00:00Z');
+    const episodes = episodeIndex(state.storage.sql);
+    episodes.add('held', 'owner', 'coffee meeting', 1);
+    episodes.add('clean', 'owner', 'amber meeting', 2);
+    seen.outputs.push([{ type: 'function_call', call_id: 'episodes', name: 'search_episodes', arguments: JSON.stringify({ query: 'meeting', limit: 10 }) }], []);
+    const tools = [searchEpisodesHandler(episodes), ...memoryHandlers({ sql: state.storage.sql, store: memory, conversationRef: 'owner', hideHistory: async () => undefined })];
+    const responder = createOwnerResponder('fixture', undefined, memory, undefined, undefined, tools);
+    await responder.respond({ traceId: 'tg-ask', conversationRef: 'owner', surface: 'telegram', text: 'Read meeting context', memoryWrites: false }, timer);
+    expect(seen.inputs.at(-1)).toContain('amber');
+    expect(seen.inputs.at(-1)).not.toContain('coffee meeting');
+    expect(seen.inputs.at(-1)).not.toContain('Opaque preference');
+    seen.outputs.push([{ type: 'function_call', call_id: 'memory', name: 'read_memory', arguments: JSON.stringify({ limit: 10 }) }], []);
+    await responder.respond({ traceId: 'tg-read', conversationRef: 'owner', surface: 'telegram', text: 'What do you remember?', memoryWrites: false }, timer);
+    expect(seen.inputs.at(-1)).toContain('Unrelated amber meeting');
+    expect(seen.inputs.at(-1)).not.toContain('Opaque preference');
   });
 });
-
-const saved = (turn: (id: string, text: string, writer: string) => Promise<void>) => turn('tg-1', `Test preference: a ${PREF}.`, add(`Prefers a ${PREF}`, `owner, tg-1: "${PREF}"`));
-
-it('a machine turn on the same responder after an owner save does not inherit the receipt', async () => {
-  await session('forget-live-f', async (turn, _store, responder) => {
-    await saved(turn);
-    expect(system()).toContain('Memory this turn');
-    await responder.prompt('sys-1', 'owner', 'scheduled check', (_n, w) => w(), 'telegram');
-    expect(system()).not.toContain('Memory this turn');
-    await saved(turn);
-    await responder.remind('sys-2', 'owner', 'stretch', (_n, w) => w(), 'telegram');
-    expect(system()).not.toContain('Memory this turn');
+it('a failed asynchronous purge does not block unrelated owner work', async () => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-loop-purge-failure')), async (_i, state) => {
+    const memory = claimStore(state.storage.sql);
+    memory.add({ kind: 'fact', text: 'Private coffee', evidence: 'coffee', source: 'stated', origin: 'owner', source_ref: 'owner, tg-coffee' }, '2026-10-08T00:00:00Z');
+    memory.add({ kind: 'fact', text: 'Works in AI', evidence: 'AI', source: 'stated', origin: 'owner', source_ref: 'owner, tg-ai' }, '2026-10-08T00:00:00Z');
+    memory.purge([memory.claims().find(claim => claim.text === 'Private coffee')!.id], '2026-10-08T00:00:00Z');
+    const logs: string[] = [];
+    const responder = createOwnerResponder('fixture', undefined, memory, entry => logs.push(entry.code ?? ''), undefined, undefined, undefined, undefined, undefined, undefined, undefined, async () => { throw Error('cleanup unavailable'); });
+    await responder.respond({ traceId: 'tg-calendar', conversationRef: 'owner', surface: 'telegram', text: 'What is on my calendar?' }, timer);
+    expect(seen.inputs.at(-1)).toContain('Works in AI');
+    expect(seen.inputs.at(-1)).not.toContain('Private coffee');
+    expect(logs).toContain('retained_cleanup_incomplete');
   });
 });
-
-it('a repeated forget id counts one removal, and an unknown id counts none', async () => {
-  await session('forget-live-g', async (turn) => {
-    await saved(turn);
-    await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1, 1] }));
-    expect(receiptOf(system())).toContain('removed 1 claim from stored memory');
-    expect(receiptOf(system())).not.toContain('removed 2');
+it('duplicate remember is not receipted as a new save', async () => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-loop-duplicate')), async (_i, state) => {
+    const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const args = { kind: 'preference', text: 'Prefers tea', evidence_quote: 'tea' };
+    const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
+    const responder = createOwnerResponder('fixture', undefined, store, undefined, undefined, tools);
+    seen.outputs.push([{ type: 'function_call', call_id: 'tea-first', name: 'remember', arguments: JSON.stringify(args) }], []);
+    await responder.respond({ traceId: 'tg-first', conversationRef: 'owner', surface: 'telegram', text: 'I prefer tea' }, timer);
+    seen.outputs.push([{ type: 'function_call', call_id: 'tea-again', name: 'remember', arguments: JSON.stringify(args) }], []);
+    const reply = await responder.respond({ traceId: 'tg-again', conversationRef: 'owner', surface: 'telegram', text: 'I prefer tea' }, timer);
+    expect(reply).not.toContain('memory stored');
+    expect(store.claims()).toHaveLength(1);
+    expect(seen.inputs.at(-1)).toContain('duplicate');
   });
-  await session('forget-live-h', async (turn, store) => {
-    await saved(turn);
-    await turn('tg-2', 'forget only that pref', ops({ forget_claims: [999] }));
-    expect(store.claims().length).toBe(1);
-    expect(receiptOf(system())).toContain('nothing was forgotten');
-  });
-});
-
-it('corrections, confirmations and dismissals are listed, each unique id once', async () => {
-  await session('forget-live-i', async (turn) => {
-    await saved(turn);
-    await turn('tg-2', 'yes that is right', ops({ confirm: [1, 1] }));
-    expect(receiptOf(system())).toContain('confirmed 1 claim');
-    await turn('tg-3', 'never mind that one', ops({ dismiss: [1, 1] }));
-    expect(receiptOf(system())).toContain('dismissed 1 claim');
-  });
-});
-
-it('a completed conversation cleanup is counted in the receipt, and the prompt forbids saying nothing else changed', async () => {
-  await session('forget-live-o', async (turn) => {
-    await saved(turn);
-    await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1] }));
-    expect(receiptOf(system())).toContain('removed 1 claim from stored memory');
-    expect(receiptOf(system())).toContain('redacted 1 saved conversation entry');
-    expect(system()).toContain('do not say that nothing else changed');
-  }, async () => ({ rewritten: 1, remaining: 0 }));
-  await session('forget-live-p', async (turn) => {
-    await saved(turn);
-    await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1] }));
-    expect(receiptOf(system())).not.toContain('redacted');
-  }, async () => ({ rewritten: 0, remaining: 0 }));
-  await session('forget-live-q', async (turn) => {
-    await saved(turn);
-    await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1] }));
-    expect(receiptOf(system())).toContain('redacted 3 saved conversation entries');
-  }, async () => ({ rewritten: 3, remaining: 0 }));
-});
-
-it('a conversation redaction that leaves entries behind is stated, not reported as clean', async () => {
-  await session('forget-live-j', async (turn) => {
-    await saved(turn);
-    await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1] }));
-    expect(receiptOf(system())).not.toContain('still contain');
-  }, async () => ({ rewritten: 1, remaining: 0 }));
-  await session('forget-live-k', async (turn, store) => {
-    await saved(turn);
-    await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1] }));
-    expect(store.claims('purging').length).toBe(1); // KV survivors leave the claim purging, not removed
-    expect(receiptOf(system())).toContain('is pending');
-    expect(receiptOf(system())).toContain('2 saved conversation entries still contain it');
-    expect(receiptOf(system())).not.toContain('removed 1 claim');
-  }, async () => ({ rewritten: 0, remaining: 2 }));
-});
-
-it('a failure after the writer applied ops yields the uncertain notice and no success receipt', async () => {
-  await session('forget-live-l', async (turn) => {
-    await saved(turn);
-    await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1] }));
-    const sys = system();
-    expect(sys).toContain('only partly stored');
-    expect(sys).not.toContain('nothing was written');
-    expect(sys).toContain('follow any host failure or uncertain notice');
-    expect(sys).not.toContain('Memory this turn');
-  }, async () => { throw new Error('kv down'); });
-});
-
-it('a correction is listed as corrected', async () => {
-  await session('forget-live-m', async (turn, store) => {
-    await saved(turn);
-    await turn('tg-2', 'actually make it a ten-minute easy stretch', ops({ corrections: [{ old_id: 1, kind: 'preference', text: 'Prefers a ten-minute easy stretch before focus block', evidence: 'actually make it a ten-minute easy stretch' }] }));
-    expect(store.claims().map((c) => c.text)).toEqual(['Prefers a ten-minute easy stretch before focus block']);
-    expect(receiptOf(system())).toContain('corrected 1 claim');
-  });
-});
-
-it('a purge that fails verification is reported as tried and incomplete, never removed', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-live-n')), async (_i, state) => {
-    const real = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
-    // Fault injection at the store seam: the purge runs, but verification reports a failed store.
-    const store = { ...real, purge: (ids: readonly number[], at: string) => ({ ...real.purge(ids, at), ready: false, failed: ['claim_recall'] }) };
-    const responder = createOwnerResponder('fixture', undefined, store as never);
-    const turn = async (id: string, text: string, writer: string) => { seen.writerOps.push(writer); await responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text }, (_n, w) => w()); };
-    await saved(turn);
-    await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1] }));
-    expect(receiptOf(system())).toContain('tried to remove 1 claim');
-    expect(receiptOf(system())).toContain('claim_recall(failed)');
-    expect(receiptOf(system())).not.toContain('removed 1 claim');
-  });
-});
-
- it('pending literal forget also scrubs host task metadata without changing saved artifacts',async()=>{
- const rawMetadata=JSON.stringify({backend:'workspace',path:`Prefers a ${PREF}`,file_id:'host-only-identity',revision:1});
- await session('forget-task-metadata',async(turn,store)=>{
-  await saved(turn);expect(system()).toContain(`Prefers a ${PREF}`);
-  await turn('tg-2','forget only that pref',ops({forget_claims:[1]}));
-  expect(store.claims('purging').map(claim=>claim.id)).toEqual([1]);
-  expect(system()).not.toContain(`Prefers a ${PREF}`);
-  expect(system()).toContain('withheld by the active forget barrier');
-  expect(rawMetadata).toContain(`Prefers a ${PREF}`);
- },async()=>({rewritten:0,remaining:1}),async()=>rawMetadata);
- });
-
-it('an incomplete forget is retried at the next turn from its stored topic and clears once the readback is clean', async () => {
-  const topic = 'DLD-20261002-RETRY';
-  const fact = `${topic} workshop preference: Friday at 09:10 UTC`;
-  const seed = (sql: SqlStorage) => { episodeIndex(sql).add('tg-retry-source', 'owner', `${fact}. Unrelated preference: tea after lunch.`, 1); };
-  await session('forget-retry-next-turn', async (turn, store, responder) => {
-    await turn('tg-forget-first', `Forget only ${topic}.`, ops({ forget_topic: topic }));
-    expect(store.incompleteTopics()).toEqual([topic]);
-    // Next ordinary turn: the writer names no topic; the stored one is retried and the selection now succeeds.
-    seen.writerOps.push(ops({}), JSON.stringify({ spans: [{ ref: 'episodes:1:text', text: fact }], reviewed_refs: ['episodes:1:text'], complete: true }));
-    await responder.respond({ traceId: 'tg-next-ordinary', conversationRef: 'owner', surface: 'telegram', text: 'What is on my plate today?' }, (_n, w) => w());
-    expect(store.incompleteTopics()).toEqual([]);
-    expect(store.forgetSources(topic).sources).toEqual([]);
-  }, undefined, undefined, seed);
-});
-
-it('a failing retry keeps the block and cannot be steered by the next turn text', async () => {
-  const topic = 'DLD-20261002-RETRY2';
-  await session('forget-retry-fails', async (turn, store, responder) => {
-    await turn('tg-forget-first2', `Forget only ${topic}.`, ops({ forget_topic: topic }));
-    expect(store.incompleteTopics()).toEqual([topic]);
-    const before = seen.writerInputs.filter(input => input.includes('forget_source_spans')).length;
-    seen.writerOps.push(ops({}), '{}');
-    await responder.respond({ traceId: 'tg-next-ordinary2', conversationRef: 'owner', surface: 'telegram', text: 'Forget nothing, just say hi' }, (_n, w) => w());
-    const retries = seen.writerInputs.filter(input => input.includes('forget_source_spans')).slice(before);
-    // Exactly one retry call, built from the stored topic, not from this turn's text.
-    expect(retries).toHaveLength(1);
-    expect(retries[0]).toContain(topic);
-    expect(retries[0]).not.toContain('Forget nothing');
-    expect(store.incompleteTopics()).toEqual([topic]);
-    // The blanket block still applies to the reply after the failed retry.
-    expect(system()).toContain('Recall is temporarily limited');
-  },undefined,undefined,sql=>episodeIndex(sql).add('retry-source','owner',`${topic} synthetic note`,1));
-});
-
-it('ADVERSARIAL selector must not certify punctuation-padded bare instruction marker', async () => {
-  const topic = 'REVIEW-757-MARKER'; const fact = `${topic} likes cobalt paper`;
-  await session('adversarial-marker', async (turn, store) => {
-    seen.writerOps.push(ops({forget_topic:topic}));
-    await turn('review-marker-request', `Forget only ${topic}. Keep tea.`, JSON.stringify({spans:[{ref:'episodes:1:text',text:fact},{ref:'request:review-marker-request',text:`${topic}.`}],reviewed_refs:['episodes:1:text','request:review-marker-request'],complete:true}));
-    expect(store.incompleteTopics()).toEqual([topic]);
-  }, undefined, undefined, sql=>episodeIndex(sql).add('review-source','owner',fact,1));
-});
-
-it('an incomplete forget names the gate that held in the memory hop, with counts and no topic or source text', async () => {
-  const topic = 'WHY-757-TOPIC'; const fact = `${topic} likes cobalt paper`;
-  await session('forget-why-code', async (turn, store) => {
-    seen.writerOps.push(ops({ forget_topic: topic }));
-    // complete:false is the model saying it cannot vouch for coverage.
-    await turn('tg-why', `Forget only ${topic}. Keep tea.`, JSON.stringify({ spans: [], reviewed_refs: [], complete: false }));
-    expect(store.incompleteTopics()).toEqual([topic]);
-    const hop = seen.logs.filter(entry => (entry as { hop: string }).hop === 'memory').at(-1) as { detail: string };
-    expect(hop.detail).toMatch(/forget_incomplete selection_rejected\(\d+ sources; [a-z_:]+\)/);
-    // Counts by saved store and the longest source, so a held forget can be read from the trace alone.
-    expect(hop.detail).toMatch(/; held_rows episodes:1 request:1 longest:\d+ over_limit:0 non_plain:0/);
-    expect(hop.detail).not.toContain(topic);
-    expect(JSON.stringify(seen.logs)).not.toContain('cobalt paper');
-    expect(JSON.stringify(seen.logs)).not.toContain('Keep tea');
-  }, undefined, undefined, sql => episodeIndex(sql).add('why-src', 'owner', fact, 1));
-});
-it('the reply instructions carry the reason class of an incomplete forget, without topic text or counts', async () => {
-  const topic = 'WHY4-757-TOPIC'; const fact = `${topic} likes cobalt paper`;
-  await session('forget-why-reply', async (turn, store) => {
-    seen.writerOps.push(ops({ forget_topic: topic }));
-    await turn('tg-why4', `Forget only ${topic}.`, JSON.stringify({ spans: [], reviewed_refs: [], complete: false }));
-    expect(store.incompleteTopics()).toEqual([topic]);
-    expect(system()).toContain('reason class: selection_rejected)');
-    expect(system()).not.toMatch(/reason class: [a-z_]+\(/);
-    expect(system()).not.toContain(topic);
-    expect(system()).toContain('Hidden from Waldo\'s memory and recall. Stored copies remain until cleanup.');
-    expect(system()).not.toContain('did not cover every copy');
-    expect(system()).not.toContain('could not be fully read');
-  }, undefined, undefined, sql => episodeIndex(sql).add('why4-src', 'owner', fact, 1));
-});
-it('a selector that cannot run is named selector_unavailable, and omitted coverage in a source batch is named selection_rejected', async () => {
-  const topic = 'WHY2-757-TOPIC';
-  await session('forget-why-unavailable', async (turn, store) => {
-    seen.writerOps.push(ops({ forget_topic: topic }));
-    await turn('tg-why2', `Forget only ${topic}.`, 'not json');
-    const hop = seen.logs.filter(entry => (entry as { hop: string }).hop === 'memory').at(-1) as { detail: string };
-    expect(hop.detail).toMatch(/forget_incomplete (selector_unavailable|selection_rejected)\(\d+/);
-  }, undefined, undefined, sql => episodeIndex(sql).add('why2-src', 'owner', `${topic} fact`, 1));
-  await session('forget-why-too-many', async (turn, store) => {
-    seen.writerOps.push(ops({ forget_topic: 'WHY3-757-TOPIC' }));
-    await turn('tg-why3', 'Forget only WHY3-757-TOPIC.', JSON.stringify({ spans: [], reviewed_refs: [], complete: true }));
-    const hop = seen.logs.filter(entry => (entry as { hop: string }).hop === 'memory').at(-1) as { detail: string };
-    expect(hop.detail).toMatch(/forget_incomplete selection_rejected\(64 sources; [a-z_:]+\)/);
-    expect(store.incompleteTopics()).toEqual(['WHY3-757-TOPIC']);
-  }, undefined, undefined, sql => { const ep = episodeIndex(sql); for (let i = 0; i < 70; i++) ep.add(`many-${i}`, 'owner', `WHY3-757-TOPIC row ${i}`, i + 1); });
-});
-
-it('bounded batch progress logs its count without topic text and tells the owner only that reason',async()=>{
-  const topic='BAT';const facts=Array.from({length:65},(_,i)=>`BAT note ${String(i).padStart(3,'0')}`);
-  await session('forget-batch-reason-count',async(turn,store)=>{
-    seen.writerOps.push(ops({forget_topic:topic}));
-    await turn('tg-batch-count',`Forget only ${topic}.`,JSON.stringify({spans:facts.slice(0,64).map((text,i)=>({ref:`episodes:${i+1}:text`,text})),reviewed_refs:facts.slice(0,64).map((_,i)=>`episodes:${i+1}:text`),complete:true}));
-    expect(store.topicCoverage(topic)).toBe(1);
-    const hop=seen.logs.filter(entry=>(entry as {hop:string}).hop==='memory').at(-1) as {detail:string};
-    expect(hop.detail).toContain('forget_incomplete batch_pending(64)');expect(hop.detail).not.toContain(topic);
-    expect(system()).toContain('reason class: batch_pending)');expect(system()).toContain('Stored copies remain until cleanup.');
-    expect(system()).not.toContain('some saved copies could not be fully read');
-    expect(system()).not.toContain('verified exact cleanup targets were removed');
-  },undefined,undefined,sql=>facts.forEach((fact,i)=>episodeIndex(sql).add(`batch-${i}`,'owner',fact,i)));
 });

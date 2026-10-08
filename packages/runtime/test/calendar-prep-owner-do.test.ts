@@ -44,7 +44,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
 });
 const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
 
-it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-revoked', 'subject', 'new-bot', 'disabled', 'owner-opt-out', 'low-volume', 'wrong-ack', 'uncertain-restart', 'changed-during-model', 'revoked-during-model', 'no-op', 'forget', 'legacy-counters', 'daily-cap', 'large-profile'])('default owner prep handles %s without stale delivery or invented completion', async mode => {
+it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-revoked', 'subject', 'new-bot', 'disabled', 'owner-opt-out', 'low-volume', 'wrong-ack', 'uncertain-restart', 'changed-during-model', 'revoked-during-model', 'no-op', 'legacy-counters', 'daily-cap', 'large-profile'])('default owner prep handles %s without stale delivery or invented completion', async mode => {
   const name = `calendar-prep-${mode}`;
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const originalNow = Date.now;
@@ -113,12 +113,6 @@ it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-r
           const all = state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!;
           all.find(r => r.calendarPrep)!.status = 'attempting'; state.storage.kv.put(FINAL_OUTBOX_KEY, all);
         }
-        if (mode === 'forget') {
-          await incoming('Forget "Bring the onboarding mocks"');
-          expect(rows()[0]?.payload.text).toContain('Bring the onboarding mocks'); // Unproved coverage preserves source bytes.
-          expect(claimStore(state.storage.sql).incompleteTopics()).toEqual(['Bring the onboarding mocks']);
-          owner = new TelegramOwnerDO(state, config); // The hold survives recreation.
-        }
         if (mode === 'daily-cap') {
           fixture.event = { ...fixture.event!, id: 'event-2' }; await incoming();
           fixture.event = { ...fixture.event!, id: 'event-3' }; await incoming();
@@ -126,7 +120,7 @@ it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-r
           expect(state.storage.sql.exec('SELECT local_date, count FROM class_state').one()).toEqual({ local_date: '2026-10-03', count: 2 });
         }
         await drain();
-        if (['disabled', 'owner-opt-out', 'low-volume', 'forget'].includes(mode)) {
+        if (['disabled', 'owner-opt-out', 'low-volume'].includes(mode)) {
           expect(rows()[0]?.status).toBe('pending');
           expect(rows()[0]!.dueAt).toBeLessThanOrEqual(Date.parse(fixture.event.start));
           now = Date.parse(fixture.event.start); await drain();

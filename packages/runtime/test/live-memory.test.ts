@@ -97,4 +97,15 @@ describe('live owner memory', () => {
     expect(s.store.claims().map(c => c.id)).toEqual([2]);
     expect(await s.call('forget_memory', { source: { message_ref: 'tg-1', start: 0, end: 999 }, scope_note: 'bad span' }, forget)).toMatchObject({ ok: false });
   });
+  it('keeps an unfinished legacy forget out of recall, and a later forget_memory on the topic finishes it', async () => {
+    const s = setup();
+    s.store.add({ kind: 'preference', text: 'Prefers oolong tea', source: 'stated', evidence: 'oolong', origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-08T08:00:00Z');
+    s.sql.exec('INSERT INTO topic_purge_pending (fingerprint, topic, created_at, coverage_incomplete) VALUES (?, ?, ?, 1)', 'legacy-fp', 'oolong', '2026-10-07T08:00:00Z');
+    expect(s.store.incompleteTopics()).toEqual(['oolong']);
+    const read = await s.call('read_memory', { query: 'tea' }, s.ctx('what tea do I like'));
+    expect(JSON.stringify(read)).not.toContain('oolong');
+    expect(await s.call('forget_memory', { topic: 'oolong', scope_note: 'oolong' }, s.ctx('forget oolong'))).toMatchObject({ ok: true });
+    expect(s.store.incompleteTopics()).toEqual([]);
+    expect(s.store.pendingTopics()).toEqual([]);
+  });
 });

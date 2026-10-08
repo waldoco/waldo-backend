@@ -134,15 +134,15 @@ describe('day-plan memory budget', () => {
     });
   });
 
-  it('skips oversized recalled evidence, retains a later fitting match and reports it', async () => {
+  it('never shows claim evidence, so oversized evidence cannot crowd out the profile', async () => {
     await withMemory('day-plan-recall-room', (store) => {
       add(store, 'Quiet hours small routine', 'short evidence');
       add(store, 'Quiet hours huge routine', 'x'.repeat(limit * 2));
       const content = composeDayPlanInput(input, store);
       expect(wireSize(content)).toBeLessThanOrEqual(limit);
-      expect(content).toContain('Quiet hours small routine | evidence');
+      expect(content).toContain('Quiet hours small routine');
+      expect(content).toContain('Quiet hours huge routine');
       expect(content).not.toContain('x'.repeat(100));
-      expect(content).toContain('(1 matching claims are too long to show here;');
     });
   });
 

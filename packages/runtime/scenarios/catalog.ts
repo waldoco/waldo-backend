@@ -119,15 +119,16 @@ export const SCENARIOS: readonly Scenario[] = [
     },
   },
   {
-    id: 'memory-writer-hop',
+    id: 'memory-tool-hop',
     category: 'memory',
     turns: ['I am vegetarian, just so you know'],
     llm: [
-      { match: /vegetarian/, rounds: [{ text: 'Noted.' }] },
+      { match: /vegetarian/, rounds: [{ toolCalls: [{ name: 'remember', arguments: { kind: 'preference', text: 'Vegetarian', evidence_quote: 'vegetarian' } }] }, { text: 'Saved.' }] },
     ],
     assert: {
-      hops: [{ hop: 'llm_reply', ok: true, after: 'memory' }],
-      replies: [/Noted/],
+      mustCall: ['remember'],
+      hops: [{ hop: 'tool_remember', ok: true }],
+      replies: [/Saved/],
     },
   },
   {
@@ -176,18 +177,18 @@ export const SCENARIOS: readonly Scenario[] = [
     },
   },
   {
-    id: 'serialization-memory-before-next-turn',
+    id: 'memory-tool-before-next-turn',
     category: 'memory',
     turns: ['I wake at 7:30 now', 'what time do I wake?'],
     llm: [
-      { match: /wake at 7:30/, rounds: [{ text: 'Got it, 7:30.' }] },
-      { match: /what time do I wake/, rounds: [{ text: '7:30.' }] },
+      { match: /wake at 7:30/, rounds: [{ toolCalls: [{ name: 'remember', arguments: { kind: 'routine', text: 'Wakes at 7:30', evidence_quote: 'wake at 7:30' } }] }, { text: 'Got it, 7:30.' }] },
+      { match: /what time do I wake/, rounds: [{ toolCalls: [{ name: 'read_memory', arguments: { query: 'wake', limit: 8 } }] }, { text: '7:30.' }] },
     ],
     assert: {
-      // Record before reply: each turn's memory write lands before its own reply and so before the next turn.
+      mustCall: ['remember', 'read_memory'],
       hops: [
-        { hop: 'llm_reply', ok: true, trace: /tg-1$/, after: 'memory', afterTrace: /tg-1$/ },
-        { hop: 'llm_reply', ok: true, trace: /tg-2$/, after: 'memory', afterTrace: /tg-2$/ },
+        { hop: 'tool_remember', ok: true, trace: /tg-1$/ },
+        { hop: 'tool_read_memory', ok: true, trace: /tg-2$/ },
       ],
     },
   },
