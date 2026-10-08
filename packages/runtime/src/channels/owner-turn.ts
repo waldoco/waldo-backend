@@ -175,7 +175,7 @@ export const createOwnerResponder = (
       if (transientDecision && (request.context !== 'full_context' || new TextEncoder().encode(JSON.stringify(request.request)).byteLength > MODEL_CONTEXT_MAX_CHARS)) throw new Error('background decision context bound');
       if (!transientDecision && skills && expectedProcedure !== undefined) await skills.assertProcedureCurrent(expectedProcedure, CANARIES);
       mark('procedure_checked');
-      mark('gateway_call');
+      mark(`gateway_call:messages=${request.request.messages.length}`);
       const result = await adapter.complete(request);
       mark('gateway_return');
       await assertCurrent();

@@ -1421,7 +1421,7 @@ async function sanitiseRequest(
   const historyChars = deriveContextBudgetChars(request.model, historyPolicy.max_chars);
   let first = Math.max(0, request.messages.length - historyPolicy.max_array_items);
   for (let used = 0, index = request.messages.length - 1; index >= first; index -= 1) {
-    used += request.messages[index]!.content.length;
+    used += JSON.stringify(request.messages[index]).length;
     if (used > historyChars && index < request.messages.length - 1) { first = index + 1; break; }
   }
   const history = first === 0 ? request.messages : request.messages.slice(first);
@@ -1432,12 +1432,19 @@ async function sanitiseRequest(
   if (!messages.ok && softScribe(messages.error)) {
     let low = 1;
     let high = history.length - 1;
+    let cut = 0;
     while (low <= high) {
       const drop = Math.floor((low + high) / 2);
       const reduced = await sanitiseValue(history.slice(drop), 'internal_context');
-      if (reduced.ok) { messages = reduced; high = drop - 1; }
-      else if (softScribe(reduced.error)) low = drop + 1;
-      else high = drop - 1;
+      // A hard denial (canary, secret, injection) anywhere rejects the request; only size and structure are trimmable.
+      if (!reduced.ok && !softScribe(reduced.error)) return { ...reduced, scribeDestination: 'internal_context' };
+      if (reduced.ok) { messages = reduced; cut = drop; high = drop - 1; }
+      else low = drop + 1;
+    }
+    // The dropped prefix is never sent, but a hard denial inside it still rejects the request, as the one-at-a-time trim did.
+    if (messages.ok && cut > 0) {
+      const dropped = await sanitiseValue(history.slice(0, cut), 'internal_context');
+      if (!dropped.ok && !softScribe(dropped.error)) return { ...dropped, scribeDestination: 'internal_context' };
     }
   }
   if (!messages.ok) return { ...messages, scribeDestination: 'internal_context' };
