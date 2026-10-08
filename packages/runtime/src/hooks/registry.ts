@@ -394,6 +394,11 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
   },
 };
 
+// Tools with an owner-approval path: a call carrying external content is routed to a proposal
+// the owner approves, instead of being refused. Tools without one stay a hard block.
+const TAINT_APPROVAL_TOOLS: readonly ToolName[] = ['send_message', 'draft_document', 'write_task', 'update_task'];
+export const TAINT_NEEDS_APPROVAL_REASON = 'external-tainted privileged action needs owner approval';
+
 export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
   name: 'autonomy_gate_check',
   event: 'PreToolUse',
@@ -418,7 +423,9 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
     }
 
     if (taintGateBlocksDirectExecution(tool.data, sourceTaint.data)) {
-      return halt('external-tainted privileged action blocked', 'forbidden');
+      return TAINT_APPROVAL_TOOLS.includes(tool.data)
+        ? halt(TAINT_NEEDS_APPROVAL_REASON, 'forbidden')
+        : halt('external-tainted privileged action blocked', 'forbidden');
     }
 
     if (ctx.hasApproval === undefined) {
@@ -545,7 +552,7 @@ export class HookHaltError extends Error {
     // invalid_args carries model-authored arg details the model needs to recover; every other
     // halt (acl, sanitise, ...) stays opaque so security reasons never reach the model. An egress denial
     // only says the address cannot be opened, so the model can pick another source instead of stalling.
-    this.clientMessage = code === 'invalid_args' ? reason : hook === 'egress_allowlist_check' ? 'That address cannot be opened. Try another source.' : 'hook halted';
+    this.clientMessage = code === 'invalid_args' ? reason : hook === 'egress_allowlist_check' ? 'That address cannot be opened. Try another source.' : reason === TAINT_NEEDS_APPROVAL_REASON ? 'This uses content from an email or web page, so it needs the owner\'s approval first. Propose it with propose_action instead of doing it directly.' : 'hook halted';
     this.onErrorPayload = {
       event: 'OnError',
       error: this.clientMessage,

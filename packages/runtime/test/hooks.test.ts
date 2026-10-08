@@ -306,7 +306,16 @@ describe('hook registry', () => {
     ).rejects.toMatchObject({
       hook: 'autonomy_gate_check',
       code: 'forbidden',
+      clientMessage: expect.stringContaining('propose_action'),
     });
+  });
+
+  it('keeps the hard block for an external-tainted tool with no approval path', async () => {
+    const ctx = runtimeCtx({ toolArgSourceTaint: 'external' });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-mcp' }, ctx);
+    await expect(
+      runHooks('PreToolUse', { event: 'PreToolUse', tool: 'call_mcp_tool', args: { server: 's', tool: 't', args: {} } }, ctx),
+    ).rejects.toMatchObject({ code: 'forbidden', clientMessage: 'hook halted' });
   });
 
   it('fails closed when an ACL-granted tool has no contract arg schema yet', async () => {
