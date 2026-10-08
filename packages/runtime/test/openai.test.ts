@@ -146,7 +146,7 @@ describe('OpenAIResponsesAdapter', () => {
     expect(result).toMatchObject({ ok: true, data: { text: '', tool_calls: [{ call_id: 'c2', name: 'get_context', arguments: '{}' }] } });
   });
 
-  it('sends a bounded reasoning effort and classifies truncated output as oversize', async () => {
+  it('sends a bounded reasoning effort and classifies an empty truncated output as oversize', async () => {
     let sent: unknown;
     const adapter = new OpenAIResponsesAdapter({
       apiKey: 'test-key',
@@ -159,6 +159,14 @@ describe('OpenAIResponsesAdapter', () => {
       ok: false, code: 'oversize', error: 'OpenAI output incomplete: max_output_tokens',
     });
     expect(sent).toMatchObject({ max_output_tokens: 32, reasoning: { effort: 'low', summary: 'auto' } });
+  });
+
+  it('an incomplete response with partial text is delivered with truncated: true', async () => {
+    const adapter = new OpenAIResponsesAdapter({
+      apiKey: 'test-key',
+      client: client(async () => ({ id: 'resp_test_3', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output_text: 'partial answer', output: [{ type: 'message', content: [{ type: 'output_text', text: 'partial answer' }] }] } as never)),
+    });
+    await expect(adapter.complete(gatewayRequest())).resolves.toMatchObject({ ok: true, data: { text: 'partial answer', truncated: true } });
   });
 
   it('fails explicitly when the key is missing', async () => {
