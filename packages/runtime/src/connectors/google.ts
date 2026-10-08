@@ -326,6 +326,27 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     const header = (name: string) => message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
     return { id, thread_id: message.threadId ?? '', from: header('From'), subject: header('Subject'), snippet: message.snippet ?? '', at: new Date(Number(message.internalDate ?? 0)).toISOString() };
   }));
+  const threadPage = async (threadId: string, limit: number, cursor?: string): Promise<Readonly<{messages:readonly ThreadMessage[];cursor:string|null}>> => {
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw new Error('invalid thread page limit');
+      const json = await call(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`) as { messages?: GmailFullMessage[] };
+      if (!json || !Array.isArray(json.messages)) throw new Error('invalid Gmail thread response');
+      const ids = json.messages.map(message => message.id);
+      const binding = await sha256Hex(JSON.stringify([account, threadId, ids]));
+      let offset = 0;
+      if (cursor) {
+        try {
+          const decoded = JSON.parse(b64urlDecode(cursor)) as {binding: string; offset: number};
+          if (decoded.binding !== binding || !Number.isSafeInteger(decoded.offset) || decoded.offset < 1 || decoded.offset >= ids.length) throw new Error();
+          offset = decoded.offset;
+        } catch { throw new Error('invalid thread cursor or thread changed; read the first page again'); }
+      }
+      const messages = json.messages.slice(offset, offset + limit).map(message => {
+        const header = (name: string) => message.payload?.headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
+        return { id: message.id ?? '', from: header('From'), subject: header('Subject'), at: new Date(Number(message.internalDate ?? 0)).toISOString(), body: threadBody(message.payload) || (message.snippet ?? '').slice(0, BODY_CAP) };
+      });
+      const next = offset + messages.length;
+      return {messages, cursor: next < ids.length ? b64url(new TextEncoder().encode(JSON.stringify({binding,offset:next}))) : null};
+  };
   return {
     account,
     freeBusy:async(from,to,calendarIds,timezone)=>{
@@ -410,29 +431,9 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       return mailItems(await listIds(query, limit));
     },
     async readThread(threadId, limit) {
-      return (await this.threadPage!(threadId, limit)).messages;
+      return (await threadPage(threadId, limit)).messages;
     },
-    async threadPage(threadId, limit, cursor) {
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw new Error('invalid thread page limit');
-      const json = await call(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`) as { messages?: GmailFullMessage[] };
-      if (!json || !Array.isArray(json.messages)) throw new Error('invalid Gmail thread response');
-      const ids = json.messages.map(message => message.id);
-      const binding = await sha256Hex(JSON.stringify([account, threadId, ids]));
-      let offset = 0;
-      if (cursor) {
-        try {
-          const decoded = JSON.parse(b64urlDecode(cursor)) as {binding: string; offset: number};
-          if (decoded.binding !== binding || !Number.isSafeInteger(decoded.offset) || decoded.offset < 1 || decoded.offset >= ids.length) throw new Error();
-          offset = decoded.offset;
-        } catch { throw new Error('invalid thread cursor or thread changed; read the first page again'); }
-      }
-      const messages = json.messages.slice(offset, offset + limit).map(message => {
-        const header = (name: string) => message.payload?.headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
-        return { id: message.id ?? '', from: header('From'), subject: header('Subject'), at: new Date(Number(message.internalDate ?? 0)).toISOString(), body: threadBody(message.payload) || (message.snippet ?? '').slice(0, BODY_CAP) };
-      });
-      const next = offset + messages.length;
-      return {messages, cursor: next < ids.length ? b64url(new TextEncoder().encode(JSON.stringify({binding,offset:next}))) : null};
-    },
+    threadPage,
     async tasks(status, limit) {
       const url = new URL('https://tasks.googleapis.com/tasks/v1/lists/@default/tasks');
       // Google Tasks has no in-progress state: todo and in_progress both read the open list;
