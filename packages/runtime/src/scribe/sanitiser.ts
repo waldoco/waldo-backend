@@ -345,7 +345,7 @@ function visitStrings(
     if (!current) continue;
     const { value } = current;
     if (typeof value === 'string') {
-      const decoded = decodedViews(value, lenientScope && destination === 'internal_context');
+      const decoded = decodedViews(value);
       if (decoded.invalid) return { invalid: true, matched: false };
       if (decoded.views.some((view) => visitor(view, current.key))) {
         return { invalid: false, matched: true };
@@ -924,7 +924,7 @@ function inspectInstructions(
       instructionCount += Array.from(text.matchAll(global)).length;
       output = output.replace(global, '[REDACTED_INSTRUCTION]');
     }
-    const decoded = decodedViews(output, lenientScope && destination === 'internal_context');
+    const decoded = decodedViews(output);
     if (decoded.views.slice(1).some((view) => scoreInjection(view).decision !== 'allow')) {
       instructionCount += 1;
       return '[REDACTED_INSTRUCTION]';

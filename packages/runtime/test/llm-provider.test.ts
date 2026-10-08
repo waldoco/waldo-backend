@@ -1658,7 +1658,7 @@ describe('sanitiseRequest structural degradation', () => {
     expect(gateway.requests[0]!.request.messages).toEqual([{ role: 'user', content: 'current question' }]);
   });
 
-  it('retries once with lenient truncation when the current message itself trips a structural scribe deny', async () => {
+  it('fails closed when the current message itself trips a structural scribe deny', async () => {
     const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
     const provider = new RuntimeLLMProvider({ gateway });
     const result = await provider.complete(
@@ -1672,8 +1672,9 @@ describe('sanitiseRequest structural degradation', () => {
       },
       runtimeCtx(),
     );
-    expect(result.ok).toBe(true);
-    expect(gateway.requests).toHaveLength(1);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.halted_by).toBe('scribe_sanitise');
+    expect(gateway.requests).toHaveLength(0);
   });
 
   it('fails closed on hard scribe denies even when only history carries the canary', async () => {

@@ -1489,15 +1489,6 @@ describe('issue #152 - malformed percent escapes are plain text, not a payload d
     expect(inspect([{ role: 'user', content: `${filler} token ${triple}` }])).toMatchObject({ ok: false, reason: 'invalid_payload' });
   });
 
-  it('lenient scope stops decoding past the two-pass bound instead of failing', () => {
-    const triple = btoa(btoa(btoa('see you at the venue')));
-    const filler = 'ordinary calendar and conversation text. '.repeat(500);
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const result = runLenientInternalContext(() => inspect([{ role: 'user', content: `${filler} token ${triple}` }]));
-    expect(result).toMatchObject({ ok: true });
-    expect(warn.mock.calls.some(call => String(call[0]).includes('scribe_lenient'))).toBe(true);
-    warn.mockRestore();
-  });
 });
 
 describe('sanitiseVerifyOnly (assembled provider prompt final pass)', () => {
