@@ -4,17 +4,17 @@ import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
 import { persistInboxWake } from '../src/scheduler/alarm-slot';
 import { claimStore } from '../src/memory/claims';
 import { episodeIndex } from '../src/channels/episodes';
-const seen = vi.hoisted(() => ({ inputs: [] as string[], outputs: [] as unknown[][] }));
+const seen = vi.hoisted(() => ({ inputs: [] as string[], outputs: [] as unknown[][], sent: [] as string[], status: undefined as string | undefined }));
 vi.mock('../src/channels/telegram-api', async load => ({
   ...await load<typeof import('../src/channels/telegram-api')>(),
-  createTelegramCaller: () => async (method: string) => method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: 1, chat: { id: 42 } } : true,
+  createTelegramCaller: () => async (method: string, params?: unknown) => { if (method === 'sendMessage') seen.sent.push(JSON.stringify(params)); return method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: 1, chat: { id: 42 } } : true; },
 }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
   seen.inputs.push(JSON.stringify(body));
   const name = (body as { text?: { format?: { name?: string } } }).text?.format?.name;
-  return { id: 'fixture', output_text: name === 'reaction' ? '{"reaction":null}' : name === 'day_plan' ? '{"cards":[]}' : 'Done', output: name ? [] : seen.outputs.shift() ?? [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
+  return { id: 'fixture', ...(seen.status ? { status: seen.status } : {}), output_text: name === 'reaction' ? '{"reaction":null}' : name === 'day_plan' ? '{"cards":[]}' : 'Done', output: name ? [] : seen.outputs.shift() ?? [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
 } }; } }));
-beforeEach(() => { seen.inputs.length = 0; seen.outputs.length = 0; });
+beforeEach(() => { seen.inputs.length = 0; seen.outputs.length = 0; seen.sent.length = 0; seen.status = undefined; });
 const stub = (name: string) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
 const turn = async (name: string, id: number, text: string) => {
   await runInDurableObject(stub(name), async (instance, state) => {
@@ -875,4 +875,17 @@ it('SCAN after forget_memory and eviction no table or column of the owner DO hol
   await evictDurableObject(stub(name));
   await turn(name, 3, 'What time is my standup?');
   await runInDurableObject(stub(name), async (_i, state) => expect([...scanForText(state.storage.sql, secret), ...await scanKv(state.storage, secret)]).toEqual([]));
+});
+
+it('an incomplete model reply with no tool calls tells the owner it stopped early', async () => {
+  const name = 'memory-do-stopped-early';
+  seen.status = 'incomplete';
+  await turn(name, 1, 'Write me a very long essay');
+  expect((await runInDurableObject(stub(name), (_i, state) => scanKv(state.storage, 'I stopped early'))).length).toBeGreaterThan(0);
+});
+it('a complete model reply carries no stop note', async () => {
+  const name = 'memory-do-not-stopped';
+  await turn(name, 1, 'Say hi');
+  expect((await runInDurableObject(stub(name), (_i, state) => scanKv(state.storage, 'I stopped early'))).length).toBe(0);
+  expect((await runInDurableObject(stub(name), (_i, state) => scanKv(state.storage, 'Done'))).length).toBeGreaterThan(0);
 });
