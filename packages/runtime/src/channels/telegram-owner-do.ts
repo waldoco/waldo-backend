@@ -91,6 +91,7 @@ import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
 import { googleProxy } from '../connectors/connections';
 import { googleCircuit } from '../connectors/google-circuit';
+import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition } from '../connectors/google-reconnect';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
@@ -1398,12 +1399,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     // A blocked send (unlinked or rebound owner) returns no message. A producer must not record that as sent, completed or folded.
     const sentOrThrow = async (sending: Promise<unknown>) => { if ((await sending) === undefined) throw new Error('telegram send blocked'); };
     // The trace names the attempt by its nonce prefix; the signed URL itself is never logged.
-    const deliverConnectLink = async (url: string): Promise<boolean> => {
+    const deliverConnectLink = async (url: string, purpose: 'connect' | 'reconnect' = 'connect', email?: string): Promise<boolean> => {
       const trace = url.includes('/c/') ? 'connect:deliver' : `oauth:${(new URL(url).searchParams.get('state') ?? '').split('.').at(-2)?.slice(0, 8) ?? 'unknown'}`;
+      const text = purpose === 'reconnect'
+        ? `Your Google connection${email ? ` (${email})` : ''} stopped working - tap below to reconnect it. The link is signed, single-purpose and expires shortly.`
+        : 'Tap below to connect your Google account. The link is signed, single-purpose and expires shortly.';
       return routedCall('sendMessage', {
         chat_id: owner,
-        text: 'Tap below to connect your Google account. The link is signed, single-purpose and expires shortly.',
-        reply_markup: { inline_keyboard: [[{ text: 'Connect Google', url }]] },
+        text,
+        reply_markup: { inline_keyboard: [[{ text: purpose === 'reconnect' ? 'Reconnect Google' : 'Connect Google', url }]] },
       }).then((sent) => { if (sent === undefined) throw new Error('telegram send blocked'); log({ trace, hop: 'oauth_link_sent', ms: 0, ok: true }); return true; })
         .catch((error: unknown) => (log({ trace, hop: 'oauth_link_sent', ms: 0, ok: false, error: String(error), code: 'send_failed' }), false));
     };
@@ -1416,6 +1420,24 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (Date.now() - (sent[key] ?? 0) < 60_000) {
         log({ trace: 'connect:offer', hop: 'connect_offer', ms: 0, ok: true, detail: `${key} already sent` });
         return true;
+      }
+      if (intent.service === 'google' && intent.reason === 'reauth_needed') {
+        // A dead grant earns one reconnect notice per failure episode. The episode record owns
+        // dedupe, so sweeps (brief, update cards) never re-offer while the grant stays broken.
+        const noticed = (await storage.get<Record<string, number>>('google:reauth-noticed')) ?? {};
+        if (Object.keys(noticed).length > 0) {
+          log({ trace: 'connect:offer', hop: 'connect_offer', ms: 0, ok: true, detail: `${key} reconnect notice outstanding` });
+          return true;
+        }
+        const url = await google.connectUrl(intent.feature ?? 'calendar');
+        const ok = url !== null && (await deliverConnectLink(url, 'reconnect'));
+        log({ trace: 'connect:offer', hop: 'connect_offer', ms: 0, ok, ...(ok ? { detail: key } : { error: url === null ? 'no link minted' : 'send failed' }) });
+        if (ok) {
+          await storage.put('connect:offers', { ...sent, [key]: Date.now() });
+          const failing = Object.keys(await health());
+          if (failing.length) await storage.put('google:reauth-noticed', { ...noticed, ...Object.fromEntries(failing.map((id) => [id, Date.now()])) });
+        }
+        return ok;
       }
       const url = await google.connectUrl(intent.feature ?? 'calendar');
       const ok = url !== null && (await deliverConnectLink(url));
@@ -1434,11 +1456,22 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const accounts = async () => (await storage.get<GoogleAccount[]>('google:accounts')) ?? [];
     const health = async () => (await storage.get<Record<string, string>>('google:health')) ?? {};
     const noteHealth = (id: string, error: string) => {
-      this.ctx.waitUntil(health().then((all) => {
+      this.ctx.waitUntil((async () => {
+        const [all, noticed] = [await health(), (await storage.get<Record<string, number>>('google:reauth-noticed')) ?? {}];
         const { [id]: _, ...rest } = all;
-        return storage.put('google:health', error ? { ...rest, [id]: error } : rest);
-      }));
-      const doName = vaultOwner();
+        await storage.put('google:health', error ? { ...rest, [id]: error } : rest);
+        const transition = reauthNoticeTransition({ failing: Boolean(all[id]), noticed: id in noticed }, error);
+        if (!transition.noticed && id in noticed) {
+          const { [id]: _cleared, ...remaining } = noticed;
+          await storage.put('google:reauth-noticed', remaining);
+        }
+        if (!transition.send) return;
+        const account = (await accounts()).find((known) => known.id === id);
+        const url = await google.connectUrl('calendar');
+        const sent = url !== null && (await deliverConnectLink(url, 'reconnect', account?.email));
+        log({ trace: `google:${Date.now()}`, hop: 'google_reauth_notice', ms: 0, ok: sent, ...(sent ? {} : { error: url === null ? 'no link minted' : 'send failed' }) });
+        if (sent) await storage.put('google:reauth-noticed', { ...(await storage.get<Record<string, number>>('google:reauth-noticed')) ?? {}, [id]: Date.now() });
+      })());
     };
     const env = this.env;
     const consentDeps = {
@@ -1563,7 +1596,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             const grant = vault && doName
               ? await vault.exchange(doName, code, redirectUri, verifier)
               : clientId && clientSecret ? await exchangeGoogleCode({ clientId, clientSecret, redirectUri }, code, fetch, verifier) : null;
-            if (grant) await google.keep(grant);
+            if (grant) {
+              await google.keep(grant);
+              // Readback-confirmed recovery: "connected" is settled only after one real provider
+              // read succeeds on the fresh grant; a failure settles the attempt as failed.
+              const feature = readbackFeature(grant.scopes ?? null);
+              if (!feature) throw new GoogleReadbackError('unavailable', 'grant holds no readable scope');
+              const readback = 'id' in grant
+                ? vault && doName ? vault.client(doName, grant.id, (error) => noteHealth(grant.id, error)) : null
+                : clientId && clientSecret ? googleClient({ clientId, clientSecret, redirectUri }, { refresh_token: grant.refresh_token, email: grant.email }, fetch, (error) => noteHealth(`local:${(grant.email ?? 'google').toLowerCase()}`, error)) : null;
+              if (!readback) throw new GoogleReadbackError('unavailable', 'no readback client');
+              await confirmGoogleReadback(readback, feature, Date.now());
+            }
             log({ trace, hop: 'oauth_exchange', ms: Date.now() - exchangeStarted, ok: grant !== null, detail: vault ? 'proxy' : 'local', ...(grant ? {} : { error: 'no account returned' }) });
             return grant;
           } catch (error) {
