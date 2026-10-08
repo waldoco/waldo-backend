@@ -19,6 +19,7 @@ const SCOPES: readonly SourceScope[] = ['none', 'pasted_only'];
 export const SOURCE_SCOPE_CLASS: Readonly<Record<ToolName, 'deny' | 'allow'>> = {
   get_crs: 'deny', get_health: 'deny', query_calendar: 'deny', get_communication: 'deny', search_communication: 'deny',
   read_thread: 'deny', get_tasks: 'deny', get_master_metrics: 'deny', get_context: 'allow', query_availability: 'deny',
+  remember: 'allow', forget_memory: 'allow',
   read_owner_context: 'deny', read_memory: 'deny', update_memory: 'allow', search_episodes: 'deny', propose_action: 'allow',
   execute_action: 'allow', send_message: 'allow', web_search: 'deny', read_document: 'deny', list_artifacts: 'deny',
   read_artifact: 'deny', call_mcp_tool: 'deny', read_mcp_tool: 'deny', read_drive: 'deny', write_task: 'allow', update_task: 'allow',

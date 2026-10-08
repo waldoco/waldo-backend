@@ -49,6 +49,8 @@ describe('toolName', () => {
       'read_owner_context',
       'read_memory',
       'update_memory',
+      'remember',
+      'forget_memory',
       'search_episodes',
       'propose_action',
       'execute_action',
@@ -236,7 +238,8 @@ describe('TOOL_PERMISSIONS', () => {
         'query_availability',
         'read_owner_context',
         'read_memory',
-        'update_memory',
+        'remember',
+        'forget_memory',
         'search_episodes',
         'search_connector',
         'web_search',
@@ -311,7 +314,7 @@ describe('TOOL_PERMISSIONS', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(TOOL_PERMISSIONS[trigger].length).toBeLessThan(toolNameSchema.options.length);
     }
-    expect(TOOL_PERMISSIONS.user_message).toHaveLength(toolNameSchema.options.length - 1);
+    expect(TOOL_PERMISSIONS.user_message).toHaveLength(toolNameSchema.options.length - 2);
   });
 
   it("keeps 'execute_code' typed but dispatchable nowhere (ADR-0050)", () => {
@@ -381,7 +384,7 @@ describe('search_tools — ADR-0034 Option A, first-class', () => {
   });
 
   it('pins the always-on discovery and skill metadata set', () => {
-    expect(ALWAYS_ON_TOOLS).toEqual(['read_memory', 'send_message', 'propose_action', 'search_tools', 'connect_service', 'skills_list']);
+    expect(ALWAYS_ON_TOOLS).toEqual(['read_memory', 'remember', 'forget_memory', 'send_message', 'propose_action', 'search_tools', 'connect_service', 'skills_list']);
   });
 
   it('grants connect_service exactly where query_calendar is granted', () => {

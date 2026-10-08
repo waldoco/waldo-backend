@@ -22,7 +22,7 @@ const NO_HANDLER = 'no live handler in this tree (see TOOL_CLAIM_EFFECT)';
 export const TOOL_REPLAY_CLASS: Readonly<Record<ToolName, ToolReplayRow>> = {
   get_crs: read(), get_health: read(), query_calendar: read(), get_communication: read(), search_communication: read(),
   read_thread: read(), get_tasks: read(), get_master_metrics: read(), get_context: read('pure clock read (tools/live/get-context.ts)'), query_availability: read(),
-  read_owner_context: read(), read_memory: unknown(NO_HANDLER + ' (schema and subagent allowlist only)'), search_episodes: read(), propose_action: unknown('proposal handler not inspected'),
+  read_owner_context: read(), read_memory: read(), search_episodes: read(), propose_action: unknown('proposal handler not inspected'),
   web_search: read(), read_document: read(), list_artifacts: read(), read_artifact: read(), read_mcp_tool: read('read-only MCP allowlist; every call goes through the proxy intent ledger (tools/live/mcp.ts); the remote server is trusted to be read-only'),
   read_drive: read(), search_connector: unknown(NO_HANDLER + ' (schema only)'), propose_schedule: unknown('proposal handler not inspected'), search_tools: read(),
   list_reminders: read(), read_tool_output: read(), connect_service: unknown('starts a connection flow; not inspected'),
@@ -42,6 +42,8 @@ export const TOOL_REPLAY_CLASS: Readonly<Record<ToolName, ToolReplayRow>> = {
   set_standing_order: unknown(NOT_INSPECTED), cancel_standing_order: unknown(NOT_INSPECTED),
   call_mcp_tool: unknown('proposes a card on the owner channel, executes directly elsewhere; remote effect unknown'),
   delegate_task: read('runs a read-only subagent (TOOL_CLAIM_EFFECT comment)'),
+  remember: { replay: 'reconcilable_write', basis: 'owner-local active claims dedupe by kind/text and corrections record supersedes_id', evidence: { file: 'tools/live/memory.ts', needle: 'supersedes_id' } },
+  forget_memory: unknown('local forget plus retained history cleanup; reconcile scope before retrying'),
   update_memory: unknown(NO_HANDLER), execute_action: unknown(NO_HANDLER), write_task: unknown(NO_HANDLER), update_task: unknown(NO_HANDLER),
   draft_document: unknown(NO_HANDLER), write_sheet_cell: unknown(NO_HANDLER), execute_code: unknown(NO_HANDLER),
   create_thread: unknown(NO_HANDLER), delete_message: unknown(NO_HANDLER), restore_message: unknown(NO_HANDLER),

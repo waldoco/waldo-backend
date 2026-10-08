@@ -136,7 +136,6 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
 // holds ONLY while it is unreachable: any change granting it an ACL MUST add it here in
 // the same change (pinned by handler.test's zero-ACL coupling guard).
 export const PRIVILEGED_ACTION_TOOLS: readonly ToolName[] = [
-  'update_memory',
   'execute_action',
   'send_message',
   'call_mcp_tool',
