@@ -1690,7 +1690,7 @@ describe('sanitiseRequest structural degradation', () => {
     );
     expect(result.ok).toBe(true);
     expect(gateway.requests[0]!.request.messages).toEqual(messages.slice(251));
-    expect(passes).toBeLessThan(30);
+    expect(passes).toBeLessThanOrEqual(12);
   });
 
   it('cuts a very long history to the item cap before scanning, in at most three sanitiser passes', async () => {

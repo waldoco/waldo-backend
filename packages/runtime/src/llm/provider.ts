@@ -1421,7 +1421,7 @@ async function sanitiseRequest(
   const historyChars = deriveContextBudgetChars(request.model, historyPolicy.max_chars);
   let first = Math.max(0, request.messages.length - historyPolicy.max_array_items);
   for (let used = 0, index = request.messages.length - 1; index >= first; index -= 1) {
-    used += request.messages[index]!.content.length;
+    used += JSON.stringify(request.messages[index]).length;
     if (used > historyChars && index < request.messages.length - 1) { first = index + 1; break; }
   }
   const history = first === 0 ? request.messages : request.messages.slice(first);
