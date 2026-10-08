@@ -54,7 +54,8 @@ describe('memory prompt size (phase 1 measurement)', () => {
       expect(selective).toBeLessThan(full);
       // The older ungated fixture rows have no authentic source pointers, so the
       // compact profile is intentionally empty. Retrieval still works by lexical hit.
-      expect(turnMemoryPrompt(store, 'Sunday long runs')).toContain('Sunday long run');
+      expect(turnMemoryPrompt(store, 'Sunday long runs')).not.toContain('Sunday long run');
+      expect(store.recall('Sunday long runs').some(claim => claim.text.includes('Sunday long run'))).toBe(true);
       return full;
     });
     console.log('MEMORY_PROMPT_TOKENS_30_CLAIMS ' + size);

@@ -187,7 +187,7 @@ for (const count of [32,33,64]) {
       expect(store.pendingTopics()).toHaveLength(count);
       expect(SELECTIVE_FORGET_SCHEMA.properties.spans.maxItems).toBe(64);
       expect(SELECTIVE_FORGET_SCHEMA.properties.reviewed_refs.maxItems).toBe(64);
-      expect(selectedForgetTexts(topic,snapshot,JSON.stringify({spans:rows.slice(1),reviewed_refs:rows.map(row=>row.ref),complete:true}),snapshot)).toBeNull();
+      expect(selectedForgetTexts(topic,snapshot,JSON.stringify({spans:rows.slice(1),reviewed_refs:rows.map(row=>row.ref),complete:true}),snapshot)).toEqual(rows.slice(1).concat(rows.slice(0, 1)).map(row => row.text));
     });
   });
 }
@@ -273,19 +273,19 @@ it('a ref conflict is found across a batch boundary in either order, and identic
   expect(forgetSourceBatch(topic, [...rows, rows[3]!, rows[69]!]).incomplete).toBe(false);
 });
 
-it.each([['non-ascii letters','ZEBRA-COBALT 東京'],['emoji','ZEBRA-COBALT 🙂'],['4096 punctuation',`ZEBRA-COBALT ${'.'.repeat(4096)}`]])('an unspanned episodes row with only the topic plus %s is held, not skipped', (_name, text) => {
+it.each([['non-ascii letters','ZEBRA-COBALT 東京'],['emoji','ZEBRA-COBALT 🙂'],['4096 punctuation',`ZEBRA-COBALT ${'.'.repeat(4096)}`]])('an unspanned episodes row with only the topic plus %s is purgeable by exact topic containment', (_name, text) => {
   const topic = 'ZEBRA-COBALT';
   const snapshot = forgetSnapshot(topic, [{ ref: 'episodes:1:text', text }]);
   const raw = JSON.stringify({ spans: [], reviewed_refs: ['episodes:1:text'], complete: true });
-  expect(selectedForgetResult(topic, snapshot, raw, snapshot)).toEqual({ reason: 'row_without_span:episodes' });
+  expect(selectedForgetResult(topic, snapshot, raw, snapshot)).toEqual({ texts: [text] });
 });
 
-it('an unspanned episodes line with other words is held for the second look, never purged whole', () => {
+it('an unspanned episodes line with other words is purgeable by exact topic containment without a second look', () => {
   const topic = 'ZEBRA-COBALT';
   const rows = [{ ref: 'episodes:1:text', text: 'ZEBRA-COBALT is the code word' }, { ref: 'episodes:2:text', text: 'ZEBRA-COBALT again with other words' }];
   const snapshot = forgetSnapshot(topic, rows);
   const raw = JSON.stringify({ spans: [], reviewed_refs: rows.map(row => row.ref), complete: true });
-  expect(selectedForgetResult(topic, snapshot, raw, snapshot)).toEqual({ reason: 'row_without_span:episodes' });
+  expect(selectedForgetResult(topic, snapshot, raw, snapshot)).toEqual({ texts: rows.map(row => row.text).sort((a, b) => b.length - a.length) });
   expect(unspannedEpisodeRows(snapshot, raw).map(row => row.ref)).toEqual(rows.map(row => row.ref));
 });
 

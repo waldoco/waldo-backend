@@ -37,7 +37,7 @@ export type OwnerTurnEnvelope = Readonly<{
   attachmentRefs?: readonly Readonly<{ reference: string; sourceMessageId: string; filename: string; mimeType: string; byteLength: number; sha256: string; caption?: string; kind: string; nativeVoice: boolean }>[];
   messageRef?: Readonly<{ id: string; conversationRef: string; bridgeRef?: string; accountRef?: string; partIndex?: number; threadOriginatorId?: string }>;
   service?: string;
-  // Set by the channel host. When false, this turn skips its immediate memory write. Nightly consolidation and history indexing are separate and unaffected.
+  // Set by the channel host. When false, memory write tools are not admitted on this turn. Nightly consolidation and history indexing are separate and unaffected.
   memoryWrites?: boolean;
   runScope?: RunEffectScope;
 }>;

@@ -19,7 +19,7 @@ type Dependencies = Readonly<{
   hideHistory(texts: readonly string[], ctx: MemoryToolContext): Promise<void>;
   resolveSource?(ref: string, ctx: MemoryToolContext): Promise<MemoryOwnerTurn | null>;
 }>;
-const fail = (error: string) => ({ ok: false as const, code: 'forbidden' as const, error, source_taint: null });
+const fail = (error: string) => ({ ok: false as const, code: 'invalid_args' as const, error, source_taint: null });
 const success = (data: unknown) => ({ ok: true as const, data, source_taint: null });
 // Split, rather than join, so evidence cannot bridge an excluded quote.
 const ownerParts = (turn: MemoryOwnerTurn): readonly string[] => {
@@ -43,7 +43,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
     return turn && turn.ownerId === ctx.authenticatedUserId && turn.conversationRef === deps.conversationRef ? turn : null;
   };
   const ready = async (ctx: MemoryToolContext) => { ctx.runScope?.admit(); await ctx.assertTaskSourceCurrent?.(); ctx.runScope?.admit(); };
-  const hidden = (claim: Claim) => [...store.pendingTopics(), ...store.incompleteTopics()].some(topic => carriesTopic(claim.text, topic) || hidesTopic(claim.text, topic));
+  const hidden = (claim: Claim) => [...store.pendingTopics(), ...store.incompleteTopics()].some(topic => [claim.text, claim.evidence, claim.source_ref, (claim as Claim & { aliases?: string | null }).aliases].some(text => typeof text === 'string' && (carriesTopic(text, topic) || hidesTopic(text, topic))));
   const blocked = (text: string) => store.barriers().some(barrier => barrier.topic_hash === textFingerprint(text.trim()) || barrier.topic_hash === textFingerprint(text.trim().toLowerCase().replace(/\s+/g, ' ')));
   const base = (name: ToolName, description: string) => ({ name, description, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name)), autonomy_gated: false });
   return [

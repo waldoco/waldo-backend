@@ -1,3 +1,4 @@
+import { carriesTopic } from './forget-guard';
 // Private, ephemeral source selection. The host supplies owner-local source rows;
 // the model judges association, while these bounds enforce exact source custody.
 // One bounded source set must be coverable without dropping a reviewed ref.
@@ -92,8 +93,7 @@ export const selectedForgetResult = (topic: string, snapshot: ForgetSnapshot, ra
   for (const row of snapshot.sources) {
     if (spans.some((entry: { ref?: unknown }) => entry.ref === row.ref)) continue;
     if (row.ref.split(':')[0] !== 'episodes') return { reason: `row_without_span:${row.ref.split(':')[0]}` };
-    if (row.text.length > 4096 || !isPlainForgetText(row.text)) return { reason: 'row_without_span:episodes' };
-    if (!/[^\s\p{P}]/u.test(row.text.toLowerCase().split(topic.toLowerCase()).join(' '))) continue;
+    if (carriesTopic(row.text, topic)) { texts.push(row.text); continue; }
     return { reason: 'row_without_span:episodes' };
   }
   return { texts: [...new Set(texts)].sort((a, b) => b.length - a.length) };

@@ -117,35 +117,26 @@ describe('claims', () => {
     });
   });
 
-  it('refuses a correction attached to an unrelated old claim or an invented replacement', async () => {
+  it('the model selects correction ids without host topic-overlap judgement', async () => {
     await withSql((sql, transaction) => {
       const store = claimStore(sql, transaction);
-      store.add({ kind: 'fact', text: 'Likes black coffee', source: 'stated', evidence: 'old', origin: 'owner' }, AT);
+      store.add({ kind: 'fact', text: 'Lives in Pune', source: 'stated', evidence: 'Pune', origin: 'owner' }, AT);
       const old = store.claims()[0]!;
-      const proposal = (text: string) => ops({ corrections: [{ old_id: old.id, kind: 'fact', text, evidence: '"actually I am back in Mumbai"' }] });
-      expect(applyClaimOps(store, proposal('Lives in Mumbai'), AT, 'owner, tg-x', undefined, { owner: 'actually I am back in Mumbai' })).not.toContain('corrected1');
-      expect(applyClaimOps(store, proposal('Likes black tea'), AT, 'owner, tg-x', undefined, { owner: 'actually I am back in Mumbai' })).not.toContain('corrected1');
-      expect(applyClaimOps(store, proposal('Likes black tea and owns a yacht'), AT, 'owner, tg-x', undefined, { owner: 'actually I prefer black tea' })).not.toContain('corrected1');
-      expect(store.claims().map((claim) => claim.text)).toEqual(['Likes black coffee']);
+      const detail = applyClaimOps(store, ops({ corrections: [{ old_id: old.id, kind: 'fact', text: 'Based in LA', evidence: 'LA' }] }), AT, 'owner, tg-la', undefined, { owner: 'LA' });
+      expect(detail).toContain('corrected1');
+      expect(store.claims()[0]).toMatchObject({ text: 'Based in LA', supersedes_id: old.id });
+      expect(store.claims('superseded')[0]?.id).toBe(old.id);
     });
   });
-
-  it('an unrelated or nonexistent correction cannot suppress an independently grounded add', async () => {
+  it('unknown correction ids do not suppress a separately grounded add', async () => {
     await withSql((sql, transaction) => {
       const store = claimStore(sql, transaction);
-      store.add({ kind: 'fact', text: 'Likes black coffee', source: 'stated', evidence: 'old', origin: 'owner' }, AT);
-      const old = store.claims()[0]!;
-      const added = applyClaimOps(store, ops({ corrections: [
-        { old_id: old.id, kind: 'fact', text: 'Lives in Mumbai', evidence: '"actually I am back in Mumbai"' },
-        { old_id: 999, kind: 'fact', text: 'Lives in Mumbai', evidence: '"actually I am back in Mumbai"' },
-      ], add: [{ kind: 'fact', text: 'Lives in Mumbai', source: 'stated', evidence: '"actually I am back in Mumbai"', touches_forgotten: false }] }),
-      AT, 'owner, tg-mumbai', undefined, { owner: 'actually I am back in Mumbai' });
-      expect(added).toContain('+1 held0');
-      expect(added).not.toContain('corrected1');
-      expect(new Set(store.claims().map((claim) => claim.text))).toEqual(new Set(['Likes black coffee', 'Lives in Mumbai']));
+      const detail = applyClaimOps(store, ops({ corrections: [{ old_id: 999, kind: 'fact', text: 'Based in LA', evidence: 'LA' }], add: [{ kind: 'fact', text: 'Based in LA', evidence: 'LA', source: 'stated', touches_forgotten: false }] }), AT, 'owner, tg-la', undefined, { owner: 'LA' });
+      expect(detail).toContain('+1 held0');
+      expect(detail).not.toContain('corrected1');
+      expect(store.claims()[0]).toMatchObject({ text: 'Based in LA', origin: 'owner' });
     });
   });
-
   it('a correction cannot create a duplicate active replacement already present', async () => {
     await withSql((sql, transaction) => {
       const store = claimStore(sql, transaction);
@@ -199,7 +190,7 @@ describe('claims', () => {
       const detail = applyClaimOps(store, ops({ corrections: [
         { old_id: old.id, kind: 'fact', text: 'Lives in Mumbai', evidence: '"actually I am back in Mumbai"' },
       ], forget_claims: [old.id], forget_topic: 'where I live' }), AT, 'owner, tg-forget', undefined,
-      { owner: 'Forget where I live. Actually I am back in Mumbai.' });
+      { owner: 'Forget where I live. Actually I am back in Mumbai.' }, true);
       expect(detail).toContain('forgot1');
       expect(detail).not.toContain('corrected1');
       expect(store.claims()).toEqual([]);
@@ -265,20 +256,20 @@ describe('claims', () => {
       store.add({ kind: 'preference', text: 'Post-workout: codeword-blue dosa', source: 'stated', evidence: '"codeword-blue dosa"' }, AT);
       const [claim] = store.claims();
       const detail = applyClaimOps(store, ops({ forget_claims: [claim!.id], forget_nodes: [], forget_topic: 'post-workout meal' }), AT, 'owner, tg-forget', undefined,
-        { owner: 'Forget the post-workout meal thing completely.', shared: '', waldo: 'Got it, dropped.' });
+        { owner: 'Forget the post-workout meal thing completely.', shared: '', waldo: 'Got it, dropped.' }, true);
       expect(detail).toContain('forgot1');
       expect(store.claims()).toEqual([]);
     });
   });
 
-  it('holds claims grounded in content-free evidence (the bare-"yes" Gmail receipt)', async () => {
+  it('short grounded evidence has no host length floor', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
       const detail = applyClaimOps(store, ops({ add: [
         { kind: 'fact', text: 'Owner agreed to fetch Gmail inbox now', source: 'stated', evidence: '"yes"', touches_forgotten: false },
       ] }), AT, 'owner, tg-yes', undefined, { owner: 'yes', shared: '', waldo: 'Morning. Do you want me to fetch your Gmail inbox now?' });
-      expect(detail).toContain('held1(thin-evidence)');
-      expect(store.claims()).toEqual([]);
+      expect(detail).toContain('+1 held0');
+      expect(store.claims()).toMatchObject([{ origin: 'owner' }]);
     });
   });
 
@@ -320,7 +311,7 @@ describe('claims', () => {
       const relevant = turnMemoryPrompt(store, 'What coffee on weekends?');
       expect(relevant).toContain('cappuccino on weekends');
       expect(relevant).not.toContain('Lives in Pune');
-      expect(turnMemoryPrompt(store, "What is my dog's name?")).toContain('No relevant memory match');
+      expect(turnMemoryPrompt(store, "What is my dog's name?")).not.toContain('No relevant memory match');
     });
   });
 
@@ -357,7 +348,7 @@ describe('claims', () => {
       store.add({ kind: 'observation', text: 'Private owner sleep statement', source: 'stated', evidence: 'private', origin: 'owner' }, AT);
       const claim = store.claims()[0]!;
       const receipts: unknown[] = [];
-      applyPromotion(store, JSON.stringify({ nodes: [{ id: null, domain: 'sleep', label: 'Private label', summary: 'Private summary', strength: 0.8, status: 'active', supporting_spots: [claim.id, 999999] }], edges: [], promoted: [] }), AT, (receipt) => receipts.push(receipt));
+      applyPromotion(store, JSON.stringify({ nodes: [{ id: null, domain: 'sleep', label: 'Private label', summary: 'Private summary', strength: 0.8, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [claim.id, 999999] }], edges: [], promoted: [] }), AT, (receipt) => receipts.push(receipt));
       expect(receipts).toEqual([{ outcome: 'held', reason: 'untrusted_or_missing', source_kind: 'owner_observation_pattern', count: 1 }]);
       expect(JSON.stringify(receipts)).not.toContain('Private');
       expect(store.nodes()).toEqual([]);
@@ -372,7 +363,7 @@ describe('claims', () => {
       store.add({ kind: 'observation', text: 'Legacy sleep', source: 'stated', evidence: 'old text' }, '2026-09-26T04:00:00Z');
       const [once, shared, legacy] = [...store.claims()].sort((a, b) => a.id - b.id);
       const detail = applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'Unsupported', summary: 'Should be held', strength: 0.9, status: 'active', supporting_spots: [once!.id, shared!.id, legacy!.id, 9999] }],
+        nodes: [{ id: null, domain: 'sleep', label: 'Unsupported', summary: 'Should be held', strength: 0.9, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [once!.id, shared!.id, legacy!.id, 9999] }],
         edges: [{ from: 'new:0', to: '12345', relation: 'co-occurs with', strength: 1, evidence_count: 9 }],
         promoted: [once!.id, shared!.id, legacy!.id],
       }), AT);
@@ -390,7 +381,7 @@ describe('claims', () => {
       store.add({ kind: 'observation', text: 'One new account', source: 'stated', evidence: 'one', origin: 'owner' }, AT);
       const once = store.claims()[0]!;
       const detail = applyPromotion(store, JSON.stringify({
-        nodes: [{ id: old, domain: 'sleep', label: 'Unsupported edit', summary: 'Injected', strength: 1, status: 'active', supporting_spots: [once.id] }],
+        nodes: [{ id: old, domain: 'sleep', label: 'Unsupported edit', summary: 'Injected', strength: 1, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [once.id] }],
         edges: [{ from: 'new:0', to: String(old), relation: 'co-occurs with', strength: 1, evidence_count: 1 }],
         promoted: [],
       }), AT);
@@ -408,7 +399,7 @@ describe('claims', () => {
       const claims = [...store.claims()].sort((a, b) => a.id - b.id);
       for (const claim of claims) store.seen(claim.id, '2026-09-26T04:00:00Z');
       const detail = applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'Busy-day sleep', summary: 'Owner supported', strength: 0.8, status: 'active', supporting_spots: claims.map((claim) => claim.id) }],
+        nodes: [{ id: null, domain: 'sleep', label: 'Busy-day sleep', summary: 'Owner supported', strength: 0.8, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: claims.map((claim) => claim.id) }],
         edges: [{ from: 'new:0', to: 'new:1', relation: 'co-occurs with', strength: 0.6, evidence_count: 2 }],
         promoted: claims.map((claim) => claim.id),
       }), '2026-09-26T04:00:00Z');
@@ -429,8 +420,8 @@ describe('claims', () => {
       const [first, second, third, goal] = [...store.claims()].sort((a, b) => a.id - b.id);
       store.seen(first!.id, AT);
       const detail = applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'Short sleep', summary: 'Sleeps less before big days', strength: 0.7, status: 'active', supporting_spots: [first!.id, second!.id] },
-          { id: null, domain: 'work rhythm', label: 'Long meeting days', summary: 'Heavy days', strength: 0.6, status: 'active', supporting_spots: [second!.id, third!.id] }],
+        nodes: [{ id: null, domain: 'sleep', label: 'Short sleep', summary: 'Sleeps less before big days', strength: 0.7, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [first!.id, second!.id] },
+          { id: null, domain: 'work rhythm', label: 'Long meeting days', summary: 'Heavy days', strength: 0.6, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [second!.id, third!.id] }],
         edges: [{ from: 'new:1', to: 'new:0', relation: 'tends to precede', strength: 0.5, evidence_count: 3 }],
         promoted: [first!.id, goal!.id],
       }), AT);
@@ -564,8 +555,8 @@ describe('claim admission gate (slice 4)', () => {
     });
   });
 });
-describe('claim salience screen (2026-09-28 staging noise receipts)', () => {
-  it('holds the four observed noise classes as transient and never writes them', async () => {
+describe('model-selected claim durability', () => {
+  it('does not classify model-selected claims with transient keywords', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
       const detail = applyClaimOps(store, ops({ add: [
@@ -574,10 +565,10 @@ describe('claim salience screen (2026-09-28 staging noise receipts)', () => {
         { kind: 'followup', text: 'Use your web search tool to find the official Cloudflare Durable Objects documentation', source: 'stated', evidence: '"Use your web search tool to find the official Cloudflare Durable Objects documentation"', touches_forgotten: false },
         { kind: 'observation', text: 'Calendar QA tool failed to fetch calendar', source: 'stated', evidence: '"Calendar QA tool failed to fetch calendar"', touches_forgotten: false },
       ] }), AT);
-      expect(detail).toContain('+0 held4(transient)');
-      expect(store.claims()).toEqual([]);
+      expect(detail).toContain('+4 held0');
+      expect(store.claims()).toHaveLength(4);
       // The hold audit carries the fingerprint, not the text - same rule as every hold.
-      expect(store.holds().map((hold) => hold.reason)).toEqual(['transient', 'transient', 'transient', 'transient']);
+      expect(store.holds()).toEqual([]);
     });
   });
   it('durable claims still admit: conditions kept, one-off events without errand verbs, health routines', async () => {
@@ -605,14 +596,14 @@ describe('claim salience screen (2026-09-28 staging noise receipts)', () => {
     });
   });
 
-  it('a bare question is transient even when the extractor frames it as a claim', async () => {
+  it('does not second-guess model-selected question-shaped text', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
       const detail = applyClaimOps(store, ops({ add: [
         { kind: 'observation', text: 'What is on the calendar today?', source: 'stated', evidence: '"what is on the calendar today?"', touches_forgotten: false },
       ] }), AT);
-      expect(detail).toContain('+0 held1(transient)');
-      expect(store.claims()).toEqual([]);
+      expect(detail).toContain('+1 held0');
+      expect(store.claims()).toHaveLength(1);
     });
   });
 });
@@ -652,7 +643,7 @@ describe('claim origin classes (gate provenance)', () => {
       const byText = new Map(store.claims().map((claim) => [claim.text, claim]));
       for (const claim of store.claims()) store.seen(claim.id, AT); // both recur, so origin alone differentiates
       const detail = applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'Sleep', summary: 'Sleep patterns', strength: 0.6, status: 'active', supporting_spots: [] }],
+        nodes: [{ id: null, domain: 'sleep', label: 'Sleep', summary: 'Sleep patterns', strength: 0.6, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [] }],
         edges: [],
         promoted: [byText.get('External-content observation')!.id, byText.get('Owner observation')!.id],
       }), AT);
@@ -669,7 +660,7 @@ describe('claim origin classes (gate provenance)', () => {
       store.add({ kind: 'observation', text: 'Single episode', source: 'stated', evidence: 'said once', origin: 'owner' }, AT);
       const once = store.claims()[0]!;
       const detail = applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'X', summary: 'x', strength: 0.5, status: 'active', supporting_spots: [] }],
+        nodes: [{ id: null, domain: 'sleep', label: 'X', summary: 'x', strength: 0.5, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [] }],
         edges: [],
         promoted: [once.id],
       }), AT);
@@ -689,8 +680,8 @@ describe('claim origin classes (gate provenance)', () => {
       store.add({ kind: 'pattern', text: 'Second owner pattern', source: 'stated', evidence: 'second', origin: 'owner' }, '2026-09-25T04:00:00Z');
       const [first, second] = [...store.claims()].sort((a, b) => a.id - b.id);
       applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'X', summary: 'x', strength: 4.7, status: 'active', supporting_spots: [first!.id, second!.id, 9999] },
-          { id: null, domain: 'work', label: 'Y', summary: 'y', strength: -2, status: 'active', supporting_spots: [first!.id, second!.id] }],
+        nodes: [{ id: null, domain: 'sleep', label: 'X', summary: 'x', strength: 4.7, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [first!.id, second!.id, 9999] },
+          { id: null, domain: 'work', label: 'Y', summary: 'y', strength: -2, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [first!.id, second!.id] }],
         edges: [{ from: 'new:0', to: 'new:1', relation: 'co-occurs with', strength: 9, evidence_count: 0 }],
         promoted: [],
       }), AT);
@@ -702,5 +693,18 @@ describe('claim origin classes (gate provenance)', () => {
       expect(edge.evidence_count).toBe(1);
       expect(store.nodes().find((n) => n.label === 'Y')!.strength).toBe(0);
     });
+  });
+});
+
+it('nightly promotion uses the model durable field rather than host wording heuristics', async () => {
+  await withSql(sql => {
+    const store = claimStore(sql);
+    store.add({ kind: 'observation', text: 'One owner pattern', evidence: 'first', source: 'stated', origin: 'owner' }, AT);
+    store.add({ kind: 'pattern', text: 'Another owner pattern', evidence: 'second', source: 'stated', origin: 'owner' }, '2026-09-25T04:00:00Z');
+    const node = { id: null, domain: 'work', label: 'Check the calendar today', summary: 'Owner pattern', strength: 0.8, status: 'active', supporting_spots: store.claims().map(claim => claim.id), durable: false, reason: 'momentary' };
+    expect(applyPromotion(store, JSON.stringify({ nodes: [node], edges: [], promoted: [] }), AT)).toContain('nodes0');
+    expect(store.nodes()).toEqual([]);
+    expect(applyPromotion(store, JSON.stringify({ nodes: [{ ...node, durable: true, reason: 'lasting routine' }], edges: [], promoted: [] }), AT)).toContain('nodes1');
+    expect(store.nodes()[0]?.label).toBe('Check the calendar today');
   });
 });
