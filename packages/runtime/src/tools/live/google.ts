@@ -39,7 +39,14 @@ const authFailed = (reason: ConnectIntent['reason'], feature: GoogleFeature): To
 
 async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, ctx: ToolDispatcherContext | undefined, work: (client: GoogleClient) => Promise<T>): Promise<ToolResult<T>> {
   const client = await google.client(feature, undefined, ctx?.assertTaskSourceCurrent);
-  if (client === null) return authFailed('not_connected', feature);
+  if (client === null) {
+    // No serving client while a connected account is failing (invalid_grant recorded, circuit
+    // open) asks for a reconnect, not a fresh connect. Accounts without the feature stay a
+    // connection gap.
+    const accounts = google.state ? await google.state() : undefined;
+    const dead = (feature === 'calendar' || feature === 'mail' || feature === 'tasks') && (accounts?.some((account) => account.error !== null && account[feature]) ?? false);
+    return authFailed(dead ? 'reauth_needed' : 'not_connected', feature);
+  }
   try {
     return { ok: true, data: await work(taskSourceClient(client, ctx)), source_taint: 'external' };
   } catch (error) {
