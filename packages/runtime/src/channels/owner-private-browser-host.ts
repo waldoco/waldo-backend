@@ -8,6 +8,7 @@ import { cloudflareGeneralBrowser } from './cloudflare-general-browser';
 import { PRIVATE_BROWSER_CONSENT_KEY, privateBrowserConsent, type PrivateBrowserConsent } from './browser-private-consent';
 import type { CommonBrowserConfiguration, CommonBrowserGrant } from './common-browser-host';
 import { browserDownloadToWorkspace } from './browser-download-workspace';
+import { browserScreenshotToWorkspace } from './browser-screenshot-workspace';
 import type { workspaceOwnerHost } from './workspace-host';
 
 type RunnerOptions = Parameters<typeof cloudflarePrivateOwner>[0];
@@ -248,7 +249,17 @@ export function ownerPrivateBrowserHost(options: Readonly<{
               if (!response || response.status() >= 400 || new URL(page.url()).origin !== registration.siteOrigin) throw Error('private content denied');
               const text = (await page.evaluate(() => (globalThis as unknown as { document: { body?: { innerText: string } } }).document.body?.innerText ?? '')).slice(0, 8000);
               if (!text.trim()) throw Error('empty private content');
-              return { url: page.url(), title: await page.title(), text };
+              const observedUrl = page.url(), title = await page.title();
+              if (!options.files) throw Error('screenshot serving unavailable');
+              const assertCurrent = async () => { await ctx.assertTaskSourceCurrent!(); await assertApproval(approval); await config.assertGrantCurrent(grant); if (options.now() >= deadline) throw Error('screenshot deadline'); };
+              await assertCurrent();
+              const image = new Uint8Array(await page.screenshot({ type: 'png', animations: 'disabled', caret: 'hide', scale: 'css', timeout: Math.max(1, deadline - options.now()) }));
+              await assertCurrent();
+              if (page.url() !== observedUrl || new URL(page.url()).origin !== registration.siteOrigin || await page.title() !== title
+                || (await page.evaluate(() => (globalThis as unknown as { document: { body?: { innerText: string } } }).document.body?.innerText ?? '')).slice(0, 8000) !== text) throw Error('private observation changed');
+              const files = await options.files(assertCurrent, approval.binding.ownerId);
+              const screenshot = await browserScreenshotToWorkspace({ ...files, image, maxScreenshotBytes: grant.maxScreenshotBytes, operationId: crypto.randomUUID(), deadline, now: options.now, assertCurrent });
+              return { url: observedUrl, title, text, screenshot };
             } finally { if (timer !== undefined) clearTimeout(timer); page.off('download', listener); await page.close(); }
           },
         });
