@@ -603,3 +603,7 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 | 2026-10-08 | Broad runtime run timed out a console card-pin fixture with synthetic key and unmocked boot-model transport; independent standalone rerun passed | Fixture isolation / owner console | dashboard-controls-owner.test.ts explicitly denies OpenAI transport; original8executor assertions and5s timeout preserved,8PASS | All owner-console fixtures that seed setup must seal background provider I/O; a passing standalone rerun does not seal the transport boundary |
 
 - [ ] Console executor fixtures mock the background model boundary even when the assertion concerns only storage, serialization or receipts.
+
+| 2026-10-08 | PR941 CI canonical-history regression pinned43 entries and commented the old final migration, creating invalid adjacent literals after migration44 | Migration source / adversarial fixtures | canonical-history-versions.test.mjs exact CI twofailures reproduced RED; fixture pins44 and comments actual final browser migration with predecessor separator repair, valid43-entry corruption refused GREEN | Update both canonical count and last-entry corruption probe when appending a migration; preserve actual-verifier rejection and SQL body boundary tests |
+
+- [ ] Canonical migration adversarial probes remove an executable entry with valid array syntax and prove the actual verifier refuses the missing migration, rather than failing on unrelated syntax.
