@@ -195,12 +195,12 @@ export function cloudflareGeneralBrowser(options: Options) {
     }
   });
   return {
-    async start(allowedDomains: readonly string[], lifetimeMs: number,
-      beforeAllocate: (allocation: Readonly<{ allowedDomains: readonly string[]; lifetimeMs: number }>) => Promise<void>,
+    async start(allowedDomains: readonly string[] | 'public', lifetimeMs: number,
+      beforeAllocate: (allocation: Readonly<{ allowedDomains: readonly string[] | 'public'; lifetimeMs: number }>) => Promise<void>,
       recordAllocation: (providerSessionId: string) => Promise<void>): Promise<string> {
       let id: string | undefined;
       try {
-        const domains = [...allowedDomains], guard = cloudflareBrowserGuardOptions(domains, lifetimeMs);
+        const domains = allowedDomains === 'public' ? 'public' as const : [...allowedDomains], guard = domains === 'public' ? { recording: false, keep_alive: lifetimeMs } as ReturnType<typeof cloudflareBrowserGuardOptions> : cloudflareBrowserGuardOptions(domains, lifetimeMs);
         await hostAdmit();
         // The existing host reserves its actual hard grant/budget before any I/O.
         await beforeAllocate({ allowedDomains: domains, lifetimeMs }); await hostAdmit();

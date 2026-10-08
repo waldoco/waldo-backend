@@ -20,7 +20,7 @@ const freezePolicy=(policy:CommonPublicReadPolicy):CommonPublicReadPolicy=>{
  if(!row.ref||!row.doName||!/^\d{1,32}$/.test(row.subject)||!/^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(row.directoryOwnerId)
   ||![row.createdAt,row.expiresAt,row.maxAllocations,row.maxReservedBrowserMs,row.lifetimeMs,row.maxScreenshotBytes].every(Number.isSafeInteger)
   ||row.createdAt<0||row.expiresAt<=row.createdAt||row.maxAllocations<1||row.maxReservedBrowserMs<row.lifetimeMs*2||row.lifetimeMs<10000||row.lifetimeMs>600000||row.maxScreenshotBytes<1
-  ||!row.allowedOrigins.length||new Set(row.allowedOrigins).size!==row.allowedOrigins.length||row.allowedOrigins.some(origin=>{try{const url=new URL(origin);return url.protocol!=='https:'||url.origin!==origin||!!url.username||!!url.password;}catch{return true;}}))throw Error('common public browser policy invalid');
+  ||!row.allowedOrigins.length||new Set(row.allowedOrigins).size!==row.allowedOrigins.length||row.allowedOrigins.some(origin=>{if(origin==='*')return false;try{const url=new URL(origin);return url.protocol!=='https:'||url.origin!==origin||!!url.username||!!url.password;}catch{return true;}}))throw Error('common public browser policy invalid');
  return Object.freeze({...row,allowedOrigins:Object.freeze(row.allowedOrigins)});
 };
 type Usage={custodyDigest?:string;policy:CommonPublicReadPolicy;allocations:number;reservedBrowserMs:number;taskGrants:CommonBrowserGrant[]};
