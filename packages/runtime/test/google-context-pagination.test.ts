@@ -35,3 +35,7 @@ it('search forwards provider continuation and includes account metadata',async()
  expect(calls).toEqual([['topic',2,'previous']]);
  expect(result).toMatchObject({ok:true,data:{account:{email:'work@example.com'},cursor:'next'}});
 });
+it('supports detached readThread invocation used by connector-proxy',async()=>{
+ const read = fixture([message('1',{mimeType:'text/plain',body:{data:encode('body')}})]).readThread;
+ expect((await read('t',10))[0]!.body).toBe('body');
+});
