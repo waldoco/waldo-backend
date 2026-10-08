@@ -1,5 +1,6 @@
 import type { TurnLogEntry } from './telegram-listener';
 import { localIso } from './reminders';
+import type { CostLedger } from '../llm/cost-ledger';
 import { modelCost } from '../llm/pricing';
 
 type Sql = Pick<SqlStorage, 'exec'>;
@@ -58,7 +59,7 @@ export const OWNER_REQUEST_HOP = 'owner_request';
 export type LastRequest = Readonly<{ trace: string; at: string; ok: boolean; partial: boolean; recorded_steps: number; hops: readonly Readonly<{ hop: string; ok: boolean; ms: number; note: string }>[] }>;
 export type TraceRow = Readonly<{ time: string; trace: string; hop: string; ok: boolean; ms: number; note: string }>;
 
-export const traceBook = (sql: Sql, keep = 500) => {
+export const traceBook = (sql: Sql, keep = 500, ledger?: CostLedger) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS trace_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, trace TEXT NOT NULL, hop TEXT NOT NULL,
     ok INTEGER NOT NULL, ms INTEGER NOT NULL, note TEXT,
@@ -82,6 +83,11 @@ export const traceBook = (sql: Sql, keep = 500) => {
         at, entry.trace, entry.hop, entry.ok ? 1 : 0, Math.round(entry.ms), (entry.guard ?? entry.error ?? entry.detail ?? '').slice(0, 200),
         entry.usage?.model ?? null, entry.usage?.input ?? null, entry.usage?.output ?? null, entry.usage?.cached ?? null, cost?.total ?? null,
         entry.shape?.system_bytes ?? null, entry.shape?.request_bytes ?? null, entry.owner ?? null);
+      if (ledger && entry.usage && cost) {
+        const interactive = sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM trace_log WHERE trace = ? AND hop = ?', entry.trace, OWNER_REQUEST_HOP).toArray()[0]!.n > 0;
+        ledger.add({ kind: entry.cost_kind ?? (interactive ? 'turn' : 'background'), model: entry.usage.model, trigger: entry.hop, input: entry.usage.input, output: entry.usage.output,
+          cached: entry.usage.cached, usd: cost.total, ...(entry.responsibility_id ? { responsibilityId: entry.responsibility_id } : {}) }, at);
+      }
       sql.exec('DELETE FROM trace_log WHERE id <= (SELECT MAX(id) FROM trace_log) - ?', keep);
     },
     recent(timezone: string, filter: string | null, limit = 25): string {

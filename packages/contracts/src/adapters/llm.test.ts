@@ -118,6 +118,7 @@ describe('llmResponse metering', () => {
       'cache_read_input_tokens',
       'latency_ms',
       'output_items',
+      'truncated',
     ]);
   });
 

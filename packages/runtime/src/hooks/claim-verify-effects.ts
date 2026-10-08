@@ -18,7 +18,7 @@ export const TOOL_CLAIM_EFFECT: Readonly<Record<ToolName, string | null>> = {
   send_message: 'message_send_proposed', send_email: 'email_send_proposed', propose_calendar_change: 'calendar_change_proposed',
   draft_email: 'email_drafted', create_artifact: 'artifact_created', revise_artifact: 'artifact_revised', export_artifact: 'artifact_exported',
   browse_act: 'browser_acted', workspace_write: 'workspace_file_written', workspace_render: 'workspace_document_rendered', set_reminder: 'reminder_set', cancel_reminder: 'reminder_cancelled',
-  open_loop: 'loop_opened', close_loop: 'loop_closed', set_proactivity: 'proactivity_set', set_schedule_preference: 'schedule_preference_set', log_meal: 'meal_logged', log_workout: 'workout_logged',
+  open_loop: 'loop_opened', close_loop: 'loop_closed', track_responsibility: 'responsibility_tracked', update_todo: 'todo_updated', list_responsibilities: null, close_responsibility: 'responsibility_closed', set_proactivity: 'proactivity_set', set_schedule_preference: 'schedule_preference_set', log_meal: 'meal_logged', log_workout: 'workout_logged',
   set_standing_order: 'standing_order_set', cancel_standing_order: 'standing_order_cancelled',
   // null on purpose. call_mcp_tool proposes a card on the owner channel and executes directly elsewhere, so no single
   // effect holds. delegate_task runs a read-only subagent. The rest have no live handler in this tree

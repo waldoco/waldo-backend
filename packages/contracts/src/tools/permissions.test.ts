@@ -86,6 +86,10 @@ describe('toolName', () => {
       'propose_calendar_change',
       'open_loop',
       'close_loop',
+      'track_responsibility',
+      'update_todo',
+      'list_responsibilities',
+      'close_responsibility',
       'set_proactivity',
       'set_schedule_preference',
       'read_tool_output',
@@ -277,6 +281,7 @@ describe('TOOL_PERMISSIONS', () => {
         'propose_calendar_change',
         'open_loop',
         'close_loop',
+        'track_responsibility',
         'set_proactivity',
         'set_schedule_preference',
         'read_tool_output',
@@ -314,7 +319,9 @@ describe('TOOL_PERMISSIONS', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(TOOL_PERMISSIONS[trigger].length).toBeLessThan(toolNameSchema.options.length);
     }
-    expect(TOOL_PERMISSIONS.user_message).toHaveLength(toolNameSchema.options.length - 2);
+    const withheld = ['execute_code', 'update_todo', 'update_memory', 'list_responsibilities', 'close_responsibility'];
+    expect(TOOL_PERMISSIONS.user_message).toHaveLength(toolNameSchema.options.length - withheld.length);
+    for (const name of withheld) expect(TOOL_PERMISSIONS.user_message).not.toContain(name);
   });
 
   it("keeps 'execute_code' typed but dispatchable nowhere (ADR-0050)", () => {

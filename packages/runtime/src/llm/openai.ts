@@ -39,7 +39,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
     this.missingKey = options.apiKey !== undefined ? !validModelCredential(options.apiKey) : options.client === undefined;
     this.client = this.missingKey ? undefined : options.client ?? new OpenAI({
       apiKey: options.apiKey,
-      maxRetries: 0,
+      maxRetries: 2,
       timeout: this.timeoutMs,
     });
   }
@@ -72,11 +72,12 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         },
         { signal: controller.signal },
       );
-      if (response.status === 'incomplete') {
-        return { ok: false, code: 'oversize', error: `OpenAI output incomplete: ${response.incomplete_details?.reason ?? 'unknown'}` };
-      }
       const text = responseText(response).trim();
       const toolCalls = response.output.flatMap((item) => item.type === 'function_call' ? [{ call_id: item.call_id, name: item.name, arguments: item.arguments }] : []);
+      const incomplete = response.status === 'incomplete';
+      if (incomplete && text.length === 0 && toolCalls.length === 0) {
+        return { ok: false, code: 'oversize', error: `OpenAI output incomplete: ${response.incomplete_details?.reason ?? 'unknown'}` };
+      }
       const parsed = {
         model: input.request.model,
         text,
@@ -86,6 +87,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         cache_read_input_tokens: response.usage?.input_tokens_details?.cached_tokens ?? 0,
         output_items: response.output.map((item) => item as unknown as Record<string, unknown>),
         latency_ms: Date.now() - startedAt,
+        ...(incomplete ? { truncated: true } : {}),
       };
       if (text.length === 0 && toolCalls.length === 0) {
         return { ok: false, code: 'invalid_args', error: 'OpenAI returned empty output' };

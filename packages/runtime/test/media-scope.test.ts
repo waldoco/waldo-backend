@@ -43,7 +43,7 @@ describe('media-scope: media and voice retain tools and conversation history', (
       args[4] = { download: vi.fn(async () => new Uint8Array([1, 2, 3])), transcribe: vi.fn(async () => "What's on my calendar?") };
       args[6] = [{ name: 'query_calendar', description: 'Read the fixture calendar', schema: queryCalendarArgsSchema, autonomy_gated: false, requires_connector: true, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes('query_calendar')), handle: calendar }];
       args[20] = surface;
-      // Media can bypass skill preparation without closing ordinary tool access.
+      // Media turns are prepared like any other turn.
       const prepare = vi.fn(async () => undefined);
       args[21] = { prepare };
       const responder = createTelegramResponder(...args);

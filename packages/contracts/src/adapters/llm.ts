@@ -106,6 +106,7 @@ export const llmResponseSchema = z
     cache_read_input_tokens: z.int().nonnegative(),
     latency_ms: z.int().nonnegative(),
     output_items: z.array(z.record(z.string(), z.unknown())).optional(),
+    truncated: z.boolean().optional(),
   })
   .refine((r) => r.text.length > 0 || r.tool_calls !== undefined, {
     error: 'a response carries text or tool calls',
