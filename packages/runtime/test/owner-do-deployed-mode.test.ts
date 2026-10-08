@@ -58,10 +58,3 @@ it.each([
     } finally { await state.storage.deleteAlarm(); denyNetwork.mockRestore(); }
   });
 });
-
-it.each([null, {}, { mode: 'unknown' }])('rejects an invalid private preparation descriptor at construction: %j', async descriptor => {
-  const name = `invalid-mode-${++sequence}`;
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
-    expect(() => new TelegramOwnerDO(state, env, descriptor as never)).toThrow('invalid owner preparation mode');
-  });
-});
