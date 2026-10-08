@@ -121,6 +121,26 @@ it('keeps an admitted public interaction connection guarded until explicit disco
   expect(f.pages).toHaveLength(0); expect(f.calls.filter(call => call === 'release')).toHaveLength(1);
   expect(await f.sdk.sessions()).toHaveLength(1);
 });
+it('never removes the HTTP guard while retained documents are live', async () => {
+  const f = harness('input'); let unguardedWrites = 0;
+  f.context.unroute = async () => { if (f.pages.some(page => page.url() !== 'about:blank')) unguardedWrites++; };
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async (_url, method) => method === 'GET', maxScreenshotBytes: 1024, publicRead: true, retainConnection: true });
+  const first = await driver.navigate(session, 'https://docs.example/index');
+  await driver.act(session, first, { operation: 'fill', element_ref: first.observation.elements[0]!.ref, value: 'Guarded' }, async () => {});
+  expect(unguardedWrites).toBe(0);
+  let aborted = false;
+  await f.route({ request: () => ({ url: () => 'https://docs.example/write', method: () => 'POST', isNavigationRequest: () => false }), abort: async () => { aborted = true; } });
+  expect(aborted).toBe(true);
+  await driver.disconnect();
+});
+it('carries background denied-document state into the next retained operation', async () => {
+  const f = harness('input');
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async (_url, method) => method === 'GET', maxScreenshotBytes: 1024, publicRead: true, retainConnection: true });
+  await driver.navigate(session, 'https://docs.example/index');
+  await f.route({ request: () => ({ url: () => 'https://docs.example/write', method: () => 'POST', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }), abort: async () => {} });
+  await expect(driver.observe(session)).rejects.toMatchObject({ code: 'rejected' });
+  expect(f.pages).toHaveLength(0);expect(f.calls.filter(call => call === 'attach')).toHaveLength(1);
+});
 it('withdrawal before a retained interaction releases its existing connection and documents', async () => {
   const f = harness(); let live = true;
   const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => { if (!live) throw Error('withdrawn'); }, authorizeRequest: async () => true, maxScreenshotBytes: 1024, publicRead: true, retainConnection: true });

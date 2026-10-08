@@ -1,13 +1,13 @@
 // Synthetic provider fixture. Sessions/pages outlive caller instances; no network is issued.
 import type { CloudflareBrowserSdkLoader } from '../../src/channels/public-fixture-browser';
-export const commonBrowserFixture={expiresAt:Date.now()+60000,allocations:0,attachments:0,ends:0,effects:0,form:false,onFill:undefined as undefined|(()=>void),onTerminate:undefined as undefined|(()=>void|Promise<void>),onAcquire:undefined as undefined|(()=>void|Promise<void>),pages:[] as any[],reset(){this.expiresAt=Date.now()+60000;this.allocations=0;this.attachments=0;this.ends=0;this.effects=0;this.form=false;this.onFill=undefined;this.onAcquire=undefined;this.onTerminate=undefined;this.pages=[];}};
+export const commonBrowserFixture={text:undefined as string|undefined,expiresAt:Date.now()+60000,allocations:0,attachments:0,ends:0,effects:0,form:false,onFill:undefined as undefined|(()=>void),onTerminate:undefined as undefined|(()=>void|Promise<void>),onAcquire:undefined as undefined|(()=>void|Promise<void>),pages:[] as any[],reset(){this.text=undefined;this.expiresAt=Date.now()+60000;this.allocations=0;this.attachments=0;this.ends=0;this.effects=0;this.form=false;this.onFill=undefined;this.onAcquire=undefined;this.onTerminate=undefined;this.pages=[];}};
 const image=Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB1cAAAAASUVORK5CYII='),x=>x.charCodeAt(0));
 let ended=false;
 const page=()=>{
  const id=`fixture-target-${commonBrowserFixture.pages.length}`;let url='about:blank',value='';
  const p={id,url:()=>url,title:async()=>url.endsWith('/a')?'Public A':'Public B',setDefaultTimeout(){},
   goto:async(input:string)=>{url=input;return {status:()=>200};},
-  evaluate:async()=>({url,title:url.endsWith('/a')?'Public A':'Public B',text:url.endsWith('/a')?'Option A costs 10 fictional tokens.':'Option B costs 20 fictional tokens.',width:1,height:1,scrollX:0,scrollY:0,elements:[{selector:'input',tag:'input',role:'textbox',name:'Note',href:'',value,type:'text',disabled:false,selected:false,checked:false,inForm:commonBrowserFixture.form}]}),
+  evaluate:async()=>({url,title:url.endsWith('/a')?'Public A':'Public B',text:commonBrowserFixture.text??(url.endsWith('/a')?'Option A costs 10 fictional tokens.':'Option B costs 20 fictional tokens.'),width:1,height:1,scrollX:0,scrollY:0,elements:[{selector:'input',tag:'input',role:'textbox',name:'Note',href:'',value,type:'text',disabled:false,selected:false,checked:false,inForm:commonBrowserFixture.form}]}),
   locator:()=>({fill:async(input:string)=>{commonBrowserFixture.effects++;value=input;commonBrowserFixture.onFill?.();},press:async()=>{commonBrowserFixture.effects++;}}),
   screenshot:async()=>image.slice(),close:async()=>{commonBrowserFixture.pages=commonBrowserFixture.pages.filter(row=>row!==p);}};
  commonBrowserFixture.pages.push(p);return p;

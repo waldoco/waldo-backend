@@ -10,6 +10,8 @@ import type { GeneralBrowserAction } from './general-browser-actions';
 export type CommonBrowserGrant = Readonly<{ ref:string;taskId:string;ownerId:string;expiresAt:number;allowedOrigins:readonly string[];maxScreenshotBytes:number;lifetimeMs:number }>;
 // Private registered host capability. Neither model arguments nor environment switches mint it.
 export type CommonBrowserConfiguration = Readonly<{
+ // Trusted preparation only; default serving reads close documents on detach.
+ retainInteractions?:true;
  binding:BrowserWorker;loadSdk:CloudflareBrowserSdkLoader;
  bindingForOperation?(grant:CommonBrowserGrant,operationId:string):BrowserWorker;
  cleanupBinding?(grant:CommonBrowserGrant,providerSessionId:string):BrowserWorker;
@@ -18,6 +20,11 @@ export type CommonBrowserConfiguration = Readonly<{
  reserveAllocation(grant:CommonBrowserGrant):Promise<void>;
  assertGrantCurrent(grant:CommonBrowserGrant):Promise<void>;
 }>;
+// Application checkpoint budget, deliberately below SQLite's 2 MiB combined
+// key/value limit. Measure UTF-8 JSON, including the envelope, and reserve room
+// for the bounded intent/cleanup metadata added after observation publication.
+export const COMMON_BROWSER_CHECKPOINT_BYTES=128*1024;
+const encodedCheckpointBytes=(record:BrowserRecord)=>new TextEncoder().encode(JSON.stringify(record)).byteLength;
 export const COMMON_BROWSER_DUE='common_browser_due_v1';
 type BrowserRecord={grant:CommonBrowserGrant;session:BrowserSession;tabs:Readonly<{url:string;ref:string}>[];allocation:'prepared'|'observed';observation?:GeneralActionSnapshot;action?:Readonly<{digest:string;state:'prepared'|'observed'|'uncertain'}>;cleanup?:'pending'|'closed';cleanupFailed?:boolean};
 const sameSession=(a:BrowserRecord,b:BrowserRecord)=>a.session.id===b.session.id&&a.session.generation===b.session.generation&&a.session.providerSessionId===b.session.providerSessionId&&JSON.stringify(a.grant)===JSON.stringify(b.grant);
@@ -48,10 +55,11 @@ export function commonBrowserHost(options:Readonly<{
   if(options.config.bindingForOperation&&(!ctx.turnId||!ctx.toolCallId))throw Error('common browser operation identity unavailable');
   const identity=JSON.stringify(grant);
   if(execution&&execution.grant!==identity)throw Error('common browser execution grant changed');
-  execution??={grant:identity,driver:makeDriver(grant,JSON.stringify([grant.ownerId,grant.taskId,ctx.turnId,ctx.toolCallId]),true)};
+  execution??={grant:identity,driver:makeDriver(grant,JSON.stringify([grant.ownerId,grant.taskId,ctx.turnId,ctx.toolCallId]),options.config.retainInteractions===true)};
   return execution.driver;
  };
  const save=(record:BrowserRecord,storageKey:string)=>options.storage.transactionSync(()=>{
+  if(encodedCheckpointBytes(record)>COMMON_BROWSER_CHECKPOINT_BYTES)throw new GeneralBrowserError('observation_oversize');
   options.storage.kv.put(storageKey,record);
   const due=[...options.storage.kv.list<BrowserRecord>({prefix:'common-browser:'})].map(([,row])=>row).filter(row=>row.cleanup!=='closed'&&!row.cleanupFailed).map(row=>row.session.expiresAt);
   options.storage.kv.put(COMMON_BROWSER_DUE,due.length?Math.min(...due):null);
@@ -60,10 +68,17 @@ export function commonBrowserHost(options:Readonly<{
   await checked();await ctx.assertTaskSourceCurrent?.();
   const latest=options.storage.kv.get<Record>(key(grant.taskId));
   if(!latest||latest.cleanup||!sameSession(latest,record)||images.length>=4)throw Error('common browser custody changed');
+  const {image:_,...observation}=observed;
+  const checkpoint={...latest,observation,tabs:observed.observation.tabs.map(tab=>({url:tab.url,ref:tab.ref}))};
+  if(encodedCheckpointBytes(checkpoint)>COMMON_BROWSER_CHECKPOINT_BYTES-1024){
+   // Do not truncate native refs/state or leave an older observation actionable.
+   // The retained exact session remains available for explicit cleanup.
+   save({...latest,observation:undefined,tabs:[]},key(grant.taskId));
+   throw new GeneralBrowserError('observation_oversize');
+  }
+  save(checkpoint,key(grant.taskId));
   let binary='';for(const byte of observed.image.bytes)binary+=String.fromCharCode(byte);
   images.push({kind:'image',filename:`browser-${images.length+1}.png`,mime_type:observed.image.mime_type,data_base64:btoa(binary)});
-  const {image:_,...observation}=observed;
-  save({...latest,observation,tabs:observed.observation.tabs.map(tab=>({url:tab.url,ref:tab.ref}))},key(grant.taskId));
   return {ok:true as const,data:{...observed.observation,session_handle:record.session.id,text:observed.observation.text.slice(0,8000),elements:observed.observation.elements.slice(0,64),tabs:observed.observation.tabs.slice(0,8),
    field_values:observed.state.elements.slice(0,64).flatMap((element,index)=>['input','textarea','select'].includes(element.tag)&&!['password','file','hidden'].includes(element.type)?[{ref:observed.observation.elements[index]!.ref,name:element.name,value:element.value}]:[]),
    ...(latest.action?.state==='uncertain'||latest.action?.state==='prepared'?{action_outcome:'uncertain'}:{})},source_taint:'external' as const};
@@ -81,15 +96,17 @@ export function commonBrowserHost(options:Readonly<{
      await driver.start(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)?'public':grant.allowedOrigins.map(origin=>new URL(origin).hostname),grant.lifetimeMs,async()=>{await options.config.reserveAllocation(grant);await checked();save(record!,storageKey);},async id=>{options.storage.transactionSync(()=>{const retained=options.storage.kv.get<Record>(storageKey);if(!retained||retained.session.id!==record!.session.id||retained.session.generation!==record!.session.generation||JSON.stringify(retained.grant)!==JSON.stringify(grant))throw Error('common browser allocation custody changed');record={...retained,cleanupFailed:undefined,allocation:'observed',session:{...retained.session,providerSessionId:id,state:retained.cleanup?retained.session.state:'active',updatedAt:options.now()}};save(record!,storageKey);});},()=>publishCleanup(options.storage,storageKey,record!,true));
     }
     if(images.length>=4)throw Error('common browser image budget exhausted');
-    // The guarded connection stays live through this admitted owner turn. Stop
-    // closes documents and terminates the exact separately funded session.
+    // Trusted interaction preparation can retain the guarded connection in a
+    // turn; default serving reads close documents before disconnect. Stop
+    // terminates the exact separately funded session in either mode.
     const observed=await driver.navigate(record.session,args.url);
-    return publishObservation(grant,record,observed,ctx);
+    return await publishObservation(grant,record,observed,ctx);
    }catch(error){return {ok:false,code:'rejected',error:'Public browser read is unavailable or uncertain. Inspect retained task state before retrying; no successful read is claimed.'+(error instanceof GeneralBrowserError?' Browser diagnostic: '+JSON.stringify({browser_code:error.code,...(error.diagnostic?{diagnostic:error.diagnostic}:{}),...(error.cleanup_failed?{cleanup_failed:true}:{}),...(error.release_failed?{release_failed:true}:{})}):''),source_taint:'external'};}
   }};
  const actionHandler:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>={name:'browse_act',description:'Interact with the current Cloudflare public page using observed refs: goto, read, inspect, type, click, scroll. Page writes and native submits require the owner approval path. Unknown outcomes block repeated effects; read evidence before deciding what completed.',schema:browseActArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_act')),autonomy_gated:false,
   async handle(args,ctx){let storageKey:string|undefined,digest:string|undefined;
    try{
+    if(options.config.retainInteractions!==true)throw Error('retained interaction capability unavailable');
     await ctx.assertTaskSourceCurrent?.();const grant=await granted();storageKey=key(grant.taskId);
     let record=options.storage.kv.get<Record>(storageKey);
     if(ctx.authenticatedUserId!==options.ownerId||!args.command||!record||record.cleanup||record.allocation!=='observed'||JSON.stringify(record.grant)!==JSON.stringify(grant)||!record.observation||args.url!==record.observation.observation.url)throw Error('current browser observation unavailable');
