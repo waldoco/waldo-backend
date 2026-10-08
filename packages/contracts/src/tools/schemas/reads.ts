@@ -86,6 +86,7 @@ export type GetCommunicationArgs = z.infer<typeof getCommunicationArgsSchema>;
 // after:/before: from the date range) and a single-thread body read. Both are read-only;
 // the E1 verification-artifact quarantine runs on results before they reach model context.
 export const searchCommunicationArgsSchema = z.strictObject({
+  cursor: z.string().min(1).max(4096).optional(),
   query: z.string().min(1),
   date_range: dateRangeSchema.optional(),
   limit: z.int().min(1).max(20).default(10),
@@ -93,6 +94,7 @@ export const searchCommunicationArgsSchema = z.strictObject({
 export type SearchCommunicationArgs = z.infer<typeof searchCommunicationArgsSchema>;
 
 export const readThreadArgsSchema = z.strictObject({
+  cursor: z.string().min(1).max(4096).optional(),
   thread_id: z.string().min(1),
   limit: z.int().min(1).max(20).default(10),
 });

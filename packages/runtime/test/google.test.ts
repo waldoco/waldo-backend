@@ -375,20 +375,20 @@ describe('gmail search + thread read (A1)', () => {
     expect(listUrl).toContain(`before:${Math.floor(Date.parse('2026-09-30T00:00:00Z') / 1000)}`);
   });
 
-  it('readThread decodes the text/plain body, falls back to the snippet, and caps at 4000 chars', async () => {
+  it('readThread decodes the text/plain body, falls back to the snippet, and caps at 32,000 chars', async () => {
     const client = googleClient(app, { refresh_token: 'rt' }, mailFetcher([]));
     const messages = await client.readThread('t1', 10);
     expect(messages).toHaveLength(2);
     expect(messages[0]!.body).toBe('Thursday works, 7pm.');
     expect(messages[0]!.from).toBe('sam@example.com');
-    const big = 'x'.repeat(5000);
+    const big = 'x'.repeat(33000);
     const fetcher = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
       return Response.json({ messages: [{ id: 'm1', internalDate: '1759140000000', payload: { mimeType: 'text/plain', headers: [], body: { data: b64(big) } } }] });
     }) as typeof fetch;
     const [message] = await googleClient(app, { refresh_token: 'rt' }, fetcher).readThread('t1', 10);
-    expect(message!.body).toHaveLength(4000);
+    expect(message!.body).toHaveLength(32000);
   });
 
   it('read_thread quarantines a body carrying an OTP - the raw code never reaches the model', async () => {
