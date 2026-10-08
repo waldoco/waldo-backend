@@ -1749,7 +1749,7 @@ describe('sanitiseRequest structural degradation', () => {
       },
       runtimeCtx(),
     );
-    expect(result).toMatchObject({ ok: false, scribe: { destination: 'system_prompt' } });
+    expect(result).toMatchObject({ ok: false, code_detail: 'system_prompt_rejected', scribe: { destination: 'system_prompt', reason: 'oversize' } });
     expect(gateway.requests).toHaveLength(0);
   });
 

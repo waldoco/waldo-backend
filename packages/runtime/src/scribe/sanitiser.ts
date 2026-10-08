@@ -1,6 +1,7 @@
 import { validId } from '@waldo/workspace';
 import {
   DERIVED_SCORE_PATTERNS,
+  MODEL_CONTEXT_MAX_CHARS,
   derivedHealthDestinationViewSchema,
   PII_PATTERNS,
   RAW_SENSOR_PATTERNS,
@@ -37,7 +38,8 @@ interface TransformResult {
 
 const MAX_PREFLIGHT_DEPTH = 128;
 const MAX_PREFLIGHT_NODES = 20_000;
-const MAX_PREFLIGHT_STRING_CHARS = 262_144;
+// One string may be as long as the model's own context allows; the destination policy then enforces its own cap.
+const MAX_PREFLIGHT_STRING_CHARS = MODEL_CONTEXT_MAX_CHARS;
 const MAX_DECODE_PASSES = 2;
 const REDACTION_ORDER: readonly RedactionKind[] = [
   'email',

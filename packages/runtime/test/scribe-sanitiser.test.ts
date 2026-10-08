@@ -3,7 +3,7 @@ import type {
   SanitiseDestination,
   SanitiseInput,
 } from '@waldo/contracts';
-import { ROSTER } from '@waldo/contracts';
+import { MODEL_CONTEXT_MAX_CHARS, ROSTER } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { guardForOffload, sanitise, sanitiseVerifyOnly } from '../src/scribe/sanitiser';
 
@@ -1086,7 +1086,7 @@ describe('Scribe sanitiser', () => {
       check: 'size_cap',
       reason: 'invalid_payload',
     });
-    expect(inspect({ note: 'x'.repeat(32_768) }, 'internal_context')).toEqual({
+    expect(inspect({ note: 'x'.repeat(MODEL_CONTEXT_MAX_CHARS) }, 'internal_context')).toEqual({
       ok: false,
       check: 'size_cap',
       reason: 'oversize',

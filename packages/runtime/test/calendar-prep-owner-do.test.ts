@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
+import { MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import type { CalendarItem, CalendarChange } from '../src/connectors/google';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
@@ -81,7 +82,7 @@ it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-r
         const system = decision.map(r => String(r.request.system)).join('\n');
         expect(system, 'the base system prompt must survive a large owner profile (the sanitiser drops an oversize system prompt whole)').toContain('You are Waldo');
         expect(system, 'the newest owner facts reach the decision prompt').toContain('Owner fact 219:');
-        expect(system.length, 'system prompt stays under the sanitiser limit').toBeLessThanOrEqual(32_768);
+        expect(system.length, 'system prompt stays under the sanitiser limit').toBeLessThanOrEqual(MODEL_CONTEXT_MAX_CHARS);
         return; // the rest of this table covers stale-delivery modes; this mode only proves the prompt
       }
       if (['changed-during-model', 'revoked-during-model', 'no-op', 'legacy-counters'].includes(mode)) {

@@ -224,6 +224,8 @@ export type RuntimeLLMFailure = {
     destination: SanitiseDestination;
     reason: SanitiseFailureReason;
   };
+  // Typed marker: the system prompt itself failed the scribe. It is never cut or dropped.
+  code_detail?: 'system_prompt_rejected';
   halted_by?: string;
   effect_receipt?: TrustedProviderEffectReceipt;
 };
@@ -1158,6 +1160,7 @@ function failFromHook(
   };
   if (scribeDestination !== undefined && scribeReason?.success === true) {
     failure.scribe = { destination: scribeDestination, reason: scribeReason.data };
+    if (scribeDestination === 'system_prompt') failure.code_detail = 'system_prompt_rejected';
   }
   return failure;
 }
