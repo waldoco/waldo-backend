@@ -114,13 +114,13 @@ export class IsolatedSourceWorld {
     this.providerSequence.set(owner, next);
     return `fixture-create-call-${next}`;
   }
-  commitCalendarCreate(owner: string, input: Readonly<{ title: string; start: string; end: string }>, key: string): SourceRow {
+  commitCalendarCreate(owner: string, input: Readonly<{ title: string; start: string; end: string; id?: string; operation_tag?: string }>, key: string): SourceRow {
     if (!input.title || !Number.isFinite(Date.parse(input.start)) || !Number.isFinite(Date.parse(input.end)) ||
       Date.parse(input.start) >= Date.parse(input.end)) throw new Error('invalid fixture event');
     const effect = this.intercept({ owner_id: owner, kind: 'calendar.create', target: 'primary', payload: input, idempotency_key: key });
     let store = this.providerCalendar.get(owner);
     if (!store) { store = new Map(); this.providerCalendar.set(owner, store); }
-    const id = `fixture-event-${effect.idempotency_key}`;
+    const id = input.id ?? `fixture-event-${effect.idempotency_key}`;
     if (!store.has(id)) store.set(id, { owner_id: owner, id, ...copy(input), all_day: false, etag: effect.idempotency_key });
     return copy(store.get(id)!);
   }

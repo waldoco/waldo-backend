@@ -84,9 +84,9 @@ vi.mock('../src/seams/deps', async (load) => {
 });
 vi.mock('../src/connectors/google', async (load) => {
   const original = await load<typeof import('../src/connectors/google')>();
-  return { ...original, googleClient: (_app: unknown, tokens: { email?: string }) => {
+  return { ...original, googleClient: (_app: unknown, tokens: { email?: string }, _fetch: unknown, _health: unknown, account: import('../src/connectors/google').CalendarPage['account']) => {
     if (!sourceWorld || !tokens.email) throw new Error('fixture Google account is unavailable');
-    return interceptCalendarEffects ? isolatedCalendarEffectClient(sourceWorld, tokens.email) : isolatedGoogleClient(sourceWorld, tokens.email);
+    return { ...(interceptCalendarEffects ? isolatedCalendarEffectClient(sourceWorld, tokens.email) : isolatedGoogleClient(sourceWorld, tokens.email)), account };
   } };
 });
 vi.mock('../src/channels/telegram-api', async (load) => {
@@ -751,14 +751,16 @@ describe('real owner-DO ingress in a sealed test world', () => {
   it('routes an owner-scoped calendar proposal card through the real DO without applying a provider effect', async () => {
     // Proposal-time route custody now resolves a real fixture account before issuing a card.
     // Do not rely on the previous test's account while leaving its source adapter unset.
+    // This fixture begins with the owner's already approved Calendar task scope.
     sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T11:00:00Z', owners: [{ id: 'a@example.invalid' }], sources: {} });
     await runInDurableObject(doStub(81101), async (_instance, state) => {
       await state.storage.put('google:accounts', [{ id: 'local:a@example.invalid', email: 'a@example.invalid', scopes: null, refresh_token: 'fictional-not-a-token' }]);
+      state.storage.sql.exec("UPDATE owner_task_source_scope SET sources_json = '[\"calendar\"]', ready = 1");
     });
     outbox.length = 0; modelInputs.length = 0;
     const update = 300000 + ++sequence * 10;
     expect((await send(81101, 'Propose a fixture calendar event, but do not commit it.', update)).status).toBe(200);
-    const cards = outbox.filter((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed:'));
+    const cards = outbox.filter((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed on a@example.invalid (primary calendar):'));
     expect(sourceWorld.outbox('a@example.invalid')).toEqual([]);
     expect(cards).toHaveLength(1);
     expect(cards[0]!.body.chat_id).toBe(81101);
@@ -801,20 +803,20 @@ describe('real owner-DO ingress in a sealed test world', () => {
     expect(await ledgerState()).toEqual([{ kind: 'calendar_change', status: 'skipped' }]);
     expect(outbox.some((item) => item.method === 'answerCallbackQuery' && item.body.callback_query_id === `fixture-query-${update + 4}` && item.body.text === 'Already handled.')).toBe(true);
     expect((await send(81101, 'Propose a fixture calendar event, but do not commit it.', update)).status).toBe(200);
-    expect(outbox.filter((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed:'))).toHaveLength(1);
+    expect(outbox.filter((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed on a@example.invalid (primary calendar):'))).toHaveLength(1);
   });
   it('intercepts a calendar provider write only after the bound owner approves the card', async () => {
     sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T13:00:00Z', owners: [{ id: 'a@example.invalid' }, { id: 'b@example.invalid' }], sources: {} });
     interceptCalendarEffects = true; outbox.length = 0; modelInputs.length = 0;
     const update = 400000 + ++sequence * 10;
     expect((await send(81101, 'Propose a fixture calendar event for my review.', update)).status).toBe(200);
-    const card = outbox.find((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed:'))!.body;
+    const card = outbox.find((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed on a@example.invalid (primary calendar):'))!.body;
     const keyboard = card.reply_markup as { inline_keyboard: { callback_data: string }[][] };
     const approve = keyboard.inline_keyboard.flat().find((button) => button.callback_data.startsWith('a:'))!.callback_data;
     expect(sourceWorld.outbox('a@example.invalid')).toEqual([]);
     expect(sourceWorld.outbox('b@example.invalid')).toEqual([]);
     expect((await callback(81101, 81101, approve, update + 1)).status).toBe(200);
-    expect(sourceWorld.outbox('a@example.invalid')).toEqual([expect.objectContaining({ kind: 'calendar.create', target: 'primary', payload: { title: 'Fixture meeting', start: '2026-10-01T10:00:00+05:30', end: '2026-10-01T10:30:00+05:30' } })]);
+    expect(sourceWorld.outbox('a@example.invalid')).toEqual([expect.objectContaining({ kind: 'calendar.create', target: 'primary', payload: expect.objectContaining({ title: 'Fixture meeting', start: '2026-10-01T10:00:00+05:30', end: '2026-10-01T10:30:00+05:30' }) })]);
     expect(sourceWorld.outbox('b@example.invalid')).toEqual([]);
     expect(sourceWorld.providerCalendarReadback('a@example.invalid')).toEqual([expect.objectContaining({ title: 'Fixture meeting', start: '2026-10-01T10:00:00+05:30' })]);
     expect(sourceWorld.providerCalendarReadback('b@example.invalid')).toEqual([]);
@@ -881,7 +883,8 @@ it('due transport backlog yields every second alarm to due scheduled work', asyn
     const records = [1, 2].map(i => ({ id: `fair-${i}`, trace: `fair-${i}`, payload: { chat_id: 81101, text: 'fixture' }, digest: 'fixture',
       ownerSubject: '81101', doName: state.storage.kv.get('do_name') ?? '', status: 'pending', dueAt: 0, createdAt: Date.now(), attempts: 0 }));
     state.storage.kv.put('telegram_final_outbox_v1', records); state.storage.kv.put('telegram_final_outbox_due_v1', 0);
-    state.storage.kv.put('transport_last_alarm', false);
+    // Start immediately before transport in the current four-class alarm ring.
+    state.storage.kv.put('owner_alarm_last_v1', 0);
     await instance.alarm();
     expect(scheduler.read('fair-reminder')).not.toBeNull();
     await instance.alarm();
