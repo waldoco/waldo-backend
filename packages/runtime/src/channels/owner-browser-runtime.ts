@@ -128,7 +128,8 @@ export function ownerBrowserRuntime(options: Readonly<{
         try {
           const assertCurrent = current(ctx); await assertCurrent();
           // Browserbase remains an explicit choice. Cloudflare failure never switches providers.
-          if (args.provider === 'browserbase_stagehand_http_v3' || !args.provider && options.env.WALDO_ENVIRONMENT !== 'staging') return fallback.handle(args, { ...ctx, assertTaskSourceCurrent: assertCurrent });
+          if(args.provider==='browserbase_stagehand_http_v3'&&args.session_handle)throw new ClosedRunError();
+          if (args.provider === 'browserbase_stagehand_http_v3' || !args.provider && !args.session_handle && options.env.WALDO_ENVIRONMENT !== 'staging') return fallback.handle(args, { ...ctx, assertTaskSourceCurrent: assertCurrent });
           if (privateBrowser.matches(args.url)) return privateBrowser.read(args, { ...ctx, assertTaskSourceCurrent: assertCurrent });
           const bound=await bindHost(ctx,args.session_handle);
           const result=await bound.active.host.handler.handle(args,bound.context);publishPointer();return result;
@@ -140,7 +141,11 @@ export function ownerBrowserRuntime(options: Readonly<{
       return {...fallback,schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page first. Native actions: type, click, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, cancel. session_handle explicitly continues an existing owner session. Uploads require owner approval; page sends are refused; uncertain effects cannot repeat. Browserbase remains an explicit alternative.',async handle(args,ctx){
         try{
           const assertCurrent=current(ctx);await assertCurrent();
-          if(args.provider==='browserbase_stagehand_http_v3'||!args.provider&&options.env.WALDO_ENVIRONMENT!=='staging')return fallback.handle(args,{...ctx,assertTaskSourceCurrent:assertCurrent});
+          if(args.provider==='browserbase_stagehand_http_v3'&&(args.command||args.session_handle))throw new ClosedRunError();
+          if(args.provider==='browserbase_stagehand_http_v3'||!args.provider&&!args.session_handle&&options.env.WALDO_ENVIRONMENT!=='staging')return fallback.handle(args,{...ctx,assertTaskSourceCurrent:assertCurrent});
+          // A configured synthetic task keeps its existing typed host. Never
+          // reinterpret native commands or explicit Cloudflare as a paid fallback.
+          if(!args.provider&&!args.session_handle&&args.command&&!options.env.COMMON_BROWSER_REGISTRATION&&!automatic.hasRetained()&&!active)return fallback.handle(args,{...ctx,assertTaskSourceCurrent:assertCurrent});
           const bound=await bindHost(ctx,args.session_handle);
           const result=await bound.active.host.actionHandler.handle(args,bound.context);
           if(args.command?.operation==='cancel'&&result.ok){active=undefined;lease=undefined;options.storage.kv.put(continuationKey,null);}else publishPointer();return result;

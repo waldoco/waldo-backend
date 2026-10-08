@@ -1,5 +1,4 @@
 import {prepareGeneralPublicRead} from './general-browser-public-read';
-import { Buffer } from 'node:buffer';
 import { LIMITS, validId, validatePath } from '@waldo/workspace';
 import type { Browser, BrowserContext, BrowserWorker, Page, Route } from '@cloudflare/playwright';
 import { browserSessionSchema, type BrowserSession } from '@waldo/contracts';
@@ -357,6 +356,9 @@ export function cloudflareGeneralBrowser(options: Options) {
       const digest = await generalDigest(JSON.stringify({ revision: snapshot.observation.revision, operation: 'upload', element_ref: reference, file }));
       const supplied = await approvedFile(digest);
       if (!(supplied instanceof Uint8Array) || supplied.length !== file.byte_size) throw new GeneralBrowserError('rejected');
+      // Native uploads require the same staging Node compatibility as the SDK;
+      // do not statically import Node modules into the ordinary production graph.
+      if (typeof Buffer === 'undefined') throw new GeneralBrowserError('provider_unavailable');
       const bytes = Buffer.from(supplied);
       if (await generalDigest(bytes) !== file.sha256) throw new GeneralBrowserError('rejected');
       await admit(session); await checked(); await admit(session);
