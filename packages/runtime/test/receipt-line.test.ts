@@ -20,6 +20,10 @@ describe('receiptLine', () => {
     expect(receiptLine([ev(1, 'set_reminder', false, { code: 'rejected' }), ev(2, 'workspace_write', false, { receiptStatus: 'unavailable' }, { path: 'a.md' })]))
       .toBe('Receipts: reminder set (failed); workspace file written a.md (unconfirmed)');
   });
+  it('a failed attempt is not shown when a later attempt of the same effect in the turn was accepted', () => {
+    expect(receiptLine([ev(1, 'forget_memory', false, { code: 'invalid_args' }), ev(2, 'forget_memory', true)])).toBe('Receipts: memory forgotten (accepted)');
+    expect(receiptLine([ev(1, 'forget_memory', true), ev(2, 'forget_memory', false, { code: 'invalid_args' })])).toBe('Receipts: memory forgotten (accepted); memory forgotten (failed)');
+  });
   it('keeps proposals labelled as proposals', () => {
     expect(receiptLine([ev(1, 'send_email', true)])).toBe('Receipts: email send proposed (accepted)');
   });
