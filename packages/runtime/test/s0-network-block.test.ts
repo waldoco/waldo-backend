@@ -23,6 +23,9 @@ it('names the failed check in a header, serves a booleans-only ping, and reports
   expect([bad.status, bad.headers.get('x-waldo-s0')]).toEqual([404, 'waldo-s0-staging;auth']);
   const ping = await handleS0(new Request('https://x/s0/ping'), { ...env, BROWSER: undefined }, (async () => { throw Error('x'); }) as never);
   expect(await ping.json()).toEqual({ worker: 'waldo-s0-staging', staging: true, hasToken: true, hasBinding: false });
+  const ready = await handleS0(new Request('https://x/s0/ready', { headers: { authorization: 'Bearer t0ken' } }), env, (async () => { throw Error('must not load'); }) as never);
+  expect([ready.status, await ready.json()]).toEqual([200, { ready: true, version: 's0-gate-v3' }]);
+  expect((await handleS0(new Request('https://x/s0/ready', { headers: { authorization: 'Bearer nope' } }), env, (async () => { throw Error('x'); }) as never)).status).toBe(404);
   const run = await handleS0(new Request('https://x/s0', { method: 'POST', headers: { authorization: 'Bearer t0ken' } }), env, (async () => { throw Error('secret detail'); }) as never);
   expect([run.status, run.headers.get('x-waldo-s0'), await run.text()]).toEqual([502, 'waldo-s0-staging;error', '{"error":"Error"}']);
 });
