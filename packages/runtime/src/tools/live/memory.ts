@@ -124,7 +124,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const atomic = () => deps.transaction ? deps.transaction(commit) : commit();
         if (ctx.runScope) ctx.runScope.commit(atomic); else atomic();
         if (incomplete) return fail('Memory cleanup is incomplete; it will be retried on the next turn.');
-        return success({ removed_ids: [...selected.keys()], scope_note: args.scope_note, scope: 'removed from memory and recall; copies in older chat history are hidden; backups expire per retention' });
+        return success({ removed_ids: [...selected.keys()], scope_note: args.scope_note, scope: 'removed from memory and recall; copies in older chat history are hidden; messages already in the Telegram chat cannot be deleted by Waldo; backups expire per retention' });
       } },
   ];
 };
