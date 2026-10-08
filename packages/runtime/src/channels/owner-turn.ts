@@ -221,10 +221,9 @@ export const createOwnerResponder = (
   const removedTopics = new Set<string>();
   const heldTopics = () => [...removedTopics, ...forgettingState?.claims('purging').flatMap(claim => [claim.text, claim.evidence]) ?? [], ...forgettingState?.pendingTopics() ?? [], ...forgettingState?.incompleteTopics() ?? []];
   const holdsAnyHeldTopic = (): boolean => heldTopics().length > 0;
-  const holdsHeldTopic = (...values: readonly (string | null | undefined)[]): boolean => {
-    const held = heldTopics();
-    return values.some(value => typeof value === 'string' && held.some(topic => carriesTopic(value, topic) || hidesTopic(value, topic)));
-  };
+  const holdsIn = (held: readonly string[]) => (...values: readonly (string | null | undefined)[]): boolean =>
+    values.some(value => typeof value === 'string' && held.some(topic => carriesTopic(value, topic) || hidesTopic(value, topic)));
+  const holdsHeldTopic = (...values: readonly (string | null | undefined)[]): boolean => holdsIn(heldTopics())(...values);
   // Retained reads drop only the list items that carry a held topic. A held string or key outside a list withholds the whole read (undefined).
   const withholdHeldItems = <T,>(value: T, tally: { dropped: number }, depth = 0): T | undefined => {
     if (typeof value === 'string') return holdsHeldTopic(value) ? undefined : value;
@@ -241,22 +240,23 @@ export const createOwnerResponder = (
     return out as T;
   };
   // A node is derived from its supporting claims: one built on a withheld claim is withheld too (fail closed on unreadable support), and so is every edge touching it.
-  const promptNodes = () => {
+  const promptNodes = (held: readonly string[]) => {
+    const holds = holdsIn(held);
     const all = memory!.allClaims();
     const known = new Set(all.map(claim => claim.id));
     const withheld = new Set(all
-      .filter(claim => holdsHeldTopic(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)).map(claim => claim.id));
+      .filter(claim => holds(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)).map(claim => claim.id));
     // While a topic is held, support naming a claim that does not exist has unknown provenance, so it fails closed like unreadable support.
-    const holding = holdsAnyHeldTopic();
+    const holding = held.length > 0;
     const supportHeld = (raw: string): boolean => { try { const spots: unknown = JSON.parse(raw); return !Array.isArray(spots) || spots.some(id => typeof id !== 'number' || withheld.has(id) || (holding && !known.has(id))); } catch { return true; } };
-    return memory!.nodes().filter(node => !holdsHeldTopic(...structuredStrings(node)) && !supportHeld(node.supporting_spots));
+    return memory!.nodes().filter(node => !holds(...structuredStrings(node)) && !supportHeld(node.supporting_spots));
   };
   const promptMemory = (): ClaimStore | undefined => memory && ({
     ...memory,
-    nodes: () => promptNodes(),
-    edges: () => { const kept = new Set(promptNodes().map(node => node.id)); return memory!.edges().filter(edge => kept.has(edge.from_id) && kept.has(edge.to_id) && !holdsHeldTopic(...structuredStrings(edge))); },
-    claims: status => memory!.claims(status).filter(claim => !holdsHeldTopic(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)),
-    recall: (query, limit) => memory!.recall(query, limit).filter(claim => !holdsHeldTopic(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)),
+    nodes: () => promptNodes(heldTopics()),
+    edges: () => { const held = heldTopics(); const holds = holdsIn(held); const kept = new Set(promptNodes(held).map(node => node.id)); return memory!.edges().filter(edge => kept.has(edge.from_id) && kept.has(edge.to_id) && !holds(...structuredStrings(edge))); },
+    claims: status => { const holds = holdsIn(heldTopics()); return memory!.claims(status).filter(claim => !holds(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)); },
+    recall: (query, limit) => { const holds = holdsIn(heldTopics()); return memory!.recall(query, limit).filter(claim => !holds(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)); },
   });
   const consumeRound = async () => {
     const added = await control.roundAsync();

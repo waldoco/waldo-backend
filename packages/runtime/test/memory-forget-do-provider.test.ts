@@ -912,3 +912,21 @@ it('HELD-TEXT after forget_memory the next turn on the same live instance sends 
   await turn(name, 3, 'What time is my standup?');
   expect(seen.inputs.filter(input => input.includes(secret))).toEqual([]);
 });
+
+it('HELDCOST a held topic with a large claim store reads the purge tables a bounded number of times per turn', async () => {
+  const name = 'memory-do-held-cost';
+  await runInDurableObject(stub(name), (_i, state) => {
+    const memory = claimStore(state.storage.sql);
+    for (let index = 0; index < 1500; index += 1) memory.add({ kind: 'fact', text: `Fact number ${index} about topic ${index}`, evidence: `evidence ${index}`, source: 'stated', origin: 'owner', source_ref: `owner, tg-${index}` }, '2026-10-08T00:00:00Z');
+    memory.beginTopicCoverage('coffee', '2026-10-08T00:00:00Z');
+  });
+  const reads = await runInDurableObject(stub(name), async (_i, state) => {
+    const sql = state.storage.sql as unknown as { exec: (query: string, ...bindings: unknown[]) => unknown };
+    const original = sql.exec.bind(sql);
+    let count = 0;
+    sql.exec = (query: string, ...bindings: unknown[]) => { if (query.includes('topic_purge_pending')) count += 1; return original(query, ...bindings); };
+    return () => count;
+  });
+  await turn(name, 1, 'What time is my standup?');
+  expect(reads()).toBeLessThan(200);
+});
