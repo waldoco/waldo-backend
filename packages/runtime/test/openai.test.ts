@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import OpenAI from 'openai';
 import {
   OPENAI_GPT_6_LUNA_MODEL,
   OPENAI_PROVIDER,
@@ -221,6 +222,14 @@ describe('OpenAIResponsesAdapter', () => {
       code: 'transient',
       error: 'OpenAI request failed',
     });
+  });
+
+  it('a provider rejection reports status, error code and parameter, never its message', async () => {
+    const adapter = new OpenAIResponsesAdapter({
+      apiKey: 'test-key',
+      client: client(async () => { throw new OpenAI.APIError(400, { message: 'secret request text', code: 'invalid_value', param: 'input[3]' }, 'secret request text', new Headers()); }),
+    });
+    await expect(adapter.complete(gatewayRequest())).resolves.toEqual({ ok: false, code: 'invalid_args', error: 'OpenAI request failed (400 invalid_value input[3])' });
   });
 
   it('aborts a hung request at the adapter timeout', async () => {
