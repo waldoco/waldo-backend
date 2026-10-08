@@ -165,14 +165,21 @@ const send = async (subject: number, text: string, updateId: number, replyTo?: R
     body: JSON.stringify({ update_id: updateId, message: { message_id: updateId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text, ...(replyTo ? { reply_to_message: replyTo } : {}) } }),
   }), env, (work) => pending.push(work), directory);
   await Promise.all(pending);
-  await runInDurableObject(doStub(subject), async (instance, state) => {
-    await instance.alarm();
-    const rows = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
-    for (const row of rows) if (row.status === 'pending') row.dueAt = 0;
-    state.storage.kv.put('telegram_final_outbox_v1', rows);
-    await instance.alarm();
-  });
   await drained(subject);
+  // Inbox closure publishes the final before its transport is due. Wait for
+  // this occurrence's delivery receipt, leaving unrelated durable finals alone.
+  await vi.waitFor(async () => {
+    await runInDurableObject(doStub(subject), async (instance, state) => {
+      const finals = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
+      const queued = finals.find(row => row.trace === `tg-${updateId}`);
+      // The source fixture freezes its clock. Make only this committed
+      // transport due, preserving source timestamps and unrelated obligations.
+      if (queued?.status === 'pending') { queued.dueAt = 0; state.storage.kv.put('telegram_final_outbox_v1', finals); state.storage.kv.put('telegram_final_outbox_due_v1', 0); }
+      await instance.alarm();
+      const final = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')?.find(row => row.trace === `tg-${updateId}`);
+      expect(final).toMatchObject({ status: 'delivered', settled: true });
+    });
+  }, { timeout: 8000, interval: 50 });
   return response;
 };
 const callback = async (subject: number, from: number, data: string, updateId: number) => {
@@ -687,7 +694,7 @@ it('due transport backlog yields every second alarm to due scheduled work', asyn
     const records = [1, 2].map(i => ({ id: `fair-${i}`, trace: `fair-${i}`, payload: { chat_id: 81101, text: 'fixture' }, digest: 'fixture',
       ownerSubject: '81101', doName: state.storage.kv.get('do_name') ?? '', status: 'pending', dueAt: 0, createdAt: Date.now(), attempts: 0 }));
     state.storage.kv.put('telegram_final_outbox_v1', records); state.storage.kv.put('telegram_final_outbox_due_v1', 0);
-    state.storage.kv.put('transport_last_alarm', false);
+    state.storage.kv.put('owner_alarm_last_v1', 0);
     await instance.alarm();
     expect(scheduler.read('fair-reminder')).not.toBeNull();
     await instance.alarm();
@@ -828,6 +835,14 @@ it.each([false, true])('accepted concurrent forget after the final model round h
     };
     await (instance as unknown as { drainInbox(): Promise<void> }).drainInbox();
     await instance.alarm();
+    // A fair alarm may service transport before the child inbox. Completion is
+    // its consumed state or committed visible outcome, not a number of alarms.
+    await vi.waitFor(async () => {
+      await instance.alarm();
+      const row = (await inbox.records()).find(row => row.updateId === childId)!;
+      const finals = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
+      expect(row.state === 'consumed' || row.state === 'completed' || finals.some(final => final.trace === `tg-${childId}`)).toBe(true);
+    }, { timeout: 8000, interval: 50 });
     const child = (await inbox.records()).find(row => row.updateId === childId)!;
     const finals = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
     expect(acceptedSteer).toBe(!stopped);
