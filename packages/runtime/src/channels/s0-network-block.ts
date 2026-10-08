@@ -72,8 +72,14 @@ export async function runS0(binding: BrowserWorker, loadSdk: CloudflareBrowserSd
 // Staging-only throwaway entry. Requires a bearer token set as a deployment secret by the
 // operator; this code never sees or logs it. Not routed on the owner-facing worker.
 export async function handleS0(request: Request, env: Readonly<{ WALDO_ENVIRONMENT?: string; S0_TOKEN?: string; BROWSER?: BrowserWorker }>, loadSdk: CloudflareBrowserSdkLoader): Promise<Response> {
-  if (env.WALDO_ENVIRONMENT !== 'staging' || !env.S0_TOKEN || !env.BROWSER) return new Response('not found', { status: 404 });
+  // Opaque bodies stay; a header names this worker and the failed check so a 403 from the edge is distinguishable from ours.
+  const reply = (body: BodyInit | null, status: number, reason: string, type?: string) => new Response(body, { status, headers: { 'x-waldo-s0': `waldo-s0-staging;${reason}`, ...(type ? { 'content-type': type } : {}) } });
+  const url = new URL(request.url);
+  if (request.method === 'GET' && url.pathname === '/s0/ping') return reply(JSON.stringify({ worker: 'waldo-s0-staging', staging: env.WALDO_ENVIRONMENT === 'staging', hasToken: !!env.S0_TOKEN, hasBinding: !!env.BROWSER }), 200, 'ping', 'application/json');
+  if (env.WALDO_ENVIRONMENT !== 'staging' || !env.S0_TOKEN || !env.BROWSER) return reply('not found', 404, 'config');
   const given = request.headers.get('authorization') ?? '', want = `Bearer ${env.S0_TOKEN}`;
-  if (request.method !== 'POST' || given.length !== want.length || !crypto.subtle || given !== want) return new Response('not found', { status: 404 });
-  return Response.json(await runS0(env.BROWSER, loadSdk));
+  if (request.method !== 'POST') return reply('not found', 404, 'method');
+  if (given.length !== want.length || !crypto.subtle || given !== want) return reply('not found', 404, 'auth');
+  try { return reply(JSON.stringify(await runS0(env.BROWSER, loadSdk)), 200, 'ok', 'application/json'); }
+  catch (error) { return reply(JSON.stringify({ error: error instanceof Error ? error.name : 'unknown' }), 502, 'error', 'application/json'); }
 }

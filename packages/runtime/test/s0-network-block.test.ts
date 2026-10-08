@@ -17,6 +17,16 @@ it('is invisible without staging, a token, a binding and the exact bearer', asyn
     expect((await handleS0(r, e, sdk)).status).toBe(404);
 });
 
+it('names the failed check in a header, serves a booleans-only ping, and reports a thrown run as 502', async () => {
+  const env = { WALDO_ENVIRONMENT: 'staging', S0_TOKEN: 't0ken', BROWSER: {} as never };
+  const bad = await handleS0(new Request('https://x/s0', { method: 'POST', headers: { authorization: 'Bearer wrong' } }), env, (async () => { throw Error('x'); }) as never);
+  expect([bad.status, bad.headers.get('x-waldo-s0')]).toEqual([404, 'waldo-s0-staging;auth']);
+  const ping = await handleS0(new Request('https://x/s0/ping'), { ...env, BROWSER: undefined }, (async () => { throw Error('x'); }) as never);
+  expect(await ping.json()).toEqual({ worker: 'waldo-s0-staging', staging: true, hasToken: true, hasBinding: false });
+  const run = await handleS0(new Request('https://x/s0', { method: 'POST', headers: { authorization: 'Bearer t0ken' } }), env, (async () => { throw Error('secret detail'); }) as never);
+  expect([run.status, run.headers.get('x-waldo-s0'), await run.text()]).toEqual([502, 'waldo-s0-staging;error', '{"error":"Error"}']);
+});
+
 it('a probe that merely timed out is not accepted as a network block, and the deadline sums under 60s', async () => {
   const mod = await import('../src/channels/s0-network-block');
   const timedOut = mod.S0_BLOCKED_PROBES.map(url => ({ url, reached: false, detail: 'blocked:TimeoutError: signal timed out' }));
