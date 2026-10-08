@@ -1,6 +1,7 @@
 import type { BrowserContext, Download, Page } from '@cloudflare/playwright';
 import type { BrowsePageArgs } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
+import { privateBrowserConsolePage } from './browser-private-console-page';
 import { browserBoundedJson } from './browser-bounded-body';
 import { cloudflarePrivateOwner, revokePrivateBrowserOwner, cleanupPrivateBrowserOwner } from './cloudflare-private-owner';
 import { cloudflareGeneralBrowser } from './cloudflare-general-browser';
@@ -24,6 +25,8 @@ const reply = (body: object, status = 200) => Response.json(body, { status, head
 export const privateBrowserRecordKey = (approval: PrivateBrowserConsent) => `private-browser-owner/v1/${JSON.stringify([approval.binding.ownerId, approval.binding.environment, approval.binding.siteOrigin, approval.binding.accountId])}`;
 export const PRIVATE_BROWSER_BUDGET_PREFIX = 'private-browser-budget:';
 export const PRIVATE_BROWSER_DUE = 'private_browser_due_v1';
+const PRIVATE_STATE_RETIREMENT = 'private_browser_state_retirement_v1';
+class PrivateStateRetirementError extends Error {}
 
 // One registered account, through existing owner authority and spend configuration.
 // Registration is trusted host policy; model tools cannot supply keys or account proof.
@@ -33,6 +36,7 @@ export function ownerPrivateBrowserHost(options: Readonly<{
   assertOwner(): Promise<Readonly<{ directoryOwnerId: string; custodyDigest: string }>>;
   now(): number;
   wake?(at: number): Promise<void>;
+  retireState?(approval: PrivateBrowserConsent): Promise<void>;
   files?(assertCurrent: () => Promise<void>, ownerId: string): Promise<Readonly<{ workspace: Awaited<ReturnType<typeof workspaceOwnerHost>>; origin: string }>>;
 }>) {
   const registration = options.registration ? Object.freeze({ ...options.registration,
@@ -43,6 +47,7 @@ export function ownerPrivateBrowserHost(options: Readonly<{
   const refreshWake = async () => {
     const approval = row();
     if (!approval || approval.state === 'revoked') return wake(null);
+    if (options.storage.kv.get(PRIVATE_STATE_RETIREMENT)) return wake(null);
     const record = options.storage.kv.get<{ allocation?: string; operationDeadline?: number; cleanupFailed?: boolean }>(privateBrowserRecordKey(approval));
     if (record?.cleanupFailed) return wake(approval.state === 'approved' && options.now() < approval.expiresAt ? approval.expiresAt : null);
     return wake(approval.state === 'retiring' ? options.now() : Math.min(approval.expiresAt, record?.allocation && record.allocation !== 'closed' ? record.operationDeadline ?? options.now() : Infinity));
@@ -85,24 +90,36 @@ export function ownerPrivateBrowserHost(options: Readonly<{
   };
   const retire = async (approval: PrivateBrowserConsent) => {
     const recordKey = privateBrowserRecordKey(approval);
-    const record = options.storage.kv.get<{ allocation?: string; allocationRef?: string; providerSessionId?: string }>(recordKey);
-    if (!record) return;
+    const observed = options.storage.kv.get<{ allocation?: string; allocationRef?: string; providerSessionId?: string; cleanupFailed?: boolean }>(recordKey);
     revokePrivateBrowserOwner(options.storage, approval.binding);
-    const config = await options.configuration(true); if (!config) throw Error('cleanup unavailable');
-    if (record.allocation && record.allocation !== 'closed') {
-      const budget = record.allocationRef ? options.storage.kv.get<{ grant: CommonBrowserGrant; recordKey: string }>(`${PRIVATE_BROWSER_BUDGET_PREFIX}${record.allocationRef}`) : undefined;
-      if (!budget || budget.recordKey !== recordKey || !record.providerSessionId || !config.cleanupBinding) throw Error('cleanup uncertain');
-      const driver = cloudflareGeneralBrowser({ ownerId: config.ownerId, binding: config.binding, loadSdk: config.loadSdk,
-        cleanupBinding: id => config.cleanupBinding!(budget.grant, id), now: options.now, deadline: options.now, maxScreenshotBytes: budget.grant.maxScreenshotBytes,
-        admit: async () => { throw Error('cleanup only'); }, authorizeRequest: async () => false });
-      await cleanupPrivateBrowserOwner(options.storage, recordKey, record.providerSessionId, record.allocationRef, () => driver.terminate({ id: budget.grant.taskId, ownerId: config.ownerId, provider: 'cloudflare_playwright', providerSessionId: record.providerSessionId!,
-        contextHandle: null, mode: 'authenticated_takeover', state: 'active', generation: approval.binding.generation, expiresAt: approval.expiresAt, updatedAt: options.now() }));
+    let stateFailed = false;
+    try { await options.retireState?.(approval); options.storage.kv.delete(PRIVATE_STATE_RETIREMENT); }
+    catch { stateFailed = true; options.storage.kv.put(PRIVATE_STATE_RETIREMENT, { binding: approval.binding }); }
+    // Remote state removal and prepaid provider termination are independent obligations.
+    // An interrupted read may have completed termination during the Vault await.
+    const record = options.storage.kv.get<typeof observed>(recordKey);
+    if (record?.allocationRef !== observed?.allocationRef || record?.providerSessionId !== observed?.providerSessionId) throw Error('cleanup custody changed');
+    if (record) {
+      if (record.cleanupFailed) throw Error('cleanup unresolved');
+      if (record.allocation && record.allocation !== 'closed') {
+        const config = await options.configuration(true); if (!config) throw Error('cleanup unavailable');
+        const budget = record.allocationRef ? options.storage.kv.get<{ grant: CommonBrowserGrant; recordKey: string }>(`${PRIVATE_BROWSER_BUDGET_PREFIX}${record.allocationRef}`) : undefined;
+        if (!budget || budget.recordKey !== recordKey || !record.providerSessionId || !config.cleanupBinding) throw Error('cleanup uncertain');
+        const driver = cloudflareGeneralBrowser({ ownerId: config.ownerId, binding: config.binding, loadSdk: config.loadSdk,
+          cleanupBinding: id => config.cleanupBinding!(budget.grant, id), now: options.now, deadline: options.now, maxScreenshotBytes: budget.grant.maxScreenshotBytes,
+          admit: async () => { throw Error('cleanup only'); }, authorizeRequest: async () => false });
+        await cleanupPrivateBrowserOwner(options.storage, recordKey, record.providerSessionId, record.allocationRef, () => driver.terminate({ id: budget.grant.taskId, ownerId: config.ownerId, provider: 'cloudflare_playwright', providerSessionId: record.providerSessionId!,
+          contextHandle: null, mode: 'authenticated_takeover', state: 'active', generation: approval.binding.generation, expiresAt: approval.expiresAt, updatedAt: options.now() }));
+      }
+      options.storage.transactionSync(() => {
+        const retained = options.storage.kv.get<{ allocationRef?: string; providerSessionId?: string }>(recordKey);
+        if (retained?.allocationRef !== record.allocationRef || retained?.providerSessionId !== record.providerSessionId) throw Error('cleanup custody changed');
+        options.storage.kv.delete(recordKey);
+      });
     }
-    options.storage.transactionSync(() => {
-      const retained = options.storage.kv.get<{ allocationRef?: string; providerSessionId?: string }>(recordKey);
-      if (retained?.allocationRef !== record.allocationRef || retained?.providerSessionId !== record.providerSessionId) throw Error('cleanup custody changed');
-      options.storage.kv.delete(recordKey);
-    });
+    // Pause remote recovery explicitly. A console revoke retries this obligation;
+    // there is no autonomous privileged RPC polling or new browser allocation.
+    if (stateFailed) throw new PrivateStateRetirementError('private state retirement unresolved');
   };
   const grantFor = async (approval: PrivateBrowserConsent, taskId: string) => {
     await assertApproval(approval);
@@ -119,10 +136,10 @@ export function ownerPrivateBrowserHost(options: Readonly<{
       options.storage.kv.put(PRIVATE_BROWSER_DUE, options.now());
     },
     async maintain() {
-      const approval = row(); if (!approval || approval.state === 'revoked') return wake(null);
+      const approval = row(); if (!approval || approval.state === 'revoked' || options.storage.kv.get(PRIVATE_STATE_RETIREMENT)) return wake(null);
       const record = options.storage.kv.get<{ allocation?: string; operationDeadline?: number; cleanupFailed?: boolean }>(privateBrowserRecordKey(approval));
       const permissionExpired = options.now() >= approval.expiresAt;
-      if (record?.cleanupFailed) {
+      if (record?.cleanupFailed && !options.storage.kv.get(PRIVATE_STATE_RETIREMENT)) {
         // Physical uncertainty does not authorize more spend or retain local auth after expiry.
         if (permissionExpired && approval.state === 'approved') {
           revokePrivateBrowserOwner(options.storage, approval.binding);
@@ -135,7 +152,8 @@ export function ownerPrivateBrowserHost(options: Readonly<{
       revokePrivateBrowserOwner(options.storage, approval.binding);
       options.storage.kv.put(PRIVATE_BROWSER_CONSENT_KEY, { ...approval, state: 'retiring' });
       try { await retire(approval); }
-      catch {
+      catch (error) {
+        if (error instanceof PrivateStateRetirementError) { await wake(null); throw error; }
         options.storage.transactionSync(() => { const retained = options.storage.kv.get<object>(privateBrowserRecordKey(approval)); if (retained) options.storage.kv.put(privateBrowserRecordKey(approval), { ...retained, cleanupFailed: true }); });
         await wake(null); throw Error('private cleanup unresolved');
       }
@@ -150,6 +168,12 @@ export function ownerPrivateBrowserHost(options: Readonly<{
       if (options.environment !== 'staging') return reply({ error: 'not_configured' }, 404);
       try {
         const owner = await options.assertOwner();
+        const retained = row();
+        if (request.method === 'GET' && request.headers.get('accept')?.includes('text/html') && retained?.state === 'retiring') {
+          if (retained.binding.ownerId !== owner.directoryOwnerId) throw Error('owner changed');
+          return privateBrowserConsolePage({ nonce: '', csrf, site: retained.binding.siteOrigin, account: retained.binding.accountId,
+            generation: retained.binding.generation, expires_at: retained.expiresAt }, false, true);
+        }
         let input: Record<string, unknown> | undefined;
         if (request.method === 'POST') {
           input = await browserBoundedJson(request.clone()) as Record<string, unknown>;
@@ -176,7 +200,9 @@ export function ownerPrivateBrowserHost(options: Readonly<{
           expiresAt: target.expiresAt, now: options.now, newId: () => crypto.randomUUID(), assertOwner: async () => {
             const current = await options.assertOwner(); if (current.directoryOwnerId !== owner.directoryOwnerId) throw Error('owner changed'); return current.custodyDigest;
           }, retire });
-        await refreshWake(); return result;
+        await refreshWake();
+        if (request.method === 'GET' && result.ok && request.headers.get('accept')?.includes('text/html')) return privateBrowserConsolePage(await result.json() as Parameters<typeof privateBrowserConsolePage>[0], row()?.state === 'approved');
+        return result;
       } catch { return reply({ error: 'private_browser_unavailable' }, 409); }
     },
     async read(args: BrowsePageArgs, ctx: ToolDispatcherContext) {

@@ -1,5 +1,7 @@
 // Typed connector proxy. The only place a Google token is read, refreshed or used: the runtime
 // sends a connection id and a typed operation, signed with the router secret, and gets data back.
+import { browserVaultOperation, BROWSER_STATE_WIRE_BYTES } from './browser-vault.ts';
+import { browserBoundedText, browserBoundedJson } from '../../../packages/runtime/src/channels/browser-bounded-body.ts';
 import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, googleHas, GoogleError, type GoogleErrorReason, type GoogleClient, type GoogleMethod } from '../../../packages/runtime/src/connectors/google.ts';
 import { driveRestClient, DRIVE_REST_METHODS, DriveRestError, type DriveRestMethod } from '../../../packages/runtime/src/connectors/drive-rest.ts';
 import { googleAccessToken, GoogleTokenError } from '../../../packages/runtime/src/connectors/google.ts';
@@ -30,14 +32,14 @@ const same = (a: string, b: string) => {
   for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ (b.charCodeAt(i) || 0);
   return diff === 0;
 };
-const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 const fail = (status: number, message: string, diagnostic?: McpErrorDiagnostic, reason?: GoogleErrorReason) => reply({ error: { status, message, ...(reason ? { reason } : {}), ...(diagnostic ? { provider_diagnostic: diagnostic } : {}) } }, status === 401 || status === 403 || status === 404 ? 200 : 502);
-const db = async (fn: string, args: Record<string, unknown>) => {
+const db = async (fn: string, args: Record<string, unknown>, signal?: AbortSignal) => {
   const response = await fetch(`${url}/rest/v1/rpc/${fn}`, {
-    method: 'POST', headers: { apikey: service, authorization: `Bearer ${service}`, 'content-profile': 'waldo', 'content-type': 'application/json' }, body: JSON.stringify(args),
+    method: 'POST', signal, headers: { apikey: service, authorization: `Bearer ${service}`, 'content-profile': 'waldo', 'content-type': 'application/json' }, body: JSON.stringify(args),
   });
   if (!response.ok) throw new Error(`db ${fn} ${response.status}`);
-  return response.json();
+  return fn === 'proxy_browser_state' ? browserBoundedJson(response, BROWSER_STATE_WIRE_BYTES) : response.json();
 };
 const store = async (doName: string, email: string, scopes: readonly string[], token: string) => {
   const id = await db('proxy_store', { p_do_name: doName, p_provider: 'google', p_account: email, p_scopes: scopes.join(' '), p_secret: token }) as string | null;
@@ -60,11 +62,20 @@ const logged = async (started: number, op: string, method: string | undefined, r
 
 Deno.serve(async (request) => {
   const started = Date.now();
-  if (request.method !== 'POST' || !router || !clientId || !clientSecret || !service) return logged(started, 'unconfigured', undefined, fail(404, 'connector proxy is not configured'));
-  const raw = await request.text();
+  if (request.method !== 'POST' || !router || !service || !url) return logged(started, 'unconfigured', undefined, fail(404, 'connector proxy is not configured'));
+  const browserWire = request.headers.get('content-type') === 'application/vnd.waldo.browser-state+json';
+  let raw: string;
+  try { raw = browserWire ? await browserBoundedText(request, BROWSER_STATE_WIRE_BYTES) : await request.text(); }
+  catch { return logged(started, 'browser_state', undefined, fail(400, 'browser_state_unavailable')); }
   const at = Number(request.headers.get('x-waldo-at'));
   if (!Number.isFinite(at) || Math.abs(Date.now() / 1000 - at) > 300 || !same(request.headers.get('x-waldo-sig') ?? '', await hmac(`${at}.proxy.${await sha256(raw)}`))) return logged(started, 'unsigned', undefined, fail(401, 'unsigned proxy call'));
-  const body = JSON.parse(raw) as Body;
+  let parsed: unknown; try { parsed = JSON.parse(raw); } catch { return logged(started, 'invalid', undefined, fail(400, 'invalid request')); }
+  if (browserWire || (parsed as {op?:unknown})?.op === 'browser_state') {
+    try { if (!browserWire) throw Error(); return logged(started, 'browser_state', undefined, reply({ data: await browserVaultOperation(parsed, db) })); }
+    catch { return logged(started, 'browser_state', undefined, fail(409, 'browser_state_unavailable')); }
+  }
+  if (!clientId || !clientSecret) return logged(started, 'unconfigured', undefined, fail(404, 'connector proxy is not configured'));
+  const body = parsed as Body;
   return logged(started, body.op, body.op === 'call' ? body.method : undefined, await handle(body), body.op === 'mcp_call' && body.read_only === true);
 });
 

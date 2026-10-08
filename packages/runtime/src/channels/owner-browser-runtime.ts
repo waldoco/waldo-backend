@@ -12,13 +12,14 @@ import type { LLMGatewayAdapter } from '../llm/provider';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import { ownerPrivateBrowserHost, type PrivateBrowserRegistration } from './owner-private-browser-host';
 import { workspaceOwnerHost, workspaceMetadata } from './workspace-host';
+import { ownerBrowserVaultRegistration, revokeOwnerBrowserVault } from './owner-browser-vault-registration';
 
 // The browser task follows the authenticated owner run. It needs no topic classifier
 // or canonical execution activation; provider identity and budget stay in the DO.
 export function ownerBrowserRuntime(options: Readonly<{
   env: TelegramWebhookEnv; storage: DurableObjectStorage; actualDoId: string;
   activeScope(): RunEffectScope | undefined;
-  privateBrowser?: PrivateBrowserRegistration;
+  privateBrowser?: Omit<PrivateBrowserRegistration, 'custody'> & Partial<Pick<PrivateBrowserRegistration, 'custody'>>;
 }>) {
   let active: Readonly<{ scope: RunEffectScope; host: ReturnType<typeof commonBrowserHost> }> | undefined;
   const automatic = commonOwnerBrowserRegistration({ ...options, loadSdk: commonBrowserSdk() });
@@ -29,7 +30,17 @@ export function ownerBrowserRuntime(options: Readonly<{
     } : {}) });
   };
   const selectedConfiguration = async (cleanupOnly = false) => automatic.selected || automatic.hasRetained() ? automatic.configuration(cleanupOnly) : configuration(cleanupOnly);
-  const privateBrowser = ownerPrivateBrowserHost({ storage: options.storage, environment: options.env.WALDO_ENVIRONMENT ?? '', registration: options.privateBrowser,
+  const assertOwner = async () => {
+      const doName = options.storage.kv.get<string>('do_name'), subject = options.storage.kv.get<string>('telegram_subject');
+      const physical = () => { if (!doName || !subject || options.storage.kv.get('do_name') !== doName || options.storage.kv.get('telegram_subject') !== subject
+        || options.storage.kv.get('telegram_unlinked') === true || options.env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== options.actualDoId) throw new ClosedRunError(); };
+      physical(); const owner = await commonOwnerAuthority(options.env).resolve('telegram', subject!, doName!); physical();
+      if (!owner) throw new ClosedRunError(); return { directoryOwnerId: owner.directoryOwnerId, custodyDigest: owner.custodyDigest };
+    };
+  const vaultOptions = { ...options, assertOwner };
+  const registration = options.privateBrowser ? options.privateBrowser.custody ? options.privateBrowser as PrivateBrowserRegistration : ownerBrowserVaultRegistration({ ...vaultOptions, registration: options.privateBrowser }) : undefined;
+  const privateBrowser = ownerPrivateBrowserHost({ storage: options.storage, environment: options.env.WALDO_ENVIRONMENT ?? '', registration,
+    retireState: approval => revokeOwnerBrowserVault(vaultOptions, approval),
     files: async (assertCurrent, ownerId) => {
       const scope = options.activeScope(), doName = options.storage.kv.get<string>('do_name');
       if (!scope || !doName) throw new ClosedRunError();
@@ -45,13 +56,7 @@ export function ownerBrowserRuntime(options: Readonly<{
       const origin = options.storage.kv.get<string>('origin'); if (!origin) throw new ClosedRunError();
       return { workspace, origin };
     },
-    configuration: selectedConfiguration, now: Date.now, wake: async at => { const prior = await options.storage.getAlarm(); await armAlarm(options.storage, Math.max(Date.now() + 250, prior === null ? at : Math.min(prior, at))); }, assertOwner: async () => {
-      const doName = options.storage.kv.get<string>('do_name'), subject = options.storage.kv.get<string>('telegram_subject');
-      const physical = () => { if (!doName || !subject || options.storage.kv.get('do_name') !== doName || options.storage.kv.get('telegram_subject') !== subject
-        || options.storage.kv.get('telegram_unlinked') === true || options.env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== options.actualDoId) throw new ClosedRunError(); };
-      physical(); const owner = await commonOwnerAuthority(options.env).resolve('telegram', subject!, doName!); physical();
-      if (!owner) throw new ClosedRunError(); return { directoryOwnerId: owner.directoryOwnerId, custodyDigest: owner.custodyDigest };
-    } });
+    configuration: selectedConfiguration, now: Date.now, wake: async at => { const prior = await options.storage.getAlarm(); await armAlarm(options.storage, Math.max(Date.now() + 250, prior === null ? at : Math.min(prior, at))); }, assertOwner });
   const current = (ctx: ToolDispatcherContext) => {
     const scope = options.activeScope(), supplied = ctx.runScope;
     const doName = options.storage.kv.get<string>('do_name'), subject = options.storage.kv.get<string>('telegram_subject');

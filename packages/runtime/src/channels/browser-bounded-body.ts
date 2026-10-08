@@ -1,6 +1,6 @@
 export class BrowserBodyError extends Error { constructor(readonly status: number) { super('browser body rejected'); } }
 // Whole-body deadline and byte bound also cover chunked/slow responses.
-export async function browserBoundedJson(message: Request | Response, maxBytes = 4096, timeoutMs = 10000): Promise<unknown> {
+export async function browserBoundedText(message: Request | Response, maxBytes = 4096, timeoutMs = 10000): Promise<string> {
   const declared = message.headers.get('content-length');
   if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > maxBytes)) throw new BrowserBodyError(413);
   if (!message.body) throw Error('browser body unavailable');
@@ -17,7 +17,9 @@ export async function browserBoundedJson(message: Request | Response, maxBytes =
     }
     const bytes = new Uint8Array(size); let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-    return JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes));
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes);
   } catch (error) { void reader.cancel().catch(() => undefined); throw error; }
   finally { clearTimeout(timer); reader.releaseLock(); }
 }
+
+export async function browserBoundedJson(message: Request | Response, maxBytes = 4096, timeoutMs = 10000): Promise<unknown> { return JSON.parse(await browserBoundedText(message, maxBytes, timeoutMs)); }

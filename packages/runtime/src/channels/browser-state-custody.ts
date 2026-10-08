@@ -9,6 +9,9 @@ export type BrowserStateBinding = Readonly<{
   accountId: string;
   generation: number;
 }>;
+export const BROWSER_STATE_BYTES = 1024 * 1024;
+export const BROWSER_STATE_WIRE_BYTES = 2 * BROWSER_STATE_BYTES + 8192;
+export type BrowserVaultScope = Readonly<{ binding: BrowserStateBinding; consentRevision: string; custodyDigest: string; expiresAt: number; namespace: string; doId: string; subject: string; sitePolicy: Readonly<{ origins: readonly string[]; cookieDomains: readonly string[] }> }>;
 export type BrowserStateBlobStore = Readonly<{
   get(key: string): Promise<Uint8Array | null>;
   put(key: string, value: Uint8Array): Promise<void>;
