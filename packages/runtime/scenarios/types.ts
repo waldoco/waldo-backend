@@ -17,6 +17,17 @@ export type HopAssert = Readonly<{
   afterTrace?: RegExp;      // scope the ordering anchor the same way
 }>;
 
+// Assertion over what the scripted model actually received on an owner turn (1-based). Text is
+// the system prompt plus every message; roles lists the message roles in order.
+export type ModelInputAssert = Readonly<{
+  turn: number;
+  mustContain?: readonly string[];
+  mustNotContain?: readonly string[];
+  roles?: readonly ('user' | 'assistant')[];
+  systemPresent?: boolean;
+  minMessages?: number;
+}>;
+
 export type StateAssert =
   | Readonly<{ kind: 'reminder_count'; equals: number }>
   | Readonly<{ kind: 'reminder_note'; matches: RegExp }>;
@@ -35,6 +46,8 @@ export type Scenario = Readonly<{
   // tool calls then the final text. Scenarios for L2-only (rubric-graded voice/clinical) omit it.
   llm?: readonly ScriptRule[];
   rubric?: string;
+  // L1: claim_ops replies for the pre-reply memory writer; a function gets the writer call index.
+  claimOps?: string | ((turnIndex: number) => string);
   fixtures?: Readonly<{
     events?: readonly FixtureEvent[];
     mail?: readonly FixtureMail[];
@@ -48,6 +61,7 @@ export type Scenario = Readonly<{
     mustNotCall?: readonly string[];
     hops?: readonly HopAssert[];
     state?: readonly StateAssert[];
+    modelInput?: readonly ModelInputAssert[];
     // One entry per turn; an entry may be a single matcher or several, all must match that turn's reply.
     replies?: readonly (string | RegExp | readonly (string | RegExp)[])[];
     // Connect intents the responder surfaced through the offer seam (S4).

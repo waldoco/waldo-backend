@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { WALDO_CHAT_MODEL } from '@waldo/contracts';
+import { COST_LEDGER_DDL, costLedger } from '../src/llm/cost-ledger';
 import { OWNER_REQUEST_HOP, parseHarnessCommand, traceBook } from '../src/channels/harness';
 
 let sequence = 0;
@@ -141,4 +142,39 @@ it('parses the /heldrows continue rowid as given and rejects a garbage one', () 
   expect(parseHarnessCommand('/heldrows day_plan -5')).toEqual({ kind: 'heldrows', table: 'day_plan', from: -5 });
   expect(parseHarnessCommand('/heldrows day_plan abc')).toEqual({ kind: 'heldrows', table: 'day_plan', from: 'invalid' });
   expect(parseHarnessCommand('/heldrows day_plan 99999999999999999999')).toEqual({ kind: 'heldrows', table: 'day_plan', from: 'invalid' });
+});
+
+describe('cost ledger', () => {
+  const usage = { model: WALDO_CHAT_MODEL, input: 12_000, output: 800, cached: 4_000 };
+  const at = Date.parse('2026-10-08T04:30:00Z');
+
+  it('ledger sum equals the trace_log usd for a turn and separates background by kind', async () => {
+    await withSql((sql) => {
+      for (const ddl of COST_LEDGER_DDL) sql.exec(ddl);
+      const ledger = costLedger(sql);
+      const book = traceBook(sql, 50, ledger);
+      book.record({ trace: 'tg-1', hop: OWNER_REQUEST_HOP, ms: 0, ok: true }, at);
+      book.record({ trace: 'tg-1', hop: 'llm_reply', ms: 900, ok: true, usage }, at + 1_000);
+      book.record({ trace: 'tg-1', hop: 'memory', ms: 400, ok: true, usage }, at + 2_000);
+      book.record({ trace: 'hb-1', hop: 'llm_reply', ms: 300, ok: true, usage, cost_kind: 'heartbeat', responsibility_id: 'resp-1' }, at + 3_000);
+      book.record({ trace: 'nightly-1', hop: 'nightly_memory', ms: 300, ok: true, usage }, at + 4_000);
+      const traceUsd = (trace: string) => sql.exec<{ usd: number }>('SELECT SUM(usd) AS usd FROM trace_log WHERE trace = ?', trace).toArray()[0]!.usd;
+      const ledgerUsd = (kind: string) => sql.exec<{ usd: number }>('SELECT SUM(usd) AS usd FROM cost_ledger WHERE kind = ?', kind).toArray()[0]!.usd;
+      expect(ledgerUsd('turn')).toBeCloseTo(traceUsd('tg-1'), 12);
+      expect(ledgerUsd('heartbeat')).toBeCloseTo(traceUsd('hb-1'), 12);
+      expect(ledgerUsd('background')).toBeCloseTo(traceUsd('nightly-1'), 12);
+      expect(ledger.byResponsibility(at)).toHaveLength(1);
+      expect(ledger.monthByKind(at).map((row) => row.kind).sort()).toEqual(['background', 'heartbeat', 'turn']);
+    });
+  });
+
+  it('does not ledger a call with no priced usage', async () => {
+    await withSql((sql) => {
+      for (const ddl of COST_LEDGER_DDL) sql.exec(ddl);
+      const ledger = costLedger(sql);
+      const book = traceBook(sql, 50, ledger);
+      book.record({ trace: 'tg-2', hop: 'llm_reply', ms: 1, ok: true, usage: { ...usage, model: 'unpriced-model' } }, at);
+      expect(ledger.monthTotal(at)).toBe(0);
+    });
+  });
 });

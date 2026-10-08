@@ -57,7 +57,7 @@ export type ApprovalReview =
   | Readonly<{ kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string }>;
 export type ApprovalItem = Readonly<{ id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; undoable: boolean; review: ApprovalReview | null }>;
 export type ApprovalDesk = Readonly<{
-  propose(args: ProposeCalendarChangeArgs): Promise<string>;
+  propose(args: ProposeCalendarChangeArgs, turnKey?: string): Promise<string>;
   proposeBrowserSubmit(payload: BrowserSubmitProposal): Promise<string>;
   proposeSendEmail(payload: EmailSendProposal): Promise<string>;
   proposeSendMessage(payload: MessageSendProposal): Promise<string>;
@@ -91,6 +91,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
     undo_json TEXT, created_at INTEGER NOT NULL, decided_at INTEGER)`);
+  // Owner turns run serially; keep only the current turn, never a cross-turn cache.
+  let proposalTurn: string | undefined;
+  const calendarProposals = new Map<string, Promise<string>>();
   const when = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: deps.timezone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
   const describe = (p: ProposeCalendarChangeArgs) => {
     const name = p.title ? `"${p.title}"` : 'the event';
@@ -423,16 +426,35 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         text.length <= REVIEW_BUDGET ? [['Do it', `a:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]]);
       return id;
     },
-    async propose(p) {
-      const id = `p${deps.newId()}`;
-      const summary = `${describe(p)}. ${p.reason}`;
-      const client = await deps.google({id:`approval:${id}:apply`},'calendar');
-      if(p.event_id&&!client)throw new Error('The calendar account is unavailable; no proposal was prepared.');
-      const seen = client && p.event_id ? (await client.event(p.event_id)).etag : undefined;
-      const stored: Stored = seen ? { ...p, seen_etag: seen } : p;
-      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
-      await sayCard(id, `Proposed: ${summary}`, [['Do it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
-      return id;
+    async propose(p, turnKey) {
+      if (proposalTurn !== turnKey) { calendarProposals.clear(); proposalTurn = turnKey; }
+      const digest = turnKey === undefined ? undefined : await sha256Hex(JSON.stringify(
+        Object.fromEntries(Object.entries(p).sort(([a], [b]) => a.localeCompare(b))),
+      ));
+      const existing = digest === undefined ? undefined : calendarProposals.get(digest);
+      if (existing) {
+        const id = await existing;
+        const entry = row(id);
+        if (entry?.status === 'open' && !expired(entry, JSON.parse(entry.payload_json) as Stored)) return id;
+      }
+      const prepare = async () => {
+        const id = `p${deps.newId()}`;
+        const summary = `${describe(p)}. ${p.reason}`;
+        const client = await deps.google({id:`approval:${id}:apply`},'calendar');
+        if(p.event_id&&!client)throw new Error('The calendar account is unavailable; no proposal was prepared.');
+        const seen = client && p.event_id ? (await client.event(p.event_id)).etag : undefined;
+        const stored: Stored = seen ? { ...p, seen_etag: seen } : p;
+        sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
+        await sayCard(id, `Proposed: ${summary}`, [['Do it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
+        return id;
+      };
+      const pending = prepare();
+      if (digest !== undefined) calendarProposals.set(digest, pending);
+      try { return await pending; }
+      catch (error) {
+        if (digest !== undefined && calendarProposals.get(digest) === pending) calendarProposals.delete(digest);
+        throw error;
+      }
     },
     record(kind, summary, payload) {
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, ?, 'done', ?, ?, NULL, ?, ?)", `l${deps.newId()}`, kind, summary, JSON.stringify(payload), deps.now(), deps.now());

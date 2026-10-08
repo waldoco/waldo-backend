@@ -124,6 +124,13 @@ export class Scheduler {
     await this.rearm();
   }
 
+  async cancelKind(kind: ScheduleKind): Promise<number> {
+    const count = this.sql.exec<{ count: number }>('SELECT COUNT(*) AS count FROM schedule WHERE kind = ?', kind).toArray()[0]!.count;
+    this.sql.exec('DELETE FROM schedule WHERE kind = ?', kind);
+    await this.rearm();
+    return count;
+  }
+
   read(id: string): ScheduleEntry | null {
     const row = this.sql
       .exec<ScheduleSqlRow>('SELECT * FROM schedule WHERE id = ?', id)
@@ -604,7 +611,7 @@ function compareScheduleEntries(a: ScheduleEntry, b: ScheduleEntry): number {
   );
 }
 
-function nextOccurrence(recurrence: ScheduleRecurrence, now: number): number {
+export function nextOccurrence(recurrence: ScheduleRecurrence, now: number): number {
   if (recurrence.type === 'interval') {
     const phase = recurrence.phase_ms % recurrence.every_ms;
     const next =
@@ -620,7 +627,20 @@ function nextOccurrence(recurrence: ScheduleRecurrence, now: number): number {
     if (next === null) throw new Error(`cron recurrence has no occurrence within scan bound: ${recurrence.expression}`);
     return next;
   }
-  return nextDailyLocalOccurrence(recurrence.time, recurrence.timezone, now);
+  if (recurrence.type === 'daily_local') return nextDailyLocalOccurrence(recurrence.time, recurrence.timezone, now);
+  const current = localParts(now, recurrence.timezone);
+  let date = localDate(current);
+  const [hour, minute] = recurrence.time.split(':').map(Number) as [number, number];
+  for (let day = 0; day < 8; day += 1) {
+    const weekday = new Date(Date.UTC(date.year, date.month - 1, date.day)).getUTCDay();
+    const matches = recurrence.type === 'weekdays_local' ? weekday >= 1 && weekday <= 5 : weekday === recurrence.weekday;
+    if (matches && !(day === 0 && current.hour * 60 + current.minute >= hour * 60 + minute)) {
+      const candidate = findLocalOccurrence(date, hour, minute, recurrence.timezone, now);
+      if (sameLocalDate(localParts(candidate, recurrence.timezone), date)) return candidate;
+    }
+    date = addLocalDays(date, 1);
+  }
+  throw new Error('No owner-local recurrence occurrence within one week');
 }
 
 export function nextDailyLocalOccurrence(time: string, timezone: string, now: number): number {

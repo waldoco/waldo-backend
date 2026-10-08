@@ -27,7 +27,7 @@ export const SOURCE_SCOPE_CLASS: Readonly<Record<ToolName, 'deny' | 'allow'>> = 
   send_email: 'allow', search_connector: 'deny', propose_schedule: 'allow', write_sheet_cell: 'allow', execute_code: 'allow',
   create_thread: 'allow', delete_message: 'allow', restore_message: 'allow', archive_thread: 'allow', update_thread_topics: 'allow',
   search_tools: 'allow', set_reminder: 'allow', list_reminders: 'allow', cancel_reminder: 'allow', propose_calendar_change: 'allow',
-  open_loop: 'allow', close_loop: 'allow', set_proactivity: 'allow', set_schedule_preference: 'allow', read_tool_output: 'deny', connect_service: 'allow',
+  open_loop: 'allow', close_loop: 'allow', track_responsibility: 'allow', update_todo: 'allow', list_responsibilities: 'allow', close_responsibility: 'allow', set_proactivity: 'allow', set_schedule_preference: 'allow', read_tool_output: 'deny', connect_service: 'allow',
   browse_page: 'deny', browse_act: 'deny', delegate_task: 'allow', log_meal: 'allow', log_workout: 'allow', list_health_logs: 'deny',
   set_standing_order: 'allow', list_standing_orders: 'allow', cancel_standing_order: 'allow', workspace_list: 'deny',
   workspace_read: 'deny', workspace_search: 'deny', workspace_write: 'allow', workspace_render: 'allow', skills_list: 'allow', skills_install: 'allow',
