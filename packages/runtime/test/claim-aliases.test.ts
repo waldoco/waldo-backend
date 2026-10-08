@@ -89,9 +89,9 @@ describe('aliases through the claim admission gate', () => {
       const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
       applyClaimOps(store, ops([{ kind: 'routine', text: 'Goes to bed around 11:30pm', source: 'stated', evidence: `owner, tg-1: "${SAID}"`, touches_forgotten: false, aliases: ['bedtime', 'lights out', 'bad"quote', 'be'] }]), AT2, 'owner agreed', undefined, { owner: SAID });
       expect(state.storage.sql.exec<{ aliases: string }>('SELECT aliases FROM claims').one().aliases).toBe('bedtime / lights out');
-      const prompt = turnMemoryPrompt(store, 'what is my bedtime?');
-      expect(prompt).toContain('Goes to bed around 11:30pm');
-      expect(prompt).not.toContain('lights out');
+      // Recall by question moved out of the turn prompt into the read_memory tool; the store still finds the claim by its alias.
+      expect(store.recall('bedtime', 8).map((claim) => claim.text)).toEqual(['Goes to bed around 11:30pm']);
+      expect(turnMemoryPrompt(store, 'what is my bedtime?')).not.toContain('lights out');
     });
   });
   it('a claim that touches a forgotten topic is held with its aliases, and an alias equal to a forgotten topic is dropped', async () => {
