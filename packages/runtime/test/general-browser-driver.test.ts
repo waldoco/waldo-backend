@@ -76,6 +76,21 @@ it('keeps the approved upload descriptor immutable across asynchronous host admi
   const result = await driver.upload(session, first, first.observation.elements[0]!.ref, file, async () => { file.name = 'changed.txt'; file.revision = 3; return bytes; });
   expect(held.name).toBe('approved.txt'); expect(result.receipt.revision).toBe(2);
 });
+it('captures upload identity before the first asynchronous admission', async () => {
+  const f = harness('input', 'file'); let deferred = false, release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => { if (deferred) await gate; }, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(session, 'https://docs.example/upload');
+  const { generalDigest } = await import('../src/channels/general-browser-observation');
+  const bytes = new Uint8Array([1]), file = { file_id: '12345678-1234-1234-1234-123456789abc', revision: 2, name: 'approved.txt', mime_type: 'text/plain', byte_size: 1, sha256: await generalDigest(bytes) };
+  let held: any;
+  f.pages[0].locator = () => ({ setInputFiles: async (input: any) => { held = input; }, evaluate: async () => [{ name: held.name, mime_type: held.mimeType, byte_size: held.buffer.length, sha256: await generalDigest(held.buffer) }] });
+  deferred = true;
+  const uploading = driver.upload(session, first, first.observation.elements[0]!.ref, file, async () => bytes);
+  file.name = 'changed-before-admission.txt'; file.revision = 3; release();
+  const result = await uploading;
+  expect(held.name).toBe('approved.txt'); expect(result.receipt.revision).toBe(2);
+});
 it('navigates a public page, returns actual image bytes, and retains two tabs across detached owner turns', async () => {
   const f = harness();
   const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });

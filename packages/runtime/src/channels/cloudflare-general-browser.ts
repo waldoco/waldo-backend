@@ -283,10 +283,11 @@ export function cloudflareGeneralBrowser(options: Options) {
       catch { throw new GeneralBrowserError('outcome_uncertain'); }
     }),
     upload: (session: BrowserSession, snapshot: GeneralSnapshot, reference: string, file: GeneralBrowserUploadFile,
-      approvedFile: (actionDigest: string) => Promise<Uint8Array>) => attached(session, async (_, context, navigation) => {
+      approvedFile: (actionDigest: string) => Promise<Uint8Array>) => {
+      file = Object.freeze({ ...file });
+      return attached(session, async (_, context, navigation) => {
       // Only a trusted host supplies workspace metadata and approved bytes. Native
       // change handlers can transmit immediately, so approval precedes setInputFiles.
-      file = Object.freeze({ ...file });
       if (snapshot.ownerId !== session.ownerId || snapshot.sessionId !== session.id || snapshot.generation !== session.generation) throw new GeneralBrowserError('stale_observation');
       const element = snapshot.state.elements[snapshot.observation.elements.findIndex(row => row.ref === reference)];
       if (!element || element.disabled || element.tag !== 'input' || element.type !== 'file') throw new GeneralBrowserError('rejected');
@@ -321,7 +322,8 @@ export function cloudflareGeneralBrowser(options: Options) {
         const after = await observe(session, context, page);
         return { snapshot: after, receipt: { file_id: file.file_id, revision: file.revision, byte_size: file.byte_size, sha256: file.sha256, target_ref: reference, verification: 'native_input' as const } };
       } catch { throw new GeneralBrowserError('outcome_uncertain'); }
-    }),
+      });
+    },
     observe: (session: BrowserSession, reference?: string) => attached(session, async (_, context) => observe(session, context, await select(session, context, reference))),
     navigate: (session: BrowserSession, url: string, reference?: string) => attached(session, async (_, context, navigation) => {
       await allowed(session, url); const page = await select(session, context, reference); page.setDefaultTimeout(10000);
