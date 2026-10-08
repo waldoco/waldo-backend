@@ -3,12 +3,19 @@ import { expect, it, vi } from 'vitest';
 import { recallResultSchema, type LLMRequest } from '@waldo/contracts';
 import type { ContextComposerDependencies } from '../src/context-composer';
 import type { OwnerMessageAdmission } from '../src/identity/owner-message-admission';
-import { TelegramOwnerDO, type TelegramOwnerPrivateHost } from '../src/channels/telegram-owner-do';
+import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { BROWSER_TASK_KEY, type BrowserOwnerConfiguration } from '../src/channels/browser-owner-host';
 import { armAlarm } from '../src/scheduler/alarm-slot';
 import { syntheticCommandAdapter, type SyntheticRequest } from '../src/channels/browser-synthetic-commands';
 import { fixtureDigest } from '../src/channels/public-fixture-browser';
 const legacyModel = vi.hoisted(() => ({ enabled: false, calls: 0 }));
+const modelGateway = vi.hoisted(() => ({ current: undefined as undefined | { complete(request: never): Promise<unknown> } }));
+vi.mock('../src/llm/openai', async load => {
+  const original = await load<typeof import('../src/llm/openai')>();
+  return { ...original, OpenAIResponsesAdapter: class extends original.OpenAIResponsesAdapter {
+    override complete(request: never) { return modelGateway.current && !legacyModel.enabled ? modelGateway.current.complete(request) as never : super.complete(request); }
+  } };
+});
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: { text?: { format?: { name?: string } } }) => {
   if (!legacyModel.enabled) throw new Error('browser proof denies unrelated model work');
   legacyModel.calls++; return { id: 'synthetic-default-reply', output: [], output_text: input.text?.format?.name === 'task_source_scope' ? JSON.stringify({ decision: 'retain', sources: [] }) : 'Ordinary messaging remains available.', usage: { input_tokens: 1, output_tokens: 1 } };
@@ -69,7 +76,7 @@ async function browserProof(work: (h: {
     } });
     const driver = mode === 'journey' ? syntheticDriver : legacyDriver;
     const config: BrowserOwnerConfiguration = { enabled: mode !== 'disabled', binding, manifestDigest: `sha256:${'a'.repeat(64)}`, driver, lookup: async () => { if (lookupPause) { const slot = lookupPause; lookupPause = undefined; slot.enter(); await slot.wait; } return { ...directory }; }, grant: async request => ({ ...request, ref: 'synthetic-current-grant', expiresAt: Date.now() + 60000 }) };
-    const host: TelegramOwnerPrivateHost = {
+    const host = {
       environment: 'staging', namespace: 'browser-proof-namespace', allowedDoNames: [doName], lookup: async () => ({ ...directory }), context: sources,
       access: async () => ({ grants: { status: 'available', tools: ['browse_act'] }, connectors: { status: 'unavailable' } }), connectorBacked: () => false,
       gateway: { complete: async ({ request }) => {
@@ -80,8 +87,9 @@ async function browserProof(work: (h: {
         return { ok: true, data: { text: request.response_format ? JSON.stringify({ decision: 'retain', sources: [] }) : calls ? '' : 'Synthetic browser reply.', ...(calls ? { tool_calls: calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, model: request.model, latency_ms: 1 } };
       } },
     };
+    modelGateway.current = host.gateway as never;
     const privateEnv = { ...env, WALDO_EGRESS_ALLOWLIST: 'fixture.example', TELEGRAM_BOT_TOKEN: '12345:fictional', TELEGRAM_WEBHOOK_SECRET: 'fictional-browser-inbox-secret', OPENAI_API_KEY: 'fictional-model-key' };
-    const construct = () => new TelegramOwnerDO(state, privateEnv, mode === 'legacy_factory_failed' ? undefined : { mode: 'canonical', host }, mode === 'absent' || mode === 'factory_failed' || mode === 'legacy_factory_failed' ? undefined : config, mode === 'factory_failed' || mode === 'legacy_factory_failed' ? { policy: { enabled: false, doName, fixtureOrigin: 'https://fixture.example' }, manifest: { origin: 'https://fixture.example', pagePath: '/form', submitPath: '/submit', receiptPrefix: '/receipts/', runId: 'trial-one', fields: ['value'], formSelector: '#form', submitSelector: '#submit', resultSelector: '#result' } } : undefined);
+    const construct = () => new TelegramOwnerDO(state, privateEnv, mode === 'absent' || mode === 'factory_failed' || mode === 'legacy_factory_failed' ? undefined : config, mode === 'factory_failed' || mode === 'legacy_factory_failed' ? { policy: { enabled: false, doName, fixtureOrigin: 'https://fixture.example' }, manifest: { origin: 'https://fixture.example', pagePath: '/form', submitPath: '/submit', receiptPrefix: '/receipts/', runId: 'trial-one', fields: ['value'], formSelector: '#form', submitSelector: '#submit', resultSelector: '#result' } } : undefined);
     if (mode === 'legacy_factory_failed') { legacyModel.enabled = true; legacyModel.calls = 0; }
     let instance = construct();
     const sendUpdate = async (update: object, text = '', expectedStatus = 200) => {
@@ -105,7 +113,7 @@ async function browserProof(work: (h: {
       task.finishRun = async () => { task.finishRun = original; throw Error('synthetic finishRun storage failure'); };
     };
     const pause = (kind: 'inspect' | 'lookup') => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const slot = { enter, wait: new Promise<void>(resolve => { resume = resolve; }) }; if (kind === 'inspect') inspectPause = slot; else lookupPause = slot; return Object.assign(resume, { reached }); };
-    try { await work({ failFinishRunOnce, approve: (id, owner) => decide(id, 'a', owner), deny: id => decide(id, 's'), readOnly: () => { journeyCommands.splice(0, journeyCommands.length, { operation: 'read' }); }, submits: () => submits, present: () => present, pauseInspect: () => pause('inspect'), pauseLookup: () => pause('lookup'), send, state, requests, reloadAbsent: () => { instance = new TelegramOwnerDO(state, privateEnv, { mode: 'canonical', host }); }, failCleanup: () => { cleanupFails = true; }, alarm: () => instance.alarm(), replyOnly: () => { replyOnly = true; }, pauseCleanup: () => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const wait = new Promise<void>(resolve => { resume = resolve; }); endPause = { enter, wait }; return Object.assign(resume, { reached }); }, starts: () => starts, ends: () => ends, inspections: () => inspections, reload: () => { instance = construct(); }, foreign: () => { directory = { ...directory, owner_id: '10000000-0000-0000-0000-000000000002' }; }, stale: () => { directory = { ...directory, admission_revision: '9007199254740995' }; } }); }
+    try { await work({ failFinishRunOnce, approve: (id, owner) => decide(id, 'a', owner), deny: id => decide(id, 's'), readOnly: () => { journeyCommands.splice(0, journeyCommands.length, { operation: 'read' }); }, submits: () => submits, present: () => present, pauseInspect: () => pause('inspect'), pauseLookup: () => pause('lookup'), send, state, requests, reloadAbsent: () => { instance = new TelegramOwnerDO(state, privateEnv); }, failCleanup: () => { cleanupFails = true; }, alarm: () => instance.alarm(), replyOnly: () => { replyOnly = true; }, pauseCleanup: () => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const wait = new Promise<void>(resolve => { resume = resolve; }); endPause = { enter, wait }; return Object.assign(resume, { reached }); }, starts: () => starts, ends: () => ends, inspections: () => inspections, reload: () => { instance = construct(); }, foreign: () => { directory = { ...directory, owner_id: '10000000-0000-0000-0000-000000000002' }; }, stale: () => { directory = { ...directory, admission_revision: '9007199254740995' }; } }); }
     finally { legacyModel.enabled = false; await state.storage.deleteAlarm(); noFetch.mockRestore(); }
   });
 }

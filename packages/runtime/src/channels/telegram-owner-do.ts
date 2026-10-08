@@ -1,25 +1,11 @@
 import {commonRuntimeReadiness} from './common-runtime-readiness';
-import {commonOwnerTools} from './common-owner-tool-policy';
-import {commonOwnerWorkspace} from './common-owner-workspace';
-import {commonOwnerMemory} from './common-owner-memory';
-import {commonOwnerHost} from './common-owner-host';
-import {revokeCommonBrowsers,maintainCommonBrowsers,COMMON_BROWSER_DUE,commonBrowserHost,type CommonBrowserConfiguration} from './common-browser-host';
-import {signCommonExecutionRequest} from '../identity/common-execution-request';
-import { signCommonTaskSourceRequest } from '../identity/common-task-source-request';
-import { commonOwnerAuthority } from '../identity/common-owner-authority';
-import { signCommonMessageIngress } from '../identity/common-message-ingress';
 import { taskSourceFetch } from '../tools/task-source-io';
 import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerControlsRead,ownerControlsAction} from './dashboard-owner-controls';
 import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
 import {CONTROLS_PATH,readControlsQuery,projectControls} from './dashboard-controls';
 import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt} from './dashboard-control-actions';
-import { createCuratedSkillCapability, createScopedCuratedSkillCapability } from '../skills/curated-host';
-import { ownerMessageAdmission, type OwnerMessageAdmission } from '../identity/owner-message-admission';
-import { createOwnerMessageContextAdapter } from './owner-message-context-adapter';
-import { ownerCanonicalHistory } from './owner-canonical-history';
-import type { OwnerResponderHost } from './owner-turn';
-import type { ContextComposerDependencies } from '../context-composer';
-import type { LLMGatewayAdapter } from '../llm/provider';
+import { createScopedCuratedSkillCapability } from '../skills/curated-host';
+import { ownerMessageAdmission } from '../identity/owner-message-admission';
 import { MEMORY_GRAPH_PATH, readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
 import {TelegramLinkInbox,LINK_MODE,type LinkBinding} from './telegram-link-inbox';
@@ -41,11 +27,9 @@ import { ProxyIntentError, type ProxyIntent } from '../connectors/proxy-intent';
 import { eventAdmission } from './event-admission';
 import { DurableObject } from 'cloudflare:workers';
 import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
-import {workspaceOperationId} from '../tools/live/workspace-operation';
-import {workspaceDelivery} from './workspace-delivery';
 import { workspaceToolHandlers } from '../tools/live/workspace';
 import { workspaceDownload, workspacePage, workspaceRead } from './console-workspace';
-import { SCHEDULE_KINDS, triggerTypeSchema, TOOL_PERMISSIONS, browsePageArgsSchema, setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from '@waldo/contracts';
+import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
@@ -118,7 +102,6 @@ import { selectTranscriber } from '../llm/transcriber';
 import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
 import { TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
-import { createTaskSourceScope, approveTaskSourceProposal, ownerReadSources, type OwnerTaskSourceScope } from './task-source-scope';
 import type { TurnControl } from './turn-control';
 import { turnFailureCode } from './turn-failure-code';
 import type { TelegramWebhookEnv } from './telegram-webhook';
@@ -200,36 +183,13 @@ const WHATSAPP_PENDING_PREFIX = 'wa_pending:';
 // How often an unfinished WhatsApp payload is looked at again. A cadence, not a limit on how long a turn may run.
 const WHATSAPP_PENDING_CHECK_MS = 60_000;
 
-export type TelegramOwnerPrivateHost = Readonly<{
-  environment: string;
-  namespace: string;
-  allowedDoNames: readonly string[];
-  lookup(provider: 'telegram', subject: string): Promise<unknown>;
-  context(admission: OwnerMessageAdmission, workspace?:()=>Promise<readonly import('../context-composer').ContextFragment[]>): ContextComposerDependencies;
-  taskMaterials?: Parameters<typeof createOwnerMessageContextAdapter>[0]['taskMaterials'];
-  access: Parameters<typeof createOwnerMessageContextAdapter>[0]['access'];
-  connectorBacked(handler: Parameters<OwnerResponderHost['prepare']>[1][number]): boolean;
-  gateway: LLMGatewayAdapter;
-  browser?:CommonBrowserConfiguration;
-  executionBinding?: Pick<import('../coordinator/waldo-coordinator').ExecutionBindingResolutionV04,'provider'|'environment'>;
-}>;
-
-// Private construction selects canonical preparation independently of supplier availability.
-// Wrangler uses the unchanged two-argument deployed constructor.
-export type TelegramOwnerPreparation = Readonly<{ mode: 'canonical'; host?: TelegramOwnerPrivateHost }>;
-
 export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
-  private readonly canonicalPreparation: boolean;
-  private readonly ownerHost: TelegramOwnerPrivateHost | undefined;
   private browserTasks: ReturnType<typeof browserOwnerHost>;
   private readonly makeBrowserHost: (config?: BrowserOwnerConfiguration) => ReturnType<typeof browserOwnerHost>;
   private readonly browserReady: Promise<void>;
   private readonly browserTrial: BrowserTrialPreparation | undefined;
-  constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, preparation?: TelegramOwnerPreparation, browserConfiguration?: BrowserOwnerConfiguration, browserTrial?: BrowserTrialPreparation) {
+  constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, browserConfiguration?: BrowserOwnerConfiguration, browserTrial?: BrowserTrialPreparation) {
     super(ctx, env);
-    if (preparation !== undefined && (!preparation || preparation.mode !== 'canonical')) throw new Error('invalid owner preparation mode');
-    this.ownerHost = preparation?.host ?? (preparation===undefined?commonOwnerHost(env,ctx.storage,ctx.id.toString()):undefined);
-    this.canonicalPreparation = preparation !== undefined || this.ownerHost!==undefined;
     this.browserTrial = browserTrial;
     const makeBrowserHost = this.makeBrowserHost = (config?: BrowserOwnerConfiguration) => browserOwnerHost({ storage: ctx.storage, config, now: Date.now, newId: () => crypto.randomUUID(),
       physical: () => { const doName = ctx.storage.kv.get<string>('do_name'); return { doName, subject: ctx.storage.kv.get<string>('telegram_subject'), matches: Boolean(doName && env.TELEGRAM_OWNER_DO && env.TELEGRAM_OWNER_DO.idFromName(doName).toString() === ctx.id.toString() && ctx.storage.kv.get<boolean>('telegram_unlinked') !== true) }; },
@@ -256,166 +216,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly inbox = new TelegramOwnerInbox(this.ctx.storage, persistInboxWake);
   private readonly liveAttempts = new Set<string>();
   private activeInbox: InboxRecord | null = null;
-  private activeCommonBrowser: ReturnType<typeof commonBrowserHost>|undefined;
-  private activeCommonExecution: import('./owner-turn').OwnerResponderBinding['execution'];
   private activeScope: RunEffectScope | undefined;
   private activeAbort: AbortController | undefined;
-  private activeOwnerContext: ReturnType<typeof createOwnerMessageContextAdapter> | undefined;
-
-  private async commonTaskSourcesForTurn(turn: import('./owner-turn-envelope').OwnerTurnEnvelope, scope: RunEffectScope, defaults: ReturnType<typeof ownerReadSources>): Promise<OwnerTaskSourceScope> {
-    const occurrence = this.activeInbox;
-    const namespace = this.env.RUN_LOOP_DO;
-    if (this.env.COMMON_OWNER_TASKS !== '1' || !namespace || !this.env.SUPABASE_PROJECT_URL || !this.env.SUPABASE_PUBLISHABLE_KEY || !this.env.WALDO_ROUTER_HMAC_SECRET) throw Error('common task sources unavailable');
-    if (!occurrence || occurrence.runId !== scope.runId || occurrence.attempt !== scope.attempt
-      || scope !== this.activeScope || turn.surface !== 'telegram' || !turn.text || turn.attachment || turn.mediaNote) throw new ClosedRunError();
-    // Populated physical source custody cannot be silently reset/imported by enabling the common path.
-    const legacyTable=this.ctx.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='owner_task_source_scope'").toArray();
-    if (legacyTable.length && this.ctx.storage.sql.exec('SELECT owner_key FROM owner_task_source_scope LIMIT 1').toArray().length) throw Error('legacy task source disposition required');
-    const directory=commonOwnerAuthority(this.env);
-    const authority=await directory.resolve('telegram',occurrence.subject,occurrence.doName);
-    scope.admit();if(!authority)throw Error('common owner unavailable');
-    const rootHash=await sha256Hex(`waldo-owner-root\0${authority.ownerId}`);
-    const root=namespace.get(namespace.idFromName(`owner-root:sha256:${rootHash}`));
-    const invoke=async(request: Omit<import('../identity/common-task-source-request').CommonTaskSourceRequest,'signature'|'ownerInput'|'defaults'>) => {
-      scope.admit();await directory.assertCurrent(authority);scope.admit();
-      const ingress=await signCommonMessageIngress(this.env.WALDO_ROUTER_HMAC_SECRET!,{provider:'telegram',subject:occurrence.subject,doName:occurrence.doName,physicalDoId:this.ctx.id.toString(),occurrenceId:occurrence.id,text:turn.text,at:Math.floor(Date.now()/1000)});
-      const signed=await signCommonTaskSourceRequest(this.env.WALDO_ROUTER_HMAC_SECRET!,ingress,{...request,ownerInput:{inputRef:turn.traceId,text:turn.text,quotedRanges:turn.sourceQuoteRanges},defaults});
-      scope.admit();const result=await root.commonTaskSourceFromHost(ingress,signed);scope.admit();return result;
-    };
-    return {
-      current:async()=>{const result=await invoke({operation:'current'});if(!('snapshot' in result)||!result.snapshot)throw Error('common source response');return result.snapshot;},
-      unresolved:async()=>{const result=await invoke({operation:'unresolved'});if(!('snapshot' in result)||!result.snapshot)throw Error('common source response');return result.snapshot;},
-      assertSame:async expected=>{await invoke({operation:'assert_same',expected});},
-      classify:async(raw,inputRef,text)=>{if(inputRef!==turn.traceId||text!==turn.text)throw Error('common owner steering not admitted');const result=await invoke({operation:'classify',raw});if(!('result' in result)||!result.result)throw Error('common source response');return result.result;},
-    };
-  }
-
-  private ownerHostBrowserRead() {
-    return {name:'browse_page' as const,description:'Read a granted public page with a retained task browser and screenshot.',schema:browsePageArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_page')),autonomy_gated:false,
-      handle:async(args:import('@waldo/contracts').BrowsePageArgs,ctx:import('../tools/dispatcher').ToolDispatcherContext)=>{
-        if(!this.activeCommonBrowser)return {ok:false as const,code:'rejected' as const,error:'Common browser host unavailable.',source_taint:'external' as const};
-        return this.activeCommonBrowser.handler.handle(args,ctx);
-      }};
-  }
-
-  private commonExecutionForTurn(turn: import('./owner-turn-envelope').OwnerTurnEnvelope,scope:RunEffectScope,host:TelegramOwnerPrivateHost) {
-    const occurrence=this.activeInbox;
-    const binding=host.executionBinding;
-    if(!occurrence||!binding||!this.env.WALDO_ROUTER_HMAC_SECRET||!this.env.RUN_LOOP_DO)throw Error('common responder execution binding unavailable');
-    const directory=commonOwnerAuthority(this.env);
-    let request:Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>|undefined;
-    let started=false;
-    let providerOrdinal=0;
-    let browser:ReturnType<typeof commonBrowserHost>|undefined;
-    const invoke=async(operation:import('../identity/common-execution-request').CommonExecutionRequest['operation'],result?:Readonly<{ref:string;digest:string}>,providerCall?:import('../identity/common-execution-request').CommonExecutionRequest['providerCall'],toolCall?:import('../identity/common-execution-request').CommonExecutionRequest['toolCall'])=>{
-      if(!request)throw Error('common execution context unavailable');
-      if(operation!=='settle'&&operation!=='cancel')scope.admit();
-      const authority=await directory.resolve('telegram',occurrence.subject,occurrence.doName);
-      if(!authority)throw Error('common owner unavailable');
-      const rootHash=await sha256Hex(`waldo-owner-root\0${authority.ownerId}`);
-      const root=this.env.RUN_LOOP_DO!.get(this.env.RUN_LOOP_DO!.idFromName(`owner-root:sha256:${rootHash}`));
-      const ingress=await signCommonMessageIngress(this.env.WALDO_ROUTER_HMAC_SECRET!,{provider:'telegram',subject:occurrence.subject,doName:occurrence.doName,physicalDoId:this.ctx.id.toString(),occurrenceId:occurrence.id,text:turn.text,at:Math.floor(Date.now()/1000)});
-      const signed=await signCommonExecutionRequest(this.env.WALDO_ROUTER_HMAC_SECRET!,ingress,{...request,operation,...(result?{result}:{}),...(providerCall?{providerCall}:{}),...(toolCall?{toolCall}:{})});
-      if(operation!=='settle'&&operation!=='cancel')scope.admit();const outcome=await root.commonExecutionFromHost(ingress,signed);if(operation!=='settle'&&operation!=='cancel')scope.admit();return outcome;
-    };
-    // A lost root ACK must retry only the frozen digest observation, never the I/O.
-    // Root accepts exact repeated settlement only while the same lease/authority is live.
-    const settleObservation=async(operation:'provider_settle'|'tool_settle',providerCall?:import('../identity/common-execution-request').CommonExecutionRequest['providerCall'],toolCall?:import('../identity/common-execution-request').CommonExecutionRequest['toolCall'])=>{
-      try{return await invoke(operation,undefined,providerCall,toolCall);}
-      catch{scope.admit();return invoke(operation,undefined,providerCall,toolCall);}
-    };
-    const execution = {
-      begin:async(source:import('./task-source-scope').TaskSourceSnapshot,composition:Extract<import('../context-composer/types').ContextCompositionResult,{ok:true}>,maxProviderTurns:number)=>{
-        if(started)return;
-        const frozenKey=`common-execution-host:${occurrence.id}`;
-        const prior=this.ctx.storage.kv.get<Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>>(frozenKey);
-        request=prior??{operation:'begin',hostRun:{runId:scope.runId,attempt:scope.attempt,deadline:scope.deadline},source,binding:{...binding,contextProjectionRef:composition.checkpoint.context_ref,contextProjectionDigest:composition.evidence.prompt_digest},
-          // This executor admits reviewed enabled skill selection, private workspace tools
-          // and explicitly registered read-only browser custody. Skill install/disable
-          // and other effects remain held; procedure loading adds no capabilities.
-          tools:composition.evidence.tool_acl.filter(tool=>commonOwnerTools({googleConnected:(this.ctx.storage.kv.get<readonly GoogleAccount[]>('google:accounts')??[]).length>0,driveReads:this.env.DRIVE_READS==='1',publicSearch:!!this.env.BRAVE_SEARCH_API_KEY,browser:!!host.browser}).includes(tool)),
-          maxProviderTurns,maxDurationMs:Math.max(1,Math.min(600000,scope.deadline-Date.now()))};
-        if(prior && (!prior.hostRun || prior.hostRun.runId!==scope.runId || prior.hostRun.attempt!==scope.attempt || prior.hostRun.deadline!==scope.deadline || JSON.stringify(prior.source)!==JSON.stringify(source) || prior.binding.contextProjectionRef!==composition.checkpoint.context_ref || prior.binding.contextProjectionDigest!==composition.evidence.prompt_digest))throw Error('common execution frozen context changed');
-        scope.commit(()=>this.ctx.storage.kv.put(frozenKey,request));
-        await invoke('begin');started=true;
-      },
-      assertCurrent:async()=>{if(started)await invoke('check');},
-      provider:async(providerRequest:import('../llm/provider').LLMGatewayRequest,issue:()=>Promise<import('@waldo/contracts').AdapterResult<import('@waldo/contracts').LLMResponse>>)=>{
-        if(!started)return issue(); // Source classification is prerequisite, not the admitted responder attempt.
-        const {runScope:_scope,...frozen}=providerRequest;
-        const call={ordinal:++providerOrdinal,model:providerRequest.request.model,requestDigest:`sha256:${await sha256Hex(JSON.stringify(frozen))}`};
-        await invoke('provider_prepare',undefined,call);
-        const result=await issue();
-        await settleObservation('provider_settle',{...call,resultDigest:`sha256:${await sha256Hex(JSON.stringify(result))}`});
-        return result;
-      },
-      tool:async(name:string,args:unknown,ctx:import('../tools/dispatcher').ToolDispatcherContext,issue:()=>Promise<unknown>)=>{
-        if(!started||!ctx.toolCallId||!request?.tools.includes(name))throw Error('common tool invocation unavailable');
-        const call={id:`tool_${await sha256Hex(JSON.stringify([ctx.turnId,ctx.toolCallId]))}`,name,requestDigest:`sha256:${await sha256Hex(JSON.stringify(args))}`};
-        const operationId=name==='workspace_write'?await workspaceOperationId([ctx.authenticatedUserId,ctx.turnId,ctx.toolCallId]):undefined;
-        const receiptKey=`common-tool-host:${occurrence.id}:${call.id}`;
-        const identity={call,operationId:operationId??null};
-        const prior=this.ctx.storage.kv.get<typeof identity>(receiptKey);
-        if(prior&&JSON.stringify(prior)!==JSON.stringify(identity))throw Error('common tool identity changed');
-        scope.commit(()=>this.ctx.storage.kv.put(receiptKey,identity));
-        await invoke('tool_prepare',undefined,undefined,call);
-        let result:unknown;
-        try{result=await issue();}catch(error){
-          if(!operationId)throw error;
-          await invoke('check');scope.admit();await ctx.assertTaskSourceCurrent?.();
-          // Exact original operation readback, never handler/write replay or a new model call.
-          const store=await workspaceOwnerHost(this.env,this.ctx.storage,this.ctx.id.toString(),occurrence.doName,fetch,scope,ctx.assertTaskSourceCurrent);
-          const meta=await store.reconcile(operationId);
-          await store.export(meta.file_id,meta.revision);
-          if(this.ctx.storage.kv.get<typeof identity>(receiptKey)?.call.requestDigest!==call.requestDigest)throw Error('common tool recovery changed');
-          const delivery=await workspaceDelivery(store,meta,{durable:Boolean(this.env.ARTIFACTS),origin:async()=>await this.ctx.storage.get<string>('origin')??null});
-          result={ok:true,source_taint:null,data:{file_id:meta.file_id,revision:meta.revision,byte_size:meta.byte_size,sha256:meta.sha256,delivery}};
-          await invoke('check');scope.admit();await ctx.assertTaskSourceCurrent?.();
-        }
-        await settleObservation('tool_settle',undefined,{...call,resultDigest:`sha256:${await sha256Hex(JSON.stringify(result))}`});
-        return result;
-      },
-      cancel:async()=>{try{if(started)await invoke('cancel');}finally{await browser?.cancel();}},
-      source:()=>{if(!request)throw Error('common source unavailable');return request.source;},
-      attachments:()=>browser?.attachments()??[],
-      bindBrowser:(value:ReturnType<typeof commonBrowserHost>|undefined)=>{browser=value;},
-      finalIntent:()=>{if(!started||!request)throw Error('common execution not started');return {request};},
-      settle:async(ref:string,text:string)=>{if(!started)throw Error('common execution not started');await invoke('settle',{ref,digest:`sha256:${await sha256Hex(text)}`});},
-      allows:(tool:string)=>started&&request?.tools.includes(tool)===true,
-    };
-    this.activeCommonExecution=execution;
-    return execution;
-  }
-
-  private async reconcileCommonFinal(final:FinalRecord):Promise<void> {
-    if(!final.commonExecution || final.commonExecution.settled||final.commonExecution.disposition)return;
-    if(!final.inbox || !this.env.WALDO_ROUTER_HMAC_SECRET || !this.env.RUN_LOOP_DO ||
-      final.ownerSubject!==this.ctx.storage.kv.get<string>('telegram_subject') || final.doName!==this.ctx.storage.kv.get<string>('do_name') ||
-      this.ctx.storage.kv.get<boolean>('telegram_unlinked') || this.env.TELEGRAM_OWNER_DO?.idFromName(final.doName).toString()!==this.ctx.id.toString())throw Error('common final binding unavailable');
-    const row=(await this.inbox.records()).find(row=>row.id===final.inbox!.id);
-    if(!row || row.runId!==final.inbox.runId || row.attempt!==final.inbox.attempt || row.subject!==final.ownerSubject || row.doName!==final.doName)throw Error('common final occurrence unavailable');
-    const directory=commonOwnerAuthority(this.env);const authority=await directory.resolve('telegram',row.subject,row.doName);
-    if(!authority)throw Error('common final owner unavailable');
-    const ingress=await signCommonMessageIngress(this.env.WALDO_ROUTER_HMAC_SECRET,{provider:'telegram',subject:row.subject,doName:row.doName,physicalDoId:this.ctx.id.toString(),occurrenceId:row.id,text:'Read back the committed physical final for this occurrence.',at:Math.floor(Date.now()/1000)});
-    const request=await signCommonExecutionRequest(this.env.WALDO_ROUTER_HMAC_SECRET,ingress,{...final.commonExecution.request,operation:'settle',result:{ref:`final_${row.updateId}`,digest:`sha256:${await sha256Hex(final.payload.text)}`}});
-    const rootHash=await sha256Hex(`waldo-owner-root\0${authority.ownerId}`);
-    const root=this.env.RUN_LOOP_DO.get(this.env.RUN_LOOP_DO.idFromName(`owner-root:sha256:${rootHash}`));
-    const outcome=await root.commonExecutionFromHost(ingress,request);
-    await directory.assertCurrent(authority);
-    this.ctx.storage.transactionSync(()=>{
-      const current=this.setup().finalOutbox.records();const stored=current.find(value=>value.id===final.id);
-      if(this.ctx.storage.kv.get<string>('telegram_subject')!==row.subject || this.ctx.storage.kv.get<string>('do_name')!==row.doName || this.ctx.storage.kv.get<boolean>('telegram_unlinked'))throw Error('common final owner changed');
-      if(!stored || stored.digest!==final.digest || stored.payload.text!==final.payload.text || JSON.stringify(stored.commonExecution)!==JSON.stringify(final.commonExecution))throw Error('common final changed');
-      if(outcome.state==='indeterminate'){
-        stored.commonExecution!.disposition='indeterminate';stored.status='blocked';stored.reason='common_execution_indeterminate';stored.settled=true;
-        const inbox=this.ctx.storage.kv.get<InboxRecord[]>('telegram_owner_inbox_v1')??[];const occurrence=inbox.find(value=>value.id===row.id&&value.runId===row.runId&&value.attempt===row.attempt);
-        if(!occurrence)throw Error('common final occurrence changed');
-        occurrence.state='quarantined';occurrence.reason='common_execution_indeterminate';occurrence.body='';
-        this.ctx.storage.kv.put('telegram_owner_inbox_v1',inbox);this.ctx.storage.kv.put('telegram_owner_inbox_due_v1',ownerInboxDue(inbox,Date.now()));
-      }else stored.commonExecution!.settled=true;
-      this.ctx.storage.kv.put('telegram_final_outbox_v1',current);
-    });
-  }
 
   private closeRunAtomic(run: InboxRecord, reason: string, awaitingDelivery = false): void {
     this.ctx.storage.transactionSync(() => {
@@ -538,11 +340,6 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       // Binding follows authenticated admission, and never replaces a different binding.
       this.ctx.storage.kv.put('do_name', doName); this.ctx.storage.kv.put('telegram_subject', subject);
       if (text === '/stop') {
-        if(this.ownerHost?.browser){
-          revokeCommonBrowsers(this.ctx.storage,Date.now());
-          const config=this.ownerHost.browser;
-          this.ctx.waitUntil(maintainCommonBrowsers(this.ctx.storage,config,Date.now()).catch(()=>{console.error('common browser stop cleanup unresolved');}));
-        }
         if (this.browserTrial) {
           this.ctx.storage.kv.delete(BROWSER_TRIAL_PENDING_KEY);
           this.ctx.storage.kv.put(BROWSER_TRIAL_REVOCATION_KEY, crypto.randomUUID());
@@ -631,7 +428,6 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       await this.inbox.transition(row.id, attempt, 'quarantined', 'execution_uncertain');
     } finally {
       clearTimeout(timeout);
-      try { if(this.activeCommonExecution && !this.setup().finalOutbox.records().some(r=>r.inbox?.runId===runId))await this.activeCommonExecution.cancel(); } catch { console.error('common cancellation unresolved; root timeout retains uncertainty'); }
       // Failed durable closure must keep the serial queue held. Never abort/release first.
       for (;;) {
         try { this.closeRunAtomic(claimed, 'execution_closed'); break; }
@@ -641,7 +437,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         await this.notifyUncertainRecovery();
       } catch { console.error('fixed failure notice unavailable'); } finally {
-      if (this.activeScope === scope) { this.activeScope = undefined; this.activeOwnerContext = undefined; this.activeCommonExecution = undefined; this.activeAbort = undefined; }
+      if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; }
       try {
       for (const child of await this.inbox.records()) if (child.control?.targetRun === runId && child.attempt) {
         if (child.state === 'claimed' && child.control.kind === 'steer') await this.inbox.returnUnconsumedSteer(child.id, child.attempt);
@@ -1235,13 +1031,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           return;
         }
       }
-      if(this.ownerHost?.browser && (this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE)??Infinity)<=Date.now())await maintainCommonBrowsers(this.ctx.storage,this.ownerHost.browser,Date.now());
       const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal, call, owner, calendarPrepCurrent, retainedRecallAvailable } = this.setup();
       await ready;
       await finalOutbox.maintain();
       // Reconcile finals before quarantining recovered claims with committed payloads.
       for(const final of finalOutbox.records())if(final.commonExecution&&!final.commonExecution.settled&&!final.commonExecution.disposition) {
-        try { await this.reconcileCommonFinal(final); } catch { console.error('common final settlement unresolved'); }
       }
       const finals = finalOutbox.records();
       const protectedAttempts = new Set(this.liveAttempts);
@@ -1314,7 +1108,6 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const trace = `tg-${update.update_id}`;
     if (text === '/stop') {
       this.ctx.waitUntil(this.browserTasks.stop());
-      if(this.activeCommonExecution)this.ctx.waitUntil(this.activeCommonExecution.cancel().catch(()=>{console.error('common stop cancellation unresolved');}));
       const stopping = control.stop();
       log({ trace, hop: 'stop', ms: 0, ok: true, detail: stopping ? 'stopping the running turn' : 'nothing running' });
       void call('sendMessage', { chat_id: owner, text: stopping ? 'Stopping.' : 'Nothing is running right now.' }).catch(() => undefined);
@@ -1783,24 +1576,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const currentTaskOwnerKey = async () => {
       const currentOwner = resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
-      if (channel !== 'telegram' || owner <= 0 || (!this.canonicalPreparation && currentOwner !== owner)) throw new ClosedRunError();
-      let boundOwner = String(owner);
-      if (this.canonicalPreparation) {
-        const host = this.ownerHost;
-        const occurrence = this.activeInbox;
-        if (!host || !occurrence || occurrence.subject !== String(owner) || !host.allowedDoNames.includes(occurrence.doName)
-          || this.env.TELEGRAM_OWNER_DO?.idFromName(occurrence.doName).toString() !== this.ctx.id.toString()) throw new ClosedRunError();
-        const scope = this.activeScope;
-        if (!scope) throw new ClosedRunError();
-        const admitted = await ownerMessageAdmission({ lookup: host.lookup.bind(host), scope,
-          locator: { environment: host.environment, namespace: host.namespace, doName: occurrence.doName, doId: this.ctx.id.toString() },
-          actualDoId: this.ctx.id.toString(), expectedDoId: name => this.env.TELEGRAM_OWNER_DO!.idFromName(name).toString(),
-          allowedDoNames: host.allowedDoNames, provider: 'telegram', subject: String(owner),
-          text: 'Task source custody admission', occurrenceKey: occurrence.id, occurredAt: occurrence.admittedAt, now: Date.now });
-        await admitted.assertCurrent();
-        boundOwner = admitted.invocation.verified_authority.principal_ref;
-      }
-      return `telegram:${this.ctx.id.toString()}:${boundOwner}`;
+      if (channel !== 'telegram' || owner <= 0 || currentOwner !== owner) throw new ClosedRunError();
+      return `telegram:${this.ctx.id.toString()}:${owner}`;
     };
     const browserSources = browserTaskSourceCustody(storage.sql, storage.kv);
     const browserApproval = browserTaskApprovalBridge({ ownerId: () => this.browserTasks.principal, host: async (payload, operation) => {
@@ -1812,16 +1589,6 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const desk = approvalDesk(storage.sql, {
       call: routedCall, owner, google: (intent,feature) => google.client(feature??'calendar',intent), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
       timezone: clock.timezone, log,
-      taskSources: async proposal => {
-        const scope = this.activeScope;
-        const occurrence = this.activeInbox;
-        if (!scope || !occurrence || occurrence.subject !== String(owner)) return false;
-        scope.admit();
-        const ownerKey = await currentTaskOwnerKey();
-        scope.admit();
-        if (scope !== this.activeScope || occurrence !== this.activeInbox) return false;
-        return approveTaskSourceProposal(storage.sql, ownerKey, proposal, Date.now(), scope);
-      },
       reviewUrl: async () => {
         const origin = await storage.get<string>('origin');
         return origin && /^https:\/\/[^/?#]+$/.test(origin) ? `${origin}${CONSOLE_PATH}/waiting` : null;
@@ -1922,7 +1689,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }, { origin: async () => await storage.get<string>('origin') ?? null, durable: Boolean(this.env.ARTIFACTS) });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...workspaceTools, ...(this.ownerHost?.browser?[{...this.ownerHostBrowserRead()}]:[]), ...reminderHandlers(book), ...healthLogHandlers(healthLogs), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
         // with the artifact text (kinds + sender only; the code itself touches no store).
@@ -1930,47 +1697,17 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await sentOrThrow(api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` }));
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), ...(this.ownerHost?.browser?[]:[browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))]), browserTaskHandler({ legacy: browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
+      }), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env)), browserTaskHandler({ legacy: browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
         if (!context.assertTaskSourceCurrent) throw Error('browser task source unavailable');
         await context.assertTaskSourceCurrent();
         const ownerKey = await currentTaskOwnerKey(); await context.assertTaskSourceCurrent();
         browserSources.capture(payload, ownerKey);
         const id = await desk.proposeBrowserSubmit(payload); await context.assertTaskSourceCurrent(); return id;
-      }, stopAdmission: async () => { await this.browserTasks.revoke(); } }), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now() }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerHost?.gateway, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
+      }, stopAdmission: async () => { await this.browserTasks.revoke(); } }), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now() }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, undefined, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
       (opt) => opt ? openLoopsPrompt(loops, clock.timezone, opt.loopsRoom) : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
-      undefined, channel, this.canonicalPreparation ? { prepare: async (turn, handlers, scope) => {
-        const host = this.ownerHost;
-        const occurrence = this.activeInbox;
-        if (!host || channel !== 'telegram' || !occurrence || !turn.text || turn.attachment || turn.mediaNote
-          || !this.env.TELEGRAM_OWNER_DO || scope !== this.activeScope) throw new Error('owner host unavailable');
-        const admission = await ownerMessageAdmission({
-          lookup: host.lookup.bind(host), scope,
-          locator: { environment: host.environment, namespace: host.namespace, doName: occurrence.doName, doId: this.ctx.id.toString() },
-          actualDoId: this.ctx.id.toString(), expectedDoId: name => this.env.TELEGRAM_OWNER_DO!.idFromName(name).toString(),
-          allowedDoNames: host.allowedDoNames, provider: 'telegram', subject: occurrence.subject, text: turn.text,
-          occurrenceKey: occurrence.id, occurredAt: occurrence.admittedAt, now: Date.now,
-        });
-        const skills = createCuratedSkillCapability(storage.sql, admission, turn.text, turn.traceId, scope);
-        const adapter = createOwnerMessageContextAdapter({ admission, scope, dependencies: host.context(admission,()=>commonOwnerWorkspace(admission,()=>workspaceOwnerHost(this.env,storage,this.ctx.id.toString(),occurrence.doName,fetch,scope,()=>adapter.assertCurrent()),()=>memory.incompleteTopics().length===0)),
-          retainedRecallAvailable: () => memory.incompleteTopics().length === 0, taskMaterials: host.taskMaterials,
-          registeredHandlers: [...handlers, ...skills.handlers].map(handler => handler.name), connectorBacked: handlers.filter(handler => host.connectorBacked(handler)).map(handler => handler.name), access: host.access.bind(host) });
-        this.activeOwnerContext = adapter;
-        const taskOwnerKey = await currentTaskOwnerKey();
-        const sourceScope = this.env.COMMON_OWNER_TASKS === '1' ? await this.commonTaskSourcesForTurn(turn, scope, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? [])) : createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
-          await admission.assertCurrent();
-          if (await currentTaskOwnerKey() !== taskOwnerKey) throw new ClosedRunError();
-        }, { inputRef: turn.traceId, text: turn.text, quotedRanges: turn.sourceQuoteRanges }, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? []));
-        const execution=this.env.COMMON_OWNER_TASKS==='1'?this.commonExecutionForTurn(turn,scope,host):undefined;
-        this.activeCommonBrowser=host.browser&&execution?commonBrowserHost({storage:this.ctx.storage,config:host.browser,ownerId:admission.invocation.verified_authority.principal_ref,source:execution.source,assertCurrent:()=>execution.assertCurrent(),deadline:()=>scope.deadline,now:Date.now}):undefined;
-        execution?.bindBrowser(this.activeCommonBrowser);
-        return { admission, adapter, store: ownerCanonicalHistory(storage, admission, adapter), skills,
-          ...(execution?{execution}:{}),
-          sourceScope: { ...sourceScope, propose: async proposal => { await admission.assertCurrent(); if (this.env.COMMON_OWNER_TASKS === '1') throw Error('common source approval recovery unavailable'); await desk.proposeTaskSources(proposal); await admission.assertCurrent(); } },
-          memoryRead: {principal_ref:admission.invocation.verified_authority.principal_ref,tenant_ref:admission.invocation.verified_authority.tenant_ref,store:commonOwnerMemory(memory)},
-          forgetting: { principal_ref: admission.invocation.verified_authority.principal_ref, tenant_ref: admission.invocation.verified_authority.tenant_ref, store: memory } };
-      } } : undefined, !this.canonicalPreparation && channel === 'telegram' ? { prepare: async (turn, contextOwnerId, scope) => {
+      undefined, channel, channel === 'telegram' ? { prepare: async (turn, contextOwnerId, scope) => {
         if (turn.attachment || turn.mediaNote || probeCapture.current !== null) return undefined;
         const occurrence = this.activeInbox;
         const doName = identity.get<string>('do_name');
@@ -2005,14 +1742,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         })() : undefined;
         const capability = createScopedCuratedSkillCapability(storage.sql, { owner: admission?.invocation.verified_authority.principal_ref ?? contextOwnerId, custodyKey: `telegram:${owner}`, turnId: turn.traceId,
           trigger: 'user_message', ownerText: turn.text, assertCurrent: assertSkillOwnerCurrent }, scope);
-        const taskOwnerKey = await currentTaskOwnerKey();
-        const sourceScope = this.env.COMMON_OWNER_TASKS === '1' ? await this.commonTaskSourcesForTurn(turn, scope, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? [])) : createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
-          await assertSkillOwnerCurrent();
-          if (await currentTaskOwnerKey() !== taskOwnerKey) throw new ClosedRunError();
-        }, { inputRef: turn.traceId, text: turn.text, quotedRanges: turn.sourceQuoteRanges }, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? []));
-        return Object.freeze({ ...capability, ...(admission ? { admission } : {}), sourceScope: { ...sourceScope, propose: async proposal => {
-          await assertSkillOwnerCurrent(); if (this.env.COMMON_OWNER_TASKS === '1') throw Error('common source approval recovery unavailable'); await desk.proposeTaskSources(proposal); await assertSkillOwnerCurrent();
-        } }, taskContext: async (assertSourceCurrent?: () => Promise<void>) => {
+        return Object.freeze({ ...capability, ...(admission ? { admission } : {}), taskContext: async (assertSourceCurrent?: () => Promise<void>) => {
           await assertSkillOwnerCurrent();
           let receipts: Awaited<ReturnType<Awaited<ReturnType<typeof workspaceOwnerHost>>['recentWrites']>>;
           try {
@@ -2043,7 +1773,6 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const listener = owner > 0 ? new TelegramOwnerListener({
       ownerTelegramId: owner, surface: channel, api, ...responder, log,
       chooseReaction: turn => {
-        if (this.canonicalPreparation && turn.runScope) return Promise.resolve(null);
         turn.runScope?.admit();
         return responder.chooseReaction(turn);
       },
@@ -2052,24 +1781,20 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return responder.respond(turn, time);
       },
       ...(channel === 'telegram' ? { queueFinal: async (turn: import('./telegram-polling').TelegramInboundTurn, payload: import('./telegram-final-outbox').FinalPayload, emoji: string) => {
-        if (this.canonicalPreparation && turn.runScope) { if (!this.activeOwnerContext) throw new Error('owner context unavailable'); await this.activeOwnerContext.assertCurrent(); }
         // Capture probes remain inert and exercise the original immediate mock path.
         if (probeCapture.current !== null) { await api.sendMessage(payload); return; }
         const captured = this.activeInbox;
         if (turn.runScope && (!captured || captured.runId !== turn.runScope.runId || captured.attempt !== turn.runScope.attempt || captured.updateId !== turn.updateId)) throw new ClosedRunError();
-        const input = { ...(this.activeCommonExecution?{commonExecution:this.activeCommonExecution.finalIntent()}:{}), id: captured ? `turn:${captured.id}` : `turn:${turn.updateId}`, trace: ownerTurnTrace(channel, turn.updateId), payload: { ...payload, text: redactSecretUrls(payload.text).text },
+        const input = { id: captured ? `turn:${captured.id}` : `turn:${turn.updateId}`, trace: ownerTurnTrace(channel, turn.updateId), payload: { ...payload, text: redactSecretUrls(payload.text).text },
           ...(captured?.runId && captured.attempt ? { inbox: { id: captured.id, runId: captured.runId, attempt: captured.attempt } } : {}),
           receiptUrls: [...(turnReceiptUrls.get(ownerTurnTrace(channel, turn.updateId)) ?? [])],
           ownerSubject: String(owner), doName: identity.get<string>('do_name') ?? '',
           ...(turn.messageId === null ? {} : { reaction: { message_id: turn.messageId, emoji } }),
         };
-        await this.activeCommonExecution?.assertCurrent();
         if (turn.runScope && captured) await finalOutbox.enqueueFenced(input, work => turn.runScope!.commit(() => {
           work(); this.closeRunAtomic(captured, 'final_committed', true);
         }));
         else await finalOutbox.enqueue(input);
-        const committed=finalOutbox.records().find(row=>row.id===input.id);
-        if(committed?.commonExecution)await this.reconcileCommonFinal(committed);
         turnReceiptUrls.delete(ownerTurnTrace(channel, turn.updateId));
         await scheduler.rearm();
       } } : {}),
