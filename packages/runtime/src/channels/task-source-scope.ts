@@ -183,6 +183,8 @@ export const approveTaskSourceProposal = (sql: SqlStorage, ownerKey: string, sup
 const TOOL_SOURCE: Partial<Record<ToolName, TaskSourceFamily>> = {
   read_owner_context: 'local', read_memory: 'local', search_episodes: 'local', read_tool_output: 'local',
   workspace_list: 'workspace', workspace_read: 'workspace', workspace_search: 'workspace', workspace_render: 'workspace', export_artifact: 'workspace', read_artifact: 'workspace', list_artifacts: 'workspace', get_communication: 'mail', search_communication: 'mail', read_thread: 'mail',
+  // Proposal-only writes: the owner approval card is the gate, so the tool needs only its own family (previously unmapped, which demanded all ten).
+  send_email: 'mail', draft_email: 'mail', propose_calendar_change: 'calendar',
   query_calendar: 'calendar', query_availability: 'calendar', get_tasks: 'tasks', read_drive: 'drive', web_search: 'web', browse_page: 'web', browse_act: 'web', read_mcp_tool: 'mcp', call_mcp_tool: 'mcp',
 };
 const taskSourceFamily = (handler: Readonly<{ name: ToolName }>, args?: unknown): TaskSourceFamily | undefined => {

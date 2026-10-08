@@ -1,37 +1,27 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { recallResultSchema, type LLMRequest } from '@waldo/contracts';
-import type { ContextComposerDependencies } from '../src/context-composer';
-import type { OwnerMessageAdmission } from '../src/identity/owner-message-admission';
-import { TelegramOwnerDO, type TelegramOwnerPrivateHost } from '../src/channels/telegram-owner-do';
+import { type LLMRequest } from '@waldo/contracts';
+import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { BROWSER_TASK_KEY, type BrowserOwnerConfiguration } from '../src/channels/browser-owner-host';
 import { armAlarm } from '../src/scheduler/alarm-slot';
 import { syntheticCommandAdapter, type SyntheticRequest } from '../src/channels/browser-synthetic-commands';
 import { fixtureDigest } from '../src/channels/public-fixture-browser';
 const legacyModel = vi.hoisted(() => ({ enabled: false, calls: 0 }));
+const modelGateway = vi.hoisted(() => ({ current: undefined as undefined | { complete(request: never): Promise<unknown> } }));
+vi.mock('../src/llm/openai', async load => {
+  const original = await load<typeof import('../src/llm/openai')>();
+  return { ...original, OpenAIResponsesAdapter: class extends original.OpenAIResponsesAdapter {
+    override complete(request: never) { return modelGateway.current && !legacyModel.enabled ? modelGateway.current.complete(request) as never : super.complete(request); }
+  } };
+});
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: { text?: { format?: { name?: string } } }) => {
   if (!legacyModel.enabled) throw new Error('browser proof denies unrelated model work');
-  legacyModel.calls++; return { id: 'synthetic-default-reply', output: [], output_text: input.text?.format?.name === 'task_source_scope' ? JSON.stringify({ decision: 'retain', sources: [] }) : 'Ordinary messaging remains available.', usage: { input_tokens: 1, output_tokens: 1 } };
+  legacyModel.calls++; return { id: 'synthetic-default-reply', output: [], output_text: 'Ordinary messaging remains available.', usage: { input_tokens: 1, output_tokens: 1 } };
 } }; } }));
 vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
   return { ...original, createTelegramCaller: () => async (method: string) => method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: 1 } : true };
 });
-function sources(admission: OwnerMessageAdmission): ContextComposerDependencies {
-  const identity = { principal_ref: admission.invocation.verified_authority.principal_ref, tenant_ref: admission.invocation.verified_authority.tenant_ref };
-  const snapshot = { ...admission.snapshot, revision_ref: 'rev_11111111111111111111111111111111' };
-  const source = (key: string, scope: 'system' | 'principal' = 'system') => ({ source_key: key.toLowerCase().replaceAll(' ', '-'), source_kind: 'runtime_metadata' as const, scope, source_taint: null, produced_at: snapshot.snapshot_at });
-  const fragment = (key: string, scope: 'system' | 'principal' = 'system') => ({ text: key, source: source(key, scope) });
-  return {
-    staged_inputs: { resolve: async () => { throw new Error('admitted input adapter required'); } },
-    materials: { load: async () => ({ ...identity, snapshot, identity: fragment('ADMITTED_MATERIAL_OWNER_BOUND_CANVAS', 'principal'), trigger_behaviour: fragment('Help the owner'), zone_modifier: fragment('Keep practical'), mode_template: fragment('Concise response'), soul_base: fragment('Be direct'), safety_rules: fragment('Respect permissions'), health: null, workspace: [], tool_outputs: [] }) },
-    owner_binding: { bind: async () => ({ ...identity, snapshot, local_user_ref: 'private-owner', source: source('owner', 'principal') }) },
-    system_skills: { list: async () => ({ rows: [], snapshot, source: source('skills') }) },
-    system_skill_state: { load: async () => ({ ...identity, snapshot, source: source('skill-state', 'principal'), connected_connectors: [], dismissed_today: [], provisional_reverted: [], identity_drift: [], priority_pinned: [] }) },
-    skill_budget: { countRenderedSkill: async () => ({ ok: false, code: 'unavailable' }), countRenderedBlock: async () => ({ ok: false, code: 'unavailable' }) },
-    recall: { recall: async () => ({ ...identity, snapshot, status: 'failed', result: recallResultSchema.parse({ memory_hits: [], episode_hits: [], evolution_hits: [], query_used: 'No recall source', duration_ms: 0 }), source: null, capability: 'owner_bound_local_temporal_snapshot' }) },
-  };
-}
 let sequence = 880000;
 async function browserProof(work: (h: {
   send(text: string): Promise<void>; approve(id: string, owner?: number): Promise<void>; deny(id: string): Promise<void>; readOnly(): void; submits(): number; present(): boolean; reload(): void; foreign(): void; stale(): void;
@@ -69,19 +59,18 @@ async function browserProof(work: (h: {
     } });
     const driver = mode === 'journey' ? syntheticDriver : legacyDriver;
     const config: BrowserOwnerConfiguration = { enabled: mode !== 'disabled', binding, manifestDigest: `sha256:${'a'.repeat(64)}`, driver, lookup: async () => { if (lookupPause) { const slot = lookupPause; lookupPause = undefined; slot.enter(); await slot.wait; } return { ...directory }; }, grant: async request => ({ ...request, ref: 'synthetic-current-grant', expiresAt: Date.now() + 60000 }) };
-    const host: TelegramOwnerPrivateHost = {
-      environment: 'staging', namespace: 'browser-proof-namespace', allowedDoNames: [doName], lookup: async () => ({ ...directory }), context: sources,
-      access: async () => ({ grants: { status: 'available', tools: ['browse_act'] }, connectors: { status: 'unavailable' } }), connectorBacked: () => false,
-      gateway: { complete: async ({ request }) => {
+    const host = {
+      gateway: { complete: async ({ request }: { request: LLMRequest }) => {
         requests.push(structuredClone(request));
-        const journey = mode === 'journey' && !request.response_format && request.tools?.some(t => t.name === 'browse_act') ? journeyCommands.shift() : undefined;
-        const calls = journey ? [{ call_id: `synthetic-command-${requests.length}`, name: 'browse_act', arguments: JSON.stringify({ url: driver.pageUrl, task: 'Prepare the known synthetic form', command: journey }) }] : !replyOnly && mode !== 'journey' && !request.response_format && !request.tool_turns?.length && request.tools?.some(t => t.name === 'browse_act')
+        const journey = mode === 'journey' && !request.response_format && request.tools?.some((t: { name: string }) => t.name === 'browse_act') ? journeyCommands.shift() : undefined;
+        const calls = journey ? [{ call_id: `synthetic-command-${requests.length}`, name: 'browse_act', arguments: JSON.stringify({ url: driver.pageUrl, task: 'Prepare the known synthetic form', command: journey }) }] : !replyOnly && mode !== 'journey' && !request.response_format && !request.tool_turns?.length && request.tools?.some((t: { name: string }) => t.name === 'browse_act')
           ? [{ call_id: `browser-inspect-${requests.length}`, name: 'browse_act', arguments: JSON.stringify({ url: driver.pageUrl, task: 'Inspect the synthetic public form', command: { operation: 'inspect' } }) }] : undefined;
         return { ok: true, data: { text: request.response_format ? JSON.stringify({ decision: 'retain', sources: [] }) : calls ? '' : 'Synthetic browser reply.', ...(calls ? { tool_calls: calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, model: request.model, latency_ms: 1 } };
       } },
     };
-    const privateEnv = { ...env, WALDO_EGRESS_ALLOWLIST: 'fixture.example', TELEGRAM_BOT_TOKEN: '12345:fictional', TELEGRAM_WEBHOOK_SECRET: 'fictional-browser-inbox-secret', OPENAI_API_KEY: 'fictional-model-key' };
-    const construct = () => new TelegramOwnerDO(state, privateEnv, mode === 'legacy_factory_failed' ? undefined : { mode: 'canonical', host }, mode === 'absent' || mode === 'factory_failed' || mode === 'legacy_factory_failed' ? undefined : config, mode === 'factory_failed' || mode === 'legacy_factory_failed' ? { policy: { enabled: false, doName, fixtureOrigin: 'https://fixture.example' }, manifest: { origin: 'https://fixture.example', pagePath: '/form', submitPath: '/submit', receiptPrefix: '/receipts/', runId: 'trial-one', fields: ['value'], formSelector: '#form', submitSelector: '#submit', resultSelector: '#result' } } : undefined);
+    modelGateway.current = host.gateway as never;
+    const privateEnv = { ...env, WALDO_ENVIRONMENT: 'staging', LANGFUSE_CAPTURE_TEXT: 'true', WALDO_EGRESS_ALLOWLIST: 'fixture.example', TELEGRAM_BOT_TOKEN: '12345:fictional', TELEGRAM_WEBHOOK_SECRET: 'fictional-browser-inbox-secret', OPENAI_API_KEY: 'fictional-model-key' };
+    const construct = () => new TelegramOwnerDO(state, privateEnv, mode === 'absent' || mode === 'factory_failed' || mode === 'legacy_factory_failed' ? undefined : config, mode === 'factory_failed' || mode === 'legacy_factory_failed' ? { policy: { enabled: false, doName, fixtureOrigin: 'https://fixture.example' }, manifest: { origin: 'https://fixture.example', pagePath: '/form', submitPath: '/submit', receiptPrefix: '/receipts/', runId: 'trial-one', fields: ['value'], formSelector: '#form', submitSelector: '#submit', resultSelector: '#result' } } : undefined);
     if (mode === 'legacy_factory_failed') { legacyModel.enabled = true; legacyModel.calls = 0; }
     let instance = construct();
     const sendUpdate = async (update: object, text = '', expectedStatus = 200) => {
@@ -105,7 +94,7 @@ async function browserProof(work: (h: {
       task.finishRun = async () => { task.finishRun = original; throw Error('synthetic finishRun storage failure'); };
     };
     const pause = (kind: 'inspect' | 'lookup') => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const slot = { enter, wait: new Promise<void>(resolve => { resume = resolve; }) }; if (kind === 'inspect') inspectPause = slot; else lookupPause = slot; return Object.assign(resume, { reached }); };
-    try { await work({ failFinishRunOnce, approve: (id, owner) => decide(id, 'a', owner), deny: id => decide(id, 's'), readOnly: () => { journeyCommands.splice(0, journeyCommands.length, { operation: 'read' }); }, submits: () => submits, present: () => present, pauseInspect: () => pause('inspect'), pauseLookup: () => pause('lookup'), send, state, requests, reloadAbsent: () => { instance = new TelegramOwnerDO(state, privateEnv, { mode: 'canonical', host }); }, failCleanup: () => { cleanupFails = true; }, alarm: () => instance.alarm(), replyOnly: () => { replyOnly = true; }, pauseCleanup: () => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const wait = new Promise<void>(resolve => { resume = resolve; }); endPause = { enter, wait }; return Object.assign(resume, { reached }); }, starts: () => starts, ends: () => ends, inspections: () => inspections, reload: () => { instance = construct(); }, foreign: () => { directory = { ...directory, owner_id: '10000000-0000-0000-0000-000000000002' }; }, stale: () => { directory = { ...directory, admission_revision: '9007199254740995' }; } }); }
+    try { await work({ failFinishRunOnce, approve: (id, owner) => decide(id, 'a', owner), deny: id => decide(id, 's'), readOnly: () => { journeyCommands.splice(0, journeyCommands.length, { operation: 'read' }); }, submits: () => submits, present: () => present, pauseInspect: () => pause('inspect'), pauseLookup: () => pause('lookup'), send, state, requests, reloadAbsent: () => { instance = new TelegramOwnerDO(state, privateEnv); }, failCleanup: () => { cleanupFails = true; }, alarm: () => instance.alarm(), replyOnly: () => { replyOnly = true; }, pauseCleanup: () => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const wait = new Promise<void>(resolve => { resume = resolve; }); endPause = { enter, wait }; return Object.assign(resume, { reached }); }, starts: () => starts, ends: () => ends, inspections: () => inspections, reload: () => { instance = construct(); }, foreign: () => { directory = { ...directory, owner_id: '10000000-0000-0000-0000-000000000002' }; }, stale: () => { directory = { ...directory, admission_revision: '9007199254740995' }; } }); }
     finally { legacyModel.enabled = false; await state.storage.deleteAlarm(); noFetch.mockRestore(); }
   });
 }
@@ -253,37 +242,39 @@ it('factory failure does not stop ordinary owner messaging', async () => {
   }, 'factory_failed');
 });
 
-for (const seam of ['lookup', 'inspect'] as const) it(`actual DO fences browser work when task sources narrow during paused ${seam}`, async () => {
+for (const seam of ['lookup', 'inspect'] as const) it(`actual DO fences browser work on authenticated stop during paused ${seam}`, async () => {
   await browserProof(async h => {
     const resume = seam === 'lookup' ? h.pauseLookup() : h.pauseInspect();
     const pending = h.send('Inspect the public fixture.'); await resume.reached;
-    h.state.storage.sql.exec("UPDATE owner_task_source_scope SET sources_json = '[]', revision = revision + 1, ready = 1");
+    await h.send('/stop');
     resume(); await pending;
     expect(h.starts()).toBe(seam === 'lookup' ? 0 : 1);
     expect(JSON.stringify(h.requests)).not.toContain('field_refs');
     await h.send('/stop'); if (seam === 'inspect') expect(h.ends()).toBe(1);
   });
 });
-it('browser approval custody survives reconstruction but denies narrowed or replaced durable task scope', async () => {
+it('browser approval custody survives reconstruction but denies replaced physical owner or continuation', async () => {
   await browserProof(async h => {
     const { browserTaskSourceCustody } = await import('../src/channels/browser-task-source');
     await h.send('Inspect the public fixture.');
-    const ownerKey = h.state.storage.sql.exec<{ owner_key: string }>('SELECT owner_key FROM owner_task_source_scope').one().owner_key;
+    const ownerKey = 'telegram:physical-owner-one';
+    let currentOwner = ownerKey;
+    const owner = async () => currentOwner;
     const payload = { url: 'https://fixture.example/form', action: { selector: '#submit', method: 'click', description: 'synthetic' }, binding: { value: 'synthetic' }, steps: [], continuation: { version: 1 as const, taskRef: 'synthetic-task', proposalId: 'synthetic-proposal', scopeDigest: `sha256:${'a'.repeat(64)}` } };
-    browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv).capture(payload, ownerKey);
-    const guard = browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv).guard(payload); await guard();
-    h.state.storage.sql.exec("UPDATE owner_task_source_scope SET sources_json = '[]', revision = revision + 1, ready = 1");
+    browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv, owner).capture(payload, ownerKey);
+    const guard = browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv, owner).guard(payload); await guard();
+    currentOwner = 'telegram:physical-owner-two';
     await expect(guard()).rejects.toThrow('changed');
     const { browserTaskApprovalBridge } = await import('../src/tools/live/browser-task');
     let submits = 0, receipts = 0;
     const approval = browserTaskApprovalBridge({ ownerId: 'prn_10000000000000000000000000000001', host: async next => {
-      const current = browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv).guard(next); await current();
+      const current = browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv, owner).guard(next); await current();
       return { taskRef: 'synthetic-task', pageUrl: next.url, validateProposal: async () => true, submit: async () => { submits++; }, validateReceipt: async () => { receipts++; return true; } } as never;
     } });
     expect(await approval.submit(payload, 'authenticated-owner-approval')).toMatchObject({ status: 'rejected' });
     expect(await approval.receiptVerified(payload, { id: 'r', observed_at: new Date().toISOString(), source: 'controlled_fixture', binding_digest: `sha256:${'a'.repeat(64)}`, action_digest: `sha256:${'b'.repeat(64)}` })).toBe(false);
     expect(submits).toBe(0); expect(receipts).toBe(0);
-    expect(() => browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv).guard({ ...payload, continuation: { ...payload.continuation, proposalId: 'foreign' } })).toThrow();
+    expect(() => browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv, owner).guard({ ...payload, continuation: { ...payload.continuation, proposalId: 'foreign' } })).toThrow();
   });
 });
 
@@ -294,21 +285,20 @@ it('default responder still answers ordinary owner text when the configured brow
     expect(JSON.stringify(h.state.storage.kv.get('telegram_final_outbox_v1'))).toContain('Ordinary messaging remains available.');
   }, 'legacy_factory_failed');
 });
-it('a web-only task can reach the browser approval card, and a task with no browsing source still cannot', async () => {
+it('browser approval custody remains valid without a classifier and is revoked by authenticated stop', async () => {
   await browserProof(async h => {
     const { browserTaskSourceCustody } = await import('../src/channels/browser-task-source');
     await h.send('Inspect the public fixture.');
-    const ownerKey = h.state.storage.sql.exec<{ owner_key: string }>('SELECT owner_key FROM owner_task_source_scope').one().owner_key;
+    const ownerKey = 'telegram:physical-owner';
+    const owner = async () => ownerKey;
     const payload = { url: 'https://fixture.example/form', action: { selector: '#submit', method: 'click', description: 'synthetic' }, binding: { value: 'synthetic' }, steps: [], continuation: { version: 1 as const, taskRef: 'synthetic-task', proposalId: 'synthetic-proposal', scopeDigest: `sha256:${'a'.repeat(64)}` } };
-    const set = (sources: string[]) => h.state.storage.sql.exec('UPDATE owner_task_source_scope SET sources_json = ?, revision = revision + 1, ready = 1', JSON.stringify(sources));
-    set(['web']);
-    const custody = browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv);
-    expect(() => custody.capture(payload, ownerKey)).not.toThrow();
-    const guard = custody.guard(payload); await guard();
-    h.state.storage.sql.exec('UPDATE owner_task_source_scope SET revision = revision + 1');
+    const custody = browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv, owner);
+    custody.capture(payload, ownerKey);
+    const guard = browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv, owner).guard(payload);
+    await guard();
+    expect(h.state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name='owner_task_source_scope'").toArray()).toHaveLength(0);
+    await h.send('/stop');
     await expect(guard()).rejects.toThrow('changed');
-    set(['local']);
-    expect(() => custody.capture(payload, ownerKey)).toThrow('browser task source unavailable');
   });
 });
 

@@ -1,7 +1,7 @@
 import { SANITISE_DESTINATION_POLICIES } from '@waldo/contracts';
 import type { SanitiseInput } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
-import { sanitise } from '../src/scribe/sanitiser';
+import { guardForOffload, sanitise, sanitiseVerifyOnly } from '../src/scribe/sanitiser';
 
 const CEILING = SANITISE_DESTINATION_POLICIES.internal_context.max_chars;
 const CANARIES = ['1111111111111111', '2222222222222222', '3333333333333333'];
@@ -42,5 +42,16 @@ describe('scribe max_chars_override (dynamic per-model budget, tighten-only)', (
   it('override above the ceiling never loosens: ceiling still binds', () => {
     const result = sanitise(input(sizedPayload(CEILING + 2_000), CEILING * 4));
     expect(result).toEqual({ ok: false, check: 'size_cap', reason: 'oversize' });
+  });
+});
+
+describe('preflight size failure across sanitizer entrypoints', () => {
+  it.each([sanitise, sanitiseVerifyOnly, guardForOffload])('reports oversized strings and keys without weakening structural rejection (%s)', inspect => {
+    for (const payload of ['a'.repeat(CEILING + 1), { ['a'.repeat(CEILING + 1)]: 'ordinary' }]) {
+      expect(inspect(input(payload))).toEqual({ ok: false, check: 'size_cap', reason: 'oversize' });
+    }
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    expect(inspect(input(cycle))).toEqual({ ok: false, check: 'size_cap', reason: 'invalid_payload' });
   });
 });

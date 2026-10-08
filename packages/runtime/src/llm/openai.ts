@@ -109,21 +109,22 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
 }
 
 function responsesInput(request: LLMGatewayRequest['request']): OpenAI.Responses.ResponseCreateParams['input'] {
-  const text = request.messages.map((message) => `${message.role}: ${message.content}`).join('\n');
-  if (!request.attachments && !request.tool_turns) return text;
+  // Real roles: a flattened "user: ..." blob hid who said what, so "that one" could not resolve (PR 1 item 3).
+  const turns = request.messages.map((message) => ({ role: message.role, content: message.content }));
+  // One plain user message stays a plain string (single-shot callers such as selectors and writers parse it as text).
+  if (!request.attachments && !request.tool_turns) return turns.length === 1 && turns[0]!.role === 'user' ? turns[0]!.content : turns;
+  const lastUser = turns.map((turn) => turn.role).lastIndexOf('user');
+  const files = (request.attachments ?? []).map((file): OpenAI.Responses.ResponseInputContent => {
+    const data = `data:${file.mime_type};base64,${file.data_base64}`;
+    return file.kind === 'image'
+      ? { type: 'input_image', image_url: data, detail: 'auto' }
+      : { type: 'input_file', filename: file.filename, file_data: data };
+  });
   return [
-    {
-      role: 'user',
-      content: [
-        { type: 'input_text', text },
-        ...(request.attachments ?? []).map((file): OpenAI.Responses.ResponseInputContent => {
-          const data = `data:${file.mime_type};base64,${file.data_base64}`;
-          return file.kind === 'image'
-            ? { type: 'input_image', image_url: data, detail: 'auto' }
-            : { type: 'input_file', filename: file.filename, file_data: data };
-        }),
-      ],
-    },
+    ...turns.map((turn, index): OpenAI.Responses.ResponseInputItem => index === lastUser && files.length
+      ? { role: 'user', content: [{ type: 'input_text', text: turn.content }, ...files] }
+      : { role: turn.role, content: turn.content }),
+    ...(lastUser === -1 && files.length ? [{ role: 'user' as const, content: files }] : []),
     ...(request.tool_turns ?? []).flatMap((turn): OpenAI.Responses.ResponseInputItem[] => {
       const prior = (turn.prior_items ?? []) as unknown as OpenAI.Responses.ResponseInputItem[];
       const included = prior.some((item) => (item as { type?: string }).type === 'function_call' && (item as { call_id?: string }).call_id === turn.call.call_id);

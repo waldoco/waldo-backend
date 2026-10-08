@@ -7,6 +7,7 @@ export type TelegramWebhookEnv = Readonly<{
   TELEGRAM_OWNER_DO?: DurableObjectNamespace;
   RUN_LOOP_DO?: DurableObjectNamespace<import('../run-loop/do').RunLoopDO>;
   // Held off until connected common-task execution and recovery acceptance.
+  COMMON_BROWSER_REGISTRATION?: string;
   COMMON_OWNER_TASKS?: string;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;

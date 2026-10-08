@@ -114,7 +114,7 @@ describe('OpenAIResponsesAdapter', () => {
     expect(sent.input).toEqual([{
       role: 'user',
       content: [
-        { type: 'input_text', text: 'user: Say hello.' },
+        { type: 'input_text', text: 'Say hello.' },
         { type: 'input_image', image_url: 'data:image/jpeg;base64,AAAA', detail: 'auto' },
         { type: 'input_file', filename: 'plan.pdf', file_data: 'data:application/pdf;base64,BBBB' },
       ],
@@ -139,7 +139,7 @@ describe('OpenAIResponsesAdapter', () => {
     });
     expect(sent.tools).toEqual([{ type: 'function', name: 'get_context', description: 'Current time', parameters, strict: false }]);
     expect(sent.input).toEqual([
-      { role: 'user', content: [{ type: 'input_text', text: 'user: Say hello.' }] },
+      { role: 'user', content: 'Say hello.' },
       { type: 'function_call', ...call },
       { type: 'function_call_output', call_id: 'c1', output: '{"now":"13:50"}' },
     ]);
@@ -251,5 +251,23 @@ describe('OpenAIResponsesAdapter reasoning passback', () => {
     await adapter.complete(plain);
     const plainItems = (bodies[1]!.input as Array<Record<string, unknown>>).slice(1);
     expect(plainItems[0]).toMatchObject({ type: 'function_call', call_id: 'c2' });
+  });
+
+  // PR 1 item 3: history keeps real roles; a flattened "user: ..." blob made "that one" unresolvable.
+  it('sends real multi-turn roles instead of one flattened text', async () => {
+    let captured: any;
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'synthetic-key', client: client(async (body: unknown) => { captured = body; return { id: 'r', status: 'completed', output_text: 'ok', output: [], usage: { input_tokens: 1, output_tokens: 1 } }; }) });
+    const gateway = gatewayRequest();
+    (gateway.request as any).messages = [
+      { role: 'user', content: 'Show me two flights' },
+      { role: 'assistant', content: 'A at 9, B at 11' },
+      { role: 'user', content: 'that one' },
+    ];
+    await adapter.complete(gateway);
+    expect(captured.input).toEqual([
+      { role: 'user', content: 'Show me two flights' },
+      { role: 'assistant', content: 'A at 9, B at 11' },
+      { role: 'user', content: 'that one' },
+    ]);
   });
 });

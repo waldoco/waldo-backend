@@ -224,6 +224,8 @@ export type RuntimeLLMFailure = {
     destination: SanitiseDestination;
     reason: SanitiseFailureReason;
   };
+  // Typed marker: the system prompt itself failed the scribe. It is never cut or dropped.
+  code_detail?: 'system_prompt_rejected';
   halted_by?: string;
   effect_receipt?: TrustedProviderEffectReceipt;
 };
@@ -1158,6 +1160,7 @@ function failFromHook(
   };
   if (scribeDestination !== undefined && scribeReason?.success === true) {
     failure.scribe = { destination: scribeDestination, reason: scribeReason.data };
+    if (scribeDestination === 'system_prompt') failure.code_detail = 'system_prompt_rejected';
   }
   return failure;
 }
@@ -1311,7 +1314,6 @@ const SCRIBE_HARD_REASONS: ReadonlySet<string> = new Set([
   'canary_leak',
   'secret_leak',
   'health_value_leak',
-  'untrusted_instruction',
 ]);
 
 async function sanitiseRequest(
@@ -1402,7 +1404,8 @@ async function sanitiseRequest(
     request.system === undefined
       ? undefined
       : await sanitiseValue(request.system, 'system_prompt');
-  if (system !== undefined && !system.ok && softScribe(system.error)) system = undefined;
+  // A system prompt that fails the scribe is a real, typed failure (destination system_prompt + reason). It is never
+  // cut and never dropped: the composer is responsible for fitting the prompt inside the window-sized cap.
   if (system !== undefined && !system.ok) {
     return { ...system, scribeDestination: 'system_prompt' };
   }
@@ -1413,10 +1416,12 @@ async function sanitiseRequest(
     };
   }
   let messages = await sanitiseValue(request.messages, 'internal_context');
-  if (!messages.ok && softScribe(messages.error) && request.messages.length > 1) {
-    // Degrade to the current message only; earlier history is the usual false-positive carrier.
-    const reduced = await sanitiseValue([request.messages[request.messages.length - 1]], 'internal_context');
+  // Oldest-first trim (PR 1 item 2): drop one oldest message at a time until the history passes, so recent
+  // context survives; collapsing straight to the last message made "that one" and "yes" meaningless.
+  for (let drop = 1; !messages.ok && softScribe(messages.error) && drop < request.messages.length; drop++) {
+    const reduced = await sanitiseValue(request.messages.slice(drop), 'internal_context');
     if (reduced.ok) messages = reduced;
+    else if (!softScribe(reduced.error)) break;
   }
   if (!messages.ok) return { ...messages, scribeDestination: 'internal_context' };
   if (!Array.isArray(messages.payload)) {

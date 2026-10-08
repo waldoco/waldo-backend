@@ -2,7 +2,6 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { OpenAIResponsesAdapter } from '../src/llm/openai';
-import { admittedOwnerHost } from './fixtures/admitted-owner-host';
 const seen=vi.hoisted(()=>({sends:[] as unknown[],pause:false,entered:undefined as undefined|(()=>void),finish:undefined as undefined|((r:unknown)=>void)}));
 vi.mock('../src/channels/telegram-api',async(load)=>({...await load<typeof import('../src/channels/telegram-api')>(),createTelegramCaller:()=>async(method:string,body:unknown)=>{if(method==='sendMessage')seen.sends.push(body);return method==='sendMessage'?{message_id:seen.sends.length,chat:{id:42}}:true;}}));
 vi.mock('openai',()=>({default:class {responses={create:async(body:unknown)=>{
@@ -10,7 +9,7 @@ vi.mock('openai',()=>({default:class {responses={create:async(body:unknown)=>{
  if(seen.pause&&!name){seen.entered?.();return new Promise(r=>{seen.finish=r;});}
  return {id:'fixture',output_text:name==='task_source_scope'?'{"decision":"retain","sources":[]}':name==='claim_ops'?'{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}':name==='reaction'?'{"reaction":"👌"}':'fenced answer',output:[],usage:{input_tokens:1,output_tokens:1}};
 }};}}));
-const setup=async(name:string,work:(i:TelegramOwnerDO,s:DurableObjectState)=>Promise<void>,omitHost=false)=>runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)),async(_i,s)=>{await s.storage.put({telegram_subject:'42',do_name:name,origin:'https://fixture.invalid'});const host=admittedOwnerHost(name,'42',new OpenAIResponsesAdapter({apiKey:env.OPENAI_API_KEY}));const i=new TelegramOwnerDO(s,env,{mode:'canonical',host:omitHost?undefined:host});await work(i,s);});
+const setup=async(name:string,work:(i:TelegramOwnerDO,s:DurableObjectState)=>Promise<void>,omitHost=false)=>runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)),async(_i,s)=>{await s.storage.put({telegram_subject:'42',do_name:name,origin:'https://fixture.invalid'});const i=new TelegramOwnerDO(s,env);await work(i,s);});
 const admit=async(i:TelegramOwnerDO,s:DurableObjectState,id:number)=>{
  const {TelegramOwnerInbox}=await import('../src/channels/telegram-owner-inbox');const {persistInboxWake}=await import('../src/scheduler/alarm-slot');const inbox=new TelegramOwnerInbox(s.storage,persistInboxWake);
  await inbox.admit({bot:(env.TELEGRAM_BOT_TOKEN??'7:fixture').split(':')[0]!,subject:'42',doName:s.storage.kv.get<string>('do_name')!},id,JSON.stringify({update_id:id,message:{message_id:id,from:{id:42,is_bot:false},chat:{id:42,type:'private'},text:'hello'}}));return inbox;
@@ -20,8 +19,8 @@ it('actual DO commits success final and run closure atomically',async()=>{
   const inbox=await admit(i,s,1);await (i as unknown as {drainInbox():Promise<void>}).drainInbox();
   const row=(await inbox.records())[0]!;expect(row.state).toBe('awaiting_delivery');expect(row.closedAt).toBeTypeOf('number');
   const finals=s.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!;expect(finals).toHaveLength(1);expect(finals[0]?.inbox?.runId).toBe(row.runId);expect(finals[0]?.payload.text).toBe('fenced answer');
-  expect((await s.storage.list({prefix:'canonical-owner-v1:prn_10000000000000000000000000000042:ten_10000000000000000000000000000042:conv:'})).size).toBe(2);
-  expect(s.storage.kv.get('conv-leaf')).toBeUndefined();
+  expect((await s.storage.list({prefix:'canonical-owner-v1:prn_10000000000000000000000000000042:ten_10000000000000000000000000000042:conv:'})).size).toBe(0);
+  expect(s.storage.kv.get('conv-leaf')).toBe('tg-1-reply');
  });
 });
 it('actual DO stop closes before late completion and creates fixed host notice only',async()=>{

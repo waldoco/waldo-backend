@@ -225,7 +225,7 @@ it('recovers incomplete topic forgetting on an ordinary turn after restart by re
   expect(request()).toContain(KEEP); expect(request()).not.toContain(topic);
   const provider = seen.requests.at(-1) as { input: Array<{ type: string; call_id?: string; output?: string }> };
   const receipt = JSON.parse(provider.input.find(item => item.type === 'function_call_output' && item.call_id === 'fixture-recovered-context')!.output!);
-  expect(receipt).toMatchObject({ ok: true, source_taint: 'external', data: { complete: true, authority: 'context_only_not_action_approval', claims: [{ text: KEEP, origin: 'owner', source_ref: 'owner, tg-101' }] } });
+  expect(receipt).toMatchObject({ ok: true, data: { complete: true, authority: 'context_only_not_action_approval', claims: [{ text: KEEP, origin: 'owner', source_ref: 'owner, tg-101' }] } });
   expect(receipt.data.claims).toHaveLength(1);
   await runInDurableObject(stub('forget-request-distinct-owner'), (_instance, state) => {
     expect(claimStore(state.storage.sql).claims()).toEqual([]);
@@ -2890,7 +2890,7 @@ it('a search hit whose source row cannot be read back is dropped, not kept', asy
     const episodes = episodeIndex(state.storage.sql);
     const real = (await import('../src/tools/live/search-episodes')).searchEpisodesHandler(episodes);
     args[5] = [{ ...real, handle: async (input: { ref?: string }, ctx: never) => input.ref === undefined
-      ? { ok: true, data: { hits: [{ ref: '999', entry_id: 'ghost', speaker: 'owner', at: null, snippet: 'Synthetic [cobalt] paper workshop ghost' }, { ref: 'x', entry_id: 'noref' }] }, source_taint: 'external' }
+      ? { ok: true, data: { hits: [{ ref: '999', entry_id: 'ghost', speaker: 'owner', at: null, snippet: 'Synthetic [cobalt] paper workshop ghost' }, { ref: 'x', entry_id: 'noref' }] }, source_taint: null }
       : real.handle(input as never, ctx) } as never];
     const responder = createOwnerResponder(...args);
     const direct = (id: string, text: string) => responder.respond({ traceId: id, conversationRef: 'owner', surface: 'telegram', text, memoryWrites: false }, (_hop, work) => work());

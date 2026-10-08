@@ -394,6 +394,11 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
   },
 };
 
+// Tools with an owner-approval path: a call carrying external content is routed to a proposal
+// the owner approves, instead of being refused. Tools without one stay a hard block.
+const TAINT_APPROVAL_TOOLS: readonly ToolName[] = ['send_message', 'draft_document', 'write_task', 'update_task'];
+export const TAINT_NEEDS_APPROVAL_REASON = 'external-tainted privileged action needs owner approval; propose it for approval with propose_action';
+
 export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
   name: 'autonomy_gate_check',
   event: 'PreToolUse',
@@ -418,7 +423,11 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
     }
 
     if (taintGateBlocksDirectExecution(tool.data, sourceTaint.data)) {
-      return halt('external-tainted privileged action blocked', 'forbidden');
+      // Shadow log (7 days, then delete with the shadow code): old verdict was always a hard block.
+      console.warn(JSON.stringify({ hop: 'send_guard_shadow', ms: 0, ok: true, detail: JSON.stringify({ tool: tool.data, old: 'block', new: TAINT_APPROVAL_TOOLS.includes(tool.data) ? 'propose' : 'block', taint: sourceTaint.data }) }));
+      return TAINT_APPROVAL_TOOLS.includes(tool.data)
+        ? halt(TAINT_NEEDS_APPROVAL_REASON, 'forbidden')
+        : halt('external-tainted privileged action blocked', 'forbidden');
     }
 
     if (ctx.hasApproval === undefined) {
@@ -503,11 +512,9 @@ export const scribeSanitisePostLlmCallHook: HookHandler<HookRuntimeContext> = {
       return ok();
     }
 
-    // The response TEXT is owner-bound reply prose -> owner_reply destination (owner decision
-    // 2026-09-28, direction A completion). Tool calls are split out inside sanitiseHookPayload
-    // and run reject-only executable-args checks; every egress tool (send_message, draft_email,
-    // send_email, ...) then crosses its own pre-tool scribe pass at its own egress destination,
-    // so third-party sends stay fully blocked.
+    // The response TEXT is owner-bound reply prose -> owner_reply destination. Tool calls are
+    // split out inside sanitiseHookPayload and cross tool_arg_sanitise at PreToolUse at each
+    // tool's own destination, so third-party sends stay fully checked.
     return sanitiseHookPayload(payload, ctx, 'owner_reply');
   },
 };
@@ -545,7 +552,7 @@ export class HookHaltError extends Error {
     // invalid_args carries model-authored arg details the model needs to recover; every other
     // halt (acl, sanitise, ...) stays opaque so security reasons never reach the model. An egress denial
     // only says the address cannot be opened, so the model can pick another source instead of stalling.
-    this.clientMessage = code === 'invalid_args' ? reason : hook === 'egress_allowlist_check' ? 'That address cannot be opened. Try another source.' : 'hook halted';
+    this.clientMessage = code === 'invalid_args' ? reason : hook === 'egress_allowlist_check' ? 'That address cannot be opened. Try another source.' : reason === TAINT_NEEDS_APPROVAL_REASON ? 'This uses content from an email or web page, so it needs the owner\'s approval first. Propose it with propose_action instead of doing it directly.' : 'hook halted';
     this.onErrorPayload = {
       event: 'OnError',
       error: this.clientMessage,
@@ -758,20 +765,17 @@ async function sanitiseHookPayload(
     const sourceTaint = sourceTaintSchema.safeParse(ctx.sourceTaint);
     if (!sourceTaint.success) return halt('model output taint invalid', 'transient');
     // When the response carries tool_calls, split them out: text is owner-bound prose and
-    // keeps full redaction, while tool calls are executable and run reject-only - a redacted
-    // argument corrupts the call (an email recipient became [REDACTED_EMAIL] and the schema
-    // rejected it, 2026-09-25) while a hard deny (canary, ADR-0081 health value, injection)
-    // must still halt fail-closed. Any other response shape sanitises whole, as before.
+    // keeps full redaction, while tool calls are executable arguments (a redacted argument
+    // corrupts the call). Every dispatched tool crosses tool_arg_sanitise at PreToolUse at
+    // its own destination, including subagent children, so the per-call check is not repeated
+    // here. Canary detection on the whole response stays with canary_leak_check. Any other
+    // response shape sanitises whole, as before.
     const response = payload.response;
     if (response !== null && typeof response === 'object' && !Array.isArray(response)
         && Array.isArray((response as { tool_calls?: unknown }).tool_calls)) {
       const { tool_calls: toolCalls, ...textResponse } = response as { tool_calls: unknown[] } & Record<string, unknown>;
       const sanitized = await sanitiseCandidate(textResponse, ctx, destination, sourceTaint.data);
       if (!sanitized.ok) return sanitized.result;
-      for (const call of toolCalls) {
-        const checked = await checkExecutableArgs(call, ctx, destination, sourceTaint.data);
-        if (!checked.ok) return checked;
-      }
       return { ok: true, payload: { ...payload, response: { ...(sanitized.payload as Record<string, unknown>), tool_calls: toolCalls } } };
     }
     const sanitized = await sanitiseCandidate(response, ctx, destination, sourceTaint.data);

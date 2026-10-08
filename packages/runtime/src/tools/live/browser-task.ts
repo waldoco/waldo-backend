@@ -34,7 +34,7 @@ export function browserTaskHandler(options: Readonly<{
           const result = await host.command(owner, command);
           if (result.held && !result.reason) unpublishedNativeHost = host;
           await source!();
-          if (!result.held) return { ok: true, data: { url: result.snapshot.url, text: result.snapshot.text, elements: result.snapshot.elements }, source_taint: 'external' };
+          if (!result.held) return { ok: true, data: { url: result.snapshot.url, text: result.snapshot.text, elements: result.snapshot.elements, ...(result.actionSessionHandle ? {browser_action_session_handle:result.actionSessionHandle} : {}) }, source_taint: 'external' };
           if (result.reason) return rejected(result.reason === 'page_write_blocked' ? 'page_write_blocked: An unapproved page write was blocked. No approval card was created.' : 'declared_send_unsupported: Held without acting. This send is outside the controlled form submission, so no approval card was created.');
           commandProposal = result.proposal;
         }
@@ -43,7 +43,7 @@ export function browserTaskHandler(options: Readonly<{
           await source!();
           return { ok: true, data: { ...snapshot, field_refs: Object.keys(snapshot.binding) }, source_taint: 'external' };
         }
-        if (command.operation === 'fill') { const data = await host.fill(owner, command.field_ref, command.value); await source!(); return { ok: true, data, source_taint: 'external' }; }
+        if (command.operation === 'fill') { const {actionSessionHandle,...data} = await host.fill(owner, command.field_ref, command.value); await source!(); return { ok: true, data:{...data,browser_action_session_handle:actionSessionHandle}, source_taint: 'external' }; }
         if (command.operation === 'cancel') {
           if (!options.stopAdmission) return rejected('Browser stop admission is not configured.');
           await options.stopAdmission(context, host);

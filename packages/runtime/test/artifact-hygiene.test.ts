@@ -6,7 +6,7 @@ const ARTIFACTS: ReadonlyArray<{ text: string; kinds: string[]; stolen: string }
   { text: 'Your Google verification code is 123456', kinds: ['otp'], stolen: '123456' },
   { text: 'G-729314 is your Google verification code.', kinds: ['otp'], stolen: '729314' },
   { text: '123456 is your Google verification code', kinds: ['otp'], stolen: '123456' },
-  { text: 'Your WhatsApp code: 123-456', kinds: ['otp'], stolen: '123-456' },
+  { text: 'Your WhatsApp passcode: 123-456', kinds: ['otp'], stolen: '123-456' },
   { text: '123-456 is your WhatsApp code. You can also tap this link: wa.me/verify', kinds: ['otp'], stolen: '123-456' },
   { text: 'Your login code is 847291. It expires in 10 minutes.', kinds: ['otp'], stolen: '847291' },
   { text: 'Security code: 003311. Do not share this with anyone.', kinds: ['otp'], stolen: '003311' },
@@ -63,9 +63,9 @@ describe('artifact hygiene quarantine', () => {
 
   it('onlyArtifacts: a message that is nothing but the artifact reads as fully quarantined', () => {
     expect(onlyArtifacts(quarantineArtifacts('G-729314'))).toBe(true);
-    expect(onlyArtifacts(quarantineArtifacts('code: 123456'))).toBe(true);
+    expect(onlyArtifacts(quarantineArtifacts('otp: 123456'))).toBe(true);
     expect(onlyArtifacts(quarantineArtifacts('hello world'))).toBe(false);
-    expect(onlyArtifacts(quarantineArtifacts('my code is 123456, also lunch?'))).toBe(false);
+    expect(onlyArtifacts(quarantineArtifacts('my otp is 123456, also lunch?'))).toBe(false);
   });
 
   it('multi-line forwarded mail with the code on the second line is still caught', () => {
@@ -78,7 +78,7 @@ describe('artifact hygiene quarantine', () => {
 
 describe('extractArtifacts (owner-ruled OTP parity)', () => {
   it('captures the bare code from the surrounding phrase, deduped by value', () => {
-    const { text, artifacts } = extractArtifacts('Your login code is 123456. Again: your code is 123456.');
+    const { text, artifacts } = extractArtifacts('Your login code is 123456. Again: your otp is 123456.');
     expect(artifacts).toEqual([{ kind: 'otp', value: '123456' }]);
     expect(text).not.toContain('123456');
     expect(text).toContain('[quarantined: otp artifact');

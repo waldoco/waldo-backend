@@ -48,6 +48,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - A refusal precedes any one-use consumption: validate first, then spend the invite, token or code. An error branch re-rendering a form puts the error in the note, never in a data field.
 
 ### Idempotency and retries
+- Multi-part channel finals commit attempting evidence before every physical part, persist ACKs outside transport catches, and quarantine uncertain restart state without resending acknowledged or ambiguous parts. Cover first/final ACK persistence faults and middle-part response loss in a three-part final.
 - Sign-in retries retain escaped email/contact/invite details only in form responses, never OTP values in restored pages or storage. Test send refusals, edit-before-resend, repeated submits, history restoration and explicit stop-waiting recovery; interrupted requests may already have completed.
 - Every webhook, callback, scheduled fire and migration can run twice without a second effect. Store the offset or the key before or atomically with the effect.
 - Every button press is safe when pressed twice or late ("Already handled", "expired").
@@ -567,3 +568,15 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] Common execution deadlines contribute persisted due time to the sole alarm arbiter; a scheduler rearm with no rows or a later wake must preserve the common deadline. Regression: scheduler-alarm.test.ts persisted common execution deadline; RED without its arbiter contribution.
 
 | 2026-10-07 | Exhaustive PR897 guard run found duplicated model IDs, two direct alarm calls, released v0.3 union mutation/new file misclassified as released v0.4; shared scheduler rearm could erase common execution wake; local pgTAP inherited IST | Repository contracts / Alarm lifetime / Released protocol bytes | Canonical WALDO_CHAT_MODEL reference; original released bytes restored and common extension composed separately; scheduler-alarm.test.ts deadline-preservation RED->GREEN; full guards and pgTAP466/466; test cluster explicitlyUTC | Guard breadth before push. One physical alarm arbiter, persisted common deadline, pinned released protocol bytes, deterministic local test timezone. No guard bypass or golden fingerprint change |
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Multi-part ACK persistence errors were caught as transport errors and could resolve without surfacing the storage fault | heartbeat-outbox.test.ts crash persistence; cap-size-limits.test.ts three-part ACK failure and middle-part response loss | Persist attempting before every part, propagate storage faults, quarantine uncertainty without resend |
+
+- Health span withholding must leave JSON-encoded object/array correlation intact for the existing health denial scan; cover raw and wrapped JSON strings as well as unencoded structured measurements.
+
+### Common host bootstrap independence
+
+- [ ] Exercise signed common-owner source/execution RPCs with the serving binding profile, without local-only or unused legacy provider bindings. Keep local ingress and legacy provider guards closed, and preserve common lease wakes when persisted legacy work fails.
+
+| 2026-10-08 | Eager legacy RunLoop provider resolution prevented signed common-owner RPCs from constructing when staging had no WALDO_ENV | Runtime composition / serving binding profile | common-run-loop-bootstrap.test.ts reproduces exact constructor error, then source replay and execution receipt settlement across eviction; invalid authority/local seams and legacy dispatch controls | Shared coordinator/scheduler construction must not initialize an unrelated provider; legacy resolver guards remain unchanged |

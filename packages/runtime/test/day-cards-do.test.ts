@@ -110,23 +110,23 @@ describe('day-plan memory budget', () => {
   const add = (store: ReturnType<typeof claimStore>, text: string, evidence = text) =>
     store.add({ kind: 'routine', text, source: 'stated', evidence, origin: 'owner', source_ref: 'owner, synthetic-day-plan' }, '2026-10-04T00:00:00Z');
 
-  it('keeps 220 facts within the provider wire budget and counts omitted facts exactly', async () => {
-    await withMemory('day-plan-220', (store) => {
-      for (let i = 0; i < 220; i++) add(store, `Routine ${i}: ${'synthetic detail '.repeat(20)}`);
+  it('keeps 2500 facts within the provider wire budget and counts omitted facts exactly', async () => {
+    await withMemory('day-plan-2500', (store) => {
+      for (let i = 0; i < 2_500; i++) add(store, `Routine ${i}: ${'synthetic detail '.repeat(20)}`);
       const content = composeDayPlanInput(input, store);
       expect(wireSize(content)).toBeLessThanOrEqual(limit);
       expect(sanitise({ payload: [{ role: 'user', content }], destination: 'internal_context', source_taint: null, canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'], max_chars_override: limit }).ok).toBe(true);
       expect(content.endsWith(input)).toBe(true);
-      expect(content).toContain('Routine 219:');
+      expect(content).toContain('Routine 2499:');
       const shown = content.split('\n').filter(line => line.startsWith('- [owner-grounded]')).length;
-      expect(content).toContain(`(${220 - shown} older owner facts are not shown here;`);
+      expect(content).toContain(`(${2_500 - shown} older owner facts are not shown here;`);
       expect(content).not.toContain('Routine 0:');
     });
   });
 
   it('includes JSON escaping and message framing in the available room', async () => {
     await withMemory('day-plan-escaping', (store) => {
-      for (let i = 0; i < 220; i++) add(store, `Quoted ${i}: ${'"\\\n'.repeat(80)}`);
+      for (let i = 0; i < 2_500; i++) add(store, `Quoted ${i}: ${'"\\\n'.repeat(80)}`);
       const content = composeDayPlanInput(input, store);
       expect(wireSize(content)).toBeLessThanOrEqual(limit);
       expect(content).toContain('older owner facts are not shown here');

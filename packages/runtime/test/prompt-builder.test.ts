@@ -493,7 +493,7 @@ describe('createRuntimePromptBuilder', () => {
     expect(renderedCanvases[2]).toContain('Attempt 3 selected fence.');
   });
 
-  it('relies on the existing provider Scribe gate for a block-scored canvas value', async () => {
+  it('admits a hostile-sounding canvas value; keywords no longer block (A-3)', async () => {
     let gatewayCalls = 0;
     const builder = createRuntimePromptBuilder({
       loadForTrigger: async () => ({ selected: [], excluded: [] }),
@@ -530,11 +530,7 @@ describe('createRuntimePromptBuilder', () => {
       hookContext(),
     );
 
-    expect(result).toMatchObject({
-      ok: false,
-      reason: 'hook_halt',
-      scribe: { destination: 'system_prompt', reason: 'untrusted_instruction' },
-    });
-    expect(gatewayCalls).toBe(0);
+    expect(result).toMatchObject({ ok: true });
+    expect(gatewayCalls).toBe(1);
   });
 });

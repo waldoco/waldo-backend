@@ -16,6 +16,9 @@ export type ReplyContext = Readonly<{
   text: string;
   truncated: boolean;
   sourceTaint: 'external';
+  // Transport-observed provenance, shown to the model as context. 'owner' and 'waldo' are set only for a
+  // non-forwarded reply whose Telegram sender is the owner or the bot; anything else is 'other'.
+  provenance?: Readonly<{ author: 'owner' | 'waldo' | 'other'; forwarded: boolean }>;
 }>;
 export const REPLY_QUOTE_LIMIT = 2048;
 

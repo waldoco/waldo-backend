@@ -36,6 +36,11 @@ export const sanitiseDestinationPolicySchema = z.strictObject({
 });
 export type SanitiseDestinationPolicy = z.infer<typeof sanitiseDestinationPolicySchema>;
 
+// The one size the model's own context (system prompt and conversation window) may reach. It is
+// sized by the window budget: 400k chars at 4 chars/token is the 100k-token conversation window
+// (runtime conversation/window.ts derives its token ceiling from this constant).
+export const MODEL_CONTEXT_MAX_CHARS = 400_000;
+
 export const SANITISE_DESTINATION_POLICIES = {
   memory_block: {
     payload_kind: 'text_or_structured',
@@ -47,7 +52,7 @@ export const SANITISE_DESTINATION_POLICIES = {
   },
   system_prompt: {
     payload_kind: 'text_or_structured',
-    max_chars: 32_768,
+    max_chars: MODEL_CONTEXT_MAX_CHARS,
     max_depth: 4,
     max_object_fields: 9,
     max_array_items: 16,
@@ -55,10 +60,10 @@ export const SANITISE_DESTINATION_POLICIES = {
   },
   internal_context: {
     payload_kind: 'structured',
-    max_chars: 32_768,
+    max_chars: MODEL_CONTEXT_MAX_CHARS,
     max_depth: 16,
-    max_object_fields: 64,
-    max_array_items: 128,
+    max_object_fields: 256,
+    max_array_items: 1_024,
     max_key_chars: 128,
   },
   draft_document: {
@@ -85,13 +90,13 @@ export const SANITISE_DESTINATION_POLICIES = {
     max_array_items: 16,
     max_key_chars: 128,
   },
-  // Owner-bound reply text (ADR-0024 amendment, owner decision 2026-09-28, direction A
-  // completion): identical caps to send_message; the behavioural difference lives in the
-  // runtime health free-text gate, which treats null-taint owner/model conversation as
-  // conversation here, exactly as at internal_context/system_prompt.
+  // Owner-bound reply text (ADR-0024): room for a long-form reply; the channel adapter
+  // splits it into what each surface can carry. The behavioural difference from send_message
+  // lives in the runtime health free-text gate, which treats null-taint owner/model
+  // conversation as conversation here, exactly as at internal_context/system_prompt.
   owner_reply: {
     payload_kind: 'text_or_structured',
-    max_chars: 4_096,
+    max_chars: 32_768,
     max_depth: 4,
     max_object_fields: 8,
     max_array_items: 16,
@@ -155,7 +160,6 @@ export const sanitiseFailureReasonSchema = z.enum([
   'secret_leak',
   'health_value_leak',
   'oversize',
-  'untrusted_instruction',
   'invalid_payload',
 ]);
 export type SanitiseFailureReason = z.infer<typeof sanitiseFailureReasonSchema>;
@@ -182,6 +186,7 @@ export const redactionKindSchema = z.enum([
   'address',
   'credit_card',
   'instruction_pattern',
+  'health_value',
 ]);
 export type RedactionKind = z.infer<typeof redactionKindSchema>;
 
@@ -367,201 +372,10 @@ export const PII_PATTERNS = {
   ipv6: /(?<![0-9a-f:])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:|(?:[0-9a-f]{1,4}:){1,6}:[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,5}(?::[0-9a-f]{1,4}){1,2}|(?:[0-9a-f]{1,4}:){1,4}(?::[0-9a-f]{1,4}){1,3}|(?:[0-9a-f]{1,4}:){1,3}(?::[0-9a-f]{1,4}){1,4}|(?:[0-9a-f]{1,4}:){1,2}(?::[0-9a-f]{1,4}){1,5}|[0-9a-f]{1,4}:(?:(?::[0-9a-f]{1,4}){1,6})|:(?:(?::[0-9a-f]{1,4}){1,7}|:))(?![0-9a-f:])/gi,
 } as const;
 
-// Check 4 — memory and skill bodies are content, not instructions. The contract owns the
-// rule table so runtime scoring cannot drift from the shared vocabulary.
-export const injectionRuleIdSchema = z.enum([
-  'instruction_override',
-  'role_reassignment',
-  'privileged_action_bypass',
-  'role_boundary',
-  'role_tag',
-  'jailbreak_marker',
-  'protected_instruction_request',
-  'encoded_instruction_request',
-  'priority_displacement',
-  'constraint_evasion',
-]);
-export type InjectionRuleId = z.infer<typeof injectionRuleIdSchema>;
-
-export const injectionRuleCategorySchema = z.enum([
-  'override',
-  'exfiltrate',
-  'role',
-  'jailbreak',
-  'data',
-]);
-export type InjectionRuleCategory = z.infer<typeof injectionRuleCategorySchema>;
-
-export const injectionRuleSchema = z.strictObject({
-  id: injectionRuleIdSchema,
-  category: injectionRuleCategorySchema,
-  weight: z.number().min(0).max(1),
-  pattern: z.instanceof(RegExp),
-});
-export type InjectionRule = z.infer<typeof injectionRuleSchema>;
-
-const INJECTION_RULE_WEIGHTS = {
-  instruction_override: 0.45,
-  role_reassignment: 0.35,
-  privileged_action_bypass: 0.45,
-  role_boundary: 0.35,
-  role_tag: 0.55,
-  jailbreak_marker: 0.45,
-  protected_instruction_request: 0.55,
-  encoded_instruction_request: 0.55,
-  priority_displacement: 0.15,
-  constraint_evasion: 0.45,
-} as const;
-
-export const INJECTION_RULES = [
-  {
-    id: 'instruction_override',
-    category: 'override',
-    weight: INJECTION_RULE_WEIGHTS.instruction_override,
-    pattern:
-      /\b(?:ignore|disregard|override|bypass)\b(?:\s+(?:all|any|the|prior|previous|earlier|existing)){0,3}\s+\b(?:instructions?|directives?|rules?|constraints?|prompts?|messages?)\b/i,
-  },
-  {
-    id: 'role_reassignment',
-    category: 'role',
-    weight: INJECTION_RULE_WEIGHTS.role_reassignment,
-    pattern:
-      /\b(?:you\s+are\s+(?:now|actually)\s+(?!waldo\b)|act\s+as\s+(?:an?\s+)?(?:privileged|unrestricted|system|administrator|operator)|assume\s+(?:the\s+)?(?:privileged|unrestricted|system|administrator|operator)(?:\s+(?:operator|administrator))?\s+role)\b/i,
-  },
-  {
-    id: 'privileged_action_bypass',
-    category: 'override',
-    weight: INJECTION_RULE_WEIGHTS.privileged_action_bypass,
-    pattern:
-      /\b(?:send|execute|invoke|call)\b(?:\s+\w+){0,4}\s+\b(?:without|bypassing)\s+(?:approval|confirmation|guardrails?)\b/i,
-  },
-  {
-    id: 'role_boundary',
-    category: 'role',
-    weight: INJECTION_RULE_WEIGHTS.role_boundary,
-    pattern: /\b(?:system|assistant)(?:\s*:\s*|\s+)|\b(?:developer|user)\s*:/i,
-  },
-  {
-    id: 'role_tag',
-    category: 'role',
-    weight: INJECTION_RULE_WEIGHTS.role_tag,
-    pattern: /<\s*\/?(?:system|assistant|developer|user)\s*>/i,
-  },
-  {
-    id: 'jailbreak_marker',
-    category: 'jailbreak',
-    weight: INJECTION_RULE_WEIGHTS.jailbreak_marker,
-    pattern:
-      /\b(?:jailbreak|dan|grandma|developer\s+mode|unrestricted\s+mode|do\s+anything\s+now)\b/i,
-  },
-  {
-    id: 'protected_instruction_request',
-    category: 'exfiltrate',
-    weight: INJECTION_RULE_WEIGHTS.protected_instruction_request,
-    pattern:
-      /\b(?:reveal|expose|print|dump|return)\b(?:\s+\w+){0,3}\s+\b(?:system\s+prompt|hidden\s+(?:rules?|instructions?)|internal\s+(?:rules?|instructions?))\b/i,
-  },
-  {
-    id: 'encoded_instruction_request',
-    category: 'data',
-    weight: INJECTION_RULE_WEIGHTS.encoded_instruction_request,
-    pattern:
-      /\b(?:decode|translate|expand)\b(?:\s+\w+){0,3}\s+\b(?:the\s+)?(?:encoded|hidden)\s+(?:instructions?|directives?)\b/i,
-  },
-  {
-    id: 'priority_displacement',
-    category: 'override',
-    weight: INJECTION_RULE_WEIGHTS.priority_displacement,
-    pattern: /\b(?:new|higher|top)\s+(?:instructions?|priority|directive)\b/i,
-  },
-  {
-    id: 'constraint_evasion',
-    category: 'override',
-    weight: INJECTION_RULE_WEIGHTS.constraint_evasion,
-    pattern:
-      /\b(?:do\s+not|don't)\s+(?:follow|obey)\b(?:\s+\w+){0,3}\s+\b(?:rules?|constraints?|guardrails?)\b/i,
-  },
-] as const satisfies readonly InjectionRule[];
-
-export const injectionGuardThresholdsSchema = z
-  .strictObject({
-    review: z.number().positive().max(1),
-    block: z.number().positive().max(1),
-  })
-  .refine((thresholds) => thresholds.block > thresholds.review, {
-    error: 'block threshold must exceed review threshold',
-    path: ['block'],
-  });
-export type InjectionGuardThresholds = z.infer<typeof injectionGuardThresholdsSchema>;
-
-export const INJECTION_GUARD_THRESHOLDS = {
-  review: 0.15,
-  block: 0.7,
-} as const satisfies InjectionGuardThresholds;
-
-export const guardDecisionSchema = z.enum(['allow', 'review', 'block']);
-export type GuardDecision = z.infer<typeof guardDecisionSchema>;
-
-export const injectionRuleMatchSchema = z.strictObject({
-  id: injectionRuleIdSchema,
-  weight: z.number().min(0).max(1),
-});
-export type InjectionRuleMatch = z.infer<typeof injectionRuleMatchSchema>;
-
-export const guardVerdictSchema = z
-  .strictObject({
-    decision: guardDecisionSchema,
-    score: z.number().nonnegative(),
-    matches: z.array(injectionRuleMatchSchema).max(INJECTION_RULES.length),
-    matchCount: z.int().nonnegative().max(INJECTION_RULES.length),
-  })
-  .superRefine((verdict, ctx) => {
-    if (verdict.matchCount !== verdict.matches.length) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'matchCount must equal matches length',
-        path: ['matchCount'],
-      });
-    }
-    if (verdict.score !== verdict.matches.reduce((total, match) => total + match.weight, 0)) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'score must equal the sum of match weights',
-        path: ['score'],
-      });
-    }
-    if (new Set(verdict.matches.map((match) => match.id)).size !== verdict.matches.length) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'matches must not repeat a rule id',
-        path: ['matches'],
-      });
-    }
-    for (const match of verdict.matches) {
-      const rule = INJECTION_RULES.find((candidate) => candidate.id === match.id);
-      if (rule?.weight !== match.weight) {
-        ctx.addIssue({
-          code: 'custom',
-          message: 'match weight must equal the canonical rule weight',
-          path: ['matches'],
-        });
-      }
-    }
-    const expected =
-      verdict.score >= INJECTION_GUARD_THRESHOLDS.block
-        ? 'block'
-        : verdict.score >= INJECTION_GUARD_THRESHOLDS.review
-          ? 'review'
-          : 'allow';
-    if (verdict.decision !== expected) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'decision must match the weighted thresholds',
-        path: ['decision'],
-      });
-    }
-  });
-export type GuardVerdict = z.infer<typeof guardVerdictSchema>;
+// Check 4 - external content cannot forge a conversation role. There is no keyword scoring:
+// the defence against injected text is structural (fences, taint -> approval, egress checks).
+// The only rule left neutralises role tags so external text cannot open a system/user turn.
+export const ROLE_TAG_PATTERN = /<\s*\/?\s*(?:system|assistant|developer|user)\s*>/gi;
 
 // ADR-0024's 2 KB memory-block cap in UTF-16 units — the single owner both the sanitiser
 // table below and memoryContentSchema (hall.ts) derive from, so the schema seam and the

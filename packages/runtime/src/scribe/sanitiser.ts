@@ -1,18 +1,16 @@
 import { validId } from '@waldo/workspace';
 import {
   DERIVED_SCORE_PATTERNS,
+  MODEL_CONTEXT_MAX_CHARS,
   derivedHealthDestinationViewSchema,
-  INJECTION_GUARD_THRESHOLDS,
-  INJECTION_RULES,
   PII_PATTERNS,
   RAW_SENSOR_PATTERNS,
+  ROLE_TAG_PATTERN,
   SANITISE_DESTINATION_POLICIES,
   TRUNCATION_MARKER,
   sanitiseInputSchema,
   type Redaction,
   type RedactionKind,
-  type GuardVerdict,
-  type InjectionRuleId,
   type SanitiseCheck,
   type SanitiseDestination,
   type SanitiseDestinationPolicy,
@@ -40,7 +38,8 @@ interface TransformResult {
 
 const MAX_PREFLIGHT_DEPTH = 128;
 const MAX_PREFLIGHT_NODES = 20_000;
-const MAX_PREFLIGHT_STRING_CHARS = 262_144;
+// One string may be as long as the model's own context allows; the destination policy then enforces its own cap.
+const MAX_PREFLIGHT_STRING_CHARS = MODEL_CONTEXT_MAX_CHARS;
 const MAX_DECODE_PASSES = 2;
 const REDACTION_ORDER: readonly RedactionKind[] = [
   'email',
@@ -113,31 +112,6 @@ function matches(pattern: RegExp, text: string): boolean {
   return cloneRegex(pattern).test(text);
 }
 
-function verdictForMatches(matches: GuardVerdict['matches']): GuardVerdict {
-  const score = matches.reduce((total, match) => total + match.weight, 0);
-  return {
-    decision:
-      score >= INJECTION_GUARD_THRESHOLDS.block
-        ? 'block'
-        : score >= INJECTION_GUARD_THRESHOLDS.review
-          ? 'review'
-          : 'allow',
-    score,
-    matches,
-    matchCount: matches.length,
-  };
-}
-
-function matchingInjectionRules(input: string) {
-  return INJECTION_RULES.filter((rule) => matches(rule.pattern, input));
-}
-
-export function scoreInjection(input: string): GuardVerdict {
-  return verdictForMatches(
-    matchingInjectionRules(input).map((rule) => ({ id: rule.id, weight: rule.weight })),
-  );
-}
-
 function compactKey(key: string): string {
   return key.replace(/[^a-z0-9]/gi, '').toLowerCase();
 }
@@ -149,7 +123,9 @@ function isNumeric(value: unknown): boolean {
   );
 }
 
-function prepareInput(raw: SanitiseInput): PreparedInput | undefined {
+type PreparationFailure = { reason: 'oversize' };
+
+function prepareInput(raw: SanitiseInput): PreparedInput | PreparationFailure | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
 
   const payload = (raw as { payload?: unknown }).payload;
@@ -166,7 +142,7 @@ function prepareInput(raw: SanitiseInput): PreparedInput | undefined {
     const value = current.value;
     if (value === null || typeof value === 'boolean') continue;
     if (typeof value === 'string') {
-      if (value.length > MAX_PREFLIGHT_STRING_CHARS) return undefined;
+      if (value.length > MAX_PREFLIGHT_STRING_CHARS) return { reason: 'oversize' };
       continue;
     }
     if (typeof value === 'number') {
@@ -187,7 +163,7 @@ function prepareInput(raw: SanitiseInput): PreparedInput | undefined {
     const descriptors = Object.getOwnPropertyDescriptors(value);
     for (const [key, descriptor] of Object.entries(descriptors)) {
       if (descriptor.get !== undefined || descriptor.set !== undefined) return undefined;
-      if (key.length > MAX_PREFLIGHT_STRING_CHARS) return undefined;
+      if (key.length > MAX_PREFLIGHT_STRING_CHARS) return { reason: 'oversize' };
       pending.push({ value: descriptor.value, depth: current.depth + 1 });
     }
   }
@@ -628,7 +604,7 @@ function containsForbiddenHealth(
           return false;
         }
         const prepared = prepareInput({ ...input, payload } as SanitiseInput);
-        if (prepared === undefined) {
+        if (prepared === undefined || 'reason' in prepared) {
           nestedInvalid = true;
           return false;
         }
@@ -642,6 +618,34 @@ function containsForbiddenHealth(
     true,
   );
   return { invalid: visited.invalid || nestedInvalid, matched: visited.matched };
+}
+
+const HEALTH_SPAN_MARKER = '[health value withheld]';
+
+// ADR-0081 free-text scan on external content headed to the model (internal_context): the span
+// is withheld and the read continues. Every other destination still denies in containsForbiddenHealth.
+function redactExternalHealthSpans(
+  payload: JsonValue,
+  redactions: Redaction[],
+): { invalid: boolean; payload: JsonValue; redactions: Redaction[] } {
+  const counts = new Map<RedactionKind, number>();
+  const patterns = [...RAW_SENSOR_PATTERNS, ...DERIVED_SCORE_PATTERNS, ...HEALTH_FREE_TEXT];
+  const transformed = transformJsonStrings(payload, (text) => {
+    // JSON-encoded structured health still belongs to the correlation check below.
+    // Rewriting its tokens first could destroy the structure and hide the measurement.
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (typeof parsed === 'object' && parsed !== null) return text;
+    } catch { /* Ordinary free text is scanned for spans. */ }
+    return patterns.reduce((output, pattern) => replaceAndCount(output, pattern, HEALTH_SPAN_MARKER, 'health_value', counts), text);
+  });
+  if (transformed.invalid) return { invalid: true, payload, redactions };
+  const count = counts.get('health_value') ?? 0;
+  return {
+    invalid: false,
+    payload: transformed.payload,
+    redactions: count === 0 ? redactions : [...redactions, { kind: 'health_value', count }],
+  };
 }
 
 function increment(counts: Map<RedactionKind, number>, kind: RedactionKind, count = 1): void {
@@ -851,12 +855,14 @@ function redactPii(
     if (MODEL_AND_OWNER_DESTINATIONS.has(destination) && (key === 'output' || key === 'arguments')) {
       let parsed: JsonValue | undefined;
       try { parsed = JSON.parse(text); } catch { /* Plain output keeps free-text redaction. */ }
-      if (parsed !== null && typeof parsed === 'object'
-          && prepareInput({ payload: parsed, destination, source_taint: taint, canary_tokens: canaryTokens })) {
-        const structured = transformJsonStrings(parsed, (value, field) => redactPiiText(value, field, destination, taint, counts));
-        if (!structured.invalid) {
-          const rewritten = JSON.stringify(structured.payload);
-          return rewritten === JSON.stringify(parsed) ? text : rewritten;
+      if (parsed !== null && typeof parsed === 'object') {
+        const prepared = prepareInput({ payload: parsed, destination, source_taint: taint, canary_tokens: canaryTokens });
+        if (prepared !== undefined && !('reason' in prepared)) {
+          const structured = transformJsonStrings(parsed, (value, field) => redactPiiText(value, field, destination, taint, counts));
+          if (!structured.invalid) {
+            const rewritten = JSON.stringify(structured.payload);
+            return rewritten === JSON.stringify(parsed) ? text : rewritten;
+          }
         }
       }
     }
@@ -871,51 +877,29 @@ function redactPii(
   };
 }
 
+// Only external-tainted text is inspected. Owner, Waldo and history text (null taint) is never
+// scored or rewritten at any destination. External text is never denied for what it says; its
+// role tags are escaped so it cannot open a system/user turn. Fence closers are handled by the
+// composer's source admission.
+const inspectsInstructions = (input: Readonly<{ source_taint: unknown }>): boolean =>
+  input.source_taint === 'external';
+
 function inspectInstructions(
   payload: JsonValue,
-  destination: SanitiseDestination,
   redactions: Redaction[],
 ): SanitiseResult | { payload: JsonValue; redactions: Redaction[] } {
-  const matched = new Map<InjectionRuleId, GuardVerdict['matches'][number]>();
-  const scanned = visitStrings(payload, destination, (text) => {
-    for (const match of scoreInjection(text).matches) matched.set(match.id, match);
-    return false;
-  });
-  if (scanned.invalid) return deny('size_cap', 'invalid_payload');
-  const verdict = verdictForMatches(
-    INJECTION_RULES.flatMap((rule) => {
-      const match = matched.get(rule.id);
-      return match === undefined ? [] : [match];
-    }),
-  );
-  if (verdict.decision === 'block') {
-    return deny('instruction_pattern', 'untrusted_instruction');
-  }
-  if (verdict.decision === 'allow') return { payload, redactions };
-
-  let instructionCount = 0;
-  const transformed = transformJsonStrings(payload, (text) => {
-    let output = text;
-    for (const rule of matchingInjectionRules(text)) {
-      const flags = rule.pattern.flags.includes('g') ? rule.pattern.flags : `${rule.pattern.flags}g`;
-      const global = new RegExp(rule.pattern.source, flags);
-      instructionCount += Array.from(text.matchAll(global)).length;
-      output = output.replace(global, '[REDACTED_INSTRUCTION]');
-    }
-    const decoded = decodedViews(output);
-    if (decoded.views.slice(1).some((view) => scoreInjection(view).decision !== 'allow')) {
-      instructionCount += 1;
-      return '[REDACTED_INSTRUCTION]';
-    }
-    return output;
-  });
+  let tagCount = 0;
+  const escapeTags = (text: string): string =>
+    text.replace(ROLE_TAG_PATTERN, (tag) => {
+      tagCount += 1;
+      return tag.replace('<', '&lt;').replace('>', '&gt;');
+    });
+  const transformed = transformJsonStrings(payload, escapeTags);
   if (transformed.invalid) return deny('size_cap', 'invalid_payload');
+  if (tagCount === 0) return { payload, redactions };
   return {
     payload: transformed.payload,
-    redactions: [
-      ...redactions,
-      { kind: 'instruction_pattern', count: Math.max(instructionCount, 1) },
-    ],
+    redactions: [...redactions, { kind: 'instruction_pattern', count: tagCount }],
   };
 }
 
@@ -1041,6 +1025,7 @@ function applyDestinationPolicy(
 export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
   if (!input) return deny('size_cap', 'invalid_payload');
+  if ('reason' in input) return deny('size_cap', input.reason);
 
   const secret = containsCanaryOrSecret(input.payload, input);
   if (secret === 'invalid_payload') return deny('size_cap', secret);
@@ -1054,7 +1039,7 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   const pii = redactPii(input.payload, 'memory_block', input.source_taint, input.canary_tokens);
   if (pii.invalid) return deny('size_cap', 'invalid_payload');
 
-  const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
+  const instructions = inspectsInstructions(input) ? inspectInstructions(pii.payload, pii.redactions) : { payload: pii.payload, redactions: pii.redactions };
   if ('ok' in instructions) return instructions;
   return {
     ok: true,
@@ -1070,10 +1055,11 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
 // 2026-09-27: the owner-readable seam passed an owner email at null taint (per owner direction),
 // the final pass re-redacted it at 'external', the assembled prompt no longer matched, and every
 // turn failed with sanitisation_failed until the fragment left the window. Deny-level guards stay:
-// canary/secret, health leak, injection block verdict, and destination policy all still fail closed.
+// canary/secret, health leak and destination policy all still fail closed.
 export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
   if (!input) return deny('size_cap', 'invalid_payload');
+  if ('reason' in input) return deny('size_cap', input.reason);
 
   const secret = containsCanaryOrSecret(input.payload, input);
   if (secret === 'invalid_payload') return deny('size_cap', secret);
@@ -1082,16 +1068,6 @@ export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
   const health = containsForbiddenHealth(input);
   if (health.invalid) return deny('size_cap', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
-
-  const matched = new Map<InjectionRuleId, GuardVerdict['matches'][number]>();
-  const scanned = visitStrings(input.payload, input.destination, (text) => {
-    for (const match of scoreInjection(text).matches) matched.set(match.id, match);
-    return false;
-  });
-  if (scanned.invalid) return deny('size_cap', 'invalid_payload');
-  if (verdictForMatches([...matched.values()]).decision === 'block') {
-    return deny('instruction_pattern', 'untrusted_instruction');
-  }
 
   return applyDestinationPolicy(input, input.payload, []);
 }
@@ -1099,19 +1075,30 @@ export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
 export function sanitise(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
   if (!input) return deny('size_cap', 'invalid_payload');
+  if ('reason' in input) return deny('size_cap', input.reason);
 
   const secret = containsCanaryOrSecret(input.payload, input);
   if (secret === 'invalid_payload') return deny('size_cap', secret);
   if (secret !== undefined) return deny('canary_token', secret);
 
-  const health = containsForbiddenHealth(input);
+  // External content to the model: withhold matched health spans, then the unchanged scan below
+  // still denies structured health correlation.
+  const withheld =
+    input.source_taint === 'external' && input.destination === 'internal_context'
+      ? redactExternalHealthSpans(input.payload, [])
+      : { invalid: false, payload: input.payload, redactions: [] as Redaction[] };
+  if (withheld.invalid) return deny('size_cap', 'invalid_payload');
+  const scanned = { ...input, payload: withheld.payload };
+
+  const health = containsForbiddenHealth(scanned);
   if (health.invalid) return deny('size_cap', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
 
-  const pii = redactPii(input.payload, input.destination, input.source_taint, input.canary_tokens);
+  const pii = redactPii(scanned.payload, input.destination, input.source_taint, input.canary_tokens);
   if (pii.invalid) return deny('size_cap', 'invalid_payload');
+  pii.redactions.unshift(...withheld.redactions);
 
-  const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
+  const instructions = inspectsInstructions(input) ? inspectInstructions(pii.payload, pii.redactions) : { payload: pii.payload, redactions: pii.redactions };
   if ('ok' in instructions) return instructions;
   return applyDestinationPolicy(input, instructions.payload, instructions.redactions);
 }

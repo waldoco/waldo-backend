@@ -1,7 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import { claimStore } from "../src/memory/claims";
-import { acceptTrustedInvocation, skillRowSchema, WALDO_CHAT_MODEL } from "@waldo/contracts";
+import { acceptTrustedInvocation, MODEL_CONTEXT_MAX_CHARS, skillRowSchema, WALDO_CHAT_MODEL } from "@waldo/contracts";
 import {
   localTrustedBriefScheduleInput,
   type LocalSystemSkillBinding,
@@ -343,20 +343,20 @@ it("an active skill plus a large owner profile keeps the final system prompt und
   const system = captured.systems[0]!;
   expect(system, "the skill procedure survives").toContain(marker);
   expect(system, "the newest owner facts survive").toContain("Owner fact 219:");
-  expect(system.length, "final wrapped system prompt stays under 32,768 chars or the sanitiser drops it whole").toBeLessThanOrEqual(32_768);
+  expect(system.length, "final wrapped system prompt stays under the window-sized cap or the sanitiser drops it whole").toBeLessThanOrEqual(MODEL_CONTEXT_MAX_CHARS);
 });
 
 it("recalled claims with very long evidence cannot push the system prompt over the sanitiser limit; omissions are stated", async () => {
   captured.systems = [];
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName("recall-long-evidence")), async (_i, state) => {
     const memory = claimStore(state.storage.sql);
-    for (let i = 0; i < 8; i++) memory.add({ kind: "fact", text: `hello greeting note ${i}`, source: "stated", evidence: `owner, tg-${i}: "${"x".repeat(6_000)}"`, origin: "owner", source_ref: `owner, tg-${i}` }, "2026-10-01T00:00:00.000Z");
+    for (let i = 0; i < 8; i++) memory.add({ kind: "fact", text: `hello greeting note ${i}`, source: "stated", evidence: `owner, tg-${i}: "${"x".repeat(60_000)}"`, origin: "owner", source_ref: `owner, tg-${i}` }, "2026-10-01T00:00:00.000Z");
     const args: Parameters<typeof createOwnerResponder> = ["fixture"];
     args[2] = memory;
     await createOwnerResponder(...args).respond(turn("recall-long-evidence"), time);
   });
   const system = captured.systems[0];
   expect(system, "system prompt reached the model (not dropped whole)").toBeDefined();
-  expect(system!.length).toBeLessThanOrEqual(32_768);
+  expect(system!.length).toBeLessThanOrEqual(MODEL_CONTEXT_MAX_CHARS);
   expect(system!, "recalled claims that do not fit are counted").toMatch(/\d+ matching claims are too long to show here/);
 });

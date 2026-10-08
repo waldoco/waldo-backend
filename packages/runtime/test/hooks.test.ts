@@ -306,7 +306,16 @@ describe('hook registry', () => {
     ).rejects.toMatchObject({
       hook: 'autonomy_gate_check',
       code: 'forbidden',
+      clientMessage: expect.stringContaining('propose_action'),
     });
+  });
+
+  it('keeps the hard block for an external-tainted tool with no approval path', async () => {
+    const ctx = runtimeCtx({ toolArgSourceTaint: 'external' });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-mcp' }, ctx);
+    await expect(
+      runHooks('PreToolUse', { event: 'PreToolUse', tool: 'call_mcp_tool', args: { server: 's', tool: 't', args: {} } }, ctx),
+    ).rejects.toMatchObject({ code: 'forbidden', clientMessage: 'hook halted' });
   });
 
   it('fails closed when an ACL-granted tool has no contract arg schema yet', async () => {
@@ -626,6 +635,30 @@ describe('hook registry', () => {
     expect(response.text).toBe('Drafted it to priya@example.com - not sent.');
     // ...and the executable call is byte-identical: the recipient IS the call.
     expect(response.tool_calls[0]!.arguments).toBe(args);
+  });
+
+  it('does not apply the 4 KB reply cap to tool-call arguments (PR 1 item 5)', async () => {
+    const ctx = runtimeCtx({ sanitise });
+    const args = JSON.stringify({ path: 'notes.md', content: 'line of notes\n'.repeat(500) });
+    expect(args.length).toBeGreaterThan(5_000);
+    const result = await runHooks(
+      'PostLLMCall',
+      {
+        event: 'PostLLMCall',
+        response: {
+          model: ROSTER.fallback,
+          text: 'Saved it.',
+          tool_calls: [{ call_id: 'c1', name: 'workspace_write', arguments: args }],
+          input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1,
+        },
+        tokens_in: 1,
+        tokens_out: 1,
+      },
+      ctx,
+    );
+    expect(result.event).toBe('PostLLMCall');
+    if (result.event !== 'PostLLMCall') throw new Error('unreachable');
+    expect((result.response as { tool_calls: { arguments: string }[] }).tool_calls[0]!.arguments).toBe(args);
   });
 
   it('still halts fail-closed when a canary hides inside tool-call arguments', async () => {

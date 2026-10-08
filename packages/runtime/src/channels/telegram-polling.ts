@@ -46,6 +46,18 @@ export type TelegramPollResult = Readonly<{
   dropped: number;
 }>;
 
+const replyProvenance = (
+  reply: { from?: { id: number; is_bot: boolean } | undefined } & Record<string, unknown>,
+  senderId: number,
+  chatType: string,
+): NonNullable<ReplyContext['provenance']> => {
+  const forwarded = ['forward_origin', 'forward_date', 'forward_from', 'forward_sender_name', 'is_automatic_forward'].some(key => key in reply);
+  if (forwarded || reply.from === undefined) return { author: 'other', forwarded };
+  if (reply.from.is_bot && chatType === 'private') return { author: 'waldo', forwarded };
+  if (!reply.from.is_bot && reply.from.id === senderId) return { author: 'owner', forwarded };
+  return { author: 'other', forwarded };
+};
+
 export class TelegramPollingAdapter {
   private nextOffset: number;
 
@@ -135,6 +147,7 @@ export class TelegramPollingAdapter {
         text: (message.reply_to_message.text ?? message.reply_to_message.caption ?? '').slice(0, REPLY_QUOTE_LIMIT),
         truncated: (message.reply_to_message.text ?? message.reply_to_message.caption ?? '').length > REPLY_QUOTE_LIMIT,
         sourceTaint: 'external' as const,
+        provenance: replyProvenance(message.reply_to_message, message.from.id, message.chat.type),
       }) } : {}),
       ...(media ? { media: Object.freeze(media) } : {}),
     });

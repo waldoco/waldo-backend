@@ -14,6 +14,7 @@ import {
   type LLMResponse,
   type ModelName,
   type TriggerType,
+  MODEL_CONTEXT_MAX_CHARS,
 } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import {
@@ -106,6 +107,23 @@ class ScriptedGateway implements LLMGatewayAdapter {
     return this.script(request);
   }
 }
+
+// The aggregate batch cap is the window-sized MODEL_CONTEXT_MAX_CHARS and one tool turn is capped at 32,768 by
+// the schema, so a batch only overflows with many turns. Padding turns (benign, no stored id) come AFTER the
+// scenario's own turns so their indices are unchanged, and each is smaller than the scenario's own turns so the
+// scribe compacts the scenario turn first.
+const PAD_TURN_CHARS = 19_000;
+const PAD_OVERSHOOT = 3_000;
+const withPad = <T extends { call: { call_id: string; name: string; arguments: string }; output: string }>(turns: T[]): T[] => {
+  let remaining = MODEL_CONTEXT_MAX_CHARS + PAD_OVERSHOOT - turns.reduce((n, t) => n + t.output.length, 0);
+  const pads: T[] = [];
+  for (let i = 0; remaining > 0; i++) {
+    const size = Math.min(PAD_TURN_CHARS, remaining);
+    pads.push({ call: { call_id: `pad${i}`, name: 'web_search', arguments: '{}' }, output: 'p'.repeat(size) } as unknown as T);
+    remaining -= size;
+  }
+  return [...turns, ...pads];
+};
 
 describe('RuntimeLLMProvider', () => {
   it('fails closed before provider I/O when a trusted effect adapter cannot reconcile by key', async () => {
@@ -1059,8 +1077,8 @@ describe('RuntimeLLMProvider', () => {
       runtimeCtx({
         sanitise: () => ({
           ok: false,
-          check: 'instruction_pattern',
-          reason: 'untrusted_instruction',
+          check: 'canary_token',
+          reason: 'canary_leak',
         }),
       }),
     );
@@ -1096,8 +1114,8 @@ describe('RuntimeLLMProvider', () => {
         runtimeCtx({
           sanitise: () => ({
             ok: false,
-            check: 'instruction_pattern',
-            reason: 'untrusted_instruction',
+            check: 'canary_token',
+            reason: 'canary_leak',
           }),
         }),
       ),
@@ -1636,7 +1654,7 @@ describe('sanitiseRequest structural degradation', () => {
   // third-pass encoding, which stays fail-closed as real obfuscation.
   const softBad = encodeURIComponent(encodeURIComponent(encodeURIComponent('hrv: 42 ms')));
 
-  it('degrades history to the current message when earlier turns trip a structural scribe deny', async () => {
+  it('trims history oldest-first when an earlier turn trips a structural scribe deny', async () => {
     const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
     const provider = new RuntimeLLMProvider({ gateway });
     const result = await provider.complete(
@@ -1655,7 +1673,7 @@ describe('sanitiseRequest structural degradation', () => {
       runtimeCtx(),
     );
     expect(result.ok).toBe(true);
-    expect(gateway.requests[0]!.request.messages).toEqual([{ role: 'user', content: 'current question' }]);
+    expect(gateway.requests[0]!.request.messages).toEqual([{ role: 'assistant', content: 'earlier reply' }, { role: 'user', content: 'current question' }]);
   });
 
   it('fails closed when the current message itself trips a structural scribe deny', async () => {
@@ -1699,7 +1717,7 @@ describe('sanitiseRequest structural degradation', () => {
     expect(gateway.requests).toHaveLength(0);
   });
 
-  it('drops the system prompt when it trips a structural scribe deny', async () => {
+  it('fails closed instead of running the model with no system prompt when it trips a structural scribe deny', async () => {
     const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
     const provider = new RuntimeLLMProvider({ gateway });
     const result = await provider.complete(
@@ -1714,8 +1732,58 @@ describe('sanitiseRequest structural degradation', () => {
       },
       runtimeCtx(),
     );
+    expect(result.ok).toBe(false);
+    expect(gateway.requests).toHaveLength(0);
+  });
+
+  it('sends a 100k-char system prompt whole (sized by the window, not the old 32k cap)', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const system = `You are Waldo. ${'x'.repeat(100_000)}`;
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({ system, messages: [{ role: 'user' as const, content: 'current question' }], max_tokens: 512, temperature: 0.3 }),
+      },
+      runtimeCtx(),
+    );
     expect(result.ok).toBe(true);
-    expect(gateway.requests[0]!.request.system).toBeUndefined();
+    expect(gateway.requests[0]!.request.system).toBe(system);
+  });
+
+  it('fails an over-window system prompt with a typed system_prompt scribe error; it is never cut or dropped', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          system: `You are Waldo. ${'x'.repeat(MODEL_CONTEXT_MAX_CHARS)}`,
+          messages: [{ role: 'user' as const, content: 'current question' }],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result).toMatchObject({ ok: false, code_detail: 'system_prompt_rejected', scribe: { destination: 'system_prompt', reason: 'oversize' } });
+    // The system prompt ceiling equals the preflight string ceiling, so an over-window prompt is rejected as invalid_payload.
+    expect(gateway.requests).toHaveLength(0);
+  });
+
+  it('passes a 100-message window of 300k chars with nothing dropped (cap-history)', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const messages = Array.from({ length: 100 }, (_, i) => ({
+      role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+      content: `message ${i} ${'y'.repeat(3_000)}`,
+    }));
+    const result = await provider.complete(
+      { trigger: 'brief', renderRequest: () => ({ messages, max_tokens: 512, temperature: 0.3 }) },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(true);
+    expect(gateway.requests[0]!.request.messages).toEqual(messages);
   });
 
   it('replaces a structurally denied tool turn with an explicit omission receipt, keeping the call', async () => {
@@ -1761,10 +1829,10 @@ describe('sanitiseRequest structural degradation', () => {
         trigger: 'brief',
         renderRequest: () => ({
           messages: [{ role: 'user' as const, content: 'what does my day look like' }],
-          tool_turns: [
+          tool_turns: withPad([
             { call: { call_id: 'c1', name: 'get_communication', arguments: '{}' }, output: busyInbox },
             { call: { call_id: 'c2', name: 'query_calendar', arguments: '{}' }, output: busyCalendar },
-          ],
+          ]),
           max_tokens: 512,
           temperature: 0.3,
         }),
@@ -1773,7 +1841,7 @@ describe('sanitiseRequest structural degradation', () => {
     );
     expect(result.ok).toBe(true);
     const turns = gateway.requests[0]!.request.tool_turns;
-    expect(turns).toHaveLength(2);
+    expect(turns!.length).toBeGreaterThanOrEqual(2);
     // Both turns survive; compaction is minimal - the largest stored turn reduces to a head +
     // truthful receipt naming its verified stored id, which is enough for the batch to pass
     // the aggregate scribe pass. The other turn keeps its full content.
@@ -1783,7 +1851,7 @@ describe('sanitiseRequest structural degradation', () => {
     expect(receipts.length).toBeGreaterThanOrEqual(1);
     for (const receipt of receipts) expect(receipt.output).toContain('do not report it as empty');
     const total = turns!.reduce((sum, t) => sum + t.output.length, 0);
-    expect(total).toBeLessThanOrEqual(32_768);
+    expect(total).toBeLessThanOrEqual(MODEL_CONTEXT_MAX_CHARS);
   });
 
   it('trims with an honest receipt when the aggregate batch overflows and no turn carries a stored-output id', async () => {
@@ -1797,10 +1865,10 @@ describe('sanitiseRequest structural degradation', () => {
         trigger: 'brief',
         renderRequest: () => ({
           messages: [{ role: 'user' as const, content: 'what does my day look like' }],
-          tool_turns: [
+          tool_turns: withPad([
             { call: { call_id: 'c1', name: 'get_communication', arguments: '{}' }, output: bigA },
             { call: { call_id: 'c2', name: 'query_calendar', arguments: '{}' }, output: bigB },
-          ],
+          ]),
           max_tokens: 512,
           temperature: 0.3,
         }),
@@ -1817,7 +1885,7 @@ describe('sanitiseRequest structural degradation', () => {
   });
 
   it('many small tool outputs that only overflow together are receipted, not failed, and the receipt says data came back', async () => {
-    const small = (n: number) => JSON.stringify({ messages: [{ id: `m${n}`, subject: 'z'.repeat(3_800) }] });
+    const small = (n: number) => JSON.stringify({ messages: [{ id: `m${n}`, subject: 'z'.repeat(6_400) }] });
     const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
     const provider = new RuntimeLLMProvider({ gateway });
     const result = await provider.complete(
@@ -1825,7 +1893,7 @@ describe('sanitiseRequest structural degradation', () => {
         trigger: 'brief',
         renderRequest: () => ({
           messages: [{ role: 'user' as const, content: 'summarize my mail' }],
-          tool_turns: Array.from({ length: 12 }, (_, i) => ({ call: { call_id: `c${i}`, name: 'read_thread', arguments: '{}' }, output: small(i) })),
+          tool_turns: Array.from({ length: 64 }, (_, i) => ({ call: { call_id: `c${i}`, name: 'read_thread', arguments: '{}' }, output: small(i) })),
           max_tokens: 512,
           temperature: 0.3,
         }),
@@ -1835,7 +1903,7 @@ describe('sanitiseRequest structural degradation', () => {
     expect(result.ok).toBe(true);
     expect(gateway.requests).toHaveLength(1);
     const outputs = (gateway.requests[0]!.request.tool_turns ?? []).map((turn) => turn.output);
-    expect(outputs.some((text) => text.includes('the tool DID return'))).toBe(true);
+    expect(outputs.some((text) => /the tool DID return/i.test(text))).toBe(true);
     expect(outputs.some((text) => text.includes('zzzz'))).toBe(true);
   });
 
@@ -1853,10 +1921,10 @@ describe('sanitiseRequest structural degradation', () => {
         trigger: 'brief',
         renderRequest: () => ({
           messages: [{ role: 'user' as const, content: 'what does my day look like' }],
-          tool_turns: [
+          tool_turns: withPad([
             { call: { call_id: 'c1', name: 'get_communication', arguments: '{}' }, output: spoofA },
             { call: { call_id: 'c2', name: 'query_calendar', arguments: '{}' }, output: spoofB },
-          ],
+          ]),
           max_tokens: 512,
           temperature: 0.3,
         }),
@@ -1888,10 +1956,10 @@ describe('sanitiseRequest structural degradation', () => {
         trigger: 'brief',
         renderRequest: () => ({
           messages: [{ role: 'user' as const, content: 'what does my day look like' }],
-          tool_turns: [
+          tool_turns: withPad([
             { call: { call_id: 'c1', name: 'get_communication', arguments: '{}' }, output: bigA },
             { call: { call_id: 'c2', name: 'query_calendar', arguments: '{}' }, output: bigB },
-          ],
+          ]),
           max_tokens: 512,
           temperature: 0.3,
         }),
@@ -1923,10 +1991,10 @@ describe('sanitiseRequest structural degradation', () => {
         trigger: 'brief',
         renderRequest: () => ({
           messages: [{ role: 'user' as const, content: 'what does my day look like' }],
-          tool_turns: [
+          tool_turns: withPad([
             { call: { call_id: 'c1', name: 'get_communication', arguments: '{}' }, output: spoofA },
             { call: { call_id: 'c2', name: 'query_calendar', arguments: '{}' }, output: spoofB },
-          ],
+          ]),
           max_tokens: 512,
           temperature: 0.3,
         }),
@@ -1958,10 +2026,10 @@ describe('sanitiseRequest structural degradation', () => {
         trigger: 'brief',
         renderRequest: () => ({
           messages: [{ role: 'user' as const, content: 'what does my day look like' }],
-          tool_turns: [
+          tool_turns: withPad([
             { call: { call_id: 'c1', name: 'get_communication', arguments: '{}' }, output: `${big} ${pad}` },
             { call: { call_id: 'c2', name: 'query_calendar', arguments: '{}' }, output: other },
-          ],
+          ]),
           max_tokens: 512,
           temperature: 0.3,
         }),
@@ -2037,31 +2105,8 @@ describe('sanitiseRequest structural degradation', () => {
     expect(gateway.requests).toHaveLength(0);
   });
 
-  it('reduces a single oversize tool output to its head plus a receipt, preserving the stored-output id', async () => {
-    // Schema caps output at 32,768, so per-item oversize arrives via output + call
-    // arguments together exceeding the internal_context policy.
-    const stored = JSON.stringify({ ok: true, data: { stored_output: 'out_123', total_chars: 61_000, head: `payload ${'z'.repeat(30_000)}` } });
-    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
-    const provider = new RuntimeLLMProvider({ gateway });
-    const result = await provider.complete(
-      {
-        trigger: 'brief',
-        renderRequest: () => ({
-          messages: [{ role: 'user' as const, content: 'summarise that page' }],
-          tool_turns: [{ call: { call_id: 'c1', name: 'browse_page', arguments: JSON.stringify({ url: 'u'.repeat(16_000) }) }, output: stored }],
-          max_tokens: 512,
-          temperature: 0.3,
-        }),
-      },
-      runtimeCtx(),
-    );
-    expect(result.ok).toBe(true);
-    const output = gateway.requests[0]!.request.tool_turns![0]!.output;
-    expect(output).toContain('out_123');
-    expect(output).toContain('reduced by the scribe');
-    expect(output).toContain('do not report it as empty');
-    expect(output.length).toBeLessThan(stored.length);
-  });
+  // UNREACHABLE since A-2: one tool turn is capped at 32,768 by llmToolTurnSchema, far below the 400k window cap, so the
+  // per-item oversize path cannot fire. The code is kept for the owner/Core decision; the test cannot run.
 
   it('derives each tool turn taint from the dispatcher contract, not the run blanket', async () => {
     // Owner finding on #204: tool_turns mixes internal mutation acks with external-origin
