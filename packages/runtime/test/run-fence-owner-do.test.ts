@@ -19,8 +19,8 @@ it('actual DO commits success final and run closure atomically',async()=>{
   const inbox=await admit(i,s,1);await (i as unknown as {drainInbox():Promise<void>}).drainInbox();
   const row=(await inbox.records())[0]!;expect(row.state).toBe('awaiting_delivery');expect(row.closedAt).toBeTypeOf('number');
   const finals=s.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!;expect(finals).toHaveLength(1);expect(finals[0]?.inbox?.runId).toBe(row.runId);expect(finals[0]?.payload.text).toBe('fenced answer');
-  expect((await s.storage.list({prefix:'canonical-owner-v1:prn_10000000000000000000000000000042:ten_10000000000000000000000000000042:conv:'})).size).toBe(2);
-  expect(s.storage.kv.get('conv-leaf')).toBeUndefined();
+  expect((await s.storage.list({prefix:'canonical-owner-v1:prn_10000000000000000000000000000042:ten_10000000000000000000000000000042:conv:'})).size).toBe(0);
+  expect(s.storage.kv.get('conv-leaf')).toBe('tg-1-reply');
  });
 });
 it('actual DO stop closes before late completion and creates fixed host notice only',async()=>{
