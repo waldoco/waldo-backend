@@ -139,7 +139,7 @@ describe('OpenAIResponsesAdapter', () => {
     });
     expect(sent.tools).toEqual([{ type: 'function', name: 'get_context', description: 'Current time', parameters, strict: false }]);
     expect(sent.input).toEqual([
-      { role: 'user', content: [{ type: 'input_text', text: 'Say hello.' }] },
+      { role: 'user', content: 'Say hello.' },
       { type: 'function_call', ...call },
       { type: 'function_call_output', call_id: 'c1', output: '{"now":"13:50"}' },
     ]);
