@@ -41,7 +41,7 @@ const BROWSER_SUBMIT_TTL_MS = 30 * 60_000;
 export type EmailSendProposal = Readonly<{
   operation_ref?: string;
   to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[];
-  subject: string; body: string; thread_id?: string; message_id: string; raw: string; digest: string; dedupe_key?: string;
+  account?: string; subject: string; body: string; thread_id?: string; message_id: string; raw: string; digest: string; dedupe_key?: string;
 }>;
 
 // send_message proposals (ADR-0054): the exact channel + content the owner approved, replayed
@@ -54,9 +54,9 @@ export type McpCallProposal = Readonly<{ operation_ref?: string; server: string;
 
 export type ApprovalDecision = Readonly<{ toast: string; message: string }>;
 export type ApprovalReview =
-  | Readonly<{ kind: 'email_send'; to: readonly string[]; cc: readonly string[]; bcc: readonly string[]; subject: string; body: string }>
+  | Readonly<{ kind: 'email_send'; account?: string; to: readonly string[]; cc: readonly string[]; bcc: readonly string[]; subject: string; body: string }>
   | Readonly<{ kind: 'message_send'; channel: string; content: string }>
-  | Readonly<{ kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string }>;
+  | Readonly<{ kind: 'calendar_change'; account?: string; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string }>;
 export type ApprovalItem = Readonly<{ id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; undoable: boolean; review: ApprovalReview | null }>;
 export type ApprovalDesk = Readonly<{
   propose(args: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string): Promise<string>;
@@ -78,7 +78,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   effects?: OwnerEffectLedger;
   call: TelegramCall;
   owner: number;
-  google(intent?: ProxyIntent, feature?: 'mail' | 'calendar'): Promise<GoogleClient | null>;
+  google(intent?: ProxyIntent, feature?: 'mail' | 'calendar', account?: string): Promise<GoogleClient | null>;
   newId(): string;
   now(): number;
   timezone: string;
@@ -105,9 +105,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const when = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: deps.timezone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
   const describe = (p: ProposeCalendarChangeArgs) => {
     const name = p.title ? `"${p.title}"` : 'the event';
-    if (p.action === 'create') return `Add ${name}, ${when(p.start!)} to ${when(p.end!)}`;
-    if (p.action === 'move') return `Move ${name} to ${when(p.start!)} to ${when(p.end!)}`;
-    return `Cancel ${name}`;
+    if (p.action === 'create') return `Add ${name}, ${when(p.start!)} to ${when(p.end!)}${p.account ? ` (${p.account})` : ''}`;
+    if (p.action === 'move') return `Move ${name} to ${when(p.start!)} to ${when(p.end!)}${p.account ? ` (${p.account})` : ''}`;
+    return `Cancel ${name}${p.account ? ` (${p.account})` : ''}`;
   };
   const row = (id: string) => sql.exec<LedgerRow>('SELECT * FROM ledger WHERE id = ?', id).toArray()[0];
   const setStatus = (id: string, status: string, undo: Undo | null = null) =>
@@ -125,7 +125,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const binding = Object.entries(p.binding).map(([k, v]) => `${k}: ${v}`).join(', ');
     return `${p.action.description} on ${p.url}${p.request ? ` via ${p.request.method} ${p.request.url}` : ''}${binding ? ` (${binding})` : ''}`;
   };
-  const describeEmail = (p: EmailSendProposal) => `Send email to ${p.to.join(', ')}: "${p.subject}"`;
+  const describeEmail = (p: EmailSendProposal) => `Send email${p.account ? ` from ${p.account}` : ''} to ${p.to.join(', ')}: "${p.subject}"`;
   const describeMessage = (p: MessageSendProposal) => `Send this on ${p.channel}: "${p.content.length > 120 ? `${p.content.slice(0, 117)}...` : p.content}"`;
   const describeMcp = (p: McpCallProposal) => `Run ${p.tool} on the ${p.server} MCP server`;
 
@@ -135,7 +135,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // button, because approving would send content the owner never saw.
   const REVIEW_BUDGET = 3800;
   const reviewEmail = (p: EmailSendProposal) =>
-    [`To: ${p.to.join(', ')}`,
+    [...(p.account ? [`From: ${p.account}`] : []), `To: ${p.to.join(', ')}`,
       ...(p.cc?.length ? [`Cc: ${p.cc.join(', ')}`] : []),
       ...(p.bcc?.length ? [`Bcc: ${p.bcc.join(', ')}`] : []),
       `Subject: ${p.subject}`, '', p.body].join('\n');
@@ -286,8 +286,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         if (action === 'u') {
           out = { toast: "Can't be undone", message: 'A sent email cannot be undone. Nothing was reversed.' };
         } else {
-          const client = await deps.google({id:`approval:${id}:apply`},'mail');
-          if (client === null) {
+          const client = await deps.google({id:`approval:${id}:apply`},'mail',ep.account);
+          if (client === null || (ep.account && client.account?.email?.toLowerCase() !== ep.account.toLowerCase())) {
             out = { toast: 'Google is not connected', message: 'I could not send that because Google is not connected.' };
           } else if (await sha256Hex(ep.raw) !== ep.digest) {
             setStatus(id, 'failed');
@@ -371,8 +371,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           }
         }
       } else {
-        const client = await deps.google({id:`approval:${id}:${action==='u'?'undo':'apply'}`,requireRoute:action==='u'||proposal.action!=='create'});
-        if (client === null) {
+        const client = await deps.google({id:`approval:${id}:${action==='u'?'undo':'apply'}`,requireRoute:action==='u'||proposal.action!=='create'},'calendar',proposal.account);
+        if (client === null || (proposal.account && client.account?.email?.toLowerCase() !== proposal.account.toLowerCase())) {
           out = { toast: 'Google is not connected', message: 'I could not do that because Google is not connected.' };
         } else if (action === 'a') {
           const eventId = proposal.action === 'create' ? await sha256Hex(`${operationRef}:apply`) : proposal.event_id!;
@@ -450,7 +450,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         : sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND json_extract(payload_json, '$.message_id') = ? ORDER BY created_at DESC LIMIT 1", payload.message_id).toArray()[0];
       if (prior) {
         const was = JSON.parse(prior.payload_json) as EmailSendProposal;
-        const semantic = ({ to, cc, bcc, subject, body, thread_id }: EmailSendProposal) => JSON.stringify({ to, cc, bcc, subject, body, thread_id });
+        const semantic = ({ account, to, cc, bcc, subject, body, thread_id }: EmailSendProposal) => JSON.stringify({ account, to, cc, bcc, subject, body, thread_id });
         if (semantic(was) !== semantic(payload)) throw new EmailProposalError('identifier_reused');
         if (prior.status === 'open' || prior.status === 'review_only') return prior.id;
         if (prior.status === 'card_unconfirmed') throw new EmailProposalError('card_unconfirmed');
@@ -516,11 +516,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       }
       const prepare = async () => {
         const id = `p${deps.newId()}`;
-        const summary = `${describe(p)}. ${p.reason}`;
-        const client = await deps.google({id:`approval:${id}:apply`},'calendar');
-        if(p.event_id&&!client)throw new Error('The calendar account is unavailable; no proposal was prepared.');
-        const seen = client && p.event_id ? (await client.event(p.event_id)).etag : undefined;
-        const stored: Stored = { ...p, ...(seen ? { seen_etag: seen } : {}), ...(operationRef ? { operation_ref: operationRef } : {}) };
+        const client = await deps.google({id:`approval:${id}:apply`},'calendar',p.account);
+        if((p.event_id || p.account)&&!client)throw new Error('The calendar account is unavailable; no proposal was prepared.');
+        if (p.account && client?.account?.email?.toLowerCase() !== p.account.toLowerCase()) throw new Error('Selected calendar account is unavailable');
+        const bound = { ...p, ...(client?.account?.email ? {account:client.account.email} : {}) };
+        const summary = `${describe(bound)}. ${bound.reason}`;
+        const seen = client && bound.event_id ? (await client.event(bound.event_id)).etag : undefined;
+        const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...(operationRef ? { operation_ref: operationRef } : {}) };
         sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
         await sayCard(id, `Proposed: ${summary}`, [['Do it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
         return id;
@@ -548,7 +550,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           if (r.kind === 'email_send') {
             const p = JSON.parse(r.payload_json) as EmailSendProposal;
             if (!Array.isArray(p.to) || !p.to.length || !p.to.every((address) => typeof address === 'string') || !Array.isArray(p.cc ?? []) || !Array.isArray(p.bcc ?? []) || !(p.cc ?? []).every((address) => typeof address === 'string') || !(p.bcc ?? []).every((address) => typeof address === 'string') || typeof p.subject !== 'string' || typeof p.body !== 'string') return null;
-            return { kind: 'email_send', to: p.to, cc: p.cc ?? [], bcc: p.bcc ?? [], subject: p.subject, body: p.body };
+            return { kind: 'email_send', ...(p.account ? {account:p.account} : {}), to: p.to, cc: p.cc ?? [], bcc: p.bcc ?? [], subject: p.subject, body: p.body };
           }
           if (r.kind === 'message_send') {
             const p = JSON.parse(r.payload_json) as MessageSendProposal;
@@ -560,7 +562,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             if (p.action === 'create' && (!p.title || !p.start || !p.end)) return null;
             if (p.action === 'move' && (!p.event_id || !p.title || !p.start || !p.end)) return null;
             if (p.action === 'cancel' && (!p.event_id || !p.title)) return null;
-            return { kind: 'calendar_change', action: p.action, title: p.title ?? null, event_id: p.event_id ?? null, start: p.start ?? null, end: p.end ?? null, reason: p.reason };
+            return { kind: 'calendar_change', ...(p.account ? {account:p.account} : {}), action: p.action, title: p.title ?? null, event_id: p.event_id ?? null, start: p.start ?? null, end: p.end ?? null, reason: p.reason };
           }
           return null;
         } catch { return null; }

@@ -1152,7 +1152,7 @@ export const nightlyInput = (store: ClaimStore, day: string): string =>
 // gate); migration passes the file payload the evidence cites.
 export type ClaimGrounding = Readonly<{ owner?: string; shared?: string; waldo?: string }>;
 
-const normalizeForGrounding = (text: string): string => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/^ +| +$/g, '');
+export const normalizeForGrounding = (text: string): string => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/^ +| +$/g, '');
 
 // Quote-aware targets: evidence like `owner, tg-1: "gym usually 11am"` grounds on the quoted
 // span, not the citation prefix. Unquoted evidence is a paraphrase and checks as a whole.
@@ -1165,7 +1165,7 @@ const groundingTargets = (evidence: string): readonly string[] => {
 };
 
 type GroundingVerdict = 'owner' | 'waldo' | 'shared' | 'ungrounded';
-const ground = (evidence: string, sections: ClaimGrounding): GroundingVerdict => {
+export const ground = (evidence: string, sections: ClaimGrounding): GroundingVerdict => {
   const targets = groundingTargets(evidence);
   if (targets.length === 0) return 'ungrounded';
   const owner = normalizeForGrounding(sections.owner ?? '');

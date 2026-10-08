@@ -64,6 +64,8 @@ import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview 
 import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
 import { changeLines, collectChanges, reviewMailFollowup, updateBook, type UpdateBook } from './update-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
+import { memoryHandlers } from '../tools/live/memory';
+import { literalTextRedactor } from '@waldo/contracts';
 import { browserOwnerHost, BROWSER_TASK_KEY, type BrowserOwnerConfiguration } from './browser-owner-host';
 import { browserProductionConfiguration, browserOwnerBindingReader } from './browser-production-factory';
 import { browserTrialConsent, BROWSER_TRIAL_PATH, BROWSER_TRIAL_PENDING_KEY, BROWSER_TRIAL_REVOCATION_KEY, type BrowserTrialPreparation } from './browser-trial-consent';
@@ -1524,7 +1526,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: vault ? 'moved to vault' : 'moved to account list' });
       },
       // The first healthy account whose grant covers the feature serves it.
-      async client(feature: GoogleFeature = 'calendar', intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>) {
+      async client(feature: GoogleFeature = 'calendar', intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>, selectedAccount?: string) {
         const app = await googleApp();
         if (!app) {if(intent)throw new ProxyIntentError('intent_unavailable');return null;}
         await google.migrate();
@@ -1533,7 +1535,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const probes = (await storage.get<Record<string, number>>('google:probes')) ?? {};
         const circuit = googleCircuit({ failing, probes, now: Date.now(), ids: all.map((account) => account.id) });
         if (circuit.probe.length) await storage.put('google:probes', { ...probes, ...Object.fromEntries(circuit.probe.map((id) => [id, Date.now()])) });
-        const fit = all.filter((account) => circuit.usable.includes(account.id) && googleHas(account.scopes, feature)).map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
+        const fit = all.filter((account) => circuit.usable.includes(account.id) && googleHas(account.scopes, feature) && (!selectedAccount || account.email.toLowerCase() === selectedAccount.toLowerCase())).map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
         const account = pinProxyIntentRoute(storage.sql,intent,`google:${feature}`,fit,fit.find((candidate) => !failing[candidate.id]) ?? fit[0]);
         if (!account) { if (circuit.skipped.length) log({ trace: `google:${Date.now()}`, hop: 'google_circuit_open', ms: 0, ok: false, detail: `${circuit.skipped.length} account(s) need reconnect; next probe within 6h` }); return null; }
         const metadata = { connection_id: account.id, email: account.email };
@@ -1645,7 +1647,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const effects = ownerEffectLedger(storage, () => deps.now());
     const desk = approvalDesk(storage.sql, {
       effects,
-      call: routedCall, owner, google: (intent,feature) => google.client(feature??'calendar',intent), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
+      call: routedCall, owner, google: (intent,feature,account) => google.client(feature??'calendar',intent,undefined,account), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
       timezone: clock.timezone, log,
       reviewUrl: async () => {
         const origin = await storage.get<string>('origin');
@@ -1758,7 +1760,26 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await sentOrThrow(api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` }));
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), this.ownerBrowser.read(browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
+      }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), ...memoryHandlers({
+        sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: `${channel}-${owner}`,
+        hideHistory: async (texts, context) => {
+          const scope = context.runScope;
+          scope?.admit();
+          const result = await redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope);
+          await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope);
+          const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
+          const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
+          if (result.remaining + mail.remaining + prep.remaining) throw new Error('Memory history cleanup is incomplete');
+          const scrubEpisodes = () => {
+            const redact = literalTextRedactor(texts, FORGOTTEN);
+            for (const row of storage.sql.exec<{ ref: number; text: string }>('SELECT rowid AS ref, text FROM episodes').toArray()) {
+              const text = redact(row.text);
+              if (text !== row.text) storage.sql.exec('UPDATE episodes SET text = ? WHERE rowid = ?', text, row.ref);
+            }
+          };
+          if (scope) scope.commit(scrubEpisodes); else scrubEpisodes();
+        },
+      }), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), this.ownerBrowser.read(browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
         if (!context.assertTaskSourceCurrent) throw Error('browser task source unavailable');
         await context.assertTaskSourceCurrent();
         const ownerKey = await currentTaskOwnerKey(); await context.assertTaskSourceCurrent();

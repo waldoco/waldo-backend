@@ -155,7 +155,6 @@ describe('privileged-action set — ADR-0049', () => {
     // draft_email is deliberately absent (owner decision 2026-09-25): a draft is a reviewable
     // artifact, not a send.
     expect(PRIVILEGED_ACTION_TOOLS).toEqual([
-      'update_memory',
       'execute_action',
       'send_message',
       'call_mcp_tool',

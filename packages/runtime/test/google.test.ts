@@ -235,10 +235,10 @@ describe('google tools', () => {
     expect(JSON.stringify(result)).not.toMatch(/https?:/);
   });
 
-  it('propose a calendar change without applying it', async () => {
+  it('requires a connected calendar account before preparing a proposal', async () => {
     const google: GoogleAccess = { client: async () => null };
     const propose = googleHandlers(google, proposals, clock).find((h) => h.name === 'propose_calendar_change')!;
-    expect(await propose.handle({ action: 'cancel', event_id: 'e1', reason: 'double booked' } as never)).toMatchObject({ ok: true, data: { proposal_id: 'proposal:1', applied: false } });
+    expect(await propose.handle({ action: 'cancel', event_id: 'e1', reason: 'double booked' } as never)).toMatchObject({ ok: false, code: 'auth_failed' });
   });
 });
 
@@ -375,20 +375,20 @@ describe('gmail search + thread read (A1)', () => {
     expect(listUrl).toContain(`before:${Math.floor(Date.parse('2026-09-30T00:00:00Z') / 1000)}`);
   });
 
-  it('readThread decodes the text/plain body, falls back to the snippet, and caps at 4000 chars', async () => {
+  it('readThread decodes the text/plain body, falls back to the snippet, and caps at 32,000 chars', async () => {
     const client = googleClient(app, { refresh_token: 'rt' }, mailFetcher([]));
     const messages = await client.readThread('t1', 10);
     expect(messages).toHaveLength(2);
     expect(messages[0]!.body).toBe('Thursday works, 7pm.');
     expect(messages[0]!.from).toBe('sam@example.com');
-    const big = 'x'.repeat(5000);
+    const big = 'x'.repeat(33000);
     const fetcher = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
       return Response.json({ messages: [{ id: 'm1', internalDate: '1759140000000', payload: { mimeType: 'text/plain', headers: [], body: { data: b64(big) } } }] });
     }) as typeof fetch;
     const [message] = await googleClient(app, { refresh_token: 'rt' }, fetcher).readThread('t1', 10);
-    expect(message!.body).toHaveLength(4000);
+    expect(message!.body).toHaveLength(32000);
   });
 
   it('read_thread quarantines a body carrying an OTP - the raw code never reaches the model', async () => {
@@ -399,6 +399,7 @@ describe('gmail search + thread read (A1)', () => {
     const { messages } = (result as { data: { messages: { id: string; body: string; subject: string; quarantined?: readonly string[] }[] } }).data;
     expect(messages[0]!.body).toBe('Thursday works, 7pm.');
     expect(messages[1]!.quarantined).toEqual(['otp']);
+    expect(messages[1]!.body).toContain('[quarantined: otp artifact');
     expect(messages[1]!.subject).toBe('Sign in');
     expect(JSON.stringify(messages)).not.toContain('123456');
   });

@@ -23,6 +23,7 @@ export const TOOL_CLAIM_EFFECT: Readonly<Record<ToolName, string | null>> = {
   // null on purpose. call_mcp_tool proposes a card on the owner channel and executes directly elsewhere, so no single
   // effect holds. delegate_task runs a read-only subagent. The rest have no live handler in this tree
   // (memory writes go through the memory path), so their effect is unverified: give each a label when its handler ships.
+  remember: 'memory_stored', forget_memory: 'memory_forgotten',
   call_mcp_tool: null, delegate_task: null, update_memory: null, execute_action: null, write_task: null, update_task: null,
   draft_document: null, write_sheet_cell: null, execute_code: null, create_thread: null, delete_message: null, restore_message: null,
   archive_thread: null, update_thread_topics: null,
