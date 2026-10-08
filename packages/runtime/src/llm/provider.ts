@@ -1402,7 +1402,12 @@ async function sanitiseRequest(
     request.system === undefined
       ? undefined
       : await sanitiseValue(request.system, 'system_prompt');
-  if (system !== undefined && !system.ok && softScribe(system.error)) system = undefined;
+  // Never run the model with no instructions (PR 1 item 2): an oversize system prompt is cut to its policy cap and
+  // re-sanitised; any other structural deny fails the turn closed instead of dropping the prompt.
+  if (system !== undefined && !system.ok && softScribe(system.error) && system.error.reason === 'scribe:oversize' && typeof request.system === 'string') {
+    const capped = await sanitiseValue(request.system.slice(0, SANITISE_DESTINATION_POLICIES.system_prompt.max_chars), 'system_prompt');
+    if (capped.ok) system = capped;
+  }
   if (system !== undefined && !system.ok) {
     return { ...system, scribeDestination: 'system_prompt' };
   }
@@ -1413,10 +1418,12 @@ async function sanitiseRequest(
     };
   }
   let messages = await sanitiseValue(request.messages, 'internal_context');
-  if (!messages.ok && softScribe(messages.error) && request.messages.length > 1) {
-    // Degrade to the current message only; earlier history is the usual false-positive carrier.
-    const reduced = await sanitiseValue([request.messages[request.messages.length - 1]], 'internal_context');
+  // Oldest-first trim (PR 1 item 2): drop one oldest message at a time until the history passes, so recent
+  // context survives; collapsing straight to the last message made "that one" and "yes" meaningless.
+  for (let drop = 1; !messages.ok && softScribe(messages.error) && drop < request.messages.length; drop++) {
+    const reduced = await sanitiseValue(request.messages.slice(drop), 'internal_context');
     if (reduced.ok) messages = reduced;
+    else if (!softScribe(reduced.error)) break;
   }
   if (!messages.ok) return { ...messages, scribeDestination: 'internal_context' };
   if (!Array.isArray(messages.payload)) {

@@ -1636,7 +1636,7 @@ describe('sanitiseRequest structural degradation', () => {
   // third-pass encoding, which stays fail-closed as real obfuscation.
   const softBad = encodeURIComponent(encodeURIComponent(encodeURIComponent('hrv: 42 ms')));
 
-  it('degrades history to the current message when earlier turns trip a structural scribe deny', async () => {
+  it('trims history oldest-first when an earlier turn trips a structural scribe deny', async () => {
     const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
     const provider = new RuntimeLLMProvider({ gateway });
     const result = await provider.complete(
@@ -1655,7 +1655,7 @@ describe('sanitiseRequest structural degradation', () => {
       runtimeCtx(),
     );
     expect(result.ok).toBe(true);
-    expect(gateway.requests[0]!.request.messages).toEqual([{ role: 'user', content: 'current question' }]);
+    expect(gateway.requests[0]!.request.messages).toEqual([{ role: 'assistant', content: 'earlier reply' }, { role: 'user', content: 'current question' }]);
   });
 
   it('fails closed when the current message itself trips a structural scribe deny', async () => {
@@ -1699,7 +1699,7 @@ describe('sanitiseRequest structural degradation', () => {
     expect(gateway.requests).toHaveLength(0);
   });
 
-  it('drops the system prompt when it trips a structural scribe deny', async () => {
+  it('fails closed instead of running the model with no system prompt when it trips a structural scribe deny', async () => {
     const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
     const provider = new RuntimeLLMProvider({ gateway });
     const result = await provider.complete(
@@ -1714,8 +1714,30 @@ describe('sanitiseRequest structural degradation', () => {
       },
       runtimeCtx(),
     );
+    expect(result.ok).toBe(false);
+    expect(gateway.requests).toHaveLength(0);
+  });
+
+  it('keeps an oversize system prompt, cut to its cap, instead of dropping it', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          system: `You are Waldo. ${'x'.repeat(40_000)}`,
+          messages: [{ role: 'user' as const, content: 'current question' }],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
     expect(result.ok).toBe(true);
-    expect(gateway.requests[0]!.request.system).toBeUndefined();
+    const sent = gateway.requests[0]!.request.system;
+    expect(sent).toBeDefined();
+    expect(sent!.startsWith('You are Waldo.')).toBe(true);
+    expect(sent!.length).toBeLessThanOrEqual(32_768);
   });
 
   it('replaces a structurally denied tool turn with an explicit omission receipt, keeping the call', async () => {
