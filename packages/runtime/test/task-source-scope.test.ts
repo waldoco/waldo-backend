@@ -534,3 +534,16 @@ it('an owner-worded non-default family (mcp) commits directly with no card; gran
   expect(result.snapshot.ready).toBe(true);
   expect(result.snapshot.sources).toEqual(expect.arrayContaining(['mail', 'mcp']));
 }));
+
+// PR 1 (unblock the loop) item 4: the send/draft/calendar-propose tools declare a source family, so a mail or calendar task reaches their approval card instead of needing all ten families.
+it('send_email, draft_email and propose_calendar_change are admitted by their own family, not all ten', () => {
+  const snap = (sources: readonly (typeof TASK_SOURCE_FAMILIES)[number][]) => ({ taskId: 't', revision: 1, sources, ready: true, startRef: null });
+  for (const name of ['send_email', 'draft_email'] as const) {
+    const handler = { name, requires_connector: true as const, mutates_state: true as const };
+    expect(taskSourceAllowed(snap(['local', 'mail']), handler)).toBe(true);
+    expect(taskSourceAllowed(snap(['local', 'calendar']), handler)).toBe(false);
+  }
+  const cal = { name: 'propose_calendar_change' as const, requires_connector: true as const, mutates_state: true as const };
+  expect(taskSourceAllowed(snap(['local', 'calendar']), cal)).toBe(true);
+  expect(taskSourceAllowed(snap(['local', 'mail']), cal)).toBe(false);
+});
