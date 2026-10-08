@@ -46,6 +46,8 @@ export const scheduleKindTrigger: Readonly<Record<ScheduleKind, TriggerType | nu
 export const scheduleStatusSchema = z.enum(['armed', 'quarantined']);
 export type ScheduleStatus = z.infer<typeof scheduleStatusSchema>;
 
+export const scheduleCronExpressionSchema = z.string().min(9).max(64).regex(/^[\d*,\/\- ]+$/);
+
 export const scheduleRecurrenceSchema = z.discriminatedUnion('type', [
   z.strictObject({
     type: z.literal('interval'),
@@ -58,10 +60,21 @@ export const scheduleRecurrenceSchema = z.discriminatedUnion('type', [
     timezone: z.string().min(1).max(64),
   }),
   z.strictObject({
+    type: z.literal('weekdays_local'),
+    time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+    timezone: z.string().min(1).max(64),
+  }),
+  z.strictObject({
+    type: z.literal('weekly_local'),
+    time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+    timezone: z.string().min(1).max(64),
+    weekday: z.int().min(0).max(6),
+  }),
+  z.strictObject({
     type: z.literal('cron'),
     // Numeric 5-field cron (minute hour day-of-month month day-of-week); parseCronExpression
     // validates ranges at create time, this screen only keeps the charset bounded.
-    expression: z.string().min(9).max(64).regex(/^[\d*,\/\- ]+$/),
+    expression: scheduleCronExpressionSchema,
     timezone: z.string().min(1).max(64),
   }),
 ]);

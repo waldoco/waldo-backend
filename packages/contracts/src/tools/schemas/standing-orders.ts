@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { reminderCronSchema } from './reminders';
 
 // A7 (BUILD_PLAN_2026-09-25): typed standing orders - the owner's persistent programs, in the
 // OpenClaw shape (scope + trigger + approval gate + escalation) but typed instead of injected
@@ -16,15 +17,16 @@ export type StandingEscalation = z.infer<typeof standingEscalationSchema>;
 
 export const setStandingOrderArgsSchema = z.strictObject({
   scope: z.string().min(1).max(500).describe("The standing order, in the owner's words."),
-  trigger: z.enum(['every_turn', 'daily']).describe('every_turn applies on each chat turn; daily also runs it at a set local time.'),
+  trigger: z.enum(['every_turn', 'daily', 'weekdays', 'weekly', 'cron']).describe('every_turn applies on each chat turn; other triggers schedule owner-local recurring runs. weekly uses the current local weekday.'),
   at: z
     .string()
     .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
     .optional()
     .describe("Local HH:MM in the owner's timezone; required when trigger is daily."),
+  cron: reminderCronSchema.optional(),
   gate: standingGateSchema.default('act_and_report').describe('confirm_first prepares and reports, then waits for the owner; act_and_report does the work and reports.'),
   escalation: standingEscalationSchema.default('message_owner').describe('Who hears about it when a scheduled run fails.'),
-});
+}).refine(({ trigger, cron }) => (trigger === 'cron') === (cron !== undefined), { error: 'cron is required only when trigger is cron.', path: ['cron'] });
 export type SetStandingOrderArgs = z.infer<typeof setStandingOrderArgsSchema>;
 
 export const listStandingOrdersArgsSchema = z.strictObject({});

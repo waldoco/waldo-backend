@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { cancelReminderArgsSchema, TOOL_PERMISSIONS } from '@waldo/contracts';
+import { cancelReminderArgsSchema, setReminderArgsSchema, setStandingOrderArgsSchema, TOOL_PERMISSIONS } from '@waldo/contracts';
+import { nextOccurrence } from '../src/scheduler/multiplexer';
 import { localIso, localToEpoch, reminderHandlers, type ReminderBook } from '../src/channels/reminders';
 
 
@@ -63,5 +64,33 @@ describe('cancel all reminders contract (T32 contract repro, not live trace)', (
     const book = { async cancelAll() { return 2; } } as unknown as ReminderBook;
     const handler = reminderHandlers(book)[2]!;
     expect(await handler.handle({ all: true } as never)).toMatchObject({ ok: true, data: { cancelled: 2 } });
+  });
+});
+
+describe('reminder recurrence contract', () => {
+  it('accepts daily, weekdays, weekly and validated cron, rejecting mismatched cron args', () => {
+    const base = { note: 'standup', at: '2026-10-09T09:00' };
+    for (const repeat of ['none', 'daily', 'weekdays', 'weekly']) expect(setReminderArgsSchema.safeParse({ ...base, repeat }).success).toBe(true);
+    expect(setReminderArgsSchema.safeParse({ ...base, repeat: 'cron', cron: '0 9 * * 1-5' }).success).toBe(true);
+    for (const args of [{ repeat: 'cron' }, { repeat: 'cron', cron: '99 9 * * *' }, { repeat: 'cron', cron: '0 0 0 0 0' }, { repeat: 'daily', cron: '0 9 * * *' }]) {
+      expect(setReminderArgsSchema.safeParse({ ...base, ...args }).success).toBe(false);
+    }
+  });
+});
+
+describe('owner-local DST recurrence edge cases', () => {
+  it('a weekly spring-gap time moves to the first valid minute on the same weekday', () => {
+    expect(nextOccurrence({ type: 'weekly_local', time: '02:30', timezone: 'America/New_York', weekday: 0 }, Date.parse('2026-03-07T15:00:00Z'))).toBe(Date.parse('2026-03-08T07:00:00Z'));
+  });
+  it('a weekly fall overlap fires once at the first occurrence, not again after completion', () => {
+    const recurrence = { type: 'weekly_local' as const, time: '01:30', timezone: 'America/New_York', weekday: 0 };
+    const first = nextOccurrence(recurrence, Date.parse('2026-10-31T15:00:00Z'));
+    expect(first).toBe(Date.parse('2026-11-01T05:30:00Z'));
+    expect(nextOccurrence(recurrence, first)).toBe(Date.parse('2026-11-08T06:30:00Z'));
+  });
+  it('standing order schema validates the same cron contract', () => {
+    for (const trigger of ['daily', 'weekdays', 'weekly']) expect(setStandingOrderArgsSchema.safeParse({ scope: 'review', trigger, at: '09:00' }).success).toBe(true);
+    expect(setStandingOrderArgsSchema.safeParse({ scope: 'review', trigger: 'cron', cron: '0 9 * * 1-5' }).success).toBe(true);
+    for (const args of [{ trigger: 'cron' }, { trigger: 'cron', cron: '99 9 * * *' }, { trigger: 'daily', cron: '0 9 * * *' }]) expect(setStandingOrderArgsSchema.safeParse({ scope: 'review', ...args }).success).toBe(false);
   });
 });
