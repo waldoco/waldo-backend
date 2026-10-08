@@ -889,3 +889,14 @@ it('a complete model reply carries no stop note', async () => {
   expect((await runInDurableObject(stub(name), (_i, state) => scanKv(state.storage, 'I stopped early'))).length).toBe(0);
   expect((await runInDurableObject(stub(name), (_i, state) => scanKv(state.storage, 'Done'))).length).toBeGreaterThan(0);
 });
+
+it('PHASES a turn records how long each context phase took, without content', async () => {
+  const name = 'memory-do-phase-timing';
+  await turn(name, 1, 'What time is my standup?');
+  await runInDurableObject(stub(name), (_i, state) => {
+    const rows = state.storage.sql.exec<{ code: string; ms: number }>("SELECT note AS code, ms FROM trace_log WHERE hop = 'composer_phase'").toArray();
+    expect(rows.map(row => row.code).join(',')).toContain('materials');
+    expect(rows.map(row => row.code).join(',')).toContain('recall');
+    expect(rows.every(row => Number.isFinite(row.ms))).toBe(true);
+  });
+});

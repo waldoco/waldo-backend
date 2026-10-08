@@ -212,6 +212,8 @@ export type ContextComposerDependencies = Readonly<{
   skill_budget: ResolvedSkillBudget;
   recall: ContextRecallGateway;
   unexpected_error_observer?: ContextComposerUnexpectedErrorObserver;
+  // Receives each phase name with the milliseconds the previous phase took. Content-free.
+  phase_observer?: (phase: string, previousMs: number) => void;
 }>;
 
 export type ContextCompositionEvidence = Readonly<{

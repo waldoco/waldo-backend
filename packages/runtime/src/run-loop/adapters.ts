@@ -123,6 +123,7 @@ type ResolveRunLoopAdaptersOptions = {
   // D5: derived health context (zones only, Art-9) for the composer's health material slot.
   // The loader owns absence: it returns null and logs when no derived context exists.
   health?: () => Promise<ContextHealthMaterial | null>;
+  onComposerPhase?: (phase: string, previousMs: number) => void;
 };
 
 export function resolveRunLoopAdapters(
@@ -149,7 +150,7 @@ export function resolveRunLoopAdapters(
       deliveryTextFallback: RUN_LOOP_DELIVERY_TEXT,
       providerMode: 'fake',
       safety: localPermissiveSafety(),
-      contextComposer: createLocalTrustedBriefContextComposer(options.toolOutputs, options.health, options.localSystemSkills),
+      contextComposer: createLocalTrustedBriefContextComposer(options.toolOutputs, options.health, options.localSystemSkills, options.onComposerPhase),
       replayArtifacts: localTrustedBriefReplayArtifacts(),
     };
   }
@@ -297,6 +298,7 @@ function createLocalTrustedBriefContextComposer(
   toolOutputs: () => Promise<readonly ContextFragment[]> = async () => [],
   health: () => Promise<ContextHealthMaterial | null> = async () => null,
   hostSkills?: LocalSystemSkillBinding,
+  phaseObserver?: (phase: string, previousMs: number) => void,
 ): ContextComposer {
   const dependencies: ContextComposerDependencies = {
     staged_inputs: {
@@ -437,7 +439,7 @@ function createLocalTrustedBriefContextComposer(
       },
     },
   };
-  return createContextComposer(dependencies);
+  return createContextComposer({ ...dependencies, ...(phaseObserver ? { phase_observer: phaseObserver } : {}) });
 }
 
 function localTrustedBriefReplayArtifacts(): V2ReplayArtifactSource {
