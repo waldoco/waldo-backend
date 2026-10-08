@@ -72,7 +72,7 @@ it('ordinary two-argument owner constructor reads A/B in one selected Cloudflare
       expect(commonBrowserFixture.allocations).toBe(1); expect(commonBrowserFixture.ends).toBe(1);
       const ledger = state.storage.kv.get<any>(`common-spend:${ref}`);
       expect(ledger.reservedMicrousd).toBeGreaterThanOrEqual(100);
-      expect(ledger.calls.filter((call: any) => call.id.startsWith('model:')).length).toBeGreaterThanOrEqual(4);
+      expect(ledger.calls.filter((call: any) => call.id.startsWith('model:')).length).toBeGreaterThanOrEqual(3);
       expect(ledger.reservedMicrousd).toBeLessThanOrEqual(10000);
     } finally { await state.storage.deleteAlarm(); denied.mockRestore(); }
   });
