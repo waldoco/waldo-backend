@@ -884,3 +884,46 @@ The owner must decide on OAuth app publication (weekly re-auth until published).
 - `verify` green at the exact head.
 - Merged, live and tested reported separately.
 - Diff reads as deletion-heavy for A, B and C. If a "removal" PR adds more lines than it deletes outside tests, it gets a second look.
+
+
+---
+
+## Amendments after reviewing the first implementation (8 Oct, #918 @ 0585d1c1)
+
+These override the matching text above.
+
+1. **A-2: bounded owner-memory budget (corrects the spec).** The old text said "compute room from the new constant", which would let the owner memory profile grow to about 400K chars in every system prompt.
+   - Only the conversation window and tool outputs use `MODEL_CONTEXT_MAX_CHARS`.
+   - The memory profile in the system prompt gets its own constant, `OWNER_PROFILE_MAX_CHARS = 12_000`. Deeper recall goes through `read_memory`.
+   - **The trusted-v2 RunLoop synthesis and replay bounds keep their own constants.** They are the trusted scheduled path, not the conversational loop. Revert their derivation from `MODEL_CONTEXT_MAX_CHARS` (`trusted-run-loop.test.ts` must pass unmodified).
+2. **A-5: fencing is not taint.** Quoted text is always fenced and escaped (`<system>` → `&lt;system&gt;`) under the "external quoted data" label, whoever the author is. Author only decides taint.
+   - The author is the owner only when the quoted message's `from.id` is the owner **and** it has no `forward_origin`/`forward_from`/`is_automatic_forward`.
+   - Anything else, or unknown, is external.
+   - `owner-turn-envelope.test.ts` "external quote is sanitised…" must pass unmodified.
+3. **A-1: workspace receipt metadata is external text and stays fenced.** Removing the classifier does not remove the taint gate that keeps externally authored file paths out of the system prompt as instructions. Either keep the sanitise-or-withhold gate, or move the receipts into a fenced data block outside the system prompt. `owner-task-context.test.ts` must pass unmodified.
+4. **A-3: deleting tests.**
+   - Delete only the injection-corpus `describe` in `scribe-sanitiser.property.test.ts`.
+   - The 11 health-value properties guard a kept boundary (ADR-0081, egress and storage) and stay. Adjust only cases at `internal_context` + external taint for A-7 redaction, and list each one.
+5. **A-6: outbox chunking must keep crash semantics.**
+   - Persist `attempting` before each part's send.
+   - Rethrow persist failures.
+   - Quarantine on ambiguity.
+   - `heartbeat-outbox.test.ts` "crash while persisting … cannot resend" must pass unmodified, plus a new 3-part version.
+6. **A-8: revised.**
+   - Keep the original bare `code|otp|passcode` pattern. Drop the narrowing and the grouped 3-3 addition.
+   - The fix is step 2 only: redact the matched span inline and keep the rest of the mail.
+   - A false positive ("postal code: 560001") now costs one number, not the whole email, and real codes ("your code is 123456") stay quarantined.
+   - `otp-postal` asserts the mail body reaches the model with only the span replaced.
+7. **D-3: allowed.** `truncated?: boolean` on `llmResponseSchema` (`contracts/src/adapters/llm.ts`) is an additive optional field on the internal adapter contract, not a released protocol. Update the key-list test (`llm.test.ts:112`). Before D merges, the reply must say in plain words that it stopped early and offer to continue.
+8. **E-6: no new dependency.**
+   - Convert HTML to text in the Worker with the built-in `HTMLRewriter`; the connector proxy returns the raw `text/html` part, bounded.
+   - Do not add `htmlparser2` or a Deno import map.
+   - If the proxy cannot return raw parts, ask the owner before adding a dependency.
+9. **E-7:** the selected account is part of the approval payload digest (`approvals.ts`). An approved effect executes only on that account.
+10. **CI is the gate.**
+    - No PR is stacked on a red base, and nothing merges red.
+    - "Left red on purpose" is not allowed. The PR that breaks a test fixes it, or coordinates a stacked fix that merges first.
+    - The browser tests A-1 broke (`browser-owner-host-do`, `browser-public-read-owner-do`) are fixed inside #918 by registering the browser host on the owner-DO path, or by a Dalda PR that #918 rebases onto.
+    - Run the full `verify` before marking any slice ready.
+11. **Pinned-constant tests** (`scribe-budget-override.test.ts`, `day-plan-gateway-admission.test.ts`) are legitimate edits where they encode the old 32K ceiling. List each in the PR body (rule 6). Do not raise caps they guard outside the conversational path.
+12. **Hostile scenarios.** The owner said to skip them for now (14:26). Recorded. Residual risk: A-3 and A-5 change injection handling without the hostile test. The single `hostile-mail-send` L1 scenario costs one test file and is recommended before staging exposure to anyone other than the owner.
