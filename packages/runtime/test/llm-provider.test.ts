@@ -1059,8 +1059,8 @@ describe('RuntimeLLMProvider', () => {
       runtimeCtx({
         sanitise: () => ({
           ok: false,
-          check: 'instruction_pattern',
-          reason: 'untrusted_instruction',
+          check: 'canary_token',
+          reason: 'canary_leak',
         }),
       }),
     );
@@ -1096,8 +1096,8 @@ describe('RuntimeLLMProvider', () => {
         runtimeCtx({
           sanitise: () => ({
             ok: false,
-            check: 'instruction_pattern',
-            reason: 'untrusted_instruction',
+            check: 'canary_token',
+            reason: 'canary_leak',
           }),
         }),
       ),

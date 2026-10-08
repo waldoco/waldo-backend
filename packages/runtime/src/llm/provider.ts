@@ -1311,7 +1311,6 @@ const SCRIBE_HARD_REASONS: ReadonlySet<string> = new Set([
   'canary_leak',
   'secret_leak',
   'health_value_leak',
-  'untrusted_instruction',
 ]);
 
 async function sanitiseRequest(

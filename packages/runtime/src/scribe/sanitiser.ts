@@ -2,17 +2,14 @@ import { validId } from '@waldo/workspace';
 import {
   DERIVED_SCORE_PATTERNS,
   derivedHealthDestinationViewSchema,
-  INJECTION_GUARD_THRESHOLDS,
-  INJECTION_RULES,
   PII_PATTERNS,
   RAW_SENSOR_PATTERNS,
+  ROLE_TAG_PATTERN,
   SANITISE_DESTINATION_POLICIES,
   TRUNCATION_MARKER,
   sanitiseInputSchema,
   type Redaction,
   type RedactionKind,
-  type GuardVerdict,
-  type InjectionRuleId,
   type SanitiseCheck,
   type SanitiseDestination,
   type SanitiseDestinationPolicy,
@@ -111,31 +108,6 @@ function cloneRegex(pattern: RegExp): RegExp {
 
 function matches(pattern: RegExp, text: string): boolean {
   return cloneRegex(pattern).test(text);
-}
-
-function verdictForMatches(matches: GuardVerdict['matches']): GuardVerdict {
-  const score = matches.reduce((total, match) => total + match.weight, 0);
-  return {
-    decision:
-      score >= INJECTION_GUARD_THRESHOLDS.block
-        ? 'block'
-        : score >= INJECTION_GUARD_THRESHOLDS.review
-          ? 'review'
-          : 'allow',
-    score,
-    matches,
-    matchCount: matches.length,
-  };
-}
-
-function matchingInjectionRules(input: string) {
-  return INJECTION_RULES.filter((rule) => matches(rule.pattern, input));
-}
-
-export function scoreInjection(input: string): GuardVerdict {
-  return verdictForMatches(
-    matchingInjectionRules(input).map((rule) => ({ id: rule.id, weight: rule.weight })),
-  );
 }
 
 function compactKey(key: string): string {
@@ -871,56 +843,29 @@ function redactPii(
   };
 }
 
-// PR 1 item 1: owner-authored text (source_taint null) headed to the model as conversation (internal_context) is not scored; the system prompt (skills, canvas values) still is for injection;
-// keyword weights ("dan", "system ") blocked ordinary asks like "Call Dan about the system update". External taint keeps the scorer.
-const ownerAuthoredSkipsInjection = (input: Readonly<{ source_taint: unknown; destination: SanitiseDestination }>): boolean =>
-  input.source_taint === null && input.destination === 'internal_context';
+// Only external-tainted text is inspected. Owner, Waldo and history text (null taint) is never
+// scored or rewritten at any destination. External text is never denied for what it says; its
+// role tags are escaped so it cannot open a system/user turn. Fence closers are handled by the
+// composer's source admission.
+const inspectsInstructions = (input: Readonly<{ source_taint: unknown }>): boolean =>
+  input.source_taint === 'external';
 
 function inspectInstructions(
   payload: JsonValue,
-  destination: SanitiseDestination,
   redactions: Redaction[],
 ): SanitiseResult | { payload: JsonValue; redactions: Redaction[] } {
-  const matched = new Map<InjectionRuleId, GuardVerdict['matches'][number]>();
-  const scanned = visitStrings(payload, destination, (text) => {
-    for (const match of scoreInjection(text).matches) matched.set(match.id, match);
-    return false;
-  });
-  if (scanned.invalid) return deny('size_cap', 'invalid_payload');
-  const verdict = verdictForMatches(
-    INJECTION_RULES.flatMap((rule) => {
-      const match = matched.get(rule.id);
-      return match === undefined ? [] : [match];
-    }),
-  );
-  if (verdict.decision === 'block') {
-    return deny('instruction_pattern', 'untrusted_instruction');
-  }
-  if (verdict.decision === 'allow') return { payload, redactions };
-
-  let instructionCount = 0;
-  const transformed = transformJsonStrings(payload, (text) => {
-    let output = text;
-    for (const rule of matchingInjectionRules(text)) {
-      const flags = rule.pattern.flags.includes('g') ? rule.pattern.flags : `${rule.pattern.flags}g`;
-      const global = new RegExp(rule.pattern.source, flags);
-      instructionCount += Array.from(text.matchAll(global)).length;
-      output = output.replace(global, '[REDACTED_INSTRUCTION]');
-    }
-    const decoded = decodedViews(output);
-    if (decoded.views.slice(1).some((view) => scoreInjection(view).decision !== 'allow')) {
-      instructionCount += 1;
-      return '[REDACTED_INSTRUCTION]';
-    }
-    return output;
-  });
+  let tagCount = 0;
+  const escapeTags = (text: string): string =>
+    text.replace(ROLE_TAG_PATTERN, (tag) => {
+      tagCount += 1;
+      return tag.replace('<', '&lt;').replace('>', '&gt;');
+    });
+  const transformed = transformJsonStrings(payload, escapeTags);
   if (transformed.invalid) return deny('size_cap', 'invalid_payload');
+  if (tagCount === 0) return { payload, redactions };
   return {
     payload: transformed.payload,
-    redactions: [
-      ...redactions,
-      { kind: 'instruction_pattern', count: Math.max(instructionCount, 1) },
-    ],
+    redactions: [...redactions, { kind: 'instruction_pattern', count: tagCount }],
   };
 }
 
@@ -1059,7 +1004,7 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   const pii = redactPii(input.payload, 'memory_block', input.source_taint, input.canary_tokens);
   if (pii.invalid) return deny('size_cap', 'invalid_payload');
 
-  const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
+  const instructions = inspectsInstructions(input) ? inspectInstructions(pii.payload, pii.redactions) : { payload: pii.payload, redactions: pii.redactions };
   if ('ok' in instructions) return instructions;
   return {
     ok: true,
@@ -1075,7 +1020,7 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
 // 2026-09-27: the owner-readable seam passed an owner email at null taint (per owner direction),
 // the final pass re-redacted it at 'external', the assembled prompt no longer matched, and every
 // turn failed with sanitisation_failed until the fragment left the window. Deny-level guards stay:
-// canary/secret, health leak, injection block verdict, and destination policy all still fail closed.
+// canary/secret, health leak and destination policy all still fail closed.
 export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
   if (!input) return deny('size_cap', 'invalid_payload');
@@ -1087,17 +1032,6 @@ export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
   const health = containsForbiddenHealth(input);
   if (health.invalid) return deny('size_cap', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
-
-  if (ownerAuthoredSkipsInjection(input)) return applyDestinationPolicy(input, input.payload, []);
-  const matched = new Map<InjectionRuleId, GuardVerdict['matches'][number]>();
-  const scanned = visitStrings(input.payload, input.destination, (text) => {
-    for (const match of scoreInjection(text).matches) matched.set(match.id, match);
-    return false;
-  });
-  if (scanned.invalid) return deny('size_cap', 'invalid_payload');
-  if (verdictForMatches([...matched.values()]).decision === 'block') {
-    return deny('instruction_pattern', 'untrusted_instruction');
-  }
 
   return applyDestinationPolicy(input, input.payload, []);
 }
@@ -1117,7 +1051,7 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
   const pii = redactPii(input.payload, input.destination, input.source_taint, input.canary_tokens);
   if (pii.invalid) return deny('size_cap', 'invalid_payload');
 
-  const instructions = ownerAuthoredSkipsInjection(input) ? { payload: pii.payload, redactions: pii.redactions } : inspectInstructions(pii.payload, input.destination, pii.redactions);
+  const instructions = inspectsInstructions(input) ? inspectInstructions(pii.payload, pii.redactions) : { payload: pii.payload, redactions: pii.redactions };
   if ('ok' in instructions) return instructions;
   return applyDestinationPolicy(input, instructions.payload, instructions.redactions);
 }
