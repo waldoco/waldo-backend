@@ -1,6 +1,6 @@
 # Owner private browser integration status
 
-SOURCE: based on Core `c53f7676a9ebc738fed5af98f6cb167cb83fee6e`, with automatic admission and the private lifecycle preparation applied separately. This branch is local preparation, not a release or credential activation.
+SOURCE: rebased on beta-mvp `e8a122d24bc551b513df61903de53159bba0ca23`, including Core #938. Automatic admission, private lifecycle and Core-cleared shared console/alarm hooks are integrated in this draft source. No deployment or credential activation is claimed.
 
 The browser-owned host now consumes persistent site/account/generation consent, native Cloudflare human handoff, account verification, encrypted state custody, the existing browser grant/spend configuration, and typed private read results. The ordinary owner browser runtime selects that host for the exact saved site. Browserbase remains explicitly selectable. Public-only trial consent is never private-state permission.
 
