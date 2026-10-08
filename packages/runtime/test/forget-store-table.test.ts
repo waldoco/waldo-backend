@@ -25,6 +25,7 @@ const TABLES: Record<string, Row> = {
   claim_holds: exempt('kind, reason code and a fingerprint hash'), forget_barriers: exempt('never holds topic words for new writes (marker and hash only); legacy rows are redacted on load'),
   purge_pending: exempt('claim id and fingerprint hash'), topic_purge_pending: exempt('fingerprint hash, a marker and a time'), settle_pending: exempt('trace id and time'),
   claim_recall_ready: exempt('claim ids'),
+  cost_ledger: exempt('day, call kind, responsibility id, trigger enum, model name, token counts and cost; no owner text'),
   schedule_preferences: exempt('a scheduled-behavior kind enum and an on/off flag; no owner text'),
   owner_request_last: exempt('trace id, time, ok flag and step count of the last owner request; no owner text (hop notes stay in trace_log)'),
   owner_source_scope: exempt('an enum value (none or pasted_only) and a time; no owner text'),
@@ -52,6 +53,7 @@ const TABLES: Record<string, Row> = {
   ledger: gap('summary and payload JSON'), event_admissions: gap('delivery body'), trace_log: gap('note column; trace sinks not verified'), journal: gap('run journal; only a partial reference in purge, not shown covered'),
   claim_recall: gap('FTS index kept in step with claims by triggers (content=claims); no test checks the index for a marker after a purge'),
   constellation_edges: gap('ids plus a relation label; node removal drops its edges per purge comments, no test checks edges'),
+  responsibilities: gap('title, intent and closing evidence text; a literal forget does not reach it yet'), responsibility_items: gap('step title and worker result text; a literal forget does not reach it yet'),
   proactivity: gap('settings JSON, not inspected'), watch_state: gap('key and value, not inspected'), proxy_intent_routes: gap('purpose text, not inspected'), workspace_manifest: gap('state JSON with file names'),
   runtime_runs: gap(TEXT_JSON), runtime_invocation_v2: gap(TEXT_JSON), runtime_journal: gap(TEXT_JSON), runtime_trace: gap(TEXT_JSON),
   // Product-schema tables (do-schema.ts), none wired to purge

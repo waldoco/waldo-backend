@@ -490,9 +490,8 @@ export const createOwnerResponder = (
       // draw from it, so the turn's stated cap is absolute (Codex #224 hold).
       const turnBudget = { remaining: MAX_TOOL_ROUNDS };
       const delegate = delegateTaskHandler(async (task) => {
-        const assertChildSource = async () => { await assertCurrent(); };
         const childHandlers = activeHandlers.map(handler => ({ ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
-          await assertChildSource();
+          await assertCurrent();
           return handler.handle(args, ctx);
         } }));
         // A5b: one run row per spawned child; the exit classification lands on the row, and
@@ -505,9 +504,9 @@ export const createOwnerResponder = (
           ctx: { ...safety, ...(turnReplyContext && !turnReplyOwnAuthored ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
           controlRound: consumeRound,
           complete: async (content, tools, turns) => {
-            await assertChildSource();
+            await assertCurrent();
             const response = await complete(trace, 'subagent', SUBAGENT_SYSTEM_PROMPT, [{ role: 'user', content }], undefined, undefined, tools as never, turns);
-            await assertChildSource();
+            await assertCurrent();
             return response;
           },
           onTool: (event) => {
@@ -515,7 +514,7 @@ export const createOwnerResponder = (
             log({ trace, hop: `subagent_tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: forgetJsonText(event.call.arguments), output: forgetJsonText(event.output, 'tool_result') } });
           },
         });
-          await assertChildSource();
+          await assertCurrent();
           if (run) runs?.finish(run.id, result.exit === 'completed' ? 'completed' : result.exit === 'stopped' ? 'stopped' : 'failed', (result.text.split('\n')[0] ?? '').slice(0, 120));
           return result;
         } catch (error) {

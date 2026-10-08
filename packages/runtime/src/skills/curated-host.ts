@@ -34,6 +34,7 @@ export function createScopedCuratedSkillCapability(sql:SqlStorage, turn:CuratedS
   // Hook snapshots clone the scope object; its host-created closure identities are opaque proof.
   if(ctx.authenticatedUserId!==owner || ctx.turnId!==turnId || (ctx.runScope?.runId!==scope.runId || ctx.runScope.attempt!==scope.attempt || ctx.runScope.deadline!==scope.deadline || ctx.runScope.admit!==scope.admit || ctx.runScope.commit!==scope.commit) || ctx.trigger!==turn.trigger || (ctx.toolArgSourceTaint!==null && !(readOnlySelection && ctx.toolArgSourceTaint==='external')))
    return {ok:false as const,code:'rejected' as const,error:'Skill invocation authority is unavailable.'};
+  await (turn.assertDispatch ?? turn.assertCurrent)();
   const result=scope.commit(work);await turn.assertCurrent();return result;
  };
  const handlers:DispatchToolOptions<ToolDispatcherContext>['handlers']=[
