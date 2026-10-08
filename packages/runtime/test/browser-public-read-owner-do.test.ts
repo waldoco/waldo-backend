@@ -20,7 +20,7 @@ vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof im
   return method === 'getMe' ? { username: 'public_browser_fixture_bot' } : true;
 } }));
 
-it('ordinary two-argument owner constructor reads A/B/A in one selected Cloudflare session, forwards PNG, delivers evidence and closes without common activation', async () => {
+it('ordinary two-argument owner constructor reads A/B in one selected Cloudflare session and refuses identical A without an action, forwards PNG, delivers evidence and closes without common activation', async () => {
   commonBrowserFixture.reset();
   const doName = proof.doName = `public-browser-two-arg-${crypto.randomUUID()}`, subject = Number(proof.subject);
   const now = Date.now(), ref = `public-proof-${crypto.randomUUID()}`;
@@ -53,9 +53,10 @@ it('ordinary two-argument owner constructor reads A/B/A in one selected Cloudfla
       const final = replies.find(input => Array.isArray(input.input) && input.input.filter((item: any) => item.type === 'function_call_output').length === 3);
       expect(final).toBeDefined();
       const outputs = final.input.filter((item: any) => item.type === 'function_call_output').map((item: any) => JSON.parse(item.output));
-      expect(outputs.every((row: any) => row.ok === true)).toBe(true);
-      expect(outputs.map((row: any) => row.data.url)).toEqual(['https://example.com/a', 'https://www.iana.org/b', 'https://example.com/a']);
-      expect(new Set(outputs.map((row: any) => row.data.session_handle)).size).toBe(1);
+      expect(outputs.slice(0,2).every((row: any) => row.ok === true)).toBe(true);
+      expect(outputs.slice(0,2).map((row: any) => row.data.url)).toEqual(['https://example.com/a', 'https://www.iana.org/b']);
+      expect(outputs[2]).toMatchObject({ok:false,code:'repeat_refusal'});
+      expect(new Set(outputs.slice(0,2).map((row: any) => row.data.session_handle)).size).toBe(1);
       expect(outputs[0].data.text).toContain('Option A costs 10'); expect(outputs[1].data.text).toContain('Option B costs 20');
       expect(JSON.stringify(final)).toContain('data:image/png;base64,iVBOR');
       expect(JSON.stringify(proof.inputs)).not.toContain('fixture-retained-provider');

@@ -64,6 +64,13 @@ export async function runToolLoop(input: Readonly<{
   const turns: LLMToolTurn[] = [];
   const seen = new Map<string, Awaited<ReturnType<typeof dispatch>>>();
   const offered = new Set<string>();
+  const browserActions = new Map<string, number>();
+  const browserReads = new Map<string, {handle:string; epoch:number}>();
+  const sessionHandle = (data:unknown, field:string):string|undefined => {
+    if (!data || typeof data !== 'object' || !(field in data)) return;
+    const value=(data as Record<string,unknown>)[field];
+    return typeof value==='string' && value.length>0 ? value : undefined;
+  };
   // Delivery URLs returned by successful tool receipts this loop; the final reply may show no other artifact link.
   const receiptUrls = new Set<string>();
   // A landed mutation opens a new read epoch. Mutation replay keys survive resets,
@@ -95,12 +102,12 @@ export async function runToolLoop(input: Readonly<{
       const started = Date.now();
       const key = `${call.name}\u0000${call.arguments}`;
       const cached = seen.get(key);
-      // A retained browser revisit observes current page state. Dispatch again so
-      // owner authority and existing provider/spend limits are checked anew.
-      const retainedRead = call.name === 'browse_page' && cached?.ok
-        && typeof cached.data === 'object' && cached.data !== null
-        && 'session_handle' in cached.data && typeof cached.data.session_handle === 'string'
-        && cached.data.session_handle.length > 0;
+      // Only a completed host action in this exact retained session opens another
+      // identical read. Reads and unrelated mutation successes are not action proof.
+      const anchor = browserReads.get(key);
+      const retainedRead = call.name === 'browse_page' && cached?.ok && anchor
+        && sessionHandle(cached.data,'session_handle') === anchor.handle
+        && (browserActions.get(anchor.handle) ?? 0) > anchor.epoch;
       const previous = retainedRead ? undefined : cached;
       // Preserve settled nonretryable failures and mutation failures verbatim.
       // Replaying them performs no I/O; transient reads may retry within the budget.
@@ -126,13 +133,23 @@ export async function runToolLoop(input: Readonly<{
       const retryableRead = !result.ok && result.code === 'transient'
         && 'reason' in result && result.reason === 'tool_result_error';
       if (mutation || !retryableRead) {
-        seen.set(key, result);
+        // Keep the successful retained anchor through a loop refusal; a later real
+        // action may unlock it. Settled provider failures still replace the anchor.
+        if (!(anchor && previous?.ok && !result.ok && result.code==='repeat_refusal')) seen.set(key, result);
+      }
+      if (!previous && result.ok && call.name==='browse_page') {
+        const handle=sessionHandle(result.data,'session_handle');
+        if(handle) browserReads.set(key,{handle,epoch:browserActions.get(handle) ?? 0});
+      }
+      if (result.ok && call.name==='browse_act') {
+        const handle=sessionHandle(result.data,'browser_action_session_handle');
+        if(handle) browserActions.set(handle,(browserActions.get(handle) ?? 0)+1);
       }
       const receipt = receiptUrl(call.name, result);
       if (receipt !== null) receiptUrls.add(receipt);
       if (result.ok && mutationTools.has(call.name as never)) {
         for (const seenKey of seen.keys()) {
-          if (!mutationTools.has(seenKey.slice(0, seenKey.indexOf('\u0000')) as never)) seen.delete(seenKey);
+          if (!browserReads.has(seenKey) && !mutationTools.has(seenKey.slice(0, seenKey.indexOf('\u0000')) as never)) seen.delete(seenKey);
         }
       }
       // Turn taint accumulation (ADR-0049): a result stamped external taints the rest of the
