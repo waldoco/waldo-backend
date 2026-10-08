@@ -62,6 +62,10 @@ jobs:
       - name: Hermetic owner ingress
         working-directory: packages/runtime
         run: npx vitest run --config vitest.owner-ingress.config.ts
+      # live-memory.test.ts needs node:sqlite, so the workers-pool config excludes it; this step is its only CI run.
+      - name: Live owner memory handlers
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.memory-b1.config.ts
       - name: Console ticket tenant routing
         working-directory: packages/runtime
         run: npx vitest run --config vitest.console-ticket.config.ts
