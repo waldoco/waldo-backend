@@ -818,6 +818,10 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     pendingTopics(): string[] {
       return sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending WHERE coverage_incomplete = 0 ORDER BY created_at, fingerprint').toArray().map((row) => row.topic);
     },
+    // An owner-requested forget that ran to completion closes a legacy hold on the same topic, so consolidation never waits on it forever.
+    finishPendingTopic(topic: string): void {
+      sql.exec('DELETE FROM topic_purge_pending WHERE topic = ?', topic);
+    },
     incompleteTopics(): string[] {
       return sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending WHERE coverage_incomplete != 0 ORDER BY created_at, fingerprint').toArray().map(row => row.topic);
     },

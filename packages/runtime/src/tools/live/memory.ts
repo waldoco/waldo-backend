@@ -111,6 +111,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const commit = () => {
           for (const text of texts) store.barrier(text, now());
           for (const id of selected.keys()) store.forget(id);
+          if (args.topic) for (const held of [...store.pendingTopics(), ...store.incompleteTopics()]) if (carriesTopic(held, args.topic) || carriesTopic(args.topic, held)) store.finishPendingTopic(held);
         };
         const atomic = () => deps.transaction ? deps.transaction(commit) : commit();
         if (ctx.runScope) ctx.runScope.commit(atomic); else atomic();
