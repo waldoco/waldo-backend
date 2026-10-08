@@ -64,6 +64,28 @@ describe('live owner memory', () => {
     expect(s.store.claims()).toHaveLength(0); expect(s.history[0]).toContain('tea');
     expect(await s.call('remember', { kind: 'preference', text: 'Prefers tea', evidence_quote: 'tea' }, s.ctx('tea'))).toMatchObject({ ok: false });
   });
+  it('rejects spans inside quoted data, even when the same text also occurs in owner prose', async () => {
+    const s = setup(); const text = 'tea then quoted tea';
+    const current = { message_ref: 'tg-8', text, sourceQuoteRanges: [{ start: 16, end: 19 }] };
+    const context = s.ctx('forget the quote'); context.memoryTurn = { ...context.memoryTurn!, recent: [current] };
+    expect(await s.call('forget_memory', { source: { message_ref: 'tg-8', start: 16, end: 19 }, scope_note: 'quoted tea' }, context)).toMatchObject({ ok: false });
+    expect(s.history).toHaveLength(0);
+  });
+  it('reports history cleanup failure without deleting claims or claiming completion', async () => {
+    const s = setup();
+    await s.call('remember', { kind: 'fact', text: 'Tea', evidence_quote: 'tea' }, s.ctx('tea'));
+    const handlers = memoryHandlers({ sql: s.sql, store: s.store, conversationRef: CHAT, hideHistory: async () => { throw new Error('history unavailable'); } });
+    const handler = handlers.find(h => h.name === 'forget_memory')!;
+    await expect(handler.handle(handler.schema.parse({ claim_ids: [1], scope_note: 'tea' }), s.ctx('forget tea'))).rejects.toThrow('history unavailable');
+    expect(s.store.claims()).toHaveLength(1);
+  });
+  it('filters pending topics only, preserving unrelated read results', async () => {
+    const s = setup();
+    await s.call('remember', { kind: 'fact', text: 'Coffee', evidence_quote: 'Coffee' }, s.ctx('Coffee'));
+    await s.call('remember', { kind: 'fact', text: 'Tea', evidence_quote: 'Tea' }, s.ctx('Tea'));
+    s.store.beginTopicCoverage('Coffee', '2026-10-08T09:00:00Z');
+    expect(await s.call('read_memory', {}, s.ctx('read'))).toMatchObject({ ok: true, data: { claims: [expect.objectContaining({ text: 'Tea' })] } });
+  });
   it('forgets an exact UTF-16 Hindi source span without touching a different span in the same turn', async () => {
     const s = setup(); const text = '😀 मुझे चाय पसंद है और मैं दिल्ली में रहता हूँ'; const context = s.ctx(text);
     await s.call('remember', { kind: 'preference', text: 'Likes tea', evidence_quote: 'चाय पसंद है' }, context);
