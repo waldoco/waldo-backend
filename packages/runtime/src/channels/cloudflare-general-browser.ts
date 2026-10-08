@@ -1,4 +1,6 @@
 import {prepareGeneralPublicRead} from './general-browser-public-read';
+import { Buffer } from 'node:buffer';
+import { LIMITS, validId, validatePath } from '@waldo/workspace';
 import type { Browser, BrowserContext, BrowserWorker, Page } from '@cloudflare/playwright';
 import { browserSessionSchema, type BrowserSession } from '@waldo/contracts';
 import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
@@ -16,6 +18,7 @@ export class GeneralBrowserError extends Error {
 }
 type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; cleanupBinding?(providerSessionId:string):BrowserWorker; publicRead?:boolean; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number }>;
 type Navigation = Readonly<{ goto(page: Page, url: string): Promise<void>; finish(page: Page): Promise<void>; pending(page: Page): boolean; dispatched(): void }>;
+export type GeneralBrowserUploadFile = Readonly<{ file_id: string; revision: number; name: string; mime_type: string; byte_size: number; sha256: string }>;
 
 // The owner host owns the durable checkpoint, authority and serialization. This
 // driver never allocates on attach failure and never creates a second ledger.
@@ -278,6 +281,46 @@ export function cloudflareGeneralBrowser(options: Options) {
         return await observe(session, context, page);
       }
       catch { throw new GeneralBrowserError('outcome_uncertain'); }
+    }),
+    upload: (session: BrowserSession, snapshot: GeneralSnapshot, reference: string, file: GeneralBrowserUploadFile,
+      approvedFile: (actionDigest: string) => Promise<Uint8Array>) => attached(session, async (_, context, navigation) => {
+      // Only a trusted host supplies workspace metadata and approved bytes. Native
+      // change handlers can transmit immediately, so approval precedes setInputFiles.
+      file = Object.freeze({ ...file });
+      if (snapshot.ownerId !== session.ownerId || snapshot.sessionId !== session.id || snapshot.generation !== session.generation) throw new GeneralBrowserError('stale_observation');
+      const element = snapshot.state.elements[snapshot.observation.elements.findIndex(row => row.ref === reference)];
+      if (!element || element.disabled || element.tag !== 'input' || element.type !== 'file') throw new GeneralBrowserError('rejected');
+      if (!validId(file.file_id) || !Number.isSafeInteger(file.revision) || file.revision < 1 || !Number.isSafeInteger(file.byte_size) || file.byte_size < 1 || file.byte_size > LIMITS.fileBytes || !/^[a-f0-9]{64}$/.test(file.sha256)
+        || typeof file.name !== 'string' || file.name.includes('/') || typeof file.mime_type !== 'string' || !file.mime_type || file.mime_type.length > 200 || /[\r\n\u0000]/.test(file.mime_type)) throw new GeneralBrowserError('rejected');
+      try { validatePath(file.name); } catch { throw new GeneralBrowserError('rejected'); }
+      const page = await select(session, context, snapshot.observation.tab_ref);
+      const checked = async () => {
+        const current = await observe(session, context, page);
+        if (current.targetId !== snapshot.targetId || current.digest !== snapshot.digest) throw new GeneralBrowserError('stale_observation');
+      };
+      await checked();
+      const digest = await generalDigest(JSON.stringify({ revision: snapshot.observation.revision, operation: 'upload', element_ref: reference, file }));
+      const supplied = await approvedFile(digest);
+      if (!(supplied instanceof Uint8Array) || supplied.length !== file.byte_size) throw new GeneralBrowserError('rejected');
+      const bytes = Buffer.from(supplied);
+      if (await generalDigest(bytes) !== file.sha256) throw new GeneralBrowserError('rejected');
+      await admit(session); await checked(); await admit(session);
+      navigation.dispatched();
+      try {
+        const locator = page.locator(element.selector);
+        await locator.setInputFiles({ name: file.name, mimeType: file.mime_type, buffer: bytes }, { timeout: actionTimeout(session) });
+        await navigation.finish(page); await admit(session);
+        // FileList is evidence of the bytes selected in the browser, not a claim
+        // that the site accepted an upload or the owner's task is complete.
+        const held = await locator.evaluate(async (node: any) => Promise.all(Array.from(node.files ?? []).map(async (entry: any) => ({
+          name: entry.name, mime_type: entry.type, byte_size: entry.size,
+          sha256: [...new Uint8Array(await crypto.subtle.digest('SHA-256', await entry.arrayBuffer()))].map(byte => byte.toString(16).padStart(2, '0')).join(''),
+        }))));
+        await admit(session);
+        if (held.length !== 1 || held[0]!.name !== file.name || held[0]!.mime_type !== file.mime_type || held[0]!.byte_size !== file.byte_size || held[0]!.sha256 !== file.sha256) throw new GeneralBrowserError('outcome_uncertain');
+        const after = await observe(session, context, page);
+        return { snapshot: after, receipt: { file_id: file.file_id, revision: file.revision, byte_size: file.byte_size, sha256: file.sha256, target_ref: reference, verification: 'native_input' as const } };
+      } catch { throw new GeneralBrowserError('outcome_uncertain'); }
     }),
     observe: (session: BrowserSession, reference?: string) => attached(session, async (_, context) => observe(session, context, await select(session, context, reference))),
     navigate: (session: BrowserSession, url: string, reference?: string) => attached(session, async (_, context, navigation) => {

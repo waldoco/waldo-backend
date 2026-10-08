@@ -3,7 +3,7 @@ import { cloudflareGeneralBrowser } from '../src/channels/cloudflare-general-bro
 import type { BrowserSession } from '@waldo/contracts';
 
 const session: BrowserSession = { id: 'host-session', ownerId: 'owner-a', provider: 'cloudflare_playwright', providerSessionId: 'PRIVATE_PROVIDER_ID', contextHandle: null, mode: 'public', state: 'active', generation: 1, expiresAt: 60000, updatedAt: 0 };
-function harness(controlTag = 'a') {
+function harness(controlTag = 'a', inputType = 'text') {
   const calls: string[] = []; let ended = false, serial = 0, changed = false;
   const pages: any[] = [];
   const page = () => {
@@ -12,7 +12,7 @@ function harness(controlTag = 'a') {
       goto: async (value: string) => { url = value; calls.push('navigate'); return { status: () => 200 }; },
       evaluate: async (fn: Function, args?: unknown) => {
         if (fn.name !== 'generalPageState') { calls.push(`scroll:${JSON.stringify(args)}`); return; }
-        return { url, title: 'Public documentation', text: changed ? 'Changed by the human' : 'Compare Browser Run sessions and contexts.', width: 1280, height: 720, scrollX: 0, scrollY: 0, elements: [{ selector: 'html > body > a:nth-of-type(1)', tag: controlTag, role: controlTag === 'a' ? 'link' : 'textbox', name: 'Session reuse', href: controlTag === 'a' ? 'https://docs.example/reuse' : '', value, type: controlTag === 'input' ? 'text' : '', disabled: false, selected: false, checked: false, inForm: false, ...(controlTag === 'select' ? { options: [{ value: 'second', label: 'Second choice', disabled: false, selected: value === 'second' }] } : {}) }] };
+        return { url, title: 'Public documentation', text: changed ? 'Changed by the human' : 'Compare Browser Run sessions and contexts.', width: 1280, height: 720, scrollX: 0, scrollY: 0, elements: [{ selector: 'html > body > a:nth-of-type(1)', tag: controlTag, role: controlTag === 'a' ? 'link' : 'textbox', name: 'Session reuse', href: controlTag === 'a' ? 'https://docs.example/reuse' : '', value, type: controlTag === 'input' ? inputType : '', disabled: false, selected: false, checked: false, inForm: false, ...(controlTag === 'select' ? { options: [{ value: 'second', label: 'Second choice', disabled: false, selected: value === 'second' }] } : {}) }] };
       },
       locator: () => ({ click: async () => { calls.push('click'); url = 'https://docs.example/reuse'; }, fill: async (input: string) => { calls.push(`fill:${input}`); value = input; }, selectOption: async (input: string) => { calls.push(`select:${input}`); value = input; }, press: async (input: string) => { calls.push(`press:${input}`); } }),
       screenshot: async () => new Uint8Array([137, 80, 78, 71]), close: async () => { pages.splice(pages.indexOf(p), 1); },
@@ -25,6 +25,57 @@ function harness(controlTag = 'a') {
   const sdk = { acquire: async () => { calls.push('acquire'); return { sessionId: session.providerSessionId }; }, connect: async (_: unknown, options: any) => { expect(options).toEqual({ sessionId: session.providerSessionId, persistent: true }); if (ended) throw Error('session ended'); calls.push('attach'); return browser; }, sessions: async () => ended ? [] : [{ sessionId: session.providerSessionId }] };
   return { calls, pages, sdk, browser, context, route: (route: any) => routeHandler!(route), humanChange: () => { changed = true; } };
 }
+it('uploads an approved exact file into the observed native input and verifies browser-held bytes', async () => {
+  const f = harness('input', 'file');
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(session, 'https://docs.example/upload');
+  const bytes = new Uint8Array([1, 2, 3]);
+  const { generalDigest } = await import('../src/channels/general-browser-observation');
+  const sha256 = await generalDigest(bytes);
+  let held: any;
+  f.pages[0].locator = () => ({ setInputFiles: async (file: any) => { f.calls.push('upload'); held = file; }, evaluate: async () => [{ name: held.name, mime_type: held.mimeType, byte_size: held.buffer.length, sha256: await generalDigest(held.buffer) }] });
+  const result = await driver.upload(session, first, first.observation.elements[0]!.ref,
+    { file_id: '12345678-1234-1234-1234-123456789abc', revision: 2, name: 'report.txt', mime_type: 'text/plain', byte_size: bytes.length, sha256 },
+    async (digest: string) => { expect(digest).toMatch(/^[a-f0-9]{64}$/); expect(f.calls).not.toContain('upload'); return bytes; });
+  expect(f.calls).toContain('upload');
+  expect(result.receipt).toEqual({ file_id: '12345678-1234-1234-1234-123456789abc', revision: 2, byte_size: 3, sha256, target_ref: first.observation.elements[0]!.ref, verification: 'native_input' });
+  expect(result.snapshot.observation.url).toBe('https://docs.example/upload');
+  expect(JSON.stringify(result.receipt)).not.toContain('PRIVATE_');
+});
+it.each(['withdrawn', 'stale', 'wrong_bytes', 'foreign_owner', 'not_file'] as const)('upload %s refuses native dispatch', async mode => {
+  const f = harness('input', mode === 'not_file' ? 'text' : 'file'); let live = true;
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => { if (!live) throw Error('withdrawn'); }, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(session, 'https://docs.example/upload');
+  const { generalDigest } = await import('../src/channels/general-browser-observation');
+  const bytes = new Uint8Array([1]);
+  f.pages[0].locator = () => ({ setInputFiles: async () => { f.calls.push('upload'); } });
+  await expect(driver.upload(mode === 'foreign_owner' ? { ...session, ownerId: 'owner-b' } : session, first, first.observation.elements[0]!.ref,
+    { file_id: '12345678-1234-1234-1234-123456789abc', revision: 2, name: 'report.txt', mime_type: 'text/plain', byte_size: 1, sha256: await generalDigest(bytes) },
+    async () => { if (mode === 'withdrawn') live = false; if (mode === 'stale') f.humanChange(); return mode === 'wrong_bytes' ? new Uint8Array([2]) : bytes; })).rejects.toMatchObject({ code: mode === 'stale' ? 'stale_observation' : 'rejected' });
+  expect(f.calls).not.toContain('upload');
+});
+it('does not report an upload receipt when native selected-file bytes differ after dispatch', async () => {
+  const f = harness('input', 'file');
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(session, 'https://docs.example/upload');
+  const { generalDigest } = await import('../src/channels/general-browser-observation');
+  const bytes = new Uint8Array([1]);
+  f.pages[0].locator = () => ({ setInputFiles: async () => { f.calls.push('upload'); }, evaluate: async () => [{ name: 'report.txt', mime_type: 'text/plain', byte_size: 1, sha256: await generalDigest(new Uint8Array([2])) }] });
+  await expect(driver.upload(session, first, first.observation.elements[0]!.ref,
+    { file_id: '12345678-1234-1234-1234-123456789abc', revision: 2, name: 'report.txt', mime_type: 'text/plain', byte_size: 1, sha256: await generalDigest(bytes) }, async () => bytes)).rejects.toMatchObject({ code: 'outcome_uncertain' });
+  expect(f.calls).toContain('upload');
+});
+it('keeps the approved upload descriptor immutable across asynchronous host admission', async () => {
+  const f = harness('input', 'file');
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const first = await driver.navigate(session, 'https://docs.example/upload');
+  const { generalDigest } = await import('../src/channels/general-browser-observation');
+  const bytes = new Uint8Array([1]), file = { file_id: '12345678-1234-1234-1234-123456789abc', revision: 2, name: 'approved.txt', mime_type: 'text/plain', byte_size: 1, sha256: await generalDigest(bytes) };
+  let held: any;
+  f.pages[0].locator = () => ({ setInputFiles: async (input: any) => { held = input; }, evaluate: async () => [{ name: held.name, mime_type: held.mimeType, byte_size: held.buffer.length, sha256: await generalDigest(held.buffer) }] });
+  const result = await driver.upload(session, first, first.observation.elements[0]!.ref, file, async () => { file.name = 'changed.txt'; file.revision = 3; return bytes; });
+  expect(held.name).toBe('approved.txt'); expect(result.receipt.revision).toBe(2);
+});
 it('navigates a public page, returns actual image bytes, and retains two tabs across detached owner turns', async () => {
   const f = harness();
   const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
