@@ -43,6 +43,9 @@ const PATTERNS: ReadonlyArray<{ kind: ArtifactKind; re: RegExp }> = [
   // not here: "postal code: 560001" and "error code 5001" are not credentials. "verification code",
   // "login code" etc. stay covered by the vendor-adjective pattern above.
   { kind: 'otp', re: new RegExp(String.raw`\b(?:otp|passcode)\b\s*(?:is|:)?\s*#?\s*` + CODE + String.raw`\b`, 'gi') },
+  // A grouped six-digit code after bare "code" ("Your WhatsApp code: 123-456") is a credential shape;
+  // an ungrouped number after "code" (postal code, error code) is not.
+  { kind: 'otp', re: new RegExp(String.raw`\bcode\b\s*(?:is|:)\s*#?\s*\d{3}[- ]\d{3}\b`, 'gi') },
   // Google's SMS/mail prefix form runs first: "G-123456 is your Google verification code" would
   // otherwise lose its prefix to the generic "is your" pattern below before extraction sees it.
   { kind: 'otp', re: new RegExp(String.raw`\bG-\d{6}\b`, 'g') },
