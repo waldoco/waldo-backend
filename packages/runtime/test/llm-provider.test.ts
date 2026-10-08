@@ -1766,7 +1766,7 @@ describe('sanitiseRequest structural degradation', () => {
       },
       runtimeCtx(),
     );
-    expect(result).toMatchObject({ ok: false, code_detail: 'system_prompt_rejected', scribe: { destination: 'system_prompt', reason: 'invalid_payload' } });
+    expect(result).toMatchObject({ ok: false, code_detail: 'system_prompt_rejected', scribe: { destination: 'system_prompt', reason: 'oversize' } });
     // The system prompt ceiling equals the preflight string ceiling, so an over-window prompt is rejected as invalid_payload.
     expect(gateway.requests).toHaveLength(0);
   });

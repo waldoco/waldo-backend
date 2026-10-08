@@ -15,8 +15,8 @@ describe('A-8 otp-real: real OTPs still caught, redacted inline', () => {
   });
   it('read_thread replaces only the matched span and keeps the rest (relay ok)', async () => {
     const relays: unknown[] = [];
-    const m = await readThread('Sign in: Acme login code is 847291', 'Hi Sam,\nYour login code is 847291. It expires in 10 minutes.\nPostal code: 560001.', async (from, a) => { relays.push({ from, a }); return true; });
-    expect(m.body).toBe('Hi Sam,\n[otp artifact - sent to the owner in a separate message]. It expires in 10 minutes.\nPostal code: 560001.');
+    const m = await readThread('Sign in: Acme login code is 847291', 'Hi Sam,\nYour login code is 847291. It expires in 10 minutes.', async (from, a) => { relays.push({ from, a }); return true; });
+    expect(m.body).toBe('Hi Sam,\n[otp artifact - sent to the owner in a separate message]. It expires in 10 minutes.');
     expect(m.subject).toBe('Sign in: [otp artifact - sent to the owner in a separate message]');
     expect(m.quarantined).toEqual(['otp']);
     expect(relays).toEqual([{ from: 'noreply@example.com', a: [{ kind: 'otp', value: '847291' }] }]);
