@@ -50,3 +50,33 @@ describe('google read tools: provider status to owner-facing result', () => {
     });
   }
 });
+
+describe('google read tools: connected-but-dead grant asks for reconnect, not a fresh connect', () => {
+  const deadGrant = (error: string | null): GoogleAccess => ({
+    client: async () => null,
+    state: async () => [{ id: 'conn-1', email: 'me@example.com', error, calendar: true, mail: true, tasks: true }],
+  });
+  for (const [name, args, feature] of READS) {
+    it(`${name}: no serving client while a connected account is failing -> reauth_needed (${feature})`, async () => {
+      const r = await run(deadGrant('google token failed: invalid_grant'), name, args);
+      expect(r).toMatchObject({ ok: false, code: 'auth_failed', source_taint: 'external', connect: { status: 'auth_required', service: 'google', reason: 'reauth_needed', feature } });
+      expect(JSON.stringify(r)).not.toMatch(/https?:|state=|accounts\.google/);
+    });
+  }
+  it('no serving client and no failing account -> not_connected', async () => {
+    const r = await run(deadGrant(null), 'query_calendar', { include_declined: false, limit: 20 });
+    expect(r).toMatchObject({ ok: false, code: 'auth_failed', connect: { reason: 'not_connected' } });
+  });
+  it('no serving client and a failing account that does not cover the feature -> not_connected', async () => {
+    const access: GoogleAccess = {
+      client: async () => null,
+      state: async () => [{ id: 'conn-1', email: 'me@example.com', error: 'google token failed: invalid_grant', calendar: false, mail: false, tasks: false }],
+    };
+    const r = await run(access, 'query_calendar', { include_declined: false, limit: 20 });
+    expect(r).toMatchObject({ ok: false, code: 'auth_failed', connect: { reason: 'not_connected' } });
+  });
+  it('no serving client and no state seam -> not_connected (unchanged)', async () => {
+    const r = await run({ client: async () => null }, 'query_calendar', { include_declined: false, limit: 20 });
+    expect(r).toMatchObject({ ok: false, code: 'auth_failed', connect: { reason: 'not_connected' } });
+  });
+});
