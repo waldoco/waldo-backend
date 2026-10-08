@@ -30,7 +30,8 @@ export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: Owner
       const due = localToEpoch(at, clock.timezone);
       if (repeat === 'none' && due <= now) throw new Error(`${at} is already past in ${clock.timezone}`);
       const recurrence = reminderRecurrence(repeat, at, clock.timezone, cron);
-      const first = recurrence === null ? due : nextOccurrence(recurrence, Math.max(now, localToEpoch(`${at.slice(0, 10)}T00:00`, clock.timezone) - 1));
+      const start = localIso(due, clock.timezone) === at ? due : localToEpoch(`${at.slice(0, 10)}T00:00`, clock.timezone);
+      const first = recurrence === null ? due : nextOccurrence(recurrence, Math.max(now, start - 1));
       const id = `reminder:${newId()}`;
       sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', id, note, now);
       let entry: ScheduleEntry;

@@ -98,3 +98,18 @@ describe('first recurrence in a DST gap', () => {
     });
   });
 });
+
+describe('future cron start boundary', () => {
+  it('does not fire before the requested at time on a future date', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('reminder-cron-start'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      claimStore(state.storage.sql); ensureSchema(state.storage);
+      const now = Date.parse('2026-10-08T08:00:00Z');
+      const scheduler = new Scheduler(state.storage.sql, state.storage, { ...productionDeps(), now: () => now });
+      const book = reminderBook(state.storage.sql, scheduler, { timezone: 'America/New_York', now: () => new Date(now) }, () => 'boundary');
+      const reminder = await book.set({ note: 'cron', at: '2026-10-09T12:00', repeat: 'cron', cron: '0 9 * * *' });
+      expect(scheduler.read(reminder.id)?.due_at).toBe(Date.parse('2026-10-10T13:00:00Z'));
+      await book.cancelAll();
+    });
+  });
+});
