@@ -35,33 +35,47 @@ export async function privateBrowserSession<C, T>(options: {
   launch(): Promise<PrivateBrowser<C>>;
   installPolicy(context: C): Promise<void>;
   work(context: C): Promise<T>;
+  signal?: AbortSignal;
+  cleanupTimeoutMs?: number;
 }): Promise<PrivateSessionOutcome<T>> {
+  const step = async <V>(work: () => Promise<V>, late?: (value: V) => Promise<void>): Promise<V> => {
+    const signal = options.signal;
+    signal?.throwIfAborted();
+    if (!signal) return work();
+    let abort!: () => void;
+    const interrupted = new Promise<never>((_, reject) => { abort = () => reject(Error('browser_private_interrupted')); });
+    signal.addEventListener('abort', abort, { once: true });
+    const pending = Promise.resolve().then(() => { signal.throwIfAborted(); return work(); });
+    void pending.then(value => { if (signal.aborted && late) void late(value).catch(() => {}); }, () => {});
+    try { return await Promise.race([pending, interrupted]); }
+    finally { signal.removeEventListener('abort', abort); }
+  };
   let phase: Exclude<PrivateSessionOutcome<T>, { status: "ok" }>["phase"] =
     "load";
   let browser: PrivateBrowser<C> | undefined,
     context: PrivateBrowserContext<C> | undefined;
   let outcome: PrivateSessionOutcome<T>;
   try {
-    const bytes = await options.custody?.load();
+    const bytes = await step(async () => options.custody?.load());
     const state = bytes
       ? JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes))
       : undefined;
     phase = "launch";
-    browser = await options.launch();
+    browser = await step(options.launch, late => late.close());
     phase = "context";
-    context = await browser.newContext(
+    context = await step(() => browser!.newContext(
       state === undefined ? {} : { storageState: state },
-    );
+    ), late => late.close());
     phase = "policy";
-    await options.installPolicy(context.value);
+    await step(() => options.installPolicy(context!.value));
     phase = "work";
-    const value = await options.work(context.value);
+    const value = await step(() => options.work(context!.value));
     if (options.custody) {
       phase = "persist";
-      const state = await context.storageState({ indexedDB: true });
-      await options.custody.save(
+      const state = await step(() => context!.storageState({ indexedDB: true }));
+      await step(() => options.custody!.save(
         new TextEncoder().encode(JSON.stringify(state)),
-      );
+      ));
     }
     outcome = {
       status: "ok",
@@ -72,18 +86,15 @@ export async function privateBrowserSession<C, T>(options: {
     outcome = { status: "failed", phase };
   }
   let cleanupFailed = false;
-  if (context)
-    try {
-      await context.close();
-    } catch {
-      cleanupFailed = true;
-    }
-  if (browser)
-    try {
-      await browser.close();
-    } catch {
-      cleanupFailed = true;
-    }
+  const cleanup = Promise.allSettled([...(context ? [Promise.resolve().then(() => context!.close())] : []), ...(browser ? [Promise.resolve().then(() => browser!.close())] : [])]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = options.cleanupTimeoutMs;
+    if (timeout !== undefined && (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 10000)) throw Error('browser cleanup timeout invalid');
+    const results = await (timeout === undefined ? cleanup : Promise.race([cleanup, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Error('browser cleanup timeout')), timeout); })]));
+    cleanupFailed = results.some(result => result.status === 'rejected');
+  } catch { cleanupFailed = true; }
+  finally { if (timer !== undefined) clearTimeout(timer); }
   // Preserve original failure phase. A successful work callback is not repeated
   // automatically if persistence or cleanup failed; it may have performed an effect.
   if (cleanupFailed && outcome.status === "ok")

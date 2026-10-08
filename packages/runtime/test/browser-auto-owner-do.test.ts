@@ -104,8 +104,9 @@ it('one explicit bounded operator policy serves two existing owners and a newly 
         const final = proof.inputs.filter(row => row.subject === owner.subject).map(row => row.input).find(input => Array.isArray(input.input) && input.input.filter((item: any) => item.type === 'function_call_output').length === 3);
         expect(final).toBeDefined();
         const outputs = final.input.filter((item: any) => item.type === 'function_call_output').map((item: any) => JSON.parse(item.output));
-        expect(outputs).toHaveLength(3); expect(outputs.every((row: any) => row.ok && row.data.text.includes(`cookie-${owner.subject}`))).toBe(true);
-        expect(new Set(outputs.map((row: any) => row.data.session_handle)).size).toBe(1);
+        expect(outputs).toHaveLength(3); expect(outputs.slice(0, 2).every((row: any) => row.ok && row.data.text.includes(`cookie-${owner.subject}`))).toBe(true);
+        expect(outputs[2]).toMatchObject({ok:false,code:'repeat_refusal'});
+        expect(new Set(outputs.slice(0,2).map((row: any) => row.data.session_handle)).size).toBe(1);
         expect(JSON.stringify(final)).toContain('data:image/png;base64,iVBOR');
         expect(JSON.stringify(final)).not.toContain('private-provider-');
         expect(proof.delivered.some(row => Number(row.subject) === owner.subject && row.text === `Owner ${owner.subject} read A/B/A.`)).toBe(true);

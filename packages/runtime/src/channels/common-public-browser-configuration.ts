@@ -69,7 +69,12 @@ export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramW
   cleanupBinding:(grant,id)=>{
    // Retained host custody, not current action authority, names the obligation.
    const retained=storage.kv.get<{grant:CommonBrowserGrant;session:{providerSessionId:string}}>(`common-browser:${grant.taskId}`);
-   if(!retained||JSON.stringify(retained.grant)!==JSON.stringify(grant)||retained.session.providerSessionId!==id)throw Error('common cleanup custody unavailable');
+   const privateBudget=storage.kv.get<{grant:CommonBrowserGrant;recordKey:string}>(`private-browser-budget:${grant.taskId}`);
+   const privateRecord=privateBudget?.recordKey?.startsWith('private-browser-owner/v1/')?storage.kv.get<{binding:{ownerId:string;environment:string;siteOrigin:string;accountId:string};providerSessionId:string;allocationRef:string}>(privateBudget.recordKey):undefined;
+   const privateMatch=privateBudget&&privateRecord&&JSON.stringify(privateBudget.grant)===JSON.stringify(grant)
+    &&privateRecord.binding.ownerId===policy.directoryOwnerId&&privateRecord.binding.environment==='staging'&&privateRecord.providerSessionId===id&&privateRecord.allocationRef===grant.taskId
+    &&privateBudget.recordKey===`private-browser-owner/v1/${JSON.stringify([privateRecord.binding.ownerId,privateRecord.binding.environment,privateRecord.binding.siteOrigin,privateRecord.binding.accountId])}`;
+   if(!(retained&&JSON.stringify(retained.grant)===JSON.stringify(grant)&&retained.session.providerSessionId===id)&&!privateMatch)throw Error('common cleanup custody unavailable');
    return calls.cleanupBinding(env.BROWSER as BrowserWorker,`browser-cleanup:${grant.taskId}`,id);
   },
   meterGateway:(gateway:LLMGatewayAdapter)=>calls.gateway(gateway),

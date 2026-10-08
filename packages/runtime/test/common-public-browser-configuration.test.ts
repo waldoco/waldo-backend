@@ -3,6 +3,16 @@ import {commonPublicBrowserConfiguration,type CommonPublicReadPolicy} from '../s
 import type {TelegramWebhookEnv} from '../src/channels/telegram-webhook';
 import {commonBrowserFixtureLoader} from './fixtures/common-browser-sdk';
 afterEach(()=>vi.unstubAllGlobals());
+it('private cleanup uses the same prepaid ledger and rejects a different provider identity',async()=>{
+ const f=fixture(),config=f.config(),grant=await config.grant(f.task,f.ownerId);await config.reserveAllocation(grant);
+ const binding={ownerId:f.policy.directoryOwnerId,environment:'staging',siteOrigin:'https://public-pages.fixture.invalid',accountId:'synthetic-account'};
+ const recordKey=`private-browser-owner/v1/${JSON.stringify(Object.values(binding))}`;
+ f.rows.set(`private-browser-budget:${grant.taskId}`,{grant,recordKey});
+ f.rows.set(recordKey,{binding,providerSessionId:'private-provider',allocation:'observed',allocationRef:grant.taskId});
+ expect(()=>config.cleanupBinding!(grant,'private-provider')).not.toThrow();
+ expect(()=>config.cleanupBinding!(grant,'other-provider')).toThrow('custody unavailable');
+ expect(f.rows.get('common-spend:fictional-spend')).toMatchObject({reservedMicrousd:1,cleanup:[{issued:0,maxCalls:3}]});
+});
 const fixture=()=>{
  let now=10000,revision='1';const rows=new Map<string,unknown>([['do_name','fixture-owner'],['telegram_subject','81106']]);
  const storage={kv:{get:(key:string)=>rows.get(key),put:(key:string,value:unknown)=>rows.set(key,structuredClone(value))},transactionSync:<T>(work:()=>T)=>work()} as unknown as DurableObjectStorage;

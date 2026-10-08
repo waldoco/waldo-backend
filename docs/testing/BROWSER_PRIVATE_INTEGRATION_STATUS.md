@@ -1,0 +1,29 @@
+# Owner private browser integration status
+
+SOURCE: based on Core `c53f7676a9ebc738fed5af98f6cb167cb83fee6e`, with automatic admission and the private lifecycle preparation applied separately. This branch is local preparation, not a release or credential activation.
+
+The browser-owned host now consumes persistent site/account/generation consent, native Cloudflare human handoff, account verification, encrypted state custody, the existing browser grant/spend configuration, and typed private read results. The ordinary owner browser runtime selects that host for the exact saved site. Browserbase remains explicitly selectable. Public-only trial consent is never private-state permission.
+
+The synthetic host journey confirms consent, completes fake MFA, saves ciphertext, reconstructs a host, restores without another login, reads useful private content, renews consent with old-state retirement, requires fresh sign-in, and revokes during an active read. It rejects another owner and changed account registration. HTTP restrictions and WebSocket rejection precede restored-account verification. Concurrent sign-out and read termination share cleanup for the exact allocation and its funded grant. A launch that never answers returns deadline failure while retaining allocation uncertainty. These are local fake receipts, not Cloudflare or private-account acceptance.
+
+## Remaining shared integration
+
+Core coordination is required before editing `packages/runtime/src/channels/telegram-owner-do.ts`: expose `privateControl` behind the existing console session, pass the trusted site/account/custody policy to the owner runtime, deliver Live View through the existing presence-checked Telegram API with a checked chat/message receipt, and connect private expiry/restart cleanup to the shared alarm arbiter. `packages/runtime/src/scheduler/alarm-slot.ts` must preserve that private cleanup wake when other flows rearm the sole alarm. No console sign-in change is needed. These hooks are not implemented or claimed as passing in this preparation.
+
+## Exact credential-custody blocker
+
+The existing `waldo.connections.provider` check in `supabase/migrations/20260924170000_waldo_connections.sql` permits only `google`. The existing `connector-proxy` supports Google exchange/adopt/call/MCP operations. Service-role-only `proxy_secret` access is not available to the Worker. Thus the existing Vault cannot currently provide browser state encryption merely by selecting a different provider string.
+
+The intended reuse is narrowly typed encrypt/decrypt operations inside the existing proxy, with owner/site/account/environment/generation binding and keys retained in Vault. The private runner now accepts custody instead of receiving an exported key. The test custody uses synthetic AES keys; no real key or connection has been created. Router HMAC, service-role credentials and Google tokens must not be reused as browser encryption keys, and a browser key must not be disguised as a Google connection.
+
+The precise additional authority needed is approval to extend the existing Vault connection provider/reference constraint and proxy API for browser-state custody, plus persistent per-owner/site/account/generation key creation and state processing after the owner's nonce/CSRF confirmation. This requires a coordinated SQL migration and credential activation, both excluded by current instructions. No migration, new database grant, key creation or proxy deployment was performed. Live account selection and expiry must be explicit before any such activation.
+
+## Serving acceptance after dependencies clear
+
+Run the normal authenticated owner-DO console and `browse_page` journey with sealed synthetic account state and fake provider/model/Telegram transports first. Verify console-session and CSRF denial, nonce replay and custody change denial, owner-only Live View delivery, useful content rather than an access-denied page, restore after DO recreation, generation renewal, active sign-out, expiry/unlink/restart cleanup, and independent absence of the exact provider session. Verify the existing spend reference and counters never reset and failed cleanup cannot allocate a replacement.
+
+Real staging provider work remains held until the existing spend ledger is reconciled and the parent coordinates a bounded allowance. No production, live account login, CAPTCHA solving, plan/cap change, key creation or new spend occurred. Files/download owner delivery and complete screenshot delivery remain separate owned backlog. Cloudflare handoff field compatibility is source/type-verified, not provider-accepted; native storage state is cookies/localStorage/IndexedDB, not an arbitrary browser profile or sessionStorage.
+
+## Release incident handoff
+
+On staging Core `c53f7676`, ordinary model calls inherit the browser-specific gateway reservation in `owner-browser-runtime.ts:73–75`. Configuration construction does not reject expired policy; the reservation later calls the expiry-enforcing physical check in `common-public-browser-configuration.ts:47`. `TelegramOwnerDO.setup()` caches the gateway, so a constructor-only expiry test misses an already-running DO crossing expiry. Release owns that correction. Preserve browser acquisition denial, retained cleanup, spend references and reconciliation failures; never catch a live budget/uncertainty failure and switch to an unmetered browser path. No incident source correction was made on this feature branch pending release coordination.

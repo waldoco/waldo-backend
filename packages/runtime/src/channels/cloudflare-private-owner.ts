@@ -1,21 +1,43 @@
 import type { BrowserContext, BrowserWorker, Page } from '@cloudflare/playwright';
-import { browserStateCustody, type BrowserStateBinding } from './browser-state-custody';
+import { browserStateCustody, type BrowserStateBinding, type BrowserStateBlobStore } from './browser-state-custody';
 import { siteScopedCustody } from './browser-site-custody';
 import type { BrowserStateSitePolicy } from './browser-state-site-scope';
-import { privateBrowserSession, type PrivateSessionOutcome } from './browser-private-session';
+import { privateBrowserSession, type PrivateSessionOutcome, type PrivateStateCustody } from './browser-private-session';
 import { cloudflarePrivateLauncher, cloudflareOwnerHandoff, type CloudflareLauncher } from './cloudflare-browser-adapter';
 
 type Record = Readonly<{ binding: BrowserStateBinding; expiresAt: number; revoked?: true;
-  allocation?: 'prepared' | 'observed' | 'closed'; providerSessionId?: string; interrupted?: true; operationId?: string }>;
+  allocation?: 'prepared' | 'observed' | 'closed'; allocationRef?: string; providerSessionId?: string; interrupted?: true; operationId?: string }>;
 type SignIn = Readonly<{ instructions: string; timeoutMs: number; liveViewExpiresMs: number;
   prepare(context: BrowserContext): Promise<Page>; deliverToOwner(ownerId: string, url: string): Promise<void> }>;
 const active = new WeakMap<DurableObjectStorage, Map<string, AbortController>>();
+const cleanupWork = new WeakMap<DurableObjectStorage, Map<string, Promise<void>>>();
+export async function cleanupPrivateBrowserOwner(storage: DurableObjectStorage, recordKey: string, providerSessionId: string, allocationRef: string | undefined, terminate: () => Promise<void>): Promise<void> {
+  let pending = cleanupWork.get(storage);
+  if (!pending) { pending = new Map(); cleanupWork.set(storage, pending); }
+  const identity = JSON.stringify([recordKey, providerSessionId, allocationRef]);
+  let work = pending.get(identity);
+  if (!work) { work = Promise.resolve().then(terminate); pending.set(identity, work); }
+  try { await work; }
+  finally { if (pending.get(identity) === work) pending.delete(identity); }
+}
+export function revokePrivateBrowserOwner(storage: DurableObjectStorage, binding: BrowserStateBinding): void {
+  const key = `private-browser-owner/v1/${JSON.stringify([binding.ownerId, binding.environment, binding.siteOrigin, binding.accountId])}`;
+  storage.transactionSync(() => {
+    const row = storage.kv.get<Record>(key);
+    if (row && JSON.stringify(row.binding) !== JSON.stringify(binding)) throw Error('browser_private_rejected');
+    if (row) storage.kv.put(key, { ...row, revoked: true, operationId: crypto.randomUUID() });
+    for (const [path] of storage.kv.list({ prefix: `${key}/encrypted/` })) storage.kv.delete(path);
+  });
+  active.get(storage)?.get(key)?.abort();
+}
 // Concrete trusted-host consumer. The caller supplies existing owner authorization,
 // persistence consent, metered allocation and a nonextractable approved key. It is
 // not a model tool and does not mint approvals, keys, grants or spend allowance.
 export function cloudflarePrivateOwner(options: Readonly<{
   storage: DurableObjectStorage; binding: BrowserWorker; launch: CloudflareLauncher;
-  bindingScope: BrowserStateBinding; expiresAt: number; key: CryptoKey;
+  bindingScope: BrowserStateBinding; expiresAt: number; key?: CryptoKey;
+  custody?(binding: BrowserStateBinding, blobs: BrowserStateBlobStore, admit: (binding: BrowserStateBinding) => Promise<boolean>): Promise<PrivateStateCustody>;
+  allocationRef?: string;
   allowedDomains: readonly string[]; sitePolicy: BrowserStateSitePolicy; now(): number;
   keepAliveMs: number; lifetimeMs: number; deadline(): number;
   assertOwnerCurrent(binding: BrowserStateBinding): Promise<void>;
@@ -51,7 +73,7 @@ export function cloudflarePrivateOwner(options: Readonly<{
     if (!matches(retained)) throw Error('browser_private_rejected');
     if (!retained?.allocation || retained.allocation === 'closed') return;
     if (!retained.providerSessionId) throw Error('browser_private_allocation_uncertain');
-    await options.terminate(retained.providerSessionId);
+    await cleanupPrivateBrowserOwner(options.storage, recordKey, retained.providerSessionId, retained.allocationRef, () => options.terminate(retained.providerSessionId!));
     options.storage.transactionSync(() => {
       const current = row();
       // A late cleanup cannot mark a replacement allocation closed.
@@ -66,6 +88,7 @@ export function cloudflarePrivateOwner(options: Readonly<{
   return {
     async run<T>(operation: Readonly<{
       verifyAccount(context: BrowserContext, binding: BrowserStateBinding): Promise<boolean>;
+      installPolicy?(context: BrowserContext): Promise<void>;
       signIn?: SignIn; work(context: BrowserContext): Promise<T>;
     }>): Promise<PrivateSessionOutcome<T>> {
       let controllers = active.get(options.storage);
@@ -109,7 +132,9 @@ export function cloudflarePrivateOwner(options: Readonly<{
         // JavaScript timers cannot represent a larger single timeout safely.
         if(!Number.isSafeInteger(remaining) || remaining<1 || remaining>2147483647) throw Error('browser_private_deadline_invalid');
         operationTimer=setTimeout(()=>controller.abort(),remaining);
-        const custody = await browserStateCustody(binding, options.key, {
+        if (!!options.key === !!options.custody) throw Error('browser_private_custody_invalid');
+        const createCustody = options.custody ?? ((scope, blobs, admit) => browserStateCustody(scope, options.key!, blobs, admit));
+        const custody = await createCustody(binding, {
           get: async path => (options.storage.kv.get<Uint8Array>(blobPrefix + path) ?? null),
           put: async (path, bytes) => options.storage.transactionSync(() => {
             // Fence in the same transaction as the write: an earlier async check
@@ -123,7 +148,7 @@ export function cloudflarePrivateOwner(options: Readonly<{
           await checkOperation(); await options.reserveAllocation(binding, options.lifetimeMs); await checkOperation();
           options.storage.transactionSync(()=>{
             if(!locallyCurrent() || controller.signal.aborted || row()?.operationId!==operationId) throw Error('browser_private_rejected');
-            update({ allocation: 'prepared', providerSessionId: undefined });
+            update({ allocation: 'prepared', allocationRef: options.allocationRef, providerSessionId: undefined });
           });
           const browser = await options.launch(browserBinding, args);
           try {
@@ -134,14 +159,15 @@ export function cloudflarePrivateOwner(options: Readonly<{
           } catch (error) { await browser.close(); throw error; }
           const retained = row();
           return new Proxy(browser, { get(target, property) {
-            if (property === 'close') return async () => { await target.close(); await cleanup(retained); };
+            if (property === 'close') return async () => { void target.close().catch(() => {}); await cleanup(retained); };
             const value = Reflect.get(target, property, target);
             return typeof value === 'function' ? value.bind(target) : value;
           }});
         }, options.allowedDomains, options.keepAliveMs);
         const result = await privateBrowserSession({
+          signal: controller.signal, cleanupTimeoutMs: 10000,
           custody: siteScopedCustody(custody, options.sitePolicy, 1048576), launch,
-          installPolicy: async () => { await checkOperation(); },
+          installPolicy: async context => { await checkOperation(); if (operation.installPolicy) await bounded(operation.installPolicy(context)); await checkOperation(); },
           work: async context => {
             await checkOperation();
             // Restored cookies are not proof of a current authenticated account.
@@ -178,12 +204,8 @@ export function cloudflarePrivateOwner(options: Readonly<{
         // Retiring state remains possible after consent expiry; identity is separate.
         await options.assertOwnerCurrent(binding);
         phase='custody';
-        options.storage.transactionSync(() => {
-          if (!matches(row())) throw Error('browser_private_rejected');
-          update({ revoked: true });
-        });
-        active.get(options.storage)?.get(recordKey)?.abort();
-        for (const [key] of options.storage.kv.list({prefix:blobPrefix})) options.storage.kv.delete(key);
+        if (!matches(row())) throw Error('browser_private_rejected');
+        revokePrivateBrowserOwner(options.storage, binding);
         phase='cleanup'; await cleanup();
         return {status:'signed_out',remoteLogout:'not_attempted'};
       } catch { return {status:'failed',phase}; }

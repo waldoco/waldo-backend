@@ -1,6 +1,7 @@
 import { it, expect } from 'vitest';
 import type { Browser, BrowserContext, BrowserWorker, Page, HandoffCompleteResponse } from '@cloudflare/playwright';
 import { cloudflarePrivateOwner } from '../src/channels/cloudflare-private-owner';
+import { browserStateCustody } from '../src/channels/browser-state-custody';
 const ownerId = '12345678-1234-1234-1234-123456789abc';
 type SyntheticContext = BrowserContext & { syntheticLogin():void; syntheticRead():string; emit(event:HandoffCompleteResponse):void };
 const fixture = async (owner=ownerId) => {
@@ -46,6 +47,26 @@ it('synthetic owner completes MFA, saves encrypted state, reconstructs host and 
  expect(await cloudflarePrivateOwner(f.options).run({verifyAccount:async context=>(context as SyntheticContext).syntheticRead()==='Synthetic account page',work:async context=>(context as SyntheticContext).syntheticRead()})).toEqual({status:'ok',value:'Synthetic account page',persistence:'saved'});
  expect(f.restored[1]).toEqual({cookies:[{domain:'synthetic.example',name:'session',value:'SYNTHETIC_MFA_SESSION'}],origins:[]});
  expect(f.loginCount).toBe(1);expect(f.sessions.size).toBe(0);
+});
+it('trusted custody can encrypt behind the host boundary without returning a key to the runner', async () => {
+ const f = await fixture();
+ const { key, ...options } = f.options;
+ let custodyCalls = 0;
+ const host = cloudflarePrivateOwner({ ...options, custody: async (binding, blobs, admit) => {
+  custodyCalls++; return browserStateCustody(binding, key, blobs, admit);
+ }});
+ expect(await host.run({ verifyAccount: async () => true, work: async () => 'Synthetic page' })).toEqual({ status: 'ok', value: 'Synthetic page', persistence: 'saved' });
+ expect(custodyCalls).toBe(1);
+});
+it('a provider launch that never answers reaches its deadline and retains allocation uncertainty', async () => {
+ const f = await fixture(); const at = Date.now();
+ const host = cloudflarePrivateOwner({ ...f.options, now: Date.now, expiresAt: at + 100000, deadline: () => at + 20, launch: () => new Promise(() => {}) });
+ let timer: ReturnType<typeof setTimeout>;
+ const watchdog = new Promise(resolve => { timer = setTimeout(() => resolve('hung'), 100); });
+ const result = await Promise.race([host.run({ verifyAccount: async () => true, work: async () => 'must not run' }), watchdog]); clearTimeout(timer!);
+ expect(result).toEqual({ status: 'failed', phase: 'launch' });
+ const record = [...f.rows.entries()].find(([path]) => path.startsWith('private-browser-owner/v1/') && !path.includes('/encrypted/'))?.[1];
+ expect(record).toMatchObject({ allocation: 'prepared' });
 });
 it('sign-out fences a pending synthetic MFA and survives host recreation without a late state write',async()=>{
  const f=await fixture();let delivered!:()=>void;const sent=new Promise<void>(r=>{delivered=r;});

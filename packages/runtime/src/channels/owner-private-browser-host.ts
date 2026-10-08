@@ -1,0 +1,181 @@
+import type { BrowserContext, Page } from '@cloudflare/playwright';
+import type { BrowsePageArgs } from '@waldo/contracts';
+import type { ToolDispatcherContext } from '../tools/dispatcher';
+import { browserBoundedJson } from './browser-bounded-body';
+import { cloudflarePrivateOwner, revokePrivateBrowserOwner, cleanupPrivateBrowserOwner } from './cloudflare-private-owner';
+import { cloudflareGeneralBrowser } from './cloudflare-general-browser';
+import { PRIVATE_BROWSER_CONSENT_KEY, privateBrowserConsent, type PrivateBrowserConsent } from './browser-private-consent';
+import type { CommonBrowserConfiguration, CommonBrowserGrant } from './common-browser-host';
+
+type RunnerOptions = Parameters<typeof cloudflarePrivateOwner>[0];
+export type PrivateBrowserRegistration = Readonly<{
+  siteOrigin: string; accountId: string; expiresAt: number;
+  allowedDomains: readonly string[]; sitePolicy: RunnerOptions['sitePolicy'];
+  launch: RunnerOptions['launch']; custody: NonNullable<RunnerOptions['custody']>;
+  verifyAccount(context: BrowserContext, accountId: string): Promise<boolean>;
+  signIn: Readonly<{ instructions: string; prepare(context: BrowserContext): Promise<Page> }>;
+  deliverToOwner(ownerId: string, url: string): Promise<void>;
+}>;
+type Configuration = CommonBrowserConfiguration & Readonly<{ ownerId: string; lifetimeMs: number; expiresAt: number }>;
+const failure = () => ({ ok: false as const, code: 'rejected' as const, error: 'Saved sign-in is unavailable or unverified. No useful private read is claimed.', source_taint: 'external' as const });
+const reply = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
+export const privateBrowserRecordKey = (approval: PrivateBrowserConsent) => `private-browser-owner/v1/${JSON.stringify([approval.binding.ownerId, approval.binding.environment, approval.binding.siteOrigin, approval.binding.accountId])}`;
+export const PRIVATE_BROWSER_BUDGET_PREFIX = 'private-browser-budget:';
+
+// One registered account, through existing owner authority and spend configuration.
+// Registration is trusted host policy; model tools cannot supply keys or account proof.
+export function ownerPrivateBrowserHost(options: Readonly<{
+  storage: DurableObjectStorage; environment: string; registration?: PrivateBrowserRegistration;
+  configuration(cleanupOnly?: boolean): Promise<Configuration | undefined>;
+  assertOwner(): Promise<Readonly<{ directoryOwnerId: string; custodyDigest: string }>>;
+  now(): number;
+}>) {
+  const registration = options.registration ? Object.freeze({ ...options.registration,
+    allowedDomains: Object.freeze([...options.registration.allowedDomains]),
+    sitePolicy: Object.freeze({ origins: Object.freeze([...options.registration.sitePolicy.origins]), cookieDomains: Object.freeze([...options.registration.sitePolicy.cookieDomains]) }) }) : undefined;
+  const row = () => options.storage.kv.get<PrivateBrowserConsent>(PRIVATE_BROWSER_CONSENT_KEY);
+  const assertApproval = async (approval: PrivateBrowserConsent) => {
+    const current = await options.assertOwner();
+    if (current.directoryOwnerId !== approval.binding.ownerId || current.custodyDigest !== approval.custodyDigest
+      || !registration || approval.binding.siteOrigin !== registration.siteOrigin || approval.binding.accountId !== registration.accountId || approval.expiresAt !== registration.expiresAt
+      || approval.binding.environment !== options.environment || JSON.stringify(row()) !== JSON.stringify(approval)
+      || approval.state !== 'approved' || options.now() >= approval.expiresAt) throw Error('private approval unavailable');
+  };
+  const runner = (approval: PrivateBrowserConsent, config: Configuration, grant: CommonBrowserGrant | undefined, deadline: number, assertTask = async () => {}) => {
+    if (!registration || !config.cleanupBinding || !config.bindingForOperation) throw Error('private transport unavailable');
+    const recordKey = privateBrowserRecordKey(approval);
+    const allocationRef = options.storage.kv.get<{ allocationRef?: string }>(recordKey)?.allocationRef;
+    const budget = allocationRef ? options.storage.kv.get<{ grant: CommonBrowserGrant; recordKey: string }>(`${PRIVATE_BROWSER_BUDGET_PREFIX}${allocationRef}`) : undefined;
+    const retained = grant ?? (budget?.recordKey === recordKey ? budget.grant : undefined);
+    return cloudflarePrivateOwner({ storage: options.storage, bindingScope: approval.binding, expiresAt: approval.expiresAt,
+      custody: registration.custody, binding: grant ? config.bindingForOperation(grant, `private:${grant.taskId}`) : config.binding,
+      allocationRef: grant?.taskId,
+      launch: registration.launch, allowedDomains: registration.allowedDomains, sitePolicy: registration.sitePolicy,
+      now: options.now, lifetimeMs: grant?.lifetimeMs ?? config.lifetimeMs, keepAliveMs: grant?.lifetimeMs ?? config.lifetimeMs, deadline: () => deadline,
+      assertOwnerCurrent: async binding => { if ((await options.assertOwner()).directoryOwnerId !== binding.ownerId) throw Error('owner changed'); },
+      assertPersistenceApproved: async () => { await assertTask(); await assertApproval(approval); },
+      reserveAllocation: async () => {
+        if (!grant) throw Error('cleanup only');
+        await assertApproval(approval); await assertTask(); await config.assertGrantCurrent(grant);
+        options.storage.kv.put(`${PRIVATE_BROWSER_BUDGET_PREFIX}${grant.taskId}`, { grant, recordKey });
+        await config.reserveAllocation(grant);
+      },
+      terminate: async providerSessionId => {
+        if (!retained) throw Error('cleanup custody unavailable');
+        const driver = cloudflareGeneralBrowser({ ownerId: config.ownerId, binding: config.binding, loadSdk: config.loadSdk,
+          cleanupBinding: id => config.cleanupBinding!(retained, id), now: options.now, deadline: () => deadline,
+          maxScreenshotBytes: retained.maxScreenshotBytes, admit: async () => { throw Error('cleanup only'); }, authorizeRequest: async () => false });
+        await driver.terminate({ id: retained.taskId, ownerId: config.ownerId, provider: 'cloudflare_playwright', providerSessionId,
+          contextHandle: null, mode: 'authenticated_takeover', state: 'active', generation: approval.binding.generation, expiresAt: approval.expiresAt, updatedAt: options.now() });
+      },
+    });
+  };
+  const retire = async (approval: PrivateBrowserConsent) => {
+    const recordKey = privateBrowserRecordKey(approval);
+    const record = options.storage.kv.get<{ allocation?: string; allocationRef?: string; providerSessionId?: string }>(recordKey);
+    if (!record) return;
+    revokePrivateBrowserOwner(options.storage, approval.binding);
+    const config = await options.configuration(true); if (!config) throw Error('cleanup unavailable');
+    if (record.allocation && record.allocation !== 'closed') {
+      const budget = record.allocationRef ? options.storage.kv.get<{ grant: CommonBrowserGrant; recordKey: string }>(`${PRIVATE_BROWSER_BUDGET_PREFIX}${record.allocationRef}`) : undefined;
+      if (!budget || budget.recordKey !== recordKey || !record.providerSessionId || !config.cleanupBinding) throw Error('cleanup uncertain');
+      const driver = cloudflareGeneralBrowser({ ownerId: config.ownerId, binding: config.binding, loadSdk: config.loadSdk,
+        cleanupBinding: id => config.cleanupBinding!(budget.grant, id), now: options.now, deadline: options.now, maxScreenshotBytes: budget.grant.maxScreenshotBytes,
+        admit: async () => { throw Error('cleanup only'); }, authorizeRequest: async () => false });
+      await cleanupPrivateBrowserOwner(options.storage, recordKey, record.providerSessionId, record.allocationRef, () => driver.terminate({ id: budget.grant.taskId, ownerId: config.ownerId, provider: 'cloudflare_playwright', providerSessionId: record.providerSessionId!,
+        contextHandle: null, mode: 'authenticated_takeover', state: 'active', generation: approval.binding.generation, expiresAt: approval.expiresAt, updatedAt: options.now() }));
+    }
+    options.storage.transactionSync(() => {
+      const retained = options.storage.kv.get<{ allocationRef?: string; providerSessionId?: string }>(recordKey);
+      if (retained?.allocationRef !== record.allocationRef || retained?.providerSessionId !== record.providerSessionId) throw Error('cleanup custody changed');
+      options.storage.kv.delete(recordKey);
+    });
+  };
+  const grantFor = async (approval: PrivateBrowserConsent, taskId: string) => {
+    await assertApproval(approval);
+    const config = await options.configuration(); if (!config || config.ownerId !== `prn_${approval.binding.ownerId.replaceAll('-', '')}`) throw Error('configuration unavailable');
+    const grant = await config.grant({ taskId, revision: 1, sources: ['browser'], ready: true, startRef: 'private-owner' }, config.ownerId);
+    if (!grant.allowedOrigins.includes('*') && !grant.allowedOrigins.includes(approval.binding.siteOrigin)) throw Error('site outside funded policy');
+    await assertApproval(approval); await config.assertGrantCurrent(grant); return { config, grant };
+  };
+  return {
+    stop() {
+      const approval = row(); if (!approval || approval.state === 'revoked') return;
+      revokePrivateBrowserOwner(options.storage, approval.binding);
+      options.storage.kv.put(PRIVATE_BROWSER_CONSENT_KEY, { ...approval, state: 'retiring', revision: crypto.randomUUID() });
+    },
+    async maintain() {
+      const approval = row(); if (!approval || approval.state === 'revoked' || approval.state === 'approved' && options.now() < approval.expiresAt) return;
+      revokePrivateBrowserOwner(options.storage, approval.binding);
+      options.storage.kv.put(PRIVATE_BROWSER_CONSENT_KEY, { ...approval, state: 'retiring' });
+      await retire(approval);
+      options.storage.transactionSync(() => {
+        if (row()?.revision !== approval.revision) throw Error('consent changed');
+        options.storage.kv.put(PRIVATE_BROWSER_CONSENT_KEY, { ...approval, state: 'revoked' });
+      });
+    },
+    matches(url: string) { try { return row()?.binding.siteOrigin === new URL(url).origin; } catch { return false; } },
+    async control(request: Request, csrf: string): Promise<Response> {
+      if (options.environment !== 'staging') return reply({ error: 'not_configured' }, 404);
+      try {
+        const owner = await options.assertOwner();
+        let input: Record<string, unknown> | undefined;
+        if (request.method === 'POST') {
+          input = await browserBoundedJson(request.clone()) as Record<string, unknown>;
+          if (input?.action === 'sign_in') {
+            if (!registration) return reply({ error: 'not_configured' }, 404);
+            if (request.headers.get('content-type')?.split(';')[0]?.trim() !== 'application/json' || Object.keys(input).sort().join(',') !== 'action,csrf' || input.csrf !== csrf) return reply({ error: 'invalid_confirmation' }, 403);
+            const approval = row(); if (!approval) throw Error('consent unavailable');
+            const { config, grant } = await grantFor(approval, crypto.randomUUID());
+            const deadline = Math.min(grant.expiresAt, approval.expiresAt, options.now() + grant.lifetimeMs);
+            if (deadline - options.now() < 60000) throw Error('handoff window unavailable');
+            const result = await runner(approval, config, grant, deadline).run({ verifyAccount: context => registration.verifyAccount(context, approval.binding.accountId),
+              signIn: { ...registration.signIn, timeoutMs: 60000, liveViewExpiresMs: 60000, deliverToOwner: registration.deliverToOwner }, work: async () => true });
+            return result.status === 'ok' ? reply({ signed_in: true }) : reply({ error: 'sign_in_failed', phase: result.phase }, 409);
+          }
+        }
+        // Retiring an owner's old state needs identity, not a still-active key
+        // registration or renewed permission to access that account.
+        const target = input?.action === 'revoke' && row() ? { siteOrigin: row()!.binding.siteOrigin, accountId: row()!.binding.accountId, expiresAt: row()!.expiresAt } : registration;
+        if (!target) return reply({ error: 'not_configured' }, 404);
+        return await privateBrowserConsent(request, { storage: options.storage, csrf,
+          binding: { ownerId: owner.directoryOwnerId, environment: options.environment, siteOrigin: target.siteOrigin, accountId: target.accountId },
+          expiresAt: target.expiresAt, now: options.now, newId: () => crypto.randomUUID(), assertOwner: async () => {
+            const current = await options.assertOwner(); if (current.directoryOwnerId !== owner.directoryOwnerId) throw Error('owner changed'); return current.custodyDigest;
+          }, retire });
+      } catch { return reply({ error: 'private_browser_unavailable' }, 409); }
+    },
+    async read(args: BrowsePageArgs, ctx: ToolDispatcherContext) {
+      try {
+        const approval = row();
+        if (!registration || !approval || !ctx.runScope || !ctx.turnId || !ctx.toolCallId || !ctx.assertTaskSourceCurrent
+          || args.provider && args.provider !== 'cloudflare_playwright' || new URL(args.url).origin !== registration.siteOrigin) throw Error('private read unavailable');
+        await ctx.assertTaskSourceCurrent();
+        const { config, grant } = await grantFor(approval, ctx.runScope.runId);
+        const result = await runner(approval, config, grant, ctx.runScope.deadline, ctx.assertTaskSourceCurrent).run({
+          installPolicy: async context => {
+            await context.route('**/*', route => {
+              const target = new URL(route.request().url());
+              return ['GET', 'HEAD'].includes(route.request().method()) && target.origin === registration.siteOrigin && !target.username && !target.password ? route.continue() : route.abort('blockedbyclient');
+            });
+            await context.routeWebSocket('**/*', socket => socket.close());
+          },
+          verifyAccount: context => registration.verifyAccount(context, approval.binding.accountId),
+          work: async context => {
+            // HTTP method and WebSocket restrictions were installed before verification.
+            const page = await context.newPage();
+            try {
+              const response = await page.goto(args.url, { waitUntil: 'domcontentloaded', timeout: Math.max(1, ctx.runScope!.deadline - options.now()) });
+              if (!response || response.status() >= 400 || new URL(page.url()).origin !== registration.siteOrigin) throw Error('private content denied');
+              const text = (await page.evaluate(() => (globalThis as unknown as { document: { body?: { innerText: string } } }).document.body?.innerText ?? '')).slice(0, 8000);
+              if (!text.trim()) throw Error('empty private content');
+              return { url: page.url(), title: await page.title(), text };
+            } finally { await page.close(); }
+          },
+        });
+        await ctx.assertTaskSourceCurrent();
+        return result.status === 'ok' ? { ok: true as const, data: result.value, source_taint: 'external' as const } : failure();
+      } catch { return failure(); }
+    },
+  };
+}

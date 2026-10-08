@@ -9,12 +9,15 @@ import { OpenAIResponsesAdapter } from '../llm/openai';
 import { armAlarm } from '../scheduler/alarm-slot';
 import { commonOwnerBrowserRegistration } from './common-owner-browser-registration';
 import type { LLMGatewayAdapter } from '../llm/provider';
+import { commonOwnerAuthority } from '../identity/common-owner-authority';
+import { ownerPrivateBrowserHost, type PrivateBrowserRegistration } from './owner-private-browser-host';
 
 // The browser task follows the authenticated owner run. It needs no topic classifier
 // or canonical execution activation; provider identity and budget stay in the DO.
 export function ownerBrowserRuntime(options: Readonly<{
   env: TelegramWebhookEnv; storage: DurableObjectStorage; actualDoId: string;
   activeScope(): RunEffectScope | undefined;
+  privateBrowser?: PrivateBrowserRegistration;
 }>) {
   let active: Readonly<{ scope: RunEffectScope; host: ReturnType<typeof commonBrowserHost> }> | undefined;
   const automatic = commonOwnerBrowserRegistration({ ...options, loadSdk: commonBrowserSdk() });
@@ -24,6 +27,15 @@ export function ownerBrowserRuntime(options: Readonly<{
       policy: registered.policy, spend: registered.spend, loadSdk: commonBrowserSdk(),
     } : {}) });
   };
+  const selectedConfiguration = async (cleanupOnly = false) => automatic.selected || automatic.hasRetained() ? automatic.configuration(cleanupOnly) : configuration(cleanupOnly);
+  const privateBrowser = ownerPrivateBrowserHost({ storage: options.storage, environment: options.env.WALDO_ENVIRONMENT ?? '', registration: options.privateBrowser,
+    configuration: selectedConfiguration, now: Date.now, assertOwner: async () => {
+      const doName = options.storage.kv.get<string>('do_name'), subject = options.storage.kv.get<string>('telegram_subject');
+      const physical = () => { if (!doName || !subject || options.storage.kv.get('do_name') !== doName || options.storage.kv.get('telegram_subject') !== subject
+        || options.storage.kv.get('telegram_unlinked') === true || options.env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== options.actualDoId) throw new ClosedRunError(); };
+      physical(); const owner = await commonOwnerAuthority(options.env).resolve('telegram', subject!, doName!); physical();
+      if (!owner) throw new ClosedRunError(); return { directoryOwnerId: owner.directoryOwnerId, custodyDigest: owner.custodyDigest };
+    } });
   const current = (ctx: ToolDispatcherContext) => {
     const scope = options.activeScope(), supplied = ctx.runScope;
     const doName = options.storage.kv.get<string>('do_name'), subject = options.storage.kv.get<string>('telegram_subject');
@@ -56,6 +68,7 @@ export function ownerBrowserRuntime(options: Readonly<{
           const assertCurrent = current(ctx); await assertCurrent();
           // Browserbase remains an explicit choice. Cloudflare failure never switches providers.
           if (args.provider === 'browserbase_stagehand_http_v3' || !args.provider && options.env.WALDO_ENVIRONMENT !== 'staging') return fallback.handle(args, { ...ctx, assertTaskSourceCurrent: assertCurrent });
+          if (privateBrowser.matches(args.url)) return privateBrowser.read(args, { ...ctx, assertTaskSourceCurrent: assertCurrent });
           const config = automatic.selected || automatic.hasRetained() ? await automatic.configuration() : configuration();
           if (!config) return { ok: false, code: 'rejected', error: 'The selected Cloudflare browser is not registered for this owner.', source_taint: 'external' };
           const wake = Math.min(ctx.runScope!.deadline, config.expiresAt, Date.now() + config.lifetimeMs);
@@ -73,6 +86,7 @@ export function ownerBrowserRuntime(options: Readonly<{
         } catch { return { ok: false, code: 'rejected', error: 'The browser owner or retained session is unavailable. No replacement was allocated.', source_taint: 'external' }; }
       } };
     },
+    privateControl: privateBrowser.control,
     gateway() {
       if (automatic.selected || automatic.hasRetained()) {
         const gateway = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY! });
@@ -113,7 +127,7 @@ export function ownerBrowserRuntime(options: Readonly<{
       if (!scope || active?.scope !== scope) return;
       const retained = active; active = undefined; await retained.host.cancel();
     },
-    stop() { revokeCommonBrowsers(options.storage, Date.now()); },
-    async maintain() { const config = await automatic.configuration(true) ?? (automatic.selected ? undefined : configuration(true)); if (config) await maintainCommonBrowsers(options.storage, config, Date.now()); },
+    stop() { privateBrowser.stop(); revokeCommonBrowsers(options.storage, Date.now()); },
+    async maintain() { await Promise.all([privateBrowser.maintain(), (async () => { const config = await automatic.configuration(true) ?? (automatic.selected ? undefined : configuration(true)); if (config) await maintainCommonBrowsers(options.storage, config, Date.now()); })()]); },
   };
 }
