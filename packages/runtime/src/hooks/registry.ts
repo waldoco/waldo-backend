@@ -397,7 +397,7 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
 // Tools with an owner-approval path: a call carrying external content is routed to a proposal
 // the owner approves, instead of being refused. Tools without one stay a hard block.
 const TAINT_APPROVAL_TOOLS: readonly ToolName[] = ['send_message', 'draft_document', 'write_task', 'update_task'];
-export const TAINT_NEEDS_APPROVAL_REASON = 'external-tainted privileged action needs owner approval';
+export const TAINT_NEEDS_APPROVAL_REASON = 'external-tainted privileged action needs owner approval; propose it for approval with propose_action';
 
 export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
   name: 'autonomy_gate_check',
