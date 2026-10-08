@@ -259,7 +259,13 @@ function canDecodeAgain(text: string): boolean {
   return false;
 }
 
-function decodedViews(text: string): DecodeBundle {
+// Owner voice notes relayed 2026-10-08 10:28 and 10:30 (remove gates that break function): the model-context path (internal_context) must not die on shape or size heuristics. Over-budget or
+// deeper-than-two-pass encodings stop decoding there; everything decoded so far is still scanned for canaries, secrets and
+// instructions, and a log line records the leniency. Other destinations keep fail-closed.
+const lenientLog = (branch: string, detail: Readonly<Record<string, number | string>> = {}) => {
+  console.warn(JSON.stringify({ hop: 'scribe_lenient', destination: 'internal_context', branch, ...detail }));
+};
+function decodedViews(text: string, lenient = false): DecodeBundle {
   const views = [text];
   const known = new Set(views);
   // Uniform 4x decode budget (live RCA 2026-09-28: brief card failed internal_context
@@ -288,6 +294,7 @@ function decodedViews(text: string): DecodeBundle {
         if (typeof value !== 'string' || value === candidate || known.has(value)) continue;
         decodedChars += value.length;
         if (value.length > maxDecodedChars || decodedChars > maxDecodedChars) {
+          if (lenient) { lenientLog('decode_budget', { chars: text.length }); return { invalid: false, views }; }
           return { invalid: true, views };
         }
         known.add(value);
@@ -299,7 +306,10 @@ function decodedViews(text: string): DecodeBundle {
     if (frontier.length === 0) break;
   }
 
-  if (frontier.some(canDecodeAgain)) return { invalid: true, views };
+  if (frontier.some(canDecodeAgain)) {
+    if (lenient) { lenientLog('decode_depth', { chars: text.length }); return { invalid: false, views }; }
+    return { invalid: true, views };
+  }
   return { invalid: false, views };
 }
 
@@ -323,7 +333,7 @@ function visitStrings(
     if (!current) continue;
     const { value } = current;
     if (typeof value === 'string') {
-      const decoded = decodedViews(value);
+      const decoded = decodedViews(value, destination === 'internal_context');
       if (decoded.invalid) return { invalid: true, matched: false };
       if (decoded.views.some((view) => visitor(view, current.key))) {
         return { invalid: false, matched: true };
@@ -902,7 +912,7 @@ function inspectInstructions(
       instructionCount += Array.from(text.matchAll(global)).length;
       output = output.replace(global, '[REDACTED_INSTRUCTION]');
     }
-    const decoded = decodedViews(output);
+    const decoded = decodedViews(output, destination === 'internal_context');
     if (decoded.views.slice(1).some((view) => scoreInjection(view).decision !== 'allow')) {
       instructionCount += 1;
       return '[REDACTED_INSTRUCTION]';
@@ -955,6 +965,24 @@ function truncateSandboxStructuredStdout(
   return bounded;
 }
 
+// Halve the longest string until the JSON fits; undefined when no string is left to cut.
+function shrinkStructuredStrings(payload: JsonValue, maxChars: number): JsonValue | undefined {
+  let current: JsonValue = JSON.parse(JSON.stringify(payload));
+  for (let round = 0; round < 400 && JSON.stringify(current).length > maxChars; round += 1) {
+    let best: { holder: Record<string, JsonValue> | JsonValue[]; key: string | number; length: number } | undefined;
+    const walk = (value: JsonValue) => {
+      if (Array.isArray(value)) value.forEach((item, index) => { if (typeof item === 'string') { if (!best || item.length > best.length) best = { holder: value, key: index, length: item.length }; } else walk(item); });
+      else if (typeof value === 'object' && value !== null) for (const [key, item] of Object.entries(value)) { if (typeof item === 'string') { if (!best || item.length > best.length) best = { holder: value as Record<string, JsonValue>, key, length: item.length }; } else walk(item as JsonValue); }
+    };
+    walk(current);
+    const target = best as { holder: any; key: string | number; length: number } | undefined;
+    if (!target || target.length <= TRUNCATION_MARKER.length + 8) return undefined;
+    const text = target.holder[target.key] as string;
+    target.holder[target.key] = `${text.slice(0, Math.floor(text.length / 2))}${TRUNCATION_MARKER}`;
+  }
+  return JSON.stringify(current).length <= maxChars ? current : undefined;
+}
+
 function applyDestinationPolicy(
   input: PreparedInput,
   payload: JsonValue,
@@ -985,15 +1013,26 @@ function applyDestinationPolicy(
   const serialized = isText ? payload : JSON.stringify(payload);
   let boundedPayload = payload;
   if (serialized.length > maxChars) {
-    if (input.destination !== 'sandbox_stdout') {
+    if (input.destination === 'internal_context') {
+      // Truncate instead of failing the whole turn/card; the cut is logged. Structure limits below still apply.
+      const shrunk = isText
+        ? `${payload.slice(0, Math.max(0, maxChars - TRUNCATION_MARKER.length))}${TRUNCATION_MARKER}`
+        : shrinkStructuredStrings(payload, maxChars);
+      if (shrunk !== undefined) {
+        lenientLog('oversize_truncated', { chars: serialized.length, max: maxChars });
+        boundedPayload = shrunk;
+      } else return deny('size_cap', 'oversize');
+    } else if (input.destination !== 'sandbox_stdout') {
       return deny('size_cap', 'oversize');
     }
-    if (isText) {
-      boundedPayload = `${payload.slice(0, maxChars - TRUNCATION_MARKER.length)}${TRUNCATION_MARKER}`;
-    } else {
-      const truncated = truncateSandboxStructuredStdout(payload, maxChars);
-      if (truncated === undefined) return deny('size_cap', 'oversize');
-      boundedPayload = truncated;
+    if (input.destination === 'sandbox_stdout') {
+      if (isText) {
+        boundedPayload = `${payload.slice(0, maxChars - TRUNCATION_MARKER.length)}${TRUNCATION_MARKER}`;
+      } else {
+        const truncated = truncateSandboxStructuredStdout(payload, maxChars);
+        if (truncated === undefined) return deny('size_cap', 'oversize');
+        boundedPayload = truncated;
+      }
     }
   }
   if (isStructured) {

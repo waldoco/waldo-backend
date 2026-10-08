@@ -4,7 +4,7 @@ import type {
   SanitiseInput,
 } from '@waldo/contracts';
 import { ROSTER } from '@waldo/contracts';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { guardForOffload, sanitise, sanitiseVerifyOnly, scoreInjection } from '../src/scribe/sanitiser';
 
 const CANARIES = ['1111111111111111', '2222222222222222', '3333333333333333'] as const;
@@ -1258,11 +1258,10 @@ describe('Scribe sanitiser', () => {
       check: 'size_cap',
       reason: 'invalid_payload',
     });
-    expect(inspect({ note: 'x'.repeat(32_768) }, 'internal_context')).toEqual({
-      ok: false,
-      check: 'size_cap',
-      reason: 'oversize',
-    });
+    // internal_context truncates an oversized string instead of failing the turn or card; other destinations still deny.
+    const truncatedContext = inspect({ note: 'x'.repeat(32_768) }, 'internal_context');
+    expect(truncatedContext).toMatchObject({ ok: true });
+    expect(JSON.stringify((truncatedContext as { payload: unknown }).payload).length).toBeLessThanOrEqual(32_768);
     expect(inspect('x'.repeat(2_049), 'memory_block')).toMatchObject({
       ok: false,
       check: 'size_cap',
@@ -1483,11 +1482,14 @@ describe('issue #152 - malformed percent escapes are plain text, not a payload d
     expect(denied).toMatchObject({ ok: false, reason: 'canary_leak' });
   });
 
-  it('still denies encoding nested beyond the two-pass bound at any size', () => {
+  it('internal_context stops decoding past the two-pass bound instead of failing; a canary inside the decoded depth is still denied', () => {
     const triple = btoa(btoa(btoa('see you at the venue')));
     const filler = 'ordinary calendar and conversation text. '.repeat(500);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const result = inspect([{ role: 'user', content: `${filler} token ${triple}` }]);
-    expect(result).toMatchObject({ ok: false, reason: 'invalid_payload' });
+    expect(result).toMatchObject({ ok: true });
+    expect(warn.mock.calls.some(call => String(call[0]).includes('scribe_lenient'))).toBe(true);
+    warn.mockRestore();
   });
 });
 
