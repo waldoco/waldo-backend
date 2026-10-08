@@ -168,6 +168,7 @@ export const createOwnerResponder = (
       ...message, content: message.content,
       ...(attachments && index === texts.length - 1 ? { attachments: attachments.map((file) => `${file.kind}:${file.filename}`) } : {}),
     }));
+    mark(`messages=${userMessages.length}`);
     const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
     const admittedGateway: LLMGatewayAdapter = skills || backgroundCurrent ? { complete: async request => {
       await assertCurrent();

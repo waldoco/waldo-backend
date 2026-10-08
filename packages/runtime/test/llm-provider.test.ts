@@ -1676,6 +1676,40 @@ describe('sanitiseRequest structural degradation', () => {
     expect(gateway.requests[0]!.request.messages).toEqual([{ role: 'assistant', content: 'earlier reply' }, { role: 'user', content: 'current question' }]);
   });
 
+  it('finds the history cut in a bounded number of sanitiser passes on a long conversation', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const messages = Array.from({ length: 300 }, (_value, index) => ({
+      role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+      content: index === 250 ? `old ${softBad}` : `message ${index}`,
+    }));
+    let passes = 0;
+    const result = await provider.complete(
+      { trigger: 'brief', renderRequest: () => ({ messages, max_tokens: 512, temperature: 0.3 }) },
+      runtimeCtx({ sanitise: (input) => { if (Array.isArray(input.payload)) passes += 1; return sanitise(input); } }),
+    );
+    expect(result.ok).toBe(true);
+    expect(gateway.requests[0]!.request.messages).toEqual(messages.slice(251));
+    expect(passes).toBeLessThan(30);
+  });
+
+  it('cuts a very long history to the item cap before scanning, in at most three sanitiser passes', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const messages = Array.from({ length: 1334 }, (_value, index) => ({
+      role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+      content: `message ${index}`,
+    }));
+    let passes = 0;
+    const result = await provider.complete(
+      { trigger: 'brief', renderRequest: () => ({ messages, max_tokens: 512, temperature: 0.3 }) },
+      runtimeCtx({ sanitise: (input) => { if (Array.isArray(input.payload)) passes += 1; return sanitise(input); } }),
+    );
+    expect(result.ok).toBe(true);
+    expect(gateway.requests[0]!.request.messages).toEqual(messages.slice(-1024));
+    expect(passes).toBeLessThanOrEqual(3);
+  });
+
   it('fails closed when the current message itself trips a structural scribe deny', async () => {
     const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
     const provider = new RuntimeLLMProvider({ gateway });
