@@ -871,6 +871,11 @@ function redactPii(
   };
 }
 
+// PR 1 item 1: owner-authored text (source_taint null) headed to the model or the owner's own reply is not scored for injection;
+// keyword weights ("dan", "system ") blocked ordinary asks like "Call Dan about the system update". External taint keeps the scorer.
+const ownerAuthoredSkipsInjection = (input: Readonly<{ source_taint: unknown; destination: SanitiseDestination }>): boolean =>
+  input.source_taint === null && (input.destination === 'internal_context' || input.destination === 'system_prompt' || input.destination === 'owner_reply');
+
 function inspectInstructions(
   payload: JsonValue,
   destination: SanitiseDestination,
@@ -1083,6 +1088,7 @@ export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
   if (health.invalid) return deny('size_cap', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
 
+  if (ownerAuthoredSkipsInjection(input)) return applyDestinationPolicy(input, input.payload, []);
   const matched = new Map<InjectionRuleId, GuardVerdict['matches'][number]>();
   const scanned = visitStrings(input.payload, input.destination, (text) => {
     for (const match of scoreInjection(text).matches) matched.set(match.id, match);
@@ -1111,7 +1117,7 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
   const pii = redactPii(input.payload, input.destination, input.source_taint, input.canary_tokens);
   if (pii.invalid) return deny('size_cap', 'invalid_payload');
 
-  const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
+  const instructions = ownerAuthoredSkipsInjection(input) ? { payload: pii.payload, redactions: pii.redactions } : inspectInstructions(pii.payload, input.destination, pii.redactions);
   if ('ok' in instructions) return instructions;
   return applyDestinationPolicy(input, instructions.payload, instructions.redactions);
 }
