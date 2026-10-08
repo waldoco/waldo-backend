@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TOOL_PERMISSIONS } from '@waldo/contracts';
+import { cancelReminderArgsSchema, TOOL_PERMISSIONS } from '@waldo/contracts';
 import { localIso, localToEpoch, reminderHandlers, type ReminderBook } from '../src/channels/reminders';
 
 
@@ -25,6 +25,7 @@ describe('reminder tools', () => {
     },
     list: () => [{ id: 'reminder:1', note: 'water', at: '2026-09-23T18:30', repeat: 'daily' }],
     async cancel(id) { calls.push(`cancel:${id}`); return id === 'reminder:1'; },
+    async cancelAll() { return 0; },
     note: () => null,
     fired: () => undefined,
   };
@@ -46,5 +47,21 @@ describe('reminder tools', () => {
 
   it('returns a readable error for a past time', async () => {
     expect(await set!.handle({ note: 'x', at: '2025-01-01T09:00', repeat: 'none' } as never)).toMatchObject({ ok: false, code: 'invalid_args', error: 'already past' });
+  });
+});
+
+describe('cancel all reminders contract (T32 contract repro, not live trace)', () => {
+  it('accepts all or one id, but rejects neither or both', () => {
+    expect(cancelReminderArgsSchema.safeParse({ all: true }).success).toBe(true);
+    expect(cancelReminderArgsSchema.safeParse({ id: 'reminder:1' }).success).toBe(true);
+    for (const args of [{}, { all: false }, { id: 'reminder:1', all: true }]) {
+      expect(cancelReminderArgsSchema.safeParse(args).success).toBe(false);
+    }
+  });
+
+  it('bulk cancellation returns the count without requiring ids from the model', async () => {
+    const book = { async cancelAll() { return 2; } } as unknown as ReminderBook;
+    const handler = reminderHandlers(book)[2]!;
+    expect(await handler.handle({ all: true } as never)).toMatchObject({ ok: true, data: { cancelled: 2 } });
   });
 });

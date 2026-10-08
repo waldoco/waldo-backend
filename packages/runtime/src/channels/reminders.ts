@@ -12,6 +12,7 @@ export type ReminderBook = Readonly<{
   set(args: SetReminderArgs): Promise<Reminder>;
   list(): readonly Reminder[];
   cancel(id: string): Promise<boolean>;
+  cancelAll(): Promise<number>;
   note(id: string): string | null;
   fired(entry: ScheduleEntry): void;
 }>;
@@ -48,6 +49,10 @@ export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: Owner
       if (known) await scheduler.cancel(id);
       sql.exec('DELETE FROM reminder_notes WHERE id = ?', id);
       return known;
+    },
+    async cancelAll() {
+      sql.exec('DELETE FROM reminder_notes');
+      return scheduler.cancelKind('reminder');
     },
     note(id) {
       return sql.exec<{ note: string }>('SELECT note FROM reminder_notes WHERE id = ?', id).toArray()[0]?.note ?? null;
@@ -91,15 +96,17 @@ export const reminderHandlers = (book: ReminderBook) => [
   } satisfies ToolHandler<ListRemindersArgs, { reminders: readonly Reminder[] }, ToolDispatcherContext>,
   {
     name: 'cancel_reminder',
-    description: 'Cancel a pending reminder or routine by id.',
+    description: "Cancel one reminder by id, or all of the owner's reminders with all: true.",
     schema: cancelReminderArgsSchema,
     trigger_allowlist: allowlist('cancel_reminder'),
     autonomy_gated: false,
     mutates_state: true,
-    async handle({ id }) {
+    async handle({ id, all }) {
+      if (all === true) return { ok: true, data: { cancelled: await book.cancelAll() }, source_taint: null };
+      if (id === undefined) return { ok: false, code: 'invalid_args', error: 'Supply a reminder id or all: true.' };
       return { ok: true, data: { id, cancelled: await book.cancel(id) }, source_taint: null };
     },
-  } satisfies ToolHandler<CancelReminderArgs, { id: string; cancelled: boolean }, ToolDispatcherContext>,
+  } satisfies ToolHandler<CancelReminderArgs, { id: string; cancelled: boolean } | { cancelled: number }, ToolDispatcherContext>,
 ];
 
 export function localIso(at: number, timezone: string): string {

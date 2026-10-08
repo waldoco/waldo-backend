@@ -124,6 +124,13 @@ export class Scheduler {
     await this.rearm();
   }
 
+  async cancelKind(kind: ScheduleKind): Promise<number> {
+    const count = this.sql.exec<{ count: number }>('SELECT COUNT(*) AS count FROM schedule WHERE kind = ?', kind).toArray()[0]!.count;
+    this.sql.exec('DELETE FROM schedule WHERE kind = ?', kind);
+    await this.rearm();
+    return count;
+  }
+
   read(id: string): ScheduleEntry | null {
     const row = this.sql
       .exec<ScheduleSqlRow>('SELECT * FROM schedule WHERE id = ?', id)

@@ -32,3 +32,27 @@ describe('reminder book on the Telegram owner object', () => {
     });
   });
 });
+
+describe('owner-scoped bulk reminder cancellation', () => {
+  it('removes all reminder rows and notes, preserving other schedule kinds', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('reminder-bulk-cancel'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      claimStore(state.storage.sql);
+      ensureSchema(state.storage);
+      const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+      const now = Date.parse('2036-09-23T08:00:00Z');
+      let n = 0;
+      const book = reminderBook(state.storage.sql, scheduler, { timezone: 'Asia/Kolkata', now: () => new Date(now) }, () => String(++n));
+      const a = await book.set({ note: 'a', at: '2036-09-23T18:30', repeat: 'none' });
+      const b = await book.set({ note: 'b', at: '2036-09-23T19:30', repeat: 'daily' });
+      await scheduler.schedule({ id: 'other', kind: 'standing_order', occurrenceAt: now + 86400000, dueAt: now + 86400000, payloadRefs: { order_id: 'other' } });
+      expect(await book.cancelAll()).toBe(2);
+      expect(book.list()).toEqual([]);
+      expect(book.note(a.id)).toBeNull();
+      expect(book.note(b.id)).toBeNull();
+      expect(scheduler.read('other')).not.toBeNull();
+      expect(await book.cancelAll()).toBe(0);
+      await scheduler.cancel('other');
+    });
+  });
+});

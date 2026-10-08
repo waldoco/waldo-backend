@@ -13,6 +13,7 @@ export const listRemindersArgsSchema = z.strictObject({});
 export type ListRemindersArgs = z.infer<typeof listRemindersArgsSchema>;
 
 export const cancelReminderArgsSchema = z.strictObject({
-  id: z.string().min(1).max(100).describe('Reminder id from list_reminders or set_reminder.'),
-});
+  id: z.string().min(1).max(100).optional().describe('Reminder id from list_reminders or set_reminder.'),
+  all: z.literal(true).optional().describe('Cancel all reminders belonging to the owner.'),
+}).refine(({ id, all }) => (id !== undefined) !== (all === true), { error: 'Supply one reminder id or all: true, not both.' });
 export type CancelReminderArgs = z.infer<typeof cancelReminderArgsSchema>;
