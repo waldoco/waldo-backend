@@ -90,6 +90,7 @@ import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
 import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
 import { googleProxy } from '../connectors/connections';
+import { googleCircuit } from '../connectors/google-circuit';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
@@ -1494,9 +1495,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!app) {if(intent)throw new ProxyIntentError('intent_unavailable');return null;}
         await google.migrate();
         const [all, failing, doName] = [await accounts(), await health(), vaultOwner()];
-        const fit = all.filter((account) => googleHas(account.scopes, feature)).map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
+        // Circuit breaker: a grant recorded as failing (invalid_grant) is skipped until its probe window elapses, then tried once.
+        const probes = (await storage.get<Record<string, number>>('google:probes')) ?? {};
+        const circuit = googleCircuit({ failing, probes, now: Date.now(), ids: all.map((account) => account.id) });
+        if (circuit.probe.length) await storage.put('google:probes', { ...probes, ...Object.fromEntries(circuit.probe.map((id) => [id, Date.now()])) });
+        const fit = all.filter((account) => circuit.usable.includes(account.id) && googleHas(account.scopes, feature)).map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
         const account = pinProxyIntentRoute(storage.sql,intent,`google:${feature}`,fit,fit.find((candidate) => !failing[candidate.id]) ?? fit[0]);
-        if (!account) return null;
+        if (!account) { if (circuit.skipped.length) log({ trace: `google:${Date.now()}`, hop: 'google_circuit_open', ms: 0, ok: false, detail: `${circuit.skipped.length} account(s) need reconnect; next probe within 6h` }); return null; }
         const metadata = { connection_id: account.id, email: account.email };
         const scopedFetch = taskSourceFetch(assertTaskSourceCurrent);
         if (account.refresh_token) return { ...googleClient(app, { refresh_token: account.refresh_token, email: account.email }, scopedFetch, (error) => noteHealth(account.id, error), metadata), account: metadata };
