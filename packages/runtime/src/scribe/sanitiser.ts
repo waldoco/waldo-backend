@@ -267,6 +267,13 @@ function canDecodeAgain(text: string): boolean {
 // Owner voice notes relayed 2026-10-08 10:28 and 10:30 (remove gates that break function): the model-context path (internal_context) must not die on shape or size heuristics. Over-budget or
 // deeper-than-two-pass encodings stop decoding there; everything decoded so far is still scanned for canaries, secrets and
 // instructions, and a log line records the leniency. Other destinations keep fail-closed.
+// Lenient mode is a last-resort retry scope (provider degradation runs strict first). Sync only.
+let lenientScope = false;
+export function runLenientInternalContext<T>(fn: () => T): T {
+  const before = lenientScope;
+  lenientScope = true;
+  try { return fn(); } finally { lenientScope = before; }
+}
 const lenientLog = (branch: string, detail: Readonly<Record<string, number | string>> = {}) => {
   console.warn(JSON.stringify({ hop: 'scribe_lenient', destination: 'internal_context', branch, ...detail }));
 };
@@ -338,7 +345,7 @@ function visitStrings(
     if (!current) continue;
     const { value } = current;
     if (typeof value === 'string') {
-      const decoded = decodedViews(value, destination === 'internal_context');
+      const decoded = decodedViews(value, lenientScope && destination === 'internal_context');
       if (decoded.invalid) return { invalid: true, matched: false };
       if (decoded.views.some((view) => visitor(view, current.key))) {
         return { invalid: false, matched: true };
@@ -917,7 +924,7 @@ function inspectInstructions(
       instructionCount += Array.from(text.matchAll(global)).length;
       output = output.replace(global, '[REDACTED_INSTRUCTION]');
     }
-    const decoded = decodedViews(output, destination === 'internal_context');
+    const decoded = decodedViews(output, lenientScope && destination === 'internal_context');
     if (decoded.views.slice(1).some((view) => scoreInjection(view).decision !== 'allow')) {
       instructionCount += 1;
       return '[REDACTED_INSTRUCTION]';
@@ -1018,7 +1025,7 @@ function applyDestinationPolicy(
   const serialized = isText ? payload : JSON.stringify(payload);
   let boundedPayload = payload;
   if (serialized.length > maxChars) {
-    if (input.destination === 'internal_context') {
+    if (lenientScope && input.destination === 'internal_context') {
       // Truncate instead of failing the whole turn/card; the cut is logged. Structure limits below still apply.
       const shrunk = isText
         ? `${payload.slice(0, Math.max(0, maxChars - TRUNCATION_MARKER.length))}${TRUNCATION_MARKER}`
