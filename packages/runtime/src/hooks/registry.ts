@@ -769,7 +769,8 @@ async function sanitiseHookPayload(
       const sanitized = await sanitiseCandidate(textResponse, ctx, destination, sourceTaint.data);
       if (!sanitized.ok) return sanitized.result;
       for (const call of toolCalls) {
-        const checked = await checkExecutableArgs(call, ctx, destination, sourceTaint.data);
+        // Tool-call arguments are not reply prose: they are checked against the context policy (large), not the 4 KB owner_reply cap (PR 1 item 5).
+        const checked = await checkExecutableArgs(call, ctx, 'internal_context', sourceTaint.data);
         if (!checked.ok) return checked;
       }
       return { ok: true, payload: { ...payload, response: { ...(sanitized.payload as Record<string, unknown>), tool_calls: toolCalls } } };
