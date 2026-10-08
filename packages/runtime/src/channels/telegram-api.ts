@@ -14,6 +14,47 @@ export class TelegramRejection extends Error {
 
 export type TelegramFinalPayload = Readonly<{ chat_id: number; text: string; parse_mode?: 'HTML'; fallback_text?: string }>;
 
+export const TELEGRAM_MESSAGE_MAX_CHARS = 4_096;
+
+// Telegram caps one message at 4,096 chars. Long outbound text splits on paragraph, then
+// sentence, boundaries into sequential messages; a single sentence longer than the cap is
+// hard-cut so the content still goes out.
+export const splitTelegramText = (text: string, limit: number = TELEGRAM_MESSAGE_MAX_CHARS): string[] => {
+  if (text.length <= limit) return [text];
+  const parts: string[] = [];
+  let current = '';
+  const flush = (): void => {
+    if (current !== '') {
+      parts.push(current);
+      current = '';
+    }
+  };
+  const append = (piece: string, separator: string): void => {
+    if (piece === '') return;
+    if (piece.length > limit) {
+      flush();
+      for (let index = 0; index < piece.length; index += limit) parts.push(piece.slice(index, index + limit));
+      return;
+    }
+    if (current !== '' && current.length + separator.length + piece.length > limit) flush();
+    current = current === '' ? piece : current + separator + piece;
+  };
+  const segments = text.split(/(\n{2,})/);
+  for (let index = 0; index < segments.length; index += 2) {
+    const paragraph = segments[index]!;
+    const separator = index === 0 ? '' : segments[index - 1]!;
+    if (paragraph.length > limit) {
+      flush();
+      for (const sentence of paragraph.split(/(?<=[.!?…])\s+/)) append(sentence, ' ');
+      flush();
+      continue;
+    }
+    append(paragraph, separator);
+  }
+  flush();
+  return parts;
+};
+
 // Only generated finals carry a frozen fallback. Definite entity rejection means
 // the rich send was not applied; transport uncertainty never permits a second send.
 export const sendTelegramFinal = async (send: TelegramOwnerApi['sendMessage'], payload: TelegramFinalPayload,

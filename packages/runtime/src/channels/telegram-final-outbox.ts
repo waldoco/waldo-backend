@@ -1,6 +1,6 @@
 import { literalTextRedactor } from '@waldo/contracts';
 import type { RunEffectScope } from './run-effect-scope';
-import { TelegramRejection, sendTelegramFinal, type TelegramFinalPayload } from './telegram-api';
+import { TelegramRejection, TELEGRAM_MESSAGE_MAX_CHARS, sendTelegramFinal, splitTelegramText, type TelegramFinalPayload } from './telegram-api';
 import { redactSecretUrls } from './egress-guard';
 import { telegramRichReply } from './rich-format';
 
@@ -9,6 +9,9 @@ export const FINAL_OUTBOX_DUE_KEY = 'telegram_final_outbox_due_v1';
 const MAX_RECORDS = 256;
 const MAX_ATTEMPTS = 3;
 export type FinalPayload = TelegramFinalPayload;
+// One sendable sendMessage unit of a frozen final. Computed at enqueue and stored on the
+// record so redelivery resumes per part instead of resending the whole message.
+export type FinalPart = Readonly<{ text: string; fallback_text?: string }>;
 export type HeartbeatReceipt = { id: string; occurrence: number; schedulerRunId: string; runId?: string; loops: { id: string; due: string }[] };
 export type MailFollowupReceipt = { loopId: string; due: string; sourceRef: string; timezone: string; messageId: string };
 export type CalendarPrepReceipt = { connectionId: string; calendarId: 'primary'; eventId: string; occurrence: string; start: string; revision: string | null; sourceDigest: string; timezone: string };
@@ -18,6 +21,8 @@ export type FinalRecord = {
   receiptUrls?: string[]; ownerSubject: string; doName: string; status: 'pending' | 'attempting' | 'delivered' | 'quarantined' | 'blocked';
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; deliveredAt?: number; reason?: string;
   inbox?: { id: string; runId: string; attempt: string };
+  parts?: FinalPart[];
+  deliveredParts?: number;
   // Host-owned frozen settlement intent, committed with the physical final.
   commonExecution?: { request: Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>; settled?: boolean; disposition?:'indeterminate' };
   heartbeat?: HeartbeatReceipt;
@@ -37,6 +42,33 @@ const guardedPayload = (payload: FinalPayload): FinalPayload => {
     ...(fallback === undefined ? {} : { fallback_text: fallback.text }) };
 };
 
+// Sendable parts for a frozen payload. A rich reply splits on its plain source and
+// re-renders per part: splitting rendered HTML could cut inside an entity, while each
+// re-rendered part is valid on its own. A part whose rendering outgrows the cap (escaping
+// expands bytes) subdivides until it fits. A short payload is a single part carrying the
+// original bytes unchanged.
+const payloadParts = (payload: FinalPayload): FinalPart[] => {
+  if (payload.parse_mode === 'HTML' && payload.fallback_text !== undefined) {
+    const pieces = splitTelegramText(payload.fallback_text);
+    if (pieces.length === 1) return [{ text: payload.text, fallback_text: payload.fallback_text }];
+    const parts: FinalPart[] = [];
+    const walk = (plain: string): void => {
+      if (plain === '') return;
+      const rich = telegramRichReply(plain);
+      if (rich.text.length <= TELEGRAM_MESSAGE_MAX_CHARS || plain.length === 1) {
+        parts.push({ text: rich.text, fallback_text: plain });
+        return;
+      }
+      const mid = Math.ceil(plain.length / 2);
+      walk(plain.slice(0, mid));
+      walk(plain.slice(mid));
+    };
+    for (const piece of pieces) walk(piece);
+    return parts;
+  }
+  return splitTelegramText(payload.text).map(text => ({ text }));
+};
+
 export class TelegramFinalOutbox {
   constructor(private readonly kv: Kv, private readonly now: () => number = Date.now, private readonly persist?: (rows: FinalRecord[], due: number | null) => Promise<void>) {}
   records(): FinalRecord[] { return this.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? []; }
@@ -51,7 +83,7 @@ export class TelegramFinalOutbox {
   }
   async maintain(): Promise<void> {
     const rows = this.records().map(r => r.settled && r.status !== 'pending' && this.now() >= r.createdAt + 86400000
-      ? { ...r, payload: { chat_id: r.payload.chat_id, text: '' }, receiptUrls: [], reason: r.status === 'quarantined' ? 'expired_ambiguous_metadata' : r.reason } : r);
+      ? { ...r, payload: { chat_id: r.payload.chat_id, text: '' }, parts: [], receiptUrls: [], reason: r.status === 'quarantined' ? 'expired_ambiguous_metadata' : r.reason } : r);
     await this.save(rows);
   }
   async enqueue(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>): Promise<void> {
@@ -70,7 +102,7 @@ export class TelegramFinalOutbox {
       if (index < 0) throw new Error('final outbox capacity');
       rows = rows.filter((_, i) => i !== index);
     }
-    rows.push({ ...input, payload: { ...input.payload }, digest: hash, status: 'pending', dueAt: this.now() + 250, createdAt: this.now(), attempts: 0 });
+    rows.push({ ...input, payload: { ...input.payload }, parts: payloadParts(input.payload), digest: hash, status: 'pending', dueAt: this.now() + 250, createdAt: this.now(), attempts: 0 });
     await this.save(rows);
   }
   // Hash before entering the caller-owned atomic fence. The caller commits inbox closure
@@ -88,7 +120,7 @@ export class TelegramFinalOutbox {
         if (index < 0) throw new Error('final outbox capacity');
         rows = rows.filter((_, i) => i !== index);
       }
-      rows.push({ ...input, payload: { ...input.payload }, digest: hash, status: 'pending', dueAt: this.now() + 250, createdAt: this.now(), attempts: 0 });
+      rows.push({ ...input, payload: { ...input.payload }, parts: payloadParts(input.payload), digest: hash, status: 'pending', dueAt: this.now() + 250, createdAt: this.now(), attempts: 0 });
       this.kv.put(FINAL_OUTBOX_KEY, rows);
       this.kv.put(FINAL_OUTBOX_DUE_KEY, this.due(rows));
     });
@@ -152,21 +184,38 @@ export class TelegramFinalOutbox {
       && JSON.stringify(current.payload) === JSON.stringify(row.payload));
     try {
       let fallbackInvalidated = false;
-      const result = await sendTelegramFinal(options.send, { ...row.payload }, async () => {
-        const current = currentAttempt();
-        if (!current) { fallbackInvalidated = true; return false; }
-        const allowed = (current.expiresAt === undefined || this.now() < current.expiresAt) && await options.allowed(current);
-        if (!currentAttempt()) { fallbackInvalidated = true; return false; }
-        return allowed && (current.expiresAt === undefined || this.now() < current.expiresAt);
-      });
-      // Concurrent cancellation/forget owns the persisted record. Never overwrite
-      // its disposition or restore its scrubbed bytes from this captured send.
-      if (fallbackInvalidated || !currentAttempt()) return;
-      const ack = result as { message_id?: unknown; chat?: { id?: unknown } } | undefined;
-      const messageId = ack?.message_id;
-      if (!Number.isSafeInteger(messageId) || (messageId as number) <= 0 || ack?.chat?.id !== row.payload.chat_id) {
-        row.status = result === undefined ? 'blocked' : 'quarantined'; row.reason = result === undefined ? 'egress_blocked' : 'invalid_ack';
-      } else { row.status = 'delivered'; row.messageId = messageId as number; row.deliveredAt = this.now(); }
+      // Records persisted before parts existed derive them from the payload on read.
+      const parts = row.parts?.length ? row.parts : payloadParts(row.payload);
+      for (let index = row.deliveredParts ?? 0; index < parts.length; index += 1) {
+        const part = parts[index]!;
+        const result = await sendTelegramFinal(options.send, {
+          chat_id: row.payload.chat_id,
+          text: part.text,
+          ...(row.payload.parse_mode === undefined ? {} : { parse_mode: row.payload.parse_mode }),
+          ...(part.fallback_text === undefined ? {} : { fallback_text: part.fallback_text }),
+        }, async () => {
+          const current = currentAttempt();
+          if (!current) { fallbackInvalidated = true; return false; }
+          const allowed = (current.expiresAt === undefined || this.now() < current.expiresAt) && await options.allowed(current);
+          if (!currentAttempt()) { fallbackInvalidated = true; return false; }
+          return allowed && (current.expiresAt === undefined || this.now() < current.expiresAt);
+        });
+        // Concurrent cancellation/forget owns the persisted record. Never overwrite
+        // its disposition or restore its scrubbed bytes from this captured send.
+        if (fallbackInvalidated || !currentAttempt()) return;
+        const ack = result as { message_id?: unknown; chat?: { id?: unknown } } | undefined;
+        const messageId = ack?.message_id;
+        if (result === undefined) { row.status = 'blocked'; row.reason = 'egress_blocked'; break; }
+        if (!Number.isSafeInteger(messageId) || (messageId as number) <= 0 || ack?.chat?.id !== row.payload.chat_id) {
+          row.status = 'quarantined'; row.reason = 'invalid_ack'; break;
+        }
+        // Persist each ACKed part before the next send: a redelivery resumes at the first
+        // undelivered part instead of resending the whole message.
+        row.deliveredParts = index + 1;
+        row.messageId = messageId as number;
+        if (index + 1 === parts.length) { row.status = 'delivered'; row.deliveredAt = this.now(); }
+        if (!(await saveCurrentRow())) return;
+      }
     } catch (error) {
       if (!currentAttempt()) return;
       if (error instanceof TelegramRejection && error.retryable && !(typeof error.retryAfter === 'number' && error.retryAfter > 3600) && row.attempts < MAX_ATTEMPTS) {
@@ -197,7 +246,8 @@ const redactSourceFinalEntries = (kv: Kv, texts: readonly string[], marker: stri
     const metadata = row.calendarPrep ? Object.fromEntries(Object.entries(row.calendarPrep).map(([key, value]) => [key, typeof value === 'string' ? redact(value) : value])) as CalendarPrepReceipt : undefined;
     const metadataChanged = metadata !== undefined && JSON.stringify(metadata) !== JSON.stringify(row.calendarPrep);
     if (text === row.payload.text && fallback === row.payload.fallback_text && !metadataChanged) continue;
-    row.payload = { ...row.payload, text, ...(fallback === undefined ? {} : { fallback_text: fallback }) }; rewritten += 1;
+    row.payload = { ...row.payload, text, ...(fallback === undefined ? {} : { fallback_text: fallback }) };
+    row.parts = payloadParts(row.payload); rewritten += 1;
     if (metadataChanged) row.calendarPrep = metadata;
     if (row.status === 'pending' || (row.status === 'blocked' && row.reason === 'owner_binding' && row.attempts === 0)) { row.status = 'blocked'; row.reason = 'owner_forget'; row.settled = false; }
     else if (row.status === 'attempting') { row.status = 'quarantined'; row.reason = 'forget_during_uncertain_send'; row.settled = false; }

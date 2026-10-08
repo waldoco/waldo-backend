@@ -85,13 +85,13 @@ export const SANITISE_DESTINATION_POLICIES = {
     max_array_items: 16,
     max_key_chars: 128,
   },
-  // Owner-bound reply text (ADR-0024 amendment, owner decision 2026-09-28, direction A
-  // completion): identical caps to send_message; the behavioural difference lives in the
-  // runtime health free-text gate, which treats null-taint owner/model conversation as
-  // conversation here, exactly as at internal_context/system_prompt.
+  // Owner-bound reply text (ADR-0024): room for a long-form reply; the channel adapter
+  // splits it into what each surface can carry. The behavioural difference from send_message
+  // lives in the runtime health free-text gate, which treats null-taint owner/model
+  // conversation as conversation here, exactly as at internal_context/system_prompt.
   owner_reply: {
     payload_kind: 'text_or_structured',
-    max_chars: 4_096,
+    max_chars: 32_768,
     max_depth: 4,
     max_object_fields: 8,
     max_array_items: 16,
