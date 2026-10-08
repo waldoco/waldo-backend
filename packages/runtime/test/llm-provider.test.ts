@@ -2107,31 +2107,6 @@ describe('sanitiseRequest structural degradation', () => {
 
   // UNREACHABLE since A-2: one tool turn is capped at 32,768 by llmToolTurnSchema, far below the 400k window cap, so the
   // per-item oversize path cannot fire. The code is kept for the owner/Core decision; the test cannot run.
-  it.skip('reduces a single oversize tool output to its head plus a receipt, preserving the stored-output id', async () => {
-    // Schema caps output at 32,768, so per-item oversize arrives via output + call
-    // arguments together exceeding the internal_context policy.
-    const stored = JSON.stringify({ ok: true, data: { stored_output: 'out_123', total_chars: 61_000, head: `payload ${'z'.repeat(30_000)}` } });
-    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
-    const provider = new RuntimeLLMProvider({ gateway });
-    const result = await provider.complete(
-      {
-        trigger: 'brief',
-        renderRequest: () => ({
-          messages: [{ role: 'user' as const, content: 'summarise that page' }],
-          tool_turns: [{ call: { call_id: 'c1', name: 'browse_page', arguments: JSON.stringify({ url: 'u'.repeat(16_000) }) }, output: stored }],
-          max_tokens: 512,
-          temperature: 0.3,
-        }),
-      },
-      runtimeCtx(),
-    );
-    expect(result.ok).toBe(true);
-    const output = gateway.requests[0]!.request.tool_turns![0]!.output;
-    expect(output).toContain('out_123');
-    expect(output).toContain('reduced by the scribe');
-    expect(output).toContain('do not report it as empty');
-    expect(output.length).toBeLessThan(stored.length);
-  });
 
   it('derives each tool turn taint from the dispatcher contract, not the run blanket', async () => {
     // Owner finding on #204: tool_turns mixes internal mutation acks with external-origin
