@@ -110,7 +110,7 @@ it('keeps caption-only and missing-author reply targets without inventing identi
   }] });
   expect((await adapter.poll(0)).accepted[0]!.replyTo).toEqual({
     surface: 'telegram', messageId: '8', conversationRef: null, authorId: null, authorIsBot: null,
-    text: 'Export preview', truncated: false, sourceTaint: 'external',
+    text: 'Export preview', truncated: false, sourceTaint: 'external', provenance: { author: 'other', forwarded: false },
   });
 });
 
@@ -123,4 +123,16 @@ it('preserves host markup quote ranges for task planning while reply-target text
   expect(result.accepted[0]!.sourceQuoteRanges).toEqual([{ start: 12, end: text.length }]);
   expect(result.accepted[0]!.text).toBe(text);
   expect(result.accepted[0]!.replyTo?.sourceTaint).toBe('external');
+});
+
+it('reply provenance: owner and Waldo replies are marked, forwarded and third-party replies stay other', async () => {
+  const run = async (reply: Record<string, unknown>) => {
+    const adapter = new TelegramPollingAdapter({ getUpdates: async () => [{ update_id: 1, message: { from: { id: 7, is_bot: false }, chat: { id: 9, type: 'private' }, text: 'ok', reply_to_message: { message_id: 3, text: 'q', ...reply } } }] }, 1);
+    return (await adapter.poll()).accepted[0]!.replyTo!.provenance;
+  };
+  expect(await run({ from: { id: 7, is_bot: false } })).toEqual({ author: 'owner', forwarded: false });
+  expect(await run({ from: { id: 500, is_bot: true } })).toEqual({ author: 'waldo', forwarded: false });
+  expect(await run({ from: { id: 7, is_bot: false }, forward_origin: { type: 'hidden_user' } })).toEqual({ author: 'other', forwarded: true });
+  expect(await run({ from: { id: 8, is_bot: false } })).toEqual({ author: 'other', forwarded: false });
+  expect(await run({})).toEqual({ author: 'other', forwarded: false });
 });
