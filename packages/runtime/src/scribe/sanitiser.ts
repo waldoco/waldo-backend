@@ -123,7 +123,9 @@ function isNumeric(value: unknown): boolean {
   );
 }
 
-function prepareInput(raw: SanitiseInput): PreparedInput | undefined {
+type PreparationFailure = { reason: 'oversize' };
+
+function prepareInput(raw: SanitiseInput): PreparedInput | PreparationFailure | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
 
   const payload = (raw as { payload?: unknown }).payload;
@@ -140,7 +142,7 @@ function prepareInput(raw: SanitiseInput): PreparedInput | undefined {
     const value = current.value;
     if (value === null || typeof value === 'boolean') continue;
     if (typeof value === 'string') {
-      if (value.length > MAX_PREFLIGHT_STRING_CHARS) return undefined;
+      if (value.length > MAX_PREFLIGHT_STRING_CHARS) return { reason: 'oversize' };
       continue;
     }
     if (typeof value === 'number') {
@@ -161,7 +163,7 @@ function prepareInput(raw: SanitiseInput): PreparedInput | undefined {
     const descriptors = Object.getOwnPropertyDescriptors(value);
     for (const [key, descriptor] of Object.entries(descriptors)) {
       if (descriptor.get !== undefined || descriptor.set !== undefined) return undefined;
-      if (key.length > MAX_PREFLIGHT_STRING_CHARS) return undefined;
+      if (key.length > MAX_PREFLIGHT_STRING_CHARS) return { reason: 'oversize' };
       pending.push({ value: descriptor.value, depth: current.depth + 1 });
     }
   }
@@ -602,7 +604,7 @@ function containsForbiddenHealth(
           return false;
         }
         const prepared = prepareInput({ ...input, payload } as SanitiseInput);
-        if (prepared === undefined) {
+        if (prepared === undefined || 'reason' in prepared) {
           nestedInvalid = true;
           return false;
         }
@@ -628,9 +630,15 @@ function redactExternalHealthSpans(
 ): { invalid: boolean; payload: JsonValue; redactions: Redaction[] } {
   const counts = new Map<RedactionKind, number>();
   const patterns = [...RAW_SENSOR_PATTERNS, ...DERIVED_SCORE_PATTERNS, ...HEALTH_FREE_TEXT];
-  const transformed = transformJsonStrings(payload, (text) =>
-    patterns.reduce((output, pattern) => replaceAndCount(output, pattern, HEALTH_SPAN_MARKER, 'health_value', counts), text),
-  );
+  const transformed = transformJsonStrings(payload, (text) => {
+    // JSON-encoded structured health still belongs to the correlation check below.
+    // Rewriting its tokens first could destroy the structure and hide the measurement.
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (typeof parsed === 'object' && parsed !== null) return text;
+    } catch { /* Ordinary free text is scanned for spans. */ }
+    return patterns.reduce((output, pattern) => replaceAndCount(output, pattern, HEALTH_SPAN_MARKER, 'health_value', counts), text);
+  });
   if (transformed.invalid) return { invalid: true, payload, redactions };
   const count = counts.get('health_value') ?? 0;
   return {
@@ -847,12 +855,14 @@ function redactPii(
     if (MODEL_AND_OWNER_DESTINATIONS.has(destination) && (key === 'output' || key === 'arguments')) {
       let parsed: JsonValue | undefined;
       try { parsed = JSON.parse(text); } catch { /* Plain output keeps free-text redaction. */ }
-      if (parsed !== null && typeof parsed === 'object'
-          && prepareInput({ payload: parsed, destination, source_taint: taint, canary_tokens: canaryTokens })) {
-        const structured = transformJsonStrings(parsed, (value, field) => redactPiiText(value, field, destination, taint, counts));
-        if (!structured.invalid) {
-          const rewritten = JSON.stringify(structured.payload);
-          return rewritten === JSON.stringify(parsed) ? text : rewritten;
+      if (parsed !== null && typeof parsed === 'object') {
+        const prepared = prepareInput({ payload: parsed, destination, source_taint: taint, canary_tokens: canaryTokens });
+        if (prepared !== undefined && !('reason' in prepared)) {
+          const structured = transformJsonStrings(parsed, (value, field) => redactPiiText(value, field, destination, taint, counts));
+          if (!structured.invalid) {
+            const rewritten = JSON.stringify(structured.payload);
+            return rewritten === JSON.stringify(parsed) ? text : rewritten;
+          }
         }
       }
     }
@@ -1015,6 +1025,7 @@ function applyDestinationPolicy(
 export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
   if (!input) return deny('size_cap', 'invalid_payload');
+  if ('reason' in input) return deny('size_cap', input.reason);
 
   const secret = containsCanaryOrSecret(input.payload, input);
   if (secret === 'invalid_payload') return deny('size_cap', secret);
@@ -1048,6 +1059,7 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
 export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
   if (!input) return deny('size_cap', 'invalid_payload');
+  if ('reason' in input) return deny('size_cap', input.reason);
 
   const secret = containsCanaryOrSecret(input.payload, input);
   if (secret === 'invalid_payload') return deny('size_cap', secret);
@@ -1063,6 +1075,7 @@ export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
 export function sanitise(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
   if (!input) return deny('size_cap', 'invalid_payload');
+  if ('reason' in input) return deny('size_cap', input.reason);
 
   const secret = containsCanaryOrSecret(input.payload, input);
   if (secret === 'invalid_payload') return deny('size_cap', secret);

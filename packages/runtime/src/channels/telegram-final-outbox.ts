@@ -182,13 +182,16 @@ export class TelegramFinalOutbox {
     const currentAttempt = () => this.records().find(current => current.id === row.id
       && current.status === 'attempting' && current.digest === row.digest && current.attempts === row.attempts
       && JSON.stringify(current.payload) === JSON.stringify(row.payload));
-    try {
-      let fallbackInvalidated = false;
-      // Records persisted before parts existed derive them from the payload on read.
-      const parts = row.parts?.length ? row.parts : payloadParts(row.payload);
-      for (let index = row.deliveredParts ?? 0; index < parts.length; index += 1) {
-        const part = parts[index]!;
-        const result = await sendTelegramFinal(options.send, {
+    let fallbackInvalidated = false;
+    // Records persisted before parts existed derive them from the payload on read.
+    const parts = row.parts?.length ? row.parts : payloadParts(row.payload);
+    for (let index = row.deliveredParts ?? 0; index < parts.length; index += 1) {
+      // Recommit attempting before each physical part, outside the transport catch.
+      if (!(await saveCurrentRow())) return;
+      const part = parts[index]!;
+      let result: unknown;
+      try {
+        result = await sendTelegramFinal(options.send, {
           chat_id: row.payload.chat_id,
           text: part.text,
           ...(row.payload.parse_mode === undefined ? {} : { parse_mode: row.payload.parse_mode }),
@@ -200,30 +203,30 @@ export class TelegramFinalOutbox {
           if (!currentAttempt()) { fallbackInvalidated = true; return false; }
           return allowed && (current.expiresAt === undefined || this.now() < current.expiresAt);
         });
-        // Concurrent cancellation/forget owns the persisted record. Never overwrite
-        // its disposition or restore its scrubbed bytes from this captured send.
-        if (fallbackInvalidated || !currentAttempt()) return;
-        const ack = result as { message_id?: unknown; chat?: { id?: unknown } } | undefined;
-        const messageId = ack?.message_id;
-        if (result === undefined) { row.status = 'blocked'; row.reason = 'egress_blocked'; break; }
-        if (!Number.isSafeInteger(messageId) || (messageId as number) <= 0 || ack?.chat?.id !== row.payload.chat_id) {
-          row.status = 'quarantined'; row.reason = 'invalid_ack'; break;
+      } catch (error) {
+        if (!currentAttempt()) return;
+        if (error instanceof TelegramRejection && error.retryable && !(typeof error.retryAfter === 'number' && error.retryAfter > 3600) && row.attempts < MAX_ATTEMPTS) {
+          row.status = 'pending'; row.reason = 'provider_rejected';
+          row.dueAt = this.now() + Math.max(30_000 * row.attempts, (typeof error.retryAfter === 'number' && Number.isFinite(error.retryAfter) && error.retryAfter >= 0 ? Math.min(3600, error.retryAfter) : 0) * 1_000);
+        } else {
+          row.status = 'quarantined'; row.reason = error instanceof TelegramRejection ? 'provider_rejected_terminal' : 'send_unknown';
         }
-        // Persist each ACKed part before the next send: a redelivery resumes at the first
-        // undelivered part instead of resending the whole message.
-        row.deliveredParts = index + 1;
-        row.messageId = messageId as number;
-        if (index + 1 === parts.length) { row.status = 'delivered'; row.deliveredAt = this.now(); }
-        if (!(await saveCurrentRow())) return;
+        break;
       }
-    } catch (error) {
-      if (!currentAttempt()) return;
-      if (error instanceof TelegramRejection && error.retryable && !(typeof error.retryAfter === 'number' && error.retryAfter > 3600) && row.attempts < MAX_ATTEMPTS) {
-        row.status = 'pending'; row.reason = 'provider_rejected';
-        row.dueAt = this.now() + Math.max(30_000 * row.attempts, (typeof error.retryAfter === 'number' && Number.isFinite(error.retryAfter) && error.retryAfter >= 0 ? Math.min(3600, error.retryAfter) : 0) * 1_000);
-      } else {
-        row.status = 'quarantined'; row.reason = error instanceof TelegramRejection ? 'provider_rejected_terminal' : 'send_unknown';
+      // Concurrent cancellation/forget owns the persisted record. Never overwrite
+      // its disposition or restore its scrubbed bytes from this captured send.
+      if (fallbackInvalidated || !currentAttempt()) return;
+      const ack = result as { message_id?: unknown; chat?: { id?: unknown } } | undefined;
+      const messageId = ack?.message_id;
+      if (result === undefined) { row.status = 'blocked'; row.reason = 'egress_blocked'; break; }
+      if (!Number.isSafeInteger(messageId) || (messageId as number) <= 0 || ack?.chat?.id !== row.payload.chat_id) {
+        row.status = 'quarantined'; row.reason = 'invalid_ack'; break;
       }
+      // Persist each ACKed part before the next send; storage faults must propagate.
+      row.deliveredParts = index + 1;
+      row.messageId = messageId as number;
+      if (index + 1 === parts.length) { row.status = 'delivered'; row.deliveredAt = this.now(); }
+      if (!(await saveCurrentRow())) return;
     }
     if (!(await saveCurrentRow())) return;
     await options.settled(row);

@@ -1,7 +1,7 @@
 import type { SanitiseInput } from '@waldo/contracts';
 import * as fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { sanitise, scoreInjection } from '../src/scribe/sanitiser';
+import { sanitise } from '../src/scribe/sanitiser';
 // @ts-ignore Vitest bundles the checked-in synthetic corpus as JSON.
 import calibrationBenignFixture from './fixtures/scribe-injection/calibration-benign.json';
 // @ts-ignore Vitest bundles the checked-in synthetic corpus as JSON.
@@ -316,11 +316,17 @@ describe('Scribe sanitiser properties', () => {
           // Owner decision 2026-09-28 (direction A): free-text scans pin at provider-payload
           // taint; owner/model conversation at null taint may carry these at the conversation
           // destinations.
-          expect(inspectExternal(wrapAtDepth(encoded, depth))).toMatchObject({
-            ok: false,
-            check: 'health_value',
-            reason: 'health_value_leak',
-          });
+          const result = inspectExternal(wrapAtDepth(encoded, depth));
+          if (encoding === 'text') {
+            if (depth === 0) {
+              expect(result).toMatchObject({ ok: false, check: 'size_cap', reason: 'invalid_payload' });
+            } else {
+              expect(result).toMatchObject({ ok: true, redactions: [{ kind: 'health_value' }] });
+              if (result.ok) expect(JSON.stringify(result.payload)).toContain('[health value withheld]');
+            }
+          } else {
+            expect(result).toMatchObject({ ok: false, check: 'health_value', reason: 'health_value_leak' });
+          }
         },
       ),
       { numRuns: RUNS },
@@ -354,11 +360,17 @@ describe('Scribe sanitiser properties', () => {
                 return unicodeEscape(text);
             }
           })();
-          expect(inspectExternal(wrapAtDepth(encoded, depth))).toMatchObject({
-            ok: false,
-            check: 'health_value',
-            reason: 'health_value_leak',
-          });
+          const result = inspectExternal(wrapAtDepth(encoded, depth));
+          if (encoding === 'text' || encoding === 'csv') {
+            if (depth === 0) {
+              expect(result).toMatchObject({ ok: false, check: 'size_cap', reason: 'invalid_payload' });
+            } else {
+              expect(result).toMatchObject({ ok: true, redactions: [{ kind: 'health_value' }] });
+              if (result.ok) expect(JSON.stringify(result.payload)).toContain('[health value withheld]');
+            }
+          } else {
+            expect(result).toMatchObject({ ok: false, check: 'health_value', reason: 'health_value_leak' });
+          }
           // Nested-JSON free text is parsed and still denied as structured correlation at any taint.
           if (encoding === 'json') {
             expect(inspect(wrapAtDepth(encoded, depth))).toMatchObject({
@@ -434,11 +446,17 @@ describe('Scribe sanitiser properties', () => {
             check: 'health_value',
             reason: 'health_value_leak',
           });
-          expect(inspectExternal(wrapAtDepth(encoded, depth))).toMatchObject({
-            ok: false,
-            check: 'health_value',
-            reason: 'health_value_leak',
-          });
+          const result = inspectExternal(wrapAtDepth(encoded, depth));
+          if (encoding === 'text') {
+            if (depth === 0) {
+              expect(result).toMatchObject({ ok: false, check: 'size_cap', reason: 'invalid_payload' });
+            } else {
+              expect(result).toMatchObject({ ok: true, redactions: [{ kind: 'health_value' }] });
+              if (result.ok) expect(JSON.stringify(result.payload)).toContain('[health value withheld]');
+            }
+          } else {
+            expect(result).toMatchObject({ ok: false, check: 'health_value', reason: 'health_value_leak' });
+          }
         },
       ),
       { numRuns: RUNS },

@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { runHooks, type HookRuntimeContext } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
 import { splitTelegramText, TELEGRAM_MESSAGE_MAX_CHARS, TelegramRejection } from '../src/channels/telegram-api';
-import { TelegramFinalOutbox, FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
+import { TelegramFinalOutbox, FINAL_OUTBOX_KEY, FINAL_OUTBOX_DUE_KEY } from '../src/channels/telegram-final-outbox';
 import { redactMailFollowupEntries } from '../src/channels/telegram-final-outbox';
 import { telegramRichReply } from '../src/channels/rich-format';
 
@@ -184,6 +184,44 @@ describe('telegram final outbox multi-part delivery', () => {
       paragraphs[0], paragraphs[1], paragraphs[1], paragraphs[2],
     ]);
     expect(f.outbox.records()[0]).toMatchObject({ status: 'delivered', messageId: 102, attempts: 2, deliveredParts: 3 });
+  });
+
+  it.each([1, 3])('rethrows ACK persistence failure at part %s and quarantines on restart without resend', async failedPart => {
+    const f = outboxFixture();
+    const paragraphs = ['a'.repeat(2_800), 'b'.repeat(2_800), 'c'.repeat(2_800)];
+    await f.outbox.enqueue({ ...f.input, payload: { chat_id: 7, text: paragraphs.join('\n\n') } });
+    f.advance();
+    let failed = false;
+    const broken = new TelegramFinalOutbox(f.kv, f.now, async (rows, due) => {
+      if (!failed && rows.some(row => row.deliveredParts === failedPart)) { failed = true; throw new Error('ACK persistence failed'); }
+      f.kv.put(FINAL_OUTBOX_KEY, rows);
+      f.kv.put(FINAL_OUTBOX_DUE_KEY, due);
+    });
+    const send = vi.fn(async () => ({ message_id: 100, chat: { id: 7 } }));
+    await expect(broken.drain({ allowed: async () => true, send, settled: f.settled })).rejects.toThrow('ACK persistence failed');
+    expect(send).toHaveBeenCalledTimes(failedPart);
+    expect(f.outbox.records()[0]).toMatchObject({ status: 'attempting', ...(failedPart > 1 ? { deliveredParts: failedPart - 1 } : {}) });
+    expect(f.settled).not.toHaveBeenCalled();
+    await f.outbox.drain({ allowed: async () => true, send, settled: f.settled });
+    expect(send).toHaveBeenCalledTimes(failedPart);
+    expect(f.outbox.records()[0]).toMatchObject({ status: 'quarantined', reason: 'restart_during_send' });
+  });
+
+  it('persists attempting before every physical part and quarantines an ambiguous middle-part transport', async () => {
+    const f = outboxFixture();
+    const paragraphs = ['a'.repeat(2_800), 'b'.repeat(2_800), 'c'.repeat(2_800)];
+    await f.outbox.enqueue({ ...f.input, payload: { chat_id: 7, text: paragraphs.join('\n\n') } });
+    f.advance();
+    let calls = 0;
+    const send = vi.fn(async () => {
+      expect(f.outbox.records()[0]).toMatchObject({ status: 'attempting', ...(calls ? { deliveredParts: calls } : {}) });
+      if (++calls === 2) throw new Error('response lost');
+      return { message_id: 100, chat: { id: 7 } };
+    });
+    await f.outbox.drain({ allowed: async () => true, send, settled: f.settled });
+    expect(f.outbox.records()[0]).toMatchObject({ status: 'quarantined', reason: 'send_unknown', deliveredParts: 1 });
+    await f.outbox.drain({ allowed: async () => true, send, settled: f.settled });
+    expect(send).toHaveBeenCalledTimes(2);
   });
 
   it('keeps a short final byte-identical: one send, unchanged request', async () => {

@@ -26,6 +26,12 @@ describe('A-7: health free text in external content is redacted, not denied', ()
     expect(run('HRV 52 ms', 'memory_block', 'external')).toEqual({ ok: false, check: 'health_value', reason: 'health_value_leak' });
   });
 
+  it('preserves JSON-encoded structured health for correlation denial before free-text redaction', () => {
+    for (const payload of [JSON.stringify({ hrv: 1, unit: 'ms' }), { output: JSON.stringify({ motion: 'walking' }) }]) {
+      expect(run(payload, 'internal_context', 'external')).toEqual({ ok: false, check: 'health_value', reason: 'health_value_leak' });
+    }
+  });
+
   it('still denies structured health correlation in external content at internal_context', () => {
     expect(run({ metric: 'hrv', measurement: 58, unit: 'ms' }, 'internal_context', 'external')).toEqual({ ok: false, check: 'health_value', reason: 'health_value_leak' });
   });
