@@ -10,7 +10,12 @@ const NOT_SHOWN = new Set(['skill_selected', 'browser_acted']);
 const STATE_WORD = { accepted: 'accepted', failed: 'failed', unresolved: 'unconfirmed' } as const;
 
 export const receiptLine = (events: readonly LoopEventLike[]): string | null => {
-  const receipts = receiptsFromLoopEvents(events).filter(r => !NOT_SHOWN.has(r.effect));
+  const shown = receiptsFromLoopEvents(events).filter(r => !NOT_SHOWN.has(r.effect));
+  // A failed attempt that a later attempt of the same effect and ref redid successfully is a retry, not an outcome.
+  const redone = (r: (typeof shown)[number], index: number): boolean =>
+    (r.state ?? (r.ok ? 'accepted' : 'failed')) === 'failed' &&
+    shown.slice(index + 1).some(later => later.effect === r.effect && later.ref === r.ref && (later.state ?? (later.ok ? 'accepted' : 'failed')) === 'accepted');
+  const receipts = shown.filter((r, index) => !redone(r, index));
   if (receipts.length === 0) return null;
   const named = receipts.slice(0, MAX_NAMED).map(r => `${r.effect.split('_').join(' ')}${r.ref ? ` ${r.ref}` : ''} (${STATE_WORD[r.state ?? (r.ok ? 'accepted' : 'failed')]}${r.delegated ? ', via task' : ''})`);
   const more = receipts.length - named.length;
