@@ -139,10 +139,11 @@ export const toolOutputLedger = (storage: KeyValueStorage) => ({
       return false;
     });
     if (poisonedKeys.length > 0) await storage.delete(poisonedKeys);
-    return clean.map(([, entry]) => entry).map((entry) => ({
+    return clean.map(([key, entry]) => ({ entry, seq: key.slice('toolout:'.length) })).map(({ entry, seq }) => ({
       text: `${entry.tool} ${entry.ok ? 'succeeded' : 'failed'}: ${redact(entry.summary)}`,
       source: {
-        source_key: `tool_output:${entry.tool}:${entry.at}`,
+        // The row sequence keeps two same-tool calls in one millisecond distinct: the timestamp alone repeats.
+        source_key: `tool_output:${entry.tool}:${entry.at}:${seq}`,
         source_kind: 'tool_result' as const,
         scope: 'invocation' as const,
         source_taint: entry.taint,

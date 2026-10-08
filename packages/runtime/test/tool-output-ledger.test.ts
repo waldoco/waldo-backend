@@ -13,6 +13,16 @@ const fakeStorage = () => {
 };
 
 describe('tool output ledger', () => {
+  it('two calls of the same tool in the same millisecond keep distinct source keys', async () => {
+    const storage = fakeStorage();
+    const ledger = toolOutputLedger(storage as never);
+    await ledger.record({ tool: 'store_memory', ok: true, at: 5000, taint: null, summary: '{"ok":true,"id":"a"}' });
+    await ledger.record({ tool: 'store_memory', ok: true, at: 5000, taint: null, summary: '{"ok":true,"id":"b"}' });
+    const keys = (await ledger.recent()).map(fragment => fragment.source.source_key);
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+  });
+
   it.each(['capped', 'legacy', 'escaped'])('forgets exact text in a %s display summary while retaining ledger provenance', async (shape) => {
     const storage = fakeStorage();
     const needle = shape === 'escaped' ? 'Synthetic workshop "azure" context' : "For project WBX-20261002-M1, the workshop start time is 08:40 UTC; this is temporary fictional test context, not the owner's real schedule.";
@@ -58,7 +68,7 @@ describe('tool output ledger', () => {
       expect(f.source.source_kind).toBe('tool_result');
       expect(f.source.scope).toBe('invocation');
       expect(f.source.source_taint).toBe('external');
-      expect(f.source.source_key).toBe(`tool_output:${i === 0 ? 'query_calendar:1000' : 'web_search:2000'}`);
+      expect(f.source.source_key).toBe(`tool_output:${i === 0 ? 'query_calendar:1000:0000000000' : 'web_search:2000:0000000001'}`);
     }
   });
 
