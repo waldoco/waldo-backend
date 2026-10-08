@@ -101,6 +101,11 @@ const PHONE_PATTERN = /\+?\b(?:1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/
 const JSON_ESCAPE = /\\u[0-9a-fA-F]{4}/;
 const PERCENT_ESCAPE = /%[0-9a-fA-F]{2}/;
 
+// Log-only branch tag so each invalid_payload source is identifiable in the worker logs (no payload text).
+function denyInvalid(branch: string, reason: SanitiseFailureReason): SanitiseResult {
+  console.warn(JSON.stringify({ hop: 'scribe_invalid', branch }));
+  return deny('size_cap', reason);
+}
 function deny(check: SanitiseCheck, reason: SanitiseFailureReason): SanitiseResult {
   return { ok: false, check, reason };
 }
@@ -259,7 +264,20 @@ function canDecodeAgain(text: string): boolean {
   return false;
 }
 
-function decodedViews(text: string): DecodeBundle {
+// Owner voice notes relayed 2026-10-08 10:28 and 10:30 (remove gates that break function): the model-context path (internal_context) must not die on shape or size heuristics. Over-budget or
+// deeper-than-two-pass encodings stop decoding there; everything decoded so far is still scanned for canaries, secrets and
+// instructions, and a log line records the leniency. Other destinations keep fail-closed.
+// Lenient mode is a last-resort retry scope (provider degradation runs strict first). Sync only.
+let lenientScope = false;
+export function runLenientInternalContext<T>(fn: () => T): T {
+  const before = lenientScope;
+  lenientScope = true;
+  try { return fn(); } finally { lenientScope = before; }
+}
+const lenientLog = (branch: string, detail: Readonly<Record<string, number | string>> = {}) => {
+  console.warn(JSON.stringify({ hop: 'scribe_lenient', destination: 'internal_context', branch, ...detail }));
+};
+function decodedViews(text: string, lenient = false): DecodeBundle {
   const views = [text];
   const known = new Set(views);
   // Uniform 4x decode budget (live RCA 2026-09-28: brief card failed internal_context
@@ -288,6 +306,7 @@ function decodedViews(text: string): DecodeBundle {
         if (typeof value !== 'string' || value === candidate || known.has(value)) continue;
         decodedChars += value.length;
         if (value.length > maxDecodedChars || decodedChars > maxDecodedChars) {
+          if (lenient) { lenientLog('decode_budget', { chars: text.length }); return { invalid: false, views }; }
           return { invalid: true, views };
         }
         known.add(value);
@@ -299,7 +318,10 @@ function decodedViews(text: string): DecodeBundle {
     if (frontier.length === 0) break;
   }
 
-  if (frontier.some(canDecodeAgain)) return { invalid: true, views };
+  if (frontier.some(canDecodeAgain)) {
+    if (lenient) { lenientLog('decode_depth', { chars: text.length }); return { invalid: false, views }; }
+    return { invalid: true, views };
+  }
   return { invalid: false, views };
 }
 
@@ -881,7 +903,7 @@ function inspectInstructions(
     for (const match of scoreInjection(text).matches) matched.set(match.id, match);
     return false;
   });
-  if (scanned.invalid) return deny('size_cap', 'invalid_payload');
+  if (scanned.invalid) return denyInvalid('L894', 'invalid_payload');
   const verdict = verdictForMatches(
     INJECTION_RULES.flatMap((rule) => {
       const match = matched.get(rule.id);
@@ -909,7 +931,7 @@ function inspectInstructions(
     }
     return output;
   });
-  if (transformed.invalid) return deny('size_cap', 'invalid_payload');
+  if (transformed.invalid) return denyInvalid('L922', 'invalid_payload');
   return {
     payload: transformed.payload,
     redactions: [
@@ -955,6 +977,24 @@ function truncateSandboxStructuredStdout(
   return bounded;
 }
 
+// Halve the longest string until the JSON fits; undefined when no string is left to cut.
+function shrinkStructuredStrings(payload: JsonValue, maxChars: number): JsonValue | undefined {
+  let current: JsonValue = JSON.parse(JSON.stringify(payload));
+  for (let round = 0; round < 400 && JSON.stringify(current).length > maxChars; round += 1) {
+    let best: { holder: Record<string, JsonValue> | JsonValue[]; key: string | number; length: number } | undefined;
+    const walk = (value: JsonValue) => {
+      if (Array.isArray(value)) value.forEach((item, index) => { if (typeof item === 'string') { if (!best || item.length > best.length) best = { holder: value, key: index, length: item.length }; } else walk(item); });
+      else if (typeof value === 'object' && value !== null) for (const [key, item] of Object.entries(value)) { if (typeof item === 'string') { if (!best || item.length > best.length) best = { holder: value as Record<string, JsonValue>, key, length: item.length }; } else walk(item as JsonValue); }
+    };
+    walk(current);
+    const target = best as { holder: any; key: string | number; length: number } | undefined;
+    if (!target || target.length <= TRUNCATION_MARKER.length + 8) return undefined;
+    const text = target.holder[target.key] as string;
+    target.holder[target.key] = `${text.slice(0, Math.floor(text.length / 2))}${TRUNCATION_MARKER}`;
+  }
+  return JSON.stringify(current).length <= maxChars ? current : undefined;
+}
+
 function applyDestinationPolicy(
   input: PreparedInput,
   payload: JsonValue,
@@ -972,28 +1012,39 @@ function applyDestinationPolicy(
     isStructured &&
     !isEligibleHealthView(payload, input.destination)
   ) {
-    return deny('size_cap', 'invalid_payload');
+    return denyInvalid('L1003', 'invalid_payload');
   }
   if (
     (policy.payload_kind === 'text' && !isText) ||
     (policy.payload_kind === 'structured' && !isStructured) ||
     (policy.payload_kind === 'text_or_structured' && !isText && !isStructured)
   ) {
-    return deny('size_cap', 'invalid_payload');
+    return denyInvalid('L1010', 'invalid_payload');
   }
 
   const serialized = isText ? payload : JSON.stringify(payload);
   let boundedPayload = payload;
   if (serialized.length > maxChars) {
-    if (input.destination !== 'sandbox_stdout') {
+    if (lenientScope && input.destination === 'internal_context') {
+      // Truncate instead of failing the whole turn/card; the cut is logged. Structure limits below still apply.
+      const shrunk = isText
+        ? `${payload.slice(0, Math.max(0, maxChars - TRUNCATION_MARKER.length))}${TRUNCATION_MARKER}`
+        : shrinkStructuredStrings(payload, maxChars);
+      if (shrunk !== undefined) {
+        lenientLog('oversize_truncated', { chars: serialized.length, max: maxChars });
+        boundedPayload = shrunk;
+      } else return deny('size_cap', 'oversize');
+    } else if (input.destination !== 'sandbox_stdout') {
       return deny('size_cap', 'oversize');
     }
-    if (isText) {
-      boundedPayload = `${payload.slice(0, maxChars - TRUNCATION_MARKER.length)}${TRUNCATION_MARKER}`;
-    } else {
-      const truncated = truncateSandboxStructuredStdout(payload, maxChars);
-      if (truncated === undefined) return deny('size_cap', 'oversize');
-      boundedPayload = truncated;
+    if (input.destination === 'sandbox_stdout') {
+      if (isText) {
+        boundedPayload = `${payload.slice(0, maxChars - TRUNCATION_MARKER.length)}${TRUNCATION_MARKER}`;
+      } else {
+        const truncated = truncateSandboxStructuredStdout(payload, maxChars);
+        if (truncated === undefined) return deny('size_cap', 'oversize');
+        boundedPayload = truncated;
+      }
     }
   }
   if (isStructured) {
@@ -1040,19 +1091,19 @@ function applyDestinationPolicy(
 // read chunks.
 export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
-  if (!input) return deny('size_cap', 'invalid_payload');
+  if (!input) return denyInvalid('L1082', 'invalid_payload');
 
   const secret = containsCanaryOrSecret(input.payload, input);
-  if (secret === 'invalid_payload') return deny('size_cap', secret);
+  if (secret === 'invalid_payload') return denyInvalid('L1085', 'invalid_payload');
   if (secret !== undefined) return deny('canary_token', secret);
 
   const health = containsForbiddenHealth(input);
-  if (health.invalid) return deny('size_cap', 'invalid_payload');
+  if (health.invalid) return denyInvalid('L1089', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
 
   // The offload store persists, so it never gets the model/owner readable seam: redact as memory_block.
   const pii = redactPii(input.payload, 'memory_block', input.source_taint, input.canary_tokens);
-  if (pii.invalid) return deny('size_cap', 'invalid_payload');
+  if (pii.invalid) return denyInvalid('L1094', 'invalid_payload');
 
   const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
   if ('ok' in instructions) return instructions;
@@ -1073,14 +1124,14 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
 // canary/secret, health leak, injection block verdict, and destination policy all still fail closed.
 export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
-  if (!input) return deny('size_cap', 'invalid_payload');
+  if (!input) return denyInvalid('L1115', 'invalid_payload');
 
   const secret = containsCanaryOrSecret(input.payload, input);
-  if (secret === 'invalid_payload') return deny('size_cap', secret);
+  if (secret === 'invalid_payload') return denyInvalid('L1118', 'invalid_payload');
   if (secret !== undefined) return deny('canary_token', secret);
 
   const health = containsForbiddenHealth(input);
-  if (health.invalid) return deny('size_cap', 'invalid_payload');
+  if (health.invalid) return denyInvalid('L1122', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
 
   const matched = new Map<InjectionRuleId, GuardVerdict['matches'][number]>();
@@ -1088,7 +1139,7 @@ export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
     for (const match of scoreInjection(text).matches) matched.set(match.id, match);
     return false;
   });
-  if (scanned.invalid) return deny('size_cap', 'invalid_payload');
+  if (scanned.invalid) return denyInvalid('L1130', 'invalid_payload');
   if (verdictForMatches([...matched.values()]).decision === 'block') {
     return deny('instruction_pattern', 'untrusted_instruction');
   }
@@ -1098,18 +1149,18 @@ export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
 
 export function sanitise(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
-  if (!input) return deny('size_cap', 'invalid_payload');
+  if (!input) return denyInvalid('L1140', 'invalid_payload');
 
   const secret = containsCanaryOrSecret(input.payload, input);
-  if (secret === 'invalid_payload') return deny('size_cap', secret);
+  if (secret === 'invalid_payload') return denyInvalid('L1143', 'invalid_payload');
   if (secret !== undefined) return deny('canary_token', secret);
 
   const health = containsForbiddenHealth(input);
-  if (health.invalid) return deny('size_cap', 'invalid_payload');
+  if (health.invalid) return denyInvalid('L1147', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
 
   const pii = redactPii(input.payload, input.destination, input.source_taint, input.canary_tokens);
-  if (pii.invalid) return deny('size_cap', 'invalid_payload');
+  if (pii.invalid) return denyInvalid('L1151', 'invalid_payload');
 
   const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
   if ('ok' in instructions) return instructions;

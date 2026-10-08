@@ -1,4 +1,5 @@
 import type { RunEffectScope } from '../channels/run-effect-scope';
+import { runLenientInternalContext } from '../scribe/sanitiser';
 import {
   ESCALATION_RULES,
   FALLBACK_LADDER,
@@ -1314,7 +1315,23 @@ const SCRIBE_HARD_REASONS: ReadonlySet<string> = new Set([
   'untrusted_instruction',
 ]);
 
+// Strict first (its structural degradation keeps the best context); only if the request still fails on a
+// structural internal_context deny, retry once with lenient truncation instead of failing the turn.
 async function sanitiseRequest(
+  request: LLMRequest,
+  ctx: HookRuntimeContext,
+): Promise<SanitiseRequestResult> {
+  const strict = await sanitiseRequestStrict(request, ctx);
+  if (strict.ok || ctx.sanitise === undefined) return strict;
+  const error = strict.error;
+  if (error.hook !== 'scribe_sanitise' || strict.scribeDestination !== 'internal_context' || !error.reason.startsWith('scribe:') || SCRIBE_HARD_REASONS.has(error.reason.slice('scribe:'.length))) return strict;
+  const inner = ctx.sanitise;
+  console.warn(JSON.stringify({ hop: 'scribe_lenient', branch: 'provider_retry', reason: error.reason }));
+  const retry = await sanitiseRequestStrict(request, { ...ctx, sanitise: (input: Parameters<typeof inner>[0]) => runLenientInternalContext(() => inner(input)) });
+  return retry.ok ? retry : strict;
+}
+
+async function sanitiseRequestStrict(
   request: LLMRequest,
   ctx: HookRuntimeContext,
 ): Promise<SanitiseRequestResult> {
