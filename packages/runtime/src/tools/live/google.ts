@@ -18,7 +18,7 @@ export type GoogleAccess = Readonly<{
 }>;
 
 export type EffectDesk = Readonly<{
-  propose(proposal: ProposeCalendarChangeArgs): Promise<string>;
+  propose(proposal: ProposeCalendarChangeArgs, turnKey?: string): Promise<string>;
   proposeSendEmail(proposal: EmailSendProposal): Promise<string>;
   record(kind: string, summary: string, payload: unknown): void;
 }>;
@@ -222,8 +222,8 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('propose_calendar_change'),
     autonomy_gated: false,
     mutates_state: true,
-    async handle(args: ProposeCalendarChangeArgs) {
-      return { ok: true, data: { proposal_id: await desk.propose(args), status: 'sent to the owner with Do it / Modify / Not now buttons', applied: false }, source_taint: null };
+    async handle(args: ProposeCalendarChangeArgs, ctx?: ToolDispatcherContext) {
+      return { ok: true, data: { proposal_id: await desk.propose(args, ctx?.turnId), status: 'sent to the owner with Do it / Modify / Not now buttons', applied: false }, source_taint: null };
     },
   } satisfies ToolHandler<ProposeCalendarChangeArgs, unknown, ToolDispatcherContext>,
   {

@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { googleClient, type CalendarChange, type GoogleClient, type MailItem } from '../src/connectors/google';
 import { collectChanges, updateBook } from '../src/channels/update-cards';
 import { updateCardPrompt } from '../src/prompt/update-cards';
@@ -69,5 +69,49 @@ describe('update cards', () => {
     const events = new URL(urls.find((url) => url.includes('/events?'))!);
     expect([events.searchParams.get('updatedMin'), events.searchParams.get('showDeleted')]).toEqual([new Date(t0).toISOString(), 'true']);
     expect(new URL(urls.find((url) => url.includes('/messages?'))!).searchParams.get('q')).toBe(`in:inbox category:primary after:${t0 / 1000}`);
+  });
+});
+
+
+const updateFixture = vi.hoisted(() => ({ changed: false, sent: [] as string[], prompts: [] as string[] }));
+vi.mock('../src/connectors/google', async load => {
+  const original = await load<typeof import('../src/connectors/google')>();
+  return { ...original, googleClient: (...args: Parameters<typeof original.googleClient>) => args[0].clientId !== 'update-fixture' ? original.googleClient(...args) : ({
+    changedEvents: async () => updateFixture.changed ? [{ id: 'event-update', title: 'Lunch', start: '2026-10-08T12:00:00Z', end: '2026-10-08T13:00:00Z', all_day: false, status: 'confirmed', created: '2026-10-08T08:01:00Z' }] : [],
+    newMail: async () => [], events: async () => [],
+  }) };
+});
+vi.mock('../src/channels/telegram-api', async load => {
+  const original = await load<typeof import('../src/channels/telegram-api')>();
+  return { ...original, createTelegramCaller: () => async (method: string, payload: { chat_id?: number; text?: string }) => {
+    if (method === 'sendMessage') { updateFixture.sent.push(payload.text ?? ''); return { message_id: updateFixture.sent.length, chat: { id: payload.chat_id } }; } return true;
+  } };
+});
+vi.mock('../src/channels/telegram-turn', async load => {
+  const original = await load<typeof import('../src/channels/telegram-turn')>();
+  return { ...original, createTelegramResponder: () => ({ prompt: async (_id: string, _chat: number, text: string) => { updateFixture.prompts.push(text); return 'Calendar update: Lunch added.'; } }) };
+});
+const { TelegramOwnerDO: UpdateOwner } = await import('../src/channels/telegram-owner-do');
+const { loopBook: updateLoops } = await import('../src/channels/loops');
+const { dayPlanBook: updatePlans } = await import('../src/channels/day-cards');
+it.each(['normal', 'low', 'quiet', 'off', 'closed'] as const)('updates without a brief respect owner preferences: %s', async mode => {
+  await runInDurableObject(env.TRACER_DO.get(env.TRACER_DO.idFromName(`update-without-brief-${mode}`)), async (_instance, state) => {
+    const now = Date.parse('2026-10-08T09:00:00Z');
+    const savedNow = Date.now; Date.now = () => now;
+    updateFixture.changed = false; updateFixture.sent = []; updateFixture.prompts = [];
+    try {
+      state.storage.kv.put('telegram_subject', '7');
+      await state.storage.put('origin', 'https://fixture.invalid');
+      await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'fixture', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+      const owner = new UpdateOwner(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:fixture', OPENAI_API_KEY: 'fixture', GOOGLE_CLIENT_ID: 'update-fixture', GOOGLE_CLIENT_SECRET: 'fixture' });
+      const runtime = (owner as unknown as { setup(): { updateCheck(trace: string): Promise<void> } }).setup();
+      const loops = updateLoops(state.storage.sql, { now: () => now, newId: () => 'fixture' });
+      loops.setProactivity({ volume: mode === 'low' ? 'low' : 'normal', quiet_start: mode === 'quiet' ? '08:00' : null, quiet_end: mode === 'quiet' ? '10:00' : null, followups: mode !== 'off' });
+      if (mode === 'closed') updatePlans(state.storage.sql).sent('2026-10-08', 'card:close');
+      await runtime.updateCheck('seed'); updateFixture.changed = true;
+      await runtime.updateCheck('changed');
+      expect(updatePlans(state.storage.sql).read('2026-10-08').some(row => row.card === 'card:brief' && row.sent)).toBe(false);
+      expect(updateFixture.sent.filter(text => text === 'Calendar update: Lunch added.')).toHaveLength(mode === 'normal' ? 1 : 0);
+    } finally { Date.now = savedNow; await state.storage.deleteAlarm(); }
   });
 });

@@ -2169,7 +2169,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         updates.pruneMail(now);
         const sentToday = new Set(plans.read(day).filter((row) => row.sent).map((row) => row.card));
         const { volume } = loops.proactivity();
-        const canSend = sentToday.has('card:brief') && !sentToday.has('card:close') && volume !== 'low' && !quiet();
+        const canSend = loops.proactivity().followups !== false && !sentToday.has('card:close') && volume !== 'low' && !quiet();
         const pendingMail = sourceFollowups ? updates.pendingMail() : [];
         const analysisChanges = sourceFollowups ? [...changes.filter(change => change.source !== 'mail'), ...pendingMail] : changes;
         let text: string | null = null;
