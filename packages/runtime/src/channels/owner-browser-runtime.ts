@@ -1,4 +1,4 @@
-import { browsePageArgsSchema, type BrowsePageArgs, type LLMAttachment, type ToolHandler } from '@waldo/contracts';
+import { browsePageArgsSchema, WALDO_CHAT_MODEL, type BrowsePageArgs, type LLMAttachment, type ToolHandler } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
@@ -7,6 +7,8 @@ import { commonPublicBrowserConfiguration } from './common-public-browser-config
 import { commonBrowserSdk, commonStagingRegistration } from './common-staging-registration';
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { armAlarm } from '../scheduler/alarm-slot';
+import { commonOwnerBrowserRegistration } from './common-owner-browser-registration';
+import type { LLMGatewayAdapter } from '../llm/provider';
 
 // The browser task follows the authenticated owner run. It needs no topic classifier
 // or canonical execution activation; provider identity and budget stay in the DO.
@@ -15,6 +17,7 @@ export function ownerBrowserRuntime(options: Readonly<{
   activeScope(): RunEffectScope | undefined;
 }>) {
   let active: Readonly<{ scope: RunEffectScope; host: ReturnType<typeof commonBrowserHost> }> | undefined;
+  const automatic = commonOwnerBrowserRegistration({ ...options, loadSdk: commonBrowserSdk() });
   const configuration = (cleanupOnly = false) => {
     const registered = commonStagingRegistration(options.env);
     return commonPublicBrowserConfiguration({ ...options, cleanupOnly, ...(registered ? {
@@ -53,7 +56,7 @@ export function ownerBrowserRuntime(options: Readonly<{
           const assertCurrent = current(ctx); await assertCurrent();
           // Browserbase remains an explicit choice. Cloudflare failure never switches providers.
           if (args.provider === 'browserbase_stagehand_http_v3' || !args.provider && options.env.WALDO_ENVIRONMENT !== 'staging') return fallback.handle(args, { ...ctx, assertTaskSourceCurrent: assertCurrent });
-          const config = configuration();
+          const config = automatic.selected || automatic.hasRetained() ? await automatic.configuration() : configuration();
           if (!config) return { ok: false, code: 'rejected', error: 'The selected Cloudflare browser is not registered for this owner.', source_taint: 'external' };
           const wake = Math.min(ctx.runScope!.deadline, config.expiresAt, Date.now() + config.lifetimeMs);
           const prior = await options.storage.getAlarm();
@@ -71,6 +74,25 @@ export function ownerBrowserRuntime(options: Readonly<{
       } };
     },
     gateway() {
+      if (automatic.selected || automatic.hasRetained()) {
+        const gateway = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY! });
+        let metered: Promise<LLMGatewayAdapter> | undefined;
+        return { async complete(request) {
+          const scope = options.activeScope(), supplied = request.runScope;
+          if (!scope || !supplied || scope.runId !== supplied.runId || scope.attempt !== supplied.attempt
+            || scope.admit !== supplied.admit || scope.commit !== supplied.commit || scope.deadline !== supplied.deadline) throw new ClosedRunError();
+          scope.admit();
+          // The reused quote covers Luna only; a model override needs its own priced envelope.
+          if (request.request.model !== WALDO_CHAT_MODEL) throw Error('automatic browser model price unavailable');
+          const config = await automatic.configuration();
+          scope.admit();
+          if (options.activeScope() !== scope || !config?.meterGateway) throw new ClosedRunError();
+          // Share one wrapper even across concurrent first calls: physical model
+          // ordinals must never restart within this constructed owner host.
+          metered ??= Promise.resolve(config.meterGateway(gateway));
+          return (await metered).complete(request);
+        } } satisfies LLMGatewayAdapter;
+      }
       const config = configuration();
       const base = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY! });
       const metered = config?.meterGateway?.(base);
@@ -92,6 +114,6 @@ export function ownerBrowserRuntime(options: Readonly<{
       const retained = active; active = undefined; await retained.host.cancel();
     },
     stop() { revokeCommonBrowsers(options.storage, Date.now()); },
-    async maintain() { const config = configuration(true); if (config) await maintainCommonBrowsers(options.storage, config, Date.now()); },
+    async maintain() { const config = await automatic.configuration(true) ?? (automatic.selected ? undefined : configuration(true)); if (config) await maintainCommonBrowsers(options.storage, config, Date.now()); },
   };
 }
