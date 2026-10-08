@@ -129,7 +129,7 @@ export const createOwnerResponder = (
     return fragments.filter(fragment => !holdsHeldTopic(fragment.text));
   }, ...(health === undefined ? {} : { health: async () => {
     return health(traceId);
-  } }) });
+  } }), onComposerPhase: (phase, previousMs) => log({ trace: traceId, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }) });
   // Tool outputs from the current turn; flushed to the ledger when the turn's entries persist.
   const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external'; summary: string }> = [];
   const circuitBreaker = new InMemoryCircuitBreaker();
