@@ -28,3 +28,16 @@ it('stage budgets are measured from the start and cannot exceed the 60s ceiling'
   const mod = await import('../src/channels/s0-network-block');
   expect(mod.S0_TOTAL_DEADLINE_MS).toBe(60_000);
 });
+
+it('a late-resolving acquire is closed by its exact id and the run fails', async () => {
+  const mod = await import('../src/channels/s0-network-block');
+  const calls: string[] = [];
+  const sdk = {
+    acquire: () => new Promise(resolve => setTimeout(() => resolve({ sessionId: 'late-1' }), 60)),
+    connect: async (_b: unknown, o: { sessionId: string }) => { calls.push(`connect:${o.sessionId}`); return { newBrowserCDPSession: async () => ({ send: async () => { calls.push('close'); } }) }; },
+    sessions: async () => { calls.push('list'); return []; },
+  };
+  await expect(mod.runS0({} as never, (async () => sdk) as never, { load: 50, acquire: 10, work: 40, cleanup: 40 })).rejects.toThrow();
+  await new Promise(r => setTimeout(r, 150));
+  expect(calls).toEqual(['connect:late-1', 'close', 'list']);
+});

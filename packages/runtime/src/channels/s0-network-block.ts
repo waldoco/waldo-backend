@@ -28,10 +28,21 @@ const within = <T>(work: Promise<T>, ms: number): Promise<T> => {
 // Hard ceiling measured from start: load 10s, acquire 25s, all page work 46s, then cleanup 12s, so the run stays under 60s. A client
 // timeout is never treated as closure: `terminated` is true only when the provider session list no
 // longer contains the session after Browser.close.
-export async function runS0(binding: BrowserWorker, loadSdk: CloudflareBrowserSdkLoader): Promise<S0Result> {
+export type S0Budgets = Readonly<{ load: number; acquire: number; work: number; cleanup: number }>;
+export const S0_BUDGETS: S0Budgets = { load: 10_000, acquire: 25_000, work: S0_WORK_CUTOFF_MS, cleanup: S0_CLEANUP_BUDGET_MS };
+
+export async function runS0(binding: BrowserWorker, loadSdk: CloudflareBrowserSdkLoader, budgets: S0Budgets = S0_BUDGETS): Promise<S0Result> {
   const started = Date.now(), left = (cutoff: number) => Math.max(1, started + cutoff - Date.now());
-  const sdk = await within(loadSdk(), left(10_000));
-  const session = await within(sdk.acquire(binding, cloudflareBrowserGuardOptions([S0_ALLOWED_HOST], 10000)), left(25_000));
+  const sdk = await within(loadSdk(), left(budgets.load));
+  const closeById = async (sessionId: string): Promise<boolean> => {
+    try { const b = await within(sdk.connect(binding, { sessionId, persistent: true } as never), budgets.cleanup / 2); const cdp = await b.newBrowserCDPSession(); await within(cdp.send('Browser.close'), budgets.cleanup / 2); } catch { /* termination can disconnect first */ }
+    try { return !(await within(sdk.sessions(binding), budgets.cleanup / 2)).some(x => x.sessionId === sessionId); } catch { return false; }
+  };
+  // If acquire misses its deadline it can still resolve later: close that exact session, never leave it running.
+  const acquiring = sdk.acquire(binding, cloudflareBrowserGuardOptions([S0_ALLOWED_HOST], 10000));
+  let session: Awaited<typeof acquiring>;
+  try { session = await within(acquiring, left(budgets.acquire)); }
+  catch (error) { void acquiring.then(late => { if (typeof late?.sessionId === 'string') void closeById(late.sessionId); }, () => undefined); throw error; }
   const id = session.sessionId;
   let browser: Awaited<ReturnType<typeof sdk.connect>> | undefined, allowedLoaded = false, terminated = false;
   const probes: S0Probe[] = [];
@@ -49,11 +60,11 @@ export async function runS0(binding: BrowserWorker, loadSdk: CloudflareBrowserSd
         // A probe that only timed out is not proof of a block.
         probes.push({ url, reached: detail.startsWith('reached:'), detail });
       }
-    })(), left(S0_WORK_CUTOFF_MS));
+    })(), left(budgets.work));
   } catch { /* an incomplete run fails the pass check below */ }
   finally {
-    try { await within((async () => { browser ??= await sdk.connect(binding, { sessionId: id, persistent: true } as never); const cdp = await browser.newBrowserCDPSession(); await cdp.send('Browser.close'); })(), S0_CLEANUP_BUDGET_MS / 2); } catch { /* termination can disconnect first */ }
-    try { terminated = !(await within(sdk.sessions(binding), S0_CLEANUP_BUDGET_MS / 2)).some(s => s.sessionId === id); } catch { /* unconfirmed stays false */ }
+    try { await within((async () => { browser ??= await sdk.connect(binding, { sessionId: id, persistent: true } as never); const cdp = await browser.newBrowserCDPSession(); await cdp.send('Browser.close'); })(), budgets.cleanup / 2); } catch { /* termination can disconnect first */ }
+    try { terminated = !(await within(sdk.sessions(binding), budgets.cleanup / 2)).some(s => s.sessionId === id); } catch { /* unconfirmed stays false */ }
   }
   return evaluateS0(allowedLoaded, probes, terminated, Date.now() - started);
 }
