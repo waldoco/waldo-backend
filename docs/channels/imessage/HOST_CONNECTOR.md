@@ -93,9 +93,9 @@ this adapter passes that object, preserving its authority checks around awaited 
 Only direct incoming iMessage messages can reach an owner turn. Group, SMS/RCS,
 echo, unknown sender, revocation and media rejection flow through the required
 onNotAdmitted(event, reasonCode) policy. acknowledge drops the event and continues;
-hold throws and preserves the queue head and subsequent events. Unexpected adapter,
-sink or callback failures also leave the event pending, even when their error text
-resembles an admission refusal. Diagnostics contain fixed reason codes only.
+hold throws and preserves the queue head and subsequent events. Unexpected failures also leave the event pending. Callback failures remain pending
+even when their error text resembles an admission refusal. Directory/media adapters
+that throw a recognized admission refusal enter the injected rejection policy. Diagnostics contain fixed reason codes only.
 
 Receipt sinks can compose correlateReceipt and label missing commandId as uncorrelated.
 All other event kinds go to nonTurnSink and never reach directory or owner-turn admission.
