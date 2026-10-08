@@ -79,10 +79,10 @@ async function browserProof(work: (h: {
     const host = {
       environment: 'staging', namespace: 'browser-proof-namespace', allowedDoNames: [doName], lookup: async () => ({ ...directory }), context: sources,
       access: async () => ({ grants: { status: 'available', tools: ['browse_act'] }, connectors: { status: 'unavailable' } }), connectorBacked: () => false,
-      gateway: { complete: async ({ request }) => {
+      gateway: { complete: async ({ request }: { request: LLMRequest }) => {
         requests.push(structuredClone(request));
-        const journey = mode === 'journey' && !request.response_format && request.tools?.some(t => t.name === 'browse_act') ? journeyCommands.shift() : undefined;
-        const calls = journey ? [{ call_id: `synthetic-command-${requests.length}`, name: 'browse_act', arguments: JSON.stringify({ url: driver.pageUrl, task: 'Prepare the known synthetic form', command: journey }) }] : !replyOnly && mode !== 'journey' && !request.response_format && !request.tool_turns?.length && request.tools?.some(t => t.name === 'browse_act')
+        const journey = mode === 'journey' && !request.response_format && request.tools?.some((t: { name: string }) => t.name === 'browse_act') ? journeyCommands.shift() : undefined;
+        const calls = journey ? [{ call_id: `synthetic-command-${requests.length}`, name: 'browse_act', arguments: JSON.stringify({ url: driver.pageUrl, task: 'Prepare the known synthetic form', command: journey }) }] : !replyOnly && mode !== 'journey' && !request.response_format && !request.tool_turns?.length && request.tools?.some((t: { name: string }) => t.name === 'browse_act')
           ? [{ call_id: `browser-inspect-${requests.length}`, name: 'browse_act', arguments: JSON.stringify({ url: driver.pageUrl, task: 'Inspect the synthetic public form', command: { operation: 'inspect' } }) }] : undefined;
         return { ok: true, data: { text: request.response_format ? JSON.stringify({ decision: 'retain', sources: [] }) : calls ? '' : 'Synthetic browser reply.', ...(calls ? { tool_calls: calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, model: request.model, latency_ms: 1 } };
       } },
