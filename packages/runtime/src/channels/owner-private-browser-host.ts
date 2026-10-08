@@ -242,7 +242,7 @@ export function ownerPrivateBrowserHost(options: Readonly<{
                 await assertCurrent();
                 const files = await options.files(assertCurrent, approval.binding.ownerId);
                 const file = await browserDownloadToWorkspace({ ...files, download, page, operationId: crypto.randomUUID(),
-                  deadline, now: options.now, assertCurrent });
+                  deadline, now: options.now, assertCurrent, sourceOrigin: registration.siteOrigin });
                 return { url: args.url, file };
               }
               if (!response || response.status() >= 400 || new URL(page.url()).origin !== registration.siteOrigin) throw Error('private content denied');

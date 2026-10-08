@@ -12,7 +12,7 @@ export class BrowserDownloadError extends Error {
 // existing authenticated owner store; provider URLs/IDs and file bytes are not tool data.
 export async function browserDownloadToWorkspace(options: Readonly<{
   download: Download; page: Page; workspace: Awaited<ReturnType<typeof workspaceOwnerHost>>;
-  operationId: string; deadline: number; now(): number; assertCurrent(): Promise<void>; origin: string;
+  operationId: string; deadline: number; now(): number; assertCurrent(): Promise<void>; origin: string; sourceOrigin: string;
   signal?: AbortSignal;
 }>): Promise<BrowserFileReceipt> {
   let timer: ReturnType<typeof setTimeout> | undefined, expired = false;
@@ -31,6 +31,10 @@ export async function browserDownloadToWorkspace(options: Readonly<{
     if (!Number.isSafeInteger(duration) || duration < 1 || duration > 2147483647 || !validId(options.operationId) || options.download.page() !== options.page) throw new BrowserDownloadError('rejected');
     const origin = new URL(options.origin);
     if (origin.protocol !== 'https:' || origin.origin !== options.origin || origin.username || origin.password) throw new BrowserDownloadError('rejected');
+    // Native redirects can produce a download without committing a page URL.
+    // Check the actual native URL against this slice's approved private site.
+    const source = new URL(options.sourceOrigin), target = new URL(options.download.url());
+    if (source.protocol !== 'https:' || source.origin !== options.sourceOrigin || target.protocol !== 'https:' || target.origin !== source.origin || target.username || target.password) throw new BrowserDownloadError('rejected');
     const name = options.download.suggestedFilename();
     if (typeof name !== 'string' || name.includes('/')) throw new BrowserDownloadError('rejected');
     const path = `browser-downloads/${options.operationId}/${name}`; validatePath(path);

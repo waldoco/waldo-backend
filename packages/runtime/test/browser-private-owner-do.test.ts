@@ -32,3 +32,19 @@ it('authenticated ownerDO exposes dark registered consent and checks its owner-o
   await state.storage.deleteAlarm();
  });
 });
+
+
+it('ordinary two-argument staging ownerDO leaves private custody dark without provider or Vault I/O',async()=>{
+ const name='private-browser-dark-'+crypto.randomUUID(),namespace=env.TELEGRAM_OWNER_DO!,id=namespace.idFromName(name);
+ await runInDurableObject(namespace.get(id),async(_instance,state)=>{
+  state.storage.kv.put('do_name',name);state.storage.kv.put('telegram_subject','81191');
+  const instance=new TelegramOwnerDO(state,{...env,WALDO_ENVIRONMENT:'staging',WALDO_OWNER_DO_NAMESPACE:'fixture'});
+  const access=consoleAccess(state.storage),cookie=await access.grant();
+  const network=vi.spyOn(globalThis,'fetch').mockImplementation(async()=>{throw Error('Dark private custody forbids network');});
+  try{
+   expect((await instance.fetch(new Request('https://owner.invalid/console/browser/saved',{headers:{cookie:`${CONSOLE_COOKIE}=${cookie}`}}))).status).toBe(404);
+   expect(network).not.toHaveBeenCalled();expect(proof.deliver).toBeUndefined();
+   expect([...state.storage.kv.list({prefix:'private-browser-owner/'})]).toHaveLength(0);
+  }finally{network.mockRestore();await state.storage.deleteAlarm();}
+ });
+});
