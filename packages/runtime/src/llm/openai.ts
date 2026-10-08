@@ -60,6 +60,10 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
     const startedAt = Date.now();
     try {
       // A reply that is only reasoning (no text, no tool call) is a transient model miss, not a finished turn: ask once more before failing.
+      // Tokens spent on a discarded attempt are still spent: they ride into the final totals.
+      let spentInput = 0;
+      let spentOutput = 0;
+      let spentCached = 0;
       for (let attempt = 0; ; attempt++) {
         const response = await this.client.responses.create(
           {
@@ -84,15 +88,20 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
           model: input.request.model,
           text,
           ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-          input_tokens: response.usage?.input_tokens ?? 0,
-          output_tokens: response.usage?.output_tokens ?? 0,
-          cache_read_input_tokens: response.usage?.input_tokens_details?.cached_tokens ?? 0,
+          input_tokens: spentInput + (response.usage?.input_tokens ?? 0),
+          output_tokens: spentOutput + (response.usage?.output_tokens ?? 0),
+          cache_read_input_tokens: spentCached + (response.usage?.input_tokens_details?.cached_tokens ?? 0),
           output_items: response.output.map((item) => item as unknown as Record<string, unknown>),
           latency_ms: Date.now() - startedAt,
           ...(incomplete ? { truncated: true } : {}),
         };
         if (text.length === 0 && toolCalls.length === 0) {
-          if (attempt === 0) continue;
+          if (attempt === 0) {
+            spentInput = parsed.input_tokens;
+            spentOutput = parsed.output_tokens;
+            spentCached = parsed.cache_read_input_tokens;
+            continue;
+          }
           return { ok: false, code: 'invalid_args', error: 'OpenAI returned empty output' };
         }
         this.onResponseMetadata?.({

@@ -171,7 +171,7 @@ describe('OpenAIResponsesAdapter', () => {
     };
     const recovered = await run([empty, good]);
     expect(recovered.calls).toBe(2);
-    expect(recovered.result).toMatchObject({ ok: true, data: { text: 'Here is your plan.' } });
+    expect(recovered.result).toMatchObject({ ok: true, data: { text: 'Here is your plan.', input_tokens: 8, output_tokens: 5 } });
     const failed = await run([empty, empty]);
     expect(failed.calls).toBe(2);
     expect(failed.result).toEqual({ ok: false, code: 'invalid_args', error: 'OpenAI returned empty output' });
