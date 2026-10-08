@@ -11,6 +11,7 @@ import { commonOwnerBrowserRegistration } from './common-owner-browser-registrat
 import type { LLMGatewayAdapter } from '../llm/provider';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import { ownerPrivateBrowserHost, type PrivateBrowserRegistration } from './owner-private-browser-host';
+import { workspaceOwnerHost, workspaceMetadata } from './workspace-host';
 
 // The browser task follows the authenticated owner run. It needs no topic classifier
 // or canonical execution activation; provider identity and budget stay in the DO.
@@ -29,7 +30,22 @@ export function ownerBrowserRuntime(options: Readonly<{
   };
   const selectedConfiguration = async (cleanupOnly = false) => automatic.selected || automatic.hasRetained() ? automatic.configuration(cleanupOnly) : configuration(cleanupOnly);
   const privateBrowser = ownerPrivateBrowserHost({ storage: options.storage, environment: options.env.WALDO_ENVIRONMENT ?? '', registration: options.privateBrowser,
-    configuration: selectedConfiguration, now: Date.now, assertOwner: async () => {
+    files: async (assertCurrent, ownerId) => {
+      const scope = options.activeScope(), doName = options.storage.kv.get<string>('do_name');
+      if (!scope || !doName) throw new ClosedRunError();
+      const admit = async () => {
+        await assertCurrent(); scope.admit();
+        if (options.activeScope() !== scope || options.storage.kv.get('do_name') !== doName) throw new ClosedRunError();
+        const binding = workspaceMetadata(options.storage, scope).transaction(state => state.binding);
+        if (binding && binding.ownerId !== ownerId) throw new ClosedRunError();
+      };
+      await admit();
+      const workspace = await workspaceOwnerHost(options.env, options.storage, options.actualDoId, doName, fetch, scope, admit);
+      await admit();
+      const origin = options.storage.kv.get<string>('origin'); if (!origin) throw new ClosedRunError();
+      return { workspace, origin };
+    },
+    configuration: selectedConfiguration, now: Date.now, wake: async at => { const prior = await options.storage.getAlarm(); await armAlarm(options.storage, Math.max(Date.now() + 250, prior === null ? at : Math.min(prior, at))); }, assertOwner: async () => {
       const doName = options.storage.kv.get<string>('do_name'), subject = options.storage.kv.get<string>('telegram_subject');
       const physical = () => { if (!doName || !subject || options.storage.kv.get('do_name') !== doName || options.storage.kv.get('telegram_subject') !== subject
         || options.storage.kv.get('telegram_unlinked') === true || options.env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== options.actualDoId) throw new ClosedRunError(); };

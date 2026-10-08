@@ -1,4 +1,6 @@
 import { expect, it } from 'vitest';
+import { Readable } from 'node:stream';
+import { workspaceStore, type WorkspaceState } from '@waldo/workspace';
 import { ownerPrivateBrowserHost } from '../src/channels/owner-private-browser-host';
 import { browserStateCustody } from '../src/channels/browser-state-custody';
 import type { CommonBrowserConfiguration } from '../src/channels/common-browser-host';
@@ -8,6 +10,9 @@ it('confirmed owner signs in, reads through the browser handler after recreation
  const storage = { kv: { get: (k: string) => rows.get(k), put: (k: string, v: unknown) => rows.set(k, v), delete: (k: string) => rows.delete(k), list: ({ prefix }: { prefix: string }) => new Map([...rows].filter(([k]) => k.startsWith(prefix))) }, transactionSync: <T>(f: () => T) => f() } as unknown as DurableObjectStorage;
  const directoryOwnerId = '12345678-1234-1234-1234-123456789abc', ownerId = `prn_${directoryOwnerId.replaceAll('-', '')}`;
  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']) as CryptoKey;
+ let downloadRead=false, downloadDeleted=false;
+ const fileState:WorkspaceState={binding:null,files:[],bodies:[],operations:[]}, fileObjects=new Map<string,Uint8Array>();
+ const workspace=await workspaceStore({binding:{ownerId:directoryOwnerId,environment:'staging',namespace:'fixture',doName:'owner',doId:'physical',stateVersion:1,mappingVersion:1},admit:async()=>({status:'ok'}),metadata:{transaction:f=>f(fileState)},bodies:{put:async(b,v)=>{fileObjects.set(b.blob_id,v.slice());},get:async b=>fileObjects.get(b.blob_id)??null,remove:async b=>{fileObjects.delete(b.blob_id);}},now:Date.now,newId:()=>crypto.randomUUID()});
  let allocations = 0, deliveries = 0, caller = directoryOwnerId, restored = 0, socketDenials = 0, duplicateCleanup=0;
  const cleanupGrants=new Set<string>(); let holdRead=false, entered!:()=>void, release!:()=>void; const reading=new Promise<void>(yes=>{entered=yes;}); const held=new Promise<void>(yes=>{release=yes;});
  const native = new Set<string>();
@@ -27,7 +32,7 @@ it('confirmed owner signs in, reads through the browser handler after recreation
     let state = args.storageState ?? { cookies: [], origins: [] }; if (args.storageState) restored++;
     let listener: any;
     const context: any = { restored: !!args.storageState, readPolicy:false, signedIn: () => state.cookies.length > 0, route: async () => { context.readPolicy=true; }, routeWebSocket: async (_:string, deny:any) => { await deny({close:()=>{socketDenials++;}}); }, storageState: async () => state, close: async () => {},
-     newPage: async () => { let url = 'https://synthetic.example/account'; return { context: () => context, url: () => url, goto: async (next: string) => { url = next; return { status: () => 200 }; }, title: async () => 'Synthetic account', evaluate: async () => { if(holdRead){entered();await held;} return 'Useful synthetic private account page'; }, close: async () => {} }; },
+     newPage: async () => { let url = 'https://synthetic.example/account', listener:any; const page:any={ on:(_:string,fn:any)=>{listener=fn;},off:()=>{listener=undefined;}, context: () => context, url: () => url, goto: async (next: string) => { url = next; if(downloadRead){listener?.({page:()=>page,suggestedFilename:()=> 'report.txt',failure:async()=>null,createReadStream:async()=>Readable.from([new TextEncoder().encode('Owner report bytes')]),delete:async()=>{downloadDeleted=true;},cancel:async()=>{}});throw Error('Download navigation');} return { status: () => 200 }; }, title: async () => 'Synthetic account', evaluate: async () => { if(holdRead){entered();await held;} return 'Useful synthetic private account page'; }, close: async () => {if(downloadRead)expect(downloadDeleted).toBe(true);} };return page; },
      newCDPSession: async () => ({ on: (_: string, fn: any) => { listener = fn; }, off: () => {}, detach: async () => {}, send: async (method: string) => method === 'Cloudflare.getLiveView' ? { id: 'target', devtoolsFrontendUrl: 'https://live.browser.run/?synthetic-bearer' } : { targetId: 'target', handoffId: 'handoff' } }) };
     complete = () => { state = { cookies: [{ domain: 'synthetic.example', name: 'session', value: 'SYNTHETIC_SESSION' }], origins: [] }; listener({ targetId: 'target', handoffId: 'handoff', success: true }); };
     return context;
@@ -35,7 +40,7 @@ it('confirmed owner signs in, reads through the browser handler after recreation
   } };
  let complete: (() => void) | undefined;
  const make = (selected:typeof registration|undefined=registration) => ownerPrivateBrowserHost({ storage, environment: 'staging', registration: selected as never, configuration: async () => configuration,
-  assertOwner: async () => { if (caller !== directoryOwnerId) throw Error('owner denied'); return { directoryOwnerId, custodyDigest: 'signed-custody' }; }, now: Date.now });
+  assertOwner: async () => { if (caller !== directoryOwnerId) throw Error('owner denied'); return { directoryOwnerId, custodyDigest: 'signed-custody' }; }, now: Date.now, files: async (assertCurrent:any)=>{await assertCurrent();return {workspace,origin:'https://owner.invalid'};} } as any);
  const request = (host: ReturnType<typeof make>, body?: object) => host.control(new Request('https://local.invalid/console/browser/saved', body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...body, csrf: 'owner-csrf' }) } : {}), 'owner-csrf');
  let host = make();
  const proposed = await (await request(host)).json() as any;
@@ -48,8 +53,13 @@ it('confirmed owner signs in, reads through the browser handler after recreation
  expect(result).toMatchObject({ ok: true, data: { text: 'Useful synthetic private account page' }, source_taint: 'external' });
  expect(restored).toBe(1); expect(socketDenials).toBe(1); expect(deliveries).toBe(1); expect(allocations).toBe(2);
  expect(JSON.stringify([...rows.values()])).not.toContain('SYNTHETIC_SESSION'); expect(JSON.stringify(result)).not.toContain('synthetic-bearer');
+ downloadRead=true;
+ const downloaded=await host.read({provider:'cloudflare_playwright',url:'https://synthetic.example/report',instruction:'Get report'}, {turnId:'download-turn',toolCallId:'download-call',runScope:{runId:'download-task',attempt:1,deadline:Date.now()+60000},assertTaskSourceCurrent:async()=>{}} as any);
+ expect(downloaded).toMatchObject({ok:true,data:{file:{audience:'owner_authenticated',retrieval:'verified',byte_size:18}}});
+ const receipt=(downloaded as any).data.file;expect(new TextDecoder().decode((await workspace.export(receipt.file_id,receipt.revision)).bytes)).toBe('Owner report bytes');
+ expect(downloadDeleted).toBe(true);downloadRead=false;
  const renewal=await (await request(host)).json() as any; expect(renewal.generation).toBe(2);
- expect((await request(host,{action:'confirm',nonce:renewal.nonce})).status).toBe(200); expect(allocations).toBe(2);
+ expect((await request(host,{action:'confirm',nonce:renewal.nonce})).status).toBe(200); expect(allocations).toBe(3);
  expect([...rows.keys()].some(k=>k.includes('/encrypted/'))).toBe(false);
  expect((await request(host,{action:'sign_in'})).status).toBe(200); expect(deliveries).toBe(2);
  holdRead=true;
@@ -58,8 +68,8 @@ it('confirmed owner signs in, reads through the browser handler after recreation
  caller = 'other-owner'; expect((await request(host, { action: 'revoke' })).status).toBe(409);
  caller = directoryOwnerId; const revokedRegistrationHost=make({...registration,accountId:'changed-account'}); expect((await request(revokedRegistrationHost, { action: 'revoke' })).status).toBe(200);
  release(); expect(await activeRead).toMatchObject({ok:false});
- expect(allocations).toBe(4); expect(native.size).toBe(0);
- expect(cleanupGrants.size).toBe(4); expect(duplicateCleanup).toBe(0);
+ expect(allocations).toBe(5); expect(native.size).toBe(0);
+ expect(cleanupGrants.size).toBe(5); expect(duplicateCleanup).toBe(0);
  expect([...rows.keys()].some(k => k.includes('/encrypted/'))).toBe(false);
  expect(await host.read({ provider: 'cloudflare_playwright', url: 'https://synthetic.example/account', instruction: 'Read' }, {} as any)).toMatchObject({ ok: false });
 });

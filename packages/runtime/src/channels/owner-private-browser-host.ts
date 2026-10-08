@@ -1,4 +1,4 @@
-import type { BrowserContext, Page } from '@cloudflare/playwright';
+import type { BrowserContext, Download, Page } from '@cloudflare/playwright';
 import type { BrowsePageArgs } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { browserBoundedJson } from './browser-bounded-body';
@@ -6,6 +6,8 @@ import { cloudflarePrivateOwner, revokePrivateBrowserOwner, cleanupPrivateBrowse
 import { cloudflareGeneralBrowser } from './cloudflare-general-browser';
 import { PRIVATE_BROWSER_CONSENT_KEY, privateBrowserConsent, type PrivateBrowserConsent } from './browser-private-consent';
 import type { CommonBrowserConfiguration, CommonBrowserGrant } from './common-browser-host';
+import { browserDownloadToWorkspace } from './browser-download-workspace';
+import type { workspaceOwnerHost } from './workspace-host';
 
 type RunnerOptions = Parameters<typeof cloudflarePrivateOwner>[0];
 export type PrivateBrowserRegistration = Readonly<{
@@ -21,6 +23,7 @@ const failure = () => ({ ok: false as const, code: 'rejected' as const, error: '
 const reply = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
 export const privateBrowserRecordKey = (approval: PrivateBrowserConsent) => `private-browser-owner/v1/${JSON.stringify([approval.binding.ownerId, approval.binding.environment, approval.binding.siteOrigin, approval.binding.accountId])}`;
 export const PRIVATE_BROWSER_BUDGET_PREFIX = 'private-browser-budget:';
+export const PRIVATE_BROWSER_DUE = 'private_browser_due_v1';
 
 // One registered account, through existing owner authority and spend configuration.
 // Registration is trusted host policy; model tools cannot supply keys or account proof.
@@ -29,11 +32,21 @@ export function ownerPrivateBrowserHost(options: Readonly<{
   configuration(cleanupOnly?: boolean): Promise<Configuration | undefined>;
   assertOwner(): Promise<Readonly<{ directoryOwnerId: string; custodyDigest: string }>>;
   now(): number;
+  wake?(at: number): Promise<void>;
+  files?(assertCurrent: () => Promise<void>, ownerId: string): Promise<Readonly<{ workspace: Awaited<ReturnType<typeof workspaceOwnerHost>>; origin: string }>>;
 }>) {
   const registration = options.registration ? Object.freeze({ ...options.registration,
     allowedDomains: Object.freeze([...options.registration.allowedDomains]),
     sitePolicy: Object.freeze({ origins: Object.freeze([...options.registration.sitePolicy.origins]), cookieDomains: Object.freeze([...options.registration.sitePolicy.cookieDomains]) }) }) : undefined;
   const row = () => options.storage.kv.get<PrivateBrowserConsent>(PRIVATE_BROWSER_CONSENT_KEY);
+  const wake = async (at: number | null) => { options.storage.kv.put(PRIVATE_BROWSER_DUE, at); if (at !== null) await options.wake?.(at); };
+  const refreshWake = async () => {
+    const approval = row();
+    if (!approval || approval.state === 'revoked') return wake(null);
+    const record = options.storage.kv.get<{ allocation?: string; operationDeadline?: number; cleanupFailed?: boolean }>(privateBrowserRecordKey(approval));
+    if (record?.cleanupFailed) return wake(approval.state === 'approved' && options.now() < approval.expiresAt ? approval.expiresAt : null);
+    return wake(approval.state === 'retiring' ? options.now() : Math.min(approval.expiresAt, record?.allocation && record.allocation !== 'closed' ? record.operationDeadline ?? options.now() : Infinity));
+  };
   const assertApproval = async (approval: PrivateBrowserConsent) => {
     const current = await options.assertOwner();
     if (current.directoryOwnerId !== approval.binding.ownerId || current.custodyDigest !== approval.custodyDigest
@@ -103,16 +116,34 @@ export function ownerPrivateBrowserHost(options: Readonly<{
       const approval = row(); if (!approval || approval.state === 'revoked') return;
       revokePrivateBrowserOwner(options.storage, approval.binding);
       options.storage.kv.put(PRIVATE_BROWSER_CONSENT_KEY, { ...approval, state: 'retiring', revision: crypto.randomUUID() });
+      options.storage.kv.put(PRIVATE_BROWSER_DUE, options.now());
     },
     async maintain() {
-      const approval = row(); if (!approval || approval.state === 'revoked' || approval.state === 'approved' && options.now() < approval.expiresAt) return;
+      const approval = row(); if (!approval || approval.state === 'revoked') return wake(null);
+      const record = options.storage.kv.get<{ allocation?: string; operationDeadline?: number; cleanupFailed?: boolean }>(privateBrowserRecordKey(approval));
+      const permissionExpired = options.now() >= approval.expiresAt;
+      if (record?.cleanupFailed) {
+        // Physical uncertainty does not authorize more spend or retain local auth after expiry.
+        if (permissionExpired && approval.state === 'approved') {
+          revokePrivateBrowserOwner(options.storage, approval.binding);
+          options.storage.kv.put(PRIVATE_BROWSER_CONSENT_KEY, { ...approval, state: 'retiring' });
+        }
+        return refreshWake();
+      }
+      const allocationExpired = record?.allocation && record.allocation !== 'closed' && (record.operationDeadline ?? options.now()) <= options.now();
+      if (approval.state === 'approved' && !permissionExpired && !allocationExpired) return refreshWake();
       revokePrivateBrowserOwner(options.storage, approval.binding);
       options.storage.kv.put(PRIVATE_BROWSER_CONSENT_KEY, { ...approval, state: 'retiring' });
-      await retire(approval);
+      try { await retire(approval); }
+      catch {
+        options.storage.transactionSync(() => { const retained = options.storage.kv.get<object>(privateBrowserRecordKey(approval)); if (retained) options.storage.kv.put(privateBrowserRecordKey(approval), { ...retained, cleanupFailed: true }); });
+        await wake(null); throw Error('private cleanup unresolved');
+      }
       options.storage.transactionSync(() => {
         if (row()?.revision !== approval.revision) throw Error('consent changed');
-        options.storage.kv.put(PRIVATE_BROWSER_CONSENT_KEY, { ...approval, state: 'revoked' });
+        options.storage.kv.put(PRIVATE_BROWSER_CONSENT_KEY, { ...approval, state: permissionExpired || approval.state === 'retiring' ? 'revoked' : 'approved' });
       });
+      await refreshWake();
     },
     matches(url: string) { try { return row()?.binding.siteOrigin === new URL(url).origin; } catch { return false; } },
     async control(request: Request, csrf: string): Promise<Response> {
@@ -129,8 +160,10 @@ export function ownerPrivateBrowserHost(options: Readonly<{
             const { config, grant } = await grantFor(approval, crypto.randomUUID());
             const deadline = Math.min(grant.expiresAt, approval.expiresAt, options.now() + grant.lifetimeMs);
             if (deadline - options.now() < 60000) throw Error('handoff window unavailable');
+            await wake(deadline);
             const result = await runner(approval, config, grant, deadline).run({ verifyAccount: context => registration.verifyAccount(context, approval.binding.accountId),
               signIn: { ...registration.signIn, timeoutMs: 60000, liveViewExpiresMs: 60000, deliverToOwner: registration.deliverToOwner }, work: async () => true });
+            await refreshWake();
             return result.status === 'ok' ? reply({ signed_in: true }) : reply({ error: 'sign_in_failed', phase: result.phase }, 409);
           }
         }
@@ -138,11 +171,12 @@ export function ownerPrivateBrowserHost(options: Readonly<{
         // registration or renewed permission to access that account.
         const target = input?.action === 'revoke' && row() ? { siteOrigin: row()!.binding.siteOrigin, accountId: row()!.binding.accountId, expiresAt: row()!.expiresAt } : registration;
         if (!target) return reply({ error: 'not_configured' }, 404);
-        return await privateBrowserConsent(request, { storage: options.storage, csrf,
+        const result = await privateBrowserConsent(request, { storage: options.storage, csrf,
           binding: { ownerId: owner.directoryOwnerId, environment: options.environment, siteOrigin: target.siteOrigin, accountId: target.accountId },
           expiresAt: target.expiresAt, now: options.now, newId: () => crypto.randomUUID(), assertOwner: async () => {
             const current = await options.assertOwner(); if (current.directoryOwnerId !== owner.directoryOwnerId) throw Error('owner changed'); return current.custodyDigest;
           }, retire });
+        await refreshWake(); return result;
       } catch { return reply({ error: 'private_browser_unavailable' }, 409); }
     },
     async read(args: BrowsePageArgs, ctx: ToolDispatcherContext) {
@@ -152,7 +186,9 @@ export function ownerPrivateBrowserHost(options: Readonly<{
           || args.provider && args.provider !== 'cloudflare_playwright' || new URL(args.url).origin !== registration.siteOrigin) throw Error('private read unavailable');
         await ctx.assertTaskSourceCurrent();
         const { config, grant } = await grantFor(approval, ctx.runScope.runId);
-        const result = await runner(approval, config, grant, ctx.runScope.deadline, ctx.assertTaskSourceCurrent).run({
+        const deadline = Math.min(approval.expiresAt, grant.expiresAt, ctx.runScope.deadline, options.now() + grant.lifetimeMs);
+        await wake(deadline);
+        const result = await runner(approval, config, grant, deadline, ctx.assertTaskSourceCurrent).run({
           installPolicy: async context => {
             await context.route('**/*', route => {
               const target = new URL(route.request().url());
@@ -164,16 +200,34 @@ export function ownerPrivateBrowserHost(options: Readonly<{
           work: async context => {
             // HTTP method and WebSocket restrictions were installed before verification.
             const page = await context.newPage();
+            let download: Download | undefined, timer: ReturnType<typeof setTimeout> | undefined;
+            let arrive!: (value: Download) => void;
+            const downloaded = new Promise<Download>((yes, no) => { arrive = yes; timer = setTimeout(() => no(Error('download unavailable')), Math.max(1, deadline - options.now())); });
+            void downloaded.catch(() => {});
+            const listener = (value: Download) => { if (download) { void value.cancel().catch(() => {}); return; } download = value; arrive(value); };
+            page.on('download', listener);
             try {
-              const response = await page.goto(args.url, { waitUntil: 'domcontentloaded', timeout: Math.max(1, ctx.runScope!.deadline - options.now()) });
+              let response;
+              try { response = await page.goto(args.url, { waitUntil: 'domcontentloaded', timeout: Math.max(1, deadline - options.now()) }); }
+              catch { download = await downloaded; }
+              if (download) {
+                if (!options.files) throw Error('download serving unavailable');
+                const assertCurrent = async () => { await ctx.assertTaskSourceCurrent!(); await assertApproval(approval); await config.assertGrantCurrent(grant); if (options.now() >= deadline) throw Error('download deadline'); };
+                await assertCurrent();
+                const files = await options.files(assertCurrent, approval.binding.ownerId);
+                const file = await browserDownloadToWorkspace({ ...files, download, page, operationId: crypto.randomUUID(),
+                  deadline, now: options.now, assertCurrent });
+                return { url: args.url, file };
+              }
               if (!response || response.status() >= 400 || new URL(page.url()).origin !== registration.siteOrigin) throw Error('private content denied');
               const text = (await page.evaluate(() => (globalThis as unknown as { document: { body?: { innerText: string } } }).document.body?.innerText ?? '')).slice(0, 8000);
               if (!text.trim()) throw Error('empty private content');
               return { url: page.url(), title: await page.title(), text };
-            } finally { await page.close(); }
+            } finally { if (timer !== undefined) clearTimeout(timer); page.off('download', listener); await page.close(); }
           },
         });
         await ctx.assertTaskSourceCurrent();
+        await refreshWake();
         return result.status === 'ok' ? { ok: true as const, data: result.value, source_taint: 'external' as const } : failure();
       } catch { return failure(); }
     },

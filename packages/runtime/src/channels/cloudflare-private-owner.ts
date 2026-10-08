@@ -6,7 +6,7 @@ import { privateBrowserSession, type PrivateSessionOutcome, type PrivateStateCus
 import { cloudflarePrivateLauncher, cloudflareOwnerHandoff, type CloudflareLauncher } from './cloudflare-browser-adapter';
 
 type Record = Readonly<{ binding: BrowserStateBinding; expiresAt: number; revoked?: true;
-  allocation?: 'prepared' | 'observed' | 'closed'; allocationRef?: string; providerSessionId?: string; interrupted?: true; operationId?: string }>;
+  allocation?: 'prepared' | 'observed' | 'closed'; allocationRef?: string; providerSessionId?: string; interrupted?: true; operationId?: string; operationDeadline?: number }>;
 type SignIn = Readonly<{ instructions: string; timeoutMs: number; liveViewExpiresMs: number;
   prepare(context: BrowserContext): Promise<Page>; deliverToOwner(ownerId: string, url: string): Promise<void> }>;
 const active = new WeakMap<DurableObjectStorage, Map<string, AbortController>>();
@@ -126,7 +126,7 @@ export function cloudflarePrivateOwner(options: Readonly<{
           interrupt(); await cleanup();
           return { status: 'failed', phase: 'work' };
         }
-        update({operationId});
+        update({operationId, operationDeadline});
         await checkOperation();
         const remaining=operationDeadline-options.now();
         // JavaScript timers cannot represent a larger single timeout safely.
