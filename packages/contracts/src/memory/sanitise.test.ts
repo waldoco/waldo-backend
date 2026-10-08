@@ -15,6 +15,7 @@ import {
   healthRuleSchema,
   isExternalSourceTaint,
   MEMORY_BLOCK_CONTENT_MAX,
+  MODEL_CONTEXT_MAX_CHARS,
   PII_PATTERNS,
   RAW_SENSOR_PATTERNS,
   ROLE_TAG_PATTERN,
@@ -105,7 +106,7 @@ describe('sanitise destination structural policy', () => {
       },
       system_prompt: {
         payload_kind: 'text_or_structured',
-        max_chars: 32_768,
+        max_chars: MODEL_CONTEXT_MAX_CHARS,
         max_depth: 4,
         max_object_fields: 9,
         max_array_items: 16,
@@ -113,10 +114,10 @@ describe('sanitise destination structural policy', () => {
       },
       internal_context: {
         payload_kind: 'structured',
-        max_chars: 32_768,
+        max_chars: MODEL_CONTEXT_MAX_CHARS,
         max_depth: 16,
-        max_object_fields: 64,
-        max_array_items: 128,
+        max_object_fields: 256,
+        max_array_items: 1_024,
         max_key_chars: 128,
       },
       draft_document: {

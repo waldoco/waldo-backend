@@ -14,6 +14,7 @@ import {
   type LLMResponse,
   type ModelName,
   type TriggerType,
+  MODEL_CONTEXT_MAX_CHARS,
 } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import {
@@ -1718,14 +1719,29 @@ describe('sanitiseRequest structural degradation', () => {
     expect(gateway.requests).toHaveLength(0);
   });
 
-  it('keeps an oversize system prompt, cut to its cap, instead of dropping it', async () => {
+  it('sends a 100k-char system prompt whole (sized by the window, not the old 32k cap)', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const system = `You are Waldo. ${'x'.repeat(100_000)}`;
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({ system, messages: [{ role: 'user' as const, content: 'current question' }], max_tokens: 512, temperature: 0.3 }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(true);
+    expect(gateway.requests[0]!.request.system).toBe(system);
+  });
+
+  it('fails an over-window system prompt with a typed system_prompt scribe error; it is never cut or dropped', async () => {
     const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
     const provider = new RuntimeLLMProvider({ gateway });
     const result = await provider.complete(
       {
         trigger: 'brief',
         renderRequest: () => ({
-          system: `You are Waldo. ${'x'.repeat(40_000)}`,
+          system: `You are Waldo. ${'x'.repeat(MODEL_CONTEXT_MAX_CHARS)}`,
           messages: [{ role: 'user' as const, content: 'current question' }],
           max_tokens: 512,
           temperature: 0.3,
@@ -1733,11 +1749,23 @@ describe('sanitiseRequest structural degradation', () => {
       },
       runtimeCtx(),
     );
+    expect(result).toMatchObject({ ok: false, scribe: { destination: 'system_prompt' } });
+    expect(gateway.requests).toHaveLength(0);
+  });
+
+  it('passes a 100-message window of 300k chars with nothing dropped (cap-history)', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const messages = Array.from({ length: 100 }, (_, i) => ({
+      role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+      content: `message ${i} ${'y'.repeat(3_000)}`,
+    }));
+    const result = await provider.complete(
+      { trigger: 'brief', renderRequest: () => ({ messages, max_tokens: 512, temperature: 0.3 }) },
+      runtimeCtx(),
+    );
     expect(result.ok).toBe(true);
-    const sent = gateway.requests[0]!.request.system;
-    expect(sent).toBeDefined();
-    expect(sent!.startsWith('You are Waldo.')).toBe(true);
-    expect(sent!.length).toBeLessThanOrEqual(32_768);
+    expect(gateway.requests[0]!.request.messages).toEqual(messages);
   });
 
   it('replaces a structurally denied tool turn with an explicit omission receipt, keeping the call', async () => {

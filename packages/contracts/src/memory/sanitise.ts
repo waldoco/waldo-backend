@@ -36,6 +36,11 @@ export const sanitiseDestinationPolicySchema = z.strictObject({
 });
 export type SanitiseDestinationPolicy = z.infer<typeof sanitiseDestinationPolicySchema>;
 
+// The one size the model's own context (system prompt and conversation window) may reach. It is
+// sized by the window budget: 400k chars at 4 chars/token is the 100k-token conversation window
+// (runtime conversation/window.ts derives its token ceiling from this constant).
+export const MODEL_CONTEXT_MAX_CHARS = 400_000;
+
 export const SANITISE_DESTINATION_POLICIES = {
   memory_block: {
     payload_kind: 'text_or_structured',
@@ -47,7 +52,7 @@ export const SANITISE_DESTINATION_POLICIES = {
   },
   system_prompt: {
     payload_kind: 'text_or_structured',
-    max_chars: 32_768,
+    max_chars: MODEL_CONTEXT_MAX_CHARS,
     max_depth: 4,
     max_object_fields: 9,
     max_array_items: 16,
@@ -55,10 +60,10 @@ export const SANITISE_DESTINATION_POLICIES = {
   },
   internal_context: {
     payload_kind: 'structured',
-    max_chars: 32_768,
+    max_chars: MODEL_CONTEXT_MAX_CHARS,
     max_depth: 16,
-    max_object_fields: 64,
-    max_array_items: 128,
+    max_object_fields: 256,
+    max_array_items: 1_024,
     max_key_chars: 128,
   },
   draft_document: {

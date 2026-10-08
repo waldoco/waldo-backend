@@ -1401,12 +1401,8 @@ async function sanitiseRequest(
     request.system === undefined
       ? undefined
       : await sanitiseValue(request.system, 'system_prompt');
-  // Never run the model with no instructions (PR 1 item 2): an oversize system prompt is cut to its policy cap and
-  // re-sanitised; any other structural deny fails the turn closed instead of dropping the prompt.
-  if (system !== undefined && !system.ok && softScribe(system.error) && system.error.reason === 'scribe:oversize' && typeof request.system === 'string') {
-    const capped = await sanitiseValue(request.system.slice(0, SANITISE_DESTINATION_POLICIES.system_prompt.max_chars), 'system_prompt');
-    if (capped.ok) system = capped;
-  }
+  // A system prompt that fails the scribe is a real, typed failure (destination system_prompt + reason). It is never
+  // cut and never dropped: the composer is responsible for fitting the prompt inside the window-sized cap.
   if (system !== undefined && !system.ok) {
     return { ...system, scribeDestination: 'system_prompt' };
   }

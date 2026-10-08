@@ -1,4 +1,4 @@
-import { MODEL_CONTEXT_SPECS, WALDO_CHAT_MODEL, type ConversationModelMessage, type ModelName } from '@waldo/contracts';
+import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS, MODEL_CONTEXT_SPECS, WALDO_CHAT_MODEL, type ConversationModelMessage, type ModelName } from '@waldo/contracts';
 
 // F1 (paper audit, arXiv 2609.20804): the chat turn path had NO input-context bound - the full
 // conversation ancestor path went to the model every turn, so overflow terminated the turn with a
@@ -12,7 +12,7 @@ import { MODEL_CONTEXT_SPECS, WALDO_CHAT_MODEL, type ConversationModelMessage, t
 // Wire ceiling for the conversation-history share of the input, in the ADR/owner-decision
 // (2026-09-26) pattern: fixed ceilings stay as hard caps and the per-model derivation may only
 // TIGHTEN below them (same construction as deriveContextBudgetChars in contracts/model/context-budget).
-export const CONVERSATION_HISTORY_WIRE_CEILING_TOKENS = 100_000;
+export const CONVERSATION_HISTORY_WIRE_CEILING_TOKENS = MODEL_CONTEXT_MAX_CHARS / BUDGET_CHARS_PER_TOKEN;
 
 // Effective history budget for the active model: the model's usable window (context minus output
 // reserve minus safety margin, from the verified roster specs) tightened to the wire ceiling.
