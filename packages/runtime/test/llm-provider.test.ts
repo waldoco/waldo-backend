@@ -1710,6 +1710,22 @@ describe('sanitiseRequest structural degradation', () => {
     expect(passes).toBeLessThanOrEqual(3);
   });
 
+  it('rejects the request when a dropped-or-kept history message carries a canary, even if a later suffix would pass', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const messages = Array.from({ length: 12 }, (_value, index) => ({
+      role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+      content: index === 0 ? `old ${softBad}` : index === 3 ? 'remember 1111111111111111 please' : `message ${index}`,
+    }));
+    const result = await provider.complete(
+      { trigger: 'brief', renderRequest: () => ({ messages, max_tokens: 512, temperature: 0.3 }) },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.scribe?.reason).toBe('canary_leak');
+    expect(gateway.requests).toHaveLength(0);
+  });
+
   it('fails closed when the current message itself trips a structural scribe deny', async () => {
     const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
     const provider = new RuntimeLLMProvider({ gateway });
