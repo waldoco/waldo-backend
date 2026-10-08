@@ -841,3 +841,38 @@ positiveStore('reminder_notes', 'POSNOTE769', (sql, text) => { sql.exec('CREATE 
 positiveStore('thread_topic_index', 'POSTOPIC769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS thread_topic_index (user_id TEXT NOT NULL, topic TEXT NOT NULL, thread_id TEXT NOT NULL, last_user_message_at TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, PRIMARY KEY (user_id, topic, thread_id))'); sql.exec('INSERT INTO thread_topic_index (user_id, topic, thread_id, last_user_message_at, is_active, updated_at) VALUES (?,?,?,?,?,?)', 'u', text, 't1', 't', 1, 't'); }, sql => JSON.stringify(sql.exec('SELECT topic FROM thread_topic_index').toArray()));
 positiveStore('memory_blocks', 'POSBLOCK769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS memory_blocks (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, hall_type TEXT NOT NULL, content TEXT NOT NULL, decision_log TEXT NOT NULL DEFAULT \'[]\', confidence REAL NOT NULL, created_at TEXT NOT NULL, valid_from TEXT NOT NULL, source_trust TEXT NOT NULL)'); sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'pos-769-block', 'u', 'facts', text, '[]', 0.9, 't', 't', 'user_stated'); }, sql => JSON.stringify(sql.exec('SELECT content, decision_log FROM memory_blocks').toArray()));
 positiveStore('memory_inbox', 'POSINBOX769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS memory_inbox (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, operation TEXT NOT NULL, hall TEXT NOT NULL, claim TEXT NOT NULL, content TEXT NOT NULL, proposed_pattern_id TEXT NOT NULL, observed_at TEXT NOT NULL, source_trust TEXT NOT NULL, rationale TEXT NOT NULL, source TEXT NOT NULL)'); sql.exec('INSERT INTO memory_inbox (id, user_id, operation, hall, claim, content, proposed_pattern_id, observed_at, source_trust, rationale, source) VALUES (?,?,?,?,?,?,?,?,?,?,?)', 'pos-769-inbox', 'u', 'ADD', 'facts', text, text, 'p', 't', 'user_stated', 'r', 's'); }, sql => JSON.stringify(sql.exec('SELECT claim, content FROM memory_inbox').toArray()));
+
+// Full-store scan: after a successful forget and a DO eviction, no table or text column in the owner DO SQLite holds the forgotten text.
+// An exemption must name why the table cannot hold owner text; there is no skip.
+const SCAN_EXEMPT: Readonly<Record<string, string>> = {};
+const scanForText = (sql: SqlStorage, needle: string): string[] => {
+  const hits: string[] = [];
+  for (const { name } of sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").toArray()) {
+    if (SCAN_EXEMPT[name]) continue;
+    const columns = sql.exec<{ name: string }>(`PRAGMA table_info("${name.replaceAll('"', '""')}")`).toArray().map(column => column.name);
+    for (const column of columns) {
+      const quoted = `"${column.replaceAll('"', '""')}"`;
+      const count = sql.exec<{ n: number }>(`SELECT count(*) AS n FROM "${name.replaceAll('"', '""')}" WHERE instr(lower(CAST(${quoted} AS TEXT)), lower(?)) > 0`, needle).one().n;
+      if (count > 0) hits.push(`${name}.${column}`);
+    }
+  }
+  return hits;
+};
+const scanKv = async (storage: DurableObjectStorage, needle: string): Promise<string[]> => {
+  const hits: string[] = [];
+  for (const [key, value] of await storage.list()) if (JSON.stringify(value)?.toLowerCase().includes(needle.toLowerCase()) || key.toLowerCase().includes(needle.toLowerCase())) hits.push(`kv:${key}`);
+  return hits;
+};
+it('SCAN after forget_memory and eviction no table or column of the owner DO holds the forgotten text', async () => {
+  const name = 'memory-do-full-scan';
+  const secret = 'XQZ-ZEBRA-4821';
+  seen.outputs.push(tool('remember', { kind: 'fact', text: `The vault code word is ${secret}`, evidence_quote: secret }), []);
+  await turn(name, 1, `Remember that the vault code word is ${secret}`);
+  await runInDurableObject(stub(name), async (_i, state) => expect(scanForText(state.storage.sql, secret).length + (await scanKv(state.storage, secret)).length).toBeGreaterThan(0));
+  seen.outputs.push(tool('forget_memory', { topic: secret, scope_note: 'vault code word' }), []);
+  await turn(name, 2, `Forget ${secret}`);
+  expect(seen.inputs.some(input => input.includes('removed from memory and recall'))).toBe(true);
+  await evictDurableObject(stub(name));
+  await turn(name, 3, 'What time is my standup?');
+  await runInDurableObject(stub(name), async (_i, state) => expect([...scanForText(state.storage.sql, secret), ...await scanKv(state.storage, secret)]).toEqual([]));
+});
