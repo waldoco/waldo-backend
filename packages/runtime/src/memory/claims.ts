@@ -1039,7 +1039,10 @@ const evidenceLabel = (claim: Claim): string => claim.origin === 'agent' ? ' (wr
 // maxChars is the room left in the system prompt (the sanitiser drops a system prompt over its limit WHOLE, which would
 // lose the base prompt too). Everything the owner said is kept while it fits; when it cannot all fit, the newest facts stay,
 // the rest are counted in one plain line, and recall still finds them. Without maxChars nothing is trimmed.
-export const turnMemoryPrompt = (store: ClaimStore, question: string, maxChars = Number.POSITIVE_INFINITY): string => {
+// The owner profile in the system prompt stays small whatever the model window is; deeper recall goes through read_memory.
+export const OWNER_PROFILE_MAX_CHARS = 12_000;
+export const turnMemoryPrompt = (store: ClaimStore, question: string, requestedMaxChars = Number.POSITIVE_INFINITY): string => {
+  const maxChars = Math.min(requestedMaxChars, OWNER_PROFILE_MAX_CHARS);
   const hits = store.recall(question, 8);
   const profileClaims = [...store.claims(), ...store.claims('promoted')].filter((claim) =>
     ['fact', 'preference', 'routine', 'health', 'goal'].includes(claim.kind) &&

@@ -59,6 +59,17 @@ describe('claims', () => {
     });
   });
 
+  it('the owner profile in the prompt stays under OWNER_PROFILE_MAX_CHARS even when the caller offers a 400K room', async () => {
+    await withSql((sql, transaction) => {
+      const store = claimStore(sql, transaction);
+      for (let i = 0; i < 400; i += 1) {
+        const text = `Fact number ${i}: ` + 'x'.repeat(200);
+        store.add({ kind: 'fact', text, source: 'stated', evidence: text, origin: 'owner', source_ref: `owner, tg-${i}` }, AT, i + 1);
+      }
+      expect(turnMemoryPrompt(store, 'unrelated question', 400_000).length).toBeLessThanOrEqual(12_000);
+    });
+  });
+
   it.each(['straight', 'typographic'])('grounds the live synthetic workshop correction inside %s quotation marks', async (quotes) => {
     await withSql((sql, transaction) => {
       const store = claimStore(sql, transaction);
