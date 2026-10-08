@@ -226,8 +226,12 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('propose_calendar_change'),
     autonomy_gated: false,
     mutates_state: true,
-    async handle(args: ProposeCalendarChangeArgs) {
-      return { ok: true, data: { proposal_id: await desk.propose(args), status: 'sent to the owner with Do it / Modify / Not now buttons', applied: false }, source_taint: null };
+    async handle(args: ProposeCalendarChangeArgs, ctx?: ToolDispatcherContext) {
+      const result = await withGoogle(google, 'calendar', ctx, async client => ({
+        proposal_id: await desk.propose({...args, ...(client.account?.email ? {account:client.account.email} : {})}),
+        status: 'sent to the owner with Do it / Modify / Not now buttons', applied: false,
+      }), args.account);
+      return result.ok ? {...result, source_taint:null} : result;
     },
   } satisfies ToolHandler<ProposeCalendarChangeArgs, unknown, ToolDispatcherContext>,
   {

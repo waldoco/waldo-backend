@@ -33,3 +33,9 @@ it('binds selected sending account into the stored proposal and receipt',async()
  expect(proposal).toMatchObject({account:account.email});
  expect(result).toMatchObject({ok:true,data:{account}});
 });
+it('calendar proposal returns the actual account and forwards its binding',async()=>{
+ let proposal:unknown;
+ const handler=googleHandlers({client:async()=>({account} as never)},{...desk,propose:async p=>{proposal=p;return 'p';}},clock).find(h=>h.name==='propose_calendar_change')!;
+ expect(await handler.handle({action:'cancel',event_id:'e',reason:'r',account:account.email} as never)).toMatchObject({ok:true,data:{account}});
+ expect(proposal).toMatchObject({account:account.email});
+});

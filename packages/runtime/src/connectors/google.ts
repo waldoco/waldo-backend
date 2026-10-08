@@ -276,7 +276,7 @@ const threadBody = (payload: GmailPayload | undefined): string => {
     for (const child of part.parts ?? []) { const text = partText(child, mime); if (text.trim()) return text; }
     return '';
   };
-  return (payload ? partText(payload, 'text/plain') || htmlText(partText(payload, 'text/html')) : '').trim().slice(0, BODY_CAP);
+  return (payload ? partText(payload, 'text/plain').trim() || htmlText(partText(payload, 'text/html')) : '').trim().slice(0, BODY_CAP);
 };
 
 // Single-shot access-token mint for callers that need a raw bearer (Google-auth MCP servers on

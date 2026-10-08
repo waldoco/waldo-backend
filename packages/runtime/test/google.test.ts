@@ -235,10 +235,10 @@ describe('google tools', () => {
     expect(JSON.stringify(result)).not.toMatch(/https?:/);
   });
 
-  it('propose a calendar change without applying it', async () => {
+  it('requires a connected calendar account before preparing a proposal', async () => {
     const google: GoogleAccess = { client: async () => null };
     const propose = googleHandlers(google, proposals, clock).find((h) => h.name === 'propose_calendar_change')!;
-    expect(await propose.handle({ action: 'cancel', event_id: 'e1', reason: 'double booked' } as never)).toMatchObject({ ok: true, data: { proposal_id: 'proposal:1', applied: false } });
+    expect(await propose.handle({ action: 'cancel', event_id: 'e1', reason: 'double booked' } as never)).toMatchObject({ ok: false, code: 'auth_failed' });
   });
 });
 
