@@ -1505,7 +1505,7 @@ describe('ContextComposer', () => {
 // query_availability and read_owner_context joined it 2026-09-30. read_mcp_tool joined it 2026-10-02. export_artifact joined it 2026-10-02. workspace_list, workspace_read and workspace_write joined it 2026-10-02. workspace_render and curated skills lifecycle tools joined it 2026-10-03.
 // set_schedule_preference joined it 2026-10-07.
 // determinism is proven by first===second above.
-    expect(first.checkpoint.context_ref).toBe('ctx_4fad5239ab1bcfff667077b8b528e45a');
+    expect(first.checkpoint.context_ref).toBe('ctx_1d7ac53828fdb519b86eec4f756821cb');
     expect(first.prompt.indexOf('Workspace source key a- marker.')).toBeLessThan(
       first.prompt.indexOf('Workspace source key a: marker.'),
     );
