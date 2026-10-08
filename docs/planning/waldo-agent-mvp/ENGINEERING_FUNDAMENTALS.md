@@ -580,3 +580,9 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 - [ ] Exercise signed common-owner source/execution RPCs with the serving binding profile, without local-only or unused legacy provider bindings. Keep local ingress and legacy provider guards closed, and preserve common lease wakes when persisted legacy work fails.
 
 | 2026-10-08 | Eager legacy RunLoop provider resolution prevented signed common-owner RPCs from constructing when staging had no WALDO_ENV | Runtime composition / serving binding profile | common-run-loop-bootstrap.test.ts reproduces exact constructor error, then source replay and execution receipt settlement across eviction; invalid authority/local seams and legacy dispatch controls | Shared coordinator/scheduler construction must not initialize an unrelated provider; legacy resolver guards remain unchanged |
+
+### Compute effect reservation on the current owner loop
+
+- [ ] A newly admitted compute tool reserves the existing owner effect before native issue; its invocation identity rejects a changed argv/file payload and unknown recovery has no dispatch fallback. Test the registered loop, /stop, private artifact download and restart, not a removed common execution profile.
+
+2026-10-09: Forward-porting PR906 exposed a missing current owner-effect reservation in the old handler. The regression fails on the old handler before issue, then verifies attempting intent before provider, changed-argument refusal, durable unknown-to-done recovery and late-result denial after /stop. Provider issued journal alone does not satisfy host intent custody.

@@ -66,6 +66,12 @@ jobs:
       - name: Live owner memory handlers
         working-directory: packages/runtime
         run: npx vitest run --config vitest.memory-b1.config.ts
+      - name: Bounded compute adapters and receipt recovery (no live provider)
+        working-directory: packages/runtime
+        run: pnpm exec vitest run --config vitest.compute.config.ts
+      - name: Registered owner compute/files journey (fake provider, real workspace/PDF/download)
+        working-directory: packages/runtime
+        run: pnpm exec vitest run test/owner-do-registered-workspace.test.ts -t 'compute'
       - name: Console ticket tenant routing
         working-directory: packages/runtime
         run: npx vitest run --config vitest.console-ticket.config.ts
