@@ -115,7 +115,11 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         return { ok: true, data: parsed };
       }
     } catch (error) {
-      return { ok: false, code: openAIErrorCode(error), error: 'OpenAI request failed' };
+      // Only identifiers cross into the trace (status, provider error code, offending parameter name); the provider's message can quote the request.
+      const detail = error instanceof OpenAI.APIError
+        ? ` (${[error.status, error.code, error.param].filter((part) => part !== undefined && part !== null && part !== '').join(' ')})`
+        : '';
+      return { ok: false, code: openAIErrorCode(error), error: `OpenAI request failed${detail}` };
     } finally {
       clearTimeout(timeout);
       input.runScope?.signal.removeEventListener('abort', abortRun);
