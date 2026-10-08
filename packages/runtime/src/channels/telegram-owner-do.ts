@@ -1763,11 +1763,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
       undefined, channel, channel === 'telegram' ? { browserAttachments: scope => this.ownerBrowser.attachments(scope), prepare: async (turn, contextOwnerId, scope) => {
-        if (turn.attachment || turn.mediaNote || probeCapture.current !== null) return undefined;
+        if (probeCapture.current !== null) return undefined;
         const occurrence = this.activeInbox;
         const doName = identity.get<string>('do_name');
         const subject = identity.get<string>('telegram_subject');
-        const assertSkillOwnerCurrent = async () => {
+        const assertOwnerIdentity = async () => {
           scope.admit();
           const currentOwner = resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
           if (!occurrence || occurrence !== this.activeInbox || scope !== this.activeScope
@@ -1775,11 +1775,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             || occurrence.subject !== String(owner) || currentOwner !== owner || owner <= 0
             || identity.get<string>('do_name') !== doName || identity.get<string>('telegram_subject') !== subject
             || turn.surface !== 'telegram' || turn.conversationRef !== `telegram-${owner}`
-            || turn.traceId !== `tg-${occurrence.updateId}` || turn.attachment || turn.mediaNote)
+            || turn.traceId !== `tg-${occurrence.updateId}`)
             throw new ClosedRunError();
           scope.admit();
         };
-        await assertSkillOwnerCurrent();
+        // One identity check at turn admission and one at effect dispatch; every other call only checks the run scope.
+        const assertSkillOwnerCurrent = async () => { scope.admit(); };
+        await assertOwnerIdentity();
         const trial = this.browserTrial;
         const admission = trial ? await (async () => {
           try { return await ownerMessageAdmission({
@@ -1788,7 +1790,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           actualDoId: this.ctx.id.toString(), expectedDoId: name => this.env.TELEGRAM_OWNER_DO!.idFromName(name).toString(), allowedDoNames: [trial.policy.doName],
           provider: 'telegram', subject: subject!, text: turn.text!, occurrenceKey: occurrence!.id, occurredAt: occurrence!.admittedAt, now: Date.now,
         }); } catch {
-            await assertSkillOwnerCurrent();
+            await assertOwnerIdentity();
             // Browser identity failure preserves the existing messaging path.
             // Its fixture principal cannot resolve the canonical browser host.
             console.warn(JSON.stringify({ event: 'browser_owner_admission_unavailable' }));
@@ -1796,7 +1798,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           }
         })() : undefined;
         const capability = createScopedCuratedSkillCapability(storage.sql, { owner: admission?.invocation.verified_authority.principal_ref ?? contextOwnerId, custodyKey: `telegram:${owner}`, turnId: turn.traceId,
-          trigger: 'user_message', ownerText: turn.text, assertCurrent: assertSkillOwnerCurrent }, scope);
+          trigger: 'user_message', ownerText: turn.text, assertCurrent: assertSkillOwnerCurrent, assertDispatch: assertOwnerIdentity }, scope);
         return Object.freeze({ ...capability, ...(admission ? { admission } : {}), taskContext: async (assertSourceCurrent?: () => Promise<void>) => {
           await assertSkillOwnerCurrent();
           let receipts: Awaited<ReturnType<Awaited<ReturnType<typeof workspaceOwnerHost>>['recentWrites']>>;
@@ -2169,7 +2171,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         updates.pruneMail(now);
         const sentToday = new Set(plans.read(day).filter((row) => row.sent).map((row) => row.card));
         const { volume } = loops.proactivity();
-        const canSend = sentToday.has('card:brief') && !sentToday.has('card:close') && volume !== 'low' && !quiet();
+        const canSend = loops.proactivity().followups !== false && !sentToday.has('card:close') && volume !== 'low' && !quiet();
         const pendingMail = sourceFollowups ? updates.pendingMail() : [];
         const analysisChanges = sourceFollowups ? [...changes.filter(change => change.source !== 'mail'), ...pendingMail] : changes;
         let text: string | null = null;

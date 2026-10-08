@@ -200,3 +200,18 @@ describe('standing order tools', () => {
     expect(failingBook.byId('order:daily3')).toBeNull();
   });
 });
+
+describe('standing order recurrence', () => {
+  it.each(['weekdays', 'weekly', 'cron'] as const)('schedules and persists %s without new DO columns', async (trigger) => {
+    const sql = fakeSql();
+    const scheduler = fakeScheduler();
+    const book = standingOrderBook(sql as never, scheduler as never, { timezone: 'America/New_York', now: () => new Date('2026-03-07T15:00:00Z') }, () => trigger);
+    const order = await book.set({ scope: 'Review', trigger, at: '09:00', gate: 'confirm_first', escalation: 'message_owner', ...(trigger === 'cron' ? { cron: '0 9 * * 1-5' } : {}) } as never);
+    const expected = trigger === 'weekly' ? '2026-03-14T13:00:00Z' : '2026-03-09T13:00:00Z';
+    expect(scheduler.armed[0]?.dueAt).toBe(Date.parse(expected));
+    expect(book.list()[0]?.trigger).toBe(trigger);
+    expect(book.byId(order.id)?.trigger).toBe(trigger);
+    if (trigger === 'cron') expect(book.list()[0]).toMatchObject({ cron: '0 9 * * 1-5' });
+    expect(standingOrdersPrompt(book)).toContain(`runs ${trigger}`);
+  });
+});

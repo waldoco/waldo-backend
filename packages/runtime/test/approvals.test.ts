@@ -830,3 +830,43 @@ describe('task source card ledger write', () => {
     });
   });
 });
+
+
+describe('calendar proposal dedupe within a turn', () => {
+  it('reuses identical pending cards, but not different payloads, turns or decided cards', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('calendar-turn-dedupe'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let next = 0; let sent = 0;
+      const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => { sent++; return {}; }, google: async () => null,
+        newId: () => String(++next), now: () => 1000, timezone: 'UTC', log: () => {} });
+      const payload = { action: 'create' as const, title: 'Lunch', start: iso('2026-10-09T12:00:00Z'), end: iso('2026-10-09T13:00:00Z'), reason: 'Owner requested' };
+      const first = await desk.propose(payload, 'turn-1');
+      expect(await desk.propose({ reason: payload.reason, end: payload.end, start: payload.start, title: payload.title, action: payload.action }, 'turn-1')).toBe(first);
+      expect(sent).toBe(1);
+      expect(await desk.propose({ ...payload, title: 'Dinner' }, 'turn-1')).not.toBe(first);
+      await desk.decide(first, 's', 'test');
+      expect(await desk.propose(payload, 'turn-1')).not.toBe(first);
+      const nextTurn = await desk.propose(payload, 'turn-2');
+      expect(nextTurn).not.toBe(first);
+      expect(await desk.propose(payload, 'turn-2')).toBe(nextTurn);
+      expect(await desk.propose(payload)).not.toBe(nextTurn);
+      expect(await desk.propose(payload)).not.toBe(nextTurn);
+    });
+  });
+  it('collapses concurrent proposals and never reuses an unconfirmed card', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('calendar-turn-concurrent'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let next = 0; let sent = 0; let fail = false;
+      const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => { sent++; return fail ? null : {}; }, google: async () => null,
+        newId: () => String(++next), now: () => 1000, timezone: 'UTC', log: () => {} });
+      const payload = { action: 'create' as const, title: 'Lunch', start: iso('2026-10-09T12:00:00Z'), end: iso('2026-10-09T13:00:00Z'), reason: 'Owner requested' };
+      const ids = await Promise.all([desk.propose(payload, 'turn-1'), desk.propose(payload, 'turn-1')]);
+      expect(ids[0]).toBe(ids[1]); expect(sent).toBe(1);
+      fail = true;
+      await expect(desk.propose(payload, 'turn-2')).rejects.toThrow('Approval card not confirmed');
+      fail = false;
+      await desk.propose(payload, 'turn-2');
+      expect(sent).toBe(3);
+    });
+  });
+});
