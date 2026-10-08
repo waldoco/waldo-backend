@@ -1415,16 +1415,26 @@ async function sanitiseRequest(
       error: new HookHaltError('llm_provider', 'sanitised system prompt invalid', 'transient'),
     };
   }
-  let messages = await sanitiseValue(request.messages, 'internal_context');
+  // Cut to the destination's own structural caps (item count, characters) before any content scan: the sanitiser would
+  // reject the excess as oversize anyway, and scanning it first costs seconds on a long stored conversation.
+  const historyPolicy = SANITISE_DESTINATION_POLICIES.internal_context;
+  const historyChars = deriveContextBudgetChars(request.model, historyPolicy.max_chars);
+  let first = Math.max(0, request.messages.length - historyPolicy.max_array_items);
+  for (let used = 0, index = request.messages.length - 1; index >= first; index -= 1) {
+    used += request.messages[index]!.content.length;
+    if (used > historyChars && index < request.messages.length - 1) { first = index + 1; break; }
+  }
+  const history = first === 0 ? request.messages : request.messages.slice(first);
+  let messages = await sanitiseValue(history, 'internal_context');
   // Oldest-first trim: find the smallest cut that passes, so recent context survives ("that one" and "yes" keep their
   // referent). A shorter suffix never fails where a longer one passes, so the cut is found by bisection, not one
   // full re-sanitise per dropped message.
   if (!messages.ok && softScribe(messages.error)) {
     let low = 1;
-    let high = request.messages.length - 1;
+    let high = history.length - 1;
     while (low <= high) {
       const drop = Math.floor((low + high) / 2);
-      const reduced = await sanitiseValue(request.messages.slice(drop), 'internal_context');
+      const reduced = await sanitiseValue(history.slice(drop), 'internal_context');
       if (reduced.ok) { messages = reduced; high = drop - 1; }
       else if (softScribe(reduced.error)) low = drop + 1;
       else high = drop - 1;

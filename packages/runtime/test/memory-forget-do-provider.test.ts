@@ -936,6 +936,6 @@ it('CPHASE a model call records content-free phase hops around the gateway', asy
   await turn(name, 1, 'What time is my standup?');
   await runInDurableObject(stub(name), (_i, state) => {
     const rows = state.storage.sql.exec<{ code: string }>("SELECT note AS code FROM trace_log WHERE hop = 'complete_phase'").toArray().map(row => row.code);
-    expect(rows).toEqual(expect.arrayContaining(['reply:enter', 'reply:gateway_call', 'reply:gateway_return']));
+    expect(rows).toEqual(expect.arrayContaining(['reply:enter', 'reply:messages=1', 'reply:gateway_call', 'reply:gateway_return']));
   });
 });
