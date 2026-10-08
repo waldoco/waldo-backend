@@ -10,7 +10,12 @@ export function browserTaskSourceCustody(sql: SqlStorage, kv: Pick<DurableObject
   const allows = (snapshot: TaskSourceSnapshot) => snapshot.ready && (snapshot.sources.includes('browser') || snapshot.sources.includes('web'));
   // A canonical task that allowed browser or web sources when the card was issued must still allow them at approval.
   // Run-owned public reads have no canonical task; they keep the owner and revoke fences only.
-  const taskSnapshot = (ownerKey: string) => { const snapshot = readTaskSourceSnapshot(sql, ownerKey); return allows(snapshot) ? snapshot : null; };
+  const current = (ownerKey: string): TaskSourceSnapshot | null => {
+    if (!sql.exec('SELECT 1 FROM sqlite_master WHERE type = ? AND name = ?', 'table', 'owner_task_source_scope').toArray().length) return null;
+    if (!sql.exec('SELECT 1 FROM owner_task_source_scope WHERE owner_key = ?', ownerKey).toArray().length) return null;
+    return readTaskSourceSnapshot(sql, ownerKey);
+  };
+  const taskSnapshot = (ownerKey: string) => { const snapshot = current(ownerKey); return snapshot && allows(snapshot) ? snapshot : null; };
   return {
     capture(payload: BrowserSubmitProposal, ownerKey: string) {
       if (!payload.continuation || !ownerKey) throw Error('browser task source unavailable');
@@ -27,8 +32,8 @@ export function browserTaskSourceCustody(sql: SqlStorage, kv: Pick<DurableObject
         // Re-read after the await: the witness or revoke marker may have changed while the owner was resolved.
         if (ownerKey !== witness.ownerKey || !unchanged()) throw Error('browser task source changed');
         if (witness.snapshot) {
-          const current = readTaskSourceSnapshot(sql, witness.ownerKey);
-          if (!allows(current) || current.taskId !== witness.snapshot.taskId || current.revision !== witness.snapshot.revision) throw Error('browser task source changed');
+          const now = current(witness.ownerKey);
+          if (!now || !allows(now) || now.taskId !== witness.snapshot.taskId || now.revision !== witness.snapshot.revision) throw Error('browser task source changed');
         }
       };
     },
