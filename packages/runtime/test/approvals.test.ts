@@ -758,8 +758,8 @@ describe('approval desk - email_send rail', () => {
 
       const miss = await setup(state, { sendError: new Error('network timeout'), found: false, messageId: '<m4@waldo-send>' });
       const out2 = await miss.desk.decide(miss.id, 'a', 't');
-      expect(out2.toast).toBe("That didn't send");
-      expect(out2.message).toContain('Nothing was delivered');
+      expect(out2.toast).toBe('Outcome unknown');
+      expect(out2.message).not.toContain('Nothing was delivered');
       expect(miss.sentRaw).toHaveLength(1);
     });
   });
