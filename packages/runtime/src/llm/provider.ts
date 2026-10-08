@@ -1416,12 +1416,19 @@ async function sanitiseRequest(
     };
   }
   let messages = await sanitiseValue(request.messages, 'internal_context');
-  // Oldest-first trim (PR 1 item 2): drop one oldest message at a time until the history passes, so recent
-  // context survives; collapsing straight to the last message made "that one" and "yes" meaningless.
-  for (let drop = 1; !messages.ok && softScribe(messages.error) && drop < request.messages.length; drop++) {
-    const reduced = await sanitiseValue(request.messages.slice(drop), 'internal_context');
-    if (reduced.ok) messages = reduced;
-    else if (!softScribe(reduced.error)) break;
+  // Oldest-first trim: find the smallest cut that passes, so recent context survives ("that one" and "yes" keep their
+  // referent). A shorter suffix never fails where a longer one passes, so the cut is found by bisection, not one
+  // full re-sanitise per dropped message.
+  if (!messages.ok && softScribe(messages.error)) {
+    let low = 1;
+    let high = request.messages.length - 1;
+    while (low <= high) {
+      const drop = Math.floor((low + high) / 2);
+      const reduced = await sanitiseValue(request.messages.slice(drop), 'internal_context');
+      if (reduced.ok) { messages = reduced; high = drop - 1; }
+      else if (softScribe(reduced.error)) low = drop + 1;
+      else high = drop - 1;
+    }
   }
   if (!messages.ok) return { ...messages, scribeDestination: 'internal_context' };
   if (!Array.isArray(messages.payload)) {
