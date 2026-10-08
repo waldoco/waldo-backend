@@ -871,10 +871,10 @@ function redactPii(
   };
 }
 
-// PR 1 item 1: owner-authored text (source_taint null) headed to the model or the owner's own reply is not scored for injection;
+// PR 1 item 1: owner-authored text (source_taint null) headed to the model as conversation (internal_context) is not scored; the system prompt (skills, canvas values) still is for injection;
 // keyword weights ("dan", "system ") blocked ordinary asks like "Call Dan about the system update". External taint keeps the scorer.
 const ownerAuthoredSkipsInjection = (input: Readonly<{ source_taint: unknown; destination: SanitiseDestination }>): boolean =>
-  input.source_taint === null && (input.destination === 'internal_context' || input.destination === 'system_prompt' || input.destination === 'owner_reply');
+  input.source_taint === null && input.destination === 'internal_context';
 
 function inspectInstructions(
   payload: JsonValue,
