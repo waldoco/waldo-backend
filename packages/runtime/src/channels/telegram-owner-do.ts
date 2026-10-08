@@ -1642,7 +1642,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       return this.browserTasks.resolve(this.browserTasks.principal, source);
     } });
     const desk = approvalDesk(storage.sql, {
-      call: routedCall, owner, google: (intent,feature) => google.client(feature??'calendar',intent), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
+      call: routedCall, owner, google: (intent,feature,account) => google.client(feature??'calendar',intent,undefined,account), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
       timezone: clock.timezone, log,
       reviewUrl: async () => {
         const origin = await storage.get<string>('origin');
