@@ -24,26 +24,26 @@ export function prepareWithScribe<T>(
   canaryTokens: CanaryTokens,
 ): ScribePrepared<T> {
   const candidate = schema.safeParse(value);
-  if (!candidate.success) return { ok: false, reason: 'invalid_payload' };
+  if (!candidate.success) { console.warn(JSON.stringify({ hop: 'scribe_invalid', branch: 'prepare_L27' })); return { ok: false, reason: 'invalid_payload' }; }
   const input = sanitiseInputSchema.safeParse({
     payload: candidate.data,
     destination,
     canary_tokens: canaryTokens,
     source_taint: sourceTaint,
   });
-  if (!input.success) return { ok: false, reason: 'invalid_payload' };
+  if (!input.success) { console.warn(JSON.stringify({ hop: 'scribe_invalid', branch: 'prepare_L34' })); return { ok: false, reason: 'invalid_payload' }; }
 
   try {
     const result = sanitiseResultSchema.parse(sanitise(input.data));
     if (!result.ok) return { ok: false, reason: result.reason };
     if (result.source_taint !== sourceTaint) {
-      return { ok: false, reason: 'invalid_payload' };
+      { console.warn(JSON.stringify({ hop: 'scribe_invalid', branch: 'prepare_L40' })); return { ok: false, reason: 'invalid_payload' }; }
     }
     const output = schema.safeParse(result.payload);
     return output.success
       ? { ok: true, value: output.data }
-      : { ok: false, reason: 'invalid_payload' };
+      : (console.warn(JSON.stringify({ hop: 'scribe_invalid', branch: 'prepare_L45' })), { ok: false as const, reason: 'invalid_payload' as const });
   } catch {
-    return { ok: false, reason: 'invalid_payload' };
+    { console.warn(JSON.stringify({ hop: 'scribe_invalid', branch: 'prepare_L47' })); return { ok: false, reason: 'invalid_payload' }; }
   }
 }

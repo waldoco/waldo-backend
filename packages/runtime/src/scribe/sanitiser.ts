@@ -101,6 +101,11 @@ const PHONE_PATTERN = /\+?\b(?:1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/
 const JSON_ESCAPE = /\\u[0-9a-fA-F]{4}/;
 const PERCENT_ESCAPE = /%[0-9a-fA-F]{2}/;
 
+// Log-only branch tag so each invalid_payload source is identifiable in the worker logs (no payload text).
+function denyInvalid(branch: string, reason: SanitiseFailureReason): SanitiseResult {
+  console.warn(JSON.stringify({ hop: 'scribe_invalid', branch }));
+  return deny('size_cap', reason);
+}
 function deny(check: SanitiseCheck, reason: SanitiseFailureReason): SanitiseResult {
   return { ok: false, check, reason };
 }
@@ -891,7 +896,7 @@ function inspectInstructions(
     for (const match of scoreInjection(text).matches) matched.set(match.id, match);
     return false;
   });
-  if (scanned.invalid) return deny('size_cap', 'invalid_payload');
+  if (scanned.invalid) return denyInvalid('L894', 'invalid_payload');
   const verdict = verdictForMatches(
     INJECTION_RULES.flatMap((rule) => {
       const match = matched.get(rule.id);
@@ -919,7 +924,7 @@ function inspectInstructions(
     }
     return output;
   });
-  if (transformed.invalid) return deny('size_cap', 'invalid_payload');
+  if (transformed.invalid) return denyInvalid('L922', 'invalid_payload');
   return {
     payload: transformed.payload,
     redactions: [
@@ -1000,14 +1005,14 @@ function applyDestinationPolicy(
     isStructured &&
     !isEligibleHealthView(payload, input.destination)
   ) {
-    return deny('size_cap', 'invalid_payload');
+    return denyInvalid('L1003', 'invalid_payload');
   }
   if (
     (policy.payload_kind === 'text' && !isText) ||
     (policy.payload_kind === 'structured' && !isStructured) ||
     (policy.payload_kind === 'text_or_structured' && !isText && !isStructured)
   ) {
-    return deny('size_cap', 'invalid_payload');
+    return denyInvalid('L1010', 'invalid_payload');
   }
 
   const serialized = isText ? payload : JSON.stringify(payload);
@@ -1079,19 +1084,19 @@ function applyDestinationPolicy(
 // read chunks.
 export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
-  if (!input) return deny('size_cap', 'invalid_payload');
+  if (!input) return denyInvalid('L1082', 'invalid_payload');
 
   const secret = containsCanaryOrSecret(input.payload, input);
-  if (secret === 'invalid_payload') return deny('size_cap', secret);
+  if (secret === 'invalid_payload') return denyInvalid('L1085', 'invalid_payload');
   if (secret !== undefined) return deny('canary_token', secret);
 
   const health = containsForbiddenHealth(input);
-  if (health.invalid) return deny('size_cap', 'invalid_payload');
+  if (health.invalid) return denyInvalid('L1089', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
 
   // The offload store persists, so it never gets the model/owner readable seam: redact as memory_block.
   const pii = redactPii(input.payload, 'memory_block', input.source_taint, input.canary_tokens);
-  if (pii.invalid) return deny('size_cap', 'invalid_payload');
+  if (pii.invalid) return denyInvalid('L1094', 'invalid_payload');
 
   const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
   if ('ok' in instructions) return instructions;
@@ -1112,14 +1117,14 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
 // canary/secret, health leak, injection block verdict, and destination policy all still fail closed.
 export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
-  if (!input) return deny('size_cap', 'invalid_payload');
+  if (!input) return denyInvalid('L1115', 'invalid_payload');
 
   const secret = containsCanaryOrSecret(input.payload, input);
-  if (secret === 'invalid_payload') return deny('size_cap', secret);
+  if (secret === 'invalid_payload') return denyInvalid('L1118', 'invalid_payload');
   if (secret !== undefined) return deny('canary_token', secret);
 
   const health = containsForbiddenHealth(input);
-  if (health.invalid) return deny('size_cap', 'invalid_payload');
+  if (health.invalid) return denyInvalid('L1122', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
 
   const matched = new Map<InjectionRuleId, GuardVerdict['matches'][number]>();
@@ -1127,7 +1132,7 @@ export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
     for (const match of scoreInjection(text).matches) matched.set(match.id, match);
     return false;
   });
-  if (scanned.invalid) return deny('size_cap', 'invalid_payload');
+  if (scanned.invalid) return denyInvalid('L1130', 'invalid_payload');
   if (verdictForMatches([...matched.values()]).decision === 'block') {
     return deny('instruction_pattern', 'untrusted_instruction');
   }
@@ -1137,18 +1142,18 @@ export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
 
 export function sanitise(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
-  if (!input) return deny('size_cap', 'invalid_payload');
+  if (!input) return denyInvalid('L1140', 'invalid_payload');
 
   const secret = containsCanaryOrSecret(input.payload, input);
-  if (secret === 'invalid_payload') return deny('size_cap', secret);
+  if (secret === 'invalid_payload') return denyInvalid('L1143', 'invalid_payload');
   if (secret !== undefined) return deny('canary_token', secret);
 
   const health = containsForbiddenHealth(input);
-  if (health.invalid) return deny('size_cap', 'invalid_payload');
+  if (health.invalid) return denyInvalid('L1147', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
 
   const pii = redactPii(input.payload, input.destination, input.source_taint, input.canary_tokens);
-  if (pii.invalid) return deny('size_cap', 'invalid_payload');
+  if (pii.invalid) return denyInvalid('L1151', 'invalid_payload');
 
   const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
   if ('ok' in instructions) return instructions;
