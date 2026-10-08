@@ -9,7 +9,7 @@ import type { OwnerClock } from '../tools/live/get-context';
 type Reminder = Readonly<{ id: string; note: string; at: string; repeat: 'none' | 'daily' }>;
 
 export type ReminderBook = Readonly<{
-  set(args: SetReminderArgs): Promise<Reminder>;
+  set(args: SetReminderArgs, key?: string): Promise<Reminder>;
   list(): readonly Reminder[];
   cancel(id: string): Promise<boolean>;
   note(id: string): string | null;
@@ -18,24 +18,42 @@ export type ReminderBook = Readonly<{
 
 // Owner reminders ride the DO scheduler (kind 'reminder'); the note text lives beside it
 // because schedule payloads carry refs only.
+// Fixed 40-hex id part keeps 'reminder:call-' + digest (54 chars) inside the 100-char cancel schema.
+const shortDigest = async (value: string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))].slice(0, 20).map(b => b.toString(16).padStart(2, '0')).join('');
 export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: OwnerClock, newId: () => string): ReminderBook => {
   sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)');
   const local = (at: number) => localIso(at, clock.timezone);
   const toReminder = (row: { id: string; note: string; due_at: number; recurrence_json: string | null }): Reminder =>
     ({ id: row.id, note: row.note, at: local(row.due_at), repeat: row.recurrence_json === null ? 'none' : 'daily' });
   return {
-    async set({ note, at, repeat }) {
+    async set({ note, at, repeat }, key) {
       const now = clock.now().getTime();
-      const due = localToEpoch(at, clock.timezone);
-      if (repeat === 'none' && due <= now) throw new Error(`${at} is already past in ${clock.timezone}`);
-      const id = `reminder:${newId()}`;
-      sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', id, note, now);
-      const entry = await scheduler.schedule({
-        id, kind: 'reminder', payloadRefs: { reminder_id: id },
-        ...(repeat === 'daily'
-          ? { occurrenceAt: nextAfter(due, now), dueAt: nextAfter(due, now), recurrence: { type: 'daily_local' as const, time: at.slice(11), timezone: clock.timezone } }
-          : { occurrenceAt: due, dueAt: due }),
-      });
+      const rawDue = localToEpoch(at, clock.timezone);
+      // A tool call's own identity makes a retry after a lost response return the same reminder, not a second one.
+      const id = key ? `reminder:call-${await shortDigest(key)}` : `reminder:${newId()}`;
+      // Checked before past-time validation so a delayed retry of an already-set reminder still returns it.
+      const existing = key ? sql.exec<{ id: string }>('SELECT id FROM reminder_notes WHERE id = ?', id).toArray()[0] : undefined;
+      if (existing) {
+        const scheduled = this.list().find(item => item.id === id);
+        if (scheduled) return scheduled;
+      } else if (repeat === 'none' && rawDue <= now) throw new Error(`${at} is already past in ${clock.timezone}`);
+      // An existing note without a schedule is a partial earlier attempt: schedule it, never report it done unscheduled.
+      const due = existing && repeat === 'none' ? Math.max(rawDue, now) : rawDue;
+      if (!existing) sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', id, note, now);
+      let entry: Awaited<ReturnType<typeof scheduler.schedule>>;
+      try {
+        entry = await scheduler.schedule({
+          id, kind: 'reminder', payloadRefs: { reminder_id: id },
+          ...(repeat === 'daily'
+            ? { occurrenceAt: nextAfter(due, now), dueAt: nextAfter(due, now), recurrence: { type: 'daily_local' as const, time: at.slice(11), timezone: clock.timezone } }
+            : { occurrenceAt: due, dueAt: due }),
+        });
+      } catch (error) {
+        // The schedule row can exist even when arming the alarm failed. Keep the note then, so the armed reminder
+        // never fires note-less and a retry finds it; delete only a note that has no schedule behind it.
+        if (!existing && !scheduler.read(id)) sql.exec('DELETE FROM reminder_notes WHERE id = ?', id);
+        throw error;
+      }
       return { id, note, at: local(entry.due_at), repeat };
     },
     list() {
@@ -71,9 +89,10 @@ export const reminderHandlers = (book: ReminderBook) => [
     trigger_allowlist: allowlist('set_reminder'),
     autonomy_gated: false,
     mutates_state: true,
-    async handle(args) {
+    async handle(args, ctx?: ToolDispatcherContext) {
       try {
-        return { ok: true, data: await book.set(args), source_taint: null };
+        const key = ctx?.turnId && ctx?.toolCallId ? `${ctx.turnId}-${ctx.toolCallId}` : undefined;
+        return { ok: true, data: await book.set(args, key), source_taint: null };
       } catch (error) {
         return { ok: false, code: 'invalid_args', error: error instanceof Error ? error.message : String(error) };
       }

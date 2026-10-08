@@ -1,4 +1,5 @@
 import {commonOwnerActivation} from './common-owner-activation';
+import {legacyOwnerRestriction} from './task-source-scope';
 import {commonOwnerTools} from './common-owner-tool-policy';
 import {commonPublicBrowserConfiguration} from './common-public-browser-configuration';
 import { WALDO_CHAT_MODEL, recallResultSchema, TOOL_PERMISSIONS, type ToolName } from '@waldo/contracts';
@@ -13,7 +14,7 @@ import type { OwnerMessageAdmission } from '../identity/owner-message-admission'
 // Existing authenticated message directory and ordinary provider, not a synthetic presence.
 // Canonical context accepts explicit reviewed projections, not raw legacy store import.
 export function commonOwnerHost(env:TelegramWebhookEnv,storage:DurableObjectStorage,actualDoId:string):TelegramOwnerPrivateHost|undefined {
- if(env.WALDO_ENVIRONMENT!=='staging'||!commonOwnerActivation(env,storage.kv.get<string>('do_name')))return undefined;
+ if(env.WALDO_ENVIRONMENT!=='staging'||!commonOwnerActivation(env,storage.kv.get<string>('do_name'))||(storage.sql&&legacyOwnerRestriction(storage.sql)))return undefined;
  const directory=commonOwnerAuthority(env);
  const currentName=()=>{
   const name=storage.kv.get<string>('do_name');

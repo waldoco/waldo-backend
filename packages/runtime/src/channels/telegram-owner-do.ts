@@ -3,6 +3,7 @@ import {commonOwnerTools} from './common-owner-tool-policy';
 import {commonOwnerWorkspace} from './common-owner-workspace';
 import {commonOwnerMemory} from './common-owner-memory';
 import {commonOwnerHost} from './common-owner-host';
+import {commonOwnerActivation} from './common-owner-activation';
 import {revokeCommonBrowsers,maintainCommonBrowsers,COMMON_BROWSER_DUE,commonBrowserHost,type CommonBrowserConfiguration} from './common-browser-host';
 import {signCommonExecutionRequest} from '../identity/common-execution-request';
 import { signCommonTaskSourceRequest } from '../identity/common-task-source-request';
@@ -118,7 +119,7 @@ import { selectTranscriber } from '../llm/transcriber';
 import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
 import { TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
-import { createTaskSourceScope, approveTaskSourceProposal, ownerReadSources, retireLegacyDefaultTaskSources, type OwnerTaskSourceScope } from './task-source-scope';
+import { createTaskSourceScope, approveTaskSourceProposal, ownerReadSources, retireLegacyDefaultTaskSources, legacyOwnerRestriction, type OwnerTaskSourceScope } from './task-source-scope';
 import type { TurnControl } from './turn-control';
 import { turnFailureCode } from './turn-failure-code';
 import type { TelegramWebhookEnv } from './telegram-webhook';
@@ -262,10 +263,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private activeAbort: AbortController | undefined;
   private activeOwnerContext: ReturnType<typeof createOwnerMessageContextAdapter> | undefined;
 
+  // One exact-owner decision for the source, proposal and execution paths, same as the host: the global flag alone must not route an unselected owner.
+  private commonActive(): boolean { return commonOwnerActivation(this.env, this.ctx.storage.kv.get<string>('do_name')) && !legacyOwnerRestriction(this.ctx.storage.sql); }
+
   private async commonTaskSourcesForTurn(turn: import('./owner-turn-envelope').OwnerTurnEnvelope, scope: RunEffectScope, defaults: ReturnType<typeof ownerReadSources>): Promise<OwnerTaskSourceScope> {
     const occurrence = this.activeInbox;
     const namespace = this.env.RUN_LOOP_DO;
-    if (this.env.COMMON_OWNER_TASKS !== '1' || !namespace || !this.env.SUPABASE_PROJECT_URL || !this.env.SUPABASE_PUBLISHABLE_KEY || !this.env.WALDO_ROUTER_HMAC_SECRET) throw Error('common task sources unavailable');
+    if (!this.commonActive() || !namespace || !this.env.SUPABASE_PROJECT_URL || !this.env.SUPABASE_PUBLISHABLE_KEY || !this.env.WALDO_ROUTER_HMAC_SECRET) throw Error('common task sources unavailable');
     if (!occurrence || occurrence.runId !== scope.runId || occurrence.attempt !== scope.attempt
       || scope !== this.activeScope || turn.surface !== 'telegram' || !turn.text || turn.attachment || turn.mediaNote) throw new ClosedRunError();
     // Populated physical source custody cannot be silently reset/imported by enabling the common path.
@@ -626,7 +630,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (direct) await this.inbox.transition(row.id, attempt, 'completed', 'direct_path_returned');
       const final = this.setup().finalOutbox.records().find(r => r.inbox?.runId === runId);
       if (!final && !direct) await this.inbox.transition(row.id, attempt, 'quarantined', 'no_final_effects_uncertain');
-    } catch {
+    } catch (error) {
+      // The owner-facing copy stays generic; the cause must not vanish. Error class plus a short message only
+      // (no owner text, no stack), so a staging operator can tell a root rejection from a closed run.
+      console.error(JSON.stringify({ hop: 'run_failed', reason: 'execution_uncertain', run: runId, error: error instanceof Error ? error.name : typeof error, detail: error instanceof Error ? error.message.slice(0, 160) : '' }));
       await this.inbox.transition(row.id, attempt, 'quarantined', 'execution_uncertain');
     } finally {
       clearTimeout(timeout);
@@ -1957,16 +1964,16 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           registeredHandlers: [...handlers, ...skills.handlers].map(handler => handler.name), connectorBacked: handlers.filter(handler => host.connectorBacked(handler)).map(handler => handler.name), access: host.access.bind(host) });
         this.activeOwnerContext = adapter;
         const taskOwnerKey = await currentTaskOwnerKey();
-        const sourceScope = this.env.COMMON_OWNER_TASKS === '1' ? await this.commonTaskSourcesForTurn(turn, scope, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? [])) : createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
+        const sourceScope = this.commonActive() ? await this.commonTaskSourcesForTurn(turn, scope, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? [])) : createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
           await admission.assertCurrent();
           if (await currentTaskOwnerKey() !== taskOwnerKey) throw new ClosedRunError();
         }, { inputRef: turn.traceId, text: turn.text, quotedRanges: turn.sourceQuoteRanges }, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? []));
-        const execution=this.env.COMMON_OWNER_TASKS==='1'?this.commonExecutionForTurn(turn,scope,host):undefined;
+        const execution=this.commonActive()?this.commonExecutionForTurn(turn,scope,host):undefined;
         this.activeCommonBrowser=host.browser&&execution?commonBrowserHost({storage:this.ctx.storage,config:host.browser,ownerId:admission.invocation.verified_authority.principal_ref,source:execution.source,assertCurrent:()=>execution.assertCurrent(),deadline:()=>scope.deadline,now:Date.now}):undefined;
         execution?.bindBrowser(this.activeCommonBrowser);
         return { admission, adapter, store: ownerCanonicalHistory(storage, admission, adapter), skills,
           ...(execution?{execution}:{}),
-          sourceScope: { ...sourceScope, propose: async proposal => { await admission.assertCurrent(); if (this.env.COMMON_OWNER_TASKS === '1') throw Error('common source approval recovery unavailable'); await desk.proposeTaskSources(proposal); await admission.assertCurrent(); } },
+          sourceScope: { ...sourceScope, propose: async proposal => { await admission.assertCurrent(); if (this.commonActive()) throw Error('common source approval recovery unavailable'); await desk.proposeTaskSources(proposal); await admission.assertCurrent(); } },
           memoryRead: {principal_ref:admission.invocation.verified_authority.principal_ref,tenant_ref:admission.invocation.verified_authority.tenant_ref,store:commonOwnerMemory(memory)},
           forgetting: { principal_ref: admission.invocation.verified_authority.principal_ref, tenant_ref: admission.invocation.verified_authority.tenant_ref, store: memory } };
       } } : undefined, !this.canonicalPreparation && channel === 'telegram' ? { prepare: async (turn, contextOwnerId, scope) => {
@@ -2005,12 +2012,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const capability = createScopedCuratedSkillCapability(storage.sql, { owner: admission?.invocation.verified_authority.principal_ref ?? contextOwnerId, custodyKey: `telegram:${owner}`, turnId: turn.traceId,
           trigger: 'user_message', ownerText: turn.text, assertCurrent: assertSkillOwnerCurrent }, scope);
         const taskOwnerKey = await currentTaskOwnerKey();
-        const sourceScope = this.env.COMMON_OWNER_TASKS === '1' ? await this.commonTaskSourcesForTurn(turn, scope, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? [])) : createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
+        const sourceScope = this.commonActive() ? await this.commonTaskSourcesForTurn(turn, scope, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? [])) : createTaskSourceScope(storage.sql, taskOwnerKey, scope, async () => {
           await assertSkillOwnerCurrent();
           if (await currentTaskOwnerKey() !== taskOwnerKey) throw new ClosedRunError();
         }, { inputRef: turn.traceId, text: turn.text, quotedRanges: turn.sourceQuoteRanges }, ownerReadSources(storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? []));
         return Object.freeze({ ...capability, ...(admission ? { admission } : {}), sourceScope: { ...sourceScope, propose: async proposal => {
-          await assertSkillOwnerCurrent(); if (this.env.COMMON_OWNER_TASKS === '1') throw Error('common source approval recovery unavailable'); await desk.proposeTaskSources(proposal); await assertSkillOwnerCurrent();
+          await assertSkillOwnerCurrent(); if (this.commonActive()) throw Error('common source approval recovery unavailable'); await desk.proposeTaskSources(proposal); await assertSkillOwnerCurrent();
         } }, taskContext: async (assertSourceCurrent?: () => Promise<void>) => {
           await assertSkillOwnerCurrent();
           let receipts: Awaited<ReturnType<Awaited<ReturnType<typeof workspaceOwnerHost>>['recentWrites']>>;
