@@ -399,7 +399,7 @@ describe('gmail search + thread read (A1)', () => {
     const { messages } = (result as { data: { messages: { id: string; body: string; subject: string; quarantined?: readonly string[] }[] } }).data;
     expect(messages[0]!.body).toBe('Thursday works, 7pm.');
     expect(messages[1]!.quarantined).toEqual(['otp']);
-    expect(messages[1]!.body).toContain('[otp artifact');
+    expect(messages[1]!.body).toContain('[quarantined: otp artifact');
     expect(messages[1]!.subject).toBe('Sign in');
     expect(JSON.stringify(messages)).not.toContain('123456');
   });
