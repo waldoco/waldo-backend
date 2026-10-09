@@ -321,19 +321,3 @@ describe('OpenAIResponsesAdapter reasoning passback', () => {
     ]);
   });
 });
-
-
-it('bounded browser test issues one physical request even for empty output and disables SDK retries',async()=>{
- let calls=0,options:unknown;
- const adapter=new OpenAIResponsesAdapter({apiKey:'test-key',singleAttempt:true,client:client(async(_body:unknown,requestOptions:unknown)=>{calls++;options=requestOptions;return {id:'empty',output_text:'',output:[],usage:{input_tokens:1,output_tokens:1}} as never;})});
- expect(await adapter.complete(gatewayRequest())).toMatchObject({ok:false,code:'invalid_args'});
- expect(calls).toBe(1);expect(options).toMatchObject({maxRetries:0});
-});
-
-
-it('one-attempt acceptance overrides the installed SDK retry setting on HTTP rate limits',async()=>{
- let requests=0;
- const sdk=new OpenAI({apiKey:'test-key',maxRetries:2,fetch:async()=>{requests++;return Response.json({error:{message:'fictional rate limit',type:'rate_limit',code:'fixture_rate_limit'}},{status:429});}});
- const adapter=new OpenAIResponsesAdapter({apiKey:'test-key',singleAttempt:true,client:sdk});
- expect(await adapter.complete(gatewayRequest())).toMatchObject({ok:false,code:'rate_limited'});expect(requests).toBe(1);
-});

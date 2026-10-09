@@ -38,10 +38,3 @@ it('refuses a one-day envelope when the approved allocation window can cross bil
  value.spend.allocationDayCount = 2;
  expect(commonStagingRegistration(env(value))!.spend.allocationMicrousd).toBe(223334);
 });
-
-
-it('acceptance pins one exact owner and requires audited prior use with at most two runs/eight requests',()=>{
- const value=base(),a={doName:value.policy.doName,subject:value.policy.subject,directoryOwnerId:value.policy.directoryOwnerId,expiresAt:value.spend.validUntil,maxRuns:2,maxModelCalls:8,priorRuns:0,priorModelCalls:0,priorMicrousd:0};
- expect(commonStagingRegistration(env({...value,acceptance:a}))!.spend.acceptance).toMatchObject({maxRuns:2,maxModelCalls:8});
- for(const change of [{doName:'other'},{directoryOwnerId:'other'},{maxRuns:3},{maxModelCalls:9},{priorModelCalls:undefined},{priorMicrousd:-1},{expiresAt:a.expiresAt+1}])expect(()=>commonStagingRegistration(env({...value,acceptance:{...a,...change}}))).toThrow('acceptance registration invalid');
-});

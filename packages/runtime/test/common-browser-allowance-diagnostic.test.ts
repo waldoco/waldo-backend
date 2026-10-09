@@ -50,6 +50,12 @@ it('an absent registration is distinct from expired history and never hides olde
  const f=fixture();f.env.COMMON_BROWSER_REGISTRATION='';
  expect((await f.read()).browser).toMatchObject({status:'unregistered',registeredCapMicrousd:null,remainingCurrentPolicyMicrousd:null,aggregateRetainedReservedMicrousd:12});
 });
+it('normal public read reservations are included in read-only aggregate accounting without trial registration',async()=>{
+ const f=fixture();f.env.COMMON_BROWSER_REGISTRATION='';
+ f.rows.set('owner-public-browser-spend:v1',{ownerId:'prn_'+proof.owner.replaceAll('-',''),custodyDigest:proof.custody,reservedMicrousd:2090000,intents:['PRIVATE_INTENT']});
+ expect((await f.read()).browser).toMatchObject({status:'unregistered',normalPublicReadReservedMicrousd:2090000,normalPublicReadReservations:1,aggregateRetainedReservedMicrousd:2090012});
+ expect(f.writes).not.toHaveBeenCalled();
+});
 it('no executable provider is unverifiable even with an unexpired registered allowance',async()=>{
  const f=fixture();current(f);proof.providerReady=false;
  expect((await f.read()).browser).toMatchObject({status:'unverifiable',providerReady:false});expect(f.env.BROWSER.fetch).not.toHaveBeenCalled();expect(f.writes).not.toHaveBeenCalled();
@@ -61,12 +67,6 @@ it('retained allocation exhaustion is reported without resetting or dispatching'
 it.each(['directory_unlinked','physical_unlinked','final_revocation'])('%s suppresses browser allowance before publication',async kind=>{
  const f=fixture();if(kind==='directory_unlinked')proof.present=false;if(kind==='physical_unlinked')f.rows.set('telegram_unlinked',true);if(kind==='final_revocation')proof.revokeAt=2;
  expect((await f.read()).browser).toBeUndefined();expect(f.writes).not.toHaveBeenCalled();expect(f.env.BROWSER.fetch).not.toHaveBeenCalled();
-});
-it('registered prior test usage and retained gate counts are read without granting a fresh test',async()=>{
- const f=fixture();current(f);const acceptance={doName:f.raw.policy.doName,subject:f.raw.policy.subject,directoryOwnerId:proof.owner,expiresAt:f.raw.spend.validUntil,maxRuns:2,maxModelCalls:8,priorRuns:1,priorModelCalls:3,priorMicrousd:100};
- (f.raw as any).acceptance=acceptance;f.env.COMMON_BROWSER_REGISTRATION=JSON.stringify(f.raw);
- expect((await f.read()).browser).toMatchObject({status:'registered',remainingCurrentPolicyMicrousd:9999893,retainedTestGate:{remainingRuns:1,remainingModelCalls:5,registeredPriorMicrousd:100},externalPriorUse:'unknown'});
- expect(f.rows.has('common-browser-acceptance:PRIVATE_REF')).toBe(false);expect(f.writes).not.toHaveBeenCalled();
 });
 it('current automatic pin is checked against current owner and deployment without renewing it',async()=>{
  const f=fixture();const {doName,subject,directoryOwnerId,...policy}=f.raw.policy;
@@ -83,15 +83,4 @@ it('retained cleanup is summarized without exposing session identity or calling 
  const f=fixture();const ownerId='prn_'+proof.owner.replaceAll('-','');
  f.rows.set('common-browser:PRIVATE_TASK',{grant:{ownerId},cleanup:'pending',cleanupFailed:true,session:{id:'PRIVATE_SESSION',ownerId,provider:'cloudflare_playwright',providerSessionId:'PRIVATE_PROVIDER',contextHandle:null,mode:'public',state:'active',generation:1,expiresAt:Date.now()-1000,updatedAt:Date.now()}});
  const result=await f.read();expect(result.browser.retainedSessionCounts).toEqual({active:0,unresolved:0,pendingCleanup:0,failedCleanup:1,closed:0});expect(JSON.stringify(result)).not.toContain('PRIVATE');expect(f.env.BROWSER.fetch).not.toHaveBeenCalled();expect(f.writes).not.toHaveBeenCalled();
-});
-it.each(['rotated_ref','missing_capsule','changed_custody'])('retained acceptance %s cannot publish available allowance',async kind=>{
- const f=fixture();current(f);
- if(kind==='changed_custody') {
-  (f.raw as any).acceptance={doName:f.raw.policy.doName,subject:f.raw.policy.subject,directoryOwnerId:proof.owner,expiresAt:f.raw.spend.validUntil,maxRuns:2,maxModelCalls:8,priorRuns:0,priorModelCalls:0,priorMicrousd:0};
-  f.env.COMMON_BROWSER_REGISTRATION=JSON.stringify(f.raw);
- }
- f.rows.set(`common-browser-acceptance-custody:${kind==='rotated_ref'?'OTHER_REF':'PRIVATE_REF'}`,kind==='changed_custody'?'b'.repeat(64):proof.custody);
- const before=structuredClone([...f.rows]);
- expect((await f.read()).browser).toMatchObject({status:'conflict',remainingCurrentPolicyMicrousd:null,remainingRegisteredCapAfterAllRetainedRefsMicrousd:null});
- expect([...f.rows]).toEqual(before);expect(f.writes).not.toHaveBeenCalled();expect(f.env.BROWSER.fetch).not.toHaveBeenCalled();
 });

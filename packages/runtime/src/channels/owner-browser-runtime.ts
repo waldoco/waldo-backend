@@ -11,6 +11,8 @@ import { commonOwnerBrowserRegistration } from './common-owner-browser-registrat
 import type { LLMGatewayAdapter } from '../llm/provider';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import { workspaceOwnerHost, workspaceMetadata } from './workspace-host';
+import {cloudflarePublicRead,PUBLIC_READ_RESERVED_BROWSER_MS} from './cloudflare-public-read';
+import {reserveOwnerPublicBrowser} from './owner-public-browser-spend';
 
 // The browser task follows the authenticated owner run. It needs no topic classifier
 // or canonical execution activation; provider identity and budget stay in the DO.
@@ -106,6 +108,25 @@ export function ownerBrowserRuntime(options: Readonly<{
           // Browserbase remains an explicit choice. Cloudflare failure never switches providers.
           if(args.provider==='browserbase_stagehand_http_v3'&&args.session_handle)throw new ClosedRunError();
           if (args.provider === 'browserbase_stagehand_http_v3' || !args.provider && !args.session_handle && options.env.WALDO_ENVIRONMENT !== 'staging') return fallback.handle(args, { ...ctx, assertTaskSourceCurrent: assertCurrent });
+          // A normal fresh public read does not require a paid-test registration.
+          // Retained session handles still select their existing exact-session host.
+          if(!args.session_handle){
+            let retainedConfiguration;
+            try{retainedConfiguration=await selectedConfiguration();}catch{/* An expired trial is not normal public-read authority. */}
+            if(!retainedConfiguration){
+              const sdk=commonBrowserSdk();
+              if(options.env.WALDO_ENVIRONMENT!=='staging'||!options.env.BROWSER||!sdk)return {ok:false,code:'auth_failed',error:'The selected Cloudflare browser provider is unavailable.',source_taint:'external'};
+              const read=cloudflarePublicRead({binding:options.env.BROWSER,loadSdk:sdk,reserveAllocation:async()=>{
+                await assertCurrent();const owner=await assertOwner();await assertCurrent();
+                const ownerId=`prn_${owner.directoryOwnerId.toLowerCase().replaceAll('-','')}`;
+                if(ctx.authenticatedUserId!==ownerId&&ctx.authenticatedUserId!==owner.directoryOwnerId)throw new ClosedRunError();
+                const scope=options.activeScope()!;
+                const declaredLimitMicrousd=options.env.COMMON_BROWSER_REGISTRATION?JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.limitMicrousd:undefined;
+                reserveOwnerPublicBrowser({storage:options.storage,ownerId,custodyDigest:owner.custodyDigest,intent:`${scope.runId}:${scope.attempt}:${ctx.toolCallId}`,reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now:Date.now(),declaredLimitMicrousd,assertCurrent:()=>{scope.admit();if(options.activeScope()!==scope||options.storage.kv.get('telegram_unlinked')===true)throw new ClosedRunError();}});
+              }});
+              return read(args,{...ctx,assertTaskSourceCurrent:assertCurrent});
+            }
+          }
           const bound=await bindHost(ctx,args.session_handle);
           const result=await bound.active.host.handler.handle(args,bound.context);publishPointer();return result;
         } catch { return { ok: false, code: 'rejected', error: 'The browser owner or retained session is unavailable. No replacement was allocated.', source_taint: 'external' }; }
@@ -128,7 +149,7 @@ export function ownerBrowserRuntime(options: Readonly<{
     },
     gateway() {
       if (automatic.selected || automatic.hasRetained()) {
-        const gateway = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY!, singleAttempt: automatic.acceptanceSelected });
+        const gateway = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY! });
         let metered: Promise<LLMGatewayAdapter> | undefined;
         return { async complete(request) {
           const scope = options.activeScope(), supplied = request.runScope;
@@ -139,7 +160,7 @@ export function ownerBrowserRuntime(options: Readonly<{
           // record keeps funded model history metered after host reconstruction,
           // including uncertain/closed records; it never restarts physical ordinals.
           const holdsFunding = () => funded(scope);
-          if (!automatic.acceptanceSelected && !holdsFunding()) {
+          if (!holdsFunding()) {
             await assertOwner(); scope.admit();
             if (options.activeScope() !== scope) throw new ClosedRunError();
             // Allocation may have appeared while directory authority was pending.
@@ -156,31 +177,16 @@ export function ownerBrowserRuntime(options: Readonly<{
           return (await metered).complete(request);
         } } satisfies LLMGatewayAdapter;
       }
-      const manual=commonStagingRegistration(options.env);
-      const acceptanceSelected=!!manual?.spend.acceptance&&options.env.TELEGRAM_OWNER_DO?.idFromName(manual.policy.doName).toString()===options.actualDoId;
       const config = configuration();
-      if (!config?.meterGateway) {
-        const retained=['common-browser-acceptance:','common-browser-acceptance-custody:'].some(prefix=>[...options.storage.kv.list({prefix})].length>0);
-        return acceptanceSelected||retained?{async complete(){throw new ClosedRunError();}} satisfies LLMGatewayAdapter:undefined;
-      }
-      const base = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY!, singleAttempt: config.acceptanceEnabled });
+      if (!config?.meterGateway) return undefined;
+      const base = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY! });
       const metered = config?.meterGateway?.(base);
       if (!metered) return undefined;
       // Only a run that holds a browser allocation is metered. An expired or used-up registration denies browser allocations, never ordinary model calls.
       return new Proxy(base, { get(target, key) {
         if (key !== 'complete') { const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value; }
-        return (request: { runScope?: RunEffectScope; request?: {model?:string} }) => {
+        return (request: { runScope?: RunEffectScope }) => {
           const scope = request.runScope;
-          if(config.acceptanceEnabled){
-            const current=options.activeScope();
-            if(!scope||!current||scope.runId!==current.runId||scope.attempt!==current.attempt||scope.deadline!==current.deadline
-              ||scope.admit!==current.admit||scope.commit!==current.commit)throw new ClosedRunError();
-            scope.admit();if(request.request?.model!==WALDO_CHAT_MODEL)throw Error('browser acceptance model price unavailable');
-            // Hold the exact captured inbox capability through owner lookup and
-            // token/hash awaits; replacing the active run cannot revive it.
-            const guarded={...scope,admit:()=>{if(options.activeScope()!==current)throw new ClosedRunError();current.admit();}};
-            return metered.complete({...request,runScope:guarded} as never);
-          }
           return scope && funded(scope) ? metered.complete(request as never) : target.complete(request as never);
         };
       } });

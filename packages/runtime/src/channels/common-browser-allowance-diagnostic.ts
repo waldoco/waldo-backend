@@ -4,6 +4,9 @@ import { assertCommonPublicBrowserUsage } from './common-public-browser-configur
 import { COMMON_BROWSER_MONTH_CEILING_MICROUSD, commonStagingRegistration } from './common-staging-registration';
 import { cloudflareBrowserProviderReadiness } from './browser-public-read-configuration';
 import type { TelegramWebhookEnv } from './telegram-webhook';
+import {ownerPublicBrowserAccounting} from './owner-public-browser-spend';
+import {commonCloudflareWorstCaseEnvelope} from './common-staging-price-envelope';
+import {PUBLIC_READ_RESERVED_BROWSER_MS} from './cloudflare-public-read';
 
 type Status = 'registered' | 'expired' | 'conflict' | 'exhausted' | 'unregistered' | 'unverifiable';
 // Numbers describe retained reservations, never vendor reconciliation or approval.
@@ -17,6 +20,8 @@ export function commonBrowserAllowanceDiagnostic(options: Readonly<{
   registeredCapMicrousd: null as number | null,
   retainedReservedMicrousd: null as number | null,
   aggregateRetainedReservedMicrousd: null as number | null,
+  normalPublicReadReservedMicrousd:null as number|null,
+  normalPublicReadReservations:null as number|null,
   remainingCurrentPolicyMicrousd: null as number | null,
   remainingRegisteredCapAfterAllRetainedRefsMicrousd: null as number | null,
   retainedCallCount: null as number | null, remainingRegisteredCallSlots: null as number | null,
@@ -34,13 +39,15 @@ export function commonBrowserAllowanceDiagnostic(options: Readonly<{
   result.providerReady = cloudflareBrowserProviderReadiness(env);
   const ownerId = `prn_${owner.directoryOwnerId.toLowerCase().replaceAll('-', '')}`;
   const ledgers = [...storage.kv.list<any>({prefix:'common-spend:'})];
-  let aggregate = 0;
+  const normal=ownerPublicBrowserAccounting(storage,ownerId,owner.custodyDigest,commonCloudflareWorstCaseEnvelope(PUBLIC_READ_RESERVED_BROWSER_MS));
+  if(normal){result.normalPublicReadReservedMicrousd=normal.reservedMicrousd;result.normalPublicReadReservations=normal.intents.length;}
+  let aggregate = normal?.reservedMicrousd??0;
   for(const [key,row] of ledgers) {
    if(!row?.policy || row.policy.ownerId !== ownerId || key !== `common-spend:${row.policy.ref}`) throw Error('conflicting retained spend');
    aggregate += commonSpendReservation(storage,row.policy,()=>now,()=>{}).reserved();
    if(!Number.isSafeInteger(aggregate)) throw Error('conflicting retained total');
   }
-  if(ledgers.length) result.aggregateRetainedReservedMicrousd = aggregate;
+  if(ledgers.length||normal) result.aggregateRetainedReservedMicrousd = aggregate;
   for(const [,total] of storage.kv.list<number>({prefix:'common-public-browser-month:'})) {
    if(!Number.isSafeInteger(total) || total < 0 || total > COMMON_BROWSER_MONTH_CEILING_MICROUSD) throw Error('conflicting month');
   }
@@ -75,23 +82,14 @@ export function commonBrowserAllowanceDiagnostic(options: Readonly<{
   if(!registered || registered.policy.doName !== owner.doName || registered.policy.subject !== owner.subject
    || registered.policy.directoryOwnerId !== owner.directoryOwnerId) throw Error('conflicting registration owner');
   const {policy,spend}=registered;
-  // Retained test custody still blocks serving after ref rotation or capsule
-  // removal; a read-only diagnostic must not report that history as available.
-  for(const prefix of ['common-browser-acceptance:','common-browser-acceptance-custody:']) {
-   const expected=prefix+(prefix.endsWith('custody:')?policy.ref:spend.policy.ref);
-   if([...storage.kv.list({prefix})].some(([key])=>key!==expected)) throw Error('conflicting acceptance ref');
-  }
-  const testCustody=storage.kv.get<string>(`common-browser-acceptance-custody:${policy.ref}`);
-  if(testCustody !== undefined && (!spend.acceptance || testCustody !== owner.custodyDigest)) throw Error('conflicting acceptance custody');
   result.registeredCapMicrousd=spend.policy.limitMicrousd;
   const ledger=storage.kv.get<any>(`common-spend:${policy.ref}`);
   if(ledger) {
-   const retained=commonSpendReservation(storage,spend.policy,()=>now,()=>{},spend.acceptance);
-   const reserved=retained.reserved(), gate=retained.acceptanceRemaining();
-   if(gate) result.retainedTestGate={remainingRuns:gate.remainingRuns,remainingModelCalls:gate.remainingModelCalls,registeredPriorMicrousd:gate.priorMicrousd};
+   const retained=commonSpendReservation(storage,spend.policy,()=>now,()=>{});
+   const reserved=retained.reserved();
    result.retainedReservedMicrousd=reserved;
-   result.remainingCurrentPolicyMicrousd=Math.max(0,spend.policy.limitMicrousd-reserved-(gate?.priorMicrousd??0));
-   result.remainingRegisteredCapAfterAllRetainedRefsMicrousd=Math.max(0,spend.policy.limitMicrousd-aggregate-(gate?.priorMicrousd??0));
+   result.remainingCurrentPolicyMicrousd=Math.max(0,spend.policy.limitMicrousd-reserved);
+   result.remainingRegisteredCapAfterAllRetainedRefsMicrousd=Math.max(0,spend.policy.limitMicrousd-aggregate);
    result.retainedCallCount=ledger.calls.length;
    result.remainingRegisteredCallSlots=spend.policy.maxCalls-ledger.calls.length-ledger.cleanup.reduce((sum:number,item:any)=>sum+item.maxCalls,0);
   }
@@ -104,8 +102,7 @@ export function commonBrowserAllowanceDiagnostic(options: Readonly<{
    result.retainedReservedBrowserMs=usage.reservedBrowserMs;
    result.remainingRegisteredBrowserMs=policy.maxReservedBrowserMs-usage.reservedBrowserMs;
   }
-  result.status=now < policy.createdAt || now >= policy.expiresAt || now >= spend.policy.validUntil
-   || spend.acceptance && now >= spend.acceptance.expiresAt ? 'expired'
+  result.status=now < policy.createdAt || now >= policy.expiresAt || now >= spend.policy.validUntil ? 'expired'
    : result.remainingCurrentPolicyMicrousd === 0 || result.remainingRegisteredCapAfterAllRetainedRefsMicrousd === 0
    || result.retainedTestGate?.remainingRuns === 0 || result.retainedTestGate?.remainingModelCalls === 0
    || result.remainingRegisteredCallSlots === 0 || result.remainingRegisteredAllocations === 0
@@ -114,7 +111,7 @@ export function commonBrowserAllowanceDiagnostic(options: Readonly<{
   return result;
  } catch {
   // Invalid history cannot produce a plausible remaining allowance.
-  return {...result,status:'conflict' as Status,retainedReservedMicrousd:null,aggregateRetainedReservedMicrousd:null,
+  return {...result,status:'conflict' as Status,retainedReservedMicrousd:null,aggregateRetainedReservedMicrousd:null,normalPublicReadReservedMicrousd:null,normalPublicReadReservations:null,
    remainingCurrentPolicyMicrousd:null,remainingRegisteredCapAfterAllRetainedRefsMicrousd:null,
    retainedCallCount:null,remainingRegisteredCallSlots:null,retainedAllocations:null,remainingRegisteredAllocations:null,
    retainedReservedBrowserMs:null,remainingRegisteredBrowserMs:null,currentMonthReservedMicrousd:null,retainedSessionCounts:null,retainedTestGate:null};

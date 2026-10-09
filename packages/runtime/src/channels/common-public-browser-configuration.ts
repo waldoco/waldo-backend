@@ -1,4 +1,4 @@
-import {commonSpendCalls,commonSpendReservation,type CommonSpendPolicy,type CommonSpendQuote,type CommonBrowserAcceptance} from './common-spend-reservation';
+import {commonSpendCalls,commonSpendReservation,type CommonSpendPolicy,type CommonSpendQuote} from './common-spend-reservation';
 import type {LLMGatewayAdapter} from '../llm/provider';
 import type {BrowserWorker} from '@cloudflare/playwright';
 import {commonOwnerAuthority} from '../identity/common-owner-authority';
@@ -13,7 +13,7 @@ export type CommonPublicReadPolicy=Readonly<{
  ref:string;doName:string;subject:string;directoryOwnerId:string;createdAt:number;expiresAt:number;
  allowedOrigins:readonly string[];maxAllocations:number;maxReservedBrowserMs:number;lifetimeMs:number;maxScreenshotBytes:number;
 }>;
-export type CommonBrowserSpendRegistration=Readonly<{policy:CommonSpendPolicy;quote:CommonSpendQuote;allocationMicrousd:number;countModel?(material:unknown):Promise<number>;acceptance?:CommonBrowserAcceptance}>;
+export type CommonBrowserSpendRegistration=Readonly<{policy:CommonSpendPolicy;quote:CommonSpendQuote;allocationMicrousd:number;countModel?(material:unknown):Promise<number>}>;
 let registration:Readonly<{policy:CommonPublicReadPolicy;loadSdk:CloudflareBrowserSdkLoader;spend?:CommonBrowserSpendRegistration}>|undefined;
 export function configureCommonPublicBrowser(policy:CommonPublicReadPolicy,loadSdk:CloudflareBrowserSdkLoader,spend?:CommonBrowserSpendRegistration){
  if(registration)throw Error('common public browser already configured');
@@ -21,7 +21,7 @@ export function configureCommonPublicBrowser(policy:CommonPublicReadPolicy,loadS
 }
 const freezeSpend=(spend:CommonBrowserSpendRegistration):CommonBrowserSpendRegistration=>{
  if(!Number.isSafeInteger(spend.allocationMicrousd)||spend.allocationMicrousd<1||spend.quote('browser',null)!==0)throw Error('common allocation price registration invalid');
- return Object.freeze({policy:Object.freeze({...spend.policy}),quote:spend.quote,allocationMicrousd:spend.allocationMicrousd,countModel:spend.countModel,acceptance:spend.acceptance?Object.freeze({...spend.acceptance}):undefined});
+ return Object.freeze({policy:Object.freeze({...spend.policy}),quote:spend.quote,allocationMicrousd:spend.allocationMicrousd,countModel:spend.countModel});
 };
 const freezePolicy=(policy:CommonPublicReadPolicy):CommonPublicReadPolicy=>{
  const row={...policy,allowedOrigins:[...policy.allowedOrigins]};
@@ -39,7 +39,7 @@ export function assertCommonPublicBrowserUsage(retained:Usage,policy:CommonPubli
    ||new Set(retained.taskGrants.map(grant=>grant.taskId)).size!==retained.taskGrants.length
    ||retained.taskGrants.some(grant=>!grant||!grant.taskId||!Number.isSafeInteger(grant.expiresAt)||grant.expiresAt<=policy.createdAt||grant.expiresAt>policy.expiresAt||JSON.stringify(grant)!==JSON.stringify({ref:policy.ref,ownerId:`prn_${policy.directoryOwnerId.toLowerCase().replaceAll('-','')}`,taskId:grant.taskId,expiresAt:grant.expiresAt,allowedOrigins:policy.allowedOrigins,lifetimeMs:policy.lifetimeMs,maxScreenshotBytes:policy.maxScreenshotBytes})))throw Error('common public browser retained policy conflict');
 }
-export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramWebhookEnv;storage:DurableObjectStorage;actualDoId:string;policy?:CommonPublicReadPolicy;loadSdk?:CloudflareBrowserSdkLoader;spend?:CommonBrowserSpendRegistration;cleanupOnly?:boolean;now?:()=>number}>):(CommonBrowserConfiguration & Readonly<{ownerId:string;lifetimeMs:number;expiresAt:number;acceptanceEnabled:boolean}>)|undefined{
+export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramWebhookEnv;storage:DurableObjectStorage;actualDoId:string;policy?:CommonPublicReadPolicy;loadSdk?:CloudflareBrowserSdkLoader;spend?:CommonBrowserSpendRegistration;cleanupOnly?:boolean;now?:()=>number}>):(CommonBrowserConfiguration & Readonly<{ownerId:string;lifetimeMs:number;expiresAt:number}>)|undefined{
  const {env,storage,actualDoId}=options,selected=options.policy?{policy:options.policy,loadSdk:options.loadSdk,spend:options.spend}:registration;
  if(env.WALDO_ENVIRONMENT!=='staging'||!env.BROWSER||!selected?.loadSdk||!selected.spend)return undefined;
  const policy=freezePolicy(selected.policy),now=options.now??Date.now,directory=commonOwnerAuthority(env);
@@ -49,15 +49,7 @@ export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramW
  if(!options.cleanupOnly&&(storage.kv.get('do_name')!==policy.doName||storage.kv.get('telegram_subject')!==policy.subject))return undefined;
  const spend=freezeSpend(selected.spend);
  if(spend.policy.ownerId!==`prn_${policy.directoryOwnerId.toLowerCase().replaceAll('-','')}`||spend.policy.validUntil>policy.expiresAt)throw Error('common browser spend policy rejected');
- // Ref rotation cannot escape a retained owner-local paid-test obligation.
- if(!options.cleanupOnly){
-  for(const prefix of ['common-browser-acceptance:','common-browser-acceptance-custody:']){
-   const expected=prefix+(prefix.endsWith('custody:')?policy.ref:spend.policy.ref);
-   if([...storage.kv.list({prefix})].some(([key])=>key!==expected))throw Error('common browser acceptance ref requires reconciliation');
-  }
- }
- const ledger=commonSpendReservation(storage,spend.policy,now,()=>physical(),spend.acceptance);
- const acceptanceRetained=()=>!!storage.kv.get(`common-browser-acceptance:${spend.policy.ref}`)||!!storage.kv.get(`common-browser-acceptance-custody:${policy.ref}`);
+ const ledger=commonSpendReservation(storage,spend.policy,now,()=>physical());
  const calls=commonSpendCalls(ledger,(kind,request)=>{const bound=spend.quote(kind,request);if(kind==='browser'&&bound!==0)throw Error('common browser allocation price changed');return bound;},{countModel:spend.countModel?material=>spend.countModel!(material):undefined});
  const key=`common-public-browser-usage:${policy.ref}`;
  const physical=()=>{const at=now();if(!Number.isSafeInteger(at)||at<policy.createdAt||at>=policy.expiresAt||storage.kv.get('do_name')!==policy.doName||storage.kv.get('telegram_subject')!==policy.subject||storage.kv.get('telegram_unlinked')===true||env.TELEGRAM_OWNER_DO?.idFromName(policy.doName).toString()!==actualDoId)throw Error('common public browser policy unavailable');};
@@ -68,9 +60,9 @@ export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramW
   return retained;
  };
  const owner=async()=>{physical();const row=await directory.resolve('telegram',policy.subject,policy.doName);physical();if(!row||row.directoryOwnerId!==policy.directoryOwnerId.toLowerCase())throw Error('common public browser owner unavailable');return {ownerId:`prn_${row.directoryOwnerId.replaceAll('-','')}`,custodyDigest:row.custodyDigest};};
- const verify=async(grant:CommonBrowserGrant)=>{if(now()>=grant.expiresAt)throw Error('common public browser grant expired');const current=await owner();if(now()>=grant.expiresAt)throw Error('common public browser grant expired');if(current.ownerId!==grant.ownerId)throw Error('common public browser owner changed');const row=read();if(row.custodyDigest!==current.custodyDigest)throw Error('common public browser authority changed');if(!row.taskGrants.some(retained=>JSON.stringify(retained)===JSON.stringify(grant)))throw Error('common public browser grant changed');};
+ const verify=async(grant:CommonBrowserGrant)=>{const current=await owner();if(current.ownerId!==grant.ownerId)throw Error('common public browser owner changed');const row=read();if(row.custodyDigest!==current.custodyDigest)throw Error('common public browser authority changed');if(!row.taskGrants.some(retained=>JSON.stringify(retained)===JSON.stringify(grant)))throw Error('common public browser grant changed');};
  return {
-  ownerId:spend.policy.ownerId,acceptanceEnabled:!!spend.acceptance||acceptanceRetained(),
+  ownerId:spend.policy.ownerId,
   lifetimeMs:policy.lifetimeMs,expiresAt:policy.expiresAt,
   binding:{fetch:async()=>{throw Error('common browser operation identity unavailable');}} as BrowserWorker,loadSdk:selected.loadSdk,
   bindingForOperation:(grant,operationId)=>{
@@ -83,20 +75,7 @@ export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramW
    if(!retained||JSON.stringify(retained.grant)!==JSON.stringify(grant)||retained.session.providerSessionId!==id)throw Error('common cleanup custody unavailable');
    return calls.cleanupBinding(env.BROWSER as BrowserWorker,`browser-cleanup:${grant.taskId}`,id);
   },
-  meterGateway:(gateway:LLMGatewayAdapter)=>{
-   const metered=calls.gateway(gateway);
-   if(!spend.acceptance)return acceptanceRetained()?{async complete(){throw Error('common browser acceptance policy missing');}}:metered;
-   return {async complete(request){
-    request.runScope?.admit();const current=await owner();request.runScope?.admit();
-    storage.transactionSync(()=>{
-     physical();const custodyKey=`common-browser-acceptance-custody:${policy.ref}`;
-     const retained=storage.kv.get<string>(custodyKey);
-     if(retained&&retained!==current.custodyDigest)throw Error('common browser acceptance custody changed');
-     if(!retained)storage.kv.put(custodyKey,current.custodyDigest);
-    });
-    return metered.complete(request);
-   }};
-  },
+  meterGateway:(gateway:LLMGatewayAdapter)=>calls.gateway(gateway),
   grant:async(task,ownerId)=>{
    const current=await owner();
    if(!task.ready||!task.sources.some(source=>source==='browser'||source==='web')||current.ownerId!==ownerId)throw Error('common public browser source unavailable');

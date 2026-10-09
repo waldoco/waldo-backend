@@ -1,4 +1,3 @@
-import type {CommonBrowserAcceptance} from './common-spend-reservation';
 import {commonCloudflareWorstCaseEnvelope} from './common-staging-price-envelope';
 import type {CloudflareBrowserSdkLoader} from './public-fixture-browser';
 import type {CommonBrowserSpendRegistration,CommonPublicReadPolicy} from './common-public-browser-configuration';
@@ -29,20 +28,10 @@ export function commonStagingRegistration(env:Readonly<{WALDO_ENVIRONMENT?:strin
   const requiredDays=Math.ceil((lastReservedAt-policy.createdAt)/86400000)+1;
   if(spend.allocationDayCount<requiredDays)throw Error('common browser allocation day bound understated');
  }
- let acceptance:CommonBrowserAcceptance|undefined;
- if(raw.acceptance!==undefined){
-  const a=raw.acceptance;
-  if(!a||a.doName!==policy.doName||a.subject!==policy.subject||a.directoryOwnerId!==policy.directoryOwnerId
-    || ![a.expiresAt,a.maxRuns,a.maxModelCalls,a.priorRuns,a.priorModelCalls,a.priorMicrousd].every(Number.isSafeInteger)
-    || a.expiresAt<=policy.createdAt||a.expiresAt>spend.validUntil||a.maxRuns<1||a.maxRuns>2||a.maxModelCalls<1||a.maxModelCalls>8
-    || a.priorRuns<0||a.priorRuns>a.maxRuns||a.priorModelCalls<0||a.priorModelCalls>a.maxModelCalls||a.priorMicrousd<0||a.priorMicrousd>spend.limitMicrousd)
-    throw Error('common browser acceptance registration invalid');
-  acceptance=Object.freeze({expiresAt:a.expiresAt,maxRuns:a.maxRuns,maxModelCalls:a.maxModelCalls,priorRuns:a.priorRuns,priorModelCalls:a.priorModelCalls,priorMicrousd:a.priorMicrousd});
- }
  const allocationMicrousd=conservative?commonCloudflareWorstCaseEnvelope(policy.lifetimeMs*2):commonAllocationEnvelope({reservedBrowserMs:policy.lifetimeMs*2,allocationDayCount:spend.allocationDayCount,maxAllocations:policy.maxAllocations},billing!);
  if(allocationMicrousd*policy.maxAllocations>COMMON_BROWSER_MONTH_CEILING_MICROUSD||allocationMicrousd*policy.maxAllocations>spend.limitMicrousd)throw Error('common browser registration exceeds owner caps');
  return Object.freeze({policy,spend:Object.freeze({
   policy:Object.freeze({ref:policy.ref,ownerId:`prn_${policy.directoryOwnerId.toLowerCase().replaceAll('-','')}`,validUntil:spend.validUntil,limitMicrousd:spend.limitMicrousd,maxCalls:spend.maxCalls}),
   quote:(kind:'model'|'browser',request:unknown)=>kind==='browser'?0:commonStagingModelQuote(request),
-  allocationMicrousd,acceptance})});
+  allocationMicrousd})});
 }

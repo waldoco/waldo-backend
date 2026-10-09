@@ -7,6 +7,8 @@ import { browserBoundedJson } from './browser-bounded-body';
 import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
 
 export type CloudflarePageReader = (args: BrowsePageArgs, context: ToolDispatcherContext) => Promise<ToolResult<Readonly<{ url: string; provider: 'cloudflare_playwright'; data: { title: string; text: string } }>>>;
+// Existing 30s work, 10s cleanup and 10s provider idle expiry after disconnect.
+export const PUBLIC_READ_RESERVED_BROWSER_MS=50000;
 // Preserve the pinned Playwright request default while vetting each hop manually.
 const PLAYWRIGHT_REDIRECT_LIMIT = 20;
 class ProviderFailure extends Error {}
@@ -24,7 +26,7 @@ const failure = (code: 'rejected' | 'transient' | 'not_found', error: string) =>
 
 // Same public-read capability and source custody as browse_page. Each invocation
 // owns a fresh private session; no owner profile, credentials or fixture grants.
-export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader }>): CloudflarePageReader {
+export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; reserveAllocation?():Promise<void> }>): CloudflarePageReader {
   return async (args, context) => {
     const allowed = (url: string) => evaluateDeclaredEgress({ url }, EGRESS_TARGET_PATHS.browse_page!, context.egressAllowlist,
       { openPublic: context.egressAllowlist?.includes(OPEN_PUBLIC) === true }).ok;
@@ -64,6 +66,10 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
       const guard = cloudflareBrowserGuardOptions([target.hostname]);
       await admit();
       sdk = await bounded(options.loadSdk);
+      await admit();
+      // The existing 30s work +10s cleanup +10s idle window is reserved by the
+      // authenticated owner host before allocation. Uncertainty never refunds it.
+      if(options.reserveAllocation)await bounded(options.reserveAllocation);
       await admit();
       const session = await bounded(() => sdk!.acquire(binding, guard));
       if (typeof session?.sessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(session.sessionId)) throw Error('invalid provider session');
