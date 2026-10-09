@@ -142,7 +142,7 @@ describe('resolveRunLoopAdapters', () => {
   ])('uses the production Scribe and medical gate in every provider mode', async (adapters) => {
     const input = {
       payload: { hrv: 41 },
-      destination: 'internal_context' as const,
+      destination: 'send_message' as const,
       canary_tokens: ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb', 'cccccccccccccccc'],
       source_taint: null,
     };

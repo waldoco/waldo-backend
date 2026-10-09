@@ -1308,7 +1308,7 @@ describe('RuntimeLLMProvider', () => {
     });
   });
 
-  it('runs custom PreLLM hooks before terminal sanitisation and never sends injected health data', async () => {
+  it('runs custom PreLLM hooks before terminal sanitisation and never sends injected health data on an externally tainted request', async () => {
     const injectHealth: HookHandler<HookRuntimeContext> = {
       name: 'inject_health',
       event: 'PreLLMCall',
@@ -1347,7 +1347,7 @@ describe('RuntimeLLMProvider', () => {
           };
         },
       },
-      runtimeCtx(),
+      runtimeCtx({ sourceTaint: 'external' }),
     );
 
     expect(result).toMatchObject({

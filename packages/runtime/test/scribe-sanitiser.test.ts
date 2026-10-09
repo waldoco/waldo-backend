@@ -9,7 +9,9 @@ import { guardForOffload, sanitise, sanitiseVerifyOnly } from '../src/scribe/san
 
 const CANARIES = ['1111111111111111', '2222222222222222', '3333333333333333'] as const;
 
-function inspect(payload: SanitiseInput['payload'], destination: SanitiseDestination = 'internal_context') {
+// Default destination keeps the health denial. The owner-bound destinations (system prompt, internal
+// context, owner reply) allow the owner's own readings and are exercised with an explicit destination.
+function inspect(payload: SanitiseInput['payload'], destination: SanitiseDestination = 'send_message') {
   return sanitise({
     payload,
     destination,
@@ -111,15 +113,11 @@ const INCOMPLETE_DERIVED_HEALTH_VIEWS: SanitiseInput['payload'][] = [
 ];
 
 describe('Scribe sanitiser', () => {
-  it('denies a structured raw health measurement', () => {
-    expect(
-      sanitise({
-        payload: { metric: 'hrv', measurement: 58, unit: 'ms' },
-        destination: 'internal_context',
-        canary_tokens: [...CANARIES],
-        source_taint: null,
-      }),
-    ).toEqual({ ok: false, check: 'health_value', reason: 'health_value_leak' });
+  it('denies a structured raw health measurement at egress and for external content, and allows it for the owner at model destinations', () => {
+    const payload = { metric: 'hrv', measurement: 58, unit: 'ms' };
+    expect(inspect(payload, 'send_message')).toEqual({ ok: false, check: 'health_value', reason: 'health_value_leak' });
+    expect(inspectExternal(payload, 'internal_context')).toEqual({ ok: false, check: 'health_value', reason: 'health_value_leak' });
+    expect(inspect(payload, 'internal_context')).toMatchObject({ ok: true, source_taint: null });
   });
 
   it.each([
@@ -222,7 +220,7 @@ describe('Scribe sanitiser', () => {
   // recovery and weight. Bare strings fail internal_context shape policy for unrelated reasons,
   // so the persistence pin wraps the sentence the way run context carries it.
   it.each(CATEGORICAL_FREE_TEXT_HEALTH)('allows owner conversation categorical health text: %j', (payload) => {
-    expect(inspect({ note: payload })).toEqual({
+    expect(inspect({ note: payload }, 'internal_context')).toEqual({
       ok: true,
       payload: { note: payload },
       source_taint: null,
@@ -473,7 +471,7 @@ describe('Scribe sanitiser', () => {
   });
 
   it.each(HEALTH_FREE_TEXT_FORMS)('allows owner conversation health free-text at internal_context: %s', (payload) => {
-    expect(inspect({ note: payload })).toEqual({
+    expect(inspect({ note: payload }, 'internal_context')).toEqual({
       ok: true,
       payload: { note: payload },
       source_taint: null,
@@ -511,8 +509,9 @@ describe('Scribe sanitiser', () => {
     expect(inspectExternal(payload, 'owner_reply')).toMatchObject({ ok: false, check: 'health_value' });
   });
 
-  it('still denies structured health correlation on the owner channel', () => {
-    expect(inspect({ ...VIEW }, 'owner_reply')).toMatchObject({ ok: false, check: 'health_value' });
+  it('allows structured health at a model destination for the owner and denies it for external content', () => {
+    expect(inspect({ ...VIEW }, 'internal_context')).toMatchObject({ ok: true });
+    expect(inspectExternal({ metric: 'hrv', measurement: 58, unit: 'ms' }, 'internal_context')).toMatchObject({ ok: false, check: 'health_value' });
   });
 
   it.each(HEALTH_FREE_TEXT_FORMS)('still denies owner health free-text at egress: %s', (payload) => {
@@ -540,7 +539,7 @@ describe('Scribe sanitiser', () => {
   );
 
   it.each(ENCODED_HEALTH_FREE_TEXT)('allows encoded owner conversation health text at internal_context: %s', (payload) => {
-    expect(inspect({ note: payload })).toEqual({
+    expect(inspect({ note: payload }, 'internal_context')).toEqual({
       ok: true,
       payload: { note: payload },
       source_taint: null,
@@ -620,7 +619,7 @@ describe('Scribe sanitiser', () => {
     expect(
       inspect({ ...VIEW, destination_eligibility: ['r2_baselines_summary'] }, 'r2_summary'),
     ).toMatchObject({ ok: true });
-    expect(inspect({ ...VIEW, provenance_refs: [] }, 'internal_context')).toEqual({
+    expect(inspect({ ...VIEW, provenance_refs: [] }, 'audit_log')).toEqual({
       ok: false,
       check: 'health_value',
       reason: 'health_value_leak',
@@ -635,7 +634,7 @@ describe('Scribe sanitiser', () => {
   });
 
   it.each(INCOMPLETE_DERIVED_HEALTH_VIEWS)('denies an incomplete derived-health view: %j', (payload) => {
-    expect(inspect(payload, 'internal_context')).toMatchObject({
+    expect(inspect(payload, 'audit_log')).toMatchObject({
       ok: false,
       check: 'health_value',
     });
@@ -709,8 +708,6 @@ describe('Scribe sanitiser', () => {
 
   it.each([
     'memory_block',
-    'system_prompt',
-    'internal_context',
     'draft_document',
     'draft_email',
     'send_message',
@@ -729,8 +726,6 @@ describe('Scribe sanitiser', () => {
 
   it.each([
     'memory_block',
-    'system_prompt',
-    'internal_context',
     'draft_document',
     'draft_email',
     'send_message',
@@ -1299,7 +1294,7 @@ describe('issue #152 - malformed percent escapes are plain text, not a payload d
     // is unchanged, so a nested-encoded canary at the same size is still caught.
     const filler = 'ordinary calendar and conversation text. '.repeat(500); // ~20k chars
     const benignNested = btoa(btoa('see you at the venue'));
-    expect(inspect([{ role: 'user', content: `${filler} token ${benignNested}` }])).toMatchObject({ ok: true });
+    expect(inspect([{ role: 'user', content: `${filler} token ${benignNested}` }], 'internal_context')).toMatchObject({ ok: true });
     const canaryNested = btoa(btoa(`token ${CANARIES[0]}`));
     const denied = inspect([{ role: 'user', content: `${filler} token ${canaryNested}` }]);
     expect(denied).toMatchObject({ ok: false, reason: 'canary_leak' });
@@ -1389,9 +1384,10 @@ describe('sanitiseVerifyOnly (assembled provider prompt final pass)', () => {
     });
   });
 
-  it('still denies structured health correlation in the assembled prompt at null taint', () => {
-    const result = verify(JSON.stringify({ metric: 'hrv', measurement: 58, unit: 'ms' }));
-    expect(result).toEqual({
+  it('allows structured health in the assembled prompt at null taint and denies it for external taint', () => {
+    const payload = JSON.stringify({ metric: 'hrv', measurement: 58, unit: 'ms' });
+    expect(verify(payload)).toMatchObject({ ok: true });
+    expect(verify(payload, 'external')).toEqual({
       ok: false,
       check: 'health_value',
       reason: 'health_value_leak',
