@@ -72,6 +72,14 @@ describe('app sign-in and main chat routes', () => {
     expect(forwards[0]!.headers.get('x-waldo-do-name')).toBe('owner-1');
     expect(new URL(forwards[0]!.url).pathname).toBe('/app/v1/chat/main/messages');
   });
+  it('rate limits chat sends per owner and fails closed without the limiter', async () => {
+    const auth = fakeAuth().auth;
+    const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
+    const send = () => post('/app/v1/chat/main/messages', { client_message_id: 'client-msg-0001', text: 'hi' }, { authorization: `Bearer ${CREDENTIAL}` });
+    expect((await handleApp(send(), limited, auth))!.status).toBe(429);
+    const absent = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: undefined } as never;
+    expect((await handleApp(send(), absent, auth))!.status).toBe(503);
+  });
   it('rate limits sign-in attempts', async () => {
     const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
     const response = await handleApp(post('/app/v1/auth/code', { email: 'member@example.test' }), limited, fakeAuth().auth);
