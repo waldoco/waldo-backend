@@ -201,7 +201,7 @@ export function ownerBrowserRuntime(options: Readonly<{
         if (key !== 'complete') { const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value; }
         return (request: { runScope?: RunEffectScope }) => {
           const scope = request.runScope;
-          return scope && funded(scope)&&config.expiresAt>Date.now() ? metered.complete(request as never) : target.complete(request as never);
+          return scope && funded(scope)&&config.expiresAt>Date.now()&&(!manual||manual.spend.policy.validUntil>Date.now()) ? metered.complete(request as never) : target.complete(request as never);
         };
       } });
     },
