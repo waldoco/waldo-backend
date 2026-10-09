@@ -615,3 +615,7 @@ A fresh staging Cloudflare public read uses the existing reader without requirin
 
 - [ ] Ordinary interactive requests select `retain_session` through the published model schema and dispatcher, receive DOM/native AX/PNG, continue beyond four observations and across an owner reply, then prove exact-session absence before settling duration. Read-only requests keep one-shot cleanup. Bound image history independently of actions; separate provider inactivity from the real admitted task deadline. Preserve existing charges and ceilings without issuing/refilling trial authority.
 - [ ] Malformed or duplicate provider session IDs cannot certify absence. Lost connections invalidate old refs and disclose recreated document state; wrong/expired handles or changed owner custody never allocate a replacement or replay an effect.
+
+### Local released-daemon acceptance
+
+- [ ] A local compute fixture must request a compatibility date supported by its pinned workerd before claiming real execution. The Computer 0.5.0 CSV-to-report/SQLite-reopen fixture first failed startup at 2026-10-07 with local maximum 2026-07-02; after correcting only the test date it executed Linux, returned the exact $229.50 report, reopened SQLite without command replay and verified Docker container absence. Do not count startup failure, missing-daemon skips or transport doubles as real daemon proof.

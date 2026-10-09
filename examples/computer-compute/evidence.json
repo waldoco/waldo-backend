@@ -12,7 +12,18 @@
     "example_types": "PASS",
     "runtime_worker_types": "PASS",
     "runtime_integration_types": "PASS",
-    "real_daemon_journey": "NOT_RUN",
+    "real_daemon_journey": {
+      "status": "PASS",
+      "fixture": "packages/runtime/test/computer-daemon.test.ts",
+      "tests_passed": 1,
+      "test_seconds": 1.22,
+      "total_seconds": 1.87,
+      "stdout": "linux",
+      "exit_code": 0,
+      "report_text": "# Order report\n\nLine items: 3\n\nTotal: $229.50\n",
+      "sqlite_reopen": "PASS: released Workspace reopened pulled report from real workerd SQLite without reissuing command",
+      "transport": "actual released TestBackend and Docker computerd; native ContainerBackend lifecycle remains a fixture"
+    },
     "native_provider_lifecycle": "NOT_RUN",
     "live_delivery": "NOT_RUN",
     "daemon_fixture_worker_types": "PASS",
@@ -22,13 +33,29 @@
       "verdict": "TRIAL_ONLY; no additional source blockers; general resource-management gap acknowledged",
       "independent_adapter_tests_passed": 10
     },
-    "existing_compute_regression_tests_passed": 35
+    "existing_compute_regression_tests_passed": 35,
+    "local_image_build": {
+      "status": "PASS",
+      "daemon_backend": "shim (FUSE_MOUNT=auto)",
+      "platform": "linux/amd64",
+      "image_config": "sha256:83fc3cc034f5e754f6c7f583490227ec625455e0e6e191bde503ef6797b72d1e",
+      "linux_image_manifest": "sha256:dc3073b37958e894e67ad2becaf5e8985bb282c2043ad1825317b83e3dc67fa5"
+    },
+    "local_container_cleanup": "PASS: docker rm then docker ps absence check",
+    "local_compatibility_date": {
+      "rejected": "2026-10-07",
+      "installed_workerd_max": "2026-07-02",
+      "fixture_corrected": "2026-07-02",
+      "provider_configuration_changed": false
+    },
+    "latest_independent_review": "PENDING for local fixture date/proof helper"
   },
   "blocked": {
-    "local_docker": "automatic approval review timed out twice; sandbox Docker socket permission denied",
+    "local_docker": "RESOLVED: normal scoped approval succeeded; no sandbox bypass",
     "docker_action": "docker build --platform linux/amd64 -t waldo-computer-trial:local examples/computer-compute",
     "approval_review": "Two deadlines; no stated safety reason",
-    "sandbox": "Docker socket permission denied"
+    "sandbox": "Docker socket permission denied",
+    "history": "Prior two approval-review deadlines and sandbox Docker socket denial remain historical; no safety rejection reason was stated"
   },
   "spend": 0,
   "deployment": false,
@@ -36,7 +63,7 @@
   "default_provider_changed": false,
   "resource_management": {
     "general_arbitrary_command_bounds": "NOT_PROVEN",
-    "controlled_synthetic_acceptance": "NOT_PREVENTED_BY_QUOTA_GAPS; pending Docker access"
+    "controlled_synthetic_acceptance": "PASS; not a general arbitrary-command quota proof"
   },
   "private_data_inspection": {
     "changed_files": 16,

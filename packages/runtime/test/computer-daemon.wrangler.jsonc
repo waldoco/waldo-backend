@@ -1,7 +1,7 @@
 {
   "name": "waldo-computer-daemon-local-test",
   "main": "./computer-daemon-worker.ts",
-  "compatibility_date": "2026-10-07",
+  "compatibility_date": "2026-07-02",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "durable_objects": {

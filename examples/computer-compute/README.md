@@ -1,36 +1,46 @@
 # Computer 0.5.0 compute trial
 
-This isolated, nondefault source proposal replaces only the Linux execution backend. It retains the existing owner compute RPC, owner/operation identity claim, durable journal, recover and cancel semantics. No OwnerDO routing or default provider configuration changes. Core must review integration separately.
+The fixed local acceptance journey passes against the real official Computer 0.5.0 Linux daemon: synthetic CSV produces a $229.50 Markdown report, stdout is `linux`, exit is zero, and the pulled report reopens from real workerd SQLite without rerunning the command. The test passed in 1.22 seconds; Docker container absence was verified after cleanup. See `evidence.json` and `packages/runtime/test/computer-daemon.test.ts`.
 
-The implementation pins `@cloudflare/computer` to 0.5.0 and the official released daemon image to a registry digest. `ComputerContainerExecutor` copies only selected revision bytes into a task-owned SQLite Workspace, runs quoted argv on ContainerBackend, requires complete pull with no skipped files, rejects symlink output ancestors, and reads only the declared output. Existing workspace authority, R2 compare-and-swap receipts, renderer and private channel delivery remain above this interface.
+This isolated, nondefault source proposal replaces only the Linux execution backend. It retains owner compute RPC, owner/operation identity, durable journal, recover and cancel semantics. No OwnerDO routing or default provider configuration changes. Existing owner workspace authority, R2 compare-and-swap receipts, renderer and private channel delivery remain above this interface.
 
-Limits enforced at the adapter: 32 input files, 256 KiB total input, 256 KiB maximum exported file, 64 argv entries, 30 seconds, 16 KiB combined diagnostic output. Network egress is disabled and restart attempts are zero. There is no automatic owner credential injection. The SDK creates its own daemon RPC transport capability; that capability is internal service authentication, not an owner credential.
+The package is pinned to `@cloudflare/computer@0.5.0`, with official daemon release digest `sha256:eb942ccd44cc259d68ece8fbdf59795d4451c893592d5ea1d8e0fd5cb963d547`. `ComputerContainerExecutor` copies selected revision bytes into a task-owned SQLite Workspace, runs quoted argv through the configured backend, requires complete pull with no skipped files, rejects symlink output ancestors and reads only the declared output.
 
-These limits are not a provider-wide quota guarantee. SDK output:false still retains internal output; streaming and result() are mutually exclusive. Full filesystem sync, daemon replay buffers and scratch growth are not adapter-bounded. A malicious command can exhaust those internal resources before the stream limiter reacts. These are general resource-management gaps for arbitrary or adversarial commands; they do not prevent attempting the small, fixed synthetic CSV acceptance journey with the official daemon. The journey writes one short report and a small diagnostic line. Demonstrating that journey does not require solving every quota first, and passing it would not establish general quota enforcement. Default adoption still needs measured resource bounds.
+The adapter bounds 32 input files, 256 KiB total input, 256 KiB exported file, 64 argv entries, 30 seconds and 16 KiB combined diagnostics. Native ContainerBackend configuration disables network egress and retries. No owner credentials are injected; the SDK creates an internal daemon RPC transport capability. Native container destruction, a persistent 35-second DO alarm and an image timeout provide teardown. Workspace.close is not VM destruction. Startup is fenced before and after awaiting launch; recover reads the durable receipt and never issues another command.
 
-Native container destruction, a persistent 35-second DO alarm and an image timeout provide independent teardown. Workspace.close does not destroy the VM. Start/restart are fenced before and after awaiting startup to kill late starts after cancellation. Recover reads the existing durable operation receipt and never opens Workspace or issues another command. Unknown interrupted commands remain pending rather than replaying.
+SDK output retention, daemon replay buffers, scratch growth and full filesystem sync are not adapter-bounded. These are general resource-management gaps for arbitrary/adversarial commands. They did not prevent the fixed small acceptance test, and solving every quota is not a prerequisite to demonstrating the official daemon. The passing synthetic journey does not prove general quotas; default adoption requires measured resource bounds.
 
-Run from packages/runtime:
+## Proof layers
 
+- Actual: official pinned image built locally; Linux computerd selected its userspace shim; released Workspace/TestBackend executed CSV-to-report, pulled and bounded-read the report, then reopened real workerd SQLite storage. One real-daemon test passed. The daemon's own transient memory store is separate from the durable Workspace SQLite file store tested by reopening.
+- Actual local cleanup: shell removed the Docker container and checked absence with docker ps. No host directories were mounted, no secrets forwarded, and the published listener was loopback only. Docker used 512 MiB memory, one CPU and 128 process limits.
+- Contract tests: 10 adapter tests passed, including cancellation, skipped/incomplete sync, log/file bounds and symlink rejection. Existing compute regression tests passed 35/35. Worker, integration and standalone example typechecks passed.
+- Still unverified: native Cloudflare ContainerBackend/provider lifecycle, native egress controls, live owner R2/channel delivery, and PDF rendering on this Computer-backed journey. The local daemon fixture counts native destroy through a labelled double; Docker cleanup is verified separately. No deployment, provider calls/spend, access grants, secret changes, image publication or default activation occurred. PR973 is unchanged.
+
+## Reproduce locally
+
+From the repository root, with local Docker Desktop access approved:
+
+```sh
+bash examples/computer-compute/local-daemon-proof.sh
 ```
+
+The helper builds the pinned images, starts a loopback-only daemon, requires a successful health probe, invokes the fixed fixture and always removes/checks the container. Its image-level 35-second watchdog applies to the daemon. The local TestBackend fixture uses no daemon RPC secret and must never be exposed publicly.
+
+Alternatively, while a loopback daemon is alive, from packages/runtime:
+
+```sh
+COMPUTERD_HARNESS_URL=http://127.0.0.1:8080 pnpm exec vitest run --config vitest.computer-daemon.config.ts
 pnpm exec tsc --noEmit -p tsconfig.computer-compute-example.json
 pnpm exec vitest run --config vitest.computer-compute.config.ts
 ```
 
-Evidence so far: released package installed from the official npm registry; daemon manifest digest resolved from official GHCR; standalone example TypeScript compilation passes; 10 adapter contract tests pass using labelled Workspace/transport doubles. Actual daemon journey and hosted native Container lifecycle remain unverified. No deployment, provider execution, access grant, secret change or Cloudflare spend has occurred. A local Docker image build is a separate proof layer and must not be described as hosted Container proof. Both escalated build attempts stopped at automatic approval-review deadlines; a sandboxed attempt failed with Docker socket permission denied. No image was built or command executed. Runtime worker and integration TypeScript checks also pass.
+The URL is required; missing URL fails instead of silently skipping. The fixture compatibility date is `2026-07-02`, supported by the pinned local workerd. The initial `2026-10-07` date failed runtime startup before tests; only the local test fixture date was corrected. Production proposal configuration was not changed.
 
-The actual-daemon fixture lives in `packages/runtime/test/computer-daemon.test.ts`. It uses released Workspace/TestBackend and real workerd SQLite; its Docker lifecycle remains an explicit fixture, and it does not prove native provider authentication, egress controls, PDF rendering or channel delivery. Worker TypeScript covers the fixture; the missing-URL configuration guard was observed to fail as expected. Execution still requires a local daemon.
+## Approval history and review
 
-Build the image from the repository root with `docker build --platform linux/amd64 -t waldo-computer-trial:local examples/computer-compute`. Start it with a loopback-only published port, for example `docker run --rm --platform linux/amd64 -p 127.0.0.1:8080:8080 waldo-computer-trial:local`, and while it is alive run from packages/runtime:
+The original blocked action was `docker build --platform linux/amd64 -t waldo-computer-trial:local examples/computer-compute`. Two escalated requests hit automatic approval-review deadlines, with no stated safety rejection reason. A sandboxed invocation then reported Docker socket permission denied. No sandbox retry or bypass followed. Later normal scoped approval allowed local build/test/cleanup; the first runtime attempt exposed the fixture date mismatch, and approved continuation passed after correction.
 
-```
-COMPUTERD_HARNESS_URL=http://127.0.0.1:8080 pnpm exec vitest run --config vitest.computer-daemon.config.ts
-```
+The approved scope was local Docker Desktop socket access, official GHCR/Docker Hub downloads, local image/cache writes and the fixed synthetic test. Docker is a privileged host interface; the helper requests no host mounts, secret forwarding, public listener, image push, deployment or Cloudflare execution.
 
-The image's 35-second watchdog applies to the daemon. The shell operator must remove the local container after testing. The TestBackend fixture uses no daemon RPC secret and is restricted to loopback; it must never be exposed publicly.
-
-Independent source review completed at `3930c45b3778e23e95aa8c75c728227c0b3182e8`, with 10 adapter tests independently passing and no additional source blockers within scope. The existing compute regression suite also passed all 35 tests. Review concluded trial-only, with the documented resource-management gap. This later checkpoint changes documentation and evidence only.
-
-Docker blocker details: the exact action was `docker build --platform linux/amd64 -t waldo-computer-trial:local examples/computer-compute` from this worktree. Both `require_escalated` requests returned “The automatic permission approval review did not finish before its deadline.” This is a review timeout, with no stated safety rejection reason. The sandboxed invocation returned “permission denied while trying to connect to the docker API at unix:///Users/shivanshfulper/.docker/run/docker.sock”. That is a filesystem/socket denial. No Docker retry or alternate access path followed that denial.
-
-Required scope for that blocked action is local Docker Desktop daemon/socket access plus official GHCR and Docker Hub image downloads to build one local image. Expected effects are image/cache disk writes and local CPU/network use. Docker daemon access is a privileged host interface, so approval should be limited to the specific local build/test actions, with no host directory mounts, credential forwarding, public listener, image push, deployment, or Cloudflare execution. The synthetic daemon acceptance test is a later separate local action; it should bind only loopback and clean up its container.
+Independent source review at `3930c45b3778e23e95aa8c75c728227c0b3182e8` found no additional source blockers within scope and independently passed all 10 adapter tests. Its verdict was trial-only with the documented general resource gap. The execution adapter and native worker remain unchanged; this checkpoint corrects only the local fixture date and adds reproducible proof/evidence.
