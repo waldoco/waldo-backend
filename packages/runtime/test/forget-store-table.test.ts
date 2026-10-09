@@ -33,6 +33,8 @@ const TABLES: Record<string, Row> = {
   // Per-device transport custody contains no owner-authored text or full heartbeat payloads.
   nonces: exempt('per-device random replay nonces and expiry times; revoke removes the isolated device store'),
   meta: exempt('per-device schema version, socket generation, heartbeat time and revoke fence'),
+  commands: gap('per-device owner-requested notification wire text until result/expiry/cancellation; isolated device custody, literal owner forget does not reach it; revoke clears storage after replay horizon'),
+  notify_issues: exempt('per-device notification identifiers and issuance times only'),
   frames: exempt('per-device logical fingerprints, protocol type, identifiers and time; no full frame or answer text'),
   // Operational: counters, flags, hashes, leases, ids, times
   class_state: exempt('counts and times per push class'), daily_push_budget: exempt('counts per day'), event_cooldowns: exempt('event id and time'),

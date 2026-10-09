@@ -1,3 +1,4 @@
+import { DeviceCommandStore, type CommandInput, type CommandSummary, type EnqueueResult } from './command-store';
 import { DurableObject } from 'cloudflare:workers';
 import { armAlarm } from '../scheduler/alarm-slot';
 import { canonicalJson, parseStrictJson } from './canonical-json';
@@ -7,8 +8,8 @@ import { deviceDirectory, type DeviceAuth } from './device-directory';
 import { deviceDiagnostic, genericReject } from './generic-reject';
 import { httpSigningFields } from './redeem-route';
 import { frameSignatureBase, httpSignatureBase, sha256Hex, verifyEd25519 } from './signing';
-import { connectDeclaration, heartbeatFrame, identifier, record } from './wire';
-type Binding = DeviceAuth & { device_id: string; declared_capabilities: string[]; last_heartbeat_at: number | null; generation: string };
+import { ackFrame, resultFrame, connectDeclaration, heartbeatFrame, identifier, record } from './wire';
+type Binding = DeviceAuth & { device_id: string; declared_capabilities: string[]; last_heartbeat_at: number | null; generation: string; outbox_depth?: number | null };
 export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
   constructor(ctx: DurableObjectState, env: DeviceBridgeEnv) {
     super(ctx, env);
@@ -17,6 +18,7 @@ export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
       ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)');
       ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS frames(message_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, type TEXT NOT NULL, command_id TEXT, revision INTEGER, idempotency_key TEXT, created_at INTEGER NOT NULL)');
       ctx.storage.sql.exec("INSERT OR IGNORE INTO meta(key,value) VALUES('schema_version','1')");
+      new DeviceCommandStore(ctx.storage);
     });
   }
   private revoked(): boolean { return this.ctx.storage.sql.exec("SELECT value FROM meta WHERE key='revoked'").toArray().length > 0; }
@@ -67,35 +69,85 @@ export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
       if (this.revoked() || socket.readyState !== WebSocket.OPEN || typeof data !== 'string') throw new Error('invalid_shape');
       const bytes = new TextEncoder().encode(data);
       if (bytes.length > FRAME_BYTES) throw new Error('invalid_shape');
-      const parsed = parseStrictJson(bytes, true), frame = heartbeatFrame(parsed);
+      const parsed = parseStrictJson(bytes, true), frame = heartbeatFrame(parsed) ?? ackFrame(parsed) ?? resultFrame(parsed);
       const binding = socket.deserializeAttachment() as Binding;
       if (record(parsed) && parsed.contract_version !== CONTRACT_VERSION) { deviceDiagnostic('version_mismatch'); socket.close(1008); return; }
-      if (!frame || !binding || !this.active(socket, binding) || frame.device_id !== binding.device_id || frame.owner_id !== binding.owner_id || Math.abs(Math.floor(Date.now() / 1000) - frame.timestamp) > CLOCK_SKEW_SECONDS || frame.payload.declared_capabilities.join(',') !== binding.declared_capabilities.join(',')) throw new Error('invalid_shape');
+      if (!frame || !binding || !this.active(socket, binding) || frame.device_id !== binding.device_id || frame.owner_id !== binding.owner_id || Math.abs(Math.floor(Date.now() / 1000) - frame.timestamp) > CLOCK_SKEW_SECONDS || (frame.type === 'heartbeat' && frame.payload.declared_capabilities.join(',') !== binding.declared_capabilities.join(','))) throw new Error('invalid_shape');
       const { signature, ...unsigned } = frame;
       const base = frameSignatureBase(frame.timestamp, frame.type, frame.message_id, frame.nonce, await sha256Hex(new TextEncoder().encode(canonicalJson(unsigned))));
       if (!await verifyEd25519(binding.pubkey, signature, base) || !this.active(socket, binding)) throw new Error('invalid_shape');
       const { timestamp: _timestamp, nonce: _nonce, ...logical } = unsigned;
       const fingerprint = await sha256Hex(new TextEncoder().encode(canonicalJson(logical)));
+      // Deleted principals cannot publish results, consume new commands or revive stale transport.
+      const principal = await deviceDirectory(this.env).deviceForAuth(binding.device_id);
+      if (!principal || principal.owner_id !== binding.owner_id || principal.pubkey !== binding.pubkey || !this.active(socket, binding)) { socket.close(1008); return; }
+      let receipt: unknown;
       const admitted = this.ctx.storage.transactionSync(() => {
         if (!this.active(socket, binding) || !this.admitNonce(frame.nonce, frame.timestamp)) return false;
         const previous = this.ctx.storage.sql.exec('SELECT fingerprint FROM frames WHERE message_id=?', frame.message_id).toArray()[0]?.fingerprint;
-        if (previous !== undefined) return previous === fingerprint;
+        if (previous !== undefined && previous !== fingerprint) return false;
         // Bound durable identity custody without evicting evidence that could permit conflicts.
-        if (Number(this.ctx.storage.sql.exec('SELECT count(*) AS count FROM frames').one().count) >= MAX_DEVICE_FRAME_FINGERPRINTS) return false;
-        this.ctx.storage.sql.exec('INSERT INTO frames(message_id,fingerprint,type,created_at) VALUES(?,?,?,?)', frame.message_id, fingerprint, frame.type, Math.floor(Date.now() / 1000));
+        if (previous === undefined && Number(this.ctx.storage.sql.exec('SELECT count(*) AS count FROM frames').one().count) >= MAX_DEVICE_FRAME_FINGERPRINTS) return false;
+        const commands = new DeviceCommandStore(this.ctx.storage);
+        if (frame.type === 'ack') commands.acceptAck(frame);
+        if (frame.type === 'result') receipt = commands.acceptResult(frame, fingerprint, Math.floor(Date.now() / 1000));
+        if (previous === undefined) this.ctx.storage.sql.exec('INSERT INTO frames(message_id,fingerprint,type,command_id,revision,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?)', frame.message_id, fingerprint, frame.type, frame.type === 'heartbeat' ? null : frame.command_id, frame.type === 'heartbeat' ? null : frame.revision, frame.type === 'heartbeat' ? null : frame.idempotency_key, Math.floor(Date.now() / 1000));
         return true;
       });
       if (!admitted) { deviceDiagnostic('idempotency_conflict'); socket.close(1008); return; }
-      // DB readback fences externally revoked/deleted owners before heartbeat effects.
-      if (!await deviceDirectory(this.env).touchDevice(binding.device_id) || !this.active(socket, binding)) { socket.close(1008); return; }
-      const at = Math.floor(Date.now() / 1000);
-      binding.last_heartbeat_at = at; socket.serializeAttachment(binding);
-      this.ctx.storage.sql.exec("INSERT OR REPLACE INTO meta(key,value) VALUES('last_heartbeat_at',?)", String(at));
+      if (frame.type === 'heartbeat') {
+        if (!await deviceDirectory(this.env).touchDevice(binding.device_id) || !this.active(socket, binding)) { socket.close(1008); return; }
+        const at = Math.floor(Date.now() / 1000);
+        binding.last_heartbeat_at = at; binding.outbox_depth = frame.payload.outbox_depth; socket.serializeAttachment(binding);
+        this.ctx.storage.sql.exec("INSERT OR REPLACE INTO meta(key,value) VALUES('last_heartbeat_at',?)", String(at));
+        this.deliver(socket, binding);
+      } else if (receipt) {
+        // Receipt delivery is not proof of application; wait for a later reconciliation heartbeat.
+        binding.outbox_depth = null; socket.serializeAttachment(binding);
+        socket.send(canonicalJson(receipt));
+      }
       await this.rearm();
-    } catch { deviceDiagnostic('invalid_shape'); socket.close(1008); }
+    } catch (error) {
+      const code = error instanceof Error && ['unknown_message', 'idempotency_conflict'].includes(error.message) ? error.message as 'unknown_message' | 'idempotency_conflict' : 'invalid_shape';
+      deviceDiagnostic(code); socket.close(1008);
+    }
+  }
+  async enqueueCommand(input: CommandInput): Promise<EnqueueResult> {
+    // The binding is internal-only; re-read principal custody rather than trusting caller-supplied ids.
+    if (this.revoked() || !identifier(input.device_id) || !this.env.DEVICE_BRIDGE_DO?.idFromName(input.device_id).equals(this.ctx.id)) return { accepted: false, reason: 'unavailable' };
+    const auth = await deviceDirectory(this.env).deviceForAuth(input.device_id);
+    if (!auth || auth.owner_id !== input.owner_id || this.revoked()) return { accepted: false, reason: 'unavailable' };
+    const result = await new DeviceCommandStore(this.ctx.storage).enqueue(input, Math.floor(Date.now() / 1000), auth.capabilities);
+    if (result.accepted && !this.revoked()) for (const socket of this.ctx.getWebSockets()) {
+      const binding = socket.deserializeAttachment() as Binding | null;
+      if (binding) this.deliver(socket, binding);
+    }
+    return result;
+  }
+  private deliver(socket: WebSocket, binding: Binding): void {
+    // A new socket drains old results and reconciles accepted work before receiving new effects.
+    if (!this.active(socket, binding) || binding.last_heartbeat_at === null || binding.outbox_depth !== 0) return;
+    const commands = new DeviceCommandStore(this.ctx.storage), pending = commands.pending(Math.floor(Date.now() / 1000));
+    const inFlight = commands.hasInFlight();
+    for (const command of pending) {
+      if (command.delivered_generation === binding.generation) continue;
+      if (command.state === 'queued' && inFlight) continue;
+      const frame = JSON.parse(command.wire) as { class: string };
+      // A reconnect may narrow its declaration; never send an unnegotiated class.
+      if (!binding.declared_capabilities.includes(frame.class)) continue;
+      commands.markSent(command.command_id, binding.generation); socket.send(command.wire);
+      if (command.state === 'queued') break;
+    }
+  }
+  async listCommands(): Promise<CommandSummary[]> {
+    const commands = new DeviceCommandStore(this.ctx.storage);
+    // Offline queues expire at the read boundary too; possibly delivered work remains uncertain.
+    commands.pending(Math.floor(Date.now() / 1000));
+    return commands.list();
   }
   async revoke(): Promise<void> {
     this.ctx.storage.transactionSync(() => {
+      new DeviceCommandStore(this.ctx.storage).cancelQueued();
       this.ctx.storage.sql.exec("INSERT OR REPLACE INTO meta(key,value) VALUES('revoked',?)", String(Math.floor(Date.now() / 1000)));
     });
     for (const socket of this.ctx.getWebSockets()) socket.close(1008);

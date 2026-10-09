@@ -24,3 +24,11 @@ export const REDEEM_THROTTLES = [
   { prefix: 'devredeem.ip3600', limit: 20, seconds: 3600 },
   { prefix: 'devredeem.code', limit: 5, seconds: PAIRING_SECONDS },
 ] as const;
+export const COMMAND_DEFAULT_TTL_SECONDS = 3600;
+export const COMMAND_MAX_TTL_SECONDS = 86400;
+export const MAX_DEVICE_COMMANDS = 100000;
+export const NOTIFY_TITLE_BYTES = 120;
+export const NOTIFY_BODY_BYTES = 1024;
+export const NOTIFY_ISSUE_LIMITS = [{ limit: 5, seconds: 60 }, { limit: 20, seconds: 3600 }] as const;
+export const NOTIFICATION_TITLE = 'Waldo status';
+export const NOTIFICATION_BODY_CHOICES = ['Your Mac is connected.', 'Your Mac needs attention.', 'Status update'] as const;
