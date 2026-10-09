@@ -75,6 +75,14 @@ export function commonBrowserAllowanceDiagnostic(options: Readonly<{
   if(!registered || registered.policy.doName !== owner.doName || registered.policy.subject !== owner.subject
    || registered.policy.directoryOwnerId !== owner.directoryOwnerId) throw Error('conflicting registration owner');
   const {policy,spend}=registered;
+  // Retained test custody still blocks serving after ref rotation or capsule
+  // removal; a read-only diagnostic must not report that history as available.
+  for(const prefix of ['common-browser-acceptance:','common-browser-acceptance-custody:']) {
+   const expected=prefix+(prefix.endsWith('custody:')?policy.ref:spend.policy.ref);
+   if([...storage.kv.list({prefix})].some(([key])=>key!==expected)) throw Error('conflicting acceptance ref');
+  }
+  const testCustody=storage.kv.get<string>(`common-browser-acceptance-custody:${policy.ref}`);
+  if(testCustody !== undefined && (!spend.acceptance || testCustody !== owner.custodyDigest)) throw Error('conflicting acceptance custody');
   result.registeredCapMicrousd=spend.policy.limitMicrousd;
   const ledger=storage.kv.get<any>(`common-spend:${policy.ref}`);
   if(ledger) {

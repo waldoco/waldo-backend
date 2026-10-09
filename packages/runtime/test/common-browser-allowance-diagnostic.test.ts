@@ -84,3 +84,10 @@ it('retained cleanup is summarized without exposing session identity or calling 
  f.rows.set('common-browser:PRIVATE_TASK',{grant:{ownerId},cleanup:'pending',cleanupFailed:true,session:{id:'PRIVATE_SESSION',ownerId,provider:'cloudflare_playwright',providerSessionId:'PRIVATE_PROVIDER',contextHandle:null,mode:'public',state:'active',generation:1,expiresAt:Date.now()-1000,updatedAt:Date.now()}});
  const result=await f.read();expect(result.browser.retainedSessionCounts).toEqual({active:0,unresolved:0,pendingCleanup:0,failedCleanup:1,closed:0});expect(JSON.stringify(result)).not.toContain('PRIVATE');expect(f.env.BROWSER.fetch).not.toHaveBeenCalled();expect(f.writes).not.toHaveBeenCalled();
 });
+it.each(['rotated_ref','missing_capsule','changed_custody'])('retained acceptance %s cannot publish available allowance',async kind=>{
+ const f=fixture();current(f);
+ f.rows.set(`common-browser-acceptance-custody:${kind==='rotated_ref'?'OTHER_REF':'PRIVATE_REF'}`,kind==='changed_custody'?'b'.repeat(64):proof.custody);
+ const before=structuredClone([...f.rows]);
+ expect((await f.read()).browser).toMatchObject({status:'conflict',remainingCurrentPolicyMicrousd:null,remainingRegisteredCapAfterAllRetainedRefsMicrousd:null});
+ expect([...f.rows]).toEqual(before);expect(f.writes).not.toHaveBeenCalled();expect(f.env.BROWSER.fetch).not.toHaveBeenCalled();
+});
