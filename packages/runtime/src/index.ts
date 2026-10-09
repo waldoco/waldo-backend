@@ -21,6 +21,7 @@ import { handleGoogleCallback } from './channels/google-oauth';
 import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-link';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH } from './channels/console';
+import { handleApp } from './channels/app-api';
 import { ownerDirectory } from './identity/owner-directory';
 import { downloadReturnTarget, handleConsole, CONSOLE_SIGNIN_PATH } from './channels/console-signin';
 import { consoleAuth, OWNER_COOKIE } from './identity/console-auth';
@@ -163,6 +164,8 @@ export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const ticketResponse = await routedConsoleTicket(request, env);
     if (ticketResponse) return ticketResponse;
+    const appResponse = await handleApp(request, env);
+    if (appResponse) return appResponse;
     const devicePath = new URL(request.url).pathname;
     if (devicePath === '/devices/redeem') return request.method === 'POST' ? handleDeviceRedeem(request, env) : genericReject();
     if (devicePath === '/devices/connect') return request.method === 'GET' ? handleDeviceConnect(request, env) : genericReject();

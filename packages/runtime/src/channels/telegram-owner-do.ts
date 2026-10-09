@@ -103,6 +103,7 @@ import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
+import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, appTranscriptPage } from './app-api';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
@@ -513,6 +514,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (path !== MEMORY_GRAPH_PATH && doName && this.ctx.storage.kv.get<string>('do_name') !== doName) this.ctx.storage.kv.put('do_name', doName);
     if (new URL(request.url).pathname === '/grant-console' && request.method === 'POST') return new Response(await consoleAccess(this.ctx.storage).grant());
     if (new URL(request.url).pathname.startsWith(CONSOLE_PATH)) return this.console(request);
+    if (path === APP_CHAT_PATH && request.method === 'GET') {
+      const url = new URL(request.url);
+      const { entries } = await durableConversationStore(this.ctx.storage).load();
+      return Response.json(appTranscriptPage(entries, url.searchParams.get('cursor'), Number(url.searchParams.get('limit') ?? 20)), { headers: { 'cache-control': 'no-store' } });
+    }
+    if (path === APP_CHAT_SEND_PATH) return Response.json({ error: 'unavailable' }, { status: 503, headers: { 'cache-control': 'no-store' } });
     const body = await request.text();
     if (new URL(request.url).pathname === GOOGLE_FINISH_PATH) {
       const reply = await this.serial(() => this.finishGoogle(JSON.parse(body) as ConsentCallback));
