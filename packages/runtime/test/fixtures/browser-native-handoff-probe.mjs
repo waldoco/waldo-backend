@@ -109,12 +109,17 @@ try {
   // A second explicit handoff exercises native redirect custody without real login.
   process.stderr.write('phase: rejected redirect\n');
   const second=await driver.beginOwnerHandoff(session,fresh,'Check fictional redirect rejection',async()=>{if(!ownerCurrent)throw Error('Owner revoked');});
-  turnAdmitted=false;try{await page.goto(origin+'/blocked-redirect',{timeout:3000});}catch{}
+  turnAdmitted=false;
+  const redirectRequestsBefore=requests.filter(request=>request==='GET /blocked-redirect').length;
+  await assert.rejects(page.goto(origin+'/blocked-redirect',{timeout:3000}),error=>
+    error instanceof Error&&error.name==='Error'&&error.message.startsWith(`page.goto: net::ERR_BLOCKED_BY_CLIENT at ${origin}/blocked-redirect\n`),
+    'Expected the native guarded redirect rejection; success, timeout and unrelated errors are not denial proof');
+  assert.equal(requests.filter(request=>request==='GET /blocked-redirect').length,redirectRequestsBefore+1,'The allowed redirect endpoint must actually be reached');
   assert.equal(rejectedOriginRequests,0,'Human redirect must not cross the already authorized origin');
   process.stderr.write('phase: cleanup\n');
   ownerCurrent=false;await driver.disconnect();
   const physicalClosure=processExit;let initialCleanupConfirmed=true;
   try{await withinHarness(()=>driver.terminate(session));}catch(error){assert.equal(error.code,'cleanup_unconfirmed');initialCleanupConfirmed=false;}
   await withinHarness(()=>physicalClosure);await driver.terminate(session);assert.deepEqual(await sessions(),[]);assert(connections.every(connection=>!connection.isConnected()));
-  process.stdout.write(JSON.stringify({localOnly:true,cloudflareProtocolAndUi:'double',nativeDomInputPost303Cookies:true,passwordAndOtpAbsentAgentEvidence:true,noSnapshotsDuringTakeover:true,domAxScreenshotCountersUnchanged:true,explicitOtpValueExcluded:true,freshAccountEvidence:true,blockedCrossOriginRedirect:true,providerAllocations:allocations,exactProcessExit:true,initialCleanupConfirmed})+'\n');
+  process.stdout.write(JSON.stringify({localOnly:true,cloudflareProtocolAndUi:'double',nativeDomInputPost303Cookies:true,passwordAndOtpAbsentAgentEvidence:true,noSnapshotsDuringTakeover:true,domAxScreenshotCountersUnchanged:true,explicitOtpValueExcluded:true,freshAccountEvidence:true,blockedCrossOriginRedirect:true,blockedRedirectOutcome:'net::ERR_BLOCKED_BY_CLIENT',allowedRedirectRequests:1,rejectedOriginRequests,providerAllocations:allocations,exactProcessExit:true,initialCleanupConfirmed})+'\n');
 } finally { clearTimeout(watchdog); if (processHandle?.pid && processHandle.exitCode === null) { processHandle.kill('SIGKILL'); await processExit; } await new Promise(resolve => server.close(resolve));await new Promise(resolve=>forbidden.close(resolve)); await rm(profile, { recursive: true, force: true }); }
