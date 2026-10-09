@@ -7,19 +7,20 @@ import { googleHandlers } from '../src/tools/live/google';
 import { workspaceToolHandlers } from '../src/tools/live/workspace';
 import type { GoogleClient } from '../src/connectors/google';
 
-it('calendar response loss reads back a stable event id before replay', async () => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('effect-calendar-readback'));
+it.each(['exact marker', 'missing marker', 'wrong marker'] as const)('calendar response loss reads back a stable event id before replay: %s', async evidence => {
+  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`effect-calendar-readback-${evidence}`));
   await runInDurableObject(stub, async (_instance, state) => {
     const effects = ownerEffectLedger(state.storage, () => 1000);
-    let sends = 0; let eventId = '';
+    let sends = 0; let eventId = ''; let marker = '';
     const start = '2026-10-08T10:00:00Z'; const end = '2026-10-08T11:00:00Z';
-    const client = { createEvent: async (input: { id: string }) => { sends++; eventId = input.id; throw Error('lost response'); }, event: async (id: string) => { expect(id).toBe(eventId); return { id, title: 'Meeting', start, end, etag: 'applied' }; } } as unknown as GoogleClient;
+    const client = { createEvent: async (input: { id: string; operationMarker: string }) => { sends++; eventId = input.id; marker = input.operationMarker; expect(marker).toMatch(/^[0-9a-f]{64}$/); throw Error('lost response'); }, event: async (id: string) => { expect(id).toBe(eventId); return { id, title: 'Meeting', start, end, etag: 'applied', ...(evidence === 'missing marker' ? {} : { operation_marker: evidence === 'exact marker' ? marker : 'foreign-operation' }) }; } } as unknown as GoogleClient;
     const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => ({}), google: async () => client, newId: () => 'one', now: () => 1000, timezone: 'UTC', log: () => {}, effects });
     const id = await desk.propose({ action: 'create', title: 'Meeting', start, end } as never);
-    expect((await desk.decide(id, 'a', 'test')).toast).toBe('Done');
-    expect(effects.get(`approval:${id}:apply`)?.receipt?.provider_id).toBe(eventId);
+    expect((await desk.decide(id, 'a', 'test')).toast).toBe(evidence === 'exact marker' ? 'Done' : 'Outcome unknown');
+    expect(effects.get(`approval:${id}:apply`)?.receipt?.provider_id).toBe(evidence === 'exact marker' ? eventId : undefined);
     expect(sends).toBe(1);
-    expect((await desk.decide(id, 'a', 'test')).toast).toBe('Already handled.');
+    expect((await desk.decide(id, 'a', 'test')).toast).toBe(evidence === 'exact marker' ? 'Already handled.' : 'Outcome unknown');
+    expect(sends).toBe(1);
   });
 });
 

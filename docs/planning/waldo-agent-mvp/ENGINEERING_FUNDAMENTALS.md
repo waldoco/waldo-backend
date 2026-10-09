@@ -614,3 +614,9 @@ A fresh staging Cloudflare public read uses the existing reader without requirin
 | Failure | Regression | Boundary |
 | --- | --- | --- |
 | Reply MIME omitted provider threading headers; Gmail search/acknowledgement could claim Sent without exact metadata; Calendar recovered matching fields without an operation marker, discarded uncertain Undo custody, and restored all-day values as dateTime | google-recovery-journey.test.ts registered Gmail and Calendar handlers, approval desk and restarted effect ledger over labelled synthetic provider doubles; google.test.ts metadata readback; approvals.test.ts exact Sent evidence | Local synthetic/source proof only. Existing account routing, frozen MIME, stable create IDs and If-Match fences remain. No live provider, grants, deployment or database reset; cancellation tombstones without markers remain uncertain |
+
+- [ ] Positive effect fixtures must include the same exact provider evidence required in production: Sent metadata or the captured Calendar operation marker. Keep missing/wrong evidence and replay controls alongside success cases; owner-ingress payload assertions include the operation marker.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Six existing positive fixtures asserted completion from a Gmail acknowledgement/search hit or unmarked Calendar evidence, or omitted the new create marker from an exact payload assertion | owner-effect-approval.test.ts and owner-effect-break-936.test.ts exact Sent doubles; owner-effect-adapters.test.ts captured marker and missing/foreign controls; owner-do-ingress-isolation.test.ts exact marked create payload | Fixture-only correction; source checks unchanged. Missing/mismatched Sent metadata and Calendar markers stay uncertain with one dispatch across replay |
