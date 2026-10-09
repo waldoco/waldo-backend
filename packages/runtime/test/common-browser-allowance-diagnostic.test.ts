@@ -86,6 +86,10 @@ it('retained cleanup is summarized without exposing session identity or calling 
 });
 it.each(['rotated_ref','missing_capsule','changed_custody'])('retained acceptance %s cannot publish available allowance',async kind=>{
  const f=fixture();current(f);
+ if(kind==='changed_custody') {
+  (f.raw as any).acceptance={doName:f.raw.policy.doName,subject:f.raw.policy.subject,directoryOwnerId:proof.owner,expiresAt:f.raw.spend.validUntil,maxRuns:2,maxModelCalls:8,priorRuns:0,priorModelCalls:0,priorMicrousd:0};
+  f.env.COMMON_BROWSER_REGISTRATION=JSON.stringify(f.raw);
+ }
  f.rows.set(`common-browser-acceptance-custody:${kind==='rotated_ref'?'OTHER_REF':'PRIVATE_REF'}`,kind==='changed_custody'?'b'.repeat(64):proof.custody);
  const before=structuredClone([...f.rows]);
  expect((await f.read()).browser).toMatchObject({status:'conflict',remainingCurrentPolicyMicrousd:null,remainingRegisteredCapAfterAllRetainedRefsMicrousd:null});
