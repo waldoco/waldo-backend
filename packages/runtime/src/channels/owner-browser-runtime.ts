@@ -3,7 +3,7 @@ import { browsePageArgsSchema, browseActArgsSchema, WALDO_CHAT_MODEL, type Brows
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
-import { commonBrowserHost, maintainCommonBrowsers, revokeCommonBrowsers } from './common-browser-host';
+import { commonBrowserHost, maintainCommonBrowsers, revokeCommonBrowsers,fenceLostNativeHandoffs } from './common-browser-host';
 import { commonPublicBrowserConfiguration } from './common-public-browser-configuration';
 import { COMMON_TEST_CEILING_MICROUSD, commonBrowserSdk, commonStagingRegistration } from './common-staging-registration';
 import { OpenAIResponsesAdapter } from '../llm/openai';
@@ -24,6 +24,7 @@ export function ownerBrowserRuntime(options: Readonly<{
   env: TelegramWebhookEnv; storage: DurableObjectStorage; actualDoId: string;
   activeScope(): RunEffectScope | undefined;
 }>) {
+  fenceLostNativeHandoffs(options.storage,Date.now());
   let active: { scope?: RunEffectScope; taskId:string; ownerId:string; host: ReturnType<typeof commonBrowserHost> } | undefined;
   let lease: Readonly<{scope?:RunEffectScope;deadline:number;assertCurrent():Promise<void>}>|undefined;
   const continuationKey='common-browser-current:v1';

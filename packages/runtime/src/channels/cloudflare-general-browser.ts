@@ -28,6 +28,8 @@ export function cloudflareGeneralBrowser(options: Options) {
   let documentFailure: GeneralBrowserError | undefined;
   const invalidDocuments = new Set<Page>();
   let guardedContext: BrowserContext | undefined;
+  const humanRequests=new Set<Promise<void>>();
+  const humanRedirects=new WeakMap<Page,Set<string>>();
   let takeover: ReturnType<typeof nativeBrowserHandoff> | undefined;
   let currentRouteGuard: ((route: Route) => Promise<void>) | undefined;
   const connectionKey = (session: BrowserSession) => JSON.stringify([session.ownerId, session.id, session.generation, session.providerSessionId]);
@@ -153,7 +155,21 @@ export function cloudflareGeneralBrowser(options: Options) {
       // documents. Between operations the previous guard still checks authority.
       currentRouteGuard = async route => {
         try {
-          if(takeover){if(!options.authorizeHumanRequest||!await options.authorizeHumanRequest(route.request().url(),route.request().method()))throw new GeneralBrowserError('rejected');await route.continue();return;}
+          if(takeover){
+            const request=route.request(),page=request.frame().page();
+            const authorize=async(url:string,method:string)=>{identity(session);if(!takeover||!options.authorizeHumanRequest||!await options.authorizeHumanRequest(url,method))throw new GeneralBrowserError('rejected');identity(session);};
+            // Preserve the existing 10s transport bound, using funded session
+            // expiry rather than the model turn that has deliberately ended.
+            const timeout=()=>{const remaining=session.expiresAt-options.now();if(remaining<=0)throw new GeneralBrowserError('rejected');return Math.min(10000,remaining);};
+            let redirect:Readonly<{page:Page;url:string}>|undefined;
+            await guardGeneralBrowserRoute(route,{authorize,timeout,admit:()=>authorize(request.url(),request.method()),redirect:(page,url)=>{redirect={page,url};},denied:(page,status)=>{invalidDocuments.add(page);documentFailure=new GeneralBrowserError('page_unavailable',{status});}});
+            if(redirect){
+              const visited=humanRedirects.get(page)??new Set<string>();visited.add(request.url());
+              if(visited.has(redirect.url)||visited.size>GENERAL_BROWSER_REDIRECT_LIMIT)throw new GeneralBrowserError('rejected');humanRedirects.set(page,visited);
+              await authorize(redirect.url,'GET');await redirect.page.goto(redirect.url,{waitUntil:'domcontentloaded',timeout:timeout()});
+            }else if(request.isNavigationRequest()&&!request.frame().parentFrame())humanRedirects.delete(page);
+            return;
+          }
           await guardGeneralBrowserRoute(route, { authorize: (url, method) => allowed(session, url, method), timeout: () => actionTimeout(session), admit: () => admit(session),
             redirect: (page, url) => { redirects.set(page, url); }, denied: (page, status) => { invalidDocuments.add(page); documentFailure = new GeneralBrowserError('page_unavailable', { status }); } });
           await admit(session);
@@ -167,7 +183,14 @@ export function cloudflareGeneralBrowser(options: Options) {
         }
       };
       if (guardedContext !== context) {
-        await context.route('**/*', route => currentRouteGuard!(route));
+        await context.route('**/*', route => {
+          // Once Done has been consumed, reject new viewer requests while any
+          // admitted human transport settles before fresh agent observation.
+          if(takeover?.ready())return route.abort('blockedbyclient');
+          const human=takeover,pending=currentRouteGuard!(route);
+          if(human){humanRequests.add(pending);const settled=()=>{humanRequests.delete(pending);};void pending.then(settled,settled);}
+          return pending;
+        });
         guardedContext = context;
       }
       const result = await work(browser, context, navigation); await admit(session);
@@ -314,7 +337,7 @@ export function cloudflareGeneralBrowser(options: Options) {
     },
     async finishOwnerHandoff(session:BrowserSession,reference:string){
       if(!takeover?.ready())throw new GeneralBrowserError('rejected');
-      const held=takeover;held.complete();await held.dispose();takeover=undefined;
+      const held=takeover;await Promise.all([...humanRequests]);if(!held.ready())throw new GeneralBrowserError('rejected');held.complete();await held.dispose();takeover=undefined;
       return attached(session,async(_,context)=>observe(session,context,await select(session,context,reference)));
     },
     async start(allowedDomains: readonly string[] | 'public', lifetimeMs: number,
