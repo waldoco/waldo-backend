@@ -16,7 +16,7 @@
   // WALDO_OWNER_TELEGRAM_ID top level stays empty: production sets its own owner routing fresh
   // (never copied from staging); empty string keeps the single-owner fallback disabled there.
   // WALDO_EGRESS_ALLOWLIST: browse-tool egress host list. Empty in production = fail-closed;
-  // staging names a demo set. guard-wrangler-local-bindings requires the key in both.
+  // staging opens the public web with "*" (private and internal addresses stay blocked; "-host" entries add a deny list). guard-wrangler-local-bindings requires the key in both.
   "vars": { "WALDO_ENVIRONMENT": "production", "WALDO_OWNER_DO_NAMESPACE": "", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "", "CALENDAR_GROUNDED_PREP": "0", "DRIVE_READS": "0", "MAIL_SOURCE_FOLLOWUPS": "0", "MCP_READ_INTENTS": "0", "LANGFUSE_CAPTURE_TEXT": "false", "WALDO_EGRESS_ALLOWLIST": "" },
   "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },
   "durable_objects": {
@@ -77,7 +77,7 @@
         "logs": { "enabled": true, "invocation_logs": false },
         "traces": { "enabled": false }
       },
-      "vars": { "WALDO_ENVIRONMENT": "staging", "WALDO_OWNER_DO_NAMESPACE": "5fe34e5daa754791b45bd80638402ac6", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "5458446350", "CALENDAR_GROUNDED_PREP": "1", "MAIL_SOURCE_FOLLOWUPS": "1", "DRIVE_READS": "1", "MCP_READ_INTENTS": "0", "LANGFUSE_CAPTURE_TEXT": "true", "WALDO_EGRESS_ALLOWLIST": "example.com,en.wikipedia.org,github.com,news.ycombinator.com,developer.mozilla.org,heywaldo.in" },
+      "vars": { "WALDO_ENVIRONMENT": "staging", "WALDO_OWNER_DO_NAMESPACE": "5fe34e5daa754791b45bd80638402ac6", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "5458446350", "CALENDAR_GROUNDED_PREP": "1", "MAIL_SOURCE_FOLLOWUPS": "1", "DRIVE_READS": "1", "MCP_READ_INTENTS": "0", "LANGFUSE_CAPTURE_TEXT": "true", "WALDO_EGRESS_ALLOWLIST": "*" },
       "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },
       "durable_objects": {
         "bindings": [
