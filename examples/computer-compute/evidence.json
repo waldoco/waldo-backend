@@ -14,7 +14,10 @@
     "runtime_integration_types": "PASS",
     "real_daemon_journey": "NOT_RUN",
     "native_provider_lifecycle": "NOT_RUN",
-    "live_delivery": "NOT_RUN"
+    "live_delivery": "NOT_RUN",
+    "daemon_fixture_worker_types": "PASS",
+    "missing_daemon_url_guard": "EXPECTED_FAILURE_OBSERVED",
+    "independent_review": "PENDING"
   },
   "blocked": {
     "local_docker": "automatic approval review timed out twice; sandbox Docker socket permission denied"

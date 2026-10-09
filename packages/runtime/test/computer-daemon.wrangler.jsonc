@@ -1,0 +1,11 @@
+{
+  "name": "waldo-computer-daemon-local-test",
+  "main": "./computer-daemon-worker.ts",
+  "compatibility_date": "2026-10-07",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "durable_objects": {
+    "bindings": [{ "name": "COMPUTER_DAEMON_STORAGE", "class_name": "ComputerDaemonStorage" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ComputerDaemonStorage"] }]
+}

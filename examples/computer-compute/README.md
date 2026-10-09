@@ -18,3 +18,13 @@ pnpm exec vitest run --config vitest.computer-compute.config.ts
 ```
 
 Evidence so far: released package installed from the official npm registry; daemon manifest digest resolved from official GHCR; standalone example TypeScript compilation passes; 10 adapter contract tests pass using labelled Workspace/transport doubles. Actual daemon journey and hosted native Container lifecycle remain unverified. No deployment, provider execution, access grant, secret change or Cloudflare spend has occurred. A local Docker image build is a separate proof layer and must not be described as hosted Container proof. Both escalated build attempts stopped at automatic approval-review deadlines; a sandboxed attempt failed with Docker socket permission denied. No image was built or command executed. Runtime worker and integration TypeScript checks also pass.
+
+The actual-daemon fixture lives in `packages/runtime/test/computer-daemon.test.ts`. It uses released Workspace/TestBackend and real workerd SQLite; its Docker lifecycle remains an explicit fixture, and it does not prove native provider authentication, egress controls, PDF rendering or channel delivery. Worker TypeScript covers the fixture; the missing-URL configuration guard was observed to fail as expected. Execution still requires a local daemon.
+
+Build the image from the repository root with `docker build --platform linux/amd64 -t waldo-computer-trial:local examples/computer-compute`. Start it with a loopback-only published port, for example `docker run --rm --platform linux/amd64 -p 127.0.0.1:8080:8080 waldo-computer-trial:local`, and while it is alive run from packages/runtime:
+
+```
+COMPUTERD_HARNESS_URL=http://127.0.0.1:8080 pnpm exec vitest run --config vitest.computer-daemon.config.ts
+```
+
+The image's 35-second watchdog applies to the daemon. The shell operator must remove the local container after testing. The TestBackend fixture uses no daemon RPC secret and is restricted to loopback; it must never be exposed publicly.
