@@ -1,3 +1,6 @@
+import {browserUploadBinding,browserUploadBytes} from './browser-upload-binding';
+import type {BrowserSubmitProposal} from './approvals';
+import type {BrowserSubmitOutcome} from '../tools/live/browser';
 import type {NativeHandoffMetadata} from './native-browser-handoff';
 import { triggerTypeSchema, TOOL_PERMISSIONS, browserSessionSchema, browsePageArgsSchema, browseActArgsSchema, type BrowseActArgs, type BrowserSession, type ToolHandler, type BrowsePageArgs, type LLMAttachment } from '@waldo/contracts';
 import type { BrowserWorker } from '@cloudflare/playwright';
@@ -34,7 +37,7 @@ export type CommonBrowserConfiguration = Readonly<{
 export const COMMON_BROWSER_CHECKPOINT_BYTES=128*1024;
 const encodedCheckpointBytes=(record:BrowserRecord)=>new TextEncoder().encode(JSON.stringify(record)).byteLength;
 export const COMMON_BROWSER_DUE='common_browser_due_v1';
-type BrowserRecord={download?:Readonly<{operationId:string;digest:string;state:'prepared'|'importing'|'ready';metadata?:BrowserDownloadMetadata;receipt?:BrowserDownloadReceipt}>;handoff?:NativeHandoffMetadata;grant:CommonBrowserGrant;session:BrowserSession;tabs:Readonly<{url:string;ref:string}>[];allocation:'prepared'|'observed';observation?:GeneralActionSnapshot;action?:Readonly<{digest:string;state:'prepared'|'observed'|'uncertain'}>;cleanup?:'pending'|'closed';cleanupFailed?:boolean};
+type BrowserRecord={upload?:Readonly<{proposal:BrowserSubmitProposal;approvalRef?:string;state:'proposing'|'pending'|'exposed'|'verified'|'denied';outcome?:BrowserSubmitOutcome}>;download?:Readonly<{operationId:string;digest:string;state:'prepared'|'importing'|'ready';metadata?:BrowserDownloadMetadata;receipt?:BrowserDownloadReceipt}>;handoff?:NativeHandoffMetadata;grant:CommonBrowserGrant;session:BrowserSession;tabs:Readonly<{url:string;ref:string}>[];allocation:'prepared'|'observed';observation?:GeneralActionSnapshot;action?:Readonly<{digest:string;state:'prepared'|'observed'|'uncertain'}>;cleanup?:'pending'|'closed';cleanupFailed?:boolean};
 const sameSession=(a:BrowserRecord,b:BrowserRecord)=>a.session.ownerId===b.session.ownerId&&a.session.id===b.session.id&&a.session.generation===b.session.generation&&a.session.providerSessionId===b.session.providerSessionId&&JSON.stringify(a.grant)===JSON.stringify(b.grant);
 const publishCleanup=(storage:DurableObjectStorage,key:string,expected:BrowserRecord,closed:boolean)=>storage.transactionSync(()=>{
  const current=storage.kv.get<BrowserRecord>(key);
@@ -43,7 +46,8 @@ const publishCleanup=(storage:DurableObjectStorage,key:string,expected:BrowserRe
 });
 export function commonBrowserHost(options:Readonly<{
  storage:DurableObjectStorage;config:CommonBrowserConfiguration;ownerId:string;egressAllowlist?:readonly string[];
- files?(assertCurrent:()=>Promise<void>,ownerId:string):Promise<{workspace:Awaited<ReturnType<typeof workspaceOwnerHost>>;origin:string}>;
+ proposeUpload?(proposal:BrowserSubmitProposal):Promise<string>;
+ files?(assertCurrent:()=>Promise<void>,ownerId:string,approved?:true):Promise<{workspace:Awaited<ReturnType<typeof workspaceOwnerHost>>;origin:string}>;
  source():TaskSourceSnapshot;assertCurrent():Promise<void>;deadline():number;now():number;
 }>) {
  let images:LLMAttachment[]=[];
@@ -152,6 +156,18 @@ export function commonBrowserHost(options:Readonly<{
      return {...published,data:{...published.data,owner_login:'completed',intended_account_verification_required:true,notice:'Provider completion is not intended-account verification. Verify the observed signed-in account before continuing.'}};
     }
     const driver=executionDriver(grant,ctx),before=record.observation!;
+    if(command.operation==='upload'){
+     if(!options.files||!options.proposeUpload||!options.config.assertHandoffCurrent||record.upload&&record.upload.state!=='denied'||record.action?.state==='prepared'||record.action?.state==='uncertain'||record.download&&record.download.state!=='ready')throw Error('native upload unavailable');
+     const files=await options.files(async()=>{await checked();},options.ownerId),file=await files.workspace.stat(command.file_id);await checked();await ctx.assertTaskSourceCurrent?.();
+     if(!file||file.revision!==command.revision)throw Error('exact current file revision unavailable');
+     const binding=browserUploadBinding({session:record.session,snapshot:before,elementRef:command.element_ref,file,operationId:crypto.randomUUID(),now:options.now()});
+     const element=before.state.elements[before.observation.elements.findIndex(element=>element.ref===command.element_ref)]!;
+     const proposal:BrowserSubmitProposal={url:before.observation.url,action:{selector:element.selector,description:`Select and upload ${binding.filename} (${binding.byteSize} bytes)`,method:'POST'},binding:{file_id:binding.fileId,revision:String(binding.revision),sha256:binding.sha256,filename:binding.filename,byte_size:String(binding.byteSize),destination:binding.destination,session_handle:binding.sessionHandle,generation:String(binding.generation),document_revision:binding.documentRevision},steps:['Owner approval exposes this exact file to page JavaScript at the named destination.','Verify independent server filename, size and SHA acknowledgment; never repeat an uncertain upload.'],request:{url:binding.destination,method:'POST',fields:[binding.filename]},approvalExpiresAt:binding.expiresAt,nativeUpload:{taskId:grant.taskId,binding}};
+     options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(!latest||latest.cleanup||latest.handoff||!sameSession(latest,record!)||latest.observation?.digest!==before.digest||latest.upload?.proposal.nativeUpload?.binding.operationId!==record!.upload?.proposal.nativeUpload?.binding.operationId)throw Error('upload preparation changed');save({...latest,upload:{proposal,state:'proposing'}},storageKey!);});
+     const approvalRef=await options.proposeUpload(proposal);await checked();
+     options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(!latest||latest.cleanup||!sameSession(latest,record!)||latest.upload?.proposal.nativeUpload?.binding.operationId!==binding.operationId||latest.upload.state!=='proposing')throw Error('upload approval custody changed');save({...latest,upload:{...latest.upload,approvalRef,state:'pending'}},storageKey!);});
+     return {ok:true,data:{stopped:'approval_pending',proposal_id:approvalRef,notice:'Approve the exact file and destination before any bytes enter the page.'},source_taint:'external'};
+    }
     if(command.operation==='download'){
      const duration=Math.min(record.session.expiresAt,options.deadline())-options.now();
      if(!Number.isSafeInteger(duration)||duration<1||duration>2147483647)throw Error('download expired');
@@ -242,7 +258,42 @@ export function commonBrowserHost(options:Readonly<{
     return {ok:false,code:'rejected',error:'The public browser action was rejected or its outcome is uncertain. No replacement browser or unapproved page write was allowed. Inspect the current page before retrying.'+(error instanceof GeneralBrowserError?' Browser diagnostic: '+JSON.stringify({browser_code:error.code,...(error.diagnostic?{diagnostic:error.diagnostic}:{}),...(error.cleanup_failed?{cleanup_failed:true}:{}),...(error.release_failed?{release_failed:true}:{})}):''),source_taint:'external'};
    }
   }};
- const api={handler,actionHandler,
+ const uploadRecord=(proposal:BrowserSubmitProposal)=>{
+  const native=proposal.nativeUpload;if(!native||native.binding.ownerId!==options.ownerId)throw Error('upload owner unavailable');
+  const row=options.storage.kv.get<Record>(key(native.taskId));
+  if(!row?.upload||row.cleanup||row.handoff||row.session.ownerId!==options.ownerId||row.session.id!==native.binding.sessionHandle||row.session.generation!==native.binding.generation||row.session.expiresAt<=options.now()||row.observation?.digest!==native.binding.documentDigest||JSON.stringify(row.upload.proposal)!==JSON.stringify(proposal)||row.upload.state==='denied')throw Error('upload custody unavailable');
+  return row;
+ };
+ const uploadCurrent=async(proposal:BrowserSubmitProposal)=>{const before=uploadRecord(proposal);if(!options.config.assertHandoffCurrent)throw Error('approved custody unavailable');await options.config.assertHandoffCurrent(before.grant);const after=uploadRecord(proposal);if(!sameSession(before,after))throw Error('upload session changed');return after;};
+ const uploadReceiptVerified=async(proposal:BrowserSubmitProposal,receipt:Extract<BrowserSubmitOutcome,{status:'verified_with_receipt'}>['receipt'])=>{
+  try{const row=await uploadCurrent(proposal);return row.upload?.state==='verified'&&row.upload.outcome?.status==='verified_with_receipt'&&JSON.stringify(row.upload.outcome.receipt)===JSON.stringify(receipt);}catch{return false;}
+ };
+ const reconcileUpload=async(proposal:BrowserSubmitProposal,_approvalRef?:string):Promise<BrowserSubmitOutcome>=>{
+  try{const row=await uploadCurrent(proposal);if(row.upload?.state==='verified'&&row.upload.outcome)return row.upload.outcome;return {status:'uncertain',message:'Upload outcome is unknown; the file was not selected or sent again.'};}catch{return {status:'uncertain',message:'Upload custody is unavailable; this cannot prove the server did not receive bytes. No retry was performed.'};}
+ };
+ const submitUpload=async(proposal:BrowserSubmitProposal,approvalRef?:string):Promise<BrowserSubmitOutcome>=>{
+  let exposed=false;
+  try{
+   const row=await uploadCurrent(proposal),binding=proposal.nativeUpload!.binding;
+   if(!approvalRef||row.upload?.approvalRef&&row.upload.approvalRef!==approvalRef)throw Error('approval reference changed');
+   const approved=options.storage.sql.exec<{status:string;payload_json:string}>('SELECT status, payload_json FROM ledger WHERE id = ? AND kind = ?',approvalRef,'browser_submit').toArray()[0];
+   if(approved?.status!=='uncertain'||approved.payload_json!==JSON.stringify(proposal))throw Error('owner approval not claimed');
+   if(row.upload?.state==='exposed'||row.upload?.state==='verified')return reconcileUpload(proposal,approvalRef);
+   if(!options.files||!execution||execution.grant!==JSON.stringify(row.grant)||!row.observation)throw Error('retained upload document unavailable');
+   const authority=async()=>{await uploadCurrent(proposal);},files=await options.files(authority,options.ownerId,true);await authority();
+   let receipt:BrowserDownloadMetadata|undefined;
+   await browserUploadBytes({binding,session:row.session,snapshot:row.observation,workspace:files.workspace,now:options.now,assertCurrent:authority,beforeExposure:authority,select:async file=>{
+    receipt=await execution!.driver.upload(row.session,row.observation!,binding.elementRef,file,{destination:binding.destination,expiresAt:binding.expiresAt,assertCurrent:authority},async()=>{
+     await authority();options.storage.transactionSync(()=>{const latest=uploadRecord(proposal);if(!sameSession(latest,row)||!['pending','proposing'].includes(latest.upload!.state))throw Error('upload already exposed');save({...latest,upload:{...latest.upload!,approvalRef,state:'exposed'}},key(row.grant.taskId));exposed=true;});
+    });
+   }});
+   if(!receipt||receipt.filename!==binding.filename||receipt.byte_size!==binding.byteSize||receipt.sha256!==binding.sha256)throw Error('upload acknowledgment mismatch');
+   await authority();const outcome:BrowserSubmitOutcome={status:'verified_with_receipt',message:`Server acknowledged ${binding.filename}, ${binding.byteSize} bytes, SHA-256 ${binding.sha256}. Broader task completion is unverified.`,receipt:{id:binding.operationId,observed_at:new Date(options.now()).toISOString(),source:'provider',action_digest:await generalDigest(JSON.stringify(proposal.action)),binding_digest:await generalDigest(JSON.stringify(proposal.binding))}};
+   await authority();options.storage.transactionSync(()=>{const latest=uploadRecord(proposal);if(!sameSession(latest,row)||latest.upload!.state!=='exposed')throw Error('upload receipt custody changed');save({...latest,upload:{...latest.upload!,state:'verified',outcome}},key(row.grant.taskId));});return outcome;
+  }catch{return {status:'uncertain',message:exposed?'Upload outcome is unknown; do not select or send the file again.':'The approved upload is unavailable or uncertain; no retry was performed.'};}
+ };
+ const denyUpload=async(proposal:BrowserSubmitProposal)=>{const row=uploadRecord(proposal);options.storage.transactionSync(()=>{const latest=uploadRecord(proposal);if(!sameSession(latest,row)||!['pending','proposing'].includes(latest.upload!.state))throw Error('upload already handled');save({...latest,upload:{...latest.upload!,state:'denied'}},key(row.grant.taskId));});};
+ const api={handler,actionHandler,submitUpload,reconcileUpload,uploadReceiptVerified,denyUpload,
  async handoffStatus(){const row=options.storage.kv.get<Record>(key(snapshot().taskId));if(!row?.handoff)return undefined;if(!human||row.handoff.state!=='pending')throw Error('owner login transition');const held=human,origin=await held.controller.origin();const fresh=await handoffCurrent(row.grant);if(human!==held||fresh.handoff!.state!=='pending')throw Error('owner login transition');return {state:fresh.handoff!.state,origin,reason:fresh.handoff!.reason,expiresAt:fresh.session.expiresAt};},
  async openHandoff(){const row=options.storage.kv.get<Record>(key(snapshot().taskId));if(!row?.handoff||!human){if(row?.handoff)await api.cancel();throw Error('owner login unavailable');}await handoffCurrent(row.grant);const url=await human.controller.open();await handoffCurrent(row.grant);return url;},
  async maintainHandoff(){
