@@ -128,7 +128,7 @@ export function ownerBrowserRuntime(options: Readonly<{
     },
     gateway() {
       if (automatic.selected || automatic.hasRetained()) {
-        const gateway = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY! });
+        const gateway = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY!, singleAttempt: automatic.acceptanceSelected });
         let metered: Promise<LLMGatewayAdapter> | undefined;
         return { async complete(request) {
           const scope = options.activeScope(), supplied = request.runScope;
@@ -139,7 +139,7 @@ export function ownerBrowserRuntime(options: Readonly<{
           // record keeps funded model history metered after host reconstruction,
           // including uncertain/closed records; it never restarts physical ordinals.
           const holdsFunding = () => funded(scope);
-          if (!holdsFunding()) {
+          if (!automatic.acceptanceSelected && !holdsFunding()) {
             await assertOwner(); scope.admit();
             if (options.activeScope() !== scope) throw new ClosedRunError();
             // Allocation may have appeared while directory authority was pending.
@@ -156,16 +156,31 @@ export function ownerBrowserRuntime(options: Readonly<{
           return (await metered).complete(request);
         } } satisfies LLMGatewayAdapter;
       }
+      const manual=commonStagingRegistration(options.env);
+      const acceptanceSelected=!!manual?.spend.acceptance&&options.env.TELEGRAM_OWNER_DO?.idFromName(manual.policy.doName).toString()===options.actualDoId;
       const config = configuration();
-      if (!config?.meterGateway) return undefined;
-      const base = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY! });
+      if (!config?.meterGateway) {
+        const retained=['common-browser-acceptance:','common-browser-acceptance-custody:'].some(prefix=>[...options.storage.kv.list({prefix})].length>0);
+        return acceptanceSelected||retained?{async complete(){throw new ClosedRunError();}} satisfies LLMGatewayAdapter:undefined;
+      }
+      const base = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY!, singleAttempt: config.acceptanceEnabled });
       const metered = config?.meterGateway?.(base);
       if (!metered) return undefined;
       // Only a run that holds a browser allocation is metered. An expired or used-up registration denies browser allocations, never ordinary model calls.
       return new Proxy(base, { get(target, key) {
         if (key !== 'complete') { const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value; }
-        return (request: { runScope?: RunEffectScope }) => {
+        return (request: { runScope?: RunEffectScope; request?: {model?:string} }) => {
           const scope = request.runScope;
+          if(config.acceptanceEnabled){
+            const current=options.activeScope();
+            if(!scope||!current||scope.runId!==current.runId||scope.attempt!==current.attempt||scope.deadline!==current.deadline
+              ||scope.admit!==current.admit||scope.commit!==current.commit)throw new ClosedRunError();
+            scope.admit();if(request.request?.model!==WALDO_CHAT_MODEL)throw Error('browser acceptance model price unavailable');
+            // Hold the exact captured inbox capability through owner lookup and
+            // token/hash awaits; replacing the active run cannot revive it.
+            const guarded={...scope,admit:()=>{if(options.activeScope()!==current)throw new ClosedRunError();current.admit();}};
+            return metered.complete({...request,runScope:guarded} as never);
+          }
           return scope && funded(scope) ? metered.complete(request as never) : target.complete(request as never);
         };
       } });

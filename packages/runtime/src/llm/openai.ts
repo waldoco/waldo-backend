@@ -14,6 +14,8 @@ export type OpenAIResponsesClient = Pick<OpenAI, 'responses'>;
 export type OpenAIAdapterOptions = Readonly<{
   apiKey?: string;
   timeoutMs?: number;
+  // A pre-reserved acceptance call must issue at most one paid HTTP attempt.
+  singleAttempt?: boolean;
   client?: OpenAIResponsesClient;
   onResponseMetadata?: (metadata: OpenAIResponseMetadata) => void;
 }>;
@@ -30,16 +32,18 @@ export type OpenAIResponseMetadata = Readonly<{
 export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
   private readonly client: OpenAIResponsesClient | undefined;
   private readonly timeoutMs: number;
+  private readonly singleAttempt: boolean;
   private readonly missingKey: boolean;
   private readonly onResponseMetadata: ((metadata: OpenAIResponseMetadata) => void) | undefined;
 
   constructor(options: OpenAIAdapterOptions) {
+    this.singleAttempt = options.singleAttempt === true;
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.onResponseMetadata = options.onResponseMetadata;
     this.missingKey = options.apiKey !== undefined ? !validModelCredential(options.apiKey) : options.client === undefined;
     this.client = this.missingKey ? undefined : options.client ?? new OpenAI({
       apiKey: options.apiKey,
-      maxRetries: 2,
+      maxRetries: this.singleAttempt ? 0 : 2,
       timeout: this.timeoutMs,
     });
   }
@@ -76,7 +80,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
             ...(input.request.tools ? { tools: input.request.tools.map((tool) => ({ type: 'function' as const, name: tool.name, description: tool.description, parameters: tool.parameters, strict: false })) } : {}),
             ...(input.request.response_format ? { text: { format: { type: 'json_schema' as const, name: input.request.response_format.name, schema: input.request.response_format.schema, strict: true } } } : {}),
           },
-          { signal: controller.signal },
+          { signal: controller.signal, ...(this.singleAttempt ? { maxRetries: 0 } : {}) },
         );
         const text = responseText(response).trim();
         const toolCalls = response.output.flatMap((item) => item.type === 'function_call' ? [{ call_id: item.call_id, name: item.name, arguments: item.arguments }] : []);
@@ -96,7 +100,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
           ...(incomplete ? { truncated: true } : {}),
         };
         if (text.length === 0 && toolCalls.length === 0) {
-          if (attempt === 0) {
+          if (attempt === 0 && !this.singleAttempt) {
             spentInput = parsed.input_tokens;
             spentOutput = parsed.output_tokens;
             spentCached = parsed.cache_read_input_tokens;

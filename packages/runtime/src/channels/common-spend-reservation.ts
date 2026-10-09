@@ -3,13 +3,25 @@
 export type CommonSpendPolicy = Readonly<{
   ref: string; ownerId: string; validUntil: number; limitMicrousd: number; maxCalls: number;
 }>;
+// Operator-audited prior use includes attempts outside this retained ledger.
+// These values are immutable test evidence, never a fresh allowance on renewal.
+export type CommonBrowserAcceptance = Readonly<{
+  expiresAt:number; maxRuns:number; maxModelCalls:number;
+  priorRuns:number; priorModelCalls:number; priorMicrousd:number;
+}>;
+type AcceptanceRow = {policy:CommonBrowserAcceptance; baseline:string[]; runs:string[]; calls:string[]};
 type Reservation = Readonly<{id: string; upperBoundMicrousd: number}>;
 type Cleanup = {id:string; upperBoundMicrousd:number; maxCalls:number; issued:number};
 type Ledger = {policy: CommonSpendPolicy; reservedMicrousd: number; calls: Reservation[]; cleanup:Cleanup[]};
 export function commonSpendReservation(storage: Pick<DurableObjectStorage,'kv'|'transactionSync'>,
-  policy: CommonSpendPolicy, now: () => number, assertCurrent: () => void) {
+  policy: CommonSpendPolicy, now: () => number, assertCurrent: () => void, acceptance?: CommonBrowserAcceptance) {
   if(!policy.ref || !policy.ownerId || !Number.isSafeInteger(policy.validUntil) ||
      !Number.isSafeInteger(policy.limitMicrousd) || policy.limitMicrousd <= 0 || !Number.isSafeInteger(policy.maxCalls) || policy.maxCalls<1) throw Error('common spend policy invalid');
+  if(acceptance && (![acceptance.expiresAt,acceptance.maxRuns,acceptance.maxModelCalls,acceptance.priorRuns,acceptance.priorModelCalls,acceptance.priorMicrousd].every(Number.isSafeInteger)
+    || acceptance.expiresAt>policy.validUntil || acceptance.maxRuns<1 || acceptance.maxRuns>2 || acceptance.maxModelCalls<1 || acceptance.maxModelCalls>8
+    || acceptance.priorRuns<0 || acceptance.priorRuns>acceptance.maxRuns || acceptance.priorModelCalls<0 || acceptance.priorModelCalls>acceptance.maxModelCalls
+    || acceptance.priorMicrousd<0 || acceptance.priorMicrousd>policy.limitMicrousd))throw Error('common browser acceptance invalid');
+  const gate=acceptance?Object.freeze({...acceptance}):undefined;
   const frozen = Object.freeze({...policy});
   const key = `common-spend:${frozen.ref}`;
   const read = (): Ledger => {
@@ -26,8 +38,24 @@ export function commonSpendReservation(storage: Pick<DurableObjectStorage,'kv'|'
        row.calls.reduce((sum,call)=>sum+call.upperBoundMicrousd,0)+row.cleanup.reduce((sum,item)=>sum+item.upperBoundMicrousd,0)!==row.reservedMicrousd) throw Error('common spend ledger conflict');
     return row;
   };
+  const acceptanceKey=`common-browser-acceptance:${frozen.ref}`;
+  const readAcceptance=(row:Ledger):AcceptanceRow|undefined=>{
+    if(!gate){if(storage.kv.get(acceptanceKey))throw Error('common browser acceptance policy missing');return undefined;}
+    const models=row.calls.filter(call=>call.id.startsWith('model:')).map(call=>call.id);
+    const retained=storage.kv.get<AcceptanceRow>(acceptanceKey);
+    if(!retained){
+      if(models.length>gate.priorModelCalls)throw Error('common browser acceptance prior history understated');
+      return {policy:gate,baseline:models,runs:[],calls:[]};
+    }
+    if(JSON.stringify(retained.policy)!==JSON.stringify(gate)||!Array.isArray(retained.baseline)||!Array.isArray(retained.runs)||!Array.isArray(retained.calls)
+      || retained.baseline.length>gate.priorModelCalls || retained.runs.length+gate.priorRuns>gate.maxRuns || retained.calls.length+gate.priorModelCalls>gate.maxModelCalls
+      || [retained.baseline,retained.runs,retained.calls].some(items=>items.some(item=>typeof item!=='string'||!item)||new Set(items).size!==items.length)
+      || models.length!==retained.baseline.length+retained.calls.length || models.some(id=>!retained.baseline.includes(id)&&!retained.calls.includes(id)))throw Error('common browser acceptance history conflict');
+    return retained;
+  };
   return Object.freeze({
-    reserve(id:string,upperBoundMicrousd:number):void {
+    acceptanceEnabled:!!gate,
+    reserve(id:string,upperBoundMicrousd:number,runId?:string):void {
       if(!id || id.length>256 || !Number.isSafeInteger(upperBoundMicrousd) || upperBoundMicrousd<0) throw Error('common spend reservation invalid');
       storage.transactionSync(()=>{
         assertCurrent();
@@ -36,9 +64,17 @@ export function commonSpendReservation(storage: Pick<DurableObjectStorage,'kv'|'
         // A prior intent is uncertainty, not permission to issue the effect again.
         if(row.calls.length+row.cleanup.reduce((sum,item)=>sum+item.maxCalls,0)>=frozen.maxCalls) throw Error('common spend call limit exceeded');
         if(row.calls.some(call=>call.id===id)) throw Error('common spend prior effect requires reconciliation');
+        const test=readAcceptance(row);
+        if(gate&&now()>=gate.expiresAt)throw Error('common browser acceptance expired');
+        if(test&&id.startsWith('model:')){
+          if(!runId)throw Error('common browser acceptance run unavailable');
+          if(test.calls.length+gate!.priorModelCalls>=gate!.maxModelCalls)throw Error('common browser acceptance model limit exceeded');
+          if(!test.runs.includes(runId)&&test.runs.length+gate!.priorRuns>=gate!.maxRuns)throw Error('common browser acceptance run limit exceeded');
+        }
         const total=row.reservedMicrousd+upperBoundMicrousd;
-        if(!Number.isSafeInteger(total) || total>frozen.limitMicrousd) throw Error('common spend limit exceeded');
+        if(!Number.isSafeInteger(total) || total+(gate?.priorMicrousd??0)>frozen.limitMicrousd) throw Error('common spend limit exceeded');
         storage.kv.put(key,{...row,reservedMicrousd:total,calls:[...row.calls,{id,upperBoundMicrousd}]});
+        if(test)storage.kv.put(acceptanceKey,id.startsWith('model:')?{...test,calls:[...test.calls,id],runs:test.runs.includes(runId!)?test.runs:[...test.runs,runId!]}:test);
       });
     },
     reserveCleanup(id:string,upperBoundMicrousd:number,maxCalls:number,commit:()=>void):void {
@@ -48,9 +84,12 @@ export function commonSpendReservation(storage: Pick<DurableObjectStorage,'kv'|'
         const row=read();
         if(row.cleanup.some(item=>item.id===id))throw Error('common cleanup prior allocation requires reconciliation');
         if(row.calls.length+row.cleanup.reduce((sum,item)=>sum+item.maxCalls,0)+maxCalls>frozen.maxCalls)throw Error('common spend call limit exceeded');
+        const test=readAcceptance(row);
+        if(gate&&now()>=gate.expiresAt)throw Error('common browser acceptance expired');
         const total=row.reservedMicrousd+upperBoundMicrousd;
-        if(!Number.isSafeInteger(total)||total>frozen.limitMicrousd)throw Error('common spend limit exceeded');
+        if(!Number.isSafeInteger(total)||total+(gate?.priorMicrousd??0)>frozen.limitMicrousd)throw Error('common spend limit exceeded');
         storage.kv.put(key,{...row,reservedMicrousd:total,cleanup:[...row.cleanup,{id,upperBoundMicrousd,maxCalls,issued:0}]});
+        if(test)storage.kv.put(acceptanceKey,test);
         commit();
       });
     },
@@ -99,7 +138,7 @@ export function commonSpendCalls(ledger: ReturnType<typeof commonSpendReservatio
           if(!Number.isSafeInteger(counted)||counted<0||counted>1_050_000)throw Error('common model count witness invalid');
           pricedMaterial={...material,countedInputTokens:counted};
         }
-        try{ledger.reserve(`model:${hash}:${ordinal}`,quote('model',pricedMaterial));}
+        try{ledger.reserve(`model:${hash}:${ordinal}`,quote('model',pricedMaterial),scope.runId);}
         catch(error){unreconciledModels.add(physical);throw error;}
         return gateway.complete(request);
       };}});

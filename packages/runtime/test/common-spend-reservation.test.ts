@@ -148,3 +148,40 @@ it('invalid count witness refuses before any reservation and issues no effect',a
  }
  expect(issued).toBe(0);expect(f.rows.has('common-spend:fictional-policy')).toBe(false);
 });
+
+
+it('gates the first model call, ninth physical request and third run across reconstruction without refund',async()=>{
+ const f=fixture(),acceptance={expiresAt:100,maxRuns:2,maxModelCalls:8,priorRuns:0,priorModelCalls:0,priorMicrousd:0};
+ const {commonSpendCalls}=await import('../src/channels/common-spend-reservation');let issued=0;
+ const make=()=>commonSpendCalls(commonSpendReservation(f.storage,{...policy,maxCalls:30,limitMicrousd:100},f.now,()=>{},acceptance),()=>1).gateway({complete:async(_request:unknown)=>{issued++;return 'done';}});
+ const first=make();
+ await first.complete({runScope:scope,request:{}});expect(issued).toBe(1);
+ await expect(make().complete({runScope:scope,request:{}})).rejects.toThrow(/reconciliation/);
+ await first.complete({runScope:{...scope,runId:'second'},request:{}});
+ await expect(first.complete({runScope:{...scope,runId:'third'},request:{}})).rejects.toThrow(/acceptance run limit/);
+ for(let i=0;i<6;i++)await first.complete({runScope:scope,request:{}});
+ await expect(first.complete({runScope:scope,request:{}})).rejects.toThrow(/acceptance model limit/);
+ expect(issued).toBe(8);
+});
+
+
+it('audited prior attempts reduce the aggregate money and request allowance and cannot change after reconstruction',()=>{
+ const f=fixture(),gate={expiresAt:100,maxRuns:2,maxModelCalls:8,priorRuns:1,priorModelCalls:7,priorMicrousd:8};
+ const make=(acceptance=gate)=>commonSpendReservation(f.storage,policy,f.now,()=>{},acceptance);
+ const ledger=make();ledger.reserve('model:first:1',1,'last-run');expect(ledger.reserved()).toBe(1);
+ expect(()=>make().reserve('model:second:1',1,'last-run')).toThrow(/model limit/);
+ expect(()=>make({...gate,priorModelCalls:0}).reserve('browser:next:1',0)).toThrow(/history conflict/);
+ expect(()=>ledger.reserveCleanup('allocation',2,1,()=>{})).toThrow(/limit exceeded/);
+ ledger.reserveCleanup('allocation',1,1,()=>{});f.expire();ledger.consumeCleanup('allocation');
+ expect(()=>ledger.reserve('browser:next:1',0)).toThrow(/expired/);
+});
+
+
+it('concurrent physical requests atomically stop at the eighth reservation',async()=>{
+ const f=fixture(),gate={expiresAt:100,maxRuns:2,maxModelCalls:8,priorRuns:0,priorModelCalls:0,priorMicrousd:0};let issued=0;
+ const {commonSpendCalls}=await import('../src/channels/common-spend-reservation');
+ const ledger=commonSpendReservation(f.storage,{...policy,maxCalls:30},f.now,()=>{},gate);
+ const gateway=commonSpendCalls(ledger,()=>1).gateway({complete:async(_request:unknown)=>{issued++;return 'done';}});
+ const results=await Promise.allSettled(Array.from({length:9},()=>gateway.complete({request:{},runScope:scope})));
+ expect(results.filter(item=>item.status==='fulfilled')).toHaveLength(8);expect(results.filter(item=>item.status==='rejected')).toHaveLength(1);expect(issued).toBe(8);expect(ledger.reserved()).toBe(8);
+});

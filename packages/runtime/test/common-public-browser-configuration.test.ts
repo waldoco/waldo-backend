@@ -28,7 +28,7 @@ it('changed source/owner/authority/expiry and widened retained policy deny befor
  const f=fixture();await expect(f.config().grant({...f.task,sources:['workspace']},f.ownerId)).rejects.toThrow('source unavailable');
  await expect(f.config().grant(f.task,'another-owner')).rejects.toThrow('source unavailable');
  const grant=await f.config().grant(f.task,f.ownerId);f.changeAuthority();await expect(f.config().assertGrantCurrent(grant)).rejects.toThrow('authority changed');
- f.advance();await expect(f.config().reserveAllocation(grant)).rejects.toThrow('policy unavailable');
+ f.advance();await expect(f.config().reserveAllocation(grant)).rejects.toThrow(/expired|policy unavailable/);
  expect((f.rows.get('common-public-browser-usage:fixture-policy') as any).allocations).toBe(0);
 });
 it('exact retained policy prevents resetting usage by changing limits or origins under same reference',async()=>{
@@ -112,4 +112,25 @@ it('one staging browser registration does not install its spend gate on another 
  f.rows.set('do_name',f.policy.doName);f.rows.set('telegram_subject','81107');
  expect(f.config()).toBeUndefined();
  expect([...f.rows.keys()].some(key=>key.startsWith('common-spend:'))).toBe(false);
+});
+
+
+it('renewed policy accepts retained history without renewing an expired task grant',async()=>{
+ const f=fixture(),grant=await f.config().grant(f.task,f.ownerId);f.advance();
+ const policy={...f.policy,expiresAt:200000},key='common-public-browser-usage:fixture-policy',row=f.rows.get(key) as any;
+ f.rows.set(key,{...row,policy});
+ const renewed=commonPublicBrowserConfiguration({env:f.env,storage:f.storage,actualDoId:'physical',policy,loadSdk:commonBrowserFixtureLoader,spend:f.spend,now:()=>100001})!;
+ await expect(renewed.assertGrantCurrent(grant)).rejects.toThrow('grant expired');
+ await expect(renewed.reserveAllocation(grant)).rejects.toThrow('grant expired');
+ expect((f.rows.get(key) as any).taskGrants[0]).toEqual(grant);expect((f.rows.get(key) as any).allocations).toBe(0);
+});
+
+
+it('a delayed owner lookup cannot pass an older task expiry inside a renewed policy',async()=>{
+ const f=fixture(),grant=await f.config().grant(f.task,f.ownerId),policy={...f.policy,expiresAt:200000};
+ const key='common-public-browser-usage:fixture-policy';f.rows.set(key,{...(f.rows.get(key) as any),policy});
+ let at=99999,release!:()=>void,entered!:()=>void;const gate=new Promise<void>(resolve=>release=resolve),ready=new Promise<void>(resolve=>entered=resolve),original=fetch;
+ vi.stubGlobal('fetch',async(...args:Parameters<typeof fetch>)=>{entered();await gate;return original(...args);});
+ const config=commonPublicBrowserConfiguration({env:f.env,storage:f.storage,actualDoId:'physical',policy,loadSdk:commonBrowserFixtureLoader,spend:f.spend,now:()=>at})!;
+ const pending=config.assertGrantCurrent(grant);await ready;at=100001;release();await expect(pending).rejects.toThrow('grant expired');expect((f.rows.get(key) as any).allocations).toBe(0);
 });
