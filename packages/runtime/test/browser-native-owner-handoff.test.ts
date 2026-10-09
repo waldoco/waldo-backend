@@ -60,3 +60,17 @@ it('maintenance status awaited across successful resume does not close the resum
  expect(await f.host.actionHandler.handle({url:read.data.url,task:'Resume',max_actions:1,command:{operation:'resume_owner_login'}},{...(f.ctx as any),turnId:'later-turn'})).toMatchObject({ok:true});
  release();await maintenance;expect(commonBrowserFixture.ends).toBe(0);await f.host.cancel();
 });
+it('console opening rejects a changed session generation even with the same grant',async()=>{
+ const f=fixture(),read=await f.host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Open task'},f.ctx) as any;
+ expect(await f.host.actionHandler.handle({url:read.data.url,task:'Login',max_actions:1,command:{operation:'owner_login',reason:'Owner login'}},f.ctx)).toMatchObject({ok:true});
+ const row=f.rows.get('common-browser:login-task') as any;row.session.generation++;f.rows.set('common-browser:login-task',row);
+ await expect(f.host.openHandoff()).rejects.toThrow();expect(nativeHandoffDouble.commands).not.toContain('Cloudflare.getLiveView');await f.host.cancel();
+});
+it('revocation and funded expiry close the exact login session without allocation or snapshots',async()=>{
+ for(const mode of ['revoked','expired']){
+  const f=fixture(),read=await f.host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Open task'},f.ctx) as any;
+  expect(await f.host.actionHandler.handle({url:read.data.url,task:'Login',max_actions:1,command:{operation:'owner_login',reason:'Owner login'}},f.ctx)).toMatchObject({ok:true});
+  if(mode==='revoked')f.revoke();else{const row=f.rows.get('common-browser:login-task') as any;row.session.expiresAt=Date.now()-1;f.rows.set('common-browser:login-task',row);}
+  await f.host.maintainHandoff();expect(commonBrowserFixture.ends).toBe(1);expect(commonBrowserFixture.allocations).toBe(1);expect(f.host.attachments()).toEqual([]);expect((f.rows.get('common-browser:login-task') as any).cleanup).toBe('closed');
+ }
+});

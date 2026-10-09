@@ -46,6 +46,7 @@ export function commonBrowserHost(options:Readonly<{
  source():TaskSourceSnapshot;assertCurrent():Promise<void>;deadline():number;now():number;
 }>) {
  let images:LLMAttachment[]=[];
+ let handoffSession:BrowserSession|undefined;
  let human: Awaited<ReturnType<ReturnType<typeof cloudflareGeneralBrowser>['beginOwnerHandoff']>>|undefined;
  let execution:Readonly<{grant:string;driver:ReturnType<typeof cloudflareGeneralBrowser>}>|undefined;
  const snapshot=()=>options.source();
@@ -78,7 +79,7 @@ export function commonBrowserHost(options:Readonly<{
   if(!options.config.assertHandoffCurrent)throw Error('owner handoff custody unavailable');
   await options.config.assertHandoffCurrent(grant);
   const row=options.storage.kv.get<Record>(key(grant.taskId));
-  if(!row||row.cleanup||row.session.ownerId!==options.ownerId||row.session.expiresAt<=options.now()||JSON.stringify(row.grant)!==JSON.stringify(grant)||!row.handoff)throw Error('owner handoff unavailable');
+  if(!row||row.cleanup||row.session.ownerId!==options.ownerId||row.session.expiresAt<=options.now()||JSON.stringify(row.grant)!==JSON.stringify(grant)||!row.handoff||handoffSession&&(row.session.id!==handoffSession.id||row.session.generation!==handoffSession.generation||row.session.providerSessionId!==handoffSession.providerSessionId))throw Error('owner handoff unavailable');
   return row;
  };
  const publishObservation=async(grant:CommonBrowserGrant,record:Record,observed:GeneralSnapshot,ctx:ToolDispatcherContext)=>{
@@ -152,7 +153,7 @@ export function commonBrowserHost(options:Readonly<{
     const driver=executionDriver(grant,ctx),before=record.observation!;
     if(command.operation==='owner_login'){
      if(!options.config.assertHandoffCurrent||!(ctx.runScope?.runId??ctx.turnId))throw Error('owner login unavailable');
-     images=[];
+     images=[];handoffSession={...record.session};
      save({...record,observation:undefined,tabs:[],handoff:{version:1,state:'starting',targetId:before.targetId,origin:new URL(before.observation.url).origin,reason:command.reason,requestRunId:(ctx.runScope?.runId??ctx.turnId)!}},storageKey);
      try {
       human=await driver.beginOwnerHandoff(record.session,before,command.reason,async()=>{await handoffCurrent(grant);});
@@ -220,7 +221,7 @@ resetAttachments(){images=[];},sessionHandle:()=>options.storage.kv.get<Record>(
   if(record.cleanupFailed)throw new GeneralBrowserError('cleanup_unconfirmed');
   save({...record,observation:undefined,tabs:[],cleanup:'pending'},key(task.taskId));
   if(record.session.providerSessionId==='pending')throw Error('common browser allocation uncertain');
-  try{await human?.controller.dispose();}catch{/* Exact termination below revokes viewers. */}finally{human=undefined;}
+  try{await human?.controller.dispose();}catch{/* Exact termination below revokes viewers. */}finally{human=undefined;handoffSession=undefined;}
   try{await execution?.driver.disconnect();}catch{/* Exact physical termination below is the authoritative cleanup. */}finally{execution=undefined;}
   // Cleanup does not depend on a still-live execution lease.
   try{
@@ -258,5 +259,17 @@ export function revokeCommonBrowsers(storage:DurableObjectStorage,now:number){
    storage.kv.put(key,{...row,cleanup:'pending'});if(!row.cleanupFailed)pending=true;
   }
   storage.kv.put(COMMON_BROWSER_DUE,pending?now:null);
+ });
+}
+
+// A reconstructed runtime has no authenticated completion listener or native
+// document custody. Never resurrect its login from durable metadata alone.
+export function fenceLostNativeHandoffs(storage:DurableObjectStorage,now:number){
+ storage.transactionSync(()=>{
+  let pending=false;
+  for(const [key,row] of storage.kv.list<BrowserRecord>({prefix:'common-browser:'}))if(row.handoff&&row.cleanup!=='closed'){
+   storage.kv.put(key,{...row,observation:undefined,tabs:[],cleanup:'pending'});if(!row.cleanupFailed)pending=true;
+  }
+  if(pending)storage.kv.put(COMMON_BROWSER_DUE,now);
  });
 }
