@@ -26,6 +26,7 @@ export * from './adapters/doc';
 export * from './adapters/workspace';
 export * from './auth/mint';
 export * from './auth/consent';
+export * from './auth/app-session';
 export * from './tools/connect-intent';
 export * from './tools/permissions';
 export * from './tools/handler';
