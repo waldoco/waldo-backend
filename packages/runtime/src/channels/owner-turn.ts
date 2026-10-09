@@ -1,5 +1,5 @@
 import { OWNER_REQUEST_HOP } from './harness';
-import { withholdHeldTurns } from '../conversation/held-turns';
+import { narrowHeldJson, withholdHeldTurns } from '../conversation/held-turns';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
@@ -444,7 +444,7 @@ export const createOwnerResponder = (
           undefined,
           attachments.length ? attachments : undefined,
           tools,
-          withholdHeldTurns(turns, output => holdsHeldTopic(output)),
+          withholdHeldTurns(turns, output => holdsHeldTopic(output), output => narrowHeldJson(output, (value, tally) => withholdHeldItems(value, tally))),
           );
         },
         onTool: (event) => {
