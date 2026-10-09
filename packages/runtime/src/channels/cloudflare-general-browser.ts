@@ -1,7 +1,9 @@
 import {nativeBrowserHandoff} from './native-browser-handoff';
+import {browserHttpAttachment} from './browser-http-attachment';
+import type {BrowserDownloadMetadata} from './browser-download-workspace';
 import {prepareGeneralPublicRead} from './general-browser-public-read';
 import { LIMITS, validId, validatePath } from '@waldo/workspace';
-import type { Browser, BrowserContext, BrowserWorker, Page, Route } from '@cloudflare/playwright';
+import type { APIResponse,Browser, BrowserContext, BrowserWorker, Page, Route } from '@cloudflare/playwright';
 import { browserSessionSchema, type BrowserSession } from '@waldo/contracts';
 import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
 import { cloudflareBrowserGuardOptions } from './cloudflare-browser-adapter';
@@ -31,6 +33,7 @@ export function cloudflareGeneralBrowser(options: Options) {
   const humanRequests=new Set<Promise<void>>();
   const humanRedirects=new WeakMap<Page,Set<string>>();
   let takeover: ReturnType<typeof nativeBrowserHandoff> | undefined;
+  let attachmentCapture:{page:Page;url:string;complete:boolean;consume(response:APIResponse):Promise<void>}|undefined;
   let currentRouteGuard: ((route: Route) => Promise<void>) | undefined;
   const connectionKey = (session: BrowserSession) => JSON.stringify([session.ownerId, session.id, session.generation, session.providerSessionId]);
   const cleanupTimeoutMs = options.cleanupTimeoutMs ?? 10000;
@@ -155,6 +158,11 @@ export function cloudflareGeneralBrowser(options: Options) {
       // documents. Between operations the previous guard still checks authority.
       currentRouteGuard = async route => {
         try {
+          const capture=attachmentCapture,request=route.request();
+          if(capture&&request.url()===capture.url&&request.isNavigationRequest()&&!request.frame().parentFrame()&&request.frame().page()===capture.page){
+            await guardGeneralBrowserRoute(route,{authorize:(url,method)=>allowed(session,url,method),timeout:()=>actionTimeout(session),admit:()=>admit(session),redirect:()=>{throw new GeneralBrowserError('rejected');},denied:(page,status)=>{invalidDocuments.add(page);documentFailure=new GeneralBrowserError('page_unavailable',{status});},attachment:async response=>{await capture.consume(response);capture.complete=true;}});
+            return;
+          }
           if(takeover){
             const request=route.request(),page=request.frame().page();
             const authorize=async(url:string,method:string)=>{identity(session);if(!takeover||!options.authorizeHumanRequest||!await options.authorizeHumanRequest(url,method))throw new GeneralBrowserError('rejected');identity(session);};
@@ -360,6 +368,23 @@ export function cloudflareGeneralBrowser(options: Options) {
       const held=takeover;await Promise.all([...humanRequests]);if(!held.ready())throw new GeneralBrowserError('rejected');held.complete();await held.dispose();takeover=undefined;
       return attached(session,async(_,context)=>observe(session,context,await select(session,context,reference)));
     },
+    download:(session:BrowserSession,snapshot:GeneralActionSnapshot,reference:string,beforeDispatch:()=>Promise<void>,consume:(metadata:BrowserDownloadMetadata,bytes:Uint8Array)=>Promise<void>)=>attached(session,async(_,context)=>{
+      if(attachmentCapture||snapshot.ownerId!==session.ownerId||snapshot.sessionId!==session.id||snapshot.generation!==session.generation)throw new GeneralBrowserError('stale_observation');
+      const page=await select(session,context,snapshot.observation.tab_ref),fresh=await observe(session,context,page);
+      if(fresh.targetId!==snapshot.targetId||fresh.digest!==snapshot.digest)throw new GeneralBrowserError('stale_observation');
+      const element=snapshot.state.elements[snapshot.observation.elements.findIndex(element=>element.ref===reference)];
+      if(!element||element.disabled||element.tag!=='a'||!element.href)throw new GeneralBrowserError('rejected');
+      await allowed(session,element.href);await beforeDispatch();await admit(session);
+      const capture=attachmentCapture={page,url:element.href,complete:false,consume:async response=>{
+        const attachment=await browserHttpAttachment(response,()=>boundedSemanticRead(session,async()=>new Uint8Array(await response.body())));
+        await admit(session);await consume(attachment.metadata,attachment.bytes);await admit(session);
+      }};
+      try{
+        try{await page.goto(element.href,{waitUntil:'domcontentloaded',timeout:actionTimeout(session)});}
+        catch(error){if(!capture.complete||!(error instanceof Error)||!error.message.startsWith(`page.goto: net::ERR_ABORTED at ${element.href}\n`))throw error;}
+        if(!capture.complete)throw new GeneralBrowserError('page_unavailable');
+      }finally{if(attachmentCapture===capture)attachmentCapture=undefined;}
+    }),
     async start(allowedDomains: readonly string[] | 'public', lifetimeMs: number,
       beforeAllocate: (allocation: Readonly<{ allowedDomains: readonly string[] | 'public'; lifetimeMs: number }>) => Promise<void>,
       recordAllocation: (providerSessionId: string) => Promise<void>,

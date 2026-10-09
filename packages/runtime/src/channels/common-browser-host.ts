@@ -10,6 +10,7 @@ import type { GeneralSnapshot, GeneralActionSnapshot } from './general-browser-o
 import type {workspaceOwnerHost} from './workspace-host';
 import {generalDigest} from './general-browser-observation';
 import {browserScreenshotToWorkspace} from './browser-screenshot-workspace';
+import {browserDownloadToWorkspace,type BrowserDownloadMetadata,type BrowserDownloadReceipt} from './browser-download-workspace';
 import type { GeneralBrowserAction } from './general-browser-actions';
 export type CommonBrowserGrant = Readonly<{ ref:string;taskId:string;ownerId:string;expiresAt:number;allowedOrigins:readonly string[];maxScreenshotBytes:number;lifetimeMs:number;keepAliveMs?:number }>;
 // Private registered host capability. Neither model arguments nor environment switches mint it.
@@ -33,7 +34,7 @@ export type CommonBrowserConfiguration = Readonly<{
 export const COMMON_BROWSER_CHECKPOINT_BYTES=128*1024;
 const encodedCheckpointBytes=(record:BrowserRecord)=>new TextEncoder().encode(JSON.stringify(record)).byteLength;
 export const COMMON_BROWSER_DUE='common_browser_due_v1';
-type BrowserRecord={handoff?:NativeHandoffMetadata;grant:CommonBrowserGrant;session:BrowserSession;tabs:Readonly<{url:string;ref:string}>[];allocation:'prepared'|'observed';observation?:GeneralActionSnapshot;action?:Readonly<{digest:string;state:'prepared'|'observed'|'uncertain'}>;cleanup?:'pending'|'closed';cleanupFailed?:boolean};
+type BrowserRecord={download?:Readonly<{operationId:string;digest:string;state:'prepared'|'importing'|'ready';metadata?:BrowserDownloadMetadata;receipt?:BrowserDownloadReceipt}>;handoff?:NativeHandoffMetadata;grant:CommonBrowserGrant;session:BrowserSession;tabs:Readonly<{url:string;ref:string}>[];allocation:'prepared'|'observed';observation?:GeneralActionSnapshot;action?:Readonly<{digest:string;state:'prepared'|'observed'|'uncertain'}>;cleanup?:'pending'|'closed';cleanupFailed?:boolean};
 const sameSession=(a:BrowserRecord,b:BrowserRecord)=>a.session.ownerId===b.session.ownerId&&a.session.id===b.session.id&&a.session.generation===b.session.generation&&a.session.providerSessionId===b.session.providerSessionId&&JSON.stringify(a.grant)===JSON.stringify(b.grant);
 const publishCleanup=(storage:DurableObjectStorage,key:string,expected:BrowserRecord,closed:boolean)=>storage.transactionSync(()=>{
  const current=storage.kv.get<BrowserRecord>(key);
@@ -124,7 +125,7 @@ export function commonBrowserHost(options:Readonly<{
     return {...published,data:{...published.data,...(recovering?{document_state:'recreated',previous_document_lost:true,document_notice:'The prior browser document was lost. Unsent form values and old action refs are unavailable. The page was recreated in the same paid session; no effect was replayed.'}:{})}};
    }catch(error){return {ok:false,code:'rejected',error:'Public browser read is unavailable or uncertain. Inspect retained task state before retrying; no successful read is claimed.'+(error instanceof GeneralBrowserError?' Browser diagnostic: '+JSON.stringify({browser_code:error.code,...(error.diagnostic?{diagnostic:error.diagnostic}:{}),...(error.cleanup_failed?{cleanup_failed:true}:{}),...(error.release_failed?{release_failed:true}:{})}):''),source_taint:'external'};}
   }};
- const actionHandler:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>={name:'browse_act',description:'Interact with the current Cloudflare public page using observed refs: goto, read, inspect, type, click, select, set_checked, scroll. File selection, page sends and native submits are unsupported. Unknown outcomes block repeated effects; read evidence before deciding what completed.',schema:browseActArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_act')),autonomy_gated:false,
+ const actionHandler:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>={name:'browse_act',description:'Interact with the current Cloudflare public page using observed refs: goto, read, inspect, type, click, select, set_checked, scroll. Download observed HTTP GET attachment links into the private owner workspace. File selection, page sends and native submits are unsupported. Unknown outcomes block repeated effects; read evidence before deciding what completed.',schema:browseActArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_act')),autonomy_gated:false,
   async handle(args,ctx){let storageKey:string|undefined,digest:string|undefined;
    try{
     if(options.config.retainInteractions!==true)throw Error('retained interaction capability unavailable');
@@ -151,6 +152,50 @@ export function commonBrowserHost(options:Readonly<{
      return {...published,data:{...published.data,owner_login:'completed',intended_account_verification_required:true,notice:'Provider completion is not intended-account verification. Verify the observed signed-in account before continuing.'}};
     }
     const driver=executionDriver(grant,ctx),before=record.observation!;
+    if(command.operation==='download'){
+     const duration=Math.min(record.session.expiresAt,options.deadline())-options.now();
+     if(!Number.isSafeInteger(duration)||duration<1||duration>2147483647)throw Error('download expired');
+     let timer:ReturnType<typeof setTimeout>|undefined,downloadExpired=false;
+     const interrupted=new Promise<never>((_,reject)=>{timer=setTimeout(()=>{downloadExpired=true;reject(Error('download expired'));},duration);});
+     const runDownload=async()=>{
+     if(!options.files||record.action?.state==='prepared'||record.action?.state==='uncertain')throw Error('owner download unavailable');
+     const downloadDigest=await generalDigest(JSON.stringify([before.targetId,before.observation.revision,command.element_ref]));
+     const prior=record.download;
+     if(prior&&prior.digest!==downloadDigest&&prior.state!=='ready')throw Error('prior download uncertain');
+     const operationId=prior?.digest===downloadDigest?prior.operationId:crypto.randomUUID();
+     const currentDownload=()=>{
+      const latest=options.storage.kv.get<Record>(storageKey!);
+      if(downloadExpired||!latest||latest.cleanup||latest.handoff||!sameSession(latest,record!)||latest.session.expiresAt<=options.now()||options.deadline()<=options.now()||latest.download?.operationId!==operationId||latest.download.digest!==downloadDigest)throw Error('download custody changed');
+      return latest;
+     };
+     const assertDownload=async()=>{
+      await checked();await options.config.assertGrantCurrent(grant);await ctx.assertTaskSourceCurrent?.();
+      currentDownload();
+     };
+     const importFile=async(metadata:BrowserDownloadMetadata,bytes?:Uint8Array)=>{
+      await assertDownload();const files=await options.files!(assertDownload,options.ownerId);await assertDownload();
+      const receipt=await browserDownloadToWorkspace({...files,operationId,metadata,bytes,deadline:Math.min(record.session.expiresAt,options.deadline()),now:options.now,assertCurrent:assertDownload});
+      await assertDownload();options.storage.transactionSync(()=>{const latest=currentDownload();save({...latest,download:{...latest.download!,state:'ready',receipt}},storageKey!);});
+      return receipt;
+     };
+     let receipt:BrowserDownloadReceipt|undefined;
+     if(prior?.digest===downloadDigest){
+      if(!prior.metadata)throw Error('download body unavailable; no repeat');
+      receipt=await importFile(prior.metadata);
+     }else{
+      await driver.download(record.session,before,command.element_ref,async()=>{
+       await checked();await options.config.assertGrantCurrent(grant);await ctx.assertTaskSourceCurrent?.();
+       options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(downloadExpired||!latest||latest.cleanup||latest.handoff||!sameSession(latest,record!)||latest.observation?.observation.revision!==before.observation.revision||latest.download?.operationId!==prior?.operationId||latest.session.expiresAt<=options.now()||options.deadline()<=options.now())throw Error('download document changed');save({...latest,download:{operationId,digest:downloadDigest,state:'prepared'}},storageKey!);});
+      },async(metadata,bytes)=>{
+       await assertDownload();options.storage.transactionSync(()=>{const latest=currentDownload();save({...latest,download:{...latest.download!,state:'importing',metadata}},storageKey!);});
+       receipt=await importFile(metadata,bytes);
+      });
+     }
+     if(!receipt)throw Error('download receipt unavailable');await assertDownload();
+     return {ok:true,data:{session_handle:record.session.id,download:receipt,notice:'Attachment bytes are saved and retrieval verified in your private workspace. This is not verification of the broader browser task.'},source_taint:'external'} as const;
+     };
+     try{return await Promise.race([runDownload(),interrupted]);}finally{if(timer!==undefined)clearTimeout(timer);}
+    }
     if(command.operation==='owner_login'){
      if(!options.config.assertHandoffCurrent||!(ctx.runScope?.runId??ctx.turnId))throw Error('owner login unavailable');
      images=[];handoffSession={...record.session};
