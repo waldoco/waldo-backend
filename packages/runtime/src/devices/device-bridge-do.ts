@@ -4,12 +4,13 @@ import { armAlarm } from '../scheduler/alarm-slot';
 import { canonicalJson, parseStrictJson } from './canonical-json';
 import type { DeviceBridgeEnv } from './connect-route';
 import { CLOCK_SKEW_SECONDS, CONTRACT_VERSION, FRAME_BYTES, MAX_DEVICE_FRAME_FINGERPRINTS, ONLINE_SECONDS } from './contract';
+import { admitFrame, principalFresh, type FrameWindow } from './frame-budget';
 import { deviceDirectory, type DeviceAuth } from './device-directory';
 import { deviceDiagnostic, genericReject } from './generic-reject';
 import { httpSigningFields } from './redeem-route';
 import { frameSignatureBase, httpSignatureBase, sha256Hex, verifyEd25519 } from './signing';
 import { ackFrame, resultFrame, connectDeclaration, heartbeatFrame, identifier, record } from './wire';
-type Binding = DeviceAuth & { device_id: string; declared_capabilities: string[]; last_heartbeat_at: number | null; generation: string; outbox_depth?: number | null };
+type Binding = DeviceAuth & { device_id: string; declared_capabilities: string[]; last_heartbeat_at: number | null; generation: string; outbox_depth?: number | null; frames?: FrameWindow; principal_checked_at?: number };
 export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
   constructor(ctx: DurableObjectState, env: DeviceBridgeEnv) {
     super(ctx, env);
@@ -71,6 +72,9 @@ export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
       if (bytes.length > FRAME_BYTES) throw new Error('invalid_shape');
       const parsed = parseStrictJson(bytes, true), frame = heartbeatFrame(parsed) ?? ackFrame(parsed) ?? resultFrame(parsed);
       const binding = socket.deserializeAttachment() as Binding;
+      const nowSeconds = Math.floor(Date.now() / 1000), budget = binding ? admitFrame(binding.frames, nowSeconds) : null;
+      if (binding && !budget) { deviceDiagnostic('invalid_shape'); socket.close(1008); return; }
+      if (binding && budget) binding.frames = budget;
       if (record(parsed) && parsed.contract_version !== CONTRACT_VERSION) { deviceDiagnostic('version_mismatch'); socket.close(1008); return; }
       if (!frame || !binding || !this.active(socket, binding) || frame.device_id !== binding.device_id || frame.owner_id !== binding.owner_id || Math.abs(Math.floor(Date.now() / 1000) - frame.timestamp) > CLOCK_SKEW_SECONDS || (frame.type === 'heartbeat' && frame.payload.declared_capabilities.join(',') !== binding.declared_capabilities.join(','))) throw new Error('invalid_shape');
       const { signature, ...unsigned } = frame;
@@ -79,8 +83,12 @@ export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
       const { timestamp: _timestamp, nonce: _nonce, ...logical } = unsigned;
       const fingerprint = await sha256Hex(new TextEncoder().encode(canonicalJson(logical)));
       // Deleted principals cannot publish results, consume new commands or revive stale transport.
-      const principal = await deviceDirectory(this.env).deviceForAuth(binding.device_id);
-      if (!principal || principal.owner_id !== binding.owner_id || principal.pubkey !== binding.pubkey || !this.active(socket, binding)) { socket.close(1008); return; }
+      if (!principalFresh(binding.principal_checked_at, nowSeconds)) {
+        const principal = await deviceDirectory(this.env).deviceForAuth(binding.device_id);
+        if (!principal || principal.owner_id !== binding.owner_id || principal.pubkey !== binding.pubkey || !this.active(socket, binding)) { socket.close(1008); return; }
+        binding.principal_checked_at = nowSeconds;
+      }
+      socket.serializeAttachment(binding);
       let receipt: unknown;
       const admitted = this.ctx.storage.transactionSync(() => {
         if (!this.active(socket, binding) || !this.admitNonce(frame.nonce, frame.timestamp)) return false;
