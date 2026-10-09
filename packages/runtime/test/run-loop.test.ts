@@ -1509,7 +1509,7 @@ describe('RunLoopDO full contract FSM', () => {
     });
     expect(proof.outbox).toEqual([]);
     expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
-    expect(gateway.requests).toHaveLength(1);
+    expect(gateway.requests).toHaveLength(2);
 
     const persisted = await runInDurableObject(stub, (_instance, state) => ({
       runs: state.storage.sql

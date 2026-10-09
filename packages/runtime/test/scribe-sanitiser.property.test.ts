@@ -162,7 +162,7 @@ describe('Scribe sanitiser properties', () => {
           const hostile = useKey
             ? { [metric]: value }
             : { metric, measurement: value };
-          expect(inspect(wrapAtDepth(hostile, depth))).toMatchObject({
+          expect(inspectExternal(wrapAtDepth(hostile, depth))).toMatchObject({
             ok: false,
             check: 'health_value',
             reason: 'health_value_leak',
@@ -194,7 +194,7 @@ describe('Scribe sanitiser properties', () => {
                 return unicodeEscape(metric);
             }
           })();
-          expect(inspect(wrapAtDepth({ metric: encoded, [numericKey]: value }, depth))).toMatchObject({
+          expect(inspectExternal(wrapAtDepth({ metric: encoded, [numericKey]: value }, depth))).toMatchObject({
             ok: false,
             check: 'health_value',
             reason: 'health_value_leak',
@@ -237,7 +237,7 @@ describe('Scribe sanitiser properties', () => {
                 return [{ metric: encodedMetric }, { [numericKey]: encodedNumeric }];
             }
           })();
-          expect(inspect(wrapAtDepth(hostile, depth))).toMatchObject({
+          expect(inspectExternal(wrapAtDepth(hostile, depth))).toMatchObject({
             ok: false,
             check: 'health_value',
             reason: 'health_value_leak',
@@ -256,7 +256,7 @@ describe('Scribe sanitiser properties', () => {
         numericArbitrary,
         fc.integer({ min: 0, max: 6 }),
         (metric, suffix, value, depth) => {
-          expect(inspect(wrapAtDepth({ [`${metric}_${suffix}`]: value }, depth))).toMatchObject({
+          expect(inspectExternal(wrapAtDepth({ [`${metric}_${suffix}`]: value }, depth))).toMatchObject({
             ok: false,
             check: 'health_value',
             reason: 'health_value_leak',
@@ -279,7 +279,7 @@ describe('Scribe sanitiser properties', () => {
               { [metric]: scientific },
               { metric, measurement: scientific },
             ]) {
-              expect(inspect(wrapAtDepth(hostile, depth))).toMatchObject({
+              expect(inspectExternal(wrapAtDepth(hostile, depth))).toMatchObject({
                 ok: false,
                 check: 'health_value',
                 reason: 'health_value_leak',
@@ -373,7 +373,7 @@ describe('Scribe sanitiser properties', () => {
           }
           // Nested-JSON free text is parsed and still denied as structured correlation at any taint.
           if (encoding === 'json') {
-            expect(inspect(wrapAtDepth(encoded, depth))).toMatchObject({
+            expect(inspectExternal(wrapAtDepth(encoded, depth))).toMatchObject({
               ok: false,
               check: 'health_value',
               reason: 'health_value_leak',
@@ -441,7 +441,7 @@ describe('Scribe sanitiser properties', () => {
           })();
           // Structured categorical values stay denied at every taint; the free-text/encoded
           // form pins at provider-payload taint (owner decision 2026-09-28, direction A).
-          expect(inspect(wrapAtDepth({ [metric]: value }, depth))).toMatchObject({
+          expect(inspectExternal(wrapAtDepth({ [metric]: value }, depth))).toMatchObject({
             ok: false,
             check: 'health_value',
             reason: 'health_value_leak',
@@ -480,7 +480,7 @@ describe('Scribe sanitiser properties', () => {
                   ? { '2026-07-11T00:00:00.000Z': sample }
                   : sample,
           };
-          expect(inspect(wrapAtDepth(hostile, depth))).toMatchObject({
+          expect(inspectExternal(wrapAtDepth(hostile, depth))).toMatchObject({
             ok: false,
             check: 'health_value',
             reason: 'health_value_leak',

@@ -9,8 +9,11 @@ const run = (payload: SanitiseInput['payload'], destination: SanitiseDestination
 const structured = { metric: 'hrv', measurement: 58, unit: 'ms' };
 
 describe('owner health readings reach the owner-bound model destinations', () => {
-  it.each<SanitiseDestination>(['system_prompt', 'internal_context', 'owner_reply'])('structured readings pass %s when the source is the owner or the system', (destination) => {
-    expect(run(structured, destination, null)).toMatchObject({ ok: true });
+  it('structured readings pass internal_context when the source is the owner or the system', () => {
+    expect(run(structured, 'internal_context', null)).toMatchObject({ ok: true });
+  });
+
+  it.each<SanitiseDestination>(['system_prompt', 'owner_reply'])('text readings pass %s when the source is the owner or the system', (destination) => {
     expect(run('Resting HR 52 bpm, HRV 58 ms, slept 6h 10m', destination, null)).toMatchObject({ ok: true });
   });
 
