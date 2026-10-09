@@ -39,6 +39,19 @@ function client(create: unknown): OpenAIResponsesClient {
 }
 
 describe('OpenAIResponsesAdapter', () => {
+  it('asks the provider not to retain the request or response', async () => {
+    let sent: Record<string, unknown> | undefined;
+    const adapter = new OpenAIResponsesAdapter({
+      apiKey: 'synthetic-key-0123456789',
+      client: client(async (body: Record<string, unknown>) => {
+        sent = body;
+        return { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'hi' }] }], output_text: 'hi', usage: { input_tokens: 1, output_tokens: 1 } };
+      }),
+    });
+    await adapter.complete(gatewayRequest());
+    expect(sent?.store).toBe(false);
+  });
+
   it.each(['synthetic-only\u2028\u2028', 'synthetic-only\n', ' synthetic-only', 'synthetic only', 'synthetic\0only', 'synthetic-☃', 'synthetic\ronly', 'synthetic\tonly', ''])('rejects malformed credential before calling an injected SDK client: %j', async (apiKey) => {
     let calls = 0;
     const adapter = new OpenAIResponsesAdapter({ apiKey, client: client(async () => { calls++; throw new Error('must not reach SDK'); }) });
