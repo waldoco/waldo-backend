@@ -175,7 +175,9 @@ function renderHealth(health: ContextHealthMaterial | null): string {
     ? 'Upcoming high-stakes: none.'
     : `Upcoming high-stakes: ${health.narrative.upcoming_high_stakes.join('; ')}`;
   return [
-    `Form zone: ${health.view.form_zone}.`,
+    health.view.algorithm_version === 'form.safte-fast.v1'
+      ? `Form zone: ${health.view.form_zone}.`
+      : `Recovery zone: ${health.view.recovery_zone}.`,
     `Trend: ${health.view.trend}. Freshness: ${health.view.freshness}.`,
     `Confidence: ${health.view.confidence_band}. Missing components: ${missing}.`,
     `Recovery: ${health.narrative.recovery_descriptor}. Load: ${health.narrative.load_descriptor}.`,

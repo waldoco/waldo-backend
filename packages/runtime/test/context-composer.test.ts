@@ -718,6 +718,50 @@ describe('ContextComposer', () => {
     expect(result.checkpoint.sources.some((item) => item.source_kind === 'recall')).toBe(false);
   });
 
+  it('composes a recovery.v1 health view, requires its zone to match the narrative, and skips the Form recall zone', async () => {
+    const base = dependencies();
+    const withRecovery = (recoveryZone: 'mixed' | 'solid') => ({
+      ...base,
+      materials: {
+        async load(request: Parameters<typeof base.materials.load>[0]) {
+          const material = await base.materials.load(request);
+          if (material.health === null) throw new Error('health fixture missing');
+          return {
+            ...material,
+            health: {
+              ...material.health,
+              view: {
+                authority: 'backend' as const,
+                algorithm_version: 'recovery.v1' as const,
+                recovery_zone: recoveryZone,
+                trend: 'steady' as const,
+                freshness: 'fresh' as const,
+                missing_components: [],
+                confidence_band: 'high' as const,
+                provenance_refs: ['hpr_88888888888888888888888888888888'],
+                destination_eligibility: ['trigger_prompt' as const, 'volatile_run' as const],
+              },
+              narrative: narrativeContextSchema.parse({
+                recovery_descriptor: 'solid',
+                load_descriptor: 'moderate',
+                day_summary: 'The day has room for one focused block and a brief reset.',
+                compiled_at: '2026-07-15T11:00:00.000Z',
+              }),
+            },
+          };
+        },
+      },
+    });
+    const ok = await createContextComposer({ ...withRecovery('solid'), phase_observer: (p: string) => console.log('PHASE', p), unexpected_error_observer: { record: async (e: unknown) => console.log('UNEXPECTED', JSON.stringify(e)) } }).compose(trustedEnvelope(), RUNTIME_INPUTS);
+    expect(ok.ok, ok.ok ? undefined : ok.failure.code).toBe(true);
+    if (ok.ok) {
+      expect(ok.prompt).toContain('Recovery zone: solid.');
+      expect(ok.prompt).not.toContain('Form zone:');
+    }
+    const mismatch = await createContextComposer(withRecovery('mixed')).compose(trustedEnvelope(), RUNTIME_INPUTS);
+    expect(mismatch).toEqual({ ok: false, failure: { code: 'health_context_invalid' } });
+  });
+
   it('fails closed for missing safeguards, unsafe derived health, external prompt injection, and an owner-mismatched recall snapshot', async () => {
     const base = dependencies();
     const missingSafeguards = await createContextComposer({

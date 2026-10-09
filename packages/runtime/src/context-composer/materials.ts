@@ -2,6 +2,7 @@ import {
   derivedHealthDestinationViewSchema,
   narrativeContextSchema,
   type CanaryTokens,
+  type DerivedHealthDestinationView,
   type NarrativeContext,
   type RuntimeContextSourceKind,
   type SanitiseFailureReason,
@@ -288,6 +289,15 @@ export async function loadLocalOwnerBinding(
   });
 }
 
+function viewMatchesNarrative(
+  view: DerivedHealthDestinationView,
+  narrative: NarrativeContext,
+): boolean {
+  return view.algorithm_version === 'form.safte-fast.v1'
+    ? narrative.zone === view.form_zone
+    : narrative.recovery_descriptor === view.recovery_zone;
+}
+
 export function prepareHealth(
   health: ContextHealthMaterial | null,
   canaries: CanaryTokens,
@@ -302,7 +312,7 @@ export function prepareHealth(
     !view.success ||
     !narrative.success ||
     !view.data.destination_eligibility.includes('trigger_prompt') ||
-    narrative.data.zone !== view.data.form_zone ||
+    !viewMatchesNarrative(view.data, narrative.data) ||
     !Number.isSafeInteger(Date.parse(narrative.data.compiled_at)) ||
     Date.parse(narrative.data.compiled_at) > snapshotAt ||
     !isBoundedNarrative(narrative.data)
