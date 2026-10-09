@@ -26,6 +26,8 @@ export type TelegramWebhookEnv = Readonly<{
   BRAVE_SEARCH_API_KEY?: string;
   // A5 artifact bodies; absent in tests/local, bound in wrangler (r2_buckets).
   ARTIFACTS?: R2Bucket;
+  // Optional private service binding; absent means compute is unavailable, never emulated.
+  COMPUTE?: import('./compute-host').ComputeService;
   RESPONSIBILITY_RATE_LIMITER?: RateLimit;
   BROWSERBASE_API_KEY?: string;
   // Type-only optional capability. No deployment binding is added here.

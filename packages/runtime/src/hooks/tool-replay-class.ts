@@ -36,6 +36,7 @@ export const TOOL_REPLAY_CLASS: Readonly<Record<ToolName, ToolReplayRow>> = {
   browse_act: unknown('real browser actions on a public page; page effects cannot be reconciled'),
   workspace_write: { replay: 'provider_idempotent', basis: 'operation_id derived from user+turn+toolCall plus expected_revision; collapse is at the workspace store, not a remote provider', evidence: { file: 'tools/live/workspace.ts', needle: 'operation_id' } },
   workspace_render: unknown('not inspected'),
+  workspace_compute: { replay: 'reconcilable_write', basis: 'durable compute intent never reexecutes an issued or uncertain command; recover exact output or known terminal failure receipt before any retry', evidence: { file: 'execution-environment/compute-journal.ts', needle: "record.status === 'issued' || !record.result" } },
   set_reminder: unknown(NOT_INSPECTED), cancel_reminder: unknown(NOT_INSPECTED),
   open_loop: unknown(NOT_INSPECTED), close_loop: unknown(NOT_INSPECTED), track_responsibility: unknown(NOT_INSPECTED), update_todo: unknown(NOT_INSPECTED), list_responsibilities: read(), close_responsibility: unknown(NOT_INSPECTED), set_proactivity: unknown(NOT_INSPECTED), set_schedule_preference: unknown(NOT_INSPECTED),
   log_meal: unknown(NOT_INSPECTED), log_workout: unknown(NOT_INSPECTED),
