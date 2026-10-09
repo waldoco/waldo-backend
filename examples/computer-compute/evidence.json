@@ -17,13 +17,30 @@
     "live_delivery": "NOT_RUN",
     "daemon_fixture_worker_types": "PASS",
     "missing_daemon_url_guard": "EXPECTED_FAILURE_OBSERVED",
-    "independent_review": "PENDING"
+    "independent_review": {
+      "reviewed_head": "3930c45b3778e23e95aa8c75c728227c0b3182e8",
+      "verdict": "TRIAL_ONLY; no additional source blockers; general resource-management gap acknowledged",
+      "independent_adapter_tests_passed": 10
+    },
+    "existing_compute_regression_tests_passed": 35
   },
   "blocked": {
-    "local_docker": "automatic approval review timed out twice; sandbox Docker socket permission denied"
+    "local_docker": "automatic approval review timed out twice; sandbox Docker socket permission denied",
+    "docker_action": "docker build --platform linux/amd64 -t waldo-computer-trial:local examples/computer-compute",
+    "approval_review": "Two deadlines; no stated safety reason",
+    "sandbox": "Docker socket permission denied"
   },
   "spend": 0,
   "deployment": false,
   "access_changes": false,
-  "default_provider_changed": false
+  "default_provider_changed": false,
+  "resource_management": {
+    "general_arbitrary_command_bounds": "NOT_PROVEN",
+    "controlled_synthetic_acceptance": "NOT_PREVENTED_BY_QUOTA_GAPS; pending Docker access"
+  },
+  "private_data_inspection": {
+    "changed_files": 16,
+    "literal_secret_patterns": "none found",
+    "owner_files": "synthetic fixture only"
+  }
 }
