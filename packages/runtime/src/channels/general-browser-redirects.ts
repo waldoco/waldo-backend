@@ -1,4 +1,4 @@
-import type { Page, Route } from '@cloudflare/playwright';
+import type { APIResponse,Page, Route } from '@cloudflare/playwright';
 
 // Match the installed Playwright request redirect default; this is not a retry.
 export const GENERAL_BROWSER_REDIRECT_LIMIT = 20;
@@ -6,7 +6,7 @@ export class GeneralRedirectError extends Error {
   readonly code = 'rejected';
   constructor() { super('browser_redirect_rejected'); }
 }
-type Routing = Readonly<{ authorize(url: string, method: string): Promise<void>; timeout(): number; admit(): Promise<void>; redirect(page: Page, url: string): void; denied(page: Page, status: number): void }>;
+type Routing = Readonly<{ authorize(url: string, method: string): Promise<void>; timeout(): number; admit(): Promise<void>; redirect(page: Page, url: string): void; denied(page: Page, status: number): void;attachment?(response:APIResponse):Promise<void> }>;
 
 // Neither continue nor fulfill(302) re-intercepts the complete Chromium chain.
 // Fetch each response without redirects; main documents re-enter page.goto so
@@ -14,6 +14,7 @@ type Routing = Readonly<{ authorize(url: string, method: string): Promise<void>;
 export async function guardGeneralBrowserRoute(route: Route, options: Routing): Promise<void> {
   const request = route.request();
   let url = request.url(), method = request.method();
+  if(options.attachment&&(method!=='GET'||!request.isNavigationRequest()||request.frame().parentFrame()))throw new GeneralRedirectError();
   let headers: Record<string, string> | undefined;
   const visited = new Set<string>();
   for (;;) {
@@ -24,7 +25,11 @@ export async function guardGeneralBrowserRoute(route: Route, options: Routing): 
     const status = response.status();
     const mainDocument = request.isNavigationRequest() && !request.frame().parentFrame();
     if (status >= 400 && mainDocument) { options.denied(request.frame().page(), status); await route.abort('blockedbyclient'); return; }
-    if (![301, 302, 303, 307, 308].includes(status)) { await route.fulfill({ response }); return; }
+    if (![301, 302, 303, 307, 308].includes(status)) {
+      if(options.attachment){if(method!=='GET'||!mainDocument||status!==200)throw new GeneralRedirectError();await options.attachment(response);await options.admit();await route.fulfill({status:204,body:''});}
+      else await route.fulfill({ response });
+      return;
+    }
     if (request.isNavigationRequest() && !mainDocument) throw new GeneralRedirectError();
     const location = response.headers()['location'];
     if (!location) throw new GeneralRedirectError();
@@ -32,7 +37,7 @@ export async function guardGeneralBrowserRoute(route: Route, options: Routing): 
     // Follow installed SDK's POST->GET semantics without replaying its body.
     const nextMethod = ((status === 301 || status === 302) && method === 'POST' || status === 303 && !['GET', 'HEAD'].includes(method)) ? 'GET' : method;
     if (!['GET', 'HEAD'].includes(nextMethod)) throw new GeneralRedirectError();
-    if (mainDocument) {
+    if (mainDocument&&!options.attachment) {
       if (nextMethod !== 'GET') throw new GeneralRedirectError();
       await options.authorize(next, nextMethod);
       options.redirect(request.frame().page(), next);

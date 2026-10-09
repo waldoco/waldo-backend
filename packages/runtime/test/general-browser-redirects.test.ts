@@ -1,6 +1,21 @@
 import { expect, it } from 'vitest';
 import { guardGeneralBrowserRoute } from '../src/channels/general-browser-redirects';
 
+it('captures a vetted redirected GET attachment and settles navigation without remote filesystem delivery',async()=>{
+ const f=route();f.responses[0]={status:()=>303,headers:()=>({location:'https://docs.example/report.csv'})};
+ f.responses[1]={status:()=>200,headers:()=>({'content-disposition':'attachment; filename="report.csv"'})};
+ const captured:any[]=[],authorized:string[]=[];
+ await guardGeneralBrowserRoute(f.route as never,{authorize:async url=>{authorized.push(url);},timeout:()=>1000,admit:async()=>{},redirect:()=>{throw Error('No document bridge for file capture');},denied:()=>{},attachment:async response=>{captured.push(response.headers()['content-disposition']);}});
+ expect(authorized).toEqual(['https://docs.example/start','https://docs.example/report.csv']);expect(captured).toEqual(['attachment; filename="report.csv"']);
+ expect(f.calls.filter(call=>call[0]==='fetch').every(call=>call[1].maxRedirects===0)).toBe(true);expect(f.calls.at(-1)).toEqual(['fulfill',{status:204,body:''}]);
+});
+it('attachment capture never admits POST export or fetches a denied redirect destination',async()=>{
+ const f=route('POST');let captured=false;
+ f.responses[0]={status:()=>200,headers:()=>({'content-disposition':'attachment'})};
+ await expect(guardGeneralBrowserRoute(f.route as never,{authorize:async()=>{},timeout:()=>1000,admit:async()=>{},redirect:()=>{},denied:()=>{},attachment:async()=>{captured=true;}})).rejects.toMatchObject({code:'rejected'});expect(captured).toBe(false);expect(f.calls).toHaveLength(0);
+ const g=route();await expect(guardGeneralBrowserRoute(g.route as never,{authorize:async url=>{if(url.includes('assets'))throw Error('denied destination');},timeout:()=>1000,admit:async()=>{},redirect:()=>{},denied:()=>{},attachment:async()=>{captured=true;}})).rejects.toThrow();expect(g.calls.filter(call=>call[0]==='fetch')).toHaveLength(1);expect(captured).toBe(false);
+});
+
 function route(method = 'GET', navigation = true) {
   const calls: any[] = [], page = {};
   const request = { url: () => 'https://docs.example/start', method: () => method, isNavigationRequest: () => navigation,

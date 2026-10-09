@@ -11,6 +11,9 @@ import { productionDeps } from '../src/seams/deps';
 import { handleConsole } from '../src/channels/console-signin';
 import type { ConsoleAuth } from '../src/identity/console-auth';
 import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
+import { workspaceOwnerHost } from '../src/channels/workspace-host';
+import { browserDownloadToWorkspace } from '../src/channels/browser-download-workspace';
+import { generalDigest } from '../src/channels/general-browser-observation';
 
 type InputItem = { type?: string; call_id?: string; name?: string; output?: string };
 type RequestBody = { tools?: { name: string }[]; input: string | InputItem[]; text?: { format?: { name?: string } }; instructions?: string };
@@ -53,6 +56,7 @@ async function proof(work: (h: {
   state: DurableObjectState; name: string; bytes: Map<string, Uint8Array>; puts: string[]; gets: string[]; rpc: string[];
   enqueue(text: string, id?: number, subject?: string, doName?: string, entities?: readonly { type: string; offset: number; length: number }[]): Promise<{ response: Response; id: number }>;
   send(text: string, id?: number, entities?: readonly { type: string; offset: number; length: number }[]): Promise<number>; alarm(): Promise<void>; restart(): void; manifest(): WorkspaceState | null; request(request: Request): Promise<Response>;
+  workspace(): ReturnType<typeof workspaceOwnerHost>;
   mapping: { owner_id: string; environment: string; namespace: string; do_name: string; do_id: string; state_version: number; mapping_version: number };
   absent(): void; unlinked(): void; pauseMapping(afterReservation?: boolean): ReturnType<typeof deferred>; pausePut(): ReturnType<typeof deferred>;
   onPut(fn: () => void): void; dispatches: MockInstance<typeof dispatcher.dispatchTool>;
@@ -134,12 +138,51 @@ async function proof(work: (h: {
       return row ? JSON.parse(row.state_json) as WorkspaceState : null;
     };
     try { await work({ state, name, bytes, puts, gets, rpc, enqueue, send, alarm: () => instance.alarm(), request: request => instance.fetch(request), restart: () => { instance = new TelegramOwnerDO(state, fixtureEnv); }, manifest, mapping,
+      workspace: () => workspaceOwnerHost(fixtureEnv, state.storage, state.id.toString(), name),
       absent: () => { missing = true; }, unlinked: () => { state.storage.kv.put('telegram_unlinked', true); },
       pauseMapping: (afterReservation = false) => { pauseAfterReservation = afterReservation; mappingPause = deferred(); pauses.push(mappingPause); return mappingPause; }, pausePut: () => { putPause = deferred(); pauses.push(putPause); return putPause; }, onPut: fn => { afterPut = fn; }, dispatches });
     } finally { for (const pause of pauses) pause.release(); await state.storage.deleteAlarm(); localFetch.mockRestore(); dispatches.mockRestore(); uuid?.mockRestore(); }
     expect(unexpected).toEqual([]);
   });
 }
+
+it.each([
+  ['text/html', 'active.html', '<!doctype html><script>window.importedFileCanary = true</script>'],
+  ['image/svg+xml', 'active.svg', '<svg xmlns="http://www.w3.org/2000/svg"><script>window.importedFileCanary = true</script></svg>'],
+])('serves a browser-imported %s through the authenticated owner route as an opaque protected attachment after restart', async (mime, filename, content) => {
+  await proof(async h => {
+    expect((await h.enqueue('Bind fixture owner for an imported file download.')).response.status).toBe(200);
+    const bytes = new TextEncoder().encode(content);
+    const receipt = await browserDownloadToWorkspace({
+      workspace: await h.workspace(), operationId: crypto.randomUUID(), origin: 'https://local.invalid',
+      metadata: { filename, mime, byte_size: bytes.length, sha256: await generalDigest(bytes) }, bytes,
+      deadline: Date.now() + 60_000, now: Date.now, assertCurrent: async () => {},
+    });
+    expect(receipt).toMatchObject({ provenance: 'provider_import', audience: 'owner_authenticated', retrieval: 'verified' });
+    const retained = await (await h.workspace()).export(receipt.file_id, receipt.revision);
+    expect(retained.meta).toMatchObject({ mime, provenance: 'provider_import', revision: receipt.revision });
+    const access = consoleAccess(h.state.storage);
+    const session = await access.grant();
+    h.restart();
+    const download = await h.request(new Request(receipt.url, { headers: { cookie: `${CONSOLE_COOKIE}=${session}` } }));
+    expect(download.status).toBe(200);
+    expect(download.headers.get('content-type')).toBe('application/octet-stream');
+    expect(download.headers.get('content-disposition')).toBe(`attachment; filename="file"; filename*=UTF-8''${filename}`);
+    expect(download.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(download.headers.get('content-security-policy')).toBe("default-src 'none'; frame-ancestors 'none'; sandbox");
+    expect(download.headers.get('cache-control')).toBe('private, no-store');
+    expect(download.headers.get('content-length')).toBe(String(bytes.length));
+    expect(new Uint8Array(await download.arrayBuffer())).toEqual(bytes);
+    const reads = h.gets.length;
+    expect((await h.request(new Request(receipt.url))).status).toBe(401);
+    const otherStub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`${h.name}-foreign-import`));
+    const otherSession = await runInDurableObject(otherStub, (_instance, state) => consoleAccess(state.storage).grant());
+    expect((await h.request(new Request(receipt.url, { headers: { cookie: `${CONSOLE_COOKIE}=${otherSession}` } }))).status).toBe(401);
+    expect((await otherStub.fetch(receipt.url, { headers: { cookie: `${CONSOLE_COOKIE}=${session}` } })).status).toBe(401);
+    expect(h.gets).toHaveLength(reads);
+    expect(model.requests).toHaveLength(0);
+  });
+});
 
 it('default two-argument owner turn advertises, creates, retries, lists and reads exact durable workspace bytes across restart', async () => {
   await proof(async h => {
