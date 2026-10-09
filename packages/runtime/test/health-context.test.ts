@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { DerivedHealthDestinationView } from '@waldo/contracts';
 import { healthContextBook, toContextHealthMaterial, type HealthContextRow } from '../src/channels/health-context';
 import { localTrustedBriefTurnSnapshot } from '../src/run-loop/adapters';
 import { md5Hex } from '../src/channels/md5';
@@ -23,6 +24,9 @@ const row = (overrides: Partial<HealthContextRow> = {}): HealthContextRow => ({
   previous: { day: '2026-09-27', form_score: 64 },
   ...overrides,
 });
+
+const formZoneOf = (material: { view: DerivedHealthDestinationView }): string | undefined =>
+  material.view.algorithm_version === 'form.safte-fast.v1' ? material.view.form_zone : undefined;
 
 describe('toContextHealthMaterial', () => {
   it('redacts a full row to the zone-word material (ADR-0024)', () => {
@@ -59,10 +63,10 @@ describe('toContextHealthMaterial', () => {
 
   it('owns the Form bands itself: the zone comes from formZoneOf(score), never the app word', () => {
     const at = (score: number) => toContextHealthMaterial(row({ context: { ...row().context!, form: { score, zone: 'high' } } }), clock);
-    expect(at(85)!.view.form_zone).toBe('energized');
-    expect(at(79)!.view.form_zone).toBe('steady');
-    expect(at(41)!.view.form_zone).toBe('flagging');
-    expect(at(12)!.view.form_zone).toBe('depleted');
+    expect(formZoneOf(at(85)!)).toBe('energized');
+    expect(formZoneOf(at(79)!)).toBe('steady');
+    expect(formZoneOf(at(41)!)).toBe('flagging');
+    expect(formZoneOf(at(12)!)).toBe('depleted');
   });
 
   it('bridges the app zone vocabulary for recovery and load', () => {
@@ -154,7 +158,7 @@ describe('healthContextBook', () => {
     expect(book.linked()).toBe(true);
     const material = await book.latest();
     expect(material).not.toBeNull();
-    expect(material!.view.form_zone).toBe('steady');
+    expect(formZoneOf(material!)).toBe('steady');
     expect(calls[0]).toEqual({ fn: 'health_context_read', message: 'healthctx.read.do-health', args: { p_do_name: 'do-health' } });
   });
 
