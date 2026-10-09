@@ -467,3 +467,41 @@ it('rejects array provider page instead of an empty complete query',async()=>{
  const fetcher=(async(input:RequestInfo|URL)=>String(input).includes('oauth2.googleapis.com')?Response.json({access_token:'unit-token'}):Response.json([])) as typeof fetch;
  await expect(googleClient(app,{refresh_token:'unit-refresh'},fetcher).mailPage('in:inbox',10)).rejects.toThrow('invalid Gmail page response');
 });
+
+
+describe('Calendar mutation notification compatibility', () => {
+  it.each([
+    ['create', undefined], ['create', 'operation-marker'],
+    ['move', undefined], ['move', 'operation-marker'],
+    ['cancel', undefined], ['cancel', 'operation-marker'],
+  ] as const)('%s with marker=%s preserves provider notification defaults and version fences', async (action, marker) => {
+    const calls: { url: URL; init: RequestInit }[] = [];
+    const start = '2026-10-11T10:00:00Z', end = '2026-10-11T11:00:00Z';
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'oauth2.googleapis.com') return Response.json({ access_token: 'synthetic' });
+      calls.push({ url, init: init! });
+      if (init?.method === 'DELETE') return new Response(null, { status: 204 });
+      return Response.json({ id: 'stable-event', summary: 'Synthetic meeting', start: { dateTime: start }, end: { dateTime: end }, etag: 'v2' });
+    }) as typeof fetch;
+    const client = googleClient(app, { refresh_token: 'synthetic' }, fetcher);
+    if (action === 'create') await client.createEvent({ id: 'stable-event', title: 'Synthetic meeting', start, end, operationMarker: marker });
+    else if (action === 'move') await client.moveEvent('stable-event', start, end, 'v1', marker);
+    else await client.cancelEvent('stable-event', 'v1', marker);
+    expect(calls).toHaveLength(1);
+    const { url, init } = calls[0]!;
+    expect(url.searchParams.has('sendUpdates')).toBe(false);
+    expect(url.searchParams.has('sendNotifications')).toBe(false);
+    expect(url.pathname).toBe(`/calendar/v3/calendars/primary/events${action === 'create' ? '' : '/stable-event'}`);
+    expect(init.method).toBe(action === 'create' ? 'POST' : action === 'cancel' && !marker ? 'DELETE' : 'PATCH');
+    expect(new Headers(init.headers).get('if-match')).toBe(action === 'create' ? null : 'v1');
+    if (init.method === 'DELETE') expect(init.body).toBeUndefined();
+    else {
+      const body = JSON.parse(String(init.body));
+      expect(body.extendedProperties?.private?.waldoOperation).toBe(marker);
+      if (action === 'create') expect(body.id).toBe('stable-event');
+      if (action === 'cancel') expect(body).toEqual({ status: 'cancelled', extendedProperties: { private: { waldoOperation: marker } } });
+      else expect(body).toMatchObject({ start: { dateTime: start, date: null }, end: { dateTime: end, date: null } });
+    }
+  });
+});

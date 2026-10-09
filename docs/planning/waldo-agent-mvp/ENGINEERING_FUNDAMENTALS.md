@@ -620,3 +620,9 @@ A fresh staging Cloudflare public read uses the existing reader without requirin
 | Failure | Regression | Boundary |
 | --- | --- | --- |
 | Six existing positive fixtures asserted completion from a Gmail acknowledgement/search hit or unmarked Calendar evidence, or omitted the new create marker from an exact payload assertion | owner-effect-approval.test.ts and owner-effect-break-936.test.ts exact Sent doubles; owner-effect-adapters.test.ts captured marker and missing/foreign controls; owner-do-ingress-isolation.test.ts exact marked create payload | Fixture-only correction; source checks unchanged. Missing/mismatched Sent metadata and Calendar markers stay uncertain with one dispatch across replay |
+
+- [ ] Recovery metadata must not change Calendar attendee notification policy. Preserve the baseline's omitted sendUpdates/sendNotifications parameters on create, move, marked cancellation and legacy DELETE, while keeping operation markers and If-Match fences.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Google recovery added undisclosed sendUpdates=none across Calendar mutation paths | google.test.ts six synthetic wire cases for marked/unmarked create, move and cancellation; google-recovery-journey.test.ts existing approved apply/Undo, replay and later-edit controls | Restore baseline omission, not a new sendUpdates=all policy. Marked cancellation remains atomic PATCH status=cancelled plus marker under If-Match. Provider guest-delivery behavior and tombstone marker retention still require staging acceptance |
