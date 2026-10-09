@@ -34,6 +34,13 @@ import {
 // loosened bounds, a taint field gone nullable, and provider vocabulary re-declared away
 // from its single owner.
 
+describe('get_communication page size', () => {
+  it('accepts a page the model can read inline and rejects one that would be offloaded', () => {
+    expect(getCommunicationArgsSchema.safeParse({ limit: 30 }).success).toBe(true);
+    expect(getCommunicationArgsSchema.safeParse({ limit: 50 }).success).toBe(false);
+  });
+});
+
 describe('getCrsArgs', () => {
   it('defaults range_days to 1', () => {
     expect(getCrsArgsSchema.parse({})).toEqual({ range_days: 1 });

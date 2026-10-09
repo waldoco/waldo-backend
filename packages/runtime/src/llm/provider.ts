@@ -227,6 +227,7 @@ export type RuntimeLLMFailure = {
   // Typed marker: the system prompt itself failed the scribe. It is never cut or dropped.
   code_detail?: 'system_prompt_rejected';
   halted_by?: string;
+  detail?: string;
   effect_receipt?: TrustedProviderEffectReceipt;
 };
 
@@ -447,7 +448,7 @@ export class RuntimeLLMProvider {
           code: gatewayResult.code,
         });
         if (gatewayResult.code === 'invalid_args') {
-          return invalidResponseFailure(plan.fallback_step, attempts, routingLogs);
+          return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
         }
         continue;
       }
@@ -989,10 +990,12 @@ function invalidResponseFailure(
   attempts: LLMAttempt[],
   routingLogs: readonly RoutingLogEvent[],
   effectReceipt?: TrustedProviderEffectReceipt,
+  detail?: string,
 ): RuntimeLLMFailure {
   return {
     ok: false,
     error: 'invalid gateway response',
+    ...(detail ? { detail } : {}),
     code: 'invalid_args',
     reason: 'invalid_response',
     fallback_step: fallbackStep,

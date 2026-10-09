@@ -64,6 +64,15 @@ describe('live owner memory', () => {
     expect(s.store.claims()).toHaveLength(0); expect(s.history[0]).toContain('tea');
     expect(await s.call('remember', { kind: 'preference', text: 'Prefers tea', evidence_quote: 'tea' }, s.ctx('tea'))).toMatchObject({ ok: false });
   });
+  it('a forget that selects no stored memory fails instead of reporting success', async () => {
+    const s = setup();
+    await s.call('remember', { kind: 'preference', text: 'Takes coffee black', evidence_quote: 'coffee black' }, s.ctx('I take my coffee black'));
+    const ask = s.ctx('Forget my coffee preference');
+    expect(await s.call('forget_memory', { topic: 'coffee preference', scope_note: 'coffee' }, ask)).toMatchObject({ ok: false });
+    expect(s.store.claims()).toHaveLength(1);
+    expect(await s.call('forget_memory', { topic: 'coffee', scope_note: 'coffee' }, ask)).toMatchObject({ ok: true, data: { removed_ids: [1] } });
+    expect(s.store.claims()).toHaveLength(0);
+  });
   it('rejects spans inside quoted data, even when the same text also occurs in owner prose', async () => {
     const s = setup(); const text = 'tea then quoted tea';
     const current = { message_ref: 'tg-8', text, sourceQuoteRanges: [{ start: 16, end: 19 }] };

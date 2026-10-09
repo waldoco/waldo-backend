@@ -79,7 +79,8 @@ export type ConnectServiceArgs = z.infer<typeof connectServiceArgsSchema>;
 export const getCommunicationArgsSchema = z.strictObject({
   account: z.email().optional(),
   date_range: dateRangeSchema.optional(),
-  limit: z.int().min(1).max(500).default(10),
+  // A page above 30 messages exceeds the inline tool-output limit and reaches the model as a stored-output pointer, not as mail.
+  limit: z.int().min(1).max(30).default(10),
   page_token: z.string().min(1).optional(),
 }).refine(args=>!args.page_token||Boolean(args.date_range),{error:'page_token requires the same explicit date_range',path:['date_range']});
 export type GetCommunicationArgs = z.infer<typeof getCommunicationArgsSchema>;
