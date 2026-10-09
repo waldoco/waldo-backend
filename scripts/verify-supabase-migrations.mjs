@@ -42,10 +42,10 @@ const expectedMigrations = [
   '20261002120000_waldo_owner_admission_revision.sql',
   '20261002170021_waldo_optional_phone_signup.sql',
   '20261003000000_waldo_router_signed_fail_closed.sql',
-  '20261004030000_browser_owner_binding.sql',
   '20261004190110_owner_trace_identity.sql',
-  '20261005120000_waldo_device_bridge.sql',
   '20261007040100_common_owner_authority.sql',
+  '20261008000000_browser_owner_binding.sql',
+  '20261008000100_waldo_device_bridge.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);
