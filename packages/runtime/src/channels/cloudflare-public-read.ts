@@ -54,7 +54,7 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
     let readStage: ReadStage = 'setup';
     const cleanupFailure = (error: string) => {
       // Only our already-sanitized failure and fixed stage label survive cleanup.
-      result = result.ok ? failure('transient', error) : { ...result, error: `${result.error} Read stage: ${readStage}. ${error}` };
+      result = result.ok ? failure('transient', `Read stage: content; page text was read but discarded. ${error}`) : { ...result, error: `${result.error} Read stage: ${readStage}. ${error}` };
     };
     // Intercept HTTP failures before the SDK turns raw response bodies into Error text.
     const binding = { fetch: async (...inputArgs: Parameters<BrowserWorker['fetch']>) => {

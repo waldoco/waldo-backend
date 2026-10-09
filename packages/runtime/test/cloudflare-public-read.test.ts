@@ -221,7 +221,7 @@ it('a late absence readback cannot settle after cleanup has timed out',async()=>
 it('malformed allocation IDs never settle and settlement failure is not reported as completion',async()=>{
  const f=fake(),settle=vi.fn();f.sdk.acquire=async()=>({sessionId:undefined} as never);
  expect(await cloudflarePublicRead({binding:{} as never,loadSdk:async()=>f.sdk as never,reserveAllocation:async()=>({settle})})(args as never,context)).toMatchObject({ok:false});expect(settle).not.toHaveBeenCalled();
- const g=fake();expect(await cloudflarePublicRead({binding:{} as never,loadSdk:async()=>g.sdk as never,reserveAllocation:async()=>({settle(){throw Error('private storage detail');}})})(args as never,context)).toMatchObject({ok:false,error:'The Cloudflare browser cost settlement is unconfirmed.'});
+ const g=fake();expect(await cloudflarePublicRead({binding:{} as never,loadSdk:async()=>g.sdk as never,reserveAllocation:async()=>({settle(){throw Error('private storage detail');}})})(args as never,context)).toMatchObject({ok:false,error:'Read stage: content; page text was read but discarded. The Cloudflare browser cost settlement is unconfirmed.'});
 });
 
 it('waits for delayed session disappearance before releasing content or settling duration', async () => {
@@ -332,4 +332,21 @@ it('preserves a rejected read and its stage when physical absence is valid but s
   expect(result).toMatchObject({ error: expect.stringContaining('Read stage: navigation.') });
   expect(result).toMatchObject({ error: expect.stringContaining('cost settlement is unconfirmed') });
   expect(JSON.stringify(result)).not.toMatch(/private storage|private-id|other\.example/);
+});
+
+it.each(['cleanup', 'settlement'] as const)('reports successful extraction safely when %s remains unconfirmed', async mode => {
+  vi.useFakeTimers();
+  try {
+    const f = fake(), settle = vi.fn(() => { if (mode === 'settlement') throw Error('private storage detail'); });
+    if (mode === 'cleanup') f.sdk.sessions = async () => [{ sessionId: 'private-id' }];
+    const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never, reserveAllocation: async () => ({ settle }) })(args as never, context);
+    await vi.advanceTimersByTimeAsync(750);
+    const result = await read;
+    expect(result).toEqual({
+      ok: false, code: 'transient', source_taint: 'external',
+      error: `Read stage: content; page text was read but discarded. ${mode === 'cleanup' ? 'The Cloudflare browser cleanup is unconfirmed. No browser read is reported as complete.' : 'The Cloudflare browser cost settlement is unconfirmed.'}`,
+    });
+    expect(JSON.stringify(result)).not.toMatch(/Menu|Vegetarian|https:|private-id|private storage/);
+    expect(settle).toHaveBeenCalledTimes(mode === 'cleanup' ? 0 : 1);
+  } finally { vi.useRealTimers(); }
 });
