@@ -102,6 +102,7 @@ export function commonSpendReservation(storage: Pick<DurableObjectStorage,'kv'|'
         storage.kv.put(key,{...row,cleanup:row.cleanup.map(current=>current===item?{...item,issued:item.issued+1}:current)});
       });
     },
+    acceptanceRemaining:()=>{const retained=readAcceptance(read());return retained?{remainingRuns:gate!.maxRuns-gate!.priorRuns-retained.runs.length,remainingModelCalls:gate!.maxModelCalls-gate!.priorModelCalls-retained.calls.length,priorMicrousd:gate!.priorMicrousd}:undefined;},
     reserved:()=>read().reservedMicrousd,
   });
 }
