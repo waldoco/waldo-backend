@@ -3,7 +3,7 @@ import {commonBrowserHost} from '../src/channels/common-browser-host';
 import {commonBrowserFixture,commonBrowserFixtureLoader,nativeHandoffDouble} from './fixtures/common-browser-sdk';
 function fixture(){
  commonBrowserFixture.reset();const rows=new Map<string,unknown>();let live=true;
- const storage={kv:{get:(k:string)=>rows.get(k),put:(k:string,v:unknown)=>rows.set(k,structuredClone(v)),list:({prefix}:{prefix:string})=>[...rows].filter(([k])=>k.startsWith(prefix))},transactionSync:<T>(f:()=>T)=>f()} as unknown as DurableObjectStorage;
+ const storage={kv:{get:(k:string)=>{const value=rows.get(k);return value===undefined?undefined:structuredClone(value);},put:(k:string,v:unknown)=>rows.set(k,structuredClone(v)),list:({prefix}:{prefix:string})=>[...rows].filter(([k])=>k.startsWith(prefix))},transactionSync:<T>(f:()=>T)=>f()} as unknown as DurableObjectStorage;
  const task={taskId:'login-task',revision:1,sources:['browser'] as const,ready:true,startRef:'owner'};
  const grant={ref:'funded',taskId:task.taskId,ownerId:'owner',expiresAt:Date.now()+600000,lifetimeMs:600000,allowedOrigins:['https://public-pages.fixture.invalid'],maxScreenshotBytes:1024};
  const custody=async()=>{if(!live)throw Error('revoked');};
@@ -73,4 +73,11 @@ it('revocation and funded expiry close the exact login session without allocatio
   if(mode==='revoked')f.revoke();else{const row=f.rows.get('common-browser:login-task') as any;row.session.expiresAt=Date.now()-1;f.rows.set('common-browser:login-task',row);}
   await f.host.maintainHandoff();expect(commonBrowserFixture.ends).toBe(1);expect(commonBrowserFixture.allocations).toBe(1);expect(f.host.attachments()).toEqual([]);expect((f.rows.get('common-browser:login-task') as any).cleanup).toBe('closed');
  }
+});
+it('maintenance must close a generation change during awaited status even if transition becomes resuming',async()=>{
+ const f=fixture(),read=await f.host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Open task'},f.ctx) as any;
+ expect(await f.host.actionHandler.handle({url:read.data.url,task:'Login',max_actions:1,command:{operation:'owner_login',reason:'Owner login'}},f.ctx)).toMatchObject({ok:true});
+ let entered!:()=>void,release!:()=>void;const reached=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>release=r);
+ nativeHandoffDouble.onSend=async method=>{if(method==='Cloudflare.getHandoffState'){entered();await gate;}};
+ const pending=f.host.maintainHandoff();await reached;const row=f.rows.get('common-browser:login-task') as any;row.session.generation++;row.handoff.state='resuming';f.rows.set('common-browser:login-task',row);release();await pending;expect(commonBrowserFixture.ends).toBe(1);
 });

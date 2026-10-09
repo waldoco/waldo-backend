@@ -35,7 +35,7 @@ const server=createServer(async(request,response)=>{
   let body='';for await(const part of request)body+=part;assert.equal(new URLSearchParams(body).get('otp'),'481516');assert(request.headers.cookie?.includes('login_stage=fictional'));
   response.writeHead(303,{'location':'/account','set-cookie':'signed_in=fictional_owner; HttpOnly; SameSite=Strict; Path=/'});return response.end();
  }
- if(request.url==='/account'){assert(request.headers.cookie?.includes('signed_in=fictional_owner'));return response.end('<h1>Signed in as fictional intended owner</h1><label>Account note<input value="Fresh owner account"></label><label>Previous OTP<input autocomplete="one-time-code" value="481516"></label>');}
+ if(request.url==='/account'){assert(request.headers.cookie?.includes('signed_in=fictional_owner'));return response.end('<h1>Signed in as fictional intended owner</h1><label>Account note<input value="Fresh owner account"></label><label>Previous OTP<input type="number" autocomplete="one-time-code" value="481516"></label><label>Overridden OTP<input role="combobox" autocomplete="one-time-code" value="481516"></label>');}
  if(request.url==='/blocked-redirect'){response.writeHead(303,{location:`http://127.0.0.1:${forbidden.address().port}/outside`});return response.end();}
  response.writeHead(404);response.end('Missing fixture');
 });

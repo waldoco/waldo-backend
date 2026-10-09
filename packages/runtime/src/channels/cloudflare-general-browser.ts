@@ -5,7 +5,7 @@ import type { Browser, BrowserContext, BrowserWorker, Page, Route } from '@cloud
 import { browserSessionSchema, type BrowserSession } from '@waldo/contracts';
 import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
 import { cloudflareBrowserGuardOptions } from './cloudflare-browser-adapter';
-import { generalDigest, generalPageState, type GeneralSnapshot, type GeneralActionSnapshot } from './general-browser-observation';
+import { generalDigest, generalPageState, type GeneralSnapshot, type GeneralActionSnapshot,type GeneralPageState } from './general-browser-observation';
 import { parseGeneralBrowserAction, type GeneralBrowserAction } from './general-browser-actions';
 export type { GeneralBrowserAction } from './general-browser-actions';
 import { generalBrowserDiagnostic, type GeneralBrowserDiagnostic } from './general-browser-diagnostic';
@@ -246,22 +246,35 @@ export function cloudflareGeneralBrowser(options: Options) {
       return await Promise.race([read(),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new GeneralBrowserError('provider_unavailable')),timeout);})]);
     } finally {clearTimeout(timer!);}
   };
-  const semanticSnapshot = async (session: BrowserSession, context: BrowserContext, page: Page) => {
+  const semanticSnapshot = async (session: BrowserSession, context: BrowserContext, page: Page,state:GeneralPageState) => {
     const cdp = await boundedSemanticRead(session,()=>context.newCDPSession(page));
     try {
       await admit(session);
       const {nodes} = await boundedSemanticRead(session,()=>cdp.send('Accessibility.getFullAXTree')); await admit(session);
-      // Editable AX descendants can expose a one-time-code as StaticText even
-      // when the textbox value itself is omitted. Field values come through the
-      // separately sanitized DOM state, so omit editable AX descendant content.
-      const byId=new Map(nodes.map(node=>[node.nodeId,node])),editableChildren=new Set<string>();
-      const pending=nodes.filter(node=>node.role?.value==='textbox').flatMap(node=>node.childIds??[]);
-      while(pending.length){const id=pending.pop()!;if(editableChildren.has(id))continue;editableChildren.add(id);pending.push(...(byId.get(id)?.childIds??[]));}
-      const visible=nodes.filter(node=>!node.ignored&&!editableChildren.has(node.nodeId));
+      // Correlate marked secret DOM controls by backend ID rather than role:
+      // numeric OTPs and overridden ARIA roles are still credential fields.
+      const secretBackends=new Set<number>();
+      if(state.elements.some(element=>element.secret)){
+        const {root}=await boundedSemanticRead(session,()=>cdp.send('DOM.getDocument',{depth:-1,pierce:true}));await admit(session);
+        const domNodes=[root];
+        while(domNodes.length){
+          const node=domNodes.pop()!,attributes=new Map<string,string>();
+          for(let i=0;i<(node.attributes?.length??0);i+=2)attributes.set(node.attributes![i]!.toLowerCase(),node.attributes![i+1]!);
+          if(['INPUT','TEXTAREA'].includes(node.nodeName)&&(attributes.get('type')?.toLowerCase()==='password'||(attributes.get('autocomplete')??'').toLowerCase().split(/\s+/).includes('one-time-code')))secretBackends.add(node.backendNodeId);
+          domNodes.push(...(node.children??[]),...(node.shadowRoots??[]));if(node.contentDocument)domNodes.push(node.contentDocument);
+        }
+      }
+      const secretNodes=new Set(nodes.filter(node=>node.backendDOMNodeId!==undefined&&secretBackends.has(node.backendDOMNodeId)).map(node=>node.nodeId));
+      const matchedBackends=new Set(nodes.filter(node=>node.backendDOMNodeId!==undefined&&secretBackends.has(node.backendDOMNodeId)).map(node=>node.backendDOMNodeId));
+      if(matchedBackends.size<state.elements.filter(element=>element.secret).length)throw new GeneralBrowserError('stale_observation');
+      const byId=new Map(nodes.map(node=>[node.nodeId,node])),secretChildren=new Set<string>();
+      const pending=nodes.filter(node=>secretNodes.has(node.nodeId)).flatMap(node=>node.childIds??[]);
+      while(pending.length){const id=pending.pop()!;if(secretChildren.has(id))continue;secretChildren.add(id);pending.push(...(byId.get(id)?.childIds??[]));}
+      const visible=nodes.filter(node=>!node.ignored&&!secretChildren.has(node.nodeId));
       const indexes=new Map(visible.map((node,index)=>[node.nodeId,index]));
       return JSON.stringify(visible.map(node=>({
-        role:node.role?.value, name:node.name?.value, ...(node.description?{description:node.description.value}:{}),
-        ...(node.value&&node.role?.value!=='textbox'?{value:node.value.value}:{}),
+        role:node.role?.value, name:secretNodes.has(node.nodeId)?'[owner credential field]':node.name?.value, ...(node.description&&!secretNodes.has(node.nodeId)?{description:node.description.value}:{}),
+        ...(node.value&&!secretNodes.has(node.nodeId)?{value:node.value.value}:{}),
         states:Object.fromEntries((node.properties??[]).filter(property=>['disabled','expanded','checked','selected','readonly','required','invalid','multiselectable','level','modal','orientation'].includes(property.name)).map(property=>[property.name,property.value.value])),
         children:(node.childIds??[]).flatMap(id=>indexes.has(id)?[indexes.get(id)!]:[]),
       })));
@@ -270,12 +283,12 @@ export function cloudflareGeneralBrowser(options: Options) {
   const observe = async (session: BrowserSession, context: BrowserContext, page: Page): Promise<GeneralSnapshot> => {
     await allowed(session, page.url());
     const state = await page.evaluate(generalPageState); await admit(session);
-    const semantic = await semanticSnapshot(session,context,page); await admit(session);
+    const semantic = await semanticSnapshot(session,context,page,state); await admit(session);
     if (!state.text.trim()) throw new GeneralBrowserError('empty_content');
     const bytes = new Uint8Array(await page.screenshot({ type: 'png', animations: 'disabled', caret: 'hide', scale: 'css',mask:[page.locator('input[type="password"],input[autocomplete~="one-time-code" i],textarea[autocomplete~="one-time-code" i]')] })); await admit(session);
     if (bytes.byteLength > options.maxScreenshotBytes) throw new GeneralBrowserError('image_oversize');
     const current = await page.evaluate(generalPageState); await admit(session);
-    const currentSemantic = await semanticSnapshot(session,context,page); await admit(session);
+    const currentSemantic = await semanticSnapshot(session,context,page,current); await admit(session);
     if (currentSemantic !== semantic || JSON.stringify(current) !== JSON.stringify(state)) throw new GeneralBrowserError('stale_observation');
     const target = await targetId(context, page);
     const digest = await generalDigest(JSON.stringify({ state, semantic, image: await generalDigest(bytes) }));

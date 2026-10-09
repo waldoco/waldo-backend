@@ -34,7 +34,7 @@ export const COMMON_BROWSER_CHECKPOINT_BYTES=128*1024;
 const encodedCheckpointBytes=(record:BrowserRecord)=>new TextEncoder().encode(JSON.stringify(record)).byteLength;
 export const COMMON_BROWSER_DUE='common_browser_due_v1';
 type BrowserRecord={handoff?:NativeHandoffMetadata;grant:CommonBrowserGrant;session:BrowserSession;tabs:Readonly<{url:string;ref:string}>[];allocation:'prepared'|'observed';observation?:GeneralActionSnapshot;action?:Readonly<{digest:string;state:'prepared'|'observed'|'uncertain'}>;cleanup?:'pending'|'closed';cleanupFailed?:boolean};
-const sameSession=(a:BrowserRecord,b:BrowserRecord)=>a.session.id===b.session.id&&a.session.generation===b.session.generation&&a.session.providerSessionId===b.session.providerSessionId&&JSON.stringify(a.grant)===JSON.stringify(b.grant);
+const sameSession=(a:BrowserRecord,b:BrowserRecord)=>a.session.ownerId===b.session.ownerId&&a.session.id===b.session.id&&a.session.generation===b.session.generation&&a.session.providerSessionId===b.session.providerSessionId&&JSON.stringify(a.grant)===JSON.stringify(b.grant);
 const publishCleanup=(storage:DurableObjectStorage,key:string,expected:BrowserRecord,closed:boolean)=>storage.transactionSync(()=>{
  const current=storage.kv.get<BrowserRecord>(key);
  if(!current||!sameSession(current,expected)||current.cleanup==='closed')return;
@@ -213,7 +213,7 @@ export function commonBrowserHost(options:Readonly<{
    // Recheck owner custody before accepting a newer valid durable transition.
    try{await options.config.assertHandoffCurrent!(row.grant);}catch{await api.cancel();return;}
    const latest=options.storage.kv.get<Record>(key(snapshot().taskId));
-   if(latest&&!latest.cleanup&&latest.session.expiresAt>options.now()&&latest.session.id===row.session.id&&latest.session.providerSessionId===row.session.providerSessionId&&JSON.stringify(latest.grant)===JSON.stringify(row.grant)&&(!latest.handoff||latest.handoff.state==='starting'||latest.handoff.state==='resuming'))return;
+   if(latest&&!latest.cleanup&&latest.session.expiresAt>options.now()&&latest.session.ownerId===options.ownerId&&sameSession(latest,row)&&(!latest.handoff||latest.handoff.state==='starting'||latest.handoff.state==='resuming'))return;
    await api.cancel();
   }
  },
