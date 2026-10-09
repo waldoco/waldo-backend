@@ -78,4 +78,15 @@ describe('JoinedConversationPath', () => {
     expect(await path.submit(input())).toEqual(await path.submit(input()));
     expect(calls).toBe(1);
   });
+
+  it('cannot replay a prior publication for changed input or another conversation', async () => {
+    const composer = resolveRunLoopAdapters({ WALDO_ENV: 'local' }).contextComposer!;
+    let calls = 0;
+    const path = new JoinedConversationPath(composer, { async complete() { calls += 1; return 'reply'; } });
+    const request = input();
+    await path.submit(request);
+    await expect(path.submit({ ...request, userEntry: { ...request.userEntry, modelPayload: 'Changed input' } })).rejects.toThrow('input conflict');
+    await expect(path.submit({ ...input('other-user'), assistantEntryId: request.assistantEntryId })).rejects.toThrow('publication identity conflict');
+    expect(calls).toBe(1);
+  });
 });

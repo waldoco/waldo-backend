@@ -1,6 +1,7 @@
 import {
   derivedHealthDestinationViewSchema,
   narrativeContextSchema,
+  MODEL_CONTEXT_MAX_CHARS,
   type CanaryTokens,
   type DerivedHealthDestinationView,
   type NarrativeContext,
@@ -36,9 +37,11 @@ import type {
   StagedInputResolver,
 } from './types';
 
-const MAX_INPUT_CHARS = 2_000;
-const MAX_INPUT_TOTAL_CHARS = 6_000;
-const MAX_CONTEXT_FRAGMENT_CHARS = 2_000;
+// Full permitted owner/source text reaches the model. The final assembled canvas
+// enforces the provider wire budget; arbitrary 2k slices lost relevant mail context.
+const MAX_INPUT_CHARS = MODEL_CONTEXT_MAX_CHARS;
+const MAX_INPUT_TOTAL_CHARS = MODEL_CONTEXT_MAX_CHARS;
+const MAX_CONTEXT_FRAGMENT_CHARS = MODEL_CONTEXT_MAX_CHARS;
 const MAX_WORKSPACE_FRAGMENTS = 4;
 const MAX_TOOL_OUTPUT_FRAGMENTS = 6;
 

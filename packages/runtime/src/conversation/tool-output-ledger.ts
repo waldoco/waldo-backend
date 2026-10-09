@@ -14,7 +14,10 @@ export type ToolOutputEntry = Readonly<{
   at: number;
   taint: SourceTaint;
   summary: string;
+  context?: ToolOutputContext;
 }>;
+
+export type ToolOutputContext = Readonly<{ owner_ref: string; conversation_ref: string; source_epoch: string }>;
 
 const MAX_KEPT = 6;
 const MAX_SUMMARY_CHARS = 500;
@@ -122,11 +125,15 @@ export const toolOutputLedger = (storage: KeyValueStorage) => ({
     const rows = await storage.list<ToolOutputEntry>({ prefix: 'toolout:' });
     return [...rows.values()].filter(entry => redact(entry.summary) !== entry.summary).length;
   },
-  async recent(texts: readonly string[] = []): Promise<readonly ContextFragment[]> {
+  async recent(texts: readonly string[] = [], context?: ToolOutputContext): Promise<readonly ContextFragment[]> {
     const redact = summaryRedactor(texts, '[forgotten]');
     const rows = await storage.list<ToolOutputEntry>({ prefix: 'toolout:' });
     const entries = [...rows.entries()]
       .filter(([key]) => key !== 'toolout-count')
+      // A cached source result is usable only under the same host-verified owner,
+      // audience and current source authority. Preserve legacy rows without promoting them.
+      .filter(([, entry]) => !context || (entry.context?.owner_ref === context.owner_ref
+        && entry.context.conversation_ref === context.conversation_ref && entry.context.source_epoch === context.source_epoch))
       .sort(([a], [b]) => a.localeCompare(b))
       .slice(-MAX_KEPT);
     // Same guard on read: legacy entries persisted before the write guard existed are evicted

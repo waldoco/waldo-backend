@@ -53,13 +53,16 @@ export class JoinedConversationPath {
     if (request.invocation.verified_authority.principal_ref !== request.authenticatedOwnerId) {
       throw new Error('conversation invocation owner mismatch');
     }
-    const existing = this.publications.get(request.assistantEntryId);
-    if (existing) return existing;
-
     request.runScope?.admit();
     const original = { ...request.userEntry, role: 'user' as const };
     const retained = this.tree.get(original.id);
     if (retained && JSON.stringify(retained) !== JSON.stringify(original)) throw Error('conversation original input conflict');
+    const existing = this.publications.get(request.assistantEntryId);
+    if (existing) {
+      if (existing.ownerId !== request.authenticatedOwnerId || existing.chatId !== original.chatId
+        || this.tree.get(existing.leafId)?.parentId !== original.id) throw new Error('conversation publication identity conflict');
+      return existing;
+    }
     if (!retained) this.tree.append(original);
     const composition = await this.composer.compose(request.invocation, request.context);
     if (!composition.ok) throw new Error(`conversation context failed: ${composition.failure.code}`);
@@ -114,8 +117,12 @@ export class JoinedConversationPath {
 }
 
 export const taskHistoryMessages = (tree: ConversationTree, leafId: string, startRef?: string): readonly ConversationModelMessage[] => {
-  if (!startRef) return tree.modelContext(leafId);
   const entries = tree.path(leafId);
+  const current = entries[entries.length - 1];
+  if (current && entries.some(entry => entry.ownerId !== current.ownerId || entry.chatId !== current.chatId)) {
+    throw new Error('conversation history audience mismatch');
+  }
+  if (!startRef) return tree.modelContext(leafId);
   const first = entries.findIndex(entry => entry.id === startRef);
   const taskEntries = first < 0 ? entries.slice(-1) : entries.slice(first);
   const taskTree = new ConversationTree();

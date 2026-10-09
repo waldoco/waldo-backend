@@ -21,6 +21,7 @@ import { readToolOutputHandler } from '../tools/read-tool-output';
 import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveRunLoopAdapters, type LocalSystemSkillBinding } from '../run-loop/adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
+import { createOwnerTurnContext, type OwnerContextCapability } from '../context-composer/owner-turn';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
@@ -36,7 +37,7 @@ import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispat
 import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
 import type { RunBook } from './background-runs';
-import { toolOutputLedger } from '../conversation/tool-output-ledger';
+import { toolOutputLedger, type ToolOutputContext } from '../conversation/tool-output-ledger';
 
 // The owner's approval line (owner direction 2026-09-27): first-party state - his own memory,
 // tasks, sheets, drafts - proceeds without a per-action card. Anything that could reach another
@@ -60,7 +61,10 @@ const MAX_TOOL_ROUNDS = 25;
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
 export type OwnerSkillHost = Readonly<{ browserAttachments?(scope?: RunEffectScope): readonly LLMAttachment[]; prepare(turn: OwnerTurnEnvelope, contextOwnerId: string, scope: RunEffectScope): Promise<OwnerSkillCapability | undefined> }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability }>;
+export type OwnerContextHost = Readonly<{ prepare(turn: OwnerTurnEnvelope, scope: RunEffectScope): Promise<OwnerContextCapability> }>;
+export type OwnerHistoryFactory = (context: OwnerContextCapability, scope: RunEffectScope) => ConversationStore;
+export type OwnerContextIntegration = Readonly<{ contextHost: OwnerContextHost; history?: OwnerHistoryFactory }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory }>;
 
 export const createOwnerResponder = (
   openaiApiKey: string,
@@ -109,7 +113,28 @@ export const createOwnerResponder = (
   privateOwner?: PrivateOwner,
 ): OwnerResponder => {
   const skills = privateOwner?.skills;
-  const invocation = (() => {
+  const retainedOutputs = async () => {
+    // Fresh connector tools retain their normal read authority. Reusing an old
+    // snapshot additionally requires its exact current host source/grant witness.
+    const retention = context ? await retentionContext() : undefined;
+    if (context && !retention) return [];
+    const fragments = await toolLedger?.recent(heldTopics(), retention) ?? [];
+    return fragments.filter(fragment => !holdsHeldTopic(fragment.text));
+  };
+  const context = privateOwner?.context ?? (skills?.admission ? createOwnerTurnContext(skills.admission, {
+    toolOutputs: retainedOutputs,
+    ...(health ? { health: () => health(traceId) } : {}),
+    onPhase: (phase, ms) => log({ trace: traceId, hop: 'composer_phase', ms, ok: true, detail: phase }),
+  }) : undefined);
+  const conversationStore = context && privateRunScope && privateOwner?.history ? privateOwner.history(context, privateRunScope) : store;
+  const retentionContext = async (): Promise<ToolOutputContext | undefined> => {
+    if (!context?.retentionEpoch) return undefined;
+    const epoch = await context.retentionEpoch();
+    if (!epoch) throw new Error('retained source authority unavailable');
+    return { owner_ref: context.invocation.verified_authority.principal_ref, conversation_ref: context.conversationRef, source_epoch: epoch };
+  };
+  let currentRetention: ToolOutputContext | undefined;
+  const invocation = context?.invocation ?? (() => {
     const accepted = acceptTrustedInvocation(localTrustedBriefScheduleInput().admission);
     if (!accepted.ok) throw new Error('fixture admission failed');
     return accepted.value;
@@ -119,20 +144,17 @@ export const createOwnerResponder = (
   const cleanupLedger = toolLedger;
   let backgroundCurrent: (() => Promise<void>) | undefined;
   let transientDecision = false;
-  const assertCurrent = async () => { privateRunScope?.admit(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
+  const assertCurrent = async () => { privateRunScope?.admit(); await context?.assertCurrent(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
   const ownerId = invocation.verified_authority.principal_ref;
   const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;
   let traceId = '';
   let surfacePresentation: import('../prompt/messaging-behavior').SurfacePresentation | undefined;
-  const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' }, { ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: async () => {
-    const fragments = await toolLedger?.recent(heldTopics()) ?? [];
-    return fragments.filter(fragment => !holdsHeldTopic(fragment.text));
-  }, ...(health === undefined ? {} : { health: async () => {
+  const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' }, { ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: retainedOutputs, ...(health === undefined ? {} : { health: async () => {
     return health(traceId);
   } }), onComposerPhase: (phase, previousMs) => log({ trace: traceId, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }) });
   // Tool outputs from the current turn; flushed to the ledger when the turn's entries persist.
-  const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external'; summary: string }> = [];
+  const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external' | null; summary: string; context?: ToolOutputContext }> = [];
   const circuitBreaker = new InMemoryCircuitBreaker();
   const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
   const offloadStore = offload ? inMemoryToolOutputStore() : undefined;
@@ -270,7 +292,9 @@ export const createOwnerResponder = (
     if (added === null) return null;
     return added;
   };
-  const path = new JoinedConversationPath(adapters.contextComposer!, {
+  const composer = context?.composer ?? adapters.contextComposer!;
+  const contextInputs = () => ({ ...(context?.snapshot() ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null });
+  const path = new JoinedConversationPath(composer, {
     complete: async (request) => {
       await assertCurrent();
         const trace = traceId;
@@ -424,10 +448,18 @@ export const createOwnerResponder = (
           await assertCurrent();
           if (control.revision() !== contextSteering) throw new ClosedRunError();
           const skillMetadata = skills ? skills.metadata() : '';
+          // A tool round can change memory, account access or source state. Never reuse a
+          // prior canvas after that boundary: a fresh witness runs source admission again.
+          const composed = await composer.compose(invocation, contextInputs());
+          if (!composed.ok) throw new Error(`owner context failed: ${composed.failure.code}`);
+          await assertCurrent();
+          currentRetention = await retentionContext();
           // Owner memory gets the room left in the FINAL system prompt (after the skill wrapper), because the sanitiser drops an oversize one whole.
           const unboundSystem = (): string => {
-            const wrapped = skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined);
-            const before = [messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation), ownerClockLine(clock)];
+            // ContextComposer already includes its admitted system procedure section.
+            // Curated per-owner procedures are a separate capability and enter once.
+            const wrapped = skillPrompt;
+            const before = [composed.prompt, messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation), ownerClockLine(clock)];
             const afterBase = [...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
             // Owner memory takes its room first; open loops get what the same reserve leaves, and the section names what it left out.
             const room = systemRoom(withOwnerSkillProcedures([...before, ...afterBase].join('\n\n'), wrapped, surfacePresentation));
@@ -454,7 +486,7 @@ export const createOwnerResponder = (
           privateRunScope?.admit();
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
           privateRunScope?.admit();
-          pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: 'external', summary: event.output });
+          pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, summary: event.output, ...(currentRetention ? { context: currentRetention } : {}) });
         },
         ...(offerConnect ? { onConnect: offerConnect } : {}),
       });
@@ -503,13 +535,13 @@ export const createOwnerResponder = (
   };
   let restorePromise: Promise<void> | undefined;
   const restored = async () => {
-    await (restorePromise ??= store ? restoreConversation(tree, store).then(leafId => { parentId = leafId; }) : Promise.resolve());
+    await (restorePromise ??= conversationStore ? restoreConversation(tree, conversationStore).then(leafId => { parentId = leafId; }) : Promise.resolve());
     const ids = forgettingState?.claims('purging').map(claim => claim.id) ?? [];
     const topics = forgettingState?.pendingTopics() ?? [];
     if (forgettingState && (ids.length || topics.length)) {
       const purge = forgettingState.purge(ids, new Date().toISOString(), topics);
       try {
-        const cleanup = redactConversation ? await redactConversation(purge.texts, privateRunScope) : { remaining: store ? 1 : 0 };
+        const cleanup = redactConversation ? await redactConversation(purge.texts, privateRunScope) : { remaining: conversationStore ? 1 : 0 };
         const remaining = cleanupLedger ? await cleanupLedger.remaining(purge.texts) : 0;
         if (purge.ready && cleanup.remaining === 0 && remaining === 0) forgettingState.settle(ids, topics);
       } catch (error) {
@@ -519,24 +551,29 @@ export const createOwnerResponder = (
     }
   };
   const converse = async (id: string, conversationRef: string, said: string, time: TurnTimer, fromOwner = false, surface = 'agent', toolNames?: readonly string[]) => {
+    conversationRef = context?.conversationRef ?? conversationRef;
     backgroundToolNames = fromOwner ? undefined : toolNames;
     traceId = id;
     ownerTurnActive = fromOwner;
     turnToolEvents = [];
     control.begin(fromOwner);
     try {
+      const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: parentId !== null && tree.get(parentId)?.chatId === conversationRef ? parentId : null, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const };
+      // Admit original owner input durably before any model/provider work. A crash
+      // leaves a witnessed input for recovery, without fabricating a completed reply.
+      if (fromOwner && context && privateRunScope) await conversationStore?.persistOwnerInput?.(userEntry, privateRunScope);
       const publication = await time('joined_path', () => path.submit({
         ...(privateRunScope ? { runScope: privateRunScope } : {}),
         authenticatedOwnerId: ownerId, invocation,
-        context: { ...localTrustedBriefTurnSnapshot(), canary_tokens: CANARIES, replay_context_ref: null },
-        userEntry: tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: parentId !== null && tree.get(parentId)?.chatId === conversationRef ? parentId : null, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' }, role:'user' },
+        context: contextInputs(),
+        userEntry,
         assistantEntryId: `${id}-reply`,
       })).finally(() => { ownerTurnActive = false; backgroundToolNames = undefined; control.end(); });
       privateRunScope?.admit();
       await assertCurrent();
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
       const savedEntries = [tree.get(id)!, tree.get(publication.leafId)!].map(entry => redactConversationEntry(entry, redact));
-      await store?.save(savedEntries, publication.leafId, privateRunScope);
+      await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }
       privateRunScope?.admit();
       await assertCurrent();
@@ -554,14 +591,16 @@ export const createOwnerResponder = (
       const memoryWrites = turn.memoryWrites !== false;
       if (turn.runScope && privateRunScope !== turn.runScope) {
         const capturedTurn = { ...turn, memoryWrites };
-        const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}) });
+        const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
+        const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
+        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? { history: privateOwner.history } : {}) });
         control.route(scoped.control);
         try { return await scoped.respond(capturedTurn, time); }
         finally { control.unroute(scoped.control); }
       }
       privateRunScope?.admit();
       await assertCurrent();
+      await context?.assertInput(turn.text);
       if (skills?.admission && (await skills.admission.readInput()).text !== turn.text) throw new Error('owner input mismatch');
       await restored();
       const id = turn.traceId;

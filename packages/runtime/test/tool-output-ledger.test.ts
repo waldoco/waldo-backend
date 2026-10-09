@@ -13,6 +13,17 @@ const fakeStorage = () => {
 };
 
 describe('tool output ledger', () => {
+  it('retained source snapshots require the same owner, audience and current source authority', async () => {
+    const storage = fakeStorage(), ledger = toolOutputLedger(storage);
+    const context = { owner_ref: 'owner-a', conversation_ref: 'owner-private', source_epoch: 'account-and-task-v1' };
+    await ledger.record({ tool: 'read_thread', ok: true, at: 1, taint: 'external', summary: 'Legacy mail row stays preserved' });
+    await ledger.record({ tool: 'read_thread', ok: true, at: 2, taint: 'external', summary: 'Current scoped mail source', context });
+    expect((await ledger.recent([], context)).map(row => row.text)).toEqual(['read_thread succeeded: Current scoped mail source']);
+    for (const changed of [{ ...context, owner_ref: 'owner-b' }, { ...context, conversation_ref: 'group' }, { ...context, source_epoch: 'revoked-v2' }]) {
+      expect(await ledger.recent([], changed)).toEqual([]);
+    }
+    expect(storage.data.size).toBe(3);
+  });
   it('two calls of the same tool in the same millisecond keep distinct source keys', async () => {
     const storage = fakeStorage();
     const ledger = toolOutputLedger(storage as never);

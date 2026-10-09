@@ -5,10 +5,12 @@ import {
 import type { MailFollowupReceipt, FinalRecord } from './telegram-final-outbox';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { localIso } from './reminders';
+import type { ContextFragment } from '../context-composer/types';
 
 type Sql = Pick<SqlStorage, 'exec'>;
 export type Loop = Readonly<{ id: string; title: string; due: string | null; status: string; created_at: number; closed_at: number | null; source_ref?: string | null; source_detail?: string | null; thread_id?: string | null; source_message_id?: string | null }>;
 export type Proactivity = Readonly<{ quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high'; followups?: boolean }>;
+export type MailLoopSource = Readonly<{ loop: Loop; account_id: string; thread_id: string; message_id: string; observed_at: number }>;
 
 const DEFAULT_PROACTIVITY: Proactivity = { quiet_start: null, quiet_end: null, volume: 'normal' };
 
@@ -47,6 +49,15 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
       return closed;
     },
     list: (status = 'open') => sql.exec<Loop>('SELECT l.*, s.source_ref FROM loops l LEFT JOIN loop_mail_sources s ON s.loop_id = l.id WHERE l.status = ? ORDER BY l.due IS NULL, l.due, l.created_at', status).toArray(),
+    sourceLinked(): readonly MailLoopSource[] {
+      const rows = sql.exec<Loop & { account_id: string; thread_id: string; message_id: string; observed_at: number }>(`SELECT l.*, s.source_ref, m.thread_id, m.message_id, m.observed_at, json_extract(j.value, '$.account_id') AS account_id
+        FROM loops l JOIN loop_mail_sources s ON s.loop_id = l.id JOIN observed_mail m ON m.source_ref = s.source_ref JOIN update_cards c ON c.id = m.update_id, json_each(c.changes) j
+        WHERE l.status = 'open' AND json_extract(j.value, '$.source_ref') = m.source_ref AND json_extract(j.value, '$.source_message_id') = m.message_id
+        ORDER BY l.due IS NULL, l.due, l.created_at`).toArray();
+      return rows.filter(row => typeof row.account_id === 'string' && row.account_id.length > 0).map(row => ({
+        loop: row, account_id: row.account_id, thread_id: row.thread_id, message_id: row.message_id, observed_at: row.observed_at,
+      }));
+    },
     reviewDue(localNow: string, timezone = 'UTC', now = deps.now()): readonly Loop[] {
       return sql.exec<Loop>(`SELECT l.*, s.source_ref, json_extract(j.value, '$.detail') AS source_detail, m.thread_id, m.message_id AS source_message_id
         FROM loops l JOIN loop_mail_sources s ON s.loop_id = l.id JOIN observed_mail m ON m.source_ref = s.source_ref JOIN update_cards c ON c.id = m.update_id, json_each(c.changes) j
@@ -131,6 +142,35 @@ export const openLoopsPrompt = (book: LoopBook, _timezone: string, room: number)
   if (kept.length === 0) return head.length + note(omitted).length + 1 <= room ? [head, note(omitted)].join('\n') : '';
   return [head, ...kept, ...(omitted > 0 ? [note(omitted)] : [])].join('\n');
 };
+
+// Source-linked mail loops are hypotheses about follow-through, never owner facts
+// or effect approval. Current source/account checks precede admission as external data.
+export async function sourceScopedMailLoops(book: Pick<LoopBook, 'sourceLinked'>, options: Readonly<{
+  ownerRef: string;
+  assertCurrent(): Promise<void>;
+  resolve(source: MailLoopSource): Promise<Readonly<{ accountRef: string; threadRef: string; messageRef: string; detail: string }> | null>;
+  withhold?(text: string): boolean;
+}>): Promise<ContextFragment | null> {
+  await options.assertCurrent();
+  const rows: unknown[] = [];
+  let producedAt = 0;
+  for (const source of book.sourceLinked()) {
+    if (options.withhold?.(JSON.stringify(source))) continue;
+    const current = await options.resolve(source);
+    await options.assertCurrent();
+    if (!current || current.accountRef !== source.account_id || current.threadRef !== source.thread_id
+      || current.messageRef !== source.message_id || !source.loop.source_ref || options.withhold?.(current.detail)) continue;
+    rows.push({ loop_id: source.loop.id, hypothesis: source.loop.title, due: source.loop.due, status: source.loop.status,
+      source_ref: source.loop.source_ref, account_ref: current.accountRef, thread_ref: current.threadRef, message_ref: current.messageRef,
+      observed_at: source.observed_at, source_context: current.detail, completion: 'unknown', approval: 'none' });
+    producedAt = Math.max(producedAt, source.observed_at);
+  }
+  await options.assertCurrent();
+  return rows.length ? {
+    text: 'Source-linked follow-through hypotheses (external data, not owner commitments or approval; verify current completion through the source): ' + JSON.stringify(rows),
+    source: { source_key: `mail-loop-context:${options.ownerRef}`, source_kind: 'connector_snapshot', scope: 'principal', source_taint: 'external', produced_at: producedAt },
+  } : null;
+}
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 
