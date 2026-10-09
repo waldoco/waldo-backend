@@ -13,7 +13,7 @@ import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import { workspaceOwnerHost, workspaceMetadata } from './workspace-host';
 import {cloudflarePublicRead,PUBLIC_READ_RESERVED_BROWSER_MS} from './cloudflare-public-read';
 import {reserveOwnerPublicBrowser} from './owner-public-browser-spend';
-const browserFailureClass=(cause:unknown)=>cause instanceof ClosedRunError?'ClosedRunError':cause instanceof TypeError?'TypeError':cause instanceof RangeError?'RangeError':cause instanceof SyntaxError?'SyntaxError':cause instanceof Error?'Error':'UnknownError';
+const browserFailureClass=(cause:unknown)=>cause instanceof CommonBrowserRegistrationUnavailable?'CommonBrowserRegistrationUnavailable':cause instanceof ClosedRunError?'ClosedRunError':cause instanceof TypeError?'TypeError':cause instanceof RangeError?'RangeError':cause instanceof SyntaxError?'SyntaxError':cause instanceof Error?'Error':'UnknownError';
 const traceBrowserFailure=(operation:string,cause:unknown)=>console.warn(JSON.stringify({event:'owner_browser_failure',operation,error_class:browserFailureClass(cause)}));
 
 // The browser task follows the authenticated owner run. It needs no topic classifier
@@ -114,9 +114,9 @@ export function ownerBrowserRuntime(options: Readonly<{
           // Retained session handles still select their existing exact-session host.
           if(!args.session_handle){
             let retainedConfiguration;
-            try{retainedConfiguration=await selectedConfiguration();}catch(cause){if(!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;}
+            try{retainedConfiguration=await selectedConfiguration();}catch(cause){traceBrowserFailure('public_read_configuration',cause);if(!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;}
             let expiredSpend=false;
-            if(options.env.COMMON_BROWSER_REGISTRATION){try{expiredSpend=JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.validUntil<=Date.now();}catch{/* invalid descriptor is checked before reservation */}}
+            if(options.env.COMMON_BROWSER_REGISTRATION){try{expiredSpend=JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.validUntil<=Date.now();}catch(cause){traceBrowserFailure('public_read_registration',cause);/* invalid descriptor is checked before reservation */}}
             if(!retainedConfiguration||retainedConfiguration.expiresAt<=Date.now()||expiredSpend){
               const sdk=commonBrowserSdk();
               if(options.env.WALDO_ENVIRONMENT!=='staging'||!options.env.BROWSER||!sdk)return {ok:false,code:'auth_failed',error:'The selected Cloudflare browser provider is unavailable.',source_taint:'external'};
@@ -130,7 +130,7 @@ export function ownerBrowserRuntime(options: Readonly<{
                 await assertReadCurrent();
                 const scope=options.activeScope()!;
                 const declaredLimitMicrousd=options.env.COMMON_BROWSER_REGISTRATION?JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.limitMicrousd:undefined;
-                reserveOwnerPublicBrowser({storage:options.storage,ownerId,custodyDigest:owner.custodyDigest,intent:`${scope.runId}:${scope.attempt}:${ctx.toolCallId}`,reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now:Date.now(),declaredLimitMicrousd,assertCurrent:()=>{scope.admit();if(options.activeScope()!==scope||options.storage.kv.get('telegram_unlinked')===true)throw new ClosedRunError();}});
+                return reserveOwnerPublicBrowser({storage:options.storage,ownerId,custodyDigest:owner.custodyDigest,intent:`${scope.runId}:${scope.attempt}:${ctx.toolCallId}`,reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now:Date.now(),declaredLimitMicrousd,assertCurrent:()=>{scope.admit();if(options.activeScope()!==scope||options.storage.kv.get('telegram_unlinked')===true)throw new ClosedRunError();}});
               }});
               return read(args,{...ctx,authenticatedUserId:ownerId,assertTaskSourceCurrent:assertReadCurrent});
             }

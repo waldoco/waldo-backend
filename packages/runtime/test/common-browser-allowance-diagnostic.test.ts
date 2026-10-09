@@ -84,3 +84,14 @@ it('retained cleanup is summarized without exposing session identity or calling 
  f.rows.set('common-browser:PRIVATE_TASK',{grant:{ownerId},cleanup:'pending',cleanupFailed:true,session:{id:'PRIVATE_SESSION',ownerId,provider:'cloudflare_playwright',providerSessionId:'PRIVATE_PROVIDER',contextHandle:null,mode:'public',state:'active',generation:1,expiresAt:Date.now()-1000,updatedAt:Date.now()}});
  const result=await f.read();expect(result.browser.retainedSessionCounts).toEqual({active:0,unresolved:0,pendingCleanup:0,failedCleanup:1,closed:0});expect(JSON.stringify(result)).not.toContain('PRIVATE');expect(f.env.BROWSER.fetch).not.toHaveBeenCalled();expect(f.writes).not.toHaveBeenCalled();
 });
+
+it('duration settlements and legacy holds are both visible without diagnostic writes',async()=>{
+ const f=fixture();f.env.COMMON_BROWSER_REGISTRATION='';const ownerId='prn_'+proof.owner.replaceAll('-',''),month=new Date().toISOString().slice(0,7);
+ f.rows.set('owner-public-browser-spend:v1',{ownerId,custodyDigest:proof.custody,limitMicrousd:20000000,reservedMicrousd:2090000,intents:['PRIVATE_OLD']});
+ f.rows.set('owner-public-browser-spend:v2',{ownerId,custodyDigest:proof.custody,reservedMicrousd:1350,reservations:[{intent:'PRIVATE_SETTLED',month,reservedBrowserMs:50000,chargedMicrousd:100,settled:true,durationMs:4000},{intent:'PRIVATE_UNKNOWN',month,reservedBrowserMs:50000,chargedMicrousd:1250,settled:false}]});
+ f.rows.set('common-public-browser-month:'+month,2091350);const snapshot=structuredClone([...f.rows]);
+ expect((await f.read()).browser).toMatchObject({normalPublicReadReservedMicrousd:2091350,normalPublicReadReservations:3,aggregateRetainedReservedMicrousd:2091362,currentMonthReservedMicrousd:2091350});
+ expect([...f.rows]).toEqual(snapshot);expect(f.writes).not.toHaveBeenCalled();
+ f.rows.get('owner-public-browser-spend:v2').reservations[0].durationMs=8000;
+ expect((await f.read()).browser).toMatchObject({status:'conflict',normalPublicReadReservedMicrousd:null});expect(f.writes).not.toHaveBeenCalled();
+});

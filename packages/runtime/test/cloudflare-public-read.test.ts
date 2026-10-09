@@ -171,3 +171,53 @@ it('retains the pinned Playwright twenty-redirect ceiling even when the host clo
     expect(count).toBe(21); expect(f.calls).toContain('Browser.close');
   } finally { clock.mockRestore(); }
 });
+
+it('settles only measured duration from before acquire through validated absence readback',async()=>{
+ const f=fake(),settle=vi.fn();let now=1700000000000;const clock=vi.spyOn(Date,'now').mockImplementation(()=>now);
+ const acquire=f.sdk.acquire,sessions=f.sdk.sessions;
+ f.sdk.acquire=async()=>{now+=1500;return acquire();};
+ f.sdk.sessions=async()=>{now+=2500;return sessions();};
+ try{
+  expect(await cloudflarePublicRead({binding:{} as never,loadSdk:async()=>f.sdk as never,reserveAllocation:async()=>({settle})})(args as never,context)).toMatchObject({ok:true});
+  expect(settle).toHaveBeenCalledExactlyOnceWith(4000);expect(f.calls).toContain('Browser.close');
+ }finally{clock.mockRestore();}
+});
+it.each([undefined,null,{},[{}],[null],[{sessionId:123}],[{sessionId:'../bad'}],[{sessionId:'other'},{sessionId:'other'}]])('malformed session-list evidence cannot certify absence or settle a reserve: %j',async response=>{
+ const f=fake(),settle=vi.fn();f.sdk.sessions=async()=>response as never;
+ expect(await cloudflarePublicRead({binding:{} as never,loadSdk:async()=>f.sdk as never,reserveAllocation:async()=>({settle})})(args as never,context)).toMatchObject({ok:false,error:expect.stringContaining('cleanup is unconfirmed')});
+ expect(settle).not.toHaveBeenCalled();
+});
+it('an owned session still listed after cleanup never settles, while a valid foreign session does not prevent exact absence',async()=>{
+ for(const id of ['private-id','other-id']){
+  const f=fake(),settle=vi.fn();f.sdk.sessions=async()=>[{sessionId:id}];
+  const result=await cloudflarePublicRead({binding:{} as never,loadSdk:async()=>f.sdk as never,reserveAllocation:async()=>({settle})})(args as never,context);
+  expect(result.ok).toBe(id==='other-id');expect(settle).toHaveBeenCalledTimes(id==='other-id'?1:0);
+ }
+});
+it('lost allocation identity and late acquire completion retain the full reserve without false zero settlement',async()=>{
+ vi.useFakeTimers();
+ try{
+  const f=fake(),settle=vi.fn();let finish:((session:{sessionId:string})=>void)|undefined;
+  f.sdk.acquire=async()=>{f.calls.push('acquire');return new Promise(resolve=>{finish=resolve;});};
+  const read=cloudflarePublicRead({binding:{} as never,loadSdk:async()=>f.sdk as never,reserveAllocation:async()=>({settle})})(args as never,{...context as object,runScope:{deadline:Date.now()+20,admit(){}}} as never);
+  await vi.advanceTimersByTimeAsync(21);expect(await read).toMatchObject({ok:false});
+  expect(f.calls).toEqual(['acquire']);expect(settle).not.toHaveBeenCalled();
+  finish!({sessionId:'private-id'});await vi.advanceTimersByTimeAsync(1000);
+  expect(f.calls).toEqual(['acquire']);expect(settle).not.toHaveBeenCalled();
+ }finally{vi.useRealTimers();}
+});
+it('a late absence readback cannot settle after cleanup has timed out',async()=>{
+ vi.useFakeTimers();
+ try{
+  const f=fake(),settle=vi.fn();let finish:((sessions:never[])=>void)|undefined;
+  f.sdk.sessions=async()=>new Promise(resolve=>{finish=resolve;});
+  const read=cloudflarePublicRead({binding:{} as never,loadSdk:async()=>f.sdk as never,reserveAllocation:async()=>({settle})})(args as never,context);
+  await vi.advanceTimersByTimeAsync(10001);expect(await read).toMatchObject({ok:false,error:expect.stringContaining('cleanup is unconfirmed')});
+  finish!([]);await vi.advanceTimersByTimeAsync(1);expect(settle).not.toHaveBeenCalled();
+ }finally{vi.useRealTimers();}
+});
+it('malformed allocation IDs never settle and settlement failure is not reported as completion',async()=>{
+ const f=fake(),settle=vi.fn();f.sdk.acquire=async()=>({sessionId:undefined} as never);
+ expect(await cloudflarePublicRead({binding:{} as never,loadSdk:async()=>f.sdk as never,reserveAllocation:async()=>({settle})})(args as never,context)).toMatchObject({ok:false});expect(settle).not.toHaveBeenCalled();
+ const g=fake();expect(await cloudflarePublicRead({binding:{} as never,loadSdk:async()=>g.sdk as never,reserveAllocation:async()=>({settle(){throw Error('private storage detail');}})})(args as never,context)).toMatchObject({ok:false,error:'The Cloudflare browser cost settlement is unconfirmed.'});
+});

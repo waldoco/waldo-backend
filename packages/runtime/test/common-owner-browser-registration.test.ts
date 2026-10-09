@@ -131,7 +131,8 @@ it('an expired trial permits a normal accounted public read and ordinary model w
   expect(await runtime.gateway()!.complete(request(fixture.scope))).toMatchObject({ ok: true });
   expect(await runtime.read({ name: 'browse_page' } as never).handle({ provider: 'cloudflare_playwright', url: 'https://example.com/a', instruction: 'Read' }, { authenticatedUserId: 'owner', runScope: fixture.scope, turnId: 'turn', toolCallId: 'call', egressAllowlist: ['*'] } as never)).toMatchObject({ ok: true });
   expect(provider.calls).toHaveLength(1); expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.ends).toBe(1);
-  expect(fixture.rows.get('owner-public-browser-spend:v1').reservedMicrousd).toBe(2090000);
+  expect(fixture.rows.get('owner-public-browser-spend:v2').reservedMicrousd).toBeLessThanOrEqual(1250);
+  expect(fixture.rows.get('owner-public-browser-spend:v2').reservations[0].settled).toBe(true);
   expect(fixture.rows.has('common_owner_browser_registration_v1')).toBe(false);
 });
 

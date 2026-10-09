@@ -24,8 +24,10 @@ it.each(['absent','expired'])('ordinary two-argument ownerDO returns useful publ
   await vi.waitFor(async()=>{await instance.alarm();expect(proof.sent.some(text=>text.includes('Vegetarian pasta'))).toBe(true);},{timeout:10000,interval:50});
   const output=proof.inputs.flatMap(input=>Array.isArray(input.input)?input.input:[]).find((row:any)=>row.type==='function_call_output');
   expect(JSON.parse(output.output)).toMatchObject({ok:true,data:{provider:'cloudflare_playwright',data:{text:'Vegetarian pasta'}}});
-  expect(state.storage.kv.get<any>('owner-public-browser-spend:v1')).toMatchObject({ownerId:'prn_10000000000000000000000000000002',reservedMicrousd:2090000});
-  expect(state.storage.kv.get('common-public-browser-month:'+new Date().toISOString().slice(0,7))).toBe(2090000);
+  const accounting=state.storage.kv.get<any>('owner-public-browser-spend:v2');
+  expect(accounting).toMatchObject({ownerId:'prn_10000000000000000000000000000002',reservations:[{settled:true}]});
+  expect(accounting.reservedMicrousd).toBeLessThanOrEqual(1250);
+  expect(state.storage.kv.get('common-public-browser-month:'+new Date().toISOString().slice(0,7))).toBe(accounting.reservedMicrousd);
   expect(proof.calls).toEqual(['acquire','close']);expect(alive).toBe(false);expect(network).not.toHaveBeenCalled();await state.storage.deleteAlarm();
  });}finally{network.mockRestore();}
 },20000);

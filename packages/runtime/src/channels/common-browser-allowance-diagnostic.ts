@@ -5,8 +5,6 @@ import { COMMON_BROWSER_MONTH_CEILING_MICROUSD, commonStagingRegistration } from
 import { cloudflareBrowserProviderReadiness } from './browser-public-read-configuration';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import {ownerPublicBrowserAccounting} from './owner-public-browser-spend';
-import {commonCloudflareWorstCaseEnvelope} from './common-staging-price-envelope';
-import {PUBLIC_READ_RESERVED_BROWSER_MS} from './cloudflare-public-read';
 
 type Status = 'registered' | 'expired' | 'conflict' | 'exhausted' | 'unregistered' | 'unverifiable';
 // Numbers describe retained reservations, never vendor reconciliation or approval.
@@ -39,7 +37,7 @@ export function commonBrowserAllowanceDiagnostic(options: Readonly<{
   result.providerReady = cloudflareBrowserProviderReadiness(env);
   const ownerId = `prn_${owner.directoryOwnerId.toLowerCase().replaceAll('-', '')}`;
   const ledgers = [...storage.kv.list<any>({prefix:'common-spend:'})];
-  const normal=ownerPublicBrowserAccounting(storage,ownerId,owner.custodyDigest,commonCloudflareWorstCaseEnvelope(PUBLIC_READ_RESERVED_BROWSER_MS));
+  const normal=ownerPublicBrowserAccounting(storage,ownerId,owner.custodyDigest);
   if(normal){result.normalPublicReadReservedMicrousd=normal.reservedMicrousd;result.normalPublicReadReservations=normal.intents.length;}
   let aggregate = normal?.reservedMicrousd??0;
   for(const [key,row] of ledgers) {
