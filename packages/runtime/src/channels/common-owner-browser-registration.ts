@@ -60,11 +60,11 @@ export function commonOwnerBrowserRegistration(options: Readonly<{
       const pinned: Pinned = { operator: operator!, custodyDigest: owner.custodyDigest, registration };
       const prior = storage.kv.get<Pinned>(KEY);
       if(prior&&JSON.stringify(prior)!==JSON.stringify(pinned))throw Error('automatic browser policy requires reconciliation');
-      const config = configuration(registration, false);
+      const now = Date.now(), expired = now >= registration.policy.expiresAt || now >= registration.spend.validUntil;
+      // Expired history is validated for fallback/cleanup, never re-admitted.
+      const config = configuration(registration, expired);
       if (!config) throw new CommonBrowserRegistrationUnavailable('automatic browser configuration unavailable');
-      const now = Date.now();
-      if (now < registration.policy.createdAt || now >= registration.policy.expiresAt
-        || now >= registration.spend.validUntil) throw new CommonBrowserRegistrationUnavailable('automatic browser operator policy expired');
+      if (now < registration.policy.createdAt || expired) throw new CommonBrowserRegistrationUnavailable('automatic browser operator policy expired');
       storage.transactionSync(() => {
         physical();
         const prior = storage.kv.get<Pinned>(KEY);

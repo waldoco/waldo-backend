@@ -163,3 +163,16 @@ it.each([10_000_000,15_000_000,20_000_000])('reads a historical %i ceiling witho
  expect(()=>reserve(f,'old-0')).toThrow('prior effect');
  expect([...f.rows]).toEqual(snapshot);
 });
+
+
+it.each(['legacy','common-spend'])('removing a descriptor cannot restore historical %s authority above ten dollars',kind=>{
+ const f=fixture(),ownerId=f.ctx.authenticatedUserId;
+ if(kind==='legacy')f.rows.set('owner-public-browser-spend:v1',{ownerId,custodyDigest:'b'.repeat(64),limitMicrousd:17_910_000,reservedMicrousd:10_450_000,intents:['old-1','old-2','old-3','old-4','old-5']});
+ else f.rows.set('common-spend:old',{policy:{ref:'old',ownerId,validUntil:2,limitMicrousd:17_910_000,maxCalls:100},reservedMicrousd:9_999_000,calls:[{id:'old',upperBoundMicrousd:9_999_000}],cleanup:[]});
+ const before=structuredClone([...f.rows]);expect(()=>reserve(f,'new')).toThrow('cost ceiling');expect([...f.rows]).toEqual(before);
+});
+it('a retained test ceiling tightens new normal admission without rewriting its historical policy',()=>{
+ const f=fixture(),old={policy:{ref:'old',ownerId:f.ctx.authenticatedUserId,validUntil:2,limitMicrousd:17_910_000,maxCalls:100},reservedMicrousd:1000,calls:[{id:'old',upperBoundMicrousd:1000}],cleanup:[]};
+ f.rows.set('common-spend:old',structuredClone(old));reserve(f,'new');
+ expect(f.rows.get('common-spend:old')).toEqual(old);expect(f.rows.get('owner-public-browser-spend:v2')).toMatchObject({limitMicrousd:10_000_000,reservedMicrousd:1250});
+});

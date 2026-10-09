@@ -594,3 +594,9 @@ A fresh staging Cloudflare public read uses the existing reader without requirin
 | Failure | Regression | Boundary |
 | --- | --- | --- |
 | A shared $20 historical-format constant also admitted new tests above the approved $10 cap | common-staging-registration.test.ts hard-coded $10 boundary; owner-browser-public-read.test.ts rejected declarations, unchanged historical $10/$15/$20 records and retained lower ceilings; historical automatic/manual cleanup and read-only diagnostic regressions | New admission tightens; historical charges, replay evidence, monthly counters and actual ceilings remain unchanged |
+
+- [ ] Expired historical registrations cannot block the ordinary public-read path solely because their immutable ceiling predates a tighter admission cap. Validate owner/pin/format before expiry fallback, reject live/future over-cap registration, count all historical charges under the effective lower ceiling, and preserve that bound when the descriptor disappears.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Expired $17.91 registration hit new $10 admission validation before normal-read fallback; removing its descriptor could restore the historical ceiling | common-owner-browser-registration.test.ts automatic/manual real-handler reads, $8 control, live/future/pin/owner/custody refusals and descriptor removal; owner-browser-public-read.test.ts unchanged legacy aggregates and retained test ceilings | Exact historical pins, refs, charges and funded cleanup remain intact; only new ordinary admission is bounded, with no reset/refund or environment mutation |

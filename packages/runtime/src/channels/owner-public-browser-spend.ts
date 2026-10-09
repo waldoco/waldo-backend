@@ -70,7 +70,8 @@ export function reserveOwnerPublicBrowser(options:Readonly<{
   options.assertCurrent();
   const prior=ownerPublicBrowserAccounting(storage,ownerId,custodyDigest);
   if(prior?.intents.includes(intent))throw Error('public browser prior effect requires reconciliation');
-  let aggregate=prior?.reservedMicrousd??0,ceiling=prior?.limitMicrousd;
+  // Historical test declarations stay readable, but cannot restore old authority.
+  let aggregate=prior?.reservedMicrousd??0,ceiling=prior?.limitMicrousd===undefined?undefined:Math.min(prior.limitMicrousd,COMMON_TEST_CEILING_MICROUSD);
   if(options.declaredLimitMicrousd!==undefined){
    if(!Number.isSafeInteger(options.declaredLimitMicrousd)||options.declaredLimitMicrousd<1||options.declaredLimitMicrousd>COMMON_TEST_CEILING_MICROUSD)throw Error('public browser retained ceiling conflict');
    ceiling=lowerCeiling(ceiling,options.declaredLimitMicrousd);
@@ -78,7 +79,7 @@ export function reserveOwnerPublicBrowser(options:Readonly<{
   for(const [key,row] of storage.kv.list<any>({prefix:'common-spend:'})){
    if(!row?.policy||row.policy.ownerId!==ownerId||key!==`common-spend:${row.policy.ref}`)throw Error('public browser retained owner conflict');
    aggregate+=commonSpendReservation(storage,row.policy,()=>now,()=>{}).reserved();
-   ceiling=lowerCeiling(ceiling,row.policy.limitMicrousd);
+   ceiling=lowerCeiling(ceiling,Math.min(row.policy.limitMicrousd,COMMON_TEST_CEILING_MICROUSD));
   }
   // Existing paid-test custody is never discarded or reinterpreted as fresh money.
   if([...storage.kv.list({prefix:'common-browser-acceptance:'})].length||[...storage.kv.list({prefix:'common-browser-acceptance-custody:'})].length)throw Error('public browser prior test requires reconciliation');

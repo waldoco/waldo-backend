@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ownerBrowserRuntime } from '../src/channels/owner-browser-runtime';
 import { registerCommonBrowserSdk } from '../src/channels/common-staging-registration';
 import { commonBrowserFixture, commonBrowserMeteredFixtureLoader } from './fixtures/common-browser-sdk';
@@ -12,6 +12,7 @@ const provider = vi.hoisted(() => ({ calls: [] as unknown[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: unknown) => { provider.calls.push(input); return { id: 'fake-response', output: [], output_text: 'Read complete.', usage: { input_tokens: 1, output_tokens: 1 } }; } }; } }));
 vi.mock('../src/identity/common-owner-authority', () => ({ commonOwnerAuthority: () => ({ resolve: async (_provider: string, subject: string, doName: string) => { const wait = directory.wait; directory.wait = undefined; if (wait) { directory.entered?.(); await wait; } return directory.present ? { directoryOwnerId: directory.owner, custodyDigest: directory.custody, subject, doName } : null; } }) }));
 registerCommonBrowserSdk(commonBrowserMeteredFixtureLoader);
+afterEach(() => vi.restoreAllMocks());
 beforeEach(() => { directory.owner = '10000000-0000-0000-0000-000000000001'; directory.custody = 'a'.repeat(64); directory.present = true; directory.wait = undefined; directory.entered = undefined; provider.calls = []; commonBrowserFixture.reset(); });
 const setup = () => {
   const rows = new Map<string, any>([['do_name', 'automatic-owner'], ['telegram_subject', '81101']]);
@@ -189,4 +190,55 @@ it.each(['automatic','manual'])('historical %s registration cleanup survives the
  runtime.stop();await f.runtime().maintain();
  expect(commonBrowserFixture.ends).toBe(1);expect(commonBrowserFixture.allocations).toBe(1);expect(provider.calls).toHaveLength(0);
  expect([...f.rows].find(([key])=>key.startsWith('common-spend:'))![1].reservedMicrousd).toBe(reserved);
+});
+
+
+async function expiredHistoricalRegistration(kind:string,limitMicrousd=17_910_000){
+ const f=setup();
+ if(kind==='manual')f.env.COMMON_BROWSER_REGISTRATION=JSON.stringify({policy:{...f.operator.policy,doName:'automatic-owner',subject:'81101',directoryOwnerId:directory.owner},spend:f.operator.spend,billing:f.operator.billing});
+ const runtime=f.runtime();await allocate(f,runtime);
+ const descriptor=JSON.parse(f.env.COMMON_BROWSER_REGISTRATION);descriptor.spend.limitMicrousd=limitMicrousd;
+ f.env.COMMON_BROWSER_REGISTRATION=JSON.stringify(descriptor);
+ const pinned=f.rows.get('common_owner_browser_registration_v1');
+ if(pinned){pinned.operator=f.env.COMMON_BROWSER_REGISTRATION;pinned.registration.spend.limitMicrousd=limitMicrousd;}
+ const ledger=[...f.rows].find(([key])=>key.startsWith('common-spend:'))![1];ledger.policy.limitMicrousd=limitMicrousd;
+ const retainedCharge=ledger.reservedMicrousd;runtime.stop();await f.runtime().maintain();
+ expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.ends).toBe(1);expect([...f.rows].find(([key])=>key.startsWith('common-spend:'))![1].reservedMicrousd).toBe(retainedCharge);
+ let clock=f.operator.policy.expiresAt+1;vi.spyOn(Date,'now').mockImplementation(()=>clock);
+ const scope={...f.scope,runId:crypto.randomUUID(),attempt:crypto.randomUUID(),deadline:clock+60000};f.activate(scope);
+ const read=(id='normal')=>f.runtime().read({name:'browse_page'} as never).handle({provider:'cloudflare_playwright',url:'https://example.com/a',instruction:'Read'},{authenticatedUserId:'owner',runScope:scope,turnId:'normal',toolCallId:id,egressAllowlist:['*']} as never);
+ return {f,read,advance:(ms:number)=>{clock+=ms;}};
+}
+it.each([['automatic',17_910_000],['manual',17_910_000],['automatic',8_000_000],['manual',8_000_000]] as const)('expired %s %i declaration admits a normal read at the effective cap without changing history',async(kind,limit)=>{
+ const {f,read,advance}=await expiredHistoricalRegistration(kind,limit),before=structuredClone([...f.rows]),descriptor=f.env.COMMON_BROWSER_REGISTRATION;
+ const month=`common-public-browser-month:${new Date().toISOString().slice(0,7)}`,priorMonth=f.rows.get(month),effective=Math.min(limit,10_000_000);
+ commonBrowserFixture.onAcquire=()=>{expect(f.rows.get('owner-public-browser-spend:v2')).toMatchObject({limitMicrousd:effective,reservedMicrousd:1250});expect(f.rows.get(month)).toBe(priorMonth+1250);advance(4000);};
+ expect(await read()).toMatchObject({ok:true,data:{provider:'cloudflare_playwright',data:{text:expect.stringContaining('Option A costs 10')}}});
+ expect(commonBrowserFixture.allocations).toBe(2);expect(commonBrowserFixture.ends).toBe(2);expect(provider.calls).toHaveLength(0);
+ expect(f.rows.get('owner-public-browser-spend:v2')).toMatchObject({limitMicrousd:effective,reservedMicrousd:100});
+ for(const [key,value] of before)if(key!==month)expect(f.rows.get(key)).toEqual(value);
+ expect(f.rows.get(month)).toBe(priorMonth+100);expect(f.env.COMMON_BROWSER_REGISTRATION).toBe(descriptor);
+});
+it.each(['automatic','manual'])('expired %s historical spend cannot exceed ten dollars after descriptor removal',async kind=>{
+ const {f,read}=await expiredHistoricalRegistration(kind);
+ expect(await read()).toMatchObject({ok:true});f.env.COMMON_BROWSER_REGISTRATION='';
+ const ledger=[...f.rows].find(([key])=>key.startsWith('common-spend:'))![1],extra=9_998_751-ledger.reservedMicrousd;
+ ledger.calls.push({id:'older-model',upperBoundMicrousd:extra});ledger.reservedMicrousd+=extra;
+ const before=structuredClone([...f.rows]);expect(await read('later')).toMatchObject({ok:false});
+ expect([...f.rows]).toEqual(before);expect(commonBrowserFixture.allocations).toBe(2);
+});
+it.each([['automatic','live'],['manual','live'],['automatic','future'],['manual','future']])('new %s %s declaration above ten dollars remains rejected',async(kind,state)=>{
+ const f=setup();f.operator.spend.limitMicrousd=17_910_000;
+ if(state==='future'){f.operator.policy.createdAt+=120000;f.operator.policy.expiresAt+=180000;f.operator.spend.validUntil=f.operator.policy.expiresAt;}
+ f.env.COMMON_BROWSER_REGISTRATION=JSON.stringify(kind==='automatic'?f.operator:{policy:{...f.operator.policy,doName:'automatic-owner',subject:'81101',directoryOwnerId:directory.owner},spend:f.operator.spend,billing:f.operator.billing});
+ const before=structuredClone([...f.rows]);
+ expect(await f.runtime().read({name:'browse_page'} as never).handle({provider:'cloudflare_playwright',url:'https://example.com/a',instruction:'Read'},{authenticatedUserId:'owner',runScope:f.scope,turnId:'new',toolCallId:'new',egressAllowlist:['*']} as never)).toMatchObject({ok:false});
+ expect([...f.rows]).toEqual(before);expect(commonBrowserFixture.allocations).toBe(0);expect(provider.calls).toHaveLength(0);
+});
+it.each([['automatic','pin'],['automatic','owner'],['automatic','custody'],['manual','owner'],['manual','custody']])('expired historical %s declaration cannot hide changed %s',async(mode,kind)=>{
+ const {f,read}=await expiredHistoricalRegistration(mode);
+ if(kind==='pin'){const descriptor=JSON.parse(f.env.COMMON_BROWSER_REGISTRATION);descriptor.spend.limitMicrousd=10_000_000;f.env.COMMON_BROWSER_REGISTRATION=JSON.stringify(descriptor);}
+ if(kind==='owner')directory.owner='10000000-0000-0000-0000-000000000002';
+ if(kind==='custody')directory.custody='b'.repeat(64);
+ const before=structuredClone([...f.rows]);expect(await read()).toMatchObject({ok:false});expect([...f.rows]).toEqual(before);expect(commonBrowserFixture.allocations).toBe(1);
 });
