@@ -34,6 +34,7 @@ export function cloudflareGeneralBrowser(options: Options) {
   const humanRedirects=new WeakMap<Page,Set<string>>();
   let takeover: ReturnType<typeof nativeBrowserHandoff> | undefined;
   let attachmentCapture:{page:Page;url:string;complete:boolean;consume(response:APIResponse):Promise<void>}|undefined;
+  let uploadAuthority:{sessionKey:string;destination:string;expiresAt:number;assertCurrent():Promise<void>;page?:Page;armed:boolean;postDispatched:boolean;consume(response:APIResponse):Promise<void>}|undefined;
   let currentRouteGuard: ((route: Route) => Promise<void>) | undefined;
   const connectionKey = (session: BrowserSession) => JSON.stringify([session.ownerId, session.id, session.generation, session.providerSessionId]);
   const cleanupTimeoutMs = options.cleanupTimeoutMs ?? 10000;
@@ -65,18 +66,19 @@ export function cloudflareGeneralBrowser(options: Options) {
     return row;
   };
   const hostAdmit = async () => {
-    try { await options.admit(); }
+    try { if(uploadAuthority)await uploadAuthority.assertCurrent();else await options.admit(); }
     catch (error) { if (error instanceof GeneralBrowserError) throw error; throw new GeneralBrowserError('rejected'); }
   };
-  const admit = async (session: BrowserSession) => { identity(session); await hostAdmit(); identity(session); };
+  const admit = async (session: BrowserSession) => { identity(session);if(uploadAuthority&&(uploadAuthority.sessionKey!==connectionKey(session)||uploadAuthority.expiresAt<=options.now()))throw new GeneralBrowserError('rejected'); await hostAdmit(); identity(session);if(uploadAuthority&&uploadAuthority.expiresAt<=options.now())throw new GeneralBrowserError('rejected'); };
   const actionTimeout = (session: BrowserSession) => {
-    const remaining = Math.min(session.expiresAt, options.deadline()) - options.now();
+    const remaining = Math.min(session.expiresAt, uploadAuthority?.expiresAt??options.deadline()) - options.now();
     if (!Number.isFinite(remaining) || remaining <= 0) throw new GeneralBrowserError('rejected');
     return Math.min(10000, remaining);
   };
   const allowed = async (session: BrowserSession, url: string, method = 'GET') => {
     await admit(session);
     const target = new URL(url);
+    if (uploadAuthority&&(!['GET','HEAD'].includes(method)||target.origin!==new URL(uploadAuthority.destination).origin))throw new GeneralBrowserError('rejected');
     if (!['https:', 'http:'].includes(target.protocol) || target.username || target.password || !await options.authorizeRequest(url, method)) throw new GeneralBrowserError('rejected');
     await admit(session);
   };
@@ -159,6 +161,16 @@ export function cloudflareGeneralBrowser(options: Options) {
       currentRouteGuard = async route => {
         try {
           const capture=attachmentCapture,request=route.request();
+          if(uploadAuthority&&request.method()==='POST'){
+            const held=uploadAuthority;
+            if(!held.armed||held.postDispatched||request.url()!==held.destination||request.frame().parentFrame()||request.frame().page()!==held.page)throw new GeneralBrowserError('rejected');
+            // Reserve one approved request before awaiting custody. Retained JS
+            // cannot turn file selection into a second POST or another destination.
+            held.postDispatched=true;await admit(session);
+            if(!await options.authorizeRequest(request.url(),'GET'))throw new GeneralBrowserError('rejected');
+            await admit(session);const response=await route.fetch({maxRedirects:0,maxRetries:0,timeout:actionTimeout(session)});await admit(session);
+            await held.consume(response);await admit(session);await route.fulfill({response});return;
+          }
           if(capture&&request.url()===capture.url&&request.isNavigationRequest()&&!request.frame().parentFrame()&&request.frame().page()===capture.page){
             await guardGeneralBrowserRoute(route,{authorize:(url,method)=>allowed(session,url,method),timeout:()=>actionTimeout(session),admit:()=>admit(session),redirect:()=>{throw new GeneralBrowserError('rejected');},denied:(page,status)=>{invalidDocuments.add(page);documentFailure=new GeneralBrowserError('page_unavailable',{status});},attachment:async response=>{await capture.consume(response);capture.complete=true;}});
             return;
@@ -367,6 +379,46 @@ export function cloudflareGeneralBrowser(options: Options) {
       if(!takeover?.ready())throw new GeneralBrowserError('rejected');
       const held=takeover;await Promise.all([...humanRequests]);if(!held.ready())throw new GeneralBrowserError('rejected');held.complete();await held.dispose();takeover=undefined;
       return attached(session,async(_,context)=>observe(session,context,await select(session,context,reference)));
+    },
+    upload:async(session:BrowserSession,snapshot:GeneralActionSnapshot,reference:string,file:Readonly<{name:string;mimeType:string;buffer:Uint8Array}>,authority:Readonly<{destination:string;expiresAt:number;assertCurrent():Promise<void>}>,beforeExposure:()=>Promise<void>)=>{
+      if(uploadAuthority||takeover||attachmentCapture||snapshot.ownerId!==session.ownerId||snapshot.sessionId!==session.id||snapshot.generation!==session.generation||authority.expiresAt>session.expiresAt||authority.expiresAt<=options.now()||!file.buffer.length||file.buffer.length>LIMITS.fileBytes)throw new GeneralBrowserError('rejected');
+      validatePath(file.name);if(file.name.includes('/')||file.name.includes('\\'))throw new GeneralBrowserError('rejected');
+      const destination=new URL(authority.destination);if(destination.origin!==new URL(snapshot.observation.url).origin||destination.username||destination.password||destination.hash)throw new GeneralBrowserError('rejected');
+      file={...file,buffer:new Uint8Array(file.buffer)};const sha256=await generalDigest(file.buffer);let resolve!:(receipt:BrowserDownloadMetadata)=>void,reject!:(error:unknown)=>void;
+      const received=new Promise<BrowserDownloadMetadata>((yes,no)=>{resolve=yes;reject=no;});void received.catch(()=>{});
+      if(uploadAuthority)throw new GeneralBrowserError('rejected');
+      uploadAuthority={...authority,sessionKey:connectionKey(session),armed:false,postDispatched:false,consume:async response=>{
+        try{
+          if(response.status()!==200||(response.headers()['content-type']??'').split(';')[0]!.trim().toLowerCase()!=='application/json')throw new GeneralBrowserError('outcome_uncertain');
+          const bytes=await boundedSemanticRead(session,async()=>new Uint8Array(await response.body()));if(bytes.length>LIMITS.fileBytes)throw new GeneralBrowserError('outcome_uncertain');
+          const body=JSON.parse(new TextDecoder().decode(bytes));
+          if(body?.filename!==file.name||body?.byte_size!==file.buffer.length||body?.sha256!==sha256)throw new GeneralBrowserError('outcome_uncertain');
+          await admit(session);resolve({filename:file.name,mime:file.mimeType,byte_size:file.buffer.length,sha256});
+        }catch(error){reject(error);throw error;}
+      }};
+      // This origin fence remains after completion or uncertainty. Clearing an
+      // input cannot revoke bytes already retained by page JavaScript.
+      return attached(session,async(_,context)=>{
+        const page=await select(session,context,snapshot.observation.tab_ref);uploadAuthority!.page=page;
+        const fresh=await observe(session,context,page);
+        if(fresh.targetId!==snapshot.targetId||fresh.digest!==snapshot.digest)throw new GeneralBrowserError('stale_observation');
+        const element=snapshot.state.elements[snapshot.observation.elements.findIndex(element=>element.ref===reference)];
+        if(!element||element.tag!=='input'||element.type!=='file'||element.disabled||!element.inForm||element.formMethod?.toLowerCase()!=='post'||element.formAction!==authority.destination)throw new GeneralBrowserError('rejected');
+        const input=await page.locator(element.selector).elementHandle();if(!input)throw new GeneralBrowserError('stale_observation');
+        try{
+          await beforeExposure();await admit(session);
+          const current=await observe(session,context,page);
+          if(current.targetId!==snapshot.targetId||current.digest!==snapshot.digest)throw new GeneralBrowserError('stale_observation');
+          // Keep the exact native node rather than resolving CSS again after
+          // consent/checkpoint awaits; replaced or adopted nodes fail admission.
+          const valid=await input.evaluate((node,args)=>{const root=globalThis as any,element=node as any;return element.isConnected&&element.ownerDocument===root.document&&element.ownerDocument.URL===args.url&&element.tagName==='INPUT'&&element.type==='file'&&!element.disabled&&element.form?.method.toLowerCase()==='post'&&element.form.action===args.destination;},{url:snapshot.observation.url,destination:authority.destination});
+          if(!valid)throw new GeneralBrowserError('stale_observation');await admit(session);uploadAuthority!.armed=true;
+          // Wrangler supplies Buffer for the activated Node-compatible browser
+          // entrypoint; an eager node:buffer import breaks the ordinary Worker.
+          await input.setInputFiles({name:file.name,mimeType:file.mimeType,buffer:Buffer.from(file.buffer)},{timeout:actionTimeout(session)});
+        }finally{await input.dispose();}
+        return boundedSemanticRead(session,()=>received);
+      });
     },
     download:(session:BrowserSession,snapshot:GeneralActionSnapshot,reference:string,beforeDispatch:()=>Promise<void>,consume:(metadata:BrowserDownloadMetadata,bytes:Uint8Array)=>Promise<void>)=>attached(session,async(_,context)=>{
       if(attachmentCapture||snapshot.ownerId!==session.ownerId||snapshot.sessionId!==session.id||snapshot.generation!==session.generation)throw new GeneralBrowserError('stale_observation');

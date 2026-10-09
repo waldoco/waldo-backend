@@ -1,3 +1,5 @@
+import type {BrowserSubmitProposal} from './approvals';
+import type {BrowserSubmitOutcome} from '../tools/live/browser';
 import {browserHandoffConsole} from './browser-handoff-console';
 import { browsePageArgsSchema, browseActArgsSchema, WALDO_CHAT_MODEL, type BrowseActArgs, type BrowsePageArgs, type LLMAttachment, type ToolHandler } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
@@ -33,6 +35,7 @@ export function ownerBrowserRuntime(options: Readonly<{
     const row=pointer?options.storage.kv.get<{session:{id:string;state:string;expiresAt:number};cleanup?:string}>(`common-browser:${pointer.taskId}`):undefined;
     return pointer&&row&&!row.cleanup&&row.session.state==='active'&&row.session.id===pointer.sessionHandle&&row.session.expiresAt>Date.now()?pointer:undefined;
   };
+  let uploadProposer:((proposal:BrowserSubmitProposal)=>Promise<string>)|undefined;
   let maintenance:Promise<void>|undefined;
   const automatic = commonOwnerBrowserRegistration({ ...options, loadSdk: commonBrowserSdk() });
   const configuration = (cleanupOnly = false, normalRead = false) => {
@@ -65,8 +68,8 @@ export function ownerBrowserRuntime(options: Readonly<{
       scope.admit();
     };
   };
-  const commonFiles=async(assertCurrent:()=>Promise<void>,ownerId:string)=>{
-    const scope=options.activeScope(),doName=options.storage.kv.get<string>('do_name');if(!doName)throw new ClosedRunError();
+  const commonFiles=async(assertCurrent:()=>Promise<void>,ownerId:string,approved?:true)=>{
+    const scope=approved?undefined:options.activeScope(),doName=options.storage.kv.get<string>('do_name');if(!doName)throw new ClosedRunError();
     const admit=async()=>{await assertCurrent();scope?.admit();if(scope&&options.activeScope()!==scope||options.storage.kv.get('do_name')!==doName)throw new ClosedRunError();const owner=await assertOwner();if(ownerId!==owner.directoryOwnerId&&ownerId!==`prn_${owner.directoryOwnerId.replaceAll('-','')}`)throw new ClosedRunError();const bound=workspaceMetadata(options.storage,scope).transaction(state=>state.binding);if(bound&&bound.ownerId!==owner.directoryOwnerId)throw new ClosedRunError();await assertCurrent();};
     await admit();const workspace=await workspaceOwnerHost(options.env,options.storage,options.actualDoId,doName,fetch,scope,admit);await admit();const origin=options.storage.kv.get<string>('origin');if(!origin)throw new ClosedRunError();return {workspace,origin};
   };
@@ -97,7 +100,7 @@ export function ownerBrowserRuntime(options: Readonly<{
       const taskId=sessionHandle?pointer!.taskId:scope.runId,initialAttempt=scope.attempt;
       active={scope,taskId,ownerId:config.ownerId,host:commonBrowserHost({storage:options.storage,config:{...config,retainInteractions:true},ownerId:config.ownerId,egressAllowlist:ctx.egressAllowlist,
         source:()=>({taskId,revision:1,sources:['browser'],ready:true,startRef:initialAttempt}),
-        files:commonFiles,
+        files:commonFiles,proposeUpload:proposal=>{if(!uploadProposer)throw new ClosedRunError();return uploadProposer(proposal);},
         assertCurrent:async()=>{const admitted=lease;if(!admitted)throw new ClosedRunError();await admitted.assertCurrent();if(lease!==admitted)throw new ClosedRunError();},
         deadline:()=>lease?.deadline??0,now:Date.now})};
     }
@@ -106,6 +109,15 @@ export function ownerBrowserRuntime(options: Readonly<{
     const wake=Math.min(scope.deadline,config.expiresAt,Date.now()+config.lifetimeMs),prior=await options.storage.getAlarm();
     await armAlarm(options.storage,Math.max(Date.now()+250,prior===null?wake:Math.min(prior,wake)));await assertCurrent();
     return {active,context:{...ctx,authenticatedUserId:config.ownerId,assertTaskSourceCurrent:assertCurrent}};
+  };
+  const uploadHost=async(proposal:BrowserSubmitProposal)=>{
+    const native=proposal.nativeUpload;if(!native)throw new ClosedRunError();
+    if(active){if(active.taskId!==native.taskId||active.ownerId!==native.binding.ownerId||active.host.sessionHandle()!==native.binding.sessionHandle)throw new ClosedRunError();return active.host;}
+    // Restart recovery reads durable receipts only. No context or provider is
+    // attached and no upload is repeated without the retained native driver.
+    const sdk=commonBrowserSdk();if(!sdk||!options.env.BROWSER)throw new ClosedRunError();
+    const config=ordinaryPublicBrowserConfiguration({storage:options.storage,binding:options.env.BROWSER,loadSdk:sdk,now:Date.now,assertCurrent:async()=>{throw new ClosedRunError();},assertOwner:async()=>{const owner=await assertOwner();return {ownerId:`prn_${owner.directoryOwnerId.replaceAll('-','')}`,custodyDigest:owner.custodyDigest};}});
+    return commonBrowserHost({storage:options.storage,config,ownerId:native.binding.ownerId,source:()=>({taskId:native.taskId,revision:1,sources:['browser'],ready:true,startRef:'approved-upload'}),assertCurrent:async()=>{throw new ClosedRunError();},deadline:()=>0,now:Date.now,files:commonFiles});
   };
   const publishPointer=()=>{const handle=active?.host.sessionHandle();if(active&&handle)options.storage.kv.put(continuationKey,{taskId:active.taskId,sessionHandle:handle});};
   const funded=(scope:RunEffectScope)=>active?.scope===scope||options.storage.kv.get(`common-browser:${scope.runId}`)!==undefined||options.storage.kv.get(`common-browser-run:${scope.runId}`)!==undefined;
@@ -169,8 +181,9 @@ export function ownerBrowserRuntime(options: Readonly<{
         } catch(cause) { traceBrowserFailure('read',cause);return { ok: false, code: 'rejected', error: `The browser owner or retained session is unavailable (${browserFailureClass(cause)}). No replacement was allocated.`, source_taint: 'external' }; }
       } };
     },
-    act(fallback:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>):ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>{
-      return {...fallback,schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page retain_session:true first, then use its session_handle. Native actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download uses an observed link for an authenticated GET attachment, stores and verifies bytes in your private workspace, and returns an exact-revision owner download link. Blob/data and POST exports are unsupported. owner_login pauses this turn for human sign-in in the authenticated console; end the turn and ask the owner to reply after Done. Resume only on that later owner reply, then verify the intended signed-in account from fresh evidence. session_handle explicitly continues an existing owner session. File selection and page sends are unsupported; uncertain effects cannot repeat. Browserbase remains an explicit alternative.',async handle(args,ctx){
+    act(fallback:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>,proposeUpload?:((proposal:BrowserSubmitProposal)=>Promise<string>)):ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>{
+      uploadProposer=proposeUpload;
+      return {...fallback,schema:browseActArgsSchema,description:'Use observed refs in the selected Cloudflare owner session. First call browse_page with retain_session:true; continue with its session_handle. Actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download saves an authenticated GET attachment to the private workspace and returns a verified exact-revision owner link; blob/data and POST exports are unsupported. owner_login pauses for human sign-in in the console: end this turn, resume on the owner reply after Done, and verify the intended account from fresh evidence. Uncertain effects cannot repeat. Browserbase requires explicit selection.'+(proposeUpload?' upload proposes an exact workspace file_id/revision for an observed POST-form file input. Owner approval precedes selection. Verification requires a server JSON filename/byte_size/sha256 acknowledgment.':''),async handle(args,ctx){
         try{
           const assertCurrent=current(ctx);await assertCurrent();
           if(args.provider==='browserbase_stagehand_http_v3'&&(args.command||args.session_handle))throw new ClosedRunError();
@@ -185,6 +198,10 @@ export function ownerBrowserRuntime(options: Readonly<{
         }catch(cause){traceBrowserFailure('act',cause);return {ok:false,code:'rejected',error:`The selected owner browser session or current action is unavailable (${browserFailureClass(cause)}). No replacement or provider switch was made.`,source_taint:'external'};}
       }};
     },
+    async submitUpload(proposal:BrowserSubmitProposal,approvalRef?:string):Promise<BrowserSubmitOutcome>{try{return await (await uploadHost(proposal)).submitUpload(proposal,approvalRef);}catch{return {status:'uncertain',message:'Approved upload custody is unavailable; no retry was performed.'};}},
+    async reconcileUpload(proposal:BrowserSubmitProposal,approvalRef:string):Promise<BrowserSubmitOutcome>{try{return await (await uploadHost(proposal)).reconcileUpload(proposal,approvalRef);}catch{return {status:'uncertain',message:'The upload receipt is unavailable; the file was not selected or sent again.'};}},
+    async uploadReceiptVerified(proposal:BrowserSubmitProposal,receipt:Extract<BrowserSubmitOutcome,{status:'verified_with_receipt'}>['receipt']){try{return await (await uploadHost(proposal)).uploadReceiptVerified(proposal,receipt);}catch{return false;}},
+    async denyUpload(proposal:BrowserSubmitProposal){await (await uploadHost(proposal)).denyUpload(proposal);},
     gateway() {
       if (automatic.selected || automatic.hasRetained()) {
         const gateway = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY! });

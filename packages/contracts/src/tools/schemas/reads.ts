@@ -226,6 +226,7 @@ export const browserTaskCommandSchema = z.discriminatedUnion('operation', [
   z.strictObject({ operation: z.literal('cancel') }),
   z.strictObject({ operation: z.literal('owner_login'), reason: z.string().min(1).max(1000) }),
   z.strictObject({ operation: z.literal('resume_owner_login') }),
+  z.strictObject({operation:z.literal('upload'),element_ref:z.string().min(1).max(80),file_id:z.uuid(),revision:z.int().min(1)}),
   z.strictObject({ operation: z.literal('download'), element_ref: z.string().min(1).max(80) }),
 ]);
 export type BrowserTaskCommand = z.infer<typeof browserTaskCommandSchema>;
