@@ -1056,6 +1056,18 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
 // the final pass re-redacted it at 'external', the assembled prompt no longer matched, and every
 // turn failed with sanitisation_failed until the fragment left the window. Deny-level guards stay:
 // canary/secret, health leak and destination policy all still fail closed.
+// Owner-ruled scope: the owner's own wearable readings and health context may reach the model and
+// owner-channel replies. Third-party sends, drafts, memory, audit, R2 and the outbox keep the
+// health denial, and so does anything of external provenance.
+function ownerHealthAllowed(input: { destination: SanitiseDestination; source_taint: 'external' | null }): boolean {
+  return (
+    input.source_taint === null &&
+    (input.destination === 'system_prompt' ||
+      input.destination === 'internal_context' ||
+      input.destination === 'owner_reply')
+  );
+}
+
 export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
   if (!input) return deny('size_cap', 'invalid_payload');
@@ -1067,7 +1079,7 @@ export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
 
   const health = containsForbiddenHealth(input);
   if (health.invalid) return deny('size_cap', 'invalid_payload');
-  if (health.matched) return deny('health_value', 'health_value_leak');
+  if (health.matched && !ownerHealthAllowed(input)) return deny('health_value', 'health_value_leak');
 
   return applyDestinationPolicy(input, input.payload, []);
 }
@@ -1092,7 +1104,7 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
 
   const health = containsForbiddenHealth(scanned);
   if (health.invalid) return deny('size_cap', 'invalid_payload');
-  if (health.matched) return deny('health_value', 'health_value_leak');
+  if (health.matched && !ownerHealthAllowed(input)) return deny('health_value', 'health_value_leak');
 
   const pii = redactPii(scanned.payload, input.destination, input.source_taint, input.canary_tokens);
   if (pii.invalid) return deny('size_cap', 'invalid_payload');
