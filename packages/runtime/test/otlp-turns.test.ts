@@ -273,16 +273,24 @@ describe('otlpTurnExporter', () => {
     expect(attrs(off.spans(0)[0]!)['langfuse.trace.input']).toBeUndefined();
   });
 
+  it('keeps every hop of one long turn that exceeds the outstanding-export budget', async () => {
+    const { calls, send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    for (let i = 0; i < 120; i++) await log({ trace: 'tg-long', hop: 'tool', ms: 3, ok: true });
+    await log({ trace: 'tg-long', hop: 'turn', ms: 10, ok: true });
+    expect(spans(calls.length - 1)).toHaveLength(121);
+  });
+
   it('reports overflow, retains new work and bounds abandoned traces', async () => {
     const { calls, send, spans } = capture();
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
-    for (let i = 0; i < 50; i++) await log({ trace: `tg-${i}`, hop: 'memory', ms: 3, ok: true });
-    await expect(log({ trace: 'tg-50', hop: 'memory', ms: 3, ok: true })).rejects.toThrow('otlp_buffer_evicted');
+    for (let i = 0; i < 1000; i++) await log({ trace: `tg-${i}`, hop: 'memory', ms: 3, ok: true });
+    await expect(log({ trace: 'tg-1000', hop: 'memory', ms: 3, ok: true })).rejects.toThrow('otlp_buffer_evicted');
     await log({ trace: 'tg-0', hop: 'turn', ms: 10, ok: true });
     expect(spans(calls.length - 1)).toHaveLength(1);
-    // tg-50 was retained even though its admission reported the eviction.
+    // tg-1000 was retained even though its admission reported the eviction.
 
-    await log({ trace: 'tg-50', hop: 'turn', ms: 10, ok: true });
+    await log({ trace: 'tg-1000', hop: 'turn', ms: 10, ok: true });
     expect(spans(calls.length - 1)).toHaveLength(2);
   });
 
