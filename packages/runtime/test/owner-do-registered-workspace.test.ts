@@ -3,6 +3,8 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi, type MockInstance } from 'vitest';
 import type { WorkspaceState } from '@waldo/workspace';
+import type { ComputeService } from '../src/channels/compute-host';
+import type { ComputeResult } from '../src/execution-environment/compute-journal';
 import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { routerSignature } from '../src/identity/owner-directory';
 import * as dispatcher from '../src/tools/dispatcher';
@@ -19,7 +21,7 @@ type Result = { ok: boolean; data?: any; source_taint?: string; error?: string; 
 const model = vi.hoisted(() => ({ sourceDecision: '{"decision":"retain","sources":[]}', requests: [] as RequestBody[], reply: undefined as undefined | ((request: RequestBody) => Promise<Call[] | string> | Call[] | string), telegram: [] as { method: string; body: any }[] }));
 vi.mock('../src/channels/telegram-api', async load => ({
   ...await load<typeof import('../src/channels/telegram-api')>(),
-  createTelegramCaller: () => async (method: string, body: unknown) => { model.telegram.push({ method, body }); return method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: 1 } : true; },
+  createTelegramCaller: () => async (method: string, body: unknown) => { model.telegram.push({ method, body }); return method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: 1, chat: { id: (body as { chat_id: number }).chat_id } } : true; },
 }));
 vi.mock('openai', () => ({ default: class {
   responses = { create: async (body: RequestBody) => {
@@ -49,6 +51,23 @@ const deferred = () => {
 let sequence = 940000;
 beforeEach(() => { model.sourceDecision = '{"decision":"retain","sources":[]}'; model.requests = []; model.reply = undefined; model.telegram = []; });
 
+// Private service double, never a Linux isolation or live provider claim.
+const computeFixture = (loseResponse = false) => {
+  const results = new Map<string, ComputeResult>();
+  const execute = vi.fn<ComputeService['execute']>(async (scope, request) => {
+    const previous = results.get(`${scope}:${request.operationId}`); if (previous) return previous;
+    expect(request.argv[0]).toBe('node'); expect(request.inputs).toHaveLength(1);
+    expect(new TextDecoder().decode(request.inputs[0]!.bytes)).toBe('category,amount\nFood,10\nFood,15\nTravel,30\n');
+    const result = { bytes: new TextEncoder().encode('# Expense report\nFood: 25\nTravel: 30\nTotal: 55\n'), stdout: '3 rows processed', stderr: '', exitCode: 0 };
+    results.set(`${scope}:${request.operationId}`, result); if (loseResponse) { loseResponse = false; throw Error('synthetic provider response lost'); } return result;
+  });
+  const recover = vi.fn<ComputeService['recover']>(async (scope, operation) => results.get(`${scope}:${operation}`) ?? null);
+  const service = { execute, recover, cancel: vi.fn(async () => {}) } satisfies ComputeService;
+  return { service, execute, recover };
+};
+const computeInput = { path: 'compute/expenses.csv', text: 'category,amount\nFood,10\nFood,15\nTravel,30\n', mime: 'text/plain', expected_revision: 0 };
+const computeArgs = (fileId: string) => ({ argv: ['node', '-e',  'const fs=require("node:fs");const rows=fs.readFileSync("input.csv","utf8").trim().split("\\n").slice(1).map(row=>row.split(","));const totals={};for(const [category,amount] of rows)totals[category]=(totals[category]||0)+Number(amount);fs.writeFileSync("report.md","# Expense report\\n"+Object.entries(totals).map(([k,v])=>k+": "+v).join("\\n")+"\\nTotal: "+Object.values(totals).reduce((a,b)=>a+b,0)+"\\n");' ], inputs: [{ file_id: fileId, revision: 1, path: 'input.csv' }], output_path: 'report.md', path: 'compute/report.md', mime: 'text/markdown', expected_revision: 0 });
+
 async function proof(work: (h: {
   state: DurableObjectState; name: string; bytes: Map<string, Uint8Array>; puts: string[]; gets: string[]; rpc: string[];
   enqueue(text: string, id?: number, subject?: string, doName?: string, entities?: readonly { type: string; offset: number; length: number }[]): Promise<{ response: Response; id: number }>;
@@ -56,7 +75,7 @@ async function proof(work: (h: {
   mapping: { owner_id: string; environment: string; namespace: string; do_name: string; do_id: string; state_version: number; mapping_version: number };
   absent(): void; unlinked(): void; pauseMapping(afterReservation?: boolean): ReturnType<typeof deferred>; pausePut(): ReturnType<typeof deferred>;
   onPut(fn: () => void): void; dispatches: MockInstance<typeof dispatcher.dispatchTool>;
-}) => Promise<void>, numericWorkspaceIdsAfter?: number, extraEnv: Record<string, string> = {}) {
+}) => Promise<void>, numericWorkspaceIdsAfter?: number, extraEnv: Record<string, unknown> = {}) {
   const name = `registered-workspace-${++sequence}`;
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const nativeUuid = crypto.randomUUID.bind(crypto);
@@ -115,7 +134,7 @@ async function proof(work: (h: {
     const dispatches = vi.spyOn(dispatcher, 'dispatchTool'); // Observes original dispatcher, including losing async continuations.
     let instance = new TelegramOwnerDO(state, fixtureEnv);
     const enqueue = async (text: string, id = ++sequence, subject = '81101', doName = name, entities?: readonly { type: string; offset: number; length: number }[]) => ({ id, response: await instance.fetch(new Request('https://local.invalid/enqueue', {
-      method: 'POST', headers: { 'x-waldo-inbox-secret': fixtureEnv.TELEGRAM_WEBHOOK_SECRET, 'x-waldo-telegram-subject': subject, 'x-waldo-do-name': doName },
+      method: 'POST', headers: { 'x-waldo-inbox-secret': fixtureEnv.TELEGRAM_WEBHOOK_SECRET, 'x-waldo-origin': 'https://local.invalid', 'x-waldo-telegram-subject': subject, 'x-waldo-do-name': doName },
       body: JSON.stringify({ update_id: id, message: { message_id: id, from: { id: Number(subject), is_bot: false }, chat: { id: Number(subject), type: 'private' }, text, ...(entities ? { entities } : {}) } }),
     })) });
     const send = async (text: string, id?: number, entities?: readonly { type: string; offset: number; length: number }[]) => {
@@ -140,6 +159,142 @@ async function proof(work: (h: {
     expect(unexpected).toEqual([]);
   });
 }
+
+it('ordinary two-argument owner turn computes a saved CSV report, recovers lost result, reads/renders/delivers it and reopens after restart', async () => {
+  const compute = computeFixture(true);
+  await proof(async h => {
+    await h.state.storage.put('origin', 'https://local.invalid');
+    model.reply = request => {
+      const done = outputs(request);
+      if (!done.csvInput) return [call('workspace_write', computeInput, 'csvInput')];
+      if (!done.computeReport) return [call('workspace_compute', computeArgs(done.csvInput.data.file_id), 'computeReport')];
+      if (!done.computeReport.ok) return 'Compute failed without a usable artifact.';
+      if (!done.readReport) return [call('workspace_read', { file_id: done.computeReport.data.file_id, revision: 1 }, 'readReport')];
+      if (!done.renderReport) return [call('workspace_render', { source_file_id: done.computeReport.data.file_id, source_revision: 1, path: 'compute/report.pdf', expected_revision: 0, format: 'pdf' }, 'renderReport')];
+      return `Report saved: ${done.renderReport.data.delivery.url}`;
+    };
+    const update = await h.send('Use my pasted CSV category,amount; Food,10; Food,15; Travel,30. Save it privately, compute category totals with Node, read the report and render a PDF.');
+    expect(replies()[0]!.tools?.map(tool => tool.name)).toContain('workspace_compute');
+    const done = allOutputs();
+    expect(done.computeReport, JSON.stringify(done.computeReport)).toMatchObject({ ok: true, source_taint: 'external', data: { stdout: '3 rows processed', delivery: { status: 'owner_link', audience: 'owner_authenticated' } } });
+    expect(done.readReport).toMatchObject({ ok: true, data: { text: '# Expense report\nFood: 25\nTravel: 30\nTotal: 55\n' } });
+    expect(done.renderReport).toMatchObject({ ok: true, data: { mime: 'application/pdf', delivery: { status: 'owner_link' } } });
+    expect(compute.execute).toHaveBeenCalledTimes(1); expect(compute.execute.mock.calls[0]![0]).toBe(h.state.id.toString());
+    expect([...h.state.storage.kv.list<any>({ prefix: 'owner:effect:' })].map(([, row]) => row).find(row => row.tool === 'workspace_compute')).toMatchObject({ state: 'done' });
+    const access = consoleAccess(h.state.storage); const session = await access.grant(); const headers = { cookie: `${CONSOLE_COOKIE}=${session}` };
+    const saved = new Map<string, Uint8Array>();
+    for (const name of ['computeReport', 'renderReport']) {
+      const download = await h.request(new Request(done[name]!.data.delivery.url, { headers })); expect(download.status).toBe(200);
+      const bytes = new Uint8Array(await download.arrayBuffer()); saved.set(name, bytes);
+      expect((await h.request(new Request(done[name]!.data.delivery.url))).status).toBe(401);
+    }
+    expect(new TextDecoder().decode(saved.get('renderReport')!.slice(0, 5))).toBe('%PDF-');
+    const manifest = h.manifest(); expect(manifest!.files).toHaveLength(3); expect(manifest!.files.find(file => file.path === 'compute/report.md')!.provenance).toBe('sandbox_output');
+    h.restart(); await h.send('Use my pasted CSV category,amount; Food,10; Food,15; Travel,30. Save it privately, compute category totals with Node, read the report and render a PDF.', update); expect(compute.execute).toHaveBeenCalledTimes(1);
+    for (const name of ['computeReport', 'renderReport']) {
+      const download = await h.request(new Request(done[name]!.data.delivery.url, { headers })); expect(new Uint8Array(await download.arrayBuffer())).toEqual(saved.get(name));
+    }
+    model.reply = request => outputs(request).reopenReport ? 'Stored report reopened.' : [call('workspace_read', { file_id: done.computeReport!.data.file_id, revision: 1 }, 'reopenReport')];
+    await h.send('Read my saved expense report after restart.'); expect(allOutputs().reopenReport).toMatchObject({ ok: true, data: { text: '# Expense report\nFood: 25\nTravel: 30\nTotal: 55\n' } });
+    expect(compute.execute).toHaveBeenCalledTimes(1); expect(h.manifest()).toEqual(manifest);
+  }, undefined, { COMPUTE: compute.service });
+});
+
+it('console CSV upload reaches the ordinary owner loop, computes the requested revision, and delivers a private PDF link that survives restart', async () => {
+  const compute = computeFixture();
+  await proof(async h => {
+    await h.send('Open my private workspace.');
+    const session = await consoleAccess(h.state.storage).grant();
+    const headers = { cookie: `${CONSOLE_COOKIE}=${session}`, origin: 'https://local.invalid' };
+    const listing = await h.request(new Request('https://local.invalid/console/workspace', { headers: { ...headers, accept: 'application/json' } }));
+    expect(listing.status).toBe(200);
+    const { csrf } = await listing.json() as { csrf: string };
+    const upload = async (text: string, expected: number, token = csrf) => {
+      const form = new FormData();
+      form.set('csrf', token); form.set('operation_id', crypto.randomUUID());
+      form.set('path', computeInput.path); form.set('expected_revision', String(expected));
+      form.set('file', new File([text], 'expenses.csv', { type: 'text/csv' }));
+      return h.request(new Request('https://local.invalid/console/workspace/upload', { method: 'POST', headers, body: form }));
+    };
+    expect((await upload(computeInput.text, 0, 'wrong-csrf')).status).toBe(403);
+    expect(h.puts).toEqual([]); expect(compute.execute).not.toHaveBeenCalled();
+    const original = await upload(computeInput.text, 0); expect(original.status).toBe(200);
+    const source = await original.json() as { file_id: string; revision: number };
+    expect(source.revision).toBe(1);
+    const changed = await upload('category,amount\nFood,999\n', 1); expect(changed.status).toBe(200);
+    expect(await changed.json()).toMatchObject({ file_id: source.file_id, revision: 2 });
+    model.reply = request => {
+      const done = outputs(request);
+      if (!done.uploads) return [call('workspace_list', { prefix: 'compute/' }, 'uploads')];
+      if (!done.uploadedReport) return [call('workspace_compute', computeArgs(done.uploads.data.files[0].file_id), 'uploadedReport')];
+      if (!done.uploadedReport.ok) return 'The uploaded report could not be computed.';
+      if (!done.uploadedRead) return [call('workspace_read', { file_id: done.uploadedReport.data.file_id, revision: 1 }, 'uploadedRead')];
+      if (!done.uploadedPdf) return [call('workspace_render', { source_file_id: done.uploadedReport.data.file_id, source_revision: 1, path: 'compute/report.pdf', expected_revision: 0, format: 'pdf' }, 'uploadedPdf')];
+      return `Your uploaded CSV report is ready: ${done.uploadedPdf.data.delivery.url}`;
+    };
+    await h.send('Use revision 1 of my uploaded compute/expenses.csv, even though I uploaded a newer revision. Compute category totals, read the report, and send me a PDF.');
+    const done = allOutputs();
+    expect(done.uploads).toMatchObject({ ok: true, data: { files: [{ file_id: source.file_id, revision: 2, provenance: 'owner_upload' }] } });
+    expect(done.uploadedRead).toMatchObject({ ok: true, source_taint: 'external', data: { text: '# Expense report\nFood: 25\nTravel: 30\nTotal: 55\n' } });
+    expect(done.uploadedPdf).toMatchObject({ ok: true, data: { delivery: { status: 'owner_link', audience: 'owner_authenticated' } } });
+    expect(compute.execute).toHaveBeenCalledTimes(1);
+    expect(compute.execute.mock.calls[0]![0]).toBe(h.state.id.toString());
+    expect(compute.execute.mock.calls[0]![1].inputs).toEqual([{ path: 'input.csv', bytes: new TextEncoder().encode(computeInput.text) }]);
+    const url = done.uploadedPdf!.data.delivery.url;
+    const deliveryClock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 1_000);
+    try { await h.alarm(); await h.alarm(); } finally { deliveryClock.mockRestore(); }
+    const delivered = model.telegram.filter(message => message.method === 'sendMessage' && message.body.text.includes(done.uploadedPdf!.data.file_id));
+    expect(delivered).toHaveLength(1); expect(delivered[0]!.body.chat_id).toBe(81101);
+    expect(delivered[0]!.body.text.replace(/&#38;|&amp;/g, '&')).toContain(url);
+    expect(h.state.storage.kv.get<any[]>('telegram_final_outbox_v1')!.find(row => row.payload.text.includes(done.uploadedPdf!.data.file_id))).toMatchObject({ status: 'delivered', settled: true, deliveredParts: 1 });
+    const download = await h.request(new Request(url, { headers })); expect(download.status).toBe(200);
+    expect(download.headers.get('content-type')).toBe('application/pdf');
+    const bytes = new Uint8Array(await download.arrayBuffer());
+    expect(new TextDecoder().decode(bytes.slice(0, 5))).toBe('%PDF-');
+    const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    expect(sha256).toBe(done.uploadedPdf!.data.sha256);
+    expect((await h.request(new Request(url))).status).toBe(401);
+    const manifest = h.manifest(); const puts = h.puts.length;
+    h.restart();
+    const reopened = await h.request(new Request(url, { headers })); expect(reopened.status).toBe(200);
+    expect(new Uint8Array(await reopened.arrayBuffer())).toEqual(bytes);
+    model.reply = request => outputs(request).uploadedReopen ? 'The saved report is unchanged.' : [call('workspace_read', { file_id: done.uploadedReport!.data.file_id, revision: 1 }, 'uploadedReopen')];
+    await h.send('Read the saved report again.');
+    expect(allOutputs().uploadedReopen).toMatchObject({ ok: true, data: { text: '# Expense report\nFood: 25\nTravel: 30\nTotal: 55\n' } });
+    expect(compute.execute).toHaveBeenCalledTimes(1); expect(h.puts).toHaveLength(puts); expect(h.manifest()).toEqual(manifest);
+  }, undefined, { COMPUTE: compute.service });
+});
+
+it('actual /stop cancels in-flight compute without publishing a late artifact', async () => {
+  const compute = computeFixture(); const pause = deferred();
+  await proof(async h => {
+    model.reply = request => outputs(request).seedCompute ? 'Input saved.' : [call('workspace_write', computeInput, 'seedCompute')];
+    await h.send('Save my expense CSV.'); const seed = allOutputs().seedCompute!;
+    const manifest = h.manifest(); const puts = h.puts.length;
+    compute.execute.mockImplementation(async () => { pause.entered(); await pause.wait; return { bytes: new TextEncoder().encode('late result'), stdout: '', stderr: '', exitCode: 0 }; });
+    compute.service.cancel = vi.fn(async () => { pause.release(); });
+    model.reply = request => outputs(request).lateCompute ? 'Stopped.' : [call('workspace_compute', computeArgs(seed.data.file_id), 'lateCompute')];
+    await h.enqueue('Compute the report.'); const alarm = h.alarm(); await pause.reached;
+    const losing = h.dispatches.mock.results.filter((_, i) => h.dispatches.mock.calls[i]![0].name === 'workspace_compute').at(-1)!.value as Promise<unknown>;
+    await h.enqueue('/stop'); await alarm; await Promise.allSettled([losing]);
+    expect(compute.service.cancel).toHaveBeenCalled(); expect(h.puts).toHaveLength(puts); expect(h.manifest()).toEqual(manifest);
+    expect([...h.state.storage.kv.list<any>({ prefix: 'owner:effect:' })].map(([, row]) => row).find(row => row.tool === 'workspace_compute')).toMatchObject({ state: 'unknown' });
+  }, undefined, { COMPUTE: compute.service });
+});
+
+it.each(['binding', 'owner', 'epoch'] as const)('ordinary owner compute cannot issue with invalid %s boundary', async fault => {
+  const compute = computeFixture();
+  await proof(async h => {
+    model.reply = request => outputs(request).seedCompute ? 'Input saved.' : [call('workspace_write', computeInput, 'seedCompute')];
+    await h.send('Save my pasted expense CSV privately.'); const seed = allOutputs().seedCompute!; expect(seed.ok).toBe(true);
+    const manifest = h.manifest(); const puts = h.puts.length;
+    if (fault === 'owner') h.mapping.owner_id = OTHER;
+    if (fault === 'epoch') compute.recover.mockImplementation(async () => { h.mapping.state_version++; return null; });
+    model.reply = request => outputs(request).deniedCompute ? 'Compute unavailable.' : [call('workspace_compute', computeArgs(seed.data.file_id), 'deniedCompute')];
+    await h.send('Compute my saved CSV now.');
+    expect(allOutputs().deniedCompute!.ok).toBe(false); expect(compute.execute).not.toHaveBeenCalled(); expect(h.puts).toHaveLength(puts); expect(h.manifest()).toEqual(manifest);
+  }, undefined, fault === 'binding' ? {} : { COMPUTE: compute.service });
+});
 
 it('default two-argument owner turn advertises, creates, retries, lists and reads exact durable workspace bytes across restart', async () => {
   await proof(async h => {

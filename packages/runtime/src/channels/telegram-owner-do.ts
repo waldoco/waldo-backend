@@ -32,6 +32,7 @@ import { eventAdmission } from './event-admission';
 import { DurableObject } from 'cloudflare:workers';
 import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
 import { workspaceToolHandlers } from '../tools/live/workspace';
+import { ownerComputeExecutor } from './compute-host';
 import { workspaceDownload, workspacePage, workspaceRead } from './console-workspace';
 import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
@@ -1764,7 +1765,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!scope) throw new ClosedRunError();
       scope.admit();
       return workspaceOwnerHost(this.env, storage, this.ctx.id.toString(), identity.get<string>('do_name'), fetch, scope, ctx?.assertTaskSourceCurrent);
-    }, { origin: async () => await storage.get<string>('origin') ?? null, durable: Boolean(this.env.ARTIFACTS) }, effects);
+    }, { origin: async () => await storage.get<string>('origin') ?? null, durable: Boolean(this.env.ARTIFACTS) }, effects, this.env.COMPUTE ? ctx => ownerComputeExecutor(this.env.COMPUTE!, this.ctx.id.toString(), ctx) : undefined);
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
       { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleHandlers(google, desk, clock, async (from, artifacts) => {

@@ -600,3 +600,11 @@ A fresh staging Cloudflare public read uses the existing reader without requirin
 | Failure | Regression | Boundary |
 | --- | --- | --- |
 | Expired $17.91 registration hit new $10 admission validation before normal-read fallback; removing its descriptor could restore the historical ceiling | common-owner-browser-registration.test.ts automatic/manual real-handler reads, $8 control, live/future/pin/owner/custody refusals and descriptor removal; owner-browser-public-read.test.ts unchanged legacy aggregates and retained test ceilings | Exact historical pins, refs, charges and funded cleanup remain intact; only new ordinary admission is bounded, with no reset/refund or environment mutation |
+
+### Compute effect reservation on the current owner loop
+
+- [ ] A newly admitted compute tool reserves the existing owner effect before native issue; its invocation identity rejects a changed argv/file payload and unknown recovery has no dispatch fallback. Test the registered loop, /stop, private artifact download and restart, not a removed common execution profile.
+
+2026-10-09: Forward-porting PR906 exposed a missing current owner-effect reservation in the old handler. The regression fails on the old handler before issue, then verifies attempting intent before provider, changed-argument refusal, durable unknown-to-done recovery and late-result denial after /stop. Provider issued journal alone does not satisfy host intent custody.
+
+- [ ] Compute acceptance crosses authenticated console CSV upload, normal owner tools and channel delivery: an explicit old input revision must remain exact after a newer upload, the returned PDF link must be acknowledged for the correct owner, and restart readback must preserve its hash without another provider execution. Fixtures must include the trusted ingress origin and a chat-bound channel acknowledgment.
