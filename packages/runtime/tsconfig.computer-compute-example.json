@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","compilerOptions":{"types":["@cloudflare/workers-types","node"]},"include":["../../examples/computer-compute/worker.ts"]}

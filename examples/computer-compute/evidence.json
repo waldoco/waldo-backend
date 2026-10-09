@@ -1,0 +1,26 @@
+{
+  "status": "SOURCE_TRIAL_NOT_ACTIVATED",
+  "base": "698bc7dd2c96953b71c5dcc589d181086c67d272",
+  "package": "@cloudflare/computer@0.5.0",
+  "official_source": "ec39cb693a5be73a735d375e228b4e2adb754abb",
+  "manifest_digest": "sha256:eb942ccd44cc259d68ece8fbdf59795d4451c893592d5ea1d8e0fd5cb963d547",
+  "checks": {
+    "adapter_contract_tests": {
+      "passed": 10,
+      "transport": "doubles"
+    },
+    "example_types": "PASS",
+    "runtime_worker_types": "PASS",
+    "runtime_integration_types": "PASS",
+    "real_daemon_journey": "NOT_RUN",
+    "native_provider_lifecycle": "NOT_RUN",
+    "live_delivery": "NOT_RUN"
+  },
+  "blocked": {
+    "local_docker": "automatic approval review timed out twice; sandbox Docker socket permission denied"
+  },
+  "spend": 0,
+  "deployment": false,
+  "access_changes": false,
+  "default_provider_changed": false
+}
