@@ -355,7 +355,7 @@ describe('delegated effects are receipted (slice 9, S2b finding 3)', () => {
     const write = childReceiptEvent(event('workspace_write', true, '{"path":"notes.md"}'), 4)!;
     expect(write).toEqual({ seq: 4, call: { name: 'workspace_write', args: { path: 'notes.md' } }, ok: true, delegated: true });
     expect(receiptsFromLoopEvents([write])).toMatchObject([{ effect: 'workspace_file_written', ref: 'notes.md', state: 'accepted', delegated: true }]);
-    expect(receiptLine([write])).toBe('Receipts: workspace file written notes.md (accepted, via task)');
+    expect(receiptLine([write])).toBe('Done: workspace file written notes.md (via task)');
   });
 
   it('a failed child effect is a failed receipt, so the reply cannot claim it', () => {
