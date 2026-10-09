@@ -135,7 +135,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<QueryCalendarArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_communication',
-    description: "Read a sampled page from the connected Gmail account's Primary inbox category, not the entire inbox or all accounts. Defaults to a rolling 24-hour window, not today. A page of up to 30 messages with complete false and a next_page_token is a normal answer, not a failure: read it, summarise it, and say it is a sample. Pass the same date_range with page_token only when the owner needs older mail. Legacy adapters lack pagination; an empty legacy page does not prove no mail in the requested range.",
+    description: "Read a sampled page from the connected Gmail account's Primary inbox category, not the entire inbox or all accounts. Defaults to a rolling 24-hour window, not today. A page of up to 30 messages with complete false and a next_page_token is a normal answer, not a failure: read it, summarise it, and say it is a sample. A message whose from differs from account.email was sent by someone else, even when it is about the owner's own tasks. Pass the same date_range with page_token only when the owner needs older mail. Legacy adapters lack pagination; an empty legacy page does not prove no mail in the requested range.",
     schema: getCommunicationArgsSchema,
     trigger_allowlist: allowlist('get_communication'),
     autonomy_gated: false,
