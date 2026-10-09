@@ -1,4 +1,3 @@
-import {Buffer} from 'node:buffer';
 import {nativeBrowserHandoff} from './native-browser-handoff';
 import {browserHttpAttachment} from './browser-http-attachment';
 import type {BrowserDownloadMetadata} from './browser-download-workspace';
@@ -414,6 +413,8 @@ export function cloudflareGeneralBrowser(options: Options) {
           // consent/checkpoint awaits; replaced or adopted nodes fail admission.
           const valid=await input.evaluate((node,args)=>{const root=globalThis as any,element=node as any;return element.isConnected&&element.ownerDocument===root.document&&element.ownerDocument.URL===args.url&&element.tagName==='INPUT'&&element.type==='file'&&!element.disabled&&element.form?.method.toLowerCase()==='post'&&element.form.action===args.destination;},{url:snapshot.observation.url,destination:authority.destination});
           if(!valid)throw new GeneralBrowserError('stale_observation');await admit(session);uploadAuthority!.armed=true;
+          // Wrangler supplies Buffer for the activated Node-compatible browser
+          // entrypoint; an eager node:buffer import breaks the ordinary Worker.
           await input.setInputFiles({name:file.name,mimeType:file.mimeType,buffer:Buffer.from(file.buffer)},{timeout:actionTimeout(session)});
         }finally{await input.dispose();}
         return boundedSemanticRead(session,()=>received);

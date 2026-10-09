@@ -629,3 +629,4 @@ A fresh staging Cloudflare public read uses the existing reader without requirin
 ### Approved retained browser file handoff
 
 - [ ] Register the real owner inbox with the complete tool catalog and assert download delivery plus approval after the model turn closes. Validate tool declarations against the provider contract; a description exceeding its wire limit must fail a regression. Prove foreign/denied/revoked callbacks and replay expose no additional bytes.
+- [ ] Native upload must not add an eager Node builtin to the ordinary Worker graph. Exercise the complete default bundle without browser activation/Node compatibility, as well as the activated staging bundle.
