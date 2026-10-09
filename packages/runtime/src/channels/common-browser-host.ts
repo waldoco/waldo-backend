@@ -265,6 +265,7 @@ export function revokeCommonBrowsers(storage:DurableObjectStorage,now:number){
 // A reconstructed runtime has no authenticated completion listener or native
 // document custody. Never resurrect its login from durable metadata alone.
 export function fenceLostNativeHandoffs(storage:DurableObjectStorage,now:number){
+ if(![...storage.kv.list<BrowserRecord>({prefix:'common-browser:'})].some(([,row])=>row.handoff&&row.cleanup!=='closed'))return;
  storage.transactionSync(()=>{
   let pending=false;
   for(const [key,row] of storage.kv.list<BrowserRecord>({prefix:'common-browser:'}))if(row.handoff&&row.cleanup!=='closed'){
