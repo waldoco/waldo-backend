@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { COMMON_TEST_CEILING_MICROUSD, commonStagingRegistration } from '../src/channels/common-staging-registration';
+import { commonStagingRegistration } from '../src/channels/common-staging-registration';
 
 const base = () => ({
   policy: { ref: 'trial-1', doName: 'owner-do', subject: '81103', directoryOwnerId: '11111111-2222-3333-4444-555555555555', createdAt: 1_791_460_800_000, expiresAt: 1_791_461_400_000, allowedOrigins: ['https://example.com'], maxAllocations: 2, maxReservedBrowserMs: 1_200_000, lifetimeMs: 120_000, maxScreenshotBytes: 500_000 },
@@ -15,14 +15,16 @@ it('registers within the owner caps and quotes browser at zero', () => {
   expect(reg.spend.quote('model', { request: { max_tokens: 1000 } })).toBeGreaterThan(0);
   expect(reg.spend.allocationMicrousd).toBeGreaterThan(0);
 });
-it('refuses a limit over the $20 test ceiling, non-staging, and no registration', () => {
-  const big = base(); big.spend.limitMicrousd = COMMON_TEST_CEILING_MICROUSD + 1;
-  expect(() => commonStagingRegistration(env(big))).toThrow('registration invalid');
+it('refuses a limit over the $10 test ceiling, non-staging, and no registration', () => {
+  for (const limit of [10_000_001, 20_000_000]) {
+    const big = base(); big.spend.limitMicrousd = limit;
+    expect(() => commonStagingRegistration(env(big))).toThrow('registration invalid');
+  }
   expect(commonStagingRegistration({ WALDO_ENVIRONMENT: 'production', COMMON_BROWSER_REGISTRATION: JSON.stringify(base()) })).toBeUndefined();
   expect(commonStagingRegistration({ WALDO_ENVIRONMENT: 'staging' })).toBeUndefined();
 });
 it('refuses allocations whose worst case exceeds the $5 monthly browser cap', () => {
-  const heavy = base(); heavy.policy.maxAllocations = 60; heavy.policy.maxReservedBrowserMs = 100_000_000_000; heavy.spend.limitMicrousd = 20_000_000; heavy.policy.lifetimeMs = 600_000;
+  const heavy = base(); heavy.policy.maxAllocations = 60; heavy.policy.maxReservedBrowserMs = 100_000_000_000; heavy.spend.limitMicrousd = 10_000_000; heavy.policy.lifetimeMs = 600_000;
   expect(() => commonStagingRegistration(env(heavy))).toThrow('exceeds owner caps');
 });
 it('admits account-independent conservative reservation without pretending a paid plan or billing cycle was read',()=>{

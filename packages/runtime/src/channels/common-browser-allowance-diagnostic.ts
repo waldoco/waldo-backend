@@ -76,7 +76,7 @@ export function commonBrowserAllowanceDiagnostic(options: Readonly<{
    if(pinned && (pinned.custodyDigest !== owner.custodyDigest || pinned.operator !== JSON.stringify(raw)
     || JSON.stringify(pinned.registration) !== JSON.stringify(descriptor))) throw Error('conflicting automatic pin');
   } else if(pinned) throw Error('conflicting registration selection');
-  const registered=commonStagingRegistration({WALDO_ENVIRONMENT:'staging',COMMON_BROWSER_REGISTRATION:JSON.stringify(descriptor)});
+  const registered=commonStagingRegistration({WALDO_ENVIRONMENT:'staging',COMMON_BROWSER_REGISTRATION:JSON.stringify(descriptor)},'retained_read');
   if(!registered || registered.policy.doName !== owner.doName || registered.policy.subject !== owner.subject
    || registered.policy.directoryOwnerId !== owner.directoryOwnerId) throw Error('conflicting registration owner');
   const {policy,spend}=registered;
