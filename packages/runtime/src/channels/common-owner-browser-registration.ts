@@ -55,12 +55,16 @@ export function commonOwnerBrowserRegistration(options: Readonly<{
         spend: raw.spend, billing: raw.billing };
       if (!raw.policy?.ref || raw.policy.doName !== undefined || raw.policy.subject !== undefined
         || raw.policy.directoryOwnerId !== undefined) throw Error('automatic browser operator policy invalid');
+      // Expiry/provider availability cannot hide a changed retained policy.
+      // This check is read-only; the transaction repeats it before any pin write.
+      const pinned: Pinned = { operator: operator!, custodyDigest: owner.custodyDigest, registration };
+      const prior = storage.kv.get<Pinned>(KEY);
+      if(prior&&JSON.stringify(prior)!==JSON.stringify(pinned))throw Error('automatic browser policy requires reconciliation');
       const config = configuration(registration, false);
       if (!config) throw new CommonBrowserRegistrationUnavailable('automatic browser configuration unavailable');
       const now = Date.now();
       if (now < registration.policy.createdAt || now >= registration.policy.expiresAt
         || now >= registration.spend.validUntil) throw new CommonBrowserRegistrationUnavailable('automatic browser operator policy expired');
-      const pinned: Pinned = { operator: operator!, custodyDigest: owner.custodyDigest, registration };
       storage.transactionSync(() => {
         physical();
         const prior = storage.kv.get<Pinned>(KEY);

@@ -103,6 +103,15 @@ it('cleanup survives registration removal and unlink without funding another ses
   expect([...fixture.rows].find(([key]) => key.startsWith('common-spend:'))![1].reservedMicrousd).toBe(ledger.reservedMicrousd);
   expect(await fixture.runtime().read({ name: 'browse_page' } as never).handle(args, ctx)).toMatchObject({ ok: false });
 });
+it.each(['expired','unavailable'])('a changed retained ref cannot hide behind %s configuration',async kind=>{
+ const fixture=setup(),runtime=fixture.runtime();await allocate(fixture,runtime);
+ fixture.operator.policy.ref='changed-ref';
+ if(kind==='expired'){fixture.operator.policy.expiresAt=Date.now()-1;fixture.operator.spend.validUntil=fixture.operator.policy.expiresAt;}else{delete (fixture.env as any).BROWSER;}
+ fixture.env.COMMON_BROWSER_REGISTRATION=JSON.stringify(fixture.operator);const retained=structuredClone([...fixture.rows]);
+ await expect(fixture.runtime().gateway()!.complete(request(fixture.scope))).rejects.toThrow('reconciliation');
+ expect(await fixture.runtime().read({name:'browse_page'} as never).handle({provider:'cloudflare_playwright',url:'https://example.com/a',instruction:'Read'},{authenticatedUserId:'owner',runScope:fixture.scope,turnId:'new',toolCallId:'new',egressAllowlist:['*']} as never)).toMatchObject({ok:false});
+ expect(provider.calls).toHaveLength(0);expect(commonBrowserFixture.allocations).toBe(1);expect([...fixture.rows]).toEqual(retained);
+});
 
 it('manual registration spend cannot be bypassed by switching to an automatic policy ref', async () => {
   const fixture = setup();

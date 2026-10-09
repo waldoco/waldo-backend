@@ -10,6 +10,10 @@ it.each(['expired','unavailable'])('a retained funded browser record with %s reg
  const rows=new Map<string,any>([['do_name','model-owner'],['telegram_subject','81102'],['common-browser:funded-run',{allocation:'observed'}],['common_owner_browser_registration_v1',{custodyDigest:'b'.repeat(64),registration:{policy:{directoryOwnerId:'10000000-0000-0000-0000-000000000002'}},operator:'{}'}]]);
  const storage={kv:{get:(key:string)=>rows.get(key),put:(key:string,value:unknown)=>rows.set(key,structuredClone(value)),list:({prefix}:{prefix:string})=>[...rows].filter(([key])=>key.startsWith(prefix))},transactionSync:<T>(work:()=>T)=>work()} as unknown as DurableObjectStorage;
  const env={WALDO_ENVIRONMENT:'staging',BROWSER:{},COMMON_BROWSER_REGISTRATION:kind==='expired'?JSON.stringify({scope:'verified_owners',policy:{ref:'expired',createdAt:1,expiresAt:2,allowedOrigins:['*'],maxAllocations:1,maxReservedBrowserMs:20000,lifetimeMs:10000,maxScreenshotBytes:1024},billing:{cloudflareAccountId:'a'.repeat(32),conservativeWorstCase:true},spend:{limitMicrousd:10000000,maxCalls:100,validUntil:2}}):undefined,TELEGRAM_OWNER_DO:{idFromName:()=>({toString:()=> 'physical'})},OPENAI_API_KEY:'fictional'} as never;
+ if(kind==='expired'){
+  const raw=JSON.parse((env as any).COMMON_BROWSER_REGISTRATION),directoryOwnerId='10000000-0000-0000-0000-000000000002';
+  rows.set('common_owner_browser_registration_v1',{operator:JSON.stringify(raw),custodyDigest:'b'.repeat(64),registration:{policy:{...raw.policy,doName:'model-owner',subject:'81102',directoryOwnerId,ref:`${raw.policy.ref}:owner:${directoryOwnerId}`},spend:raw.spend,billing:raw.billing}});
+ }
  const scope={runId:'funded-run',attempt:'attempt',deadline:Date.now()+60000,signal:new AbortController().signal,admit:vi.fn(),commit:<T>(work:()=>T)=>work()};
  const gateway=ownerBrowserRuntime({env,storage,actualDoId:'physical',activeScope:()=>scope}).gateway()!;
  const before=proof.calls,snapshot=structuredClone([...rows]);
