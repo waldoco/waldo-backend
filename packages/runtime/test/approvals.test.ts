@@ -577,7 +577,8 @@ describe('approval desk - email_send rail', () => {
     let n = 0;
     const client = {
       sendRaw: async (raw: string) => { sentRaw.push(raw); if (opts.sendError) throw opts.sendError; return { message_id: 'g1' }; },
-      findSentByMessageId: async () => opts.found ?? false,
+      // Labelled Sent metadata double: a send acknowledgement alone is insufficient.
+      findSentByMessageId: async (messageId: string) => (opts.found ?? !opts.sendError) ? {message_id:'g1',thread_id:'synthetic-thread',rfc822_message_id:messageId,label_ids:['SENT']} : false,
     } as unknown as GoogleClient;
     const desk = approvalDesk(state.storage.sql, {
       call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },

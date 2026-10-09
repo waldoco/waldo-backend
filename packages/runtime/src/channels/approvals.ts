@@ -2,7 +2,7 @@ import { EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type Ef
 import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
 import type { BrowserTaskContinuation, ProposeCalendarChangeArgs } from '@waldo/contracts';
-import { GoogleError, sha256Hex, type GoogleClient } from '../connectors/google';
+import { GoogleError, sha256Hex, verifiedSent, type GoogleClient } from '../connectors/google';
 import type { BrowserSubmitOutcome } from '../tools/live/browser';
 import type { TurnLogEntry } from './telegram-listener';
 
@@ -41,7 +41,7 @@ const BROWSER_SUBMIT_TTL_MS = 30 * 60_000;
 export type EmailSendProposal = Readonly<{
   operation_ref?: string;
   to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[];
-  account?: string; subject: string; body: string; thread_id?: string; message_id: string; raw: string; digest: string; dedupe_key?: string;
+  account?: string; subject: string; body: string; inReplyTo?: string; references?: readonly string[]; thread_id?: string; message_id: string; raw: string; digest: string; dedupe_key?: string;
 }>;
 
 // send_message proposals (ADR-0054): the exact channel + content the owner approved, replayed
@@ -157,33 +157,33 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const expired = (entry: LedgerRow, p: Stored) =>
     (entry.kind === 'browser_submit' && (p as unknown as BrowserSubmitProposal).approvalExpiresAt !== undefined && (!Number.isSafeInteger((p as unknown as BrowserSubmitProposal).approvalExpiresAt) || deps.now() >= (p as unknown as BrowserSubmitProposal).approvalExpiresAt!)) ||
     deps.now() - entry.created_at > (entry.kind === 'browser_submit' ? BROWSER_SUBMIT_TTL_MS : PROPOSAL_TTL_MS) || (entry.kind !== 'browser_submit' && p.start !== undefined && Date.parse(p.start) <= deps.now());
-  const apply = async (client: GoogleClient, p: Stored, eventId?: string): Promise<Undo | null | 'stale'> => {
+  const apply = async (client: GoogleClient, p: Stored, eventId?: string, marker?: string): Promise<Undo | null | 'stale'> => {
     if (p.action === 'create') {
-      const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end!, ...(eventId ? { id: eventId } : {}) });
+      const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end!, ...(eventId ? { id: eventId } : {}), ...(marker ? { operationMarker:marker } : {}) });
       return applied.etag ? { op: 'cancel', id: applied.id, applied_etag: applied.etag } : null;
     }
     const before = await client.event(p.event_id!);
-    if (p.seen_etag && before.etag && before.etag !== p.seen_etag) return 'stale';
+    if (p.seen_etag && before.etag !== p.seen_etag) return 'stale';
     try {
       if (p.action === 'move') {
-        const applied = await client.moveEvent(p.event_id!, p.start!, p.end!, before.etag);
+        const applied = await client.moveEvent(p.event_id!, p.start!, p.end!, before.etag, marker);
         return applied.etag ? { op: 'move', id: p.event_id!, start: before.start, end: before.end, applied_etag: applied.etag } : null;
       }
-      await client.cancelEvent(p.event_id!, before.etag);
+      await client.cancelEvent(p.event_id!, before.etag, marker);
     } catch (error) {
       if (error instanceof GoogleError && error.status === 412) return 'stale';
       throw error;
     }
     return null;
   };
-  const revert = async (client: GoogleClient, undo: Undo): Promise<'undone' | 'stale' | 'unavailable'> => {
+  const revert = async (client: GoogleClient, undo: Undo, marker?: string): Promise<'undone' | 'stale' | 'unavailable'> => {
     // Legacy entries have no applied version. A fresh owner edit never grants Undo authority.
     if (!undo.applied_etag) return 'unavailable';
     const current = await client.event(undo.id);
     if (current.etag !== undo.applied_etag) return 'stale';
     try {
-      if (undo.op === 'cancel') await client.cancelEvent(undo.id, undo.applied_etag);
-      else await client.moveEvent(undo.id, undo.start, undo.end, undo.applied_etag);
+      if (undo.op === 'cancel') await client.cancelEvent(undo.id, undo.applied_etag, marker);
+      else await client.moveEvent(undo.id, undo.start, undo.end, undo.applied_etag, marker);
     } catch (error) {
       if (error instanceof GoogleError && error.status === 412) return 'stale';
       throw error;
@@ -202,7 +202,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     }
     if (deps.effects?.isActive(`${operationRef}:${action === 'u' ? 'undo' : 'apply'}`)) return { toast: 'Already handled.', message: 'Already handled.' };
     // An uncertain row with no effect record never reached dispatch (the record is written before the provider call), so it is safe to run again; a record sends it through reconcile instead.
-    const recovering = action === 'a' && entry?.status === 'uncertain' && deps.effects !== undefined;
+    const recovering = entry?.status === 'uncertain' && deps.effects !== undefined && (action === 'a' || action === 'u' && entry.kind === 'calendar_change' && !!entry.undo_json && !!deps.effects.get(`${operationRef}:undo`));
     if (entry?.status === 'uncertain' && entry.kind !== 'browser_submit' && action === 'a' && !recovering) return { toast: 'Outcome unknown', message: 'The outcome of that approval is unknown. Check the result before retrying; nothing was sent again.' };
     if (!entry || (entry.status !== expected && !recovering)) return { toast: 'Already handled.', message: 'Already handled.' };
     const proposal = JSON.parse(entry.payload_json) as Stored;
@@ -300,17 +300,19 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             try {
               await effect(`${operationRef}:apply`, 'send_email', ep, async () => {
                 const sent = await client.sendRaw(ep.raw, ep.thread_id);
-                return { provider_id: sent.message_id, result: sent };
+                const landed = await client.findSentByMessageId(ep.message_id, ep.thread_id);
+                if (!verifiedSent(landed, ep.message_id, ep.thread_id) || landed.message_id !== sent.message_id) throw new EffectUnknownError();
+                return { provider_id: landed.message_id, result: landed };
               }, async () => {
-                const landed = await client.findSentByMessageId(ep.message_id);
-                return landed && typeof landed === 'object' ? { status: 'done', receipt: { provider_id: landed.message_id, result: landed } } : { status: 'unknown' };
+                const landed = await client.findSentByMessageId(ep.message_id, ep.thread_id);
+                return verifiedSent(landed, ep.message_id, ep.thread_id) ? { status: 'done', receipt: { provider_id: landed.message_id, result: landed } } : { status: 'unknown' };
               });
               setStatus(id, 'done');
               out = { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. This one can't be undone.` };
             } catch (error) {
               if (!deps.effects && !(error instanceof ProxyIntentError)) {
-                const landed = await client.findSentByMessageId(ep.message_id).catch((readError) => { deps.log({ trace, hop: 'email_readback', ms: 0, ok: false, error: String(readError) }); return false; });
-                if (landed) { setStatus(id, 'done'); return { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. Gmail confirmed it after a hiccup; it went out exactly once.` }; }
+                const landed = await client.findSentByMessageId(ep.message_id, ep.thread_id).catch((readError) => { deps.log({ trace, hop: 'email_readback', ms: 0, ok: false, error: String(readError) }); return false; });
+                if (verifiedSent(landed, ep.message_id, ep.thread_id)) { setStatus(id, 'done'); return { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. Gmail confirmed it after a hiccup; it went out exactly once.` }; }
               }
               setStatus(id, 'uncertain');
               out = { toast: 'Outcome unknown', message: 'The send outcome is unknown. Check Gmail before retrying; nothing was sent again.' };
@@ -376,20 +378,22 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           out = { toast: 'Google is not connected', message: 'I could not do that because Google is not connected.' };
         } else if (action === 'a') {
           const eventId = proposal.action === 'create' ? await sha256Hex(`${operationRef}:apply`) : proposal.event_id!;
+          const marker = await sha256Hex(`${operationRef}:apply`);
           const receipt = await effect(`${operationRef}:apply`, 'calendar_change', proposal, async () => {
-            const undo = await apply(client, proposal, deps.effects ? eventId : undefined);
+            const undo = await apply(client, proposal, deps.effects ? eventId : undefined, marker);
             return { provider_id: eventId, result: undo };
           }, async () => {
             try {
               const current = await client.event(eventId);
+              if (current.operation_marker !== marker) return {status:'unknown'};
               if (proposal.action !== 'cancel' && current.status !== 'cancelled' && (proposal.action !== 'create' || current.title === proposal.title) && current.start === proposal.start && current.end === proposal.end && current.etag
                 && (!proposal.seen_etag || current.etag !== proposal.seen_etag)) {
-                // A recovered move cannot invent the previous event version for Undo.
-                return { status: 'done', receipt: { provider_id: current.id, result: proposal.action === 'create' ? { op: 'cancel', id: current.id, applied_etag: current.etag } : null } };
+                // A marker can survive a later owner edit. Recovery proves the effect, but
+                // cannot establish the exact applied ETag needed for safe Undo.
+                return { status: 'done', receipt: { provider_id: current.id, result: null } };
               }
               if (proposal.action === 'cancel' && current.status === 'cancelled') return { status: 'done', receipt: { provider_id: eventId, result: null } };
             } catch (error) {
-              if (proposal.action === 'cancel' && error instanceof GoogleError && error.status === 404) return { status: 'done', receipt: { provider_id: eventId, result: null } };
               deps.log({ trace, hop: 'calendar_readback', ms: 0, ok: false, error: String(error) });
             }
             return { status: 'unknown' };
@@ -402,10 +406,18 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             setStatus(id, 'done', undo);
             out = { toast: 'Done', message: `Done: ${describe(proposal)}.${undo ? ' Undo is available for 10 minutes.' : " This one can't be undone from here."}` };
           }
-        } else if (entry.undo_json && entry.decided_at !== null && deps.now() - entry.decided_at <= UNDO_WINDOW_MS) {
+        } else if (entry.undo_json && entry.decided_at !== null && (recovering || deps.now() - entry.decided_at <= UNDO_WINDOW_MS)) {
           const undo = JSON.parse(entry.undo_json) as Undo;
+          const marker = await sha256Hex(`${operationRef}:undo`);
           const receipt = await effect(`${operationRef}:undo`, 'calendar_undo', undo,
-            async () => ({ provider_id: undo.id, result: await revert(client, undo) }), async () => ({ status: 'unknown' }));
+            async () => ({ provider_id: undo.id, result: await revert(client, undo, marker) }), async () => {
+              try {
+                const current = await client.event(undo.id);
+                if (current.operation_marker === marker && (undo.op === 'cancel' ? current.status === 'cancelled' : current.status !== 'cancelled' && current.start === undo.start && current.end === undo.end))
+                  return {status:'done',receipt:{provider_id:undo.id,result:'undone'}};
+              } catch (error) { deps.log({trace,hop:'calendar_undo_readback',ms:0,ok:false,error:String(error)}); }
+              return {status:'unknown'};
+            });
           const result = receipt.result as 'undone' | 'stale' | 'unavailable';
           if (result === 'undone') {
             setStatus(id, 'undone');
@@ -427,7 +439,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       // A late duplicate failure cannot replace a confirmed Undo receipt.
       if (action === 'u' && row(id)?.status === 'undone') return { toast: 'Already handled.', message: 'Already handled.' };
       const durable = deps.effects?.get(`${operationRef}:${action === 'u' ? 'undo' : 'apply'}`);
-      if(durable?.state === 'attempting' || durable?.state === 'unknown' || error instanceof EffectUnknownError || error instanceof ProxyIntentError || (error instanceof GoogleError && error.message==='intent_pending')) { setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The operation outcome is unknown. Check the result before retrying; nothing was run again.'}; }
+      if(durable?.state === 'attempting' || durable?.state === 'unknown' || error instanceof EffectUnknownError || error instanceof ProxyIntentError || (error instanceof GoogleError && error.message==='intent_pending')) { if (action === 'u' && entry.kind === 'calendar_change') sql.exec("UPDATE ledger SET status = 'uncertain' WHERE id = ?", id); else setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The operation outcome is unknown. Check the result before retrying; nothing was run again.'}; }
       deps.log({ trace, hop: `approval_${action}`, ms: deps.now() - started, ok: false, error: String(error) });
       return { toast: 'That failed', message: `That didn't work: ${error instanceof Error ? error.message : String(error)}` };
     }
@@ -450,7 +462,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         : sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND json_extract(payload_json, '$.message_id') = ? ORDER BY created_at DESC LIMIT 1", payload.message_id).toArray()[0];
       if (prior) {
         const was = JSON.parse(prior.payload_json) as EmailSendProposal;
-        const semantic = ({ account, to, cc, bcc, subject, body, thread_id }: EmailSendProposal) => JSON.stringify({ account, to, cc, bcc, subject, body, thread_id });
+        const semantic = ({ account, to, cc, bcc, subject, body, thread_id, inReplyTo, references }: EmailSendProposal) => JSON.stringify({ account, to, cc, bcc, subject, body, thread_id, inReplyTo, references });
         if (semantic(was) !== semantic(payload)) throw new EmailProposalError('identifier_reused');
         if (prior.status === 'open' || prior.status === 'review_only') return prior.id;
         if (prior.status === 'card_unconfirmed') throw new EmailProposalError('card_unconfirmed');
@@ -521,7 +533,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         if (p.account && client?.account?.email?.toLowerCase() !== p.account.toLowerCase()) throw new Error('Selected calendar account is unavailable');
         const bound = { ...p, ...(client?.account?.email ? {account:client.account.email} : {}) };
         const summary = `${describe(bound)}. ${bound.reason}`;
-        const seen = client && bound.event_id ? (await client.event(bound.event_id)).etag : undefined;
+        const before = client && bound.event_id ? await client.event(bound.event_id) : undefined;
+        const seen = before?.etag;
         const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...(operationRef ? { operation_ref: operationRef } : {}) };
         sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
         await sayCard(id, `Proposed: ${summary}`, [['Do it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);

@@ -605,3 +605,24 @@ A fresh staging Cloudflare public read uses the existing reader without requirin
 
 - [ ] Ordinary interactive requests select `retain_session` through the published model schema and dispatcher, receive DOM/native AX/PNG, continue beyond four observations and across an owner reply, then prove exact-session absence before settling duration. Read-only requests keep one-shot cleanup. Bound image history independently of actions; separate provider inactivity from the real admitted task deadline. Preserve existing charges and ceilings without issuing/refilling trial authority.
 - [ ] Malformed or duplicate provider session IDs cannot certify absence. Lost connections invalidate old refs and disclose recreated document state; wrong/expired handles or changed owner custody never allocate a replacement or replay an effect.
+
+### Google reply and Calendar recovery evidence
+
+- [ ] Resolve a Gmail reply parent and subject from the selected account's thread, validate its provider Message-ID/References, and freeze those headers in approved MIME. A send acknowledgement or search hit cannot establish Sent: require metadata with SENT, exact RFC822 Message-ID and intended thread. Test response loss, unavailable/mismatched metadata, frozen-byte substitution, wrong account and restart without another send.
+- [ ] Calendar apply and Undo use distinct private operation markers. Reconcile uncertain Undo read-only while retaining the confirmed applied ETag and original Undo payload. A recovered apply never promotes a later readback ETag into Undo authority; missing cancellation markers remain uncertain. Restore date-only events with date and clear dateTime, and clear date when moving to timed endpoints. Test later edits, marker loss, restart and replay without another mutation.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Reply MIME omitted provider threading headers; Gmail search/acknowledgement could claim Sent without exact metadata; Calendar recovered matching fields without an operation marker, discarded uncertain Undo custody, and restored all-day values as dateTime | google-recovery-journey.test.ts registered Gmail and Calendar handlers, approval desk and restarted effect ledger over labelled synthetic provider doubles; google.test.ts metadata readback; approvals.test.ts exact Sent evidence | Local synthetic/source proof only. Existing account routing, frozen MIME, stable create IDs and If-Match fences remain. No live provider, grants, deployment or database reset; cancellation tombstones without markers remain uncertain |
+
+- [ ] Positive effect fixtures must include the same exact provider evidence required in production: Sent metadata or the captured Calendar operation marker. Keep missing/wrong evidence and replay controls alongside success cases; owner-ingress payload assertions include the operation marker.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Six existing positive fixtures asserted completion from a Gmail acknowledgement/search hit or unmarked Calendar evidence, or omitted the new create marker from an exact payload assertion | owner-effect-approval.test.ts and owner-effect-break-936.test.ts exact Sent doubles; owner-effect-adapters.test.ts captured marker and missing/foreign controls; owner-do-ingress-isolation.test.ts exact marked create payload | Fixture-only correction; source checks unchanged. Missing/mismatched Sent metadata and Calendar markers stay uncertain with one dispatch across replay |
+
+- [ ] Recovery metadata must not change Calendar attendee notification policy. Preserve the baseline's omitted sendUpdates/sendNotifications parameters on create, move, marked cancellation and legacy DELETE, while keeping operation markers and If-Match fences.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Google recovery added undisclosed sendUpdates=none across Calendar mutation paths | google.test.ts six synthetic wire cases for marked/unmarked create, move and cancellation; google-recovery-journey.test.ts existing approved apply/Undo, replay and later-edit controls | Restore baseline omission, not a new sendUpdates=all policy. Marked cancellation remains atomic PATCH status=cancelled plus marker under If-Match. Provider guest-delivery behavior and tombstone marker retention still require staging acceptance |

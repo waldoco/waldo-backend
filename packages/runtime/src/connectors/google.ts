@@ -126,13 +126,13 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
   return { refresh_token: result.refresh_token, scopes: (result.scope ?? '').split(' ').filter(Boolean), ...(claims.email ? { email: claims.email } : {}) };
 }
 
-export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string;
+export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string; operation_marker?: string;
   status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[] }>;
 
 // Provider-internal etags are unnecessary in model-facing context. Keep them in the
 // connector API for concurrency (moveEvent/cancelEvent), not in a card prompt.
-export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag'> => {
-  const { etag: _etag, ...projection } = event;
+export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker'> => {
+  const { etag: _etag, operation_marker: _marker, ...projection } = event;
   return projection;
 };
 
@@ -171,13 +171,21 @@ export type CalendarChange = Omit<CalendarItem, 'status'> & Readonly<{ status: s
 export type MailItem = Readonly<{ id: string; thread_id: string; from: string; subject: string; snippet: string; at: string }>;
 // A1: a thread-read message carries the decoded body; the list projection (MailItem) stays
 // snippet-only so 'what is new' scans never pull bodies into a turn.
-export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string }>;
-export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string; messageId?: string }>;
+export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string; message_id?: string; references?: readonly string[] }>;
+export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string; messageId?: string; inReplyTo?: string; references?: readonly string[] }>;
+
+// Conservative wire Message-ID validation: never interpolate model/provider header text.
+export const validMessageId = (value: unknown): value is string => typeof value === 'string' && value.length <= 900 && /^<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+>$/.test(value);
+export type SentEvidence = Readonly<{ message_id: string; thread_id: string; rfc822_message_id: string; label_ids: readonly string[] }>;
+export const verifiedSent = (value: unknown, messageId: string, threadId?: string): value is SentEvidence =>
+  isObject(value) && typeof value.message_id === 'string' && !!value.message_id && typeof value.thread_id === 'string' && !!value.thread_id
+  && value.rfc822_message_id === messageId && Array.isArray(value.label_ids) && value.label_ids.includes('SENT') && (!threadId || value.thread_id === threadId);
 
 // Canonical MIME for the send rail: fixed header order, CRLF, no display names. The digest the
 // owner approves binds these exact bytes; Message-ID (set by us) is the reconciliation handle
 // when the send result is ambiguous (timeout after Gmail accepted).
 export const buildMime = (input: DraftInput & { messageId?: string }): string => {
+  if ((input.messageId && !validMessageId(input.messageId)) || (input.inReplyTo && !validMessageId(input.inReplyTo)) || input.references?.some(id => !validMessageId(id))) throw new Error('invalid MIME threading headers');
   const clean = (value: string) => value.replace(/[\r\n]+/g, ' ');
   const headers = [
     `To: ${clean(input.to.join(', '))}`,
@@ -185,6 +193,11 @@ export const buildMime = (input: DraftInput & { messageId?: string }): string =>
     ...(input.bcc?.length ? [`Bcc: ${clean(input.bcc.join(', '))}`] : []),
     `Subject: ${clean(input.subject)}`,
     ...(input.messageId ? [`Message-ID: ${input.messageId}`, 'MIME-Version: 1.0'] : []),
+    ...(input.inReplyTo ? [`In-Reply-To: ${input.inReplyTo}`] : []),
+    ...(input.references?.length ? [input.references.reduce((line, id) => {
+      const last = line.split('\r\n').at(-1)!;
+      return `${line}${last.length + id.length + 1 > 78 ? '\r\n\t' : ' '}${id}`;
+    }, 'References:')] : []),
     'Content-Type: text/plain; charset="UTF-8"',
   ];
   return `${headers.join('\r\n')}\r\n\r\n${input.body}`;
@@ -229,11 +242,11 @@ export type GoogleClient = Readonly<{
   findDraftByMessageId?(messageId: string): Promise<Readonly<{ draft_id: string; message_id?: string }> | null>;
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
   sendRaw(raw: string, threadId?: string): Promise<Readonly<{ message_id: string; thread_id?: string }>>;
-  findSentByMessageId(messageId: string): Promise<boolean | Readonly<{ message_id: string }>>;
+  findSentByMessageId(messageId: string, threadId?: string): Promise<boolean | SentEvidence | Readonly<{ message_id: string }>>;
   event(id: string): Promise<CalendarItem>;
-  createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string }>): Promise<CalendarItem>;
-  moveEvent(id: string, start: string, end: string, etag?: string): Promise<CalendarItem>;
-  cancelEvent(id: string, etag?: string): Promise<void>;
+  createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string; operationMarker?: string }>): Promise<CalendarItem>;
+  moveEvent(id: string, start: string, end: string, etag?: string, operationMarker?: string): Promise<CalendarItem>;
+  cancelEvent(id: string, etag?: string, operationMarker?: string): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
   mailPage(query:string,limit:number,pageToken?:string):Promise<Readonly<{messages:readonly MailItem[];next_page_token:string|null;result_size_estimate:number|null}>>;
   newMail(since: number, limit: number): Promise<readonly MailItem[]>;
@@ -258,7 +271,7 @@ const b64urlDecode = (data: string): string => {
 // (tools/live/google.ts); this cap is the second wall - a huge body never floods a turn.
 const BODY_CAP = 32_000;
 type GmailPayload = Readonly<{ mimeType?: string; body?: { data?: string }; parts?: GmailPayload[]; headers?: { name: string; value: string }[] }>;
-type GmailFullMessage = Readonly<{ id?: string; snippet?: string; internalDate?: string; payload?: GmailPayload }>;
+type GmailFullMessage = Readonly<{ id?: string; threadId?: string; snippet?: string; internalDate?: string; payload?: GmailPayload }>;
 const htmlText = (html: string): string => {
   const blocks = new Set(['p', 'div', 'br', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'section', 'article', 'hr']);
   let suppressed = 0;
@@ -329,8 +342,8 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
   }));
   const threadPage = async (threadId: string, limit: number, cursor?: string): Promise<Readonly<{messages:readonly ThreadMessage[];cursor:string|null}>> => {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw new Error('invalid thread page limit');
-      const json = await call(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`) as { messages?: GmailFullMessage[] };
-      if (!json || !Array.isArray(json.messages)) throw new Error('invalid Gmail thread response');
+      const json = await call(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`) as { id?:string; messages?: GmailFullMessage[] };
+      if (!json || !Array.isArray(json.messages) || (json.id !== undefined && json.id !== threadId) || json.messages.some(m => !m || typeof m.id !== 'string' || !m.id || m.threadId !== undefined && m.threadId !== threadId)) throw new Error('invalid Gmail thread response');
       const ids = json.messages.map(message => message.id);
       const binding = await sha256Hex(JSON.stringify([account, threadId, ids]));
       let offset = 0;
@@ -343,7 +356,10 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       }
       const messages = json.messages.slice(offset, offset + limit).map(message => {
         const header = (name: string) => message.payload?.headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
-        return { id: message.id ?? '', from: header('From'), subject: header('Subject'), at: new Date(Number(message.internalDate ?? 0)).toISOString(), body: threadBody(message.payload) || (message.snippet ?? '').slice(0, BODY_CAP) };
+        const messageIds = message.payload?.headers?.filter(h => h.name.toLowerCase() === 'message-id') ?? [];
+        const messageId = messageIds.length === 1 ? messageIds[0]!.value.trim() : '';
+        const references = (message.payload?.headers?.filter(h => h.name.toLowerCase() === 'references').map(h => h.value).join(' ') ?? '').trim().split(/\s+/).filter(Boolean);
+        return { ...(validMessageId(messageId) ? {message_id:messageId} : {}), ...(references.length ? {references} : {}), id: message.id ?? '', from: header('From'), subject: header('Subject'), at: new Date(Number(message.internalDate ?? 0)).toISOString(), body: threadBody(message.payload) || (message.snippet ?? '').slice(0, BODY_CAP) };
       });
       const next = offset + messages.length;
       return {messages, cursor: next < ids.length ? b64url(new TextEncoder().encode(JSON.stringify({binding,offset:next}))) : null};
@@ -362,10 +378,14 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       if (!validCalendarEvent(value) || value.id !== id) throw new Error('invalid Calendar event response');
       return toItem(value);
     },
-    createEvent: ({ title, start, end, id }) => send(EVENTS, 'POST', { ...(id ? { id } : {}), summary: title, start: { dateTime: start }, end: { dateTime: end } }),
-    moveEvent: (id, start, end, etag) => send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { start: { dateTime: start }, end: { dateTime: end } }, etag),
-    async cancelEvent(id, etag) {
-      await call(`${EVENTS}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: match(etag) });
+    // Preserve the provider's notification defaults; recovery markers do not authorize silent guest updates.
+    createEvent: ({ title, start, end, id, operationMarker }) => send(EVENTS, 'POST', { ...(id ? { id } : {}), summary: title, ...calendarTimes(start, end), ...calendarMarker(operationMarker) }),
+    moveEvent: (id, start, end, etag, operationMarker) => send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { ...calendarTimes(start, end), ...calendarMarker(operationMarker) }, etag),
+    async cancelEvent(id, etag, operationMarker) {
+      // Put cancellation and its marker in one version-fenced mutation. A missing tombstone
+      // marker later is ambiguous, even if a provider returns 404 or a bare cancelled event.
+      if (operationMarker) await send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { status: 'cancelled', ...calendarMarker(operationMarker) }, etag);
+      else await call(`${EVENTS}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: match(etag) });
     },
     async calendarPage(calendarId, from, to, limit, includeDeclined, pageToken) {
       if (typeof calendarId !== 'string' || !calendarId.trim() || calendarId.length > 254 || ![from,to].every(v => validCalendarInstant(v)) || Date.parse(from) >= Date.parse(to) || !Number.isSafeInteger(limit) || limit < 1 || limit > 50 || typeof includeDeclined !== 'boolean' || (pageToken !== undefined && (typeof pageToken !== 'string' || !pageToken || pageToken.length > 4096))) throw new Error('invalid Calendar page request');
@@ -473,12 +493,20 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       }) as { id: string; threadId?: string };
       return { message_id: json.id, ...(json.threadId ? { thread_id: json.threadId } : {}) };
     },
-    async findSentByMessageId(messageId) {
-      const list = new URL('https://gmail.googleapis.com/gmail/v1/users/me/messages');
-      const bare = messageId.replace(/^<|>$/g, '');
-      list.search = new URLSearchParams({ q: `in:sent rfc822msgid:${bare}`, maxResults: '1' }).toString();
+    async findSentByMessageId(messageId, threadId) {
+      if (!validMessageId(messageId)) throw new Error('invalid Sent Message-ID');
+      const list = new URL(GMAIL);
+      list.search = new URLSearchParams({ q: `in:sent rfc822msgid:${messageId.slice(1,-1)}`, maxResults: '10' }).toString();
       const { messages = [] } = await call(list.toString()) as { messages?: { id: string }[] };
-      return messages[0] ? { message_id: messages[0].id } : false;
+      if (!Array.isArray(messages) || messages.length > 10) throw new Error('invalid Sent search response');
+      for (const candidate of messages) {
+        if (typeof candidate?.id !== 'string' || !candidate.id) continue;
+        const value = await call(`${GMAIL}/${encodeURIComponent(candidate.id)}?format=metadata&metadataHeaders=Message-ID`) as { id?: string; threadId?: string; labelIds?: string[]; payload?: GmailPayload };
+        const ids = value.payload?.headers?.filter(h => h.name.toLowerCase() === 'message-id');
+        const evidence = { message_id: value.id, thread_id: value.threadId, label_ids: value.labelIds, rfc822_message_id: ids?.length === 1 ? ids[0]!.value.trim() : undefined };
+        if (value.id === candidate.id && verifiedSent(evidence, messageId, threadId)) return evidence;
+      }
+      return false;
     },
   };
 }
@@ -514,6 +542,14 @@ const calendarSourceUrl = (value: string | undefined): string | undefined => {
       && value.length <= 2048 && url.href.length <= 2048 ? url.href : undefined;
   } catch { return undefined; }
 };
+const calendarMarker = (operationMarker?: string) => operationMarker ? { extendedProperties: { private: { waldoOperation: operationMarker } } } : {};
+const calendarTimes = (start: string, end: string) => {
+  const date = (v: string) => /^\d{4}-\d\d-\d\d$/.test(v) && new Date(v).toISOString().slice(0,10) === v;
+  const allDay = date(start) && date(end);
+  if ((!allDay && (!validCalendarInstant(start) || !validCalendarInstant(end))) || Date.parse(start) >= Date.parse(end)) throw new Error('invalid Calendar mutation times');
+  // PATCH merges nested fields, so explicitly clear the previous representation.
+  return allDay ? {start:{date:start,dateTime:null},end:{date:end,dateTime:null}} : {start:{dateTime:start,date:null},end:{dateTime:end,date:null}};
+};
 const toItem = (event: GoogleEvent): CalendarItem => ({
   id: event.id, title: event.summary ?? '(no title)',
   start: event.start?.dateTime ?? event.start?.date ?? '', end: event.end?.dateTime ?? event.end?.date ?? '',
@@ -522,6 +558,7 @@ const toItem = (event: GoogleEvent): CalendarItem => ({
   ...(event.description?.trim() ? { description: event.description.trim().slice(0, 2000) } : {}),
   ...(event.attendees?.length ? { attendees: event.attendees.length } : {}),
   ...(event.etag ? { etag: event.etag } : {}),
+  ...(typeof event.extendedProperties?.private?.waldoOperation === 'string' ? { operation_marker: event.extendedProperties.private.waldoOperation } : {}),
   ...(['confirmed', 'tentative', 'cancelled'].includes(event.status ?? '') ? { status: event.status as CalendarItem['status'] } : {}),
   ...(typeof event.updated === 'string' && validCalendarInstant(event.updated) ? { updated: event.updated } : {}),
   ...(typeof event.recurringEventId === 'string' ? { recurring_event_id: event.recurringEventId.slice(0, 1024) } : {}),
@@ -533,5 +570,6 @@ const toItem = (event: GoogleEvent): CalendarItem => ({
 type GoogleEvent = {
   id: string; etag?: string; status?: string; summary?: string; location?: string; description?: string; created?: string; updated?: string; recurringEventId?: string; originalStartTime?: { dateTime?: string; date?: string }; htmlLink?: string;
   start: { dateTime?: string; date?: string }; end: { dateTime?: string; date?: string };
+  extendedProperties?: { private?: Record<string,string> };
   attendees?: { self?: boolean; responseStatus?: string; displayName?: string }[];
 };

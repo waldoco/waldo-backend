@@ -27,7 +27,7 @@ it('BREAK-2 two concurrent approves while google() client is still resolving: ex
   await runInDurableObject(stubFor('b2'), async (_, state) => {
     let sends = 0;
     const effects = ownerEffectLedger(state.storage, () => 1000);
-    const client = { sendRaw: async () => { sends++; await new Promise(r => setTimeout(r, 5)); return { message_id: 'm' }; }, findSentByMessageId: async () => false } as unknown as GoogleClient;
+    const client = { sendRaw: async () => { sends++; await new Promise(r => setTimeout(r, 5)); return { message_id: 'm' }; }, findSentByMessageId: async (messageId: string) => { expect(messageId).toBe('<x@waldo-send>'); return { message_id: 'm', thread_id: 'sent-thread', rfc822_message_id: '<x@waldo-send>', label_ids: ['SENT'] }; } } as unknown as GoogleClient;
     const desk = approvalDesk(state.storage.sql, { ...base, newId: () => 'one', now: () => 1000, effects, google: async () => { await new Promise(r => setTimeout(r, 2)); return client; } });
     const raw = 'bytes';
     const id = await desk.proposeSendEmail({ to: ['a@example.test'], subject: 's', body: 'b', raw, digest: await sha256Hex(raw), message_id: '<x@waldo-send>' });
