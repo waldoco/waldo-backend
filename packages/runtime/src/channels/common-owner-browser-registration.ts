@@ -31,7 +31,7 @@ export function commonOwnerBrowserRegistration(options: Readonly<{
     return { doName, subject };
   };
   const configuration = (registration: Record<string, any>, cleanupOnly: boolean) => {
-    const registered = commonStagingRegistration({ WALDO_ENVIRONMENT: env.WALDO_ENVIRONMENT, COMMON_BROWSER_REGISTRATION: JSON.stringify(registration) });
+    const registered = commonStagingRegistration({ WALDO_ENVIRONMENT: env.WALDO_ENVIRONMENT, COMMON_BROWSER_REGISTRATION: JSON.stringify(registration) }, cleanupOnly ? 'retained_read' : 'admission');
     if (!registered) return undefined;
     return commonPublicBrowserConfiguration({ ...options, ...registered, cleanupOnly });
   };

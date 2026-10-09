@@ -171,3 +171,22 @@ it('a retained browser does not meter an unrelated run without explicit browser 
  expect(f.rows.get(`common-browser-run:${unrelated.runId}`)).toBeUndefined();
  runtime.stop();await runtime.maintain();expect(commonBrowserFixture.ends).toBe(1);
 });
+
+
+it.each(['automatic','manual'])('historical %s registration cleanup survives the lower admission cap without new funding',async kind=>{
+ const f=setup();
+ if(kind==='manual')f.env.COMMON_BROWSER_REGISTRATION=JSON.stringify({policy:{...f.operator.policy,doName:'automatic-owner',subject:'81101',directoryOwnerId:directory.owner},spend:f.operator.spend,billing:f.operator.billing});
+ const runtime=f.runtime();await allocate(f,runtime);
+ // Model a retained registration written when the parser accepted $20.
+ const descriptor=JSON.parse(f.env.COMMON_BROWSER_REGISTRATION);descriptor.spend.limitMicrousd=20_000_000;
+ f.env.COMMON_BROWSER_REGISTRATION=JSON.stringify(descriptor);
+ const pinned=f.rows.get('common_owner_browser_registration_v1');
+ if(pinned){pinned.operator=f.env.COMMON_BROWSER_REGISTRATION;pinned.registration.spend.limitMicrousd=20_000_000;}
+ const ledger=[...f.rows].find(([key])=>key.startsWith('common-spend:'))![1];ledger.policy.limitMicrousd=20_000_000;
+ const before=structuredClone([...f.rows]),reserved=ledger.reservedMicrousd;
+ expect(await f.runtime().read({name:'browse_page'} as never).handle({provider:'cloudflare_playwright',url:'https://example.com/a',instruction:'Read'},{authenticatedUserId:'owner',runScope:f.scope,turnId:'new',toolCallId:'new',egressAllowlist:['*']} as never)).toMatchObject({ok:false});
+ expect([...f.rows]).toEqual(before);expect(commonBrowserFixture.allocations).toBe(1);
+ runtime.stop();await f.runtime().maintain();
+ expect(commonBrowserFixture.ends).toBe(1);expect(commonBrowserFixture.allocations).toBe(1);expect(provider.calls).toHaveLength(0);
+ expect([...f.rows].find(([key])=>key.startsWith('common-spend:'))![1].reservedMicrousd).toBe(reserved);
+});

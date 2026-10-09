@@ -137,3 +137,29 @@ it('over-bound or invalid measured duration keeps the full unresolved reservatio
  for(const duration of [50001,100000,-1,NaN,0.1]){expect(()=>held.settle(duration)).toThrow();expect([...f.rows]).toEqual(snapshot);}
  expect(f.rows.get(f.month())).toBe(1250);expect(f.rows.get('owner-public-browser-spend:v2').reservations[0].settled).toBe(false);
 });
+
+
+it.each([10_000_001,20_000_000])('rejects a new declared test ceiling of %i without counter mutation',limit=>{
+ const f=fixture(),snapshot=structuredClone([...f.rows]);
+ expect(()=>reserve(f,'new',limit)).toThrow('retained ceiling conflict');
+ expect([...f.rows]).toEqual(snapshot);
+});
+it('admits the ten dollar declared test maximum',()=>{
+ const f=fixture();reserve(f,'first',10_000_000);
+ expect(ownerPublicBrowserAccounting(f.storage,f.ctx.authenticatedUserId,'b'.repeat(64))).toMatchObject({limitMicrousd:10_000_000,reservedMicrousd:1250,intents:['first']});
+});
+it('the ten dollar declared test maximum cannot increase a lower retained ceiling',()=>{
+ const f=fixture();reserve(f,'first',2000);const snapshot=structuredClone([...f.rows]);
+ expect(()=>reserve(f,'second',10_000_000)).toThrow('cost ceiling');
+ expect(ownerPublicBrowserAccounting(f.storage,f.ctx.authenticatedUserId,'b'.repeat(64))).toMatchObject({limitMicrousd:2000,reservedMicrousd:1250,intents:['first']});
+ expect([...f.rows]).toEqual(snapshot);
+});
+it.each([10_000_000,15_000_000,20_000_000])('reads a historical %i ceiling without rewriting or refunding its ledger',limitMicrousd=>{
+ const f=fixture(),count=Math.floor(limitMicrousd/2090000),reservedMicrousd=count*2090000,intents=Array.from({length:count},(_,i)=>`old-${i}`);
+ f.rows.set('owner-public-browser-spend:v1',{ownerId:f.ctx.authenticatedUserId,custodyDigest:'b'.repeat(64),limitMicrousd,reservedMicrousd,intents});
+ const snapshot=structuredClone([...f.rows]);
+ expect(ownerPublicBrowserAccounting(f.storage,f.ctx.authenticatedUserId,'b'.repeat(64))).toEqual({ownerId:f.ctx.authenticatedUserId,custodyDigest:'b'.repeat(64),limitMicrousd:limitMicrousd===20000000?undefined:limitMicrousd,reservedMicrousd,intents});
+ if(limitMicrousd<20000000)expect(()=>assertOwnerPublicBrowserCapacity(f.storage,f.ctx.authenticatedUserId,20000000,limitMicrousd-reservedMicrousd+1)).toThrow('cost ceiling');
+ expect(()=>reserve(f,'old-0')).toThrow('prior effect');
+ expect([...f.rows]).toEqual(snapshot);
+});

@@ -21,6 +21,8 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 ## Checklist
 
+- [ ] Admission caps and historical ledger formats are separate: reject test ceilings above the approved $10 without invalidating v1 $20 records, dropping actual lower retained ceilings, stranding already-funded exact-session cleanup, or mutating prior charges/counters during reads or denials.
+
 - [ ] Adapter-normalized owner messages pass the actual shared parser, including authenticated sender fields; direct command and mocked-turn success cannot establish ordinary text ingress.
 - [ ] A post-issue final-send failure reaches the channel admission uncertainty path, never an unconditional retry notice or answered receipt. Cover the actual DO/listener boundary, retained message dedup and no responder replay.
 - [ ] Transport deadlines race response-body parsing as well as fetch even if the body ignores abort; no late parsing may turn timeout into acknowledged delivery.
@@ -588,3 +590,7 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 A fresh staging Cloudflare public read uses the existing reader without requiring paid-test registration. Its authenticated owner host reserves the bounded browser-duration estimate against retained owner/month accounting before acquisition, including prior spend refs. Only validated physical absence settles unused duration in the original reservation month; lost or late acquisition and uncertain cleanup retain the full estimate. Legacy charges and replay evidence remain intact, while ordinary reads have no invented lifetime cap. Account-level billing and registered test envelopes are separate from this usage estimate. Registration-backed retained session operations remain separate. Provider binding/SDK readiness and the authenticated read-only diagnostic do not grant spending approval. Ordinary model turns receive no new acceptance capsule or retry change.
 
 - [ ] Normal public reads reserve duration once, retain exact replay evidence, and settle atomically only after valid physical absence. Cover late acquire/readback, malformed session lists, owner/custody/intent drift, legacy retention, month boundaries and real lower ceilings; never credit another month or infer zero cost from uncertainty.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| A shared $20 historical-format constant also admitted new tests above the approved $10 cap | common-staging-registration.test.ts hard-coded $10 boundary; owner-browser-public-read.test.ts rejected declarations, unchanged historical $10/$15/$20 records and retained lower ceilings; historical automatic/manual cleanup and read-only diagnostic regressions | New admission tightens; historical charges, replay evidence, monthly counters and actual ceilings remain unchanged |

@@ -6,6 +6,9 @@ import {PUBLIC_READ_RESERVED_BROWSER_MS, type PublicReadReservation} from './clo
 const LEGACY_KEY='owner-public-browser-spend:v1',KEY='owner-public-browser-spend:v2';
 // Frozen v1 charge: historical reservations never follow a new pricing formula.
 const LEGACY_RESERVATION_MICROUSD=2_090_000;
+// Frozen v1 format/default, not admission authority for a new test. Lower
+// historical ceilings stay binding even when above today's admission maximum.
+const LEGACY_DEFAULT_CEILING_MICROUSD=20_000_000;
 type Accounting={ownerId:string;custodyDigest:string;limitMicrousd?:number;reservedMicrousd:number;intents:readonly string[]};
 type Legacy=Accounting&{limitMicrousd:number};
 type Reservation={intent:string;month:string;reservedBrowserMs:number;chargedMicrousd:number;settled:boolean;durationMs?:number};
@@ -24,7 +27,7 @@ function retainedAccounting(storage:Pick<DurableObjectStorage,'kv'>,ownerId:stri
  const legacy=storage.kv.get<Legacy>(LEGACY_KEY),current=storage.kv.get<Retained>(KEY);
  if(legacy&&(legacy.ownerId!==ownerId||legacy.custodyDigest!==custodyDigest||!validAmount(legacy.reservedMicrousd)
   ||!Array.isArray(legacy.intents)||legacy.intents.some(id=>!validIntent(id))||new Set(legacy.intents).size!==legacy.intents.length
-  ||!Number.isSafeInteger(legacy.limitMicrousd)||legacy.limitMicrousd<1||legacy.limitMicrousd>COMMON_TEST_CEILING_MICROUSD
+  ||!Number.isSafeInteger(legacy.limitMicrousd)||legacy.limitMicrousd<1||legacy.limitMicrousd>LEGACY_DEFAULT_CEILING_MICROUSD
   ||legacy.reservedMicrousd>legacy.limitMicrousd||legacy.reservedMicrousd!==legacy.intents.length*LEGACY_RESERVATION_MICROUSD))throw Error('public browser retained cost conflict');
  if(current){
   if(current.ownerId!==ownerId||current.custodyDigest!==custodyDigest||!validAmount(current.reservedMicrousd)
@@ -51,7 +54,7 @@ export function ownerPublicBrowserAccounting(storage:Pick<DurableObjectStorage,'
  const {legacy,current}=retainedAccounting(storage,ownerId,custodyDigest);if(!legacy&&!current)return;
  // v1's default $20 was not an owner ceiling. Preserve every prior charge and
  // replay tombstone, plus any lower retained ceiling; never invent old refunds.
- const limitMicrousd=lowerCeiling(legacy&&legacy.limitMicrousd<COMMON_TEST_CEILING_MICROUSD?legacy.limitMicrousd:undefined,current?.limitMicrousd);
+ const limitMicrousd=lowerCeiling(legacy&&legacy.limitMicrousd<LEGACY_DEFAULT_CEILING_MICROUSD?legacy.limitMicrousd:undefined,current?.limitMicrousd);
  const reservedMicrousd=(legacy?.reservedMicrousd??0)+(current?.reservedMicrousd??0);
  if(!Number.isSafeInteger(reservedMicrousd)||limitMicrousd!==undefined&&reservedMicrousd>limitMicrousd)throw Error('public browser retained cost conflict');
  return {ownerId,custodyDigest,limitMicrousd,reservedMicrousd,intents:[...(legacy?.intents??[]),...(current?.reservations.map(item=>item.intent)??[])]};

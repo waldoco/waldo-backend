@@ -95,3 +95,12 @@ it('duration settlements and legacy holds are both visible without diagnostic wr
  f.rows.get('owner-public-browser-spend:v2').reservations[0].durationMs=8000;
  expect((await f.read()).browser).toMatchObject({status:'conflict',normalPublicReadReservedMicrousd:null});expect(f.writes).not.toHaveBeenCalled();
 });
+
+
+it('historical registered ceilings remain readable without admitting new spend or changing counters',async()=>{
+ const f=fixture();f.raw.spend.limitMicrousd=20_000_000;f.env.COMMON_BROWSER_REGISTRATION=JSON.stringify(f.raw);
+ for(const [key,row] of f.rows)if(key.startsWith('common-spend:'))row.policy.limitMicrousd=20_000_000;
+ const before=structuredClone([...f.rows]);
+ expect((await f.read()).browser).toMatchObject({status:'expired',registeredCapMicrousd:20_000_000,aggregateRetainedReservedMicrousd:12});
+ expect([...f.rows]).toEqual(before);expect(f.writes).not.toHaveBeenCalled();expect(f.env.BROWSER.fetch).not.toHaveBeenCalled();
+});

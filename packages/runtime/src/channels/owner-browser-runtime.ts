@@ -33,7 +33,7 @@ export function ownerBrowserRuntime(options: Readonly<{
   let maintenance:Promise<void>|undefined;
   const automatic = commonOwnerBrowserRegistration({ ...options, loadSdk: commonBrowserSdk() });
   const configuration = (cleanupOnly = false) => {
-    const registered = commonStagingRegistration(options.env);
+    const registered = commonStagingRegistration(options.env, cleanupOnly ? 'retained_read' : 'admission');
     return commonPublicBrowserConfiguration({ ...options, cleanupOnly, ...(registered ? {
       policy: registered.policy, spend: registered.spend, loadSdk: commonBrowserSdk(),
     } : {}) });
