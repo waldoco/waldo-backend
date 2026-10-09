@@ -192,6 +192,7 @@ export function ownerBrowserRuntime(options: Readonly<{
         } } satisfies LLMGatewayAdapter;
       }
       const config = configuration();
+      if (!config?.meterGateway) return undefined;
       const base = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY! });
       const metered = config?.meterGateway?.(base);
       if (!metered) return undefined;
