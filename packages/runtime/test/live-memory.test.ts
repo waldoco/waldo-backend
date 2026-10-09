@@ -117,4 +117,14 @@ describe('live owner memory', () => {
     expect(s.store.incompleteTopics()).toEqual([]);
     expect(s.store.pendingTopics()).toEqual([]);
   });
+  it('a topic whose source coverage is unproven stays recorded after a forget that could not verify it, and the owner is not told it will be retried', async () => {
+    const s = setup();
+    s.store.add({ kind: 'preference', text: 'Prefers oolong tea', source: 'stated', evidence: 'oolong', origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-08T08:00:00Z');
+    s.store.beginTopicCoverage('oolong', '2026-10-08T08:00:00Z');
+    expect(s.store.incompleteTopics()).toEqual(['oolong']);
+    const result = await s.call('forget_memory', { topic: 'oolong', scope_note: 'oolong' }, s.ctx('forget oolong'));
+    expect(result).toMatchObject({ ok: false });
+    expect(JSON.stringify(result)).not.toContain('retried on the next turn');
+    expect(s.store.incompleteTopics()).toEqual(['oolong']);
+  });
 });
