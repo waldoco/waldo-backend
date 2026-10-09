@@ -132,7 +132,9 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   return fail(404);
 };
 
-export type AppMessage = Readonly<{ id: string; role: 'user' | 'assistant'; text: string; channel: string; parent_id: string | null }>;
+// `text` is always the plain-text form of the row. `parts` is the typed form: v1 emits only type 'text'. Later part types (cards)
+// are added without changing existing fields, and a reader must ignore any part type it does not know and fall back to `text`.
+export type AppMessage = Readonly<{ id: string; role: 'user' | 'assistant'; text: string; parts: readonly Readonly<{ type: string; text?: string }>[]; channel: string; parent_id: string | null }>;
 
 // Newest-first page over the one shared transcript. The cursor is how many rows were already returned from the newest end.
 export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
@@ -141,6 +143,6 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
   const size = Math.min(Math.max(Math.trunc(limit) || 20, 1), 50);
   const end = Math.max(shown.length - taken, 0);
   const start = Math.max(end - size, 0);
-  const messages = shown.slice(start, end).reverse().map(entry => ({ id: entry.id, role: entry.role, text: entry.appPayload, channel: entry.surface, parent_id: entry.parentId }));
+  const messages = shown.slice(start, end).reverse().map(entry => ({ id: entry.id, role: entry.role, text: entry.appPayload, parts: [{ type: 'text', text: entry.appPayload }], channel: entry.surface, parent_id: entry.parentId }));
   return { messages, next_cursor: start > 0 ? String(taken + messages.length) : null };
 };

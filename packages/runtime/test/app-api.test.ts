@@ -85,7 +85,7 @@ describe('main chat transcript page', () => {
   it('returns newest first with the channel label and a cursor for older rows', () => {
     const page = appTranscriptPage(all, null, 2);
     expect(page.messages.map(m => m.text)).toEqual(['text 4', 'text 3']);
-    expect(page.messages[0]).toMatchObject({ id: 'e4', role: 'user', channel: 'app', parent_id: null });
+    expect(page.messages[0]).toMatchObject({ id: 'e4', role: 'user', channel: 'app', parent_id: null, parts: [{ type: 'text', text: 'text 4' }] });
     expect(page.next_cursor).toBe('2');
     const older = appTranscriptPage(all, page.next_cursor, 10);
     expect(older.messages.map(m => m.text)).toEqual(['text 2', 'text 1', 'text 0']);
