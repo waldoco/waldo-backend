@@ -12,6 +12,9 @@ export const PUBLIC_READ_RESERVED_BROWSER_MS=50000;
 export type PublicReadReservation = Readonly<{ settle(durationMs: number): void }>;
 // Preserve the pinned Playwright request default while vetting each hop manually.
 const PLAYWRIGHT_REDIRECT_LIMIT = 20;
+const CLEANUP_ABSENCE_ATTEMPTS = 4;
+const CLEANUP_ABSENCE_INTERVAL_MS = 250;
+type ReadStage = 'setup' | 'allocation' | 'connection' | 'context' | 'navigation' | 'content';
 class ProviderFailure extends Error {}
 const diagnostic = async (response: Response) => {
   const token = (raw: unknown) => { const value = typeof raw === 'number' && Number.isSafeInteger(raw) ? String(raw) : raw; return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(value) ? value : undefined; };
@@ -48,6 +51,11 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
     let sdk: Awaited<ReturnType<CloudflareBrowserSdkLoader>> | undefined;
     let reservation: PublicReadReservation | void = undefined, acquiredAt: number | undefined;
     let result: Awaited<ReturnType<CloudflarePageReader>> = failure('transient', 'The Cloudflare browser request failed.');
+    let readStage: ReadStage = 'setup';
+    const cleanupFailure = (error: string) => {
+      // Only our already-sanitized failure and fixed stage label survive cleanup.
+      result = result.ok ? failure('transient', `Read stage: content; page text was read but discarded. ${error}`) : { ...result, error: `${result.error} Read stage: ${readStage}. ${error}` };
+    };
     // Intercept HTTP failures before the SDK turns raw response bodies into Error text.
     const binding = { fetch: async (...inputArgs: Parameters<BrowserWorker['fetch']>) => {
       if (cleanupDeadline === undefined) context.runScope?.admit();
@@ -73,13 +81,16 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
       // authenticated owner host before allocation. Uncertainty never refunds it.
       if(options.reserveAllocation)reservation=await bounded(options.reserveAllocation);
       await admit();
+      readStage = 'allocation';
       acquiredAt = Date.now();
       const session = await bounded(() => sdk!.acquire(binding, guard));
       if (typeof session?.sessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(session.sessionId)) throw Error('invalid provider session');
       id = session.sessionId;
       await admit();
+      readStage = 'connection';
       browser = await bounded(connect);
       await admit();
+      readStage = 'context';
       privateContext = await bounded(() => browser!.newContext({ serviceWorkers: 'block' }));
       await bounded(() => privateContext!.route('**/*', async route => {
         try {
@@ -106,6 +117,7 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
       page = await bounded(() => privateContext!.newPage());
       page.setDefaultTimeout(10000);
       await admit();
+      readStage = 'navigation';
       let nextUrl = args.url, response: Awaited<ReturnType<Page['goto']>> = null;
       const visited = new Set<string>();
       for (;;) {
@@ -124,6 +136,7 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
       if (!allowed(url) || new URL(url).hostname !== target.hostname) result = failure('rejected', 'The page moved outside the selected public browser target.');
       else if (!response || response.status() >= 400) result = failure('transient', `The page did not load${response ? ` (HTTP ${response.status()})` : ''}.`);
       else {
+        readStage = 'content';
         const title = await bounded(() => page!.title());
         await admit();
         const text = await bounded(() => page!.locator('body').innerText());
@@ -143,22 +156,28 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
           try { await bounded(async () => { await privateContext?.close(); }, true); } catch { /* terminate the browser even if its context is damaged */ }
           browser ??= await bounded(connect, true);
           try { await bounded(async () => { const cdp = await browser!.newBrowserCDPSession(); await cdp.send('Browser.close'); }, true); } catch { /* termination can disconnect before acknowledgement */ }
-          const sessions = await bounded(() => sdk!.sessions(binding), true);
-          if (!Array.isArray(sessions)) throw Error('invalid provider sessions');
-          const ids = new Set<string>();
-          for (const session of sessions) {
-            if (typeof session?.sessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(session.sessionId) || ids.has(session.sessionId)) throw Error('invalid provider sessions');
-            ids.add(session.sessionId);
+          // Closing the transport is not an absence barrier. Observe the same ID
+          // a bounded few times; never retry allocation or accept malformed proof.
+          for (let attempt = 0; attempt < CLEANUP_ABSENCE_ATTEMPTS; attempt++) {
+            if (attempt > 0) await bounded(() => new Promise<void>(resolve => setTimeout(resolve, CLEANUP_ABSENCE_INTERVAL_MS)), true);
+            const sessions = await bounded(() => sdk!.sessions(binding), true);
+            if (!Array.isArray(sessions)) throw Error('invalid provider sessions');
+            const ids = new Set<string>();
+            for (const session of sessions) {
+              if (typeof session?.sessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(session.sessionId) || ids.has(session.sessionId)) throw Error('invalid provider sessions');
+              ids.add(session.sessionId);
+            }
+            const observedAt = Date.now();
+            if (observedAt >= cleanupDeadline) throw Error('browser deadline elapsed');
+            if (!ids.has(id)) { terminated = true; absenceAt = observedAt; break; }
           }
-          terminated = !ids.has(id);
-          if (terminated) absenceAt = Date.now();
         } catch { /* keep honest cleanup uncertainty */ }
         try { await bounded(async () => { await browser?.close(); }, true); } catch { /* absence is the termination proof */ }
         if (terminated && reservation && acquiredAt !== undefined && absenceAt !== undefined) {
           try { reservation.settle(absenceAt - acquiredAt); }
-          catch { result = failure('transient', 'The Cloudflare browser cost settlement is unconfirmed.'); }
+          catch { cleanupFailure('The Cloudflare browser cost settlement is unconfirmed.'); }
         }
-        if (!terminated) result = failure('transient', 'The Cloudflare browser cleanup is unconfirmed. No browser read is reported as complete.');
+        if (!terminated) cleanupFailure('The Cloudflare browser cleanup is unconfirmed. No browser read is reported as complete.');
       }
     }
     if (result.ok) {
