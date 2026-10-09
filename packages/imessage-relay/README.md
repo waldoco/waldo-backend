@@ -23,3 +23,5 @@ Deadline, invalid receipt, thrown transport failure or unknown native result per
 Proof: temporary real on-disk SQLite close/reopen, actual transaction write-fault triggers, synthetic transport and crypto tests. Recovered started command is an explicitly seeded crash-state fixture; no real native process was killed. Synthetic account separation does not prove an Apple multi-account host. SQL inside this package initializes only disposable relay storage; no Supabase migration is applied. Native permissions, real Mac sleep/Apple session expiry, recipient-device readback, media security/R2, full owner routing and delivery are NOT TESTED. S3–S5 remain excluded.
 
 Run local fixture suites: `npx -y pnpm@10.34.4 --filter @waldo/imessage-relay test`. The root `verify:node` includes this suite so GitHub's existing core verification job exercises it. No deployment/CI workflow configuration is changed.
+
+Fixture-only cloud host connector: [wire profile, composition and integration gaps](../../docs/channels/imessage/HOST_CONNECTOR.md).
