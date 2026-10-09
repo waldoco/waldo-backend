@@ -1,20 +1,21 @@
 // Synthetic provider fixture. Sessions/pages outlive caller instances; no network is issued.
 import type { CloudflareBrowserSdkLoader } from '../../src/channels/public-fixture-browser';
-export const commonBrowserFixture={expiresAt:Date.now()+60000,allocations:0,attachments:0,ends:0,onTerminate:undefined as undefined|(()=>void|Promise<void>),onAcquire:undefined as undefined|(()=>void|Promise<void>),pages:[] as any[],reset(){this.expiresAt=Date.now()+60000;this.allocations=0;this.attachments=0;this.ends=0;this.onAcquire=undefined;this.onTerminate=undefined;this.pages=[];}};
+export const commonBrowserFixture={text:undefined as string|undefined,expiresAt:Date.now()+60000,allocations:0,attachments:0,ends:0,effects:0,uploads:0,held:undefined as undefined|{name:string;mimeType:string;buffer:Uint8Array},form:false,onGoto:undefined as undefined|(()=>void),onClose:undefined as undefined|(()=>void),navigations:0,tabCloses:0,onFill:undefined as undefined|(()=>void),onTerminate:undefined as undefined|(()=>void|Promise<void>),onAcquire:undefined as undefined|(()=>void|Promise<void>),pages:[] as any[],reset(){this.text=undefined;this.expiresAt=Date.now()+60000;this.allocations=0;this.attachments=0;this.ends=0;this.effects=0;this.uploads=0;this.held=undefined;this.form=false;this.onGoto=undefined;this.onClose=undefined;this.navigations=0;this.tabCloses=0;this.onFill=undefined;this.onAcquire=undefined;this.onTerminate=undefined;this.pages=[];}};
 const image=Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB1cAAAAASUVORK5CYII='),x=>x.charCodeAt(0));
 let ended=false;
 const page=()=>{
- const id=`fixture-target-${commonBrowserFixture.pages.length}`;let url='about:blank';
+ const id=`fixture-target-${commonBrowserFixture.pages.length}`;let url='about:blank',value='';
  const p={id,url:()=>url,title:async()=>url.endsWith('/a')?'Public A':'Public B',setDefaultTimeout(){},
-  goto:async(input:string)=>{url=input;return {status:()=>200};},
-  evaluate:async()=>({url,title:url.endsWith('/a')?'Public A':'Public B',text:url.endsWith('/a')?'Option A costs 10 fictional tokens.':'Option B costs 20 fictional tokens.',width:1,height:1,scrollX:0,scrollY:0,elements:[]}),
-  screenshot:async()=>image.slice(),close:async()=>{commonBrowserFixture.pages=commonBrowserFixture.pages.filter(row=>row!==p);}};
+  goto:async(input:string)=>{url=input;commonBrowserFixture.navigations++;commonBrowserFixture.onGoto?.();return {status:()=>200};},
+  evaluate:async()=>({url,title:url.endsWith('/a')?'Public A':'Public B',text:commonBrowserFixture.text??(url.endsWith('/a')?'Option A costs 10 fictional tokens.':'Option B costs 20 fictional tokens.'),width:1,height:1,scrollX:0,scrollY:0,elements:[{selector:'input',tag:'input',role:'textbox',name:'Note',href:'',value,type:'text',disabled:false,selected:false,checked:false,inForm:commonBrowserFixture.form},{selector:'input[type=file]',tag:'input',role:'textbox',name:'Document',href:'',value:'',type:'file',disabled:false,selected:false,checked:false,inForm:false}]}),
+  locator:()=>({setInputFiles:async(file:any)=>{commonBrowserFixture.uploads++;commonBrowserFixture.held={...file,buffer:new Uint8Array(file.buffer)};},evaluate:async()=>{const file=commonBrowserFixture.held;return file?[{name:file.name,mime_type:file.mimeType,byte_size:file.buffer.length,sha256:[...new Uint8Array(await crypto.subtle.digest('SHA-256',file.buffer))].map(byte=>byte.toString(16).padStart(2,'0')).join('')}]:[];},fill:async(input:string)=>{commonBrowserFixture.effects++;value=input;commonBrowserFixture.onFill?.();},press:async()=>{commonBrowserFixture.effects++;}}),
+  screenshot:async()=>image.slice(),close:async()=>{commonBrowserFixture.pages=commonBrowserFixture.pages.filter(row=>row!==p);commonBrowserFixture.tabCloses++;commonBrowserFixture.onClose?.();}};
  commonBrowserFixture.pages.push(p);return p;
 };
-const context={serviceWorkers:()=>[],addInitScript:async()=>{},routeWebSocket:async()=>{},pages:()=>commonBrowserFixture.pages.slice(),newPage:async()=>page(),route:async()=>{},unroute:async()=>{},newCDPSession:async(p:any)=>({send:async()=>({targetInfo:{targetId:p.id}}),detach:async()=>{}})};
+const context={close:async()=>{await Promise.all(commonBrowserFixture.pages.map(page=>page.close()));},serviceWorkers:()=>[],addInitScript:async()=>{},routeWebSocket:async()=>{},pages:()=>commonBrowserFixture.pages.slice(),newPage:async()=>page(),route:async()=>{},unroute:async()=>{},newCDPSession:async(p:any)=>({send:async()=>({targetInfo:{targetId:p.id}}),detach:async()=>{}})};
 export const commonBrowserFixtureLoader:CloudflareBrowserSdkLoader=async()=>({
  acquire:async()=>{ended=false;commonBrowserFixture.allocations++;if(!commonBrowserFixture.pages.length)page();await commonBrowserFixture.onAcquire?.();return {sessionId:'fixture-retained-provider'};},
- connect:async()=>{if(ended)throw Error('fixture session ended');commonBrowserFixture.attachments++;return {contexts:()=>[context],close:async()=>{},newBrowserCDPSession:async()=>({send:async()=>{await commonBrowserFixture.onTerminate?.();ended=true;commonBrowserFixture.ends++;}})};},
+ connect:async()=>{if(ended)throw Error('fixture session ended');commonBrowserFixture.attachments++;return {contexts:()=>[context],newContext:async()=>context,close:async()=>{},newBrowserCDPSession:async()=>({send:async()=>{await commonBrowserFixture.onTerminate?.();ended=true;commonBrowserFixture.pages=[];commonBrowserFixture.ends++;}})};},
  sessions:async()=>ended?[]:[{sessionId:'fixture-retained-provider'}],endpointURLString:()=>'',
 } as never);
 

@@ -43,7 +43,8 @@ function uriPaths(schema: unknown, path: readonly string[] = []): string[] {
     }
   }
 
-  return paths;
+  // Union alternatives share argument locations, not separate egress targets.
+  return [...new Set(paths)];
 }
 
 function declaredUriPaths() {
@@ -99,7 +100,7 @@ function schemasAtPath(schema: unknown, path: readonly string[]): JsonSchema[] {
 }
 
 describe('egress URL schema conformance', () => {
-  it('blocks a nested goto destination before handler or provider IO, with an allowed positive control', async () => {
+  it.each(['goto', 'open_tab'] as const)('blocks a nested %s destination before handler or provider IO, with an allowed positive control', async operation => {
     let handled = 0, issued = 0;
     const provider = async () => { issued++; };
     const handler: ToolHandler<BrowseActArgs, { observed: boolean }, ToolDispatcherContext> = {
@@ -108,7 +109,7 @@ describe('egress URL schema conformance', () => {
       async handle() { handled++; await provider(); return { ok: true, data: { observed: true }, source_taint: 'external' }; },
     };
     const invoke = (url: string, allowlist = ['example.org']) => dispatchTool({ id: crypto.randomUUID(), name: 'browse_act', args: {
-      url: 'https://forms.example.org/form', task: 'Read the synthetic form', command: { operation: 'goto', url },
+      url: 'https://forms.example.org/form', task: 'Read the synthetic form', command: { operation, url },
     } }, {
       authenticatedUserId: 'synthetic-owner', trigger: 'user_message',
       session: buildSessionState({ trigger: 'user_message', canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'], started_at: 1700000000000 }),
@@ -135,6 +136,17 @@ describe('egress URL schema conformance', () => {
       expect(undeclaredUriPaths({ example: uriPaths(schema) }, {})).toEqual(['example.command.url']);
       expect(schemasAtPath(schema, ['command', 'url'])).toEqual([{ type: 'string', format: 'uri' }]);
       expect(schemasAtPath(schema, ['command', 'absent'])).toEqual([]);
+    }
+  });
+
+  it('declares a shared URI path once while preserving distinct paths across union branches', () => {
+    for (const union of ['allOf', 'anyOf', 'oneOf']) {
+      const schema = { properties: { command: { [union]: [
+        { properties: { url: { type: 'string', format: 'uri' } } },
+        { properties: { url: { type: 'string', format: 'uri' }, callback: { type: 'string', format: 'uri' } } },
+      ] } } };
+      expect(uriPaths(schema)).toEqual(['command.url', 'command.callback']);
+      expect(undeclaredUriPaths({ example: uriPaths(schema) }, { example: ['command.url'] })).toEqual(['example.command.callback']);
     }
   });
 

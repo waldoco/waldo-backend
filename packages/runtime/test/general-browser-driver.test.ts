@@ -3,7 +3,7 @@ import { cloudflareGeneralBrowser } from '../src/channels/cloudflare-general-bro
 import type { BrowserSession } from '@waldo/contracts';
 
 const session: BrowserSession = { id: 'host-session', ownerId: 'owner-a', provider: 'cloudflare_playwright', providerSessionId: 'PRIVATE_PROVIDER_ID', contextHandle: null, mode: 'public', state: 'active', generation: 1, expiresAt: 60000, updatedAt: 0 };
-function harness(controlTag = 'a') {
+function harness(controlTag = 'a', inputType = 'text') {
   const calls: string[] = []; let ended = false, serial = 0, changed = false;
   const pages: any[] = [];
   const page = () => {
@@ -12,7 +12,7 @@ function harness(controlTag = 'a') {
       goto: async (value: string) => { url = value; calls.push('navigate'); return { status: () => 200 }; },
       evaluate: async (fn: Function, args?: unknown) => {
         if (fn.name !== 'generalPageState') { calls.push(`scroll:${JSON.stringify(args)}`); return; }
-        return { url, title: 'Public documentation', text: changed ? 'Changed by the human' : 'Compare Browser Run sessions and contexts.', width: 1280, height: 720, scrollX: 0, scrollY: 0, elements: [{ selector: 'html > body > a:nth-of-type(1)', tag: controlTag, role: controlTag === 'a' ? 'link' : 'textbox', name: 'Session reuse', href: controlTag === 'a' ? 'https://docs.example/reuse' : '', value, type: controlTag === 'input' ? 'text' : '', disabled: false, selected: false, checked: false, inForm: false, ...(controlTag === 'select' ? { options: [{ value: 'second', label: 'Second choice', disabled: false, selected: value === 'second' }] } : {}) }] };
+        return { url, title: 'Public documentation', text: changed ? 'Changed by the human' : 'Compare Browser Run sessions and contexts.', width: 1280, height: 720, scrollX: 0, scrollY: 0, elements: [{ selector: 'html > body > a:nth-of-type(1)', tag: controlTag, role: controlTag === 'a' ? 'link' : 'textbox', name: 'Session reuse', href: controlTag === 'a' ? 'https://docs.example/reuse' : '', value, type: controlTag === 'input' ? inputType : '', disabled: false, selected: false, checked: false, inForm: false, ...(controlTag === 'select' ? { options: [{ value: 'second', label: 'Second choice', disabled: false, selected: value === 'second' }] } : {}) }] };
       },
       locator: () => ({ click: async () => { calls.push('click'); url = 'https://docs.example/reuse'; }, fill: async (input: string) => { calls.push(`fill:${input}`); value = input; }, selectOption: async (input: string) => { calls.push(`select:${input}`); value = input; }, press: async (input: string) => { calls.push(`press:${input}`); } }),
       screenshot: async () => new Uint8Array([137, 80, 78, 71]), close: async () => { pages.splice(pages.indexOf(p), 1); },
@@ -20,8 +20,8 @@ function harness(controlTag = 'a') {
   };
   page();
   let routeHandler: ((route: any) => Promise<void>) | undefined;
-  const context = { serviceWorkers:()=>[], addInitScript:async()=>{calls.push('block-service-workers');}, routeWebSocket:async(_:string,handler:any)=>{await handler({close:()=>{calls.push('block-websocket');}});}, pages: () => [...pages], newPage: async () => page(), route: async (_: string, handler: (route: any) => Promise<void>) => { routeHandler = handler; }, unroute: async () => {}, newCDPSession: async (p: any) => ({ send: async () => ({ targetInfo: { targetId: p.id } }), detach: async () => {} }) };
-  const browser = { contexts: () => [context], newContext: async () => { throw Error('disposeOnDetach context would lose tabs'); }, close: async () => { calls.push('release'); }, newBrowserCDPSession: async () => ({ send: async () => { ended = true; } }) };
+  const context = { close:async()=>{await Promise.all(pages.map(page=>page.close()));}, serviceWorkers:()=>[], addInitScript:async()=>{calls.push('block-service-workers');}, routeWebSocket:async(_:string,handler:any)=>{await handler({close:()=>{calls.push('block-websocket');}});}, pages: () => [...pages], newPage: async () => page(), route: async (_: string, handler: (route: any) => Promise<void>) => { routeHandler = handler; }, unroute: async () => {}, newCDPSession: async (p: any) => ({ send: async () => ({ targetInfo: { targetId: p.id } }), detach: async () => {} }) };
+  const browser = { contexts: () => [context], newContext: async () => { calls.push('new-disposable-context'); return context; }, close: async () => { calls.push('release'); }, newBrowserCDPSession: async () => ({ send: async () => { ended = true; } }) };
   const sdk = { acquire: async () => { calls.push('acquire'); return { sessionId: session.providerSessionId }; }, connect: async (_: unknown, options: any) => { expect(options).toEqual({ sessionId: session.providerSessionId, persistent: true }); if (ended) throw Error('session ended'); calls.push('attach'); return browser; }, sessions: async () => ended ? [] : [{ sessionId: session.providerSessionId }] };
   return { calls, pages, sdk, browser, context, route: (route: any) => routeHandler!(route), humanChange: () => { changed = true; } };
 }
@@ -42,6 +42,46 @@ it('navigates a public page, returns actual image bytes, and retains two tabs ac
   expect(f.calls).not.toContain('acquire');
   await driver.terminate(session);
   expect(await f.sdk.sessions()).toEqual([]);
+});
+it('keeps an admitted public interaction connection guarded until explicit disconnect closes documents', async () => {
+  const f = harness('input');
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024, publicRead: true, retainConnection: true });
+  const first = await driver.navigate(session, 'https://docs.example/index');
+  const filled = await driver.act(session, first, { operation: 'fill', element_ref: first.observation.elements[0]!.ref, value: 'Admitted form value' }, async () => {});
+  expect(filled.state.elements[0]!.value).toBe('Admitted form value');
+  expect(f.calls.filter(call => call === 'attach')).toHaveLength(1); expect(f.calls).not.toContain('release');
+  expect(f.calls).toContain('block-service-workers'); expect(f.calls).toContain('block-websocket'); expect(f.calls.filter(call=>call==='new-disposable-context')).toHaveLength(1);
+  await driver.disconnect();
+  expect(f.pages).toHaveLength(0); expect(f.calls.filter(call => call === 'release')).toHaveLength(1);
+  expect(await f.sdk.sessions()).toHaveLength(1);
+});
+it('never removes the HTTP guard while retained documents are live', async () => {
+  const f = harness('input'); let unguardedWrites = 0;
+  f.context.unroute = async () => { if (f.pages.some(page => page.url() !== 'about:blank')) unguardedWrites++; };
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async (_url, method) => method === 'GET', maxScreenshotBytes: 1024, publicRead: true, retainConnection: true });
+  const first = await driver.navigate(session, 'https://docs.example/index');
+  await driver.act(session, first, { operation: 'fill', element_ref: first.observation.elements[0]!.ref, value: 'Guarded' }, async () => {});
+  expect(unguardedWrites).toBe(0);
+  let aborted = false;
+  await f.route({ request: () => ({ url: () => 'https://docs.example/write', method: () => 'POST', isNavigationRequest: () => false }), abort: async () => { aborted = true; } });
+  expect(aborted).toBe(true);
+  await driver.disconnect();
+});
+it('carries background denied-document state into the next retained operation', async () => {
+  const f = harness('input');
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async (_url, method) => method === 'GET', maxScreenshotBytes: 1024, publicRead: true, retainConnection: true });
+  await driver.navigate(session, 'https://docs.example/index');
+  await f.route({ request: () => ({ url: () => 'https://docs.example/write', method: () => 'POST', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }), abort: async () => {} });
+  await expect(driver.observe(session)).rejects.toMatchObject({ code: 'rejected' });
+  expect(f.pages).toHaveLength(0);expect(f.calls.filter(call => call === 'attach')).toHaveLength(1);
+});
+it('withdrawal before a retained interaction releases its existing connection and documents', async () => {
+  const f = harness(); let live = true;
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => { if (!live) throw Error('withdrawn'); }, authorizeRequest: async () => true, maxScreenshotBytes: 1024, publicRead: true, retainConnection: true });
+  await driver.navigate(session, 'https://docs.example/index'); live = false;
+  await expect(driver.observe(session)).rejects.toMatchObject({ code: 'rejected' });
+  expect(f.pages).toHaveLength(0); expect(f.calls.filter(call => call === 'release')).toHaveLength(1);
+  expect(f.calls.filter(call => call === 'attach')).toHaveLength(1);
 });
 it('dispatches typed fill and returns changed field state', async () => {
   const f = harness('input');
@@ -64,6 +104,12 @@ it('selects, presses keys and scrolls without accepting model-authored code', as
   await driver.act(session, pressed, { operation: 'scroll', direction: 'down' }, async () => {});
   expect(f.calls).toContain('scroll:{"x":0,"y":720}');
   await expect(driver.act(session, pressed, { operation: 'evaluate', code: 'steal()' } as never, async () => {})).rejects.toMatchObject({ code: 'rejected' });
+});
+it('preserves the existing typed command pixel scroll amount',async()=>{
+ const f=harness();const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>60000,admit:async()=>{},authorizeRequest:async()=>true,maxScreenshotBytes:1024});
+ const first=await driver.navigate(session,'https://docs.example/index');
+ await driver.act(session,first,{operation:'scroll',delta:225} as never,async()=>{});
+ expect(f.calls).toContain('scroll:{"x":0,"y":225}');
 });
 it('withdraws authority before an effect and rejects foreign owner and expired reads', async () => {
   const f = harness(); let revoked = false;
