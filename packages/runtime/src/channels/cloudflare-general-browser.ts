@@ -1,3 +1,4 @@
+import {nativeBrowserHandoff} from './native-browser-handoff';
 import {prepareGeneralPublicRead} from './general-browser-public-read';
 import { LIMITS, validId, validatePath } from '@waldo/workspace';
 import type { Browser, BrowserContext, BrowserWorker, Page, Route } from '@cloudflare/playwright';
@@ -15,7 +16,7 @@ export class GeneralBrowserError extends Error {
   cleanup_failed?: true;
   constructor(readonly code: 'rejected' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'observation_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
 }
-type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; cleanupBinding?(providerSessionId:string):BrowserWorker; publicRead?:boolean; retainConnection?:boolean; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number }>;
+type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; cleanupBinding?(providerSessionId:string):BrowserWorker; publicRead?:boolean; retainConnection?:boolean; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number; authorizeHumanRequest?(url:string,method:string):Promise<boolean> }>;
 type Navigation = Readonly<{ goto(page: Page, url: string): Promise<void>; finish(page: Page): Promise<void>; pending(page: Page): boolean; dispatched(): void }>;
 
 // The owner host owns the durable checkpoint, authority and serialization. This
@@ -27,6 +28,7 @@ export function cloudflareGeneralBrowser(options: Options) {
   let documentFailure: GeneralBrowserError | undefined;
   const invalidDocuments = new Set<Page>();
   let guardedContext: BrowserContext | undefined;
+  let takeover: ReturnType<typeof nativeBrowserHandoff> | undefined;
   let currentRouteGuard: ((route: Route) => Promise<void>) | undefined;
   const connectionKey = (session: BrowserSession) => JSON.stringify([session.ownerId, session.id, session.generation, session.providerSessionId]);
   const cleanupTimeoutMs = options.cleanupTimeoutMs ?? 10000;
@@ -80,6 +82,7 @@ export function cloudflareGeneralBrowser(options: Options) {
     finally { await cdp.detach(); }
   };
   const attached = async <T>(session: BrowserSession, work: (browser: Browser, context: BrowserContext, navigation: Navigation) => Promise<T>): Promise<T> => {
+    if(takeover)throw new GeneralBrowserError('rejected');
     let browser: Browser | undefined, context: BrowserContext | undefined, primary: GeneralBrowserError | undefined;
     let mutationDispatched = false, pageCleanupFailed = false;
     const redirects = new Map<Page, string>();
@@ -150,6 +153,7 @@ export function cloudflareGeneralBrowser(options: Options) {
       // documents. Between operations the previous guard still checks authority.
       currentRouteGuard = async route => {
         try {
+          if(takeover){if(!options.authorizeHumanRequest||!await options.authorizeHumanRequest(route.request().url(),route.request().method()))throw new GeneralBrowserError('rejected');await route.continue();return;}
           await guardGeneralBrowserRoute(route, { authorize: (url, method) => allowed(session, url, method), timeout: () => actionTimeout(session), admit: () => admit(session),
             redirect: (page, url) => { redirects.set(page, url); }, denied: (page, status) => { invalidDocuments.add(page); documentFailure = new GeneralBrowserError('page_unavailable', { status }); } });
           await admit(session);
@@ -283,6 +287,7 @@ export function cloudflareGeneralBrowser(options: Options) {
     hasRetainedConnection:()=>connected!==undefined,
     async disconnect(): Promise<void> {
       const retained = connected; connected = undefined; guardedContext=undefined;
+      try{await takeover?.dispose();}finally{takeover=undefined;}
       if (!retained) return;
       // Leaving a turn disconnects only after closing active documents. Current
       // authority still guards requests while model calls wait between actions.
@@ -298,6 +303,19 @@ export function cloudflareGeneralBrowser(options: Options) {
       try { await cleanup(step => step(() => retained.browser.close())); }
       catch { failure ??= new GeneralBrowserError('cleanup_unconfirmed'); failure.release_failed = true; }
       if (failure) throw failure;
+    },
+    async beginOwnerHandoff(session:BrowserSession,snapshot:GeneralActionSnapshot,reason:string,assertCustody:()=>Promise<void>){
+      await assertCustody();identity(session);if(takeover||!connected||connected.sessionKey!==connectionKey(session))throw new GeneralBrowserError('session_lost');
+      const page=await select(session,connected.context,snapshot.observation.tab_ref);
+      if(await targetId(connected.context,page)!==snapshot.targetId)throw new GeneralBrowserError('stale_observation');
+      const cdp=await connected.context.newCDPSession(page);
+      takeover=nativeBrowserHandoff({cdp,providerSessionId:session.providerSessionId,targetId:snapshot.targetId,expiresAt:session.expiresAt,now:options.now,assertCustody});
+      return {controller:takeover,handoffId:await takeover.start(reason),origin:new URL(page.url()).origin};
+    },
+    async finishOwnerHandoff(session:BrowserSession,reference:string){
+      if(!takeover?.ready())throw new GeneralBrowserError('rejected');
+      const held=takeover;held.complete();await held.dispose();takeover=undefined;
+      return attached(session,async(_,context)=>observe(session,context,await select(session,context,reference)));
     },
     async start(allowedDomains: readonly string[] | 'public', lifetimeMs: number,
       beforeAllocate: (allocation: Readonly<{ allowedDomains: readonly string[] | 'public'; lifetimeMs: number }>) => Promise<void>,

@@ -1,3 +1,4 @@
+import type {NativeHandoffMetadata} from './native-browser-handoff';
 import { triggerTypeSchema, TOOL_PERMISSIONS, browserSessionSchema, browsePageArgsSchema, browseActArgsSchema, type BrowseActArgs, type BrowserSession, type ToolHandler, type BrowsePageArgs, type LLMAttachment } from '@waldo/contracts';
 import type { BrowserWorker } from '@cloudflare/playwright';
 import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
@@ -24,6 +25,7 @@ export type CommonBrowserConfiguration = Readonly<{
  grant(task:TaskSourceSnapshot,ownerId:string):Promise<CommonBrowserGrant>;
  reserveAllocation(grant:CommonBrowserGrant):Promise<void>;
  assertGrantCurrent(grant:CommonBrowserGrant):Promise<void>;
+ assertHandoffCurrent?(grant:CommonBrowserGrant):Promise<void>;
 }>;
 // Application checkpoint budget, deliberately below SQLite's 2 MiB combined
 // key/value limit. Measure UTF-8 JSON, including the envelope, and reserve room
@@ -31,7 +33,7 @@ export type CommonBrowserConfiguration = Readonly<{
 export const COMMON_BROWSER_CHECKPOINT_BYTES=128*1024;
 const encodedCheckpointBytes=(record:BrowserRecord)=>new TextEncoder().encode(JSON.stringify(record)).byteLength;
 export const COMMON_BROWSER_DUE='common_browser_due_v1';
-type BrowserRecord={grant:CommonBrowserGrant;session:BrowserSession;tabs:Readonly<{url:string;ref:string}>[];allocation:'prepared'|'observed';observation?:GeneralActionSnapshot;action?:Readonly<{digest:string;state:'prepared'|'observed'|'uncertain'}>;cleanup?:'pending'|'closed';cleanupFailed?:boolean};
+type BrowserRecord={handoff?:NativeHandoffMetadata;grant:CommonBrowserGrant;session:BrowserSession;tabs:Readonly<{url:string;ref:string}>[];allocation:'prepared'|'observed';observation?:GeneralActionSnapshot;action?:Readonly<{digest:string;state:'prepared'|'observed'|'uncertain'}>;cleanup?:'pending'|'closed';cleanupFailed?:boolean};
 const sameSession=(a:BrowserRecord,b:BrowserRecord)=>a.session.id===b.session.id&&a.session.generation===b.session.generation&&a.session.providerSessionId===b.session.providerSessionId&&JSON.stringify(a.grant)===JSON.stringify(b.grant);
 const publishCleanup=(storage:DurableObjectStorage,key:string,expected:BrowserRecord,closed:boolean)=>storage.transactionSync(()=>{
  const current=storage.kv.get<BrowserRecord>(key);
@@ -44,6 +46,7 @@ export function commonBrowserHost(options:Readonly<{
  source():TaskSourceSnapshot;assertCurrent():Promise<void>;deadline():number;now():number;
 }>) {
  let images:LLMAttachment[]=[];
+ let human: Awaited<ReturnType<ReturnType<typeof cloudflareGeneralBrowser>['beginOwnerHandoff']>>|undefined;
  let execution:Readonly<{grant:string;driver:ReturnType<typeof cloudflareGeneralBrowser>}>|undefined;
  const snapshot=()=>options.source();
  const checked=async()=>{await options.assertCurrent();const task=snapshot();if(!task.ready||!task.sources.includes('browser')&&!task.sources.includes('web'))throw Error('common browser source unavailable');return task;};
@@ -55,7 +58,8 @@ export function commonBrowserHost(options:Readonly<{
  type Record=BrowserRecord;
  const key=(taskId:string)=>`common-browser:${taskId}`;
  const makeDriver=(grant:CommonBrowserGrant,operationId?:string,retainConnection=false)=>cloudflareGeneralBrowser({ownerId:options.ownerId,publicRead:true,retainConnection,binding:operationId&&options.config.bindingForOperation?options.config.bindingForOperation(grant,operationId):options.config.binding,cleanupBinding:options.config.cleanupBinding? id=>options.config.cleanupBinding!(grant,id):undefined,loadSdk:options.config.loadSdk,now:options.now,deadline:options.deadline,cleanupTimeoutMs:10000,maxScreenshotBytes:grant.maxScreenshotBytes,
-  admit:async()=>{await checked();await options.config.assertGrantCurrent(grant);await checked();if(options.storage.kv.get<BrowserRecord>(key(grant.taskId))?.cleanup)throw Error('common browser stopped');},
+  admit:async()=>{await checked();await options.config.assertGrantCurrent(grant);await checked();const row=options.storage.kv.get<BrowserRecord>(key(grant.taskId));if(row?.cleanup||row?.handoff&&row.handoff.state!=='resuming')throw Error('common browser stopped');},
+  authorizeHumanRequest:async(url,_method)=>{await handoffCurrent(grant);return isPublicWebUrl(url,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(new URL(url).origin));},
   authorizeRequest:async(url,method)=>{if(!['GET','HEAD'].includes(method))return false;try{return isPublicWebUrl(url,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(new URL(url).origin));}catch{return false;}}});
  const executionDriver=(grant:CommonBrowserGrant,ctx:ToolDispatcherContext)=>{
   if(options.config.bindingForOperation&&(!ctx.turnId||!ctx.toolCallId))throw Error('common browser operation identity unavailable');
@@ -70,6 +74,13 @@ export function commonBrowserHost(options:Readonly<{
   const due=[...options.storage.kv.list<BrowserRecord>({prefix:'common-browser:'})].map(([,row])=>row).filter(row=>row.cleanup!=='closed'&&!row.cleanupFailed).map(row=>row.session.expiresAt);
   options.storage.kv.put(COMMON_BROWSER_DUE,due.length?Math.min(...due):null);
  });
+ const handoffCurrent=async(grant:CommonBrowserGrant)=>{
+  if(!options.config.assertHandoffCurrent)throw Error('owner handoff custody unavailable');
+  await options.config.assertHandoffCurrent(grant);
+  const row=options.storage.kv.get<Record>(key(grant.taskId));
+  if(!row||row.cleanup||row.session.ownerId!==options.ownerId||row.session.expiresAt<=options.now()||JSON.stringify(row.grant)!==JSON.stringify(grant)||!row.handoff)throw Error('owner handoff unavailable');
+  return row;
+ };
  const publishObservation=async(grant:CommonBrowserGrant,record:Record,observed:GeneralSnapshot,ctx:ToolDispatcherContext)=>{
   await checked();await ctx.assertTaskSourceCurrent?.();
   const latest=options.storage.kv.get<Record>(key(grant.taskId));
@@ -97,6 +108,7 @@ export function commonBrowserHost(options:Readonly<{
     if(args.provider&&args.provider!=='cloudflare_playwright'||ctx.authenticatedUserId!==options.ownerId||args.session_handle&&options.storage.kv.get<Record>(key(grant.taskId))?.session.id!==args.session_handle||(!isPublicWebUrl(args.url,options.egressAllowlist)||!grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)&&!grant.allowedOrigins.includes(new URL(args.url).origin)))throw Error('common browser target rejected');
     if(options.config.bindingForOperation&&(!ctx.turnId||!ctx.toolCallId))throw Error('common browser operation identity unavailable');
     const driver=executionDriver(grant,ctx);const storageKey=key(grant.taskId);let record=options.storage.kv.get<Record>(storageKey);
+    if(record?.handoff){if(!human)await api.cancel();throw Error('owner login pending');}
     if(record&&(JSON.stringify(record.grant)!==JSON.stringify(grant)||record.session.ownerId!==options.ownerId||record.cleanup||record.allocation!=='observed'))throw Error('common browser retained identity uncertain');
     if(!record){
      const now=options.now();record={grant,allocation:'prepared',tabs:[],session:browserSessionSchema.parse({id:crypto.randomUUID(),ownerId:options.ownerId,provider:'cloudflare_playwright',providerSessionId:'pending',contextHandle:null,mode:'public',state:'starting',generation:1,expiresAt:Math.min(grant.expiresAt,now+grant.lifetimeMs),updatedAt:now})};
@@ -117,10 +129,39 @@ export function commonBrowserHost(options:Readonly<{
     if(options.config.retainInteractions!==true)throw Error('retained interaction capability unavailable');
     await ctx.assertTaskSourceCurrent?.();const grant=await granted();storageKey=key(grant.taskId);
     let record=options.storage.kv.get<Record>(storageKey);
-    if(ctx.authenticatedUserId!==options.ownerId||!args.command||!record||args.session_handle&&record.session.id!==args.session_handle||record.cleanup||record.allocation!=='observed'||JSON.stringify(record.grant)!==JSON.stringify(grant)||!record.observation||args.url!==record.observation.observation.url)throw Error('current browser observation unavailable');
+    if(ctx.authenticatedUserId!==options.ownerId||!args.command||!record||args.session_handle&&record.session.id!==args.session_handle||record.cleanup||record.allocation!=='observed'||JSON.stringify(record.grant)!==JSON.stringify(grant)||!record.handoff&&(!record.observation||args.url!==record.observation.observation.url))throw Error('current browser observation unavailable');
     const command=args.command;
     if(command.operation==='cancel'){await api.cancel();return {ok:true,data:{ended:true},source_taint:'external'};}
-    const driver=executionDriver(grant,ctx),before=record.observation;
+    if(record.handoff){
+     if(command.operation!=='resume_owner_login'||record.handoff.requestRunId===(ctx.runScope?.runId??ctx.turnId)||!human){if(!human)await api.cancel();throw Error('owner login pending');}
+     const held=human;
+     await held.controller.resume(()=>options.storage.transactionSync(()=>{
+      const latest=options.storage.kv.get<Record>(storageKey!);
+      if(!latest||latest.cleanup||!sameSession(latest,record!)||latest.handoff?.handoffId!==held.handoffId||latest.handoff.state!=='pending'||latest.session.expiresAt<=options.now())throw Error('owner login custody changed');
+      save({...latest,handoff:{...latest.handoff,state:'resuming'},observation:undefined,tabs:[]},storageKey!);
+     }));
+     const driver=executionDriver(grant,ctx);
+     const reference=await generalDigest(JSON.stringify([record.session.ownerId,record.session.id,record.session.generation,record.handoff.targetId])).then(value=>`tab:${value.slice(0,24)}`);
+     const observed=await driver.finishOwnerHandoff(record.session,reference);
+     await checked();await handoffCurrent(grant);
+     const latest=options.storage.kv.get<Record>(storageKey!)!;
+     save({...latest,handoff:undefined,observation:undefined},storageKey!);human=undefined;
+     const published=await publishObservation(grant,record,observed,ctx);
+     return {...published,data:{...published.data,owner_login:'completed',intended_account_verification_required:true,notice:'Provider completion is not intended-account verification. Verify the observed signed-in account before continuing.'}};
+    }
+    const driver=executionDriver(grant,ctx),before=record.observation!;
+    if(command.operation==='owner_login'){
+     if(!options.config.assertHandoffCurrent||!(ctx.runScope?.runId??ctx.turnId))throw Error('owner login unavailable');
+     images=[];
+     save({...record,observation:undefined,tabs:[],handoff:{version:1,state:'starting',targetId:before.targetId,origin:new URL(before.observation.url).origin,reason:command.reason,requestRunId:(ctx.runScope?.runId??ctx.turnId)!}},storageKey);
+     try {
+      human=await driver.beginOwnerHandoff(record.session,before,command.reason,async()=>{await handoffCurrent(grant);});
+      const latest=await handoffCurrent(grant);
+      save({...latest,handoff:{...latest.handoff!,state:'pending',handoffId:human.handoffId,origin:human.origin}},storageKey);
+      return {ok:true,data:{owner_login:'pending',console_path:'/console/browser-handoff',session_handle:record.session.id,notice:'End this turn. Open the authenticated owner console to sign in directly on the provider page, then send Waldo a new reply to resume.'},source_taint:'external'};
+     }catch {await api.cancel();throw Error('owner login unavailable');}
+    }
+    if(command.operation==='resume_owner_login')throw Error('no pending login');
     let observed:GeneralSnapshot;
     if(command.operation==='read'||command.operation==='inspect'||command.operation==='screenshot'||command.operation==='switch_tab')observed=await driver.observe(record.session,command.operation==='switch_tab'?command.tab_ref:before.observation.tab_ref);
     else {
@@ -156,10 +197,30 @@ export function commonBrowserHost(options:Readonly<{
    }
   }};
  const api={handler,actionHandler,
+ async handoffStatus(){const row=options.storage.kv.get<Record>(key(snapshot().taskId));if(!row?.handoff)return undefined;if(!human||row.handoff.state!=='pending')throw Error('owner login transition');const held=human,origin=await held.controller.origin();const fresh=await handoffCurrent(row.grant);if(human!==held||fresh.handoff!.state!=='pending')throw Error('owner login transition');return {state:fresh.handoff!.state,origin,reason:fresh.handoff!.reason,expiresAt:fresh.session.expiresAt};},
+ async openHandoff(){const row=options.storage.kv.get<Record>(key(snapshot().taskId));if(!row?.handoff||!human){if(row?.handoff)await api.cancel();throw Error('owner login unavailable');}await handoffCurrent(row.grant);const url=await human.controller.open();await handoffCurrent(row.grant);return url;},
+ async maintainHandoff(){
+  const row=options.storage.kv.get<Record>(key(snapshot().taskId));if(!row?.handoff||row.cleanup==='closed')return;
+  if(row.cleanup||row.session.expiresAt<=options.now()){await api.cancel();return;}
+  try{await handoffCurrent(row.grant);}catch{await api.cancel();return;}
+  const current=options.storage.kv.get<Record>(key(snapshot().taskId));
+  if(!current||current.cleanup||current.session.expiresAt<=options.now()){await api.cancel();return;}
+  if(current.handoff?.state==='starting'||current.handoff?.state==='resuming')return;
+  if(!human){await api.cancel();return;}
+  try{await human.controller.status();}catch{
+   // A concurrent resume can consume the volatile controller during status.
+   // Recheck owner custody before accepting a newer valid durable transition.
+   try{await options.config.assertHandoffCurrent!(row.grant);}catch{await api.cancel();return;}
+   const latest=options.storage.kv.get<Record>(key(snapshot().taskId));
+   if(latest&&!latest.cleanup&&latest.session.expiresAt>options.now()&&latest.session.id===row.session.id&&latest.session.providerSessionId===row.session.providerSessionId&&JSON.stringify(latest.grant)===JSON.stringify(row.grant)&&(!latest.handoff||latest.handoff.state==='starting'||latest.handoff.state==='resuming'))return;
+   await api.cancel();
+  }
+ },
 resetAttachments(){images=[];},sessionHandle:()=>options.storage.kv.get<Record>(key(snapshot().taskId))?.session.id,attachments:()=>[...images],async cancel(){images=[];const task=snapshot();const record=options.storage.kv.get<Record>(key(task.taskId));if(!record||record.cleanup==='closed')return;
   if(record.cleanupFailed)throw new GeneralBrowserError('cleanup_unconfirmed');
   save({...record,observation:undefined,tabs:[],cleanup:'pending'},key(task.taskId));
   if(record.session.providerSessionId==='pending')throw Error('common browser allocation uncertain');
+  try{await human?.controller.dispose();}catch{/* Exact termination below revokes viewers. */}finally{human=undefined;}
   try{await execution?.driver.disconnect();}catch{/* Exact physical termination below is the authoritative cleanup. */}finally{execution=undefined;}
   // Cleanup does not depend on a still-live execution lease.
   try{
