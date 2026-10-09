@@ -195,3 +195,5 @@ export * from './tools/schemas/skills';
 export * from './protocol/common-workunit-execution';
 
 export * from './tools/schemas/memory';
+export * from './app/agent';
+export * from './app/client';

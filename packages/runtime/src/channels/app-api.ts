@@ -1,4 +1,4 @@
-import type { ConversationEntry } from '@waldo/contracts';
+import { appCodeRequestSchema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type ConversationEntry } from '@waldo/contracts';
 import { consoleAuth, OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
@@ -57,7 +57,15 @@ const admit = async (env: AppEnv, auth: ConsoleAuth, request: Request, kind: 'se
   } catch { return 'unavailable'; }
 };
 
-const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,255}$/;
+const sessionView = async (auth: ConsoleAuth, doName: string, credential: string) => {
+  const sessionId = sessionIdOf(credential);
+  if (!sessionId) throw new Error('invalid session');
+  const hash = await linkCodeHash(sessionId);
+  const row = (await auth.listSessions(doName)).find(value => value.session === hash);
+  const created = row ? Date.parse(row.created_at) : NaN;
+  if (!Number.isFinite(created) || created + 12 * 60 * 60_000 <= Date.now()) throw new Error('expired session');
+  return appSessionV1Schema.parse({ state: 'active', session_ref: `sess_${hash}`, account_ref: `acct_${await linkCodeHash(doName)}`, surface: 'app', absolute_expires_at: created + 12 * 60 * 60_000 });
+};
 
 // App sign-in and the shared main chat. Returns null for paths outside /app/v1 so the caller keeps routing.
 export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth | null = consoleAuth(env)): Promise<Response | null> => {
@@ -70,7 +78,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (request.method !== 'POST') return fail(405);
     const body = await readJson(request);
     const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
-    if (!EMAIL.test(email)) return fail(403);
+    if (!appCodeRequestSchema.safeParse(body).success) return fail(403);
     const gate = await admit(env, auth, request, 'send', email);
     if (gate === 'limited') return fail(429);
     if (gate === 'unavailable') return fail(503);
@@ -84,7 +92,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const body = await readJson(request);
     const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
     const code = typeof body?.code === 'string' ? body.code.trim() : '';
-    if (!EMAIL.test(email) || !/^\d{4,10}$/.test(code)) return fail(403);
+    if (!appVerifyRequestV1Schema.safeParse(body).success) return fail(403);
     const gate = await admit(env, auth, request, 'verify', email);
     if (gate === 'limited') return fail(429);
     if (gate === 'unavailable') return fail(503);
@@ -94,8 +102,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     let credential: string | null;
     try { credential = await auth.ownerCookie(doName); } catch { credential = null; }
     if (!credential) return fail(503);
-    const sessionId = sessionIdOf(credential);
-    return ok({ state: 'active', credential, session_ref: sessionId ? (await linkCodeHash(sessionId)).slice(0, 16) : null, surface: 'app' });
+    try { return ok({ ...await sessionView(auth, doName, credential), credential }); } catch { return fail(503); }
   }
 
   const who = await authenticate(request, auth);
@@ -104,8 +111,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
 
   if (url.pathname === `${APP_PATH}/session`) {
     if (request.method !== 'GET') return fail(405);
-    const sessionId = sessionIdOf(who.credential);
-    return ok({ state: 'active', session_ref: sessionId ? (await linkCodeHash(sessionId)).slice(0, 16) : null, surface: 'app' });
+    try { return ok(await sessionView(auth, who.doName, who.credential)); } catch { return fail(503); }
   }
 
   if (url.pathname === `${APP_PATH}/auth/signout`) {
@@ -128,7 +134,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     }
     const forwarded = new Request(`https://telegram-owner${url.pathname}${url.search}`, {
       method: request.method,
-      headers: { 'x-waldo-do-name': who.doName, 'content-type': 'application/json' },
+      headers: { 'x-waldo-do-name': who.doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionIdOf(who.credential)!), 'content-type': 'application/json' },
       ...(sending ? { body } : {}),
     });
     try { return await owners.get(owners.idFromName(who.doName)).fetch(forwarded); } catch { return fail(503); }
@@ -162,11 +168,8 @@ export const appSubjectFor = (doName: string): number => {
 export const parseAppSend = (raw: string): Readonly<{ clientMessageId: string; text: string }> | null => {
   let value: unknown;
   try { value = JSON.parse(raw); } catch { return null; }
-  if (!value || typeof value !== 'object') return null;
-  const { client_message_id: id, text } = value as Record<string, unknown>;
-  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(id) || typeof text !== 'string') return null;
-  const trimmed = text.trim();
-  return trimmed.length > 0 && trimmed.length <= 4000 ? { clientMessageId: id, text: trimmed } : null;
+  const parsed = appSendRequestV1Schema.safeParse(value);
+  return parsed.success ? { clientMessageId: parsed.data.client_message_id, text: parsed.data.text } : null;
 };
 
 // Replies reach the app through the transcript, so outbound sends on this channel are accepted and not delivered anywhere else.

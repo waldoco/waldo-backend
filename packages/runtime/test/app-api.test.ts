@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { appTranscriptPage, handleApp } from '../src/channels/app-api';
 import type { ConsoleAuth } from '../src/identity/console-auth';
+import { linkCodeHash } from '../src/identity/owner-directory';
 
 const SESSION = 'a'.repeat(32);
 const CREDENTIAL = `owner-1.${SESSION}.sig`;
@@ -12,6 +13,7 @@ const fakeAuth = (over: Partial<ConsoleAuth> = {}) => {
     sendCode: async (email: string) => { calls.push(`send:${email}`); return email === 'member@example.test'; },
     verify: async (email: string, code: string) => (email === 'member@example.test' && code === '123456' ? 'owner-1' : null),
     ownerCookie: async () => CREDENTIAL,
+    listSessions: async () => [{ session: await linkCodeHash(SESSION), created_at: new Date().toISOString(), last_seen_at: new Date().toISOString() }],
     readOwnerCookie: async (request: Request) => ((request.headers.get('cookie') ?? '').includes(CREDENTIAL) ? 'owner-1' : null),
     revokeSession: async () => { calls.push('revoke'); return true; },
     ...over,
@@ -39,7 +41,7 @@ describe('app sign-in and main chat routes', () => {
   });
   it('verifies a code into the console session artifact and labels the surface app', async () => {
     const response = await handleApp(post('/app/v1/auth/verify', { email: 'member@example.test', code: '123456' }), env(), fakeAuth().auth);
-    expect(await response!.json()).toMatchObject({ state: 'active', credential: CREDENTIAL, surface: 'app' });
+    expect(await response!.json()).toMatchObject({ state: 'active', credential: CREDENTIAL, surface: 'app', account_ref: expect.stringMatching(/^acct_/), session_ref: expect.stringMatching(/^sess_/) });
     expect(response!.headers.get('cache-control')).toBe('no-store');
   });
   it('says needs_invite for a wrong code without opening a session', async () => {
