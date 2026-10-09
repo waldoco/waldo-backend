@@ -1,4 +1,5 @@
 import { OWNER_REQUEST_HOP } from './harness';
+import { withholdHeldTurns } from '../conversation/held-turns';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
@@ -443,7 +444,7 @@ export const createOwnerResponder = (
           undefined,
           attachments.length ? attachments : undefined,
           tools,
-          turns.filter(turn => turn.call.name === 'forget_memory' || !holdsHeldTopic(turn.output)),
+          withholdHeldTurns(turns, output => holdsHeldTopic(output)),
           );
         },
         onTool: (event) => {
