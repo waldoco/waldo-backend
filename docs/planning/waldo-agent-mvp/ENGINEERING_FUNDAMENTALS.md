@@ -605,3 +605,12 @@ A fresh staging Cloudflare public read uses the existing reader without requirin
 
 - [ ] Ordinary interactive requests select `retain_session` through the published model schema and dispatcher, receive DOM/native AX/PNG, continue beyond four observations and across an owner reply, then prove exact-session absence before settling duration. Read-only requests keep one-shot cleanup. Bound image history independently of actions; separate provider inactivity from the real admitted task deadline. Preserve existing charges and ceilings without issuing/refilling trial authority.
 - [ ] Malformed or duplicate provider session IDs cannot certify absence. Lost connections invalidate old refs and disclose recreated document state; wrong/expired handles or changed owner custody never allocate a replacement or replay an effect.
+
+### Google reply and Calendar recovery evidence
+
+- [ ] Resolve a Gmail reply parent and subject from the selected account's thread, validate its provider Message-ID/References, and freeze those headers in approved MIME. A send acknowledgement or search hit cannot establish Sent: require metadata with SENT, exact RFC822 Message-ID and intended thread. Test response loss, unavailable/mismatched metadata, frozen-byte substitution, wrong account and restart without another send.
+- [ ] Calendar apply and Undo use distinct private operation markers. Reconcile uncertain Undo read-only while retaining the confirmed applied ETag and original Undo payload. A recovered apply never promotes a later readback ETag into Undo authority; missing cancellation markers remain uncertain. Restore date-only events with date and clear dateTime, and clear date when moving to timed endpoints. Test later edits, marker loss, restart and replay without another mutation.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Reply MIME omitted provider threading headers; Gmail search/acknowledgement could claim Sent without exact metadata; Calendar recovered matching fields without an operation marker, discarded uncertain Undo custody, and restored all-day values as dateTime | google-recovery-journey.test.ts registered Gmail and Calendar handlers, approval desk and restarted effect ledger over labelled synthetic provider doubles; google.test.ts metadata readback; approvals.test.ts exact Sent evidence | Local synthetic/source proof only. Existing account routing, frozen MIME, stable create IDs and If-Match fences remain. No live provider, grants, deployment or database reset; cancellation tombstones without markers remain uncertain |

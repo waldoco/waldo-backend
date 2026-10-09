@@ -263,6 +263,7 @@ describe('gmail send rail bytes', () => {
       if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
       if (url.includes('/messages/send')) return Response.json({ id: 'sent1', threadId: 't1' });
       if (url.includes('/messages?')) return Response.json({ messages: [{ id: 'sent1' }] });
+      if (url.includes('/messages/sent1?')) return Response.json({id:'sent1',threadId:'t1',labelIds:['SENT'],payload:{headers:[{name:'Message-ID',value:'<m1@waldo-send>'}]}});
       return new Response('{}', { status: 404 });
     }) as typeof fetch;
     const client = googleClient(app, { refresh_token: 'rt' }, f);
@@ -270,7 +271,7 @@ describe('gmail send rail bytes', () => {
     expect(await client.sendRaw(raw, 't1')).toEqual({ message_id: 'sent1', thread_id: 't1' });
     const sendCall = calls.find((c) => c.url.includes('/messages/send'))!;
     expect(JSON.parse(String(sendCall.init!.body))).toEqual({ raw: 'xJ7', threadId: 't1' });
-    expect(await client.findSentByMessageId('<m1@waldo-send>')).toEqual({ message_id: 'sent1' });
+    expect(await client.findSentByMessageId('<m1@waldo-send>', 't1')).toEqual({ message_id: 'sent1', thread_id:'t1', rfc822_message_id:'<m1@waldo-send>', label_ids:['SENT'] });
     // Regression: the approved bytes are base64url MIME (google 400 'Base64 decoding failed'
     // when unencoded MIME text crosses messages/send). The tool binds exactly these bytes.
     const wire = b64url(new TextEncoder().encode(buildMime({ to: ['a@x.test'], subject: 'Hi', body: 'b', messageId: '<m2@waldo-send>' })));

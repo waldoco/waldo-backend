@@ -8,7 +8,7 @@ import {
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { b64url, buildMime, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature } from '../../connectors/google';
+import { b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature } from '../../connectors/google';
 import { EmailProposalError, type EmailSendProposal } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
@@ -61,6 +61,30 @@ async function withGoogle<T extends object>(google: GoogleAccess, feature: Googl
     return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error), source_taint: 'external' };
   }
 }
+
+// Reply intent is resolved from the selected account, never from model-supplied RFC headers.
+const replyHeaders = async (client: GoogleClient, args: DraftEmailArgs) => {
+  if (!args.reply_to_thread_id) {
+    if (args.in_reply_to_msg_id) throw new Error('A reply parent requires its Gmail thread.');
+    return {};
+  }
+  if (!client.threadPage) throw new Error('Gmail reply metadata is unavailable.');
+  let cursor: string | undefined;
+  let parent: Awaited<ReturnType<NonNullable<GoogleClient['threadPage']>>>['messages'][number] | undefined;
+  for (let pageNumber = 0; pageNumber < 10; pageNumber++) {
+    const page = await client.threadPage(args.reply_to_thread_id, 20, cursor);
+    if (args.in_reply_to_msg_id) parent ??= page.messages.find(m => m.id === args.in_reply_to_msg_id);
+    else parent = page.messages.at(-1) ?? parent;
+    if ((parent && args.in_reply_to_msg_id) || !page.cursor) break;
+    if (pageNumber === 9) throw new Error('Reply thread exceeds the metadata review budget; select a parent message.');
+    cursor = page.cursor;
+  }
+  if (!parent || !validMessageId(parent.message_id)) throw new Error('Reply parent has no valid provider Message-ID in this thread.');
+  const subject = (value: string) => value.replace(/^(?:\s*re:\s*)+/i, '').trim();
+  if (/[\r\n]/.test(args.subject) || subject(args.subject) !== subject(parent.subject)) throw new Error('Reply subject differs from its parent thread.');
+  if (parent.references && (parent.references.length > 100 || !parent.references.every(validMessageId))) throw new Error('Reply parent References are invalid.');
+  return { inReplyTo: parent.message_id, references: [...new Set([...(parent.references ?? []), parent.message_id])] };
+};
 
 // E1 (issue #150) as amended by the owner's September 27, 2026 ruling ("instinct way for OTP"):
 // a verification artifact in either visible list field quarantines both - the snippet routinely
@@ -250,6 +274,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const access: GoogleAccess = { client: (feature, _intent, guard, account) => google.client(feature,intent,guard,account) };
       const result = await withGoogle(access, 'mail', ctx, async (client) => {
         const input = {
+          ...await replyHeaders(client, args),
           to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
           subject: args.subject, body: args.body_markdown, ...(args.reply_to_thread_id ? { threadId: args.reply_to_thread_id } : {}),
           messageId: `<${intent.id.slice(6)}@waldo-draft>`,
@@ -279,7 +304,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     handle: async (args: SendEmailArgs, ctx?: ToolDispatcherContext) => {
       // Connectivity is gated at propose time (same tier-2 contract as the other google
       // handlers): no client -> typed connect intent, no half-proposed card.
-      const gate = await withGoogle(google, 'mail', ctx, async client => ({account: client.account ?? {connection_id:null,email:null}}), args.account);
+      const gate = await withGoogle(google, 'mail', ctx, async client => ({account: client.account ?? {connection_id:null,email:null}, reply: await replyHeaders(client, args)}), args.account);
       if (!gate.ok) return { ...gate, source_taint: null };
       // A replay of the same ingress turn with the same final email arguments must reuse its
       // proposal, even though each invocation mints fresh wire Message-ID bytes. Later turns
@@ -291,7 +316,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       // "Base64 decoding failed" on the approved send path.)
       const raw = b64url(new TextEncoder().encode(buildMime({
         to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
-        subject: args.subject, body: args.body_markdown, messageId: message_id,
+        subject: args.subject, body: args.body_markdown, messageId: message_id, ...gate.data.reply,
       })));
       try {
         const proposal_id = await desk.proposeSendEmail({
@@ -300,7 +325,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           subject: args.subject, body: args.body_markdown,
           ...(gate.data.account.email ? {account:gate.data.account.email} : {}),
           ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
-          message_id, raw, digest: await sha256Hex(raw), ...(dedupe_key ? { dedupe_key } : {}),
+          ...gate.data.reply, message_id, raw, digest: await sha256Hex(raw), ...(dedupe_key ? { dedupe_key } : {}),
         });
         return { ok: true, data: { account: gate.data.account, proposal_id, status: 'review card requested in chat; nothing was sent', sent: false }, source_taint: null };
       } catch (error) {
