@@ -1,5 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {readdirSync,readFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
 import {compareHistory,readHistory,localManifest} from './staging-migration-preflight.mjs';
 const local=[{version:'20260930060000'},{version:'20260930070000'}];
 test('empty or exact prefix produces pending list',()=>{
@@ -17,6 +19,16 @@ test('only GET, redirects refused, errors reveal status not body',async()=>{
 });
 test('auth absent cannot make request',async()=>await assert.rejects(readHistory('','togdshayyxycitzckpqv',()=>{throw Error('should not call');}),/auth_missing/));
 test('oversize history rejected',async()=>await assert.rejects(readHistory('fictional-token','togdshayyxycitzckpqv',async()=>new Response(' '.repeat(128*1024+1))),/history_oversize/));
-test('real committed manifest has digests and43 entries',()=>{const m=localManifest(new URL('../supabase/migrations/',import.meta.url));assert.equal(m.length,43);assert.equal(m.at(-1).version,'20261007040100');assert.equal(m.at(-1).sha256,'6d1266eaad7d81490f68e658494da04a704ff425d2a96a7fefd57a85a9ee0322');assert.ok(m.every(x=>/^[a-f0-9]{64}$/.test(x.sha256)&&x.byteLength>0));});
+test('real committed manifest includes every migration with exact byte digests',()=>{
+ const directory=new URL('../supabase/migrations/',import.meta.url);
+ const files=readdirSync(directory).filter(file=>file.endsWith('.sql')).sort();
+ const manifest=localManifest(directory);
+ assert.deepEqual(manifest.map(row=>row.version),files.map(file=>file.split('_')[0]));
+ for(const [index,file] of files.entries()){
+  const bytes=readFileSync(new URL(file,directory));
+  assert.equal(manifest[index].byteLength,bytes.length);
+  assert.equal(manifest[index].sha256,createHash('sha256').update(bytes).digest('hex'));
+ }
+});
 
 test('malformed provider content does not leak in parse error',async()=>await assert.rejects(readHistory('fictional-token','togdshayyxycitzckpqv',async()=>new Response('do-not-print-this-value')),/history_json/));
