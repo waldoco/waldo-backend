@@ -118,3 +118,10 @@ it.each(['scroll','read','wait'] as const)('only landed %s produces a host-local
  expect(result.ok).toBe(true);
  if(result.ok){const data=result.data as Record<string,unknown>;expect(typeof data.browser_action_session_handle).toBe(operation==='scroll'?'string':'undefined');expect(JSON.stringify(result)).not.toContain('PRIVATE_PROVIDER_ID');}
 });
+
+ it.each([{operation:'open_tab',url:'https://fixture.example/other'},{operation:'switch_tab',tab_ref:'tab-one'},{operation:'close_tab',tab_ref:'tab-one'},{operation:'screenshot'}])('legacy task host refuses native-only command $operation before resolving or proposing',async command=>{
+ let resolutions=0,cards=0,legacy=0;
+ const handler=browserTaskHandler({legacy:{...browseActHandler(undefined,undefined,undefined),handle:async()=>{legacy++;return {ok:true,data:{},source_taint:'external'};}},host:async()=>{resolutions++;return {pageUrl:'https://fixture.example/form',propose:async()=>({})} as never;},propose:async()=>{cards++;return 'unexpected';}});
+ expect(await handler.handle(browseActArgsSchema.parse({url:'https://fixture.example/form',task:'native command',command}),context)).toMatchObject({ok:false,code:'rejected'});
+ expect({resolutions,cards,legacy}).toEqual({resolutions:0,cards:0,legacy:0});
+ });

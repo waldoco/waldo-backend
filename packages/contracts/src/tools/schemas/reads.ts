@@ -194,6 +194,7 @@ export type WebSearchArgs = z.infer<typeof webSearchArgsSchema>;
 // B-tool-1: read-only browser. One shot: open the page in a real browser, extract, done.
 // No act/observe here - bounded actions are a later slice with the approval gate.
 export const browsePageArgsSchema = z.strictObject({
+  session_handle: z.string().min(1).max(80).optional().describe('Continue the exact owner browser session returned by a prior observation; never a provider ID.'),
   provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional(),
   url: z.url().max(2000),
   instruction: z.string().min(1).max(1000),
@@ -215,10 +216,16 @@ export const browserTaskCommandSchema = z.discriminatedUnion('operation', [
   z.strictObject({ operation: z.literal('fill'), field_ref: z.string().min(1).max(80), value: z.string().min(1).max(1000) }),
   z.strictObject({ operation: z.literal('prepare_submit') }),
   z.strictObject({ operation: z.literal('verify') }),
+  z.strictObject({ operation: z.literal('open_tab'), url: z.url().max(2000) }),
+  z.strictObject({ operation: z.literal('switch_tab'), tab_ref: z.string().min(1).max(80) }),
+  z.strictObject({ operation: z.literal('close_tab'), tab_ref: z.string().min(1).max(80) }),
+  z.strictObject({ operation: z.literal('screenshot') }),
   z.strictObject({ operation: z.literal('cancel') }),
 ]);
 export type BrowserTaskCommand = z.infer<typeof browserTaskCommandSchema>;
 export const browseActArgsSchema = z.strictObject({
+  provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional(),
+  session_handle: z.string().min(1).max(80).optional(),
   url: z.url().max(2000),
   task: z.string().min(1).max(1000),
   max_actions: z.int().min(1).max(5).default(3),

@@ -2,7 +2,8 @@ export type GeneralBrowserAction =
   | Readonly<{ operation: 'click'; element_ref: string }>
   | Readonly<{ operation: 'fill' | 'select'; element_ref: string; value: string }>
   | Readonly<{ operation: 'press'; element_ref: string; key: GeneralBrowserKey }>
-  | Readonly<{ operation: 'scroll'; direction: 'up' | 'down' | 'left' | 'right' }>;
+  | Readonly<{ operation: 'scroll'; direction: 'up' | 'down' | 'left' | 'right' }>
+  | Readonly<{ operation: 'scroll'; delta: number }>;
 const keys = ['Enter', 'Tab', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Space'] as const;
 type GeneralBrowserKey = typeof keys[number];
 
@@ -24,6 +25,7 @@ export function parseGeneralBrowserAction(input: unknown): GeneralBrowserAction 
       if (reference && keys.some(key => key === row.key) && exact('operation', 'element_ref', 'key')) return row as GeneralBrowserAction;
       break;
     case 'scroll':
+      if (Number.isSafeInteger(row.delta) && (row.delta as number) >= -2000 && (row.delta as number) <= 2000 && exact('operation', 'delta')) return row as GeneralBrowserAction;
       if (['up', 'down', 'left', 'right'].some(direction => direction === row.direction) && exact('operation', 'direction')) return row as GeneralBrowserAction;
   }
 }

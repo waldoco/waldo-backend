@@ -4,6 +4,7 @@ export type GeneralElement = Readonly<{ selector: string; tag: string; role: str
 export type GeneralPageState = Readonly<{ url: string; title: string; text: string; width: number; height: number; scrollX: number; scrollY: number; elements: readonly GeneralElement[] }>;
 export type GeneralObservation = Readonly<{ revision: string; tab_ref: string; url: string; title: string; text: string; viewport: Readonly<{ width: number; height: number }>; elements: readonly Readonly<{ ref: string; role: string; name: string; tag: string; disabled: boolean; options?: readonly GeneralSelectOption[] }>[]; tabs: readonly Readonly<{ ref: string; url: string; title: string }>[] }>;
 export type GeneralSnapshot = Readonly<{ ownerId: string; sessionId: string; generation: number; targetId: string; digest: string; state: GeneralPageState; observation: GeneralObservation; image: Readonly<{ mime_type: 'image/png'; bytes: Uint8Array }> }>;
+export type GeneralActionSnapshot = Omit<GeneralSnapshot, 'image'>;
 
 // Host-authored page evaluation. No script/code is accepted from a model argument.
 export function generalPageState(): GeneralPageState {
