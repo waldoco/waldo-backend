@@ -186,3 +186,35 @@ it('near-full public observation evidence cannot prevent exact cancellation clea
  expect(await host.actionHandler.handle({...args,url:observed.data.url},f.ctx)).toMatchObject({ok:false});
  expect(operation==='close_tab'?commonBrowserFixture.tabCloses:commonBrowserFixture.navigations).toBe(afterRead);await host.cancel();
  });
+
+
+it('selects an observed enabled public filter and publishes semantic selected state',async()=>{
+ const f=fixture();commonBrowserFixture.filters=true;const host=f.host();
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read filters.'},f.ctx) as any;
+ const select=first.data.elements.find((row:any)=>row.name==='Region');
+ const result=await host.actionHandler.handle({url:first.data.url,task:'Choose the North filter',session_handle:first.data.session_handle,command:{operation:'select',element_ref:select.ref,value:'north'}} as never,f.ctx) as any;
+ expect(result).toMatchObject({ok:true,data:{elements:expect.arrayContaining([{ref:expect.any(String),role:'combobox',name:'Region',tag:'select',disabled:false,options:expect.arrayContaining([{value:'north',label:'North',disabled:false,selected:true}])}])}});
+ expect(commonBrowserFixture.allocations).toBe(1);
+ await host.cancel();
+});
+
+it('returns native accessibility context and verified desired checkbox state on the exact retained session',async()=>{
+ const f=fixture();commonBrowserFixture.filters=true;const host=f.host();
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read available filters.'},f.ctx) as any;
+ expect(first.data.accessibility_snapshot).toContain('"name":"Available only"');
+ const checkbox=first.data.elements.find((row:any)=>row.name==='Available only');
+ expect(checkbox.checked).toBe(false);
+ const result=await host.actionHandler.handle({url:first.data.url,task:'Show available only',session_handle:first.data.session_handle,command:{operation:'set_checked',element_ref:checkbox.ref,checked:true}} as never,f.ctx) as any;
+ expect(result).toMatchObject({ok:true,data:{session_handle:first.data.session_handle}});
+ expect(result.data.elements.find((row:any)=>row.name==='Available only').checked).toBe(true);
+ expect(result.data.accessibility_snapshot).toContain('"checked":true');
+ expect(commonBrowserFixture.allocations).toBe(1);await host.cancel();
+});
+
+it('a disabled public option is refused without dispatching a selection or granting another session',async()=>{
+ const f=fixture();commonBrowserFixture.filters=true;const host=f.host();
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read filters.'},f.ctx) as any;
+ const select=first.data.elements.find((row:any)=>row.name==='Region');
+ expect(await host.actionHandler.handle({url:first.data.url,task:'Choose unavailable',session_handle:first.data.session_handle,command:{operation:'select',element_ref:select.ref,value:'closed'}} as never,f.ctx)).toMatchObject({ok:false});
+ expect(commonBrowserFixture.effects).toBe(0);expect(commonBrowserFixture.allocations).toBe(1);await host.cancel();
+});

@@ -209,23 +209,49 @@ export function cloudflareGeneralBrowser(options: Options) {
     for (const page of pages) if (await tabRef(session, await targetId(context, page)) === reference) return page;
     throw new GeneralBrowserError('stale_observation');
   };
+  // Chromium's native accessibility tree masks password values. Playwright's
+  // body ariaSnapshot currently serializes them; never publish that raw snapshot.
+  const boundedSemanticRead = async <T>(session:BrowserSession, read:()=>Promise<T>):Promise<T> => {
+    const timeout=actionTimeout(session);
+    let timer:ReturnType<typeof setTimeout>;
+    try {
+      return await Promise.race([read(),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new GeneralBrowserError('provider_unavailable')),timeout);})]);
+    } finally {clearTimeout(timer!);}
+  };
+  const semanticSnapshot = async (session: BrowserSession, context: BrowserContext, page: Page) => {
+    const cdp = await boundedSemanticRead(session,()=>context.newCDPSession(page));
+    try {
+      await admit(session);
+      const {nodes} = await boundedSemanticRead(session,()=>cdp.send('Accessibility.getFullAXTree')); await admit(session);
+      const visible=nodes.filter(node=>!node.ignored);
+      const indexes=new Map(visible.map((node,index)=>[node.nodeId,index]));
+      return JSON.stringify(visible.map(node=>({
+        role:node.role?.value, name:node.name?.value, ...(node.description?{description:node.description.value}:{}),
+        ...(node.value?{value:node.value.value}:{}),
+        states:Object.fromEntries((node.properties??[]).filter(property=>['disabled','expanded','checked','selected','readonly','required','invalid','multiselectable','level','modal','orientation'].includes(property.name)).map(property=>[property.name,property.value.value])),
+        children:(node.childIds??[]).flatMap(id=>indexes.has(id)?[indexes.get(id)!]:[]),
+      })));
+    } finally { await cleanup(step=>step(()=>cdp.detach())); }
+  };
   const observe = async (session: BrowserSession, context: BrowserContext, page: Page): Promise<GeneralSnapshot> => {
     await allowed(session, page.url());
     const state = await page.evaluate(generalPageState); await admit(session);
+    const semantic = await semanticSnapshot(session,context,page); await admit(session);
     if (!state.text.trim()) throw new GeneralBrowserError('empty_content');
     const bytes = new Uint8Array(await page.screenshot({ type: 'png', animations: 'disabled', caret: 'hide', scale: 'css' })); await admit(session);
     if (bytes.byteLength > options.maxScreenshotBytes) throw new GeneralBrowserError('image_oversize');
     const current = await page.evaluate(generalPageState); await admit(session);
-    if (JSON.stringify(current) !== JSON.stringify(state)) throw new GeneralBrowserError('stale_observation');
+    const currentSemantic = await semanticSnapshot(session,context,page); await admit(session);
+    if (currentSemantic !== semantic || JSON.stringify(current) !== JSON.stringify(state)) throw new GeneralBrowserError('stale_observation');
     const target = await targetId(context, page);
-    const digest = await generalDigest(JSON.stringify({ state, image: await generalDigest(bytes) }));
+    const digest = await generalDigest(JSON.stringify({ state, semantic, image: await generalDigest(bytes) }));
     const revision = await generalDigest(JSON.stringify([session.ownerId, session.id, session.generation, target, digest]));
     const tabs = [];
     for (const tab of context.pages()) tabs.push({ ref: await tabRef(session, await targetId(context, tab)), url: tab.url(), title: await tab.title() });
     await admit(session);
     return { ownerId: session.ownerId, sessionId: session.id, generation: session.generation, targetId: target, digest, state,
-      observation: { revision, tab_ref: await tabRef(session, target), url: state.url, title: state.title, text: state.text, viewport: { width: state.width, height: state.height },
-        elements: state.elements.map((element, index) => ({ ref: `e:${revision.slice(0, 24)}:${index}`, role: element.role, name: element.name, tag: element.tag, disabled: element.disabled, ...(element.options ? { options: element.options } : {}) })), tabs },
+      observation: { revision, tab_ref: await tabRef(session, target), url: state.url, title: state.title, text: state.text, accessibility_snapshot:semantic, viewport: { width: state.width, height: state.height },
+        elements: state.elements.map((element, index) => ({ ref: `e:${revision.slice(0, 24)}:${index}`, role: element.role, name: element.name, tag: element.tag, disabled: element.disabled, ...(['checkbox','radio'].includes(element.type)?{checked:element.checked}:{}), ...(element.options ? { options: element.options } : {}) })), tabs },
       image: { mime_type: 'image/png', bytes } };
   };
   const terminateId = async (id: string): Promise<void> => cleanup(async step => {
@@ -303,7 +329,8 @@ export function cloudflareGeneralBrowser(options: Options) {
       const element = snapshot.state.elements[index];
       if (action.operation !== 'scroll' && (!element || element.disabled)) throw new GeneralBrowserError('stale_observation');
       if (element?.href) await allowed(session, element.href);
-      if (action.operation === 'fill' && (!['input', 'textarea'].includes(element!.tag) || ['password', 'file', 'hidden'].includes(element!.type))) throw new GeneralBrowserError('rejected');
+      if (action.operation === 'fill' && (!['input', 'textarea'].includes(element!.tag) && !element!.editable || element!.readOnly || ['password', 'file', 'hidden', 'checkbox', 'radio'].includes(element!.type))) throw new GeneralBrowserError('rejected');
+      if (action.operation === 'set_checked' && (element!.tag!=='input' || !['checkbox','radio'].includes(element!.type) || element!.type==='radio' && !action.checked)) throw new GeneralBrowserError('rejected');
       if (action.operation === 'select' && element!.tag !== 'select') throw new GeneralBrowserError('rejected');
       if (action.operation === 'select' && !element!.options?.some(option => option.value === action.value && !option.disabled)) throw new GeneralBrowserError('rejected');
       await checked();
@@ -322,6 +349,7 @@ export function cloudflareGeneralBrowser(options: Options) {
           const locator = page.locator(element!.selector);
           try {
             switch (action.operation) {
+              case 'set_checked': await locator.setChecked(action.checked, {timeout}); break;
               case 'click': await locator.click({ timeout }); break;
               case 'fill': await locator.fill(action.value, { timeout }); break;
               case 'select': await locator.selectOption(action.value, { timeout }); break;

@@ -1,5 +1,6 @@
 export type GeneralBrowserAction =
   | Readonly<{ operation: 'click'; element_ref: string }>
+  | Readonly<{ operation: 'set_checked'; element_ref: string; checked: boolean }>
   | Readonly<{ operation: 'fill' | 'select'; element_ref: string; value: string }>
   | Readonly<{ operation: 'press'; element_ref: string; key: GeneralBrowserKey }>
   | Readonly<{ operation: 'scroll'; direction: 'up' | 'down' | 'left' | 'right' }>
@@ -17,6 +18,9 @@ export function parseGeneralBrowserAction(input: unknown): GeneralBrowserAction 
   switch (row.operation) {
     case 'click':
       if (reference && exact('operation', 'element_ref')) return row as GeneralBrowserAction;
+      break;
+    case 'set_checked':
+      if(reference && typeof row.checked==='boolean' && exact('operation','element_ref','checked')) return row as GeneralBrowserAction;
       break;
     case 'fill': case 'select':
       if (reference && typeof row.value === 'string' && exact('operation', 'element_ref', 'value')) return row as GeneralBrowserAction;

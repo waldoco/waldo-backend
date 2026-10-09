@@ -589,3 +589,9 @@ Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabas
 | Failure | Regression | Boundary |
 | --- | --- | --- |
 | Preallocation model calls bypassed browser spend; expiry-only registration changes conflicted; manual capsule removal, ref rotation or missing binding restored unmetered calls; awaited directory lookup could cross an old grant expiry | owner-browser-acceptance.test.ts first-call, third-run/ninth-request, removal/ref-rotation/missing-binding; openai.test.ts one physical attempt; common-owner-browser-renewal.test.ts atomic preservation and corruption; common-public-browser-configuration.test.ts old-grant and awaited expiry | Staging-only exact-owner test, existing refs/caps/prices/custody, no count reset or new credentials; served activation and prior-use audit require operator receipts |
+
+- [ ] Native semantic browser observations exclude password values from DOM, accessibility and durable/model evidence. Prove labelled open-shadow controls, enabled select options, desired checkbox state, owner-pause fresh observation, stale-ref refusal, bounded native reads and exact cleanup without replacement allocation.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Native body ariaSnapshot serialized a synthetic password value; public tools omitted supported select and checkbox readback | browser-semantic-interaction-probe.mjs reproduces password leak and proves native Chromium AX masking, shadow controls, desired-state filter/pause/resume/cleanup; browser-public-read-owner-do.test.ts ordinary tools and owner PNG receipt; common-browser-host.test.ts disabled option; general-browser-driver.test.ts native read timeout | Use native CDP accessibility projection with no backend IDs or private snapshot APIs; preserve paid session/caps, owner/run fences, external taint and native-submit refusal |

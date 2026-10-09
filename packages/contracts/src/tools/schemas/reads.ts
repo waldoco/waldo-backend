@@ -209,6 +209,8 @@ export const browserTaskCommandSchema = z.discriminatedUnion('operation', [
   z.strictObject({ operation: z.literal('goto'), url: z.url().max(2000), intent: browserCommandIntent }),
   z.strictObject({ operation: z.literal('click'), element_ref: z.string().min(1).max(80), intent: browserCommandIntent }),
   z.strictObject({ operation: z.literal('type'), element_ref: z.string().min(1).max(80), value: z.string().min(1).max(1000).optional(), key: z.literal('Enter').optional(), intent: browserCommandIntent }).refine(value => (value.value !== undefined) !== (value.key !== undefined), 'Type needs exactly a value or Enter'),
+  z.strictObject({ operation: z.literal('select'), element_ref: z.string().min(1).max(80), value: z.string().max(1000), intent: browserCommandIntent }),
+  z.strictObject({ operation: z.literal('set_checked'), element_ref: z.string().min(1).max(80), checked: z.boolean(), intent: browserCommandIntent }),
   z.strictObject({ operation: z.literal('scroll'), delta: z.int().min(-2000).max(2000), intent: browserCommandIntent }),
   z.strictObject({ operation: z.literal('read'), intent: browserCommandIntent }),
   z.strictObject({ operation: z.literal('wait'), milliseconds: z.int().min(0).max(1000), intent: browserCommandIntent }),

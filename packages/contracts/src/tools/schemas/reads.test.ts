@@ -400,3 +400,10 @@ it('browser native commands are strict and cannot smuggle owner, session or subm
   expect(browseActArgsSchema.safeParse({ url: 'https://fixture.example/form', task: 'Fill observed field', command: { operation: 'fill', field_ref: 'value', value: 'synthetic' } }).success).toBe(true);
   for (const command of [{ operation: 'submit', approval_ref: 'guessed' }, { operation: 'fill', field_ref: 'value', value: '', session_id: 'foreign' }, { operation: 'inspect', owner_id: 'foreign' }]) expect(browseActArgsSchema.safeParse({ url: 'https://fixture.example/form', task: 'native', command }).success).toBe(false);
 });
+
+it('validates explicit native filter choices without executable selectors or coerced checkbox state',()=>{
+ const base={provider:'cloudflare_playwright',url:'https://example.com/',task:'Choose a public filter'};
+ expect(browseActArgsSchema.safeParse({...base,command:{operation:'select',element_ref:'e:observed:0',value:''}}).success).toBe(true);
+ expect(browseActArgsSchema.safeParse({...base,command:{operation:'set_checked',element_ref:'e:observed:1',checked:false}}).success).toBe(true);
+ for(const command of [{operation:'set_checked',element_ref:'e:observed:1',checked:'true'},{operation:'select',element_ref:'e:observed:0',value:'north',selector:'input'},{operation:'set_checked',checked:true}])expect(browseActArgsSchema.safeParse({...base,command}).success).toBe(false);
+});
