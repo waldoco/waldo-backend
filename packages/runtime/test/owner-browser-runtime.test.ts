@@ -56,7 +56,7 @@ it('late old-run cleanup preserves the newer session; unlink reconstruction clea
  it('preserves an unselected typed fixture host but never falls back for explicit Cloudflare or free-text staging calls',async()=>{
  const rows=new Map<string,unknown>([['do_name','fixture-only'],['telegram_subject','81102']]);
  const scope:RunEffectScope={runId:'fixture-run',attempt:'fixture-attempt',deadline:Date.now()+60000,signal:new AbortController().signal,admit(){},commit:work=>work()};
- const storage={kv:{get:(key:string)=>rows.get(key),put:(key:string,value:unknown)=>rows.set(key,value)},getAlarm:async()=>null,setAlarm:async()=>{}} as unknown as DurableObjectStorage;
+ const storage={kv:{get:(key:string)=>rows.get(key),put:(key:string,value:unknown)=>rows.set(key,value),list:({prefix}:{prefix:string})=>[...rows].filter(([key])=>key.startsWith(prefix))},transactionSync:<T>(work:()=>T)=>work(),getAlarm:async()=>null,setAlarm:async()=>{}} as unknown as DurableObjectStorage;
  const env={WALDO_ENVIRONMENT:'staging',TELEGRAM_OWNER_DO:{idFromName:()=>({toString:()=> 'fixture-physical'})}} as never;
  const runtime=ownerBrowserRuntime({env,storage,actualDoId:'fixture-physical',activeScope:()=>scope});
  const called=vi.fn(async()=>({ok:true as const,data:{fixture:true},source_taint:'external' as const}));

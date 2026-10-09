@@ -224,6 +224,8 @@ export const browserTaskCommandSchema = z.discriminatedUnion('operation', [
   z.strictObject({ operation: z.literal('close_tab'), tab_ref: z.string().min(1).max(80) }),
   z.strictObject({ operation: z.literal('screenshot') }),
   z.strictObject({ operation: z.literal('cancel') }),
+  z.strictObject({ operation: z.literal('owner_login'), reason: z.string().min(1).max(1000) }),
+  z.strictObject({ operation: z.literal('resume_owner_login') }),
 ]);
 export type BrowserTaskCommand = z.infer<typeof browserTaskCommandSchema>;
 export const browseActArgsSchema = z.strictObject({

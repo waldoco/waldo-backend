@@ -48,6 +48,11 @@ export function ordinaryPublicBrowserConfiguration(options:Readonly<{
    storage.kv.put(prefix+task.taskId,{grant,custody:owner} satisfies Retained);return grant;
   },
   assertGrantCurrent:verify,
+  assertHandoffCurrent:async(grant)=>{
+   const before=read(grant);const owner=await options.assertOwner();const after=read(grant);
+   if(JSON.stringify(before)!==JSON.stringify(after)||JSON.stringify(owner)!==JSON.stringify(after.custody)||grant.expiresAt<=options.now()||!after.intent||after.startedAt===undefined)throw Error('ordinary browser handoff custody unavailable');
+   const held=storage.kv.get<{session:BrowserSession}>(`common-browser:${grant.taskId}`);if(!held)throw Error('ordinary browser handoff session unavailable');exact(grant,held.session);
+  },
   reserveAllocation:async(grant)=>{
    await verify(grant);const at=options.now(),row=read(grant),intent=`ordinary:${grant.taskId}`;
    if(row.startedAt!==undefined||row.intent!==undefined)throw Error('ordinary browser allocation requires reconciliation');

@@ -1,6 +1,6 @@
 // Trusted observation code; page content supplies evidence, never owner authority.
 export type GeneralSelectOption = Readonly<{ value: string; label: string; disabled: boolean; selected: boolean }>;
-export type GeneralElement = Readonly<{ selector: string; tag: string; role: string; name: string; href: string; value: string; type: string; disabled: boolean; selected: boolean; checked: boolean; inForm: boolean; editable?: boolean; readOnly?: boolean; options?: readonly GeneralSelectOption[] }>;
+export type GeneralElement = Readonly<{ selector: string; tag: string; role: string; name: string; href: string; value: string; type: string; disabled: boolean; selected: boolean; checked: boolean; inForm: boolean; editable?: boolean; readOnly?: boolean; secret?:boolean; options?: readonly GeneralSelectOption[] }>;
 export type GeneralPageState = Readonly<{ url: string; title: string; text: string; width: number; height: number; scrollX: number; scrollY: number; elements: readonly GeneralElement[] }>;
 export type GeneralObservation = Readonly<{ revision: string; tab_ref: string; url: string; title: string; text: string; viewport: Readonly<{ width: number; height: number }>; accessibility_snapshot?: string; elements: readonly Readonly<{ ref: string; role: string; name: string; tag: string; disabled: boolean; checked?: boolean; options?: readonly GeneralSelectOption[] }>[]; tabs: readonly Readonly<{ ref: string; url: string; title: string }>[] }>;
 export type GeneralSnapshot = Readonly<{ ownerId: string; sessionId: string; generation: number; targetId: string; digest: string; state: GeneralPageState; observation: GeneralObservation; image: Readonly<{ mime_type: 'image/png'; bytes: Uint8Array }> }>;
@@ -22,6 +22,7 @@ export function generalPageState(): GeneralPageState {
     const box = node.getBoundingClientRect(), style = root.getComputedStyle(node);
     if (!box.width || !box.height || style.visibility === 'hidden' || style.display === 'none') continue;
     const tag = String(node.tagName).toLowerCase(), type = String(node.type ?? '');
+    const secret=type==='password'||String(node.getAttribute('autocomplete')??'').toLowerCase().split(/\s+/).includes('one-time-code');
     // Keep page evaluation self-contained after esbuild's keepNames transform;
     // a named nested function would reference a host-only __name helper.
     const parts: string[] = [];
@@ -45,7 +46,7 @@ export function generalPageState(): GeneralPageState {
     else if(['input','textarea'].includes(tag) || node.isContentEditable) nativeRole='textbox';
     const role=node.getAttribute('role') || nativeRole;
     const options = tag === 'select' ? Array.from(node.options).map((option: any) => ({ value: String(option.value), label: String(option.label), disabled: Boolean(option.disabled || option.parentElement?.disabled), selected: Boolean(option.selected) })) : undefined;
-    elements.push({ selector: parts.join(' > '), tag, role, name, href: tag === 'a' ? node.href : '', value: type === 'password' || type === 'file' ? '' : String(node.value ?? ''), type, disabled: Boolean(node.disabled || node.matches(':disabled') || node.getAttribute('aria-disabled')==='true'), selected: Boolean(node.selected), checked: Boolean(node.checked), inForm: Boolean(node.form), editable:Boolean(node.isContentEditable), readOnly:Boolean(node.readOnly || node.getAttribute('aria-readonly')==='true'), ...(options ? { options } : {}) });
+    elements.push({ selector: parts.join(' > '), tag, role, name, href: tag === 'a' ? node.href : '', value: secret || type === 'file' ? '' : String(node.value ?? ''), type, ...(secret?{secret:true}:{}), disabled: Boolean(node.disabled || node.matches(':disabled') || node.getAttribute('aria-disabled')==='true'), selected: Boolean(node.selected), checked: Boolean(node.checked), inForm: Boolean(node.form), editable:Boolean(node.isContentEditable), readOnly:Boolean(node.readOnly || node.getAttribute('aria-readonly')==='true'), ...(options ? { options } : {}) });
   }
   return { url: root.location.href, title: document.title, text: document.body?.innerText ?? '', width: root.innerWidth, height: root.innerHeight, scrollX: root.scrollX, scrollY: root.scrollY, elements };
 }

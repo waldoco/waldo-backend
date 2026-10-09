@@ -33,7 +33,7 @@ it('one explicit bounded operator policy serves two existing owners and a newly 
         newCDPSession: async (page: any) => ({ send: async (method:string) => method==='Accessibility.getFullAXTree'?{nodes:[{nodeId:'owner-page',role:{value:'heading'},name:{value:`Owner ${subject} ${page.url()}`},properties:[]}]}:({ targetInfo: { targetId: page.id } }), detach: async () => {} }),
         newPage: async () => {
           let url = 'about:blank';
-          const page = { id: crypto.randomUUID(), url: () => url, title: async () => `Owner ${subject}`, setDefaultTimeout() {}, goto: async (target: string) => { url = target; return { status: () => 200 }; },
+          const page = { id: crypto.randomUUID(), url: () => url, title: async () => `Owner ${subject}`, setDefaultTimeout() {}, locator: (selector:string) => ({selector}), goto: async (target: string) => { url = target; return { status: () => 200 }; },
             evaluate: async () => ({ url, title: `Owner ${subject}`, text: `Owner ${subject} cookie-${subject} ${url}`, width: 1, height: 1, scrollX: 0, scrollY: 0, elements: [] }), screenshot: async () => png.slice(), close: async () => { row.pages = row.pages.filter(p => p !== page); } };
           row.pages.push(page); return page;
         } };

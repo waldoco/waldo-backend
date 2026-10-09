@@ -1,8 +1,9 @@
+import {browserHandoffConsole} from './browser-handoff-console';
 import { browsePageArgsSchema, browseActArgsSchema, WALDO_CHAT_MODEL, type BrowseActArgs, type BrowsePageArgs, type LLMAttachment, type ToolHandler } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
-import { commonBrowserHost, maintainCommonBrowsers, revokeCommonBrowsers } from './common-browser-host';
+import { commonBrowserHost, maintainCommonBrowsers, revokeCommonBrowsers,fenceLostNativeHandoffs } from './common-browser-host';
 import { commonPublicBrowserConfiguration } from './common-public-browser-configuration';
 import { COMMON_TEST_CEILING_MICROUSD, commonBrowserSdk, commonStagingRegistration } from './common-staging-registration';
 import { OpenAIResponsesAdapter } from '../llm/openai';
@@ -23,6 +24,7 @@ export function ownerBrowserRuntime(options: Readonly<{
   env: TelegramWebhookEnv; storage: DurableObjectStorage; actualDoId: string;
   activeScope(): RunEffectScope | undefined;
 }>) {
+  fenceLostNativeHandoffs(options.storage,Date.now());
   let active: { scope?: RunEffectScope; taskId:string; ownerId:string; host: ReturnType<typeof commonBrowserHost> } | undefined;
   let lease: Readonly<{scope?:RunEffectScope;deadline:number;assertCurrent():Promise<void>}>|undefined;
   const continuationKey='common-browser-current:v1';
@@ -109,6 +111,12 @@ export function ownerBrowserRuntime(options: Readonly<{
   const funded=(scope:RunEffectScope)=>active?.scope===scope||options.storage.kv.get(`common-browser:${scope.runId}`)!==undefined||options.storage.kv.get(`common-browser-run:${scope.runId}`)!==undefined;
   return {
     current,
+    consoleHandoff(request:Request,csrf:string,assertSession:()=>Promise<void>){
+      const held=active;
+      const admit=async()=>{await assertSession();if(held){const owner=await assertOwner();await assertSession();if(active!==held||held.ownerId!==`prn_${owner.directoryOwnerId.replaceAll('-','')}`&&held.ownerId!==owner.directoryOwnerId)throw new ClosedRunError();}};
+      return browserHandoffConsole(request,{csrf,ownerScope:options.actualDoId,limiter:options.env.RESPONSIBILITY_RATE_LIMITER,assertConsole:admit,
+        status:async()=>held?.host.handoffStatus(),open:async()=>{if(!held)throw new ClosedRunError();return held.host.openHandoff();},cancel:async()=>{if(!held)throw new ClosedRunError();await held.host.cancel();}});
+    },
     guard<T>(handler: ToolHandler<T, unknown, ToolDispatcherContext>, principal?: () => string): ToolHandler<T, unknown, ToolDispatcherContext> {
       return { ...handler, async handle(args, ctx) {
         try {
@@ -162,7 +170,7 @@ export function ownerBrowserRuntime(options: Readonly<{
       } };
     },
     act(fallback:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>):ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>{
-      return {...fallback,schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page retain_session:true first, then use its session_handle. Native actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, cancel. session_handle explicitly continues an existing owner session. File selection and page sends are unsupported; uncertain effects cannot repeat. Browserbase remains an explicit alternative.',async handle(args,ctx){
+      return {...fallback,schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page retain_session:true first, then use its session_handle. Native actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, owner_login, resume_owner_login, cancel. owner_login pauses this turn for human sign-in in the authenticated console; end the turn and ask the owner to reply after Done. Resume only on that later owner reply, then verify the intended signed-in account from fresh evidence. session_handle explicitly continues an existing owner session. File selection and page sends are unsupported; uncertain effects cannot repeat. Browserbase remains an explicit alternative.',async handle(args,ctx){
         try{
           const assertCurrent=current(ctx);await assertCurrent();
           if(args.provider==='browserbase_stagehand_http_v3'&&(args.command||args.session_handle))throw new ClosedRunError();
@@ -172,6 +180,7 @@ export function ownerBrowserRuntime(options: Readonly<{
           if(!args.provider&&!args.session_handle&&args.command&&!options.env.COMMON_BROWSER_REGISTRATION&&!automatic.hasRetained()&&!active)return fallback.handle(args,{...ctx,assertTaskSourceCurrent:assertCurrent});
           const bound=await bindHost(ctx,args.session_handle);
           const result=await bound.active.host.actionHandler.handle(args,bound.context);
+          if(args.command?.operation==='owner_login'&&result.ok){const origin=options.storage.kv.get<string>('origin');if(origin&&new URL(origin).protocol==='https:'&&'data' in result&&result.data&&typeof result.data==='object')Object.assign(result.data,{console_url:new URL('/console/browser-handoff',origin).href});}
           if(args.command?.operation==='cancel'&&result.ok){active=undefined;lease=undefined;options.storage.kv.put(continuationKey,null);}else publishPointer();return result;
         }catch(cause){traceBrowserFailure('act',cause);return {ok:false,code:'rejected',error:`The selected owner browser session or current action is unavailable (${browserFailureClass(cause)}). No replacement or provider switch was made.`,source_taint:'external'};}
       }};
@@ -239,7 +248,7 @@ export function ownerBrowserRuntime(options: Readonly<{
     stop() { revokeCommonBrowsers(options.storage, Date.now()); },
     maintain() {
       return maintenance??=(async()=>{
-        if(active){const row=options.storage.kv.get<{cleanup?:string;cleanupFailed?:boolean;session:{expiresAt:number}}>(`common-browser:${active.taskId}`);if(row&&!row.cleanupFailed&&(row.cleanup||row.session.expiresAt<=Date.now())){const held=active;await held.host.cancel();if(active===held){active=undefined;lease=undefined;}}}
+        if(active){await active.host.maintainHandoff();const row=options.storage.kv.get<{cleanup?:string;cleanupFailed?:boolean;session:{expiresAt:number}}>(`common-browser:${active.taskId}`);if(row&&!row.cleanupFailed&&(row.cleanup||row.session.expiresAt<=Date.now())){const held=active;await held.host.cancel();if(active===held){active=undefined;lease=undefined;}}}
         const config=await automatic.configuration(true)??(automatic.selected?undefined:configuration(true));
         if(config)await maintainCommonBrowsers(options.storage,config,Date.now());
         const sdk=commonBrowserSdk();if(options.env.BROWSER&&sdk){

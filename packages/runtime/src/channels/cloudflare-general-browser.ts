@@ -1,10 +1,11 @@
+import {nativeBrowserHandoff} from './native-browser-handoff';
 import {prepareGeneralPublicRead} from './general-browser-public-read';
 import { LIMITS, validId, validatePath } from '@waldo/workspace';
 import type { Browser, BrowserContext, BrowserWorker, Page, Route } from '@cloudflare/playwright';
 import { browserSessionSchema, type BrowserSession } from '@waldo/contracts';
 import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
 import { cloudflareBrowserGuardOptions } from './cloudflare-browser-adapter';
-import { generalDigest, generalPageState, type GeneralSnapshot, type GeneralActionSnapshot } from './general-browser-observation';
+import { generalDigest, generalPageState, type GeneralSnapshot, type GeneralActionSnapshot,type GeneralPageState } from './general-browser-observation';
 import { parseGeneralBrowserAction, type GeneralBrowserAction } from './general-browser-actions';
 export type { GeneralBrowserAction } from './general-browser-actions';
 import { generalBrowserDiagnostic, type GeneralBrowserDiagnostic } from './general-browser-diagnostic';
@@ -15,7 +16,7 @@ export class GeneralBrowserError extends Error {
   cleanup_failed?: true;
   constructor(readonly code: 'rejected' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'observation_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
 }
-type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; cleanupBinding?(providerSessionId:string):BrowserWorker; publicRead?:boolean; retainConnection?:boolean; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number }>;
+type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; cleanupBinding?(providerSessionId:string):BrowserWorker; publicRead?:boolean; retainConnection?:boolean; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number; authorizeHumanRequest?(url:string,method:string):Promise<boolean> }>;
 type Navigation = Readonly<{ goto(page: Page, url: string): Promise<void>; finish(page: Page): Promise<void>; pending(page: Page): boolean; dispatched(): void }>;
 
 // The owner host owns the durable checkpoint, authority and serialization. This
@@ -27,6 +28,9 @@ export function cloudflareGeneralBrowser(options: Options) {
   let documentFailure: GeneralBrowserError | undefined;
   const invalidDocuments = new Set<Page>();
   let guardedContext: BrowserContext | undefined;
+  const humanRequests=new Set<Promise<void>>();
+  const humanRedirects=new WeakMap<Page,Set<string>>();
+  let takeover: ReturnType<typeof nativeBrowserHandoff> | undefined;
   let currentRouteGuard: ((route: Route) => Promise<void>) | undefined;
   const connectionKey = (session: BrowserSession) => JSON.stringify([session.ownerId, session.id, session.generation, session.providerSessionId]);
   const cleanupTimeoutMs = options.cleanupTimeoutMs ?? 10000;
@@ -80,6 +84,7 @@ export function cloudflareGeneralBrowser(options: Options) {
     finally { await cdp.detach(); }
   };
   const attached = async <T>(session: BrowserSession, work: (browser: Browser, context: BrowserContext, navigation: Navigation) => Promise<T>): Promise<T> => {
+    if(takeover)throw new GeneralBrowserError('rejected');
     let browser: Browser | undefined, context: BrowserContext | undefined, primary: GeneralBrowserError | undefined;
     let mutationDispatched = false, pageCleanupFailed = false;
     const redirects = new Map<Page, string>();
@@ -150,6 +155,22 @@ export function cloudflareGeneralBrowser(options: Options) {
       // documents. Between operations the previous guard still checks authority.
       currentRouteGuard = async route => {
         try {
+          if(takeover){
+            const request=route.request(),page=request.frame().page();
+            const authorize=async(url:string,method:string)=>{identity(session);if(!takeover||!options.authorizeHumanRequest||!await options.authorizeHumanRequest(url,method))throw new GeneralBrowserError('rejected');identity(session);};
+            // Preserve the existing 10s transport bound, using funded session
+            // expiry rather than the model turn that has deliberately ended.
+            const timeout=()=>{const remaining=session.expiresAt-options.now();if(remaining<=0)throw new GeneralBrowserError('rejected');return Math.min(10000,remaining);};
+            let redirect:Readonly<{page:Page;url:string;committed:Promise<unknown>}>|undefined;
+            await guardGeneralBrowserRoute(route,{authorize,timeout,admit:()=>authorize(request.url(),request.method()),redirect:(page,url)=>{const committed=page.waitForEvent('domcontentloaded',{timeout:timeout()});void committed.catch(()=>undefined);redirect={page,url,committed};},denied:(page,status)=>{invalidDocuments.add(page);documentFailure=new GeneralBrowserError('page_unavailable',{status});}});
+            if(redirect){
+              const visited=humanRedirects.get(page)??new Set<string>();visited.add(request.url());
+              if(visited.has(redirect.url)||visited.size>GENERAL_BROWSER_REDIRECT_LIMIT)throw new GeneralBrowserError('rejected');humanRedirects.set(page,visited);
+              await redirect.committed;if(page.url()!==request.url())throw new GeneralBrowserError('rejected');
+              await authorize(redirect.url,'GET');await redirect.page.goto(redirect.url,{waitUntil:'domcontentloaded',timeout:timeout()});
+            }else if(request.isNavigationRequest()&&!request.frame().parentFrame())humanRedirects.delete(page);
+            return;
+          }
           await guardGeneralBrowserRoute(route, { authorize: (url, method) => allowed(session, url, method), timeout: () => actionTimeout(session), admit: () => admit(session),
             redirect: (page, url) => { redirects.set(page, url); }, denied: (page, status) => { invalidDocuments.add(page); documentFailure = new GeneralBrowserError('page_unavailable', { status }); } });
           await admit(session);
@@ -163,7 +184,14 @@ export function cloudflareGeneralBrowser(options: Options) {
         }
       };
       if (guardedContext !== context) {
-        await context.route('**/*', route => currentRouteGuard!(route));
+        await context.route('**/*', route => {
+          // Once Done has been consumed, reject new viewer requests while any
+          // admitted human transport settles before fresh agent observation.
+          if(takeover?.ready())return route.abort('blockedbyclient');
+          const human=takeover,pending=currentRouteGuard!(route);
+          if(human){humanRequests.add(pending);const settled=()=>{humanRequests.delete(pending);};void pending.then(settled,settled);}
+          return pending;
+        });
         guardedContext = context;
       }
       const result = await work(browser, context, navigation); await admit(session);
@@ -218,16 +246,35 @@ export function cloudflareGeneralBrowser(options: Options) {
       return await Promise.race([read(),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new GeneralBrowserError('provider_unavailable')),timeout);})]);
     } finally {clearTimeout(timer!);}
   };
-  const semanticSnapshot = async (session: BrowserSession, context: BrowserContext, page: Page) => {
+  const semanticSnapshot = async (session: BrowserSession, context: BrowserContext, page: Page,state:GeneralPageState) => {
     const cdp = await boundedSemanticRead(session,()=>context.newCDPSession(page));
     try {
       await admit(session);
       const {nodes} = await boundedSemanticRead(session,()=>cdp.send('Accessibility.getFullAXTree')); await admit(session);
-      const visible=nodes.filter(node=>!node.ignored);
+      // Correlate marked secret DOM controls by backend ID rather than role:
+      // numeric OTPs and overridden ARIA roles are still credential fields.
+      const secretBackends=new Set<number>();
+      if(state.elements.some(element=>element.secret)){
+        const {root}=await boundedSemanticRead(session,()=>cdp.send('DOM.getDocument',{depth:-1,pierce:true}));await admit(session);
+        const domNodes=[root];
+        while(domNodes.length){
+          const node=domNodes.pop()!,attributes=new Map<string,string>();
+          for(let i=0;i<(node.attributes?.length??0);i+=2)attributes.set(node.attributes![i]!.toLowerCase(),node.attributes![i+1]!);
+          if(['INPUT','TEXTAREA'].includes(node.nodeName)&&(attributes.get('type')?.toLowerCase()==='password'||(attributes.get('autocomplete')??'').toLowerCase().split(/\s+/).includes('one-time-code')))secretBackends.add(node.backendNodeId);
+          domNodes.push(...(node.children??[]),...(node.shadowRoots??[]));if(node.contentDocument)domNodes.push(node.contentDocument);
+        }
+      }
+      const secretNodes=new Set(nodes.filter(node=>node.backendDOMNodeId!==undefined&&secretBackends.has(node.backendDOMNodeId)).map(node=>node.nodeId));
+      const matchedBackends=new Set(nodes.filter(node=>node.backendDOMNodeId!==undefined&&secretBackends.has(node.backendDOMNodeId)).map(node=>node.backendDOMNodeId));
+      if(matchedBackends.size<state.elements.filter(element=>element.secret).length)throw new GeneralBrowserError('stale_observation');
+      const byId=new Map(nodes.map(node=>[node.nodeId,node])),secretChildren=new Set<string>();
+      const pending=nodes.filter(node=>secretNodes.has(node.nodeId)).flatMap(node=>node.childIds??[]);
+      while(pending.length){const id=pending.pop()!;if(secretChildren.has(id))continue;secretChildren.add(id);pending.push(...(byId.get(id)?.childIds??[]));}
+      const visible=nodes.filter(node=>!node.ignored&&!secretChildren.has(node.nodeId));
       const indexes=new Map(visible.map((node,index)=>[node.nodeId,index]));
       return JSON.stringify(visible.map(node=>({
-        role:node.role?.value, name:node.name?.value, ...(node.description?{description:node.description.value}:{}),
-        ...(node.value?{value:node.value.value}:{}),
+        role:node.role?.value, name:secretNodes.has(node.nodeId)?'[owner credential field]':node.name?.value, ...(node.description&&!secretNodes.has(node.nodeId)?{description:node.description.value}:{}),
+        ...(node.value&&!secretNodes.has(node.nodeId)?{value:node.value.value}:{}),
         states:Object.fromEntries((node.properties??[]).filter(property=>['disabled','expanded','checked','selected','readonly','required','invalid','multiselectable','level','modal','orientation'].includes(property.name)).map(property=>[property.name,property.value.value])),
         children:(node.childIds??[]).flatMap(id=>indexes.has(id)?[indexes.get(id)!]:[]),
       })));
@@ -236,12 +283,12 @@ export function cloudflareGeneralBrowser(options: Options) {
   const observe = async (session: BrowserSession, context: BrowserContext, page: Page): Promise<GeneralSnapshot> => {
     await allowed(session, page.url());
     const state = await page.evaluate(generalPageState); await admit(session);
-    const semantic = await semanticSnapshot(session,context,page); await admit(session);
+    const semantic = await semanticSnapshot(session,context,page,state); await admit(session);
     if (!state.text.trim()) throw new GeneralBrowserError('empty_content');
-    const bytes = new Uint8Array(await page.screenshot({ type: 'png', animations: 'disabled', caret: 'hide', scale: 'css' })); await admit(session);
+    const bytes = new Uint8Array(await page.screenshot({ type: 'png', animations: 'disabled', caret: 'hide', scale: 'css',mask:[page.locator('input[type="password"],input[autocomplete~="one-time-code" i],textarea[autocomplete~="one-time-code" i]')] })); await admit(session);
     if (bytes.byteLength > options.maxScreenshotBytes) throw new GeneralBrowserError('image_oversize');
     const current = await page.evaluate(generalPageState); await admit(session);
-    const currentSemantic = await semanticSnapshot(session,context,page); await admit(session);
+    const currentSemantic = await semanticSnapshot(session,context,page,current); await admit(session);
     if (currentSemantic !== semantic || JSON.stringify(current) !== JSON.stringify(state)) throw new GeneralBrowserError('stale_observation');
     const target = await targetId(context, page);
     const digest = await generalDigest(JSON.stringify({ state, semantic, image: await generalDigest(bytes) }));
@@ -283,6 +330,7 @@ export function cloudflareGeneralBrowser(options: Options) {
     hasRetainedConnection:()=>connected!==undefined,
     async disconnect(): Promise<void> {
       const retained = connected; connected = undefined; guardedContext=undefined;
+      try{await takeover?.dispose();}finally{takeover=undefined;}
       if (!retained) return;
       // Leaving a turn disconnects only after closing active documents. Current
       // authority still guards requests while model calls wait between actions.
@@ -298,6 +346,19 @@ export function cloudflareGeneralBrowser(options: Options) {
       try { await cleanup(step => step(() => retained.browser.close())); }
       catch { failure ??= new GeneralBrowserError('cleanup_unconfirmed'); failure.release_failed = true; }
       if (failure) throw failure;
+    },
+    async beginOwnerHandoff(session:BrowserSession,snapshot:GeneralActionSnapshot,reason:string,assertCustody:()=>Promise<void>){
+      await assertCustody();identity(session);if(takeover||!connected||connected.sessionKey!==connectionKey(session))throw new GeneralBrowserError('session_lost');
+      const page=await select(session,connected.context,snapshot.observation.tab_ref);
+      if(await targetId(connected.context,page)!==snapshot.targetId)throw new GeneralBrowserError('stale_observation');
+      const cdp=await connected.context.newCDPSession(page);
+      takeover=nativeBrowserHandoff({cdp,providerSessionId:session.providerSessionId,targetId:snapshot.targetId,expiresAt:session.expiresAt,now:options.now,assertCustody});
+      return {controller:takeover,handoffId:await takeover.start(reason),origin:new URL(page.url()).origin};
+    },
+    async finishOwnerHandoff(session:BrowserSession,reference:string){
+      if(!takeover?.ready())throw new GeneralBrowserError('rejected');
+      const held=takeover;await Promise.all([...humanRequests]);if(!held.ready())throw new GeneralBrowserError('rejected');held.complete();await held.dispose();takeover=undefined;
+      return attached(session,async(_,context)=>observe(session,context,await select(session,context,reference)));
     },
     async start(allowedDomains: readonly string[] | 'public', lifetimeMs: number,
       beforeAllocate: (allocation: Readonly<{ allowedDomains: readonly string[] | 'public'; lifetimeMs: number }>) => Promise<void>,
@@ -336,7 +397,7 @@ export function cloudflareGeneralBrowser(options: Options) {
       const element = snapshot.state.elements[index];
       if (action.operation !== 'scroll' && (!element || element.disabled)) throw new GeneralBrowserError('stale_observation');
       if (element?.href) await allowed(session, element.href);
-      if (action.operation === 'fill' && (!['input', 'textarea'].includes(element!.tag) && !element!.editable || element!.readOnly || ['password', 'file', 'hidden', 'checkbox', 'radio'].includes(element!.type))) throw new GeneralBrowserError('rejected');
+      if (action.operation === 'fill' && (!['input', 'textarea'].includes(element!.tag) && !element!.editable || element!.readOnly || element!.secret || ['password', 'file', 'hidden', 'checkbox', 'radio'].includes(element!.type))) throw new GeneralBrowserError('rejected');
       if (action.operation === 'set_checked' && (element!.tag!=='input' || !['checkbox','radio'].includes(element!.type) || element!.type==='radio' && !action.checked)) throw new GeneralBrowserError('rejected');
       if (action.operation === 'select' && element!.tag !== 'select') throw new GeneralBrowserError('rejected');
       if (action.operation === 'select' && !element!.options?.some(option => option.value === action.value && !option.disabled)) throw new GeneralBrowserError('rejected');
