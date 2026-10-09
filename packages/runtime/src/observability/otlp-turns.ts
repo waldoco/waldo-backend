@@ -44,8 +44,9 @@ const hex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))
 const nanos = (ms: number) => `${Math.round(ms)}000000`;
 const attr = (key: string, value: string) => ({ key, value: { stringValue: value } });
 const list = (key: string, values: readonly string[]) => ({ key, value: { arrayValue: { values: values.map((stringValue) => ({ stringValue })) } } });
-// Retain the existing 50-item budget; apply it to hops and outstanding exports too.
+// Outstanding exports keep the 50-item budget. Buffered hops get their own, larger one so a long tool turn keeps every span.
 const MAX_RETAINED = 50;
+const MAX_BUFFERED_HOPS = 1000;
 // OpenTelemetry's standard OTLP exporter timeout.
 const EXPORT_TIMEOUT_MS = 10_000;
 const tagsFor = (context: TraceContext, spans: readonly Span[]) => [
@@ -203,7 +204,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
     const done = exported.get(entry.trace);
     if (done) return post([span(done.traceId, hex(8), done.rootId, item, [list('langfuse.trace.tags', tagsFor(context, [item]))], done.rootHop)], done.delivery);
     if (entry.hop !== 'turn' && entry.hop !== 'machine_turn') {
-      const overflow = bufferedHops >= MAX_RETAINED;
+      const overflow = bufferedHops >= MAX_BUFFERED_HOPS;
       if (overflow) {
         let oldest = pending.keys().next().value!;
         // Each trace's hops are arrival-ordered; compare heads across all traces.

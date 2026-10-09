@@ -610,3 +610,4 @@ footer .refresh:disabled { opacity:1; }
 .tree .disclosure>summary .value{flex-basis:calc(100% - 72px)}
 @media(max-width:600px){.activity-record>summary{flex-wrap:wrap}.activity-record>summary .time{flex-basis:100%;margin-left:28px}.tree .disclosure>summary .access-label{margin-left:12px}.primary-nav a{position:relative}.primary-nav .nav-count{position:absolute;right:8px;top:2px}}
 @media(max-width:640px){.primary-nav{position:fixed}.primary-nav[data-indicator]::before{display:none}.activity-record>summary .time{display:block}}
+.live-status{color:var(--muted,#6b6b66);font-size:.85em}

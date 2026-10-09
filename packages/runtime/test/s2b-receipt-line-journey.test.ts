@@ -49,7 +49,7 @@ it.each(['effect-turn', 'read-only-turn'])('S2b receipt line on the owner reply:
       for (let i = 0; i < 3; i++) { now += 61_000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); }
       const replies = fixture.sent.filter(text => text.includes('Done.'));
       expect(replies, JSON.stringify(fixture.sent)).toHaveLength(1);
-      if (mode === 'effect-turn') expect(replies[0], 'effect turn: last line is the receipt from the typed tool result').toMatch(/\n\nReceipts: proactivity set \(accepted\)$/);
+      if (mode === 'effect-turn') expect(replies[0], 'effect turn: last line is the receipt from the typed tool result').toMatch(/\n\nDone: proactivity set$/);
       else expect(replies[0]).not.toContain('Receipts:');
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });

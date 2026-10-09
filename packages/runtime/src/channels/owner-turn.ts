@@ -619,7 +619,7 @@ export const createOwnerResponder = (
     },
     async migrate(trace, input) {
       if (!memory) return 'no memory';
-      if (holdsAnyHeldTopic()) return 'historical memory migration deferred: forgetting coverage incomplete';
+      if (holdsAnyHeldTopic()) throw new Error('historical memory migration deferred: forgetting coverage incomplete');
       const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
       return applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', undefined, { owner: input }, false);
     },

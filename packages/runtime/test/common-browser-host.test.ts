@@ -186,3 +186,52 @@ it('near-full public observation evidence cannot prevent exact cancellation clea
  expect(await host.actionHandler.handle({...args,url:observed.data.url},f.ctx)).toMatchObject({ok:false});
  expect(operation==='close_tab'?commonBrowserFixture.tabCloses:commonBrowserFixture.navigations).toBe(afterRead);await host.cancel();
  });
+
+
+it('selects an observed enabled public filter and publishes semantic selected state',async()=>{
+ const f=fixture();commonBrowserFixture.filters=true;const host=f.host();
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read filters.'},f.ctx) as any;
+ const select=first.data.elements.find((row:any)=>row.name==='Region');
+ const result=await host.actionHandler.handle({url:first.data.url,task:'Choose the North filter',session_handle:first.data.session_handle,command:{operation:'select',element_ref:select.ref,value:'north'}} as never,f.ctx) as any;
+ expect(result).toMatchObject({ok:true,data:{elements:expect.arrayContaining([{ref:expect.any(String),role:'combobox',name:'Region',tag:'select',disabled:false,options:expect.arrayContaining([{value:'north',label:'North',disabled:false,selected:true}])}])}});
+ expect(commonBrowserFixture.allocations).toBe(1);
+ await host.cancel();
+});
+
+it('returns native accessibility context and verified desired checkbox state on the exact retained session',async()=>{
+ const f=fixture();commonBrowserFixture.filters=true;const host=f.host();
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read available filters.'},f.ctx) as any;
+ expect(first.data.accessibility_snapshot).toContain('"name":"Available only"');
+ const checkbox=first.data.elements.find((row:any)=>row.name==='Available only');
+ expect(checkbox.checked).toBe(false);
+ const result=await host.actionHandler.handle({url:first.data.url,task:'Show available only',session_handle:first.data.session_handle,command:{operation:'set_checked',element_ref:checkbox.ref,checked:true}} as never,f.ctx) as any;
+ expect(result).toMatchObject({ok:true,data:{session_handle:first.data.session_handle}});
+ expect(result.data.elements.find((row:any)=>row.name==='Available only').checked).toBe(true);
+ expect(result.data.accessibility_snapshot).toContain('"checked":true');
+ expect(commonBrowserFixture.allocations).toBe(1);await host.cancel();
+});
+
+it('a disabled public option is refused without dispatching a selection or granting another session',async()=>{
+ const f=fixture();commonBrowserFixture.filters=true;const host=f.host();
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read filters.'},f.ctx) as any;
+ const select=first.data.elements.find((row:any)=>row.name==='Region');
+ expect(await host.actionHandler.handle({url:first.data.url,task:'Choose unavailable',session_handle:first.data.session_handle,command:{operation:'select',element_ref:select.ref,value:'closed'}} as never,f.ctx)).toMatchObject({ok:false});
+ expect(commonBrowserFixture.effects).toBe(0);expect(commonBrowserFixture.allocations).toBe(1);await host.cancel();
+});
+
+it('continues beyond four observations while retaining only bounded recent model images',async()=>{
+ const f=fixture(),host=f.host(),url='https://public-pages.fixture.invalid/a';
+ const first=await host.handler.handle({url,instruction:'Read.'},f.ctx);expect(first.ok).toBe(true);
+ for(let step=0;step<8;step++){
+  const result=await host.actionHandler.handle({url,task:'Observe the current page.',max_actions:1,command:{operation:'read'}},f.ctx);
+  expect(result).toMatchObject({ok:true,data:{session_handle:host.sessionHandle()}});
+  expect(host.attachments().length).toBeLessThanOrEqual(4);
+ }
+ expect(commonBrowserFixture.allocations).toBe(1);await host.cancel();expect(commonBrowserFixture.ends).toBe(1);
+});
+it('separates an admitted long task from the provider inactivity timeout',async()=>{
+ const f=fixture();(f.grant as any).lifetimeMs=3_600_000;(f.grant as any).keepAliveMs=600_000;(f.grant as any).expiresAt=Date.now()+3_600_000;
+ let idle:number|undefined;const load=f.config.loadSdk;f.config.loadSdk=async()=>{const sdk=await load();return {...sdk,acquire:async(binding:any,options:any)=>{idle=options.keep_alive;return sdk.acquire(binding,options);}} as never;};
+ const host=f.host();expect(await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx)).toMatchObject({ok:true});expect(idle).toBe(600_000);
+ expect((f.rows.get('common-browser:fixture-task') as any).session.expiresAt).toBeGreaterThan(Date.now()+3_500_000);await host.cancel();
+});

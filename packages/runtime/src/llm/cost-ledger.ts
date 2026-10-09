@@ -1,4 +1,6 @@
-type Sql = Pick<SqlStorage, 'exec'>;
+type Sql = Readonly<{
+  exec<T extends Record<string, string | number | null>>(query: string, ...bindings: (string | number | null)[]): { toArray(): T[] };
+}>;
 
 export const COST_KINDS = ['turn', 'background', 'worker', 'heartbeat', 'eval'] as const;
 export type CostKind = (typeof COST_KINDS)[number];

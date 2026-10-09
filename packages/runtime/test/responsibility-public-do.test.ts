@@ -18,7 +18,7 @@ import {
   workUnitExecutionStartRequestV04Schema,
 } from '@waldo/contracts';
 import { env, evictDurableObject, runInDurableObject } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { responsibilityOwnerRootName } from '../src/index';
 import {
   canonicalizePlanningProjectionIngressForDigest,
@@ -81,6 +81,14 @@ async function stubFor(ownerId: string): Promise<DurableObjectStub<RunLoopDO>> {
   const name = `${await responsibilityOwnerRootName(ownerId)}:test:${sequence}`;
   return env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName(name));
 }
+
+// The ingress limiter counts per one-minute bucket, so a run that straddles a minute boundary
+// splits its count. Rate tests pin the clock to the middle of the current bucket.
+function pinMidBucketClock(): void {
+  const middle = Math.floor(Date.now() / 60_000) * 60_000 + 30_000;
+  vi.spyOn(Date, 'now').mockReturnValue(middle);
+}
+afterEach(() => vi.restoreAllMocks());
 
 describe('production responsibility RunLoopDO RPC', () => {
   it('starts one canonical WorkUnit through signed owner RPC and recovers after eviction', async () => {
@@ -578,6 +586,7 @@ describe('production responsibility RunLoopDO RPC', () => {
 
   it('rate-limits one authenticated owner session before extra capture work', async () => {
     const ownerId = 'owner_public_rate_01';
+    pinMidBucketClock();
     const stub = await stubFor(ownerId);
     const input = await admission(ownerId, 'request_public_rate_01');
     const captureIngress = await signedCaptureIngress(ownerId, input);
@@ -618,6 +627,7 @@ describe('production responsibility RunLoopDO RPC', () => {
 
   it('enforces the owner-global ceiling across authenticated sessions', async () => {
     const ownerId = 'owner_public_global_rate_01';
+    pinMidBucketClock();
     const stub = await stubFor(ownerId);
     const firstSessionId = `authenticated_session_${'0'.repeat(64)}`;
     const captureInput = await admission(ownerId, 'request_public_global_rate_01', firstSessionId);

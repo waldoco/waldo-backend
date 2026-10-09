@@ -14,13 +14,13 @@ function harness(controlTag = 'a', inputType = 'text') {
         if (fn.name !== 'generalPageState') { calls.push(`scroll:${JSON.stringify(args)}`); return; }
         return { url, title: 'Public documentation', text: changed ? 'Changed by the human' : 'Compare Browser Run sessions and contexts.', width: 1280, height: 720, scrollX: 0, scrollY: 0, elements: [{ selector: 'html > body > a:nth-of-type(1)', tag: controlTag, role: controlTag === 'a' ? 'link' : 'textbox', name: 'Session reuse', href: controlTag === 'a' ? 'https://docs.example/reuse' : '', value, type: controlTag === 'input' ? inputType : '', disabled: false, selected: false, checked: false, inForm: false, ...(controlTag === 'select' ? { options: [{ value: 'second', label: 'Second choice', disabled: false, selected: value === 'second' }] } : {}) }] };
       },
-      locator: () => ({ click: async () => { calls.push('click'); url = 'https://docs.example/reuse'; }, fill: async (input: string) => { calls.push(`fill:${input}`); value = input; }, selectOption: async (input: string) => { calls.push(`select:${input}`); value = input; }, press: async (input: string) => { calls.push(`press:${input}`); } }),
+      locator: () => ({ ariaSnapshot:async()=>`- heading "Public documentation"\n- textbox "Session reuse": ${value}`, click: async () => { calls.push('click'); url = 'https://docs.example/reuse'; }, fill: async (input: string) => { calls.push(`fill:${input}`); value = input; }, selectOption: async (input: string) => { calls.push(`select:${input}`); value = input; }, press: async (input: string) => { calls.push(`press:${input}`); } }),
       screenshot: async () => new Uint8Array([137, 80, 78, 71]), close: async () => { pages.splice(pages.indexOf(p), 1); },
     }; pages.push(p); return p;
   };
   page();
   let routeHandler: ((route: any) => Promise<void>) | undefined;
-  const context = { close:async()=>{await Promise.all(pages.map(page=>page.close()));}, serviceWorkers:()=>[], addInitScript:async()=>{calls.push('block-service-workers');}, routeWebSocket:async(_:string,handler:any)=>{await handler({close:()=>{calls.push('block-websocket');}});}, pages: () => [...pages], newPage: async () => page(), route: async (_: string, handler: (route: any) => Promise<void>) => { routeHandler = handler; }, unroute: async () => {}, newCDPSession: async (p: any) => ({ send: async () => ({ targetInfo: { targetId: p.id } }), detach: async () => {} }) };
+  const context = { close:async()=>{await Promise.all(pages.map(page=>page.close()));}, serviceWorkers:()=>[], addInitScript:async()=>{calls.push('block-service-workers');}, routeWebSocket:async(_:string,handler:any)=>{await handler({close:()=>{calls.push('block-websocket');}});}, pages: () => [...pages], newPage: async () => page(), route: async (_: string, handler: (route: any) => Promise<void>) => { routeHandler = handler; }, unroute: async () => {}, newCDPSession: async (p: any) => ({ send: async (method:string) => method==='Accessibility.getFullAXTree'?{nodes:[{nodeId:'1',role:{value:'heading'},name:{value:'Public documentation'},properties:[]}]}:({ targetInfo: { targetId: p.id } }), detach: async () => {} }) };
   const browser = { contexts: () => [context], newContext: async () => { calls.push('new-disposable-context'); return context; }, close: async () => { calls.push('release'); }, newBrowserCDPSession: async () => ({ send: async () => { ended = true; } }) };
   const sdk = { acquire: async () => { calls.push('acquire'); return { sessionId: session.providerSessionId }; }, connect: async (_: unknown, options: any) => { expect(options).toEqual({ sessionId: session.providerSessionId, persistent: true }); if (ended) throw Error('session ended'); calls.push('attach'); return browser; }, sessions: async () => ended ? [] : [{ sessionId: session.providerSessionId }] };
   return { calls, pages, sdk, browser, context, route: (route: any) => routeHandler!(route), humanChange: () => { changed = true; } };
@@ -181,7 +181,8 @@ it('keeps an uncertain action outcome when disconnect also fails', async () => {
   const f = harness();
   const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   const first = await driver.navigate(session, 'https://docs.example/index');
-  f.pages[0].locator = () => ({ click: async () => { throw Error('PRIVATE_ACTION_ERROR'); } });
+  const originalLocator=f.pages[0].locator;
+  f.pages[0].locator = () => ({ ...originalLocator(), click: async () => { throw Error('PRIVATE_ACTION_ERROR'); } });
   f.browser.close = async () => { throw Error('PRIVATE_DISCONNECT_ERROR'); };
   await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'outcome_uncertain', release_failed: true });
 });
@@ -204,7 +205,8 @@ it('does not fulfill a denied document or report a click into it as useful work'
   const f = harness(); const routeCalls: string[] = [];
   const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   const first = await driver.navigate(session, 'https://docs.example/index');
-  f.pages[0].locator = () => ({ click: async () => {
+  const originalLocator=f.pages[0].locator;
+  f.pages[0].locator = () => ({ ...originalLocator(), click: async () => {
     await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }),
       fetch: async () => ({ status: () => 403 }), fulfill: async () => { routeCalls.push('fulfilled'); }, abort: async () => { routeCalls.push('blocked'); } });
   } });
@@ -225,7 +227,8 @@ it('fits locator auto-wait within the actual host and session deadline', async (
   const f = harness(); let now = 1, observedTimeout: number | undefined;
   const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => now, deadline: () => 100, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   const first = await driver.navigate(session, 'https://docs.example/index'); now = 99;
-  f.pages[0].locator = () => ({ click: async (options?: { timeout: number }) => {
+  const originalLocator=f.pages[0].locator;
+  f.pages[0].locator = () => ({ ...originalLocator(), click: async (options?: { timeout: number }) => {
     observedTimeout = options?.timeout;
     // The control becomes ready only after this admitted deadline.
     if (observedTimeout !== undefined && observedTimeout < 2) throw Error('actionability timed out');
@@ -279,7 +282,8 @@ it('keeps routed mutation uncertainty and separately records unconfirmed denied-
   const first = await driver.navigate(session, 'https://docs.example/index');
   f.pages[0].close = async () => { throw Error('cannot discard'); };
   f.browser.newBrowserCDPSession = async () => ({ send: async () => { throw Error('termination unconfirmed'); } });
-  f.pages[0].locator = () => ({ click: async () => {
+  const originalLocator=f.pages[0].locator;
+  f.pages[0].locator = () => ({ ...originalLocator(), click: async () => {
     await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }), fetch: async () => ({ status: () => 403 }), abort: async () => {} });
   } });
   await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'outcome_uncertain', diagnostic: { status: 403 }, cleanup_failed: true });
@@ -342,4 +346,18 @@ it('failed page shutdown ends the owned browser and returns uncertainty rather t
  const f=harness();f.pages[0].close=async()=>{throw Error('local page would stay active');};
  const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>60000,admit:async()=>{},authorizeRequest:async()=>true,maxScreenshotBytes:1024,publicRead:true});
  await expect(driver.navigate(session,'https://docs.example/index')).rejects.toMatchObject({code:'cleanup_unconfirmed'});expect(await f.sdk.sessions()).toEqual([]);expect(f.calls).toContain('release');expect(f.calls).not.toContain('acquire');
+});
+
+it('bounds native semantic reads by current run authority and never publishes an unfinished snapshot',async()=>{
+ const f=harness();const original=f.context.newCDPSession;
+ f.context.newCDPSession=async(page:any)=>{const cdp=await original(page);return {...cdp,send:async(method:string)=>method==='Accessibility.getFullAXTree'?await new Promise<never>(()=>{}):cdp.send(method)};};
+ const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>3,admit:async()=>{},authorizeRequest:async()=>true,maxScreenshotBytes:1024});
+ await expect(driver.navigate(session,'https://docs.example/index')).rejects.toMatchObject({code:'provider_unavailable'});
+ expect(f.calls).not.toContain('acquire');
+});
+
+it.each([{evidence:[{}]}, {evidence:[{sessionId:'bad id'}]}, {evidence:[{sessionId:'duplicate'},{sessionId:'duplicate'}]}])('malformed provider session evidence cannot certify exact cleanup: %j',async ({evidence})=>{
+ const f=harness();f.sdk.sessions=async()=>evidence as never;
+ const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>60000,admit:async()=>{},authorizeRequest:async()=>true,maxScreenshotBytes:1024});
+ await expect(driver.terminate(session)).rejects.toMatchObject({code:'cleanup_unconfirmed'});
 });

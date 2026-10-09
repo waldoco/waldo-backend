@@ -194,6 +194,7 @@ export type WebSearchArgs = z.infer<typeof webSearchArgsSchema>;
 // B-tool-1: read-only browser. One shot: open the page in a real browser, extract, done.
 // No act/observe here - bounded actions are a later slice with the approval gate.
 export const browsePageArgsSchema = z.strictObject({
+  retain_session: z.boolean().optional().describe('Use true before an interactive browser journey. Returns DOM, accessibility, screenshot and session_handle for subsequent browse_act calls; omit for a one-shot page read.'),
   session_handle: z.string().min(1).max(80).optional().describe('Continue the exact owner browser session returned by a prior observation; never a provider ID.'),
   provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional(),
   url: z.url().max(2000),
@@ -209,6 +210,8 @@ export const browserTaskCommandSchema = z.discriminatedUnion('operation', [
   z.strictObject({ operation: z.literal('goto'), url: z.url().max(2000), intent: browserCommandIntent }),
   z.strictObject({ operation: z.literal('click'), element_ref: z.string().min(1).max(80), intent: browserCommandIntent }),
   z.strictObject({ operation: z.literal('type'), element_ref: z.string().min(1).max(80), value: z.string().min(1).max(1000).optional(), key: z.literal('Enter').optional(), intent: browserCommandIntent }).refine(value => (value.value !== undefined) !== (value.key !== undefined), 'Type needs exactly a value or Enter'),
+  z.strictObject({ operation: z.literal('select'), element_ref: z.string().min(1).max(80), value: z.string().max(1000), intent: browserCommandIntent }),
+  z.strictObject({ operation: z.literal('set_checked'), element_ref: z.string().min(1).max(80), checked: z.boolean(), intent: browserCommandIntent }),
   z.strictObject({ operation: z.literal('scroll'), delta: z.int().min(-2000).max(2000), intent: browserCommandIntent }),
   z.strictObject({ operation: z.literal('read'), intent: browserCommandIntent }),
   z.strictObject({ operation: z.literal('wait'), milliseconds: z.int().min(0).max(1000), intent: browserCommandIntent }),

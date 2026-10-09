@@ -610,3 +610,8 @@ A fresh staging Cloudflare public read uses the existing reader without requirin
 - [ ] Compute acceptance crosses authenticated console CSV upload, normal owner tools and channel delivery: an explicit old input revision must remain exact after a newer upload, the returned PDF link must be acknowledged for the correct owner, and restart readback must preserve its hash without another provider execution. Fixtures must include the trusted ingress origin and a chat-bound channel acknowledgment.
 
 - [ ] Known command failure retains bounded terminal diagnostics and no output artifact; reopen reads the same receipt without execution. The registered tool failure must preserve a useful diagnostic preview within the dispatcher error limit, and a corrected command needs a new invocation. Failed intents without a result remain uncertain; revoked authority cannot expose late results.
+
+### Ordinary retained browser journeys
+
+- [ ] Ordinary interactive requests select `retain_session` through the published model schema and dispatcher, receive DOM/native AX/PNG, continue beyond four observations and across an owner reply, then prove exact-session absence before settling duration. Read-only requests keep one-shot cleanup. Bound image history independently of actions; separate provider inactivity from the real admitted task deadline. Preserve existing charges and ceilings without issuing/refilling trial authority.
+- [ ] Malformed or duplicate provider session IDs cannot certify absence. Lost connections invalidate old refs and disclose recreated document state; wrong/expired handles or changed owner custody never allocate a replacement or replay an effect.
