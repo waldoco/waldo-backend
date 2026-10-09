@@ -200,6 +200,33 @@ it('ordinary two-argument owner turn computes a saved CSV report, recovers lost 
   }, undefined, { COMPUTE: compute.service });
 });
 
+it('the registered owner loop reads command diagnostics and corrects the command as a new invocation', async () => {
+  const compute = computeFixture();
+  compute.execute.mockResolvedValueOnce({ bytes: new Uint8Array(), stdout: 'CSV read', stderr: 'Missing column: amount', exitCode: 2 });
+  await proof(async h => {
+    await h.state.storage.put('origin', 'https://local.invalid');
+    model.reply = request => {
+      const done = outputs(request);
+      if (!done.seedFailure) return [call('workspace_write', computeInput, 'seedFailure')];
+      const args = computeArgs(done.seedFailure.data.file_id);
+      if (!done.failedReport) return [call('workspace_compute', { ...args, argv: ['node', '-e', 'throw Error("Missing column: amount")'] }, 'failedReport')];
+      expect(done.failedReport).toMatchObject({ ok: false, code: 'rejected', source_taint: 'external', error: expect.stringContaining('Missing column: amount') });
+      expect(done.failedReport.error).toContain('code 2'); expect(done.failedReport.error).toContain('CSV read');
+      if (!done.correctedReport) {
+        expect(h.manifest()?.files).toHaveLength(1); expect(h.puts).toHaveLength(1);
+        return [call('workspace_compute', args, 'correctedReport')];
+      }
+      return done.correctedReport.ok ? `Report saved: ${done.correctedReport.data.delivery.url}` : 'Correction failed.';
+    };
+    await h.send('Compute my CSV report, inspect any command error and correct it.');
+    expect(allOutputs().correctedReport).toMatchObject({ ok: true, data: { delivery: { status: 'owner_link' } } });
+    expect(compute.execute).toHaveBeenCalledTimes(2); expect(h.manifest()?.files).toHaveLength(2);
+    const terminal = [...h.state.storage.kv.list<any>({ prefix: 'owner:effect:' })].map(([, row]) => row).filter(row => row.tool === 'workspace_compute');
+    expect(terminal).toHaveLength(2); expect(terminal.every(row => row.state === 'done')).toBe(true);
+    expect(terminal.map(row => row.receipt.result.status).sort()).toEqual(['completed', 'failed']);
+  }, undefined, { COMPUTE: compute.service });
+});
+
 it('console CSV upload reaches the ordinary owner loop, computes the requested revision, and delivers a private PDF link that survives restart', async () => {
   const compute = computeFixture();
   await proof(async h => {

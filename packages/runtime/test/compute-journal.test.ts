@@ -32,17 +32,39 @@ describe('durable bounded compute intent', () => {
     await expect(reopened.execute(request())).rejects.toThrow('workspace_pending');
     release(); await first; expect(run).toHaveBeenCalledTimes(1);
   });
-  it('a failed command or lost current authority has no completed receipt', async () => {
-    const s = state(), run = vi.fn(async () => ({ ...result(), exitCode: 1 }));
+  it('reopens known command failure diagnostics without executing again', async () => {
+    const failed = { bytes: new Uint8Array(), stdout: '', stderr: 'Missing column: amount', exitCode: 2 };
+    const s = state(), run = vi.fn(async () => failed);
     const executor = journaledCompute(s.journal, run);
-    await expect(executor.execute(request())).rejects.toThrow();
+    expect(await executor.execute(request())).toEqual(failed);
     expect(s.read()?.status).toBe('failed');
-    await expect(executor.recover('operation-1')).rejects.toThrow('workspace_pending');
-    await expect(executor.execute(request())).rejects.toThrow('workspace_pending');
+    const reopened = journaledCompute(s.journal, run);
+    expect(await reopened.recover('operation-1')).toEqual(failed);
+    expect(await reopened.execute(request())).toEqual(failed);
+    await expect(reopened.execute({ ...request(), argv: ['corrected'] })).rejects.toThrow('workspace_conflict');
     expect(run).toHaveBeenCalledTimes(1);
+  });
+  it('lost current authority leaves no completed receipt', async () => {
+    const run = vi.fn(async () => result());
     const closed = state(), check = vi.fn(async () => { throw Error('revoked'); });
     await expect(journaledCompute(closed.journal, run).execute({ ...request(), assertCurrent: check })).rejects.toThrow('revoked');
     expect(closed.read()).toBeNull();
+  });
+  it('strips terminal controls and discards a failed output body before persisting diagnostics', async () => {
+    const s = state();
+    const failed = { ...result(), stdout: 'read\u0000\tCSV\n', stderr: '\u001b[31mMissing\rcolumn\u007f', exitCode: 2 };
+    const executor = journaledCompute(s.journal, async () => failed);
+    const safe = { ...failed, bytes: new Uint8Array(), stdout: 'read\tCSV\n', stderr: '[31mMissingcolumn' };
+    expect(await executor.execute(request())).toEqual(safe);
+    expect(await executor.recover('operation-1')).toEqual(safe);
+  });
+  it('revocation after a failed command leaves an uncertain intent without readable diagnostics', async () => {
+    const s = state(); let current = true;
+    const run = vi.fn(async () => { current = false; return { ...result(), exitCode: 2 }; });
+    const executor = journaledCompute(s.journal, run);
+    await expect(executor.execute({ ...request(), assertCurrent: async () => { if (!current) throw Error('revoked'); } })).rejects.toThrow('revoked');
+    await expect(executor.recover('operation-1')).rejects.toThrow('workspace_pending');
+    expect(s.read()?.result).toBeUndefined(); expect(run).toHaveBeenCalledTimes(1);
   });
   it('rejects oversized output and traversal before recording success', async () => {
     const s = state(), run = vi.fn(async () => ({ ...result(), bytes: new Uint8Array(101) }));

@@ -18,7 +18,7 @@ export type ComputeJournal = Readonly<{ transaction<T>(work: (record: ComputeRec
 export const journaledCompute = (journal: ComputeJournal, run: (request: ComputeRequest) => Promise<ComputeResult>): ComputeExecutor => {
   const recover = async (operationId: string): Promise<ComputeResult | null> => journal.transaction(record => {
     if (record && record.operationId !== operationId) throw new WorkspaceError('rejected');
-    if (record && record.status !== 'completed') throw new WorkspaceError('pending');
+    if (record && (record.status === 'issued' || !record.result)) throw new WorkspaceError('pending');
     return { record, value: record?.result ?? null };
   });
   return {
@@ -38,18 +38,22 @@ export const journaledCompute = (journal: ComputeJournal, run: (request: Compute
       await request.assertCurrent();
       const prior = journal.transaction(record => {
         if (record && (record.operationId !== request.operationId || record.fingerprint !== fingerprint)) throw new WorkspaceError('conflict');
-        if (record && record.status !== 'completed') throw new WorkspaceError('pending');
+        if (record && (record.status === 'issued' || !record.result)) throw new WorkspaceError('pending');
         return { record: record ?? { operationId: request.operationId, fingerprint, status: 'issued' }, value: record?.result ?? null };
       });
       if (prior) return prior;
       try {
         await request.assertCurrent();
-        const result = await run(request);
-        if (result.bytes.byteLength > request.maxOutputBytes || new TextEncoder().encode(result.stdout + result.stderr).byteLength > 16_384 || result.exitCode !== 0) throw new WorkspaceError('unavailable');
+        const output = await run(request);
+        if (output.bytes.byteLength > request.maxOutputBytes || new TextEncoder().encode(output.stdout + output.stderr).byteLength > 16_384 || !Number.isSafeInteger(output.exitCode)) throw new WorkspaceError('unavailable');
+        // Failed commands retain diagnostics, never a publishable output body.
+        // Remove terminal controls so diagnostics cannot hide or overwrite displayed evidence.
+        const diagnostic = (text: string) => text.replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, '');
+        const result = output.exitCode === 0 ? output : { ...output, bytes: new Uint8Array(), stdout: diagnostic(output.stdout), stderr: diagnostic(output.stderr) };
         await request.assertCurrent();
         return journal.transaction(record => {
           if (record?.operationId !== request.operationId || record.fingerprint !== fingerprint || record.status !== 'issued') throw new WorkspaceError('rejected');
-          return { record: { ...record, status: 'completed', result }, value: result };
+          return { record: { ...record, status: result.exitCode === 0 ? 'completed' : 'failed', result }, value: result };
         });
       } catch (error) {
         journal.transaction(record => ({ record: record?.status === 'issued' ? { ...record, status: 'failed' } : record, value: undefined }));

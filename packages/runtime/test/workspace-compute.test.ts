@@ -28,6 +28,22 @@ const fixture = async (withEffects = false) => {
 };
 
 describe('workspace_compute handler with fake provider', () => {
+  it('returns terminal failure diagnostics after reopen and accepts correction only as a new invocation', async () => {
+    const w = await fixture(true);
+    const failed = { bytes: bytes('partial output must not be saved'), stdout: 'CSV read', stderr: 'Missing column: amount', exitCode: 2 };
+    w.execute.mockImplementationOnce(async request => { w.completed.set(request.operationId, failed); return failed; });
+    const first = await w.call();
+    expect(first).toMatchObject({ ok: false, code: 'rejected', source_taint: 'external', error: expect.stringContaining('Missing column: amount') });
+    if (first.ok) throw Error('failed command claimed success');
+    expect(first.error).toContain('code 2'); expect(first.error).toContain('CSV read');
+    expect(await w.call()).toMatchObject({ ok: false, error: expect.stringContaining('code 2 (recovered)') });
+    expect(w.state().files).toHaveLength(1);
+    expect(await w.handler().handle({ ...w.args(), argv: ['node', 'corrected.js'] }, ctx as never)).toMatchObject({ ok: false });
+    expect(w.execute).toHaveBeenCalledTimes(1);
+    expect(await w.handler().handle({ ...w.args(), argv: ['node', 'corrected.js'] }, { ...ctx, toolCallId: 'corrected-call' } as never)).toMatchObject({ ok: true, data: { status: 'completed' } });
+    expect(w.execute).toHaveBeenCalledTimes(2);
+    expect(w.state().files).toHaveLength(2);
+  });
   it('reserves the owner effect before provider issue and settles its exact artifact receipt', async () => {
     const w = await fixture(true); w.execute.mockImplementation(async request => {
       const reserved = [...w.rows.values()] as any[]; expect(reserved).toHaveLength(1);
@@ -36,6 +52,15 @@ describe('workspace_compute handler with fake provider', () => {
     });
     expect(await w.call()).toMatchObject({ ok: true });
     expect([...w.rows.values()]).toEqual([expect.objectContaining({ state: 'done', receipt: expect.objectContaining({ provider_id: expect.any(String) }) })]);
+  });
+  it('keeps terminal failure previews inside the dispatcher error limit', async () => {
+    const w = await fixture(true);
+    w.execute.mockResolvedValue({ ...w.result, exitCode: 2, stdout: '\n'.repeat(2000), stderr: 'Missing column\n'.repeat(500) });
+    const out = await w.call();
+    expect(out).toMatchObject({ ok: false, error: expect.stringContaining('[truncated]') });
+    if (out.ok) throw Error('failed command claimed success');
+    expect(out.error.length).toBeLessThanOrEqual(512); expect(out.error).toContain('stderr='); expect(out.error).toContain('stdout=');
+    expect(w.state().files).toHaveLength(1);
   });
   it('changed arguments under the same owner call cannot issue another effect', async () => {
     const w = await fixture(true); expect(await w.call()).toMatchObject({ ok: true });

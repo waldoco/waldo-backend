@@ -72,22 +72,29 @@ export const workspaceComputeHandler = (
             computation = await executor.execute({ operationId, argv: args.argv, inputs, outputPath: args.output_path, timeoutMs: args.timeout_ms, maxOutputBytes: args.max_output_bytes, assertCurrent });
           }
           await assertCurrent();
-          if (!Number.isSafeInteger(computation.exitCode) || computation.exitCode !== 0) throw new WorkspaceError('rejected');
+          if (!Number.isSafeInteger(computation.exitCode)) throw new WorkspaceError('rejected');
           if (!(computation.bytes instanceof Uint8Array) || computation.bytes.byteLength > args.max_output_bytes || encoder.encode(computation.stdout).byteLength + encoder.encode(computation.stderr).byteLength > LOG_BYTES) throw new WorkspaceError('quota');
+          if (computation.exitCode !== 0) return { status: 'failed' as const, recovered, stdout: computation.stdout, stderr: computation.stderr, exit_code: computation.exitCode };
           await assertCurrent();
           meta = await store.write({ path: args.path, bytes: computation.bytes, mime: args.mime, expected_revision: args.expected_revision, operation_id: operationId, provenance: 'sandbox_output' });
         }
-        return { meta, recovered, ...(computation ? { stdout: computation.stdout, stderr: computation.stderr, exit_code: computation.exitCode } : {}) };
+        return { status: 'completed' as const, meta, recovered, ...(computation ? { stdout: computation.stdout, stderr: computation.stderr, exit_code: computation.exitCode } : {}) };
       };
       // One invocation owns one intent; changing argv under the same call cannot buy a second execution.
       const effectId = await workspaceOperationId([ctx.authenticatedUserId, ctx.turnId, ctx.toolCallId], 'workspace_compute_effect');
       const wasCompleted = effects?.get(effectId)?.state === 'done';
       const saved = effects ? (await effects.execute({ operationId: effectId, owner_ref: ctx.authenticatedUserId, tool: 'workspace_compute', payload: args }, {
-        dispatch: async () => { const result = await produce(true); return { provider_id: result.meta.file_id, result }; },
-        reconcile: async () => { const result = await produce(false); return { status: 'done', receipt: { provider_id: result.meta.file_id, result } }; },
+        dispatch: async () => { const result = await produce(true); return { provider_id: result.status === 'completed' ? result.meta.file_id : operationId, result }; },
+        reconcile: async () => { const result = await produce(false); return { status: 'done', receipt: { provider_id: result.status === 'completed' ? result.meta.file_id : operationId, result } }; },
       })).result as Awaited<ReturnType<typeof produce>> : await produce(true);
-      const { meta } = saved;
       await assertCurrent();
+      // Ledger done means a terminal receipt exists, not that the command succeeded.
+      if (saved.status === 'failed') {
+        // The existing failure contract admits 512 characters; the journal retains the full bounded logs.
+        const preview = (text: string) => { const encoded = JSON.stringify(text); return encoded.length <= 150 ? encoded : `${encoded.slice(0,150)}…[truncated]`; };
+        return { ok: false as const, code: 'rejected' as const, error: `Command exited with code ${saved.exit_code}${saved.recovered || wasCompleted ? ' (recovered)' : ''}. Use a new invocation for a corrected command. Untrusted diagnostics: stderr=${preview(saved.stderr)}; stdout=${preview(saved.stdout)}`, source_taint: 'external' as const };
+      }
+      const { meta } = saved;
       // Do not claim a usable artifact until the durable body has been read back.
       await store.export(meta.file_id, meta.revision, args.max_output_bytes);
       await assertCurrent();
