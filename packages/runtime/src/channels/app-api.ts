@@ -122,6 +122,10 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (request.method !== (sending ? 'POST' : 'GET')) return fail(405);
     const body = sending ? await request.text() : '';
     if (body.length > MAX_BODY_BYTES) return fail(413);
+    if (sending) {
+      if (!env.RESPONSIBILITY_RATE_LIMITER) return fail(503);
+      try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-chat-send:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
+    }
     const forwarded = new Request(`https://telegram-owner${url.pathname}${url.search}`, {
       method: request.method,
       headers: { 'x-waldo-do-name': who.doName, 'content-type': 'application/json' },
