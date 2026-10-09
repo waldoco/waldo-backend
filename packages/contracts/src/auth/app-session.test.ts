@@ -2,8 +2,8 @@
 // active result carries one opaque rotating credential and nothing rail-specific.
 // Invariants under test: credentials exist only on an active result; not_activated, needs_invite
 // and needs_phone_proof carry no token, session or device authority; the app session view is
-// literally the app surface and never carries an owner routing name; refs must be server-issued
-// opaque identifiers; revoke is idempotent and pending carries a reconciliation handle; rotation
+// literally the app surface and never carries an owner routing name; refs must match the opaque
+// identifier format (issuance and ownership are handler checks, not schema checks); revoke is idempotent and pending carries a reconciliation handle; rotation
 // never moves the absolute expiry.
 import { describe, expect, it } from 'vitest';
 import {
@@ -59,7 +59,7 @@ describe('appCurrentSessionSchema', () => {
     expect(appCurrentSessionSchema.safeParse({ ...session, do_name: 'owner-1' }).success).toBe(false);
     expect(appCurrentSessionSchema.safeParse({ ...session, owner_id: 'o1' }).success).toBe(false);
   });
-  it.each(['account_ref', 'install_id', 'session_ref'] as const)('%s must be a server-issued opaque ref', (field) => {
+  it.each(['account_ref', 'install_id', 'session_ref'] as const)('%s must match the opaque ref format', (field) => {
     const bad = [
       'owner-1',
       '5f0c9d66-3d52-4e1e-9d4c-0a1b2c3d4e5f',
@@ -97,7 +97,7 @@ describe('consoleSessionListItemSchema', () => {
 });
 
 describe('revoke', () => {
-  it('names the session by server-issued ref', () => {
+  it('names the session by an opaque ref', () => {
     expect(appRevokeRequestSchema.safeParse({ session_ref: 'sess_0123456789abcdef0123' }).success).toBe(true);
     expect(appRevokeRequestSchema.safeParse({ session_ref: 'abc' }).success).toBe(false);
     expect(appRevokeRequestSchema.safeParse({}).success).toBe(false);
@@ -120,6 +120,11 @@ describe('revoke', () => {
 describe('rotatedExpiryHolds', () => {
   it('accepts a rotation that keeps the absolute expiry and changes the credential time', () => {
     expect(rotatedExpiryHolds(session, { ...session, credential_expires_at: 1_300, renew_after: 1_100 })).toBe(true);
+  });
+  it('rejects a rotation that moves the session to another account, install or surface', () => {
+    expect(rotatedExpiryHolds(session, { ...session, account_ref: 'acct_ffffffffffffffffffff' })).toBe(false);
+    expect(rotatedExpiryHolds(session, { ...session, install_id: 'inst_ffffffffffffffffffff' })).toBe(false);
+    expect(rotatedExpiryHolds(session, { ...session, surface: 'console' } as never)).toBe(false);
   });
   it('rejects a rotation that moves the absolute expiry or changes the session ref', () => {
     expect(rotatedExpiryHolds(session, { ...session, absolute_expires_at: 2_500 })).toBe(false);

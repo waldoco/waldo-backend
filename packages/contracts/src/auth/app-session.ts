@@ -7,8 +7,9 @@ import { z } from 'zod';
 const epochMs = z.int().nonnegative();
 const opaqueSecret = z.string().min(1).max(512);
 
-// Server-issued identifiers: a fixed kind prefix and an opaque body. A routing name, a UUID, a
-// JWT or a client-made value cannot parse as one.
+// Identifier format only: a fixed kind prefix and an opaque body. A routing name, a UUID or a
+// JWT-shaped value does not match. The format cannot prove the server issued the value; issuance,
+// account ownership and install binding are checks the live handler and store must make.
 const ref = <P extends string>(prefix: P) => z.string().regex(new RegExp(`^${prefix}_[A-Za-z0-9]{16,64}$`));
 export const accountRefSchema = ref('acct');
 export const installIdSchema = ref('inst');
@@ -64,6 +65,11 @@ export const appRevokeResultSchema = z.discriminatedUnion('status', [
 ]);
 export type AppRevokeResult = z.infer<typeof appRevokeResultSchema>;
 
-// Rotation replaces credential timing and never moves the session identity or its absolute expiry.
+// Rotation replaces credential timing only. It never moves the session to another account,
+// install or surface, and never changes its identity or absolute expiry.
 export const rotatedExpiryHolds = (before: AppCurrentSession, after: AppCurrentSession): boolean =>
-  before.session_ref === after.session_ref && before.absolute_expires_at === after.absolute_expires_at;
+  before.session_ref === after.session_ref
+  && before.account_ref === after.account_ref
+  && before.install_id === after.install_id
+  && before.surface === after.surface
+  && before.absolute_expires_at === after.absolute_expires_at;
