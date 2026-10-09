@@ -652,7 +652,7 @@ describe('ToolDispatcher', () => {
             result: {
               ok: true,
               data: { metric: 'hrv', sample: 41, unit: 'ms' },
-              source_taint: null,
+              source_taint: 'external',
             },
           },
         };
