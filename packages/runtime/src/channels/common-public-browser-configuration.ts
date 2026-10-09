@@ -63,6 +63,7 @@ export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramW
  const owner=async()=>{physical();const row=await directory.resolve('telegram',policy.subject,policy.doName);physical();if(!row||row.directoryOwnerId!==policy.directoryOwnerId.toLowerCase())throw Error('common public browser owner unavailable');return {ownerId:`prn_${row.directoryOwnerId.replaceAll('-','')}`,custodyDigest:row.custodyDigest};};
  const verify=async(grant:CommonBrowserGrant)=>{const current=await owner();if(current.ownerId!==grant.ownerId)throw Error('common public browser owner changed');const row=read();if(row.custodyDigest!==current.custodyDigest)throw Error('common public browser authority changed');if(!row.taskGrants.some(retained=>JSON.stringify(retained)===JSON.stringify(grant)))throw Error('common public browser grant changed');};
  return {
+  ownsGrant:grant=>grant.ref===policy.ref,
   ownerId:spend.policy.ownerId,
   lifetimeMs:policy.lifetimeMs,expiresAt:policy.expiresAt,
   binding:{fetch:async()=>{throw Error('common browser operation identity unavailable');}} as BrowserWorker,loadSdk:selected.loadSdk,

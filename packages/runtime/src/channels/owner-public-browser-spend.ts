@@ -1,7 +1,7 @@
 import {commonSpendReservation} from './common-spend-reservation';
 import {COMMON_BROWSER_MONTH_CEILING_MICROUSD,COMMON_TEST_CEILING_MICROUSD} from './common-staging-registration';
 import {assertCommonPublicBrowserUsage} from './common-public-browser-configuration';
-import {PUBLIC_READ_RESERVED_BROWSER_MS, type PublicReadReservation} from './cloudflare-public-read';
+import type {PublicReadReservation} from './cloudflare-public-read';
 
 const LEGACY_KEY='owner-public-browser-spend:v1',KEY='owner-public-browser-spend:v2';
 // Frozen v1 charge: historical reservations never follow a new pricing formula.
@@ -15,6 +15,7 @@ type Reservation={intent:string;month:string;reservedBrowserMs:number;chargedMic
 type Retained=Omit<Accounting,'intents'>&{reservations:readonly Reservation[]};
 const validIntent=(id:unknown):id is string=>typeof id==='string'&&id.length>0&&id.length<=256;
 const validAmount=(amount:unknown):amount is number=>Number.isSafeInteger(amount)&&(amount as number)>=0;
+const validReservedDuration=(duration:unknown):duration is number=>validAmount(duration)&&duration>0;
 const lowerCeiling=(a:number|undefined,b:number|undefined)=>a===undefined?b:b===undefined?a:Math.min(a,b);
 // Normal reads estimate browser duration at $0.09/hour, rounded up to microUSD.
 // Account-level peak/rounding charges belong to the registered test envelope.
@@ -36,7 +37,7 @@ function retainedAccounting(storage:Pick<DurableObjectStorage,'kv'>,ownerId:stri
   let sum=0;const intents=new Set(legacy?.intents??[]),months=new Map<string,number>();
   for(const item of current.reservations){
    if(!item||!validIntent(item.intent)||intents.has(item.intent)||typeof item.month!=='string'||!/^\d{4}-(0[1-9]|1[0-2])$/.test(item.month)
-    ||item.reservedBrowserMs!==PUBLIC_READ_RESERVED_BROWSER_MS||!validAmount(item.chargedMicrousd)||typeof item.settled!=='boolean'
+    ||!validReservedDuration(item.reservedBrowserMs)||!validAmount(item.chargedMicrousd)||typeof item.settled!=='boolean'
     ||item.chargedMicrousd>ownerPublicBrowserDurationMicrousd(item.reservedBrowserMs)
     ||!item.settled&&(item.durationMs!==undefined||item.chargedMicrousd!==ownerPublicBrowserDurationMicrousd(item.reservedBrowserMs))
     ||item.settled&&(!validAmount(item.durationMs)||item.durationMs>item.reservedBrowserMs||item.chargedMicrousd!==ownerPublicBrowserDurationMicrousd(item.durationMs)))throw Error('public browser retained cost conflict');
@@ -64,7 +65,7 @@ export function reserveOwnerPublicBrowser(options:Readonly<{
 }>):PublicReadReservation{
  const {storage,ownerId,custodyDigest,intent,now,reservedBrowserMs}=options;
  const bound=ownerPublicBrowserDurationMicrousd(reservedBrowserMs);
- if(!validIntent(intent)||!Number.isSafeInteger(now)||!/^[a-f0-9]{64}$/.test(custodyDigest)||reservedBrowserMs!==PUBLIC_READ_RESERVED_BROWSER_MS)throw Error('public browser reservation unavailable');
+ if(!validIntent(intent)||!Number.isSafeInteger(now)||!/^[a-f0-9]{64}$/.test(custodyDigest)||!validReservedDuration(reservedBrowserMs))throw Error('public browser reservation unavailable');
  const month=new Date(now).toISOString().slice(0,7),monthKey=`common-public-browser-month:${month}`;
  storage.transactionSync(()=>{
   options.assertCurrent();
@@ -96,25 +97,31 @@ export function reserveOwnerPublicBrowser(options:Readonly<{
    reservations:[...(current?.reservations??[]),{intent,month,reservedBrowserMs,chargedMicrousd:bound,settled:false}]} satisfies Retained);
   storage.kv.put(monthKey,spent+bound);
  });
- return Object.freeze({settle(durationMs:number){
-  const chargedMicrousd=ownerPublicBrowserDurationMicrousd(durationMs);
-  // A duration outside the reserved window is unresolved, never capped into
-  // a falsely settled charge. Preserve the full hold for reconciliation.
-  if(durationMs>reservedBrowserMs)throw Error('public browser duration exceeds reservation');
-  // The host invokes this capability only after exact physical absence evidence.
-  // Cleanup and its accounting survive run expiry, without authorizing new I/O.
-  storage.transactionSync(()=>{
-   const {current}=retainedAccounting(storage,ownerId,custodyDigest),item=current?.reservations.find(row=>row.intent===intent);
-   if(!current||!item||item.month!==month||item.reservedBrowserMs!==reservedBrowserMs)throw Error('public browser settlement conflict');
-   if(item.settled){if(item.durationMs!==durationMs)throw Error('public browser settlement conflict');return;}
-   const spent=storage.kv.get<number>(monthKey),refund=bound-chargedMicrousd;
-   const retainedMonth=current.reservations.filter(row=>row.month===month).reduce((sum,row)=>sum+row.chargedMicrousd,0);
-   if(!validAmount(spent)||spent>COMMON_BROWSER_MONTH_CEILING_MICROUSD||spent<retainedMonth)throw Error('public browser retained month conflict');
-   storage.kv.put(KEY,{...current,reservedMicrousd:current.reservedMicrousd-refund,
-    reservations:current.reservations.map(row=>row.intent===intent?{...row,chargedMicrousd,settled:true,durationMs}:row)} satisfies Retained);
-   storage.kv.put(monthKey,spent-refund);
-  });
- }});
+ return Object.freeze({settle:(durationMs:number)=>settleOwnerPublicBrowser({storage,ownerId,custodyDigest,intent,durationMs,expected:{month,reservedBrowserMs}})});
+}
+// The host calls settlement only after exact physical absence evidence. Its
+// durable owner/custody/intent binding survives restart and run expiry; this
+// accounting path never authorizes browser I/O or a new reservation.
+export function settleOwnerPublicBrowser(options:Readonly<{
+ storage:Pick<DurableObjectStorage,'kv'|'transactionSync'>;ownerId:string;custodyDigest:string;intent:string;durationMs:number;
+ expected?:Readonly<Pick<Reservation,'month'|'reservedBrowserMs'>>;
+}>):void{
+ const {storage,ownerId,custodyDigest,intent,durationMs,expected}=options;
+ const chargedMicrousd=ownerPublicBrowserDurationMicrousd(durationMs);
+ if(!validIntent(intent)||!/^[a-f0-9]{64}$/.test(custodyDigest))throw Error('public browser settlement conflict');
+ storage.transactionSync(()=>{
+  const {current}=retainedAccounting(storage,ownerId,custodyDigest),item=current?.reservations.find(row=>row.intent===intent);
+  if(!current||!item||expected&&(item.month!==expected.month||item.reservedBrowserMs!==expected.reservedBrowserMs))throw Error('public browser settlement conflict');
+  // An over-bound duration stays unresolved, never capped into a false refund.
+  if(durationMs>item.reservedBrowserMs)throw Error('public browser duration exceeds reservation');
+  if(item.settled){if(item.durationMs!==durationMs)throw Error('public browser settlement conflict');return;}
+  const monthKey=`common-public-browser-month:${item.month}`,spent=storage.kv.get<number>(monthKey),refund=item.chargedMicrousd-chargedMicrousd;
+  const retainedMonth=current.reservations.filter(row=>row.month===item.month).reduce((sum,row)=>sum+row.chargedMicrousd,0);
+  if(!validAmount(spent)||spent>COMMON_BROWSER_MONTH_CEILING_MICROUSD||spent<retainedMonth)throw Error('public browser retained month conflict');
+  storage.kv.put(KEY,{...current,reservedMicrousd:current.reservedMicrousd-refund,
+   reservations:current.reservations.map(row=>row.intent===intent?{...row,chargedMicrousd,settled:true,durationMs}:row)} satisfies Retained);
+  storage.kv.put(monthKey,spent-refund);
+ });
 }
 // Existing registration-funded allocations/model calls must also see normal
 // browser reservations. Called atomically inside their existing spend ledger,
