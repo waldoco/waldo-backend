@@ -6,6 +6,7 @@ import type {CommonBrowserConfiguration,CommonBrowserGrant} from './common-brows
 import type {CloudflareBrowserSdkLoader} from './public-fixture-browser';
 import type {TelegramWebhookEnv} from './telegram-webhook';
 import {COMMON_BROWSER_MONTH_CEILING_MICROUSD} from './common-staging-registration';
+import {assertOwnerPublicBrowserCapacity} from './owner-public-browser-spend';
 
 // Deployment/test host policy must be supplied within owner-approved testing scope.
 // This module does not create an owner decision, widen fixture authorization or enable BROWSER.
@@ -49,7 +50,7 @@ export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramW
  if(!options.cleanupOnly&&(storage.kv.get('do_name')!==policy.doName||storage.kv.get('telegram_subject')!==policy.subject))return undefined;
  const spend=freezeSpend(selected.spend);
  if(spend.policy.ownerId!==`prn_${policy.directoryOwnerId.toLowerCase().replaceAll('-','')}`||spend.policy.validUntil>policy.expiresAt)throw Error('common browser spend policy rejected');
- const ledger=commonSpendReservation(storage,spend.policy,now,()=>physical());
+ const ledger=commonSpendReservation(storage,spend.policy,now,()=>physical(),additional=>assertOwnerPublicBrowserCapacity(storage,spend.policy.ownerId,spend.policy.limitMicrousd,additional));
  const calls=commonSpendCalls(ledger,(kind,request)=>{const bound=spend.quote(kind,request);if(kind==='browser'&&bound!==0)throw Error('common browser allocation price changed');return bound;},{countModel:spend.countModel?material=>spend.countModel!(material):undefined});
  const key=`common-public-browser-usage:${policy.ref}`;
  const physical=()=>{const at=now();if(!Number.isSafeInteger(at)||at<policy.createdAt||at>=policy.expiresAt||storage.kv.get('do_name')!==policy.doName||storage.kv.get('telegram_subject')!==policy.subject||storage.kv.get('telegram_unlinked')===true||env.TELEGRAM_OWNER_DO?.idFromName(policy.doName).toString()!==actualDoId)throw Error('common public browser policy unavailable');};

@@ -52,7 +52,7 @@ it('an absent registration is distinct from expired history and never hides olde
 });
 it('normal public read reservations are included in read-only aggregate accounting without trial registration',async()=>{
  const f=fixture();f.env.COMMON_BROWSER_REGISTRATION='';
- f.rows.set('owner-public-browser-spend:v1',{ownerId:'prn_'+proof.owner.replaceAll('-',''),custodyDigest:proof.custody,reservedMicrousd:2090000,intents:['PRIVATE_INTENT']});
+ f.rows.set('owner-public-browser-spend:v1',{ownerId:'prn_'+proof.owner.replaceAll('-',''),custodyDigest:proof.custody,limitMicrousd:10000000,reservedMicrousd:2090000,intents:['PRIVATE_INTENT']});
  expect((await f.read()).browser).toMatchObject({status:'unregistered',normalPublicReadReservedMicrousd:2090000,normalPublicReadReservations:1,aggregateRetainedReservedMicrousd:2090012});
  expect(f.writes).not.toHaveBeenCalled();
 });

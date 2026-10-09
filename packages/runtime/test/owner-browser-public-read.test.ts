@@ -1,6 +1,8 @@
 import {expect,it,vi} from 'vitest';
 import {ownerBrowserRuntime} from '../src/channels/owner-browser-runtime';
 import {registerCommonBrowserSdk} from '../src/channels/common-staging-registration';
+import {commonSpendReservation} from '../src/channels/common-spend-reservation';
+import {assertOwnerPublicBrowserCapacity} from '../src/channels/owner-public-browser-spend';
 vi.mock('../src/identity/common-owner-authority',()=>({commonOwnerAuthority:()=>({resolve:async()=>({directoryOwnerId:'10000000-0000-0000-0000-000000000002',custodyDigest:'b'.repeat(64)})})}));
 const calls:string[]=[];let alive=false;
 registerCommonBrowserSdk(async()=>({
@@ -20,13 +22,22 @@ function fixture(){
  return {rows,storage,env,runtime,fallback,args,ctx,reconstruct:()=>ownerBrowserRuntime({env,storage,actualDoId:'physical',activeScope:()=>scope}),read:(id='read-1')=>runtime.read(fallback).handle(args,{...ctx,toolCallId:id} as never)};
 }
 it('ordinary owner Cloudflare read works without trial registration and reserves retained owner cost before acquire',async()=>{
- const {read,rows}=fixture(),result=await read();
+ const f=fixture();f.ctx.authenticatedUserId='prn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';const {read,rows}=f,result=await read();
  expect(result).toMatchObject({ok:true,data:{provider:'cloudflare_playwright',data:{text:'Vegetarian pasta'}}});
  expect(calls.indexOf('reserve')).toBeLessThan(calls.indexOf('acquire'));expect(calls).toContain('close');expect(alive).toBe(false);
  expect(rows.get('common-public-browser-month:'+new Date().toISOString().slice(0,7))).toBe(2090000);
 });
+it('lower declared ceiling survives descriptor removal and constrains later registered funded calls atomically',async()=>{
+ const f=fixture();(f.env as any).COMMON_BROWSER_REGISTRATION=JSON.stringify({spend:{limitMicrousd:2100000}});
+ expect(await f.read()).toMatchObject({ok:true});delete (f.env as any).COMMON_BROWSER_REGISTRATION;
+ // A new calendar month cannot restore a lost total ceiling.
+ f.rows.set('common-public-browser-month:'+new Date().toISOString().slice(0,7),0);
+ const snapshot=structuredClone([...f.rows]);expect(await f.read('read-2')).toMatchObject({ok:false});expect([...f.rows]).toEqual(snapshot);
+ const ownerId='prn_10000000000000000000000000000002',ledger=commonSpendReservation(f.storage,{ref:'later-funded',ownerId,validUntil:Date.now()+60000,limitMicrousd:3000000,maxCalls:100},Date.now,()=>{},amount=>assertOwnerPublicBrowserCapacity(f.storage,ownerId,3000000,amount));
+ expect(()=>ledger.reserve('model',2000000)).toThrow('cost ceiling');expect(ledger.reserved()).toBe(0);expect([...f.rows]).toEqual(snapshot);
+});
 it('expired trial registration does not block normal reads or reset prior reservations',async()=>{
- const f=fixture();(f.env as any).COMMON_BROWSER_REGISTRATION=JSON.stringify({scope:'verified_owners',policy:{ref:'expired',createdAt:1,expiresAt:2},spend:{validUntil:2}});
+ const f=fixture();(f.env as any).COMMON_BROWSER_REGISTRATION=JSON.stringify({policy:{ref:'expired',doName:'public-owner',subject:'81102',directoryOwnerId:'10000000-0000-0000-0000-000000000002',createdAt:1,expiresAt:2,allowedOrigins:['*'],maxAllocations:1,maxReservedBrowserMs:20000,lifetimeMs:10000,maxScreenshotBytes:1024},billing:{cloudflareAccountId:'a'.repeat(32),conservativeWorstCase:true},spend:{limitMicrousd:10000000,maxCalls:100,validUntil:2}});
  const ownerId=f.ctx.authenticatedUserId;
  f.rows.set('common-spend:expired',{policy:{ref:'expired',ownerId,validUntil:2,limitMicrousd:10000000,maxCalls:100},reservedMicrousd:100,calls:[{id:'prior',upperBoundMicrousd:100}],cleanup:[]});
  const prior=structuredClone(f.rows.get('common-spend:expired'));
