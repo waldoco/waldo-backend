@@ -123,6 +123,22 @@ describe('Google Tasks collection coverage', () => {
 });
 
 describe('Google Calendar discovery', () => {
+  it('reads the authoritative exact event in an explicit calendar without a primary fallback', async () => {
+    const urls: URL[] = [];
+    const client = googleClient(app, { refresh_token: 'grant' }, provider(() => ({ id: 'event/id', summary: 'Shared event', start: { dateTime: '2026-10-11T10:00:00Z' }, end: { dateTime: '2026-10-11T11:00:00Z' }, etag: 'v1' }), urls), undefined, account);
+    expect(await client.eventInCalendar!('team@example.test', 'event/id')).toMatchObject({ id: 'event/id', title: 'Shared event' });
+    expect(urls[0]!.pathname).toBe('/calendar/v3/calendars/team%40example.test/events/event%2Fid');
+    await expect(client.eventInCalendar!('team@example.test', 'different')).rejects.toThrow('event response');
+    expect(urls.some(u => u.pathname.includes('/primary/'))).toBe(false);
+  });
+  it('reads authoritative events from their selected calendar without a primary fallback', async () => {
+    const urls: URL[] = [];
+    const client = googleClient(app, { refresh_token: 'grant' }, provider(url => ({ id: 'event/id', status: 'cancelled', etag: 'cancelled-v2' }), urls), undefined, account);
+    expect(await client.eventInCalendar!('shared/team@example.test', 'event/id')).toMatchObject({ id: 'event/id', status: 'cancelled', etag: 'cancelled-v2' });
+    expect(urls.map(url => url.pathname)).toEqual(['/calendar/v3/calendars/shared%2Fteam%40example.test/events/event%2Fid']);
+    const wrong = googleClient(app, { refresh_token: 'grant' }, provider(() => ({ id: 'different', status: 'cancelled' })), undefined, account);
+    await expect(wrong.eventInCalendar!('shared@example.test', 'event')).rejects.toThrow('response');
+  });
   it('returns permission, calendar identity and timezone with bound pagination', async () => {
     const urls: URL[] = [];
     const fetcher = provider(() => ({ kind: 'calendar#calendarList', items: [{ id: 'shared@example.test', summary: 'Team', timeZone: 'Asia/Kolkata', accessRole: 'reader' }], nextPageToken: 'next' }), urls);
@@ -137,7 +153,7 @@ describe('Google Calendar discovery', () => {
   });
   it('reports a missing Calendar-list grant without inventing permitted calendars', async () => {
     const handler = googleHandlers({ client: async () => ({ account, calendarListsPage: async () => { throw new GoogleError(403, 'scope missing', 'ACCESS_TOKEN_SCOPE_INSUFFICIENT'); } } as never) }, desk, clock).find(h => h.name === 'query_calendar')!;
-    expect(await handler.handle(queryCalendarArgsSchema.parse({ operation: 'list_calendars' }))).toMatchObject({ ok: false, code: 'auth_failed', connect: { reason: 'scope_missing', feature: 'calendar' } });
+    expect(await handler.handle(queryCalendarArgsSchema.parse({ operation: 'list_calendars' }))).toMatchObject({ ok: false, code: 'auth_failed', connect: { reason: 'scope_missing', feature: 'calendar_list' } });
   });
   it('does not silently degrade discovery to primary-calendar events on an older proxy', async () => {
     let events = 0;
@@ -148,6 +164,21 @@ describe('Google Calendar discovery', () => {
 });
 
 describe('Calendar change continuation', () => {
+  it.each([
+    ['2026-10-11T10:00:00.000Z', '2026-10-11T10:00:00Z'],
+    ['2026-10-11T10:00:00Z', '2026-10-11T10:00:00+00:00'],
+    ['2026-10-11T10:00:00Z', '2026-10-11T15:30:00+05:30'],
+  ])('verifies equivalent Calendar instants %s and %s', async (wanted, observed) => {
+    const client = googleClient(app, { refresh_token: 'grant' }, (async (input: RequestInfo | URL) => {
+      if (String(input).includes('oauth2.googleapis.com')) return Response.json({ access_token: 'fixture' });
+      return Response.json({ id: 'event', summary: 'Meeting', start: { dateTime: observed }, end: { dateTime: '2026-10-11T11:00:00+00:00' }, etag: 'v2', extendedProperties: { private: { waldoOperation: 'marker' } } });
+    }) as typeof fetch, undefined, account);
+    await expect(client.createEvent({ id: 'event', title: 'Meeting', start: wanted, end: '2026-10-11T11:00:00.000Z', operationMarker: 'marker' })).resolves.toMatchObject({ id: 'event' });
+  });
+  it('does not equate Calendar all-day dates with timed events', async () => {
+    const client = googleClient(app, { refresh_token: 'grant' }, provider(() => ({ id: 'event', summary: 'Meeting', start: { date: '2026-10-11' }, end: { date: '2026-10-12' }, etag: 'v2' })), undefined, account);
+    await expect(client.createEvent({ id: 'event', title: 'Meeting', start: '2026-10-11T00:00:00Z', end: '2026-10-12T00:00:00Z' })).rejects.toThrow('readback');
+  });
   it('legacy change collection processes more than fifty events and retains cancelled tombstones', async () => {
     const urls: URL[] = [];
     const client = googleClient(app, { refresh_token: 'grant' }, provider(url => url.searchParams.has('pageToken')

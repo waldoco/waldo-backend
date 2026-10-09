@@ -197,3 +197,12 @@ export * from './protocol/common-workunit-execution';
 export * from './tools/schemas/memory';
 export * from './app/agent';
 export * from './app/client';
+export * from './app/controls';
+
+export * from './app/artifacts';
+export * from './app/threads';
+export * from './app/replay';
+export * from './app/rights';
+export * from './app/access';
+export * from './app/health';
+export * from './health/ingest';

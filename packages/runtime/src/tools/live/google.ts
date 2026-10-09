@@ -137,7 +137,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('query_calendar'),
     autonomy_gated: false,
     requires_connector: true,
-    handle: ({ date_range, include_declined, limit, calendar_id = 'primary', page_token, account, operation, include_hidden }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'calendar', ctx, async (client) => {
+    handle: ({ date_range, include_declined, limit, calendar_id = 'primary', page_token, account, operation, include_hidden }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => withGoogle(google, operation === 'list_calendars' ? 'calendar_list' : 'calendar', ctx, async (client) => {
       if (operation === 'list_calendars') {
         if (!client.calendarListsPage) throw new Error('Calendar discovery adapter unavailable');
         const page = googleCalendarListPageSchema.parse(await client.calendarListsPage(limit, include_hidden ?? false, page_token));

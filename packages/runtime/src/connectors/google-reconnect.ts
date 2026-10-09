@@ -1,4 +1,4 @@
-import { googleHas, GoogleError, type GoogleClient } from './google';
+import { googleHas, GoogleError, type GoogleClient, type GoogleFeature } from './google';
 
 // One reconnect notice per failure episode. The notice fires on the healthy -> failing
 // transition while no notice is outstanding; while the grant keeps failing the circuit breaker
@@ -15,9 +15,10 @@ export const reauthNoticeTransition = (
 // The confirmation read after a connect or reconnect: one real provider round trip on the new
 // grant, on the cheapest feature the grant covers. Legacy null-scope grants retain the old
 // features (googleHas), so they confirm on calendar like a full consent grant.
-export type GoogleReadbackFeature = 'calendar' | 'mail' | 'tasks';
-export const readbackFeature = (scopes: readonly string[] | null | undefined): GoogleReadbackFeature | null =>
-  (['calendar', 'mail', 'tasks'] as const).find((feature) => googleHas(scopes, feature)) ?? null;
+export type GoogleReadbackFeature = 'calendar' | 'calendar_list' | 'mail' | 'tasks';
+export const readbackFeature = (scopes: readonly string[] | null | undefined, requested?: GoogleFeature): GoogleReadbackFeature | null =>
+  requested === 'calendar_list' ? googleHas(scopes, 'calendar_list') ? 'calendar_list' : null
+    : (['calendar', 'mail', 'tasks', 'calendar_list'] as const).find((feature) => googleHas(scopes, feature)) ?? null;
 
 export class GoogleReadbackError extends Error {
   constructor(readonly kind: 'auth' | 'transient' | 'unavailable', message: string) {
@@ -33,6 +34,7 @@ export class GoogleReadbackError extends Error {
 export const confirmGoogleReadback = async (client: GoogleClient, feature: GoogleReadbackFeature, now: number): Promise<void> => {
   try {
     if (feature === 'calendar') await client.events(new Date(now).toISOString(), new Date(now + 3_600_000).toISOString(), 1, false);
+    else if (feature === 'calendar_list') { if (!client.calendarListsPage) throw new GoogleReadbackError('unavailable', 'Calendar discovery readback is unavailable'); await client.calendarListsPage(1, false); }
     else if (feature === 'mail') await client.newMail(now, 1);
     else await client.tasks('todo', 1);
   } catch (error) {

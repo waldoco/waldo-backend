@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { b64url, readConsentState } from '../src/connectors/google';
+import { b64url, googleHas, readConsentState } from '../src/connectors/google';
 import { CONSENT_TTL_MS, finishConsent, startConsent, type ConsentFlow, type ConsentGrant } from '../src/connectors/google-consent';
 import { consentPage, handleGoogleCallback, GOOGLE_FINISH_PATH } from '../src/channels/google-oauth';
 import { googleProxy } from '../src/connectors/connections';
@@ -26,6 +26,19 @@ const begin = async (deps: Parameters<typeof startConsent>[0], owner = '54584463
 };
 
 describe('google consent attempt', () => {
+  it('requests Calendar discovery only from an explicit stored feature target', async () => {
+    const { deps, memory } = setup();
+    const { url, nonce } = await startConsent(deps, app, SECRET, '5458446350', { feature: 'calendar_list', session: 'ticket', surface: 'app' });
+    expect(new URL(url).searchParams.get('scope')!.split(' ')).toEqual(['openid', 'email', 'https://www.googleapis.com/auth/calendar.calendarlist.readonly']);
+    expect(memory.flows()[nonce]!.feature).toBe('calendar_list');
+    const exchange = vi.fn(async () => ({ email: 'me@example.com', scopes: ['https://www.googleapis.com/auth/calendar.calendarlist.readonly'] }));
+    await finishConsent(deps, { nonce, code: 'one-time-code' }, exchange);
+    expect(exchange).toHaveBeenCalledWith('one-time-code', memory.flows()[nonce]!.verifier, app.redirectUri, 'calendar_list');
+    expect(googleHas(null, 'calendar_list')).toBe(false);
+    expect(googleHas(['https://www.googleapis.com/auth/calendar.events'], 'calendar_list')).toBe(false);
+    for (const scope of ['calendar.calendarlist.readonly', 'calendar.calendarlist', 'calendar.readonly', 'calendar']) expect(googleHas([`https://www.googleapis.com/auth/${scope}`], 'calendar_list')).toBe(true);
+    expect(new URL((await startConsent(deps, app, SECRET, '5458446350')).url).searchParams.get('scope')).not.toContain('calendar.calendarlist');
+  });
   it('records the connect-session ticket hash on the attempt when started from a /c/ link (S3)', async () => {
     const { deps, memory } = setup();
     const { nonce } = await startConsent(deps, app, SECRET, '5458446350', { session: 'hashabc' });
