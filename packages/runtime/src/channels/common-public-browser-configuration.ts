@@ -49,6 +49,13 @@ export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramW
  if(!options.cleanupOnly&&(storage.kv.get('do_name')!==policy.doName||storage.kv.get('telegram_subject')!==policy.subject))return undefined;
  const spend=freezeSpend(selected.spend);
  if(spend.policy.ownerId!==`prn_${policy.directoryOwnerId.toLowerCase().replaceAll('-','')}`||spend.policy.validUntil>policy.expiresAt)throw Error('common browser spend policy rejected');
+ // Ref rotation cannot escape a retained owner-local paid-test obligation.
+ if(!options.cleanupOnly){
+  for(const prefix of ['common-browser-acceptance:','common-browser-acceptance-custody:']){
+   const expected=prefix+(prefix.endsWith('custody:')?policy.ref:spend.policy.ref);
+   if([...storage.kv.list({prefix})].some(([key])=>key!==expected))throw Error('common browser acceptance ref requires reconciliation');
+  }
+ }
  const ledger=commonSpendReservation(storage,spend.policy,now,()=>physical(),spend.acceptance);
  const acceptanceRetained=()=>!!storage.kv.get(`common-browser-acceptance:${spend.policy.ref}`)||!!storage.kv.get(`common-browser-acceptance-custody:${policy.ref}`);
  const calls=commonSpendCalls(ledger,(kind,request)=>{const bound=spend.quote(kind,request);if(kind==='browser'&&bound!==0)throw Error('common browser allocation price changed');return bound;},{countModel:spend.countModel?material=>spend.countModel!(material):undefined});

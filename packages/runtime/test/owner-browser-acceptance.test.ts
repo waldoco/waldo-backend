@@ -45,6 +45,8 @@ it('manual acceptance capsule or whole registration removal cannot resume unmete
  fake.custody='b'.repeat(64);await expect(make().complete({request:{model:WALDO_CHAT_MODEL,max_tokens:32},runScope:scope} as never)).rejects.toThrow(/custody changed/);fake.custody='a'.repeat(64);expect(fake.calls).toBe(issued);
  delete raw.acceptance;(env as any).COMMON_BROWSER_REGISTRATION=JSON.stringify(raw);
  await expect(make().complete({request:{model:WALDO_CHAT_MODEL,max_tokens:32},runScope:scope} as never)).rejects.toThrow(/policy missing/);
+ raw.policy.ref='rotated-ref';(env as any).COMMON_BROWSER_REGISTRATION=JSON.stringify(raw);
+ expect(()=>make()).toThrow(/ref requires reconciliation/);expect(fake.calls).toBe(issued);
  (env as any).COMMON_BROWSER_REGISTRATION='';
  await expect(make().complete({request:{model:WALDO_CHAT_MODEL,max_tokens:32},runScope:scope} as never)).rejects.toThrow();expect(fake.calls).toBe(issued);
 });

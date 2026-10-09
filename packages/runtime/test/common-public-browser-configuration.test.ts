@@ -5,7 +5,7 @@ import {commonBrowserFixtureLoader} from './fixtures/common-browser-sdk';
 afterEach(()=>vi.unstubAllGlobals());
 const fixture=()=>{
  let now=10000,revision='1';const rows=new Map<string,unknown>([['do_name','fixture-owner'],['telegram_subject','81106']]);
- const storage={kv:{get:(key:string)=>rows.get(key),put:(key:string,value:unknown)=>rows.set(key,structuredClone(value))},transactionSync:<T>(work:()=>T)=>work()} as unknown as DurableObjectStorage;
+ const storage={kv:{get:(key:string)=>rows.get(key),put:(key:string,value:unknown)=>rows.set(key,structuredClone(value)),list:({prefix}:{prefix:string})=>[...rows].filter(([key])=>key.startsWith(prefix))},transactionSync:<T>(work:()=>T)=>work()} as unknown as DurableObjectStorage;
  const env={WALDO_ENVIRONMENT:'staging',BROWSER:{},SUPABASE_PROJECT_URL:'https://fixture-source.invalid',SUPABASE_PUBLISHABLE_KEY:'fictional',WALDO_ROUTER_HMAC_SECRET:'fictional-private',TELEGRAM_OWNER_DO:{idFromName:(name:string)=>({toString:()=>name==='fixture-owner'?'physical':'wrong'})}} as unknown as TelegramWebhookEnv;
  const policy:CommonPublicReadPolicy={ref:'fixture-policy',doName:'fixture-owner',subject:'81106',directoryOwnerId:'10000000-0000-0000-0000-000000081106',createdAt:9000,expiresAt:100000,allowedOrigins:['https://public-pages.fixture.invalid'],maxAllocations:1,maxReservedBrowserMs:120000,lifetimeMs:60000,maxScreenshotBytes:1024};
  vi.stubGlobal('fetch',async()=>Response.json({owner_id:policy.directoryOwnerId,auth_user_id:'30000000-0000-0000-0000-000000000006',presence_id:'20000000-0000-0000-0000-000000081106',do_name:policy.doName,provider:'telegram',subject:policy.subject,state_version:0,admission_revision:revision}));
