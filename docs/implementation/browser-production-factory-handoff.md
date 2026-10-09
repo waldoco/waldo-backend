@@ -8,7 +8,7 @@ The deployed two-argument TelegramOwnerDO constructor omits the trusted trial po
 
 Configured initialization participates in owner DO readiness. Browser factory or canonical binding failure disables browser work while preserving existing ordinary messaging. The optional default messaging path uses canonical ownerMessageAdmission only when available for the browser dispatcher principal. Its fallback fixture principal cannot resolve the canonical browser host. This bounded slice does not migrate the broad default context/history adapter.
 
-`supabase/migrations/20261004030000_browser_owner_binding.sql` is a signed, staging/Telegram-only read of existing owner/presence/physical workspace mapping. It denies null signatures and mismatched six-part locators. It cannot provision a mapping. Installing source is separate from applying this migration remotely.
+`supabase/migrations/20261008000000_browser_owner_binding.sql` is a signed, staging/Telegram-only read of existing owner/presence/physical workspace mapping. It denies null signatures and mismatched six-part locators. It cannot provision a mapping. Installing source is separate from applying this migration remotely.
 
 The authenticated consent API uses the existing physical-owner rate limiter (missing/error503, denial429 with Retry-After30). POST accepts exactly CSRF and nonce as JSON, at most4096bytes with a whole-body10second deadline. Owner binding, expiry and stop generation are checked after waits before atomic installation. Replay cannot reset usage, refresh an existing decision or widen the trusted manifest/budget. `/stop` invalidates pending confirmation and fences the run before cleanup waits. No dashboard confirmation UI is included.
 

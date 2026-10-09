@@ -12,7 +12,14 @@ const STATE_WORD = { accepted: 'accepted', failed: 'failed', unresolved: 'unconf
 export const receiptLine = (events: readonly LoopEventLike[]): string | null => {
   const receipts = receiptsFromLoopEvents(events).filter(r => !NOT_SHOWN.has(r.effect));
   if (receipts.length === 0) return null;
-  const named = receipts.slice(0, MAX_NAMED).map(r => `${r.effect.split('_').join(' ')}${r.ref ? ` ${r.ref}` : ''} (${STATE_WORD[r.state ?? (r.ok ? 'accepted' : 'failed')]}${r.delegated ? ', via task' : ''})`);
+  const stateOf = (r: (typeof receipts)[number]) => STATE_WORD[r.state ?? (r.ok ? 'accepted' : 'failed')];
+  // A turn where every effect was accepted reads as plain words; any other state keeps every entry's state explicit.
+  const plain = receipts.every(r => stateOf(r) === 'accepted');
+  const named = receipts.slice(0, MAX_NAMED).map(r => {
+    const label = `${r.effect.split('_').join(' ')}${r.ref ? ` ${r.ref}` : ''}`;
+    if (plain) return r.delegated ? `${label} (via task)` : label;
+    return `${label} (${stateOf(r)}${r.delegated ? ', via task' : ''})`;
+  });
   const more = receipts.length - named.length;
-  return `Receipts: ${named.join('; ')}${more > 0 ? `; and ${more} more` : ''}`;
+  return `${plain ? 'Done' : 'Receipts'}: ${named.join('; ')}${more > 0 ? `; and ${more} more` : ''}`;
 };

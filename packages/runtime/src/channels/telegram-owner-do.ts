@@ -103,6 +103,7 @@ import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
+import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_UPDATE_BASE, appSinkCaller, appSubjectFor, appTranscriptPage, parseAppSend } from './app-api';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
@@ -188,7 +189,8 @@ export const resolveOwnerTelegramId = (
   return env.WALDO_OWNER_TELEGRAM_ID ? Number(env.WALDO_OWNER_TELEGRAM_ID) : 0;
 };
 
-type ChannelKind = 'telegram' | 'whatsapp';
+type ChannelKind = 'telegram' | 'whatsapp' | 'app';
+const offsetKeyOf = (channel: ChannelKind) => channel === 'whatsapp' ? 'wa_offset' : channel === 'app' ? 'app_offset' : 'offset';
 const WHATSAPP_PENDING_PREFIX = 'wa_pending:';
 // How often an unfinished WhatsApp payload is looked at again. A cadence, not a limit on how long a turn may run.
 const WHATSAPP_PENDING_CHECK_MS = 60_000;
@@ -513,6 +515,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (path !== MEMORY_GRAPH_PATH && doName && this.ctx.storage.kv.get<string>('do_name') !== doName) this.ctx.storage.kv.put('do_name', doName);
     if (new URL(request.url).pathname === '/grant-console' && request.method === 'POST') return new Response(await consoleAccess(this.ctx.storage).grant());
     if (new URL(request.url).pathname.startsWith(CONSOLE_PATH)) return this.console(request);
+    if (path === APP_CHAT_PATH && request.method === 'GET') {
+      const url = new URL(request.url);
+      const { entries } = await durableConversationStore(this.ctx.storage).load();
+      return Response.json(appTranscriptPage(entries, url.searchParams.get('cursor'), Number(url.searchParams.get('limit') ?? 20)), { headers: { 'cache-control': 'no-store' } });
+    }
+    if (path === APP_CHAT_SEND_PATH && request.method === 'POST') return this.appSend(request);
     const body = await request.text();
     if (new URL(request.url).pathname === GOOGLE_FINISH_PATH) {
       const reply = await this.serial(() => this.finishGoogle(JSON.parse(body) as ConsentCallback));
@@ -553,6 +561,27 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (this.intercept(update)) return new Response('ok');
     await this.serial(() => this.turn(update));
     return new Response('ok');
+  }
+
+  // App ingress: the session was validated at the Worker; the owner is the DO this request reached. The turn runs through the same
+  // pipeline as the other channels. Replies are not pushed anywhere: they land in the shared transcript the app reads.
+  private async appSend(request: Request): Promise<Response> {
+    const doName = request.headers.get('x-waldo-do-name') ?? '';
+    const send = parseAppSend(await request.text());
+    if (!doName || send === null) return Response.json({ error: 'unavailable' }, { status: 403, headers: { 'cache-control': 'no-store' } });
+    const { kv } = this.ctx.storage;
+    const subject = appSubjectFor(doName);
+    if (kv.get<string>('app_subject') !== String(subject)) { kv.put('app_subject', String(subject)); this.runtimes = {}; }
+    const seen = kv.get<{ message_id: string }>(`app_msg:${send.clientMessageId}`);
+    if (seen) return Response.json({ accepted: true, message_id: seen.message_id }, { status: 202, headers: { 'cache-control': 'no-store' } });
+    const seq = ((await this.ctx.storage.get<number>('app_seq')) ?? 0) + 1;
+    await this.ctx.storage.put('app_seq', seq);
+    const updateId = APP_UPDATE_BASE + seq;
+    kv.put(`app_msg:${send.clientMessageId}`, { message_id: `app-${updateId}` });
+    const update = { update_id: updateId, message: { message_id: updateId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: send.text } };
+    this.bindIdentity(request.headers);
+    this.ctx.waitUntil(this.serial(() => this.turn(update, 'app')).catch(() => undefined));
+    return Response.json({ accepted: true, message_id: `app-${updateId}` }, { status: 202, headers: { 'cache-control': 'no-store' } });
   }
 
   // WhatsApp ingress (WHATSAPP_CHANNEL_SPEC W3). The webhook has already verified Meta's
@@ -1202,7 +1231,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       return;
     }
     try {
-    const offsetKey = channel === 'whatsapp' ? 'wa_offset' : 'offset';
+    const offsetKey = offsetKeyOf(channel);
     const offset = durable ? 0 : (await this.ctx.storage.get<number>(offsetKey)) ?? 0;
     const raw = update as RawUpdate;
     const fromOwner = raw.message?.from?.id === owner && raw.message.chat?.id === owner;
@@ -1324,8 +1353,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private setup(channel: ChannelKind = 'telegram'): OwnerRuntime {
     const { TELEGRAM_BOT_TOKEN: token, OPENAI_API_KEY: key } = this.env;
     const identity = this.ctx.storage.kv;
-    const currentOwner = channel === 'whatsapp'
-      ? Number(identity.get<string>('whatsapp_subject') ?? '0') || 0
+    const currentOwner = channel === 'whatsapp' || channel === 'app'
+      ? Number(identity.get<string>(`${channel}_subject`) ?? '0') || 0
       : resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
     const cached = this.runtimes[channel];
     // A cached runtime is current only for the owner it was built for. A turn already running keeps its own runtime object; only later turns see the rebuilt one.
@@ -1333,8 +1362,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     // consoleAuth is non-null exactly when the Supabase directory backs this deploy.
     // WhatsApp identity is the E.164-digit subject bound at ingress; a directory-backed DO with
     // no whatsapp_subject resolves owner 0 and every send drops at the gate (same rule as d3a050c).
-    const owner = channel === 'whatsapp'
-      ? Number(identity.get<string>('whatsapp_subject') ?? '0') || 0
+    const owner = channel === 'whatsapp' || channel === 'app'
+      ? Number(identity.get<string>(`${channel}_subject`) ?? '0') || 0
       : resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
     if (channel === 'whatsapp' && (!this.env.WHATSAPP_ACCESS_TOKEN || !this.env.WHATSAPP_PHONE_NUMBER_ID)) throw new Error('whatsapp owner runtime is unconfigured');
     if (channel === 'telegram' && !token) throw new Error('telegram owner runtime is unconfigured');
@@ -1384,7 +1413,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date(deps.now()) };
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
-    const healthLogs = healthLogBook(signedRpc(this.env), identity.get<string>('do_name') ?? null, channel, clock, (error) =>
+    const healthLogs = healthLogBook(signedRpc(this.env), identity.get<string>('do_name') ?? null, channel === 'app' ? 'console' : channel, clock, (error) =>
       log({ trace: `health:${channel}`, hop: 'health_log', ms: 0, ok: false, error: String(error) }),
     );
     // D5: derived health context for the system prompt's health material (zones only). Read
@@ -1393,16 +1422,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       (error, trace) => log({ trace: trace ?? `health:${channel}`, hop: 'health_context', ms: 0, ok: false, error: String(error), code: 'read_failed' }),
       (present, trace) => log({ trace: trace ?? `health:${channel}`, hop: 'health_context', ms: 0, ok: true, code: present ? 'present' : 'absent' }),
     );
-    const baseCall = channel === 'whatsapp'
-      ? whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? '')
-      : createTelegramCaller(token!);
+    const baseCall = channel === 'app'
+      ? appSinkCaller()
+      : channel === 'whatsapp'
+        ? whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? '')
+        : createTelegramCaller(token!);
     const egressDoName = identity.get<string>('do_name');
-    const egressSubject = identity.get<string>(channel === 'whatsapp' ? 'whatsapp_subject' : 'telegram_subject');
+    const egressSubject = identity.get<string>(channel === 'telegram' ? 'telegram_subject' : `${channel}_subject`);
     const egressAuth = consoleAuth(this.env);
     const call = egressGuardedCaller(
       gatedCaller(baseCall, egressGate(
-        () => owner === 0 || identity.get<boolean>(channel === 'whatsapp' ? 'whatsapp_unlinked' : 'telegram_unlinked') === true,
-        presenceRecheck(egressAuth, egressDoName, channel, egressSubject),
+        () => owner === 0 || identity.get<boolean>(`${channel}_unlinked`) === true,
+        channel === 'app' ? undefined : presenceRecheck(egressAuth, egressDoName, channel, egressSubject),
       )),
       (count, method) => log({ trace: 'egress', hop: 'egress_redacted', ms: 0, ok: true, detail: `${method}: ${count} link(s)` }),
     );
@@ -1719,9 +1750,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
     // Media reads are per-channel: Telegram file ids go through getFile; WhatsApp media ids go
     // through the Graph two-step (W4). Both feed the same transcriber/attachment pipeline.
-    const download = channel === 'whatsapp'
-      ? createWhatsAppMediaDownloader(this.env.WHATSAPP_ACCESS_TOKEN!)
-      : createTelegramFileDownloader(token ?? '');
+    const download = channel === 'app'
+      ? async (): Promise<Uint8Array> => { throw new Error('app chat has no attachments'); }
+      : channel === 'whatsapp'
+        ? createWhatsAppMediaDownloader(this.env.WHATSAPP_ACCESS_TOKEN!)
+        : createTelegramFileDownloader(token ?? '');
     // Google-auth MCP servers: pick the serving account per call. A locally held refresh token
     // mints a bearer here; a Vault-backed account keeps the token edge-side and the proxy runs
     // the call with the connection id (the runtime never sees a bearer).
@@ -1899,7 +1932,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await scheduler.rearm();
       } } : {}),
       clearTurnReceipts: trace => { turnReceiptUrls.delete(trace); },
-      saveOffset: (offset) => this.ctx.storage.put(channel === 'whatsapp' ? 'wa_offset' : 'offset', offset),
+      saveOffset: (offset) => this.ctx.storage.put(offsetKeyOf(channel), offset),
     }) : null;
     const fire = async (entry: ScheduleEntry) => {
       const note = book.note(entry.id);

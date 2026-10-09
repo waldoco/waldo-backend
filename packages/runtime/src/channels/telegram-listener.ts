@@ -27,7 +27,7 @@ import type { TurnLogEntry, TurnTimer } from './owner-turn-types';
 
 export type TelegramOwnerListenerOptions = Readonly<{
   ownerTelegramId: number;
-  surface?: 'telegram' | 'whatsapp';
+  surface?: 'telegram' | 'whatsapp' | 'app';
   api: TelegramOwnerApi;
   respond(turn: TelegramInboundTurn, time: TurnTimer): Promise<string>;
   queueFinal?(turn: TelegramInboundTurn, payload: TelegramFinalPayload, reaction: string): Promise<void>;
