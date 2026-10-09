@@ -55,6 +55,8 @@ describe('cancel all reminders contract (T32 contract repro, not live trace)', (
   it('accepts all or one id, but rejects neither or both', () => {
     expect(cancelReminderArgsSchema.safeParse({ all: true }).success).toBe(true);
     expect(cancelReminderArgsSchema.safeParse({ id: 'reminder:1' }).success).toBe(true);
+    // A model that writes all: false beside an id means one reminder; the schema should not bounce it.
+    expect(cancelReminderArgsSchema.safeParse({ id: 'reminder:1', all: false }).success).toBe(true);
     for (const args of [{}, { all: false }, { id: 'reminder:1', all: true }]) {
       expect(cancelReminderArgsSchema.safeParse(args).success).toBe(false);
     }
