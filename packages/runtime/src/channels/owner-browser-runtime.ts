@@ -7,7 +7,7 @@ import { commonPublicBrowserConfiguration } from './common-public-browser-config
 import { commonBrowserSdk, commonStagingRegistration } from './common-staging-registration';
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { armAlarm } from '../scheduler/alarm-slot';
-import { commonOwnerBrowserRegistration } from './common-owner-browser-registration';
+import { commonOwnerBrowserRegistration,CommonBrowserRegistrationUnavailable } from './common-owner-browser-registration';
 import type { LLMGatewayAdapter } from '../llm/provider';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import { workspaceOwnerHost, workspaceMetadata } from './workspace-host';
@@ -114,7 +114,7 @@ export function ownerBrowserRuntime(options: Readonly<{
           // Retained session handles still select their existing exact-session host.
           if(!args.session_handle){
             let retainedConfiguration;
-            try{retainedConfiguration=await selectedConfiguration();}catch{/* An expired trial is not normal public-read authority. */}
+            try{retainedConfiguration=await selectedConfiguration();}catch(cause){if(!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;}
             let expiredSpend=false;
             if(options.env.COMMON_BROWSER_REGISTRATION){try{expiredSpend=JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.validUntil<=Date.now();}catch{/* invalid descriptor is checked before reservation */}}
             if(!retainedConfiguration||retainedConfiguration.expiresAt<=Date.now()||expiredSpend){
@@ -173,11 +173,13 @@ export function ownerBrowserRuntime(options: Readonly<{
             // Allocation may have appeared while directory authority was pending.
             if (!holdsFunding()) return gateway.complete(request);
           }
-          const config = await automatic.configuration().catch(cause=>{traceBrowserFailure('trial_configuration',cause);return undefined;});
+          const config = await automatic.configuration().catch(cause=>{traceBrowserFailure('trial_configuration',cause);if(!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;return undefined;});
           scope.admit();
           if (options.activeScope() !== scope) throw new ClosedRunError();
           if(!config?.meterGateway||config.expiresAt<=Date.now()){
-            await assertOwner();scope.admit();if(options.activeScope()!==scope)throw new ClosedRunError();
+            const owner=await assertOwner();scope.admit();if(options.activeScope()!==scope)throw new ClosedRunError();
+            const pinned=options.storage.kv.get<any>('common_owner_browser_registration_v1');
+            if(pinned&&(pinned.custodyDigest!==owner.custodyDigest||pinned.registration?.policy?.directoryOwnerId!==owner.directoryOwnerId))throw Error('automatic browser policy requires reconciliation');
             return gateway.complete(request);
           }
           // The live trial quote covers Luna only; normal model policy remains
@@ -192,7 +194,6 @@ export function ownerBrowserRuntime(options: Readonly<{
       let config;try{config=configuration();}catch(cause){traceBrowserFailure('trial_configuration',cause);return undefined;}
       if (!config?.meterGateway) return undefined;
       const manual=commonStagingRegistration(options.env);
-      if(config.expiresAt<=Date.now()||manual&&manual.spend.policy.validUntil<=Date.now())return undefined;
       const base = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY! });
       const metered = config?.meterGateway?.(base);
       if (!metered) return undefined;

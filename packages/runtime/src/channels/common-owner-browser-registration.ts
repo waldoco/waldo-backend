@@ -6,6 +6,7 @@ import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
 
 const KEY = 'common_owner_browser_registration_v1';
 type Pinned = Readonly<{ operator: string; custodyDigest: string; registration: Record<string, any> }>;
+export class CommonBrowserRegistrationUnavailable extends Error {}
 
 // Operator-supplied per-owner ceilings, not an account-wide allocation service.
 // No policy means no automatic browser admission; existing ledgers are never reset.
@@ -55,10 +56,10 @@ export function commonOwnerBrowserRegistration(options: Readonly<{
       if (!raw.policy?.ref || raw.policy.doName !== undefined || raw.policy.subject !== undefined
         || raw.policy.directoryOwnerId !== undefined) throw Error('automatic browser operator policy invalid');
       const config = configuration(registration, false);
-      if (!config) throw Error('automatic browser configuration unavailable');
+      if (!config) throw new CommonBrowserRegistrationUnavailable('automatic browser configuration unavailable');
       const now = Date.now();
       if (now < registration.policy.createdAt || now >= registration.policy.expiresAt
-        || now >= registration.spend.validUntil) throw Error('automatic browser operator policy expired');
+        || now >= registration.spend.validUntil) throw new CommonBrowserRegistrationUnavailable('automatic browser operator policy expired');
       const pinned: Pinned = { operator: operator!, custodyDigest: owner.custodyDigest, registration };
       storage.transactionSync(() => {
         physical();

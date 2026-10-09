@@ -21,6 +21,7 @@ function fixture(){
  const ctx={authenticatedUserId:'prn_10000000000000000000000000000002',runScope:scope,egressAllowlist:['*'],toolCallId:'read-1'};
  return {rows,storage,env,runtime,fallback,args,ctx,reconstruct:()=>ownerBrowserRuntime({env,storage,actualDoId:'physical',activeScope:()=>scope}),read:(id='read-1')=>runtime.read(fallback).handle(args,{...ctx,toolCallId:id} as never)};
 }
+const expiredDeclaration=(limitMicrousd:number)=>JSON.stringify({policy:{ref:'expired',doName:'public-owner',subject:'81102',directoryOwnerId:'10000000-0000-0000-0000-000000000002',createdAt:1,expiresAt:2,allowedOrigins:['*'],maxAllocations:1,maxReservedBrowserMs:20000,lifetimeMs:10000,maxScreenshotBytes:1024},billing:{cloudflareAccountId:'a'.repeat(32),conservativeWorstCase:true},spend:{limitMicrousd,maxCalls:100,validUntil:2}});
 it('ordinary owner Cloudflare read works without trial registration and reserves retained owner cost before acquire',async()=>{
  const f=fixture();f.ctx.authenticatedUserId='prn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';const {read,rows}=f,result=await read();
  expect(result).toMatchObject({ok:true,data:{provider:'cloudflare_playwright',data:{text:'Vegetarian pasta'}}});
@@ -28,7 +29,7 @@ it('ordinary owner Cloudflare read works without trial registration and reserves
  expect(rows.get('common-public-browser-month:'+new Date().toISOString().slice(0,7))).toBe(2090000);
 });
 it('lower declared ceiling survives descriptor removal and constrains later registered funded calls atomically',async()=>{
- const f=fixture();(f.env as any).COMMON_BROWSER_REGISTRATION=JSON.stringify({spend:{limitMicrousd:2100000}});
+ const f=fixture();(f.env as any).COMMON_BROWSER_REGISTRATION=expiredDeclaration(2100000);
  expect(await f.read()).toMatchObject({ok:true});delete (f.env as any).COMMON_BROWSER_REGISTRATION;
  // A new calendar month cannot restore a lost total ceiling.
  f.rows.set('common-public-browser-month:'+new Date().toISOString().slice(0,7),0);
@@ -57,6 +58,6 @@ it.each(['foreign','corrupt','monthly','revoked','lower_ceiling'])('rejects %s r
  if(kind==='corrupt')f.rows.set('owner-public-browser-spend:v1',{ownerId:f.ctx.authenticatedUserId,custodyDigest:'b'.repeat(64),reservedMicrousd:0,intents:['prior']});
  if(kind==='monthly')f.rows.set('common-public-browser-month:'+new Date().toISOString().slice(0,7),-1);
  if(kind==='revoked')f.rows.set('telegram_unlinked',true);
- if(kind==='lower_ceiling')(f.env as any).COMMON_BROWSER_REGISTRATION=JSON.stringify({spend:{limitMicrousd:2000000}});
+ if(kind==='lower_ceiling')(f.env as any).COMMON_BROWSER_REGISTRATION=expiredDeclaration(2000000);
  const snapshot=structuredClone([...f.rows]);expect(await f.read()).toMatchObject({ok:false});expect(calls).not.toContain('acquire');expect([...f.rows]).toEqual(snapshot);
 });
