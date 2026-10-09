@@ -1645,6 +1645,30 @@ describe('RuntimeLLMProvider', () => {
   });
 });
 
+describe('gateway attempt failure detail', () => {
+  class RunClosedProbe extends Error {}
+  const request = () => ({
+    trigger: 'user_message' as const,
+    spend: { spent_cents_today: 0, cap_cents: 70 },
+    renderRequest() {
+      return { messages: [{ role: 'user' as const, content: 'safe prompt' }], max_tokens: 512, temperature: 0.3 };
+    },
+  });
+
+  it('names the error class when every attempt throws before a provider answer', async () => {
+    const gateway = new ScriptedGateway(() => { throw new RunClosedProbe('closed with private words'); });
+    const result = await new RuntimeLLMProvider({ gateway }).complete(request(), runtimeCtx());
+    expect(result).toMatchObject({ ok: false, reason: 'template_unavailable', detail: 'RunClosedProbe' });
+    expect(JSON.stringify(result)).not.toContain('private words');
+  });
+
+  it('carries the adapter failure text when every attempt returns a failure', async () => {
+    const gateway = new ScriptedGateway(() => ({ ok: false, error: 'OpenAI request failed (503)', code: 'transient' }));
+    const result = await new RuntimeLLMProvider({ gateway }).complete(request(), runtimeCtx());
+    expect(result).toMatchObject({ ok: false, reason: 'template_unavailable', detail: 'OpenAI request failed (503)' });
+  });
+});
+
 describe('sanitiseRequest structural degradation', () => {
   // Regression guard for the live outage where one un-decodable sequence in conversation
   // history killed every reply turn pre-flight. Structural scribe denies (invalid_payload,

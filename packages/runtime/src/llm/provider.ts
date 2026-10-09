@@ -366,6 +366,7 @@ export class RuntimeLLMProvider {
     }
     const effectiveRoute = spendCapped ? spendClampedRoute(route) : route;
     const attempts: LLMAttempt[] = [];
+    let lastDetail: string | undefined;
 
     for (const plan of attemptPlan(effectiveRoute, spendCapped)) {
       input.runScope?.admit();
@@ -424,7 +425,9 @@ export class RuntimeLLMProvider {
           fallback_step: plan.fallback_step,
           headers: GATEWAY_CONSTANT_HEADERS,
         });
-      } catch {
+      } catch (error) {
+        // Only the class name is kept: a thrown message can quote the request.
+        lastDetail = error instanceof Error ? error.constructor.name : typeof error;
         this.circuitBreaker.recordFailure(plan.step.provider);
         attempts.push({
           outcome: 'failure',
@@ -438,6 +441,7 @@ export class RuntimeLLMProvider {
       }
 
       if (!gatewayResult.ok) {
+        lastDetail = gatewayResult.error;
         this.circuitBreaker.recordFailure(plan.step.provider);
         attempts.push({
           outcome: 'failure',
@@ -505,7 +509,7 @@ export class RuntimeLLMProvider {
       };
     }
 
-    return this.templateOrFailure(input, effectiveRoute, attempts, routingLogs, ctx);
+    return this.templateOrFailure(input, effectiveRoute, attempts, routingLogs, ctx, lastDetail);
   }
 
   // Unlike complete(), this path has exactly one physical provider attempt. A V2 effect intent
@@ -886,9 +890,10 @@ export class RuntimeLLMProvider {
     attempts: LLMAttempt[],
     routingLogs: readonly RoutingLogEvent[],
     ctx: HookRuntimeContext,
+    detail?: string,
   ): Promise<RuntimeLLMResult> {
     if (route.floor !== 'template' || input.renderTemplate === undefined) {
-      return templateUnavailableFailure(route, attempts, routingLogs);
+      return templateUnavailableFailure(route, attempts, routingLogs, detail);
     }
 
     let parsedResponse: ReturnType<typeof llmResponseSchema.safeParse>;
@@ -1126,9 +1131,11 @@ function templateUnavailableFailure(
   route: ModelRoute,
   attempts: LLMAttempt[],
   routingLogs: readonly RoutingLogEvent[],
+  detail?: string,
 ): RuntimeLLMResult {
   return {
     ok: false,
+    ...(detail ? { detail } : {}),
     error: route.floor === 'template' ? 'template fallback unavailable' : `route ${route.floor}`,
     code: 'transient',
     reason: route.floor === 'template' ? 'template_unavailable' : 'gateway_exhausted',
