@@ -1,3 +1,4 @@
+import {commonBrowserAllowanceDiagnostic} from './common-browser-allowance-diagnostic';
 import {commonOwnerAuthority} from '../identity/common-owner-authority';
 import {signedRpc} from '../identity/owner-directory';
 import type {TelegramWebhookEnv} from './telegram-webhook';
@@ -10,6 +11,7 @@ export async function commonRuntimeReadiness(env:TelegramWebhookEnv,storage:Dura
  try{if(!(await limiter.limit({key:`common-runtime-readiness:${actualDoId}`})).success)return Response.json({error:'rate_limited'},{status:429,headers:{...headers,'retry-after':'60'}});}catch{return Response.json({error:'unavailable'},{status:503,headers});}
  const doName=storage.kv.get<string>('do_name'),subject=storage.kv.get<string>('telegram_subject');
  if(!doName||!subject||storage.kv.get<boolean>('telegram_unlinked')||env.TELEGRAM_OWNER_DO?.idFromName(doName).toString()!==actualDoId)return Response.json({error:'owner_unavailable'},{status:503,headers});
+ let browser:ReturnType<typeof commonBrowserAllowanceDiagnostic>|undefined;
  let owner:'verified'|'unlinked'|'unverifiable'='unverifiable',workspace:'verified'|'unlinked'|'unverifiable'='unverifiable';
  try{
   const directory=commonOwnerAuthority(env),authority=await directory.resolve('telegram',subject,doName);
@@ -24,9 +26,10 @@ export async function commonRuntimeReadiness(env:TelegramWebhookEnv,storage:Dura
     const row=value as Record<string,unknown>|null;
     workspace=row===null?'unlinked':row&&row.owner_id===authority.directoryOwnerId&&row.environment===environment&&row.namespace===namespace&&row.do_name===doName&&row.do_id===actualDoId&&row.state_version===authority.stateVersion&&Number.isSafeInteger(row.mapping_version)&&Number(row.mapping_version)>0?'verified':'unverifiable';
    }
+   browser=commonBrowserAllowanceDiagnostic({env,storage,actualDoId,now:Date.now(),owner:{directoryOwnerId:authority.directoryOwnerId,custodyDigest:authority.custodyDigest,doName,subject}});
    await directory.assertCurrent(authority);
   }
- }catch{owner='unverifiable';workspace='unverifiable';}
- if(storage.kv.get('do_name')!==doName||storage.kv.get('telegram_subject')!==subject||storage.kv.get<boolean>('telegram_unlinked')){owner='unverifiable';workspace='unverifiable';}
- return Response.json({version:1,owner_authority:owner,workspace_binding:workspace,scope:'signed_read_checks_only_not_schema_health_issuer_or_execution_acceptance'}, {headers});
+ }catch{owner='unverifiable';workspace='unverifiable';browser=undefined;}
+ if(storage.kv.get('do_name')!==doName||storage.kv.get('telegram_subject')!==subject||storage.kv.get<boolean>('telegram_unlinked')||env.TELEGRAM_OWNER_DO?.idFromName(doName).toString()!==actualDoId){owner='unverifiable';workspace='unverifiable';browser=undefined;}
+ return Response.json({version:1,owner_authority:owner,workspace_binding:workspace,...(browser?{browser}:{}),scope:'signed_read_checks_only_not_schema_health_issuer_or_execution_acceptance'}, {headers});
 }

@@ -7,7 +7,7 @@ type Reservation = Readonly<{id: string; upperBoundMicrousd: number}>;
 type Cleanup = {id:string; upperBoundMicrousd:number; maxCalls:number; issued:number};
 type Ledger = {policy: CommonSpendPolicy; reservedMicrousd: number; calls: Reservation[]; cleanup:Cleanup[]};
 export function commonSpendReservation(storage: Pick<DurableObjectStorage,'kv'|'transactionSync'>,
-  policy: CommonSpendPolicy, now: () => number, assertCurrent: () => void) {
+  policy: CommonSpendPolicy, now: () => number, assertCurrent: () => void,assertTotal?:(additionalMicrousd:number)=>void) {
   if(!policy.ref || !policy.ownerId || !Number.isSafeInteger(policy.validUntil) ||
      !Number.isSafeInteger(policy.limitMicrousd) || policy.limitMicrousd <= 0 || !Number.isSafeInteger(policy.maxCalls) || policy.maxCalls<1) throw Error('common spend policy invalid');
   const frozen = Object.freeze({...policy});
@@ -38,6 +38,7 @@ export function commonSpendReservation(storage: Pick<DurableObjectStorage,'kv'|'
         if(row.calls.some(call=>call.id===id)) throw Error('common spend prior effect requires reconciliation');
         const total=row.reservedMicrousd+upperBoundMicrousd;
         if(!Number.isSafeInteger(total) || total>frozen.limitMicrousd) throw Error('common spend limit exceeded');
+        assertTotal?.(upperBoundMicrousd);
         storage.kv.put(key,{...row,reservedMicrousd:total,calls:[...row.calls,{id,upperBoundMicrousd}]});
       });
     },
@@ -50,6 +51,7 @@ export function commonSpendReservation(storage: Pick<DurableObjectStorage,'kv'|'
         if(row.calls.length+row.cleanup.reduce((sum,item)=>sum+item.maxCalls,0)+maxCalls>frozen.maxCalls)throw Error('common spend call limit exceeded');
         const total=row.reservedMicrousd+upperBoundMicrousd;
         if(!Number.isSafeInteger(total)||total>frozen.limitMicrousd)throw Error('common spend limit exceeded');
+        assertTotal?.(upperBoundMicrousd);
         storage.kv.put(key,{...row,reservedMicrousd:total,cleanup:[...row.cleanup,{id,upperBoundMicrousd,maxCalls,issued:0}]});
         commit();
       });

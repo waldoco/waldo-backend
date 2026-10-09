@@ -7,10 +7,14 @@ import { commonPublicBrowserConfiguration } from './common-public-browser-config
 import { commonBrowserSdk, commonStagingRegistration } from './common-staging-registration';
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { armAlarm } from '../scheduler/alarm-slot';
-import { commonOwnerBrowserRegistration } from './common-owner-browser-registration';
+import { commonOwnerBrowserRegistration,CommonBrowserRegistrationUnavailable } from './common-owner-browser-registration';
 import type { LLMGatewayAdapter } from '../llm/provider';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import { workspaceOwnerHost, workspaceMetadata } from './workspace-host';
+import {cloudflarePublicRead,PUBLIC_READ_RESERVED_BROWSER_MS} from './cloudflare-public-read';
+import {reserveOwnerPublicBrowser} from './owner-public-browser-spend';
+const browserFailureClass=(cause:unknown)=>cause instanceof CommonBrowserRegistrationUnavailable?'CommonBrowserRegistrationUnavailable':cause instanceof ClosedRunError?'ClosedRunError':cause instanceof TypeError?'TypeError':cause instanceof RangeError?'RangeError':cause instanceof SyntaxError?'SyntaxError':cause instanceof Error?'Error':'UnknownError';
+const traceBrowserFailure=(operation:string,cause:unknown)=>console.warn(JSON.stringify({event:'owner_browser_failure',operation,error_class:browserFailureClass(cause)}));
 
 // The browser task follows the authenticated owner run. It needs no topic classifier
 // or canonical execution activation; provider identity and budget stay in the DO.
@@ -106,9 +110,34 @@ export function ownerBrowserRuntime(options: Readonly<{
           // Browserbase remains an explicit choice. Cloudflare failure never switches providers.
           if(args.provider==='browserbase_stagehand_http_v3'&&args.session_handle)throw new ClosedRunError();
           if (args.provider === 'browserbase_stagehand_http_v3' || !args.provider && !args.session_handle && options.env.WALDO_ENVIRONMENT !== 'staging') return fallback.handle(args, { ...ctx, assertTaskSourceCurrent: assertCurrent });
+          // A normal fresh public read does not require a paid-test registration.
+          // Retained session handles still select their existing exact-session host.
+          if(!args.session_handle){
+            let retainedConfiguration;
+            try{retainedConfiguration=await selectedConfiguration();}catch(cause){traceBrowserFailure('public_read_configuration',cause);if(!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;}
+            let expiredSpend=false;
+            if(options.env.COMMON_BROWSER_REGISTRATION){try{expiredSpend=JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.validUntil<=Date.now();}catch(cause){traceBrowserFailure('public_read_registration',cause);/* invalid descriptor is checked before reservation */}}
+            if(!retainedConfiguration||retainedConfiguration.expiresAt<=Date.now()||expiredSpend){
+              const sdk=commonBrowserSdk();
+              if(options.env.WALDO_ENVIRONMENT!=='staging'||!options.env.BROWSER||!sdk)return {ok:false,code:'auth_failed',error:'The selected Cloudflare browser provider is unavailable.',source_taint:'external'};
+              const owner=await assertOwner();await assertCurrent();
+              const ownerId=`prn_${owner.directoryOwnerId.toLowerCase().replaceAll('-','')}`;
+              // The ordinary owner loop carries its trusted local principal.
+              // Browser custody comes from this physical host's live directory,
+              // never from model arguments or a trial-only invocation principal.
+              const assertReadCurrent=async()=>{await assertCurrent();const fresh=await assertOwner();await assertCurrent();if(fresh.directoryOwnerId!==owner.directoryOwnerId||fresh.custodyDigest!==owner.custodyDigest)throw new ClosedRunError();};
+              const read=cloudflarePublicRead({binding:options.env.BROWSER,loadSdk:sdk,reserveAllocation:async()=>{
+                await assertReadCurrent();
+                const scope=options.activeScope()!;
+                const declaredLimitMicrousd=options.env.COMMON_BROWSER_REGISTRATION?JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.limitMicrousd:undefined;
+                return reserveOwnerPublicBrowser({storage:options.storage,ownerId,custodyDigest:owner.custodyDigest,intent:`${scope.runId}:${scope.attempt}:${ctx.toolCallId}`,reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now:Date.now(),declaredLimitMicrousd,assertCurrent:()=>{scope.admit();if(options.activeScope()!==scope||options.storage.kv.get('telegram_unlinked')===true)throw new ClosedRunError();}});
+              }});
+              return read(args,{...ctx,authenticatedUserId:ownerId,assertTaskSourceCurrent:assertReadCurrent});
+            }
+          }
           const bound=await bindHost(ctx,args.session_handle);
           const result=await bound.active.host.handler.handle(args,bound.context);publishPointer();return result;
-        } catch { return { ok: false, code: 'rejected', error: 'The browser owner or retained session is unavailable. No replacement was allocated.', source_taint: 'external' }; }
+        } catch(cause) { traceBrowserFailure('read',cause);return { ok: false, code: 'rejected', error: `The browser owner or retained session is unavailable (${browserFailureClass(cause)}). No replacement was allocated.`, source_taint: 'external' }; }
       } };
     },
     act(fallback:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>):ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>{
@@ -123,7 +152,7 @@ export function ownerBrowserRuntime(options: Readonly<{
           const bound=await bindHost(ctx,args.session_handle);
           const result=await bound.active.host.actionHandler.handle(args,bound.context);
           if(args.command?.operation==='cancel'&&result.ok){active=undefined;lease=undefined;options.storage.kv.put(continuationKey,null);}else publishPointer();return result;
-        }catch{return {ok:false,code:'rejected',error:'The selected owner browser session or current action is unavailable. No replacement or provider switch was made.',source_taint:'external'};}
+        }catch(cause){traceBrowserFailure('act',cause);return {ok:false,code:'rejected',error:`The selected owner browser session or current action is unavailable (${browserFailureClass(cause)}). No replacement or provider switch was made.`,source_taint:'external'};}
       }};
     },
     gateway() {
@@ -135,9 +164,8 @@ export function ownerBrowserRuntime(options: Readonly<{
           if (!scope || !supplied || scope.runId !== supplied.runId || scope.attempt !== supplied.attempt
             || scope.admit !== supplied.admit || scope.commit !== supplied.commit || scope.deadline !== supplied.deadline) throw new ClosedRunError();
           scope.admit();
-          // Directory admission is independent of browser policy. A retained task
-          // record keeps funded model history metered after host reconstruction,
-          // including uncertain/closed records; it never restarts physical ordinals.
+          // Browser trial funding never defines ordinary model-run admission.
+          // Retained browser spend is metered only while its configuration is live.
           const holdsFunding = () => funded(scope);
           if (!holdsFunding()) {
             await assertOwner(); scope.admit();
@@ -145,19 +173,27 @@ export function ownerBrowserRuntime(options: Readonly<{
             // Allocation may have appeared while directory authority was pending.
             if (!holdsFunding()) return gateway.complete(request);
           }
-          // The reused quote covers Luna only; a model override needs its own priced envelope.
-          if (request.request.model !== WALDO_CHAT_MODEL) throw Error('automatic browser model price unavailable');
-          const config = await automatic.configuration();
+          const config = await automatic.configuration().catch(cause=>{traceBrowserFailure('trial_configuration',cause);if(!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;return undefined;});
           scope.admit();
-          if (options.activeScope() !== scope || !config?.meterGateway) throw new ClosedRunError();
+          if (options.activeScope() !== scope) throw new ClosedRunError();
+          if(!config?.meterGateway||config.expiresAt<=Date.now()){
+            const owner=await assertOwner();scope.admit();if(options.activeScope()!==scope)throw new ClosedRunError();
+            const pinned=options.storage.kv.get<any>('common_owner_browser_registration_v1');
+            if(pinned&&(pinned.custodyDigest!==owner.custodyDigest||pinned.registration?.policy?.directoryOwnerId!==owner.directoryOwnerId))throw Error('automatic browser policy requires reconciliation');
+            return gateway.complete(request);
+          }
+          // The live trial quote covers Luna only; normal model policy remains
+          // with the ordinary adapter when trial registration is unavailable.
+          if (request.request.model !== WALDO_CHAT_MODEL) throw Error('automatic browser model price unavailable');
           // Share one wrapper even across concurrent first calls: physical model
           // ordinals must never restart within this constructed owner host.
           metered ??= Promise.resolve(config.meterGateway(gateway));
           return (await metered).complete(request);
         } } satisfies LLMGatewayAdapter;
       }
-      const config = configuration();
+      let config;try{config=configuration();}catch(cause){traceBrowserFailure('trial_configuration',cause);return undefined;}
       if (!config?.meterGateway) return undefined;
+      const manual=commonStagingRegistration(options.env);
       const base = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY! });
       const metered = config?.meterGateway?.(base);
       if (!metered) return undefined;
@@ -166,7 +202,7 @@ export function ownerBrowserRuntime(options: Readonly<{
         if (key !== 'complete') { const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value; }
         return (request: { runScope?: RunEffectScope }) => {
           const scope = request.runScope;
-          return scope && funded(scope) ? metered.complete(request as never) : target.complete(request as never);
+          return scope && funded(scope)&&config.expiresAt>Date.now()&&(!manual||manual.spend.policy.validUntil>Date.now()) ? metered.complete(request as never) : target.complete(request as never);
         };
       } });
     },

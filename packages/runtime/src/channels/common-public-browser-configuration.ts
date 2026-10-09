@@ -6,6 +6,7 @@ import type {CommonBrowserConfiguration,CommonBrowserGrant} from './common-brows
 import type {CloudflareBrowserSdkLoader} from './public-fixture-browser';
 import type {TelegramWebhookEnv} from './telegram-webhook';
 import {COMMON_BROWSER_MONTH_CEILING_MICROUSD} from './common-staging-registration';
+import {assertOwnerPublicBrowserCapacity} from './owner-public-browser-spend';
 
 // Deployment/test host policy must be supplied within owner-approved testing scope.
 // This module does not create an owner decision, widen fixture authorization or enable BROWSER.
@@ -32,6 +33,13 @@ const freezePolicy=(policy:CommonPublicReadPolicy):CommonPublicReadPolicy=>{
  return Object.freeze({...row,allowedOrigins:Object.freeze(row.allowedOrigins)});
 };
 type Usage={custodyDigest?:string;allocationMicrousd:number;policy:CommonPublicReadPolicy;allocations:number;reservedBrowserMs:number;taskGrants:CommonBrowserGrant[]};
+export function assertCommonPublicBrowserUsage(retained:Usage,policy:CommonPublicReadPolicy,allocationMicrousd:number):void{
+  if(retained.allocationMicrousd!==allocationMicrousd||JSON.stringify(retained.policy)!==JSON.stringify(policy)||!Number.isSafeInteger(retained.allocations)||retained.allocations<0||retained.allocations>policy.maxAllocations||!Number.isSafeInteger(retained.reservedBrowserMs)||retained.reservedBrowserMs<0||retained.reservedBrowserMs>policy.maxReservedBrowserMs||!Array.isArray(retained.taskGrants)||retained.taskGrants.length>policy.maxAllocations
+   ||retained.allocations*policy.lifetimeMs*2!==retained.reservedBrowserMs
+   ||typeof retained.custodyDigest!=='string'||!/^[a-f0-9]{64}$/.test(retained.custodyDigest)
+   ||new Set(retained.taskGrants.map(grant=>grant.taskId)).size!==retained.taskGrants.length
+   ||retained.taskGrants.some(grant=>!grant||!grant.taskId||!Number.isSafeInteger(grant.expiresAt)||grant.expiresAt<=policy.createdAt||grant.expiresAt>policy.expiresAt||JSON.stringify(grant)!==JSON.stringify({ref:policy.ref,ownerId:`prn_${policy.directoryOwnerId.toLowerCase().replaceAll('-','')}`,taskId:grant.taskId,expiresAt:grant.expiresAt,allowedOrigins:policy.allowedOrigins,lifetimeMs:policy.lifetimeMs,maxScreenshotBytes:policy.maxScreenshotBytes})))throw Error('common public browser retained policy conflict');
+}
 export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramWebhookEnv;storage:DurableObjectStorage;actualDoId:string;policy?:CommonPublicReadPolicy;loadSdk?:CloudflareBrowserSdkLoader;spend?:CommonBrowserSpendRegistration;cleanupOnly?:boolean;now?:()=>number}>):(CommonBrowserConfiguration & Readonly<{ownerId:string;lifetimeMs:number;expiresAt:number}>)|undefined{
  const {env,storage,actualDoId}=options,selected=options.policy?{policy:options.policy,loadSdk:options.loadSdk,spend:options.spend}:registration;
  if(env.WALDO_ENVIRONMENT!=='staging'||!env.BROWSER||!selected?.loadSdk||!selected.spend)return undefined;
@@ -42,18 +50,14 @@ export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramW
  if(!options.cleanupOnly&&(storage.kv.get('do_name')!==policy.doName||storage.kv.get('telegram_subject')!==policy.subject))return undefined;
  const spend=freezeSpend(selected.spend);
  if(spend.policy.ownerId!==`prn_${policy.directoryOwnerId.toLowerCase().replaceAll('-','')}`||spend.policy.validUntil>policy.expiresAt)throw Error('common browser spend policy rejected');
- const ledger=commonSpendReservation(storage,spend.policy,now,()=>physical());
+ const ledger=commonSpendReservation(storage,spend.policy,now,()=>physical(),additional=>assertOwnerPublicBrowserCapacity(storage,spend.policy.ownerId,spend.policy.limitMicrousd,additional));
  const calls=commonSpendCalls(ledger,(kind,request)=>{const bound=spend.quote(kind,request);if(kind==='browser'&&bound!==0)throw Error('common browser allocation price changed');return bound;},{countModel:spend.countModel?material=>spend.countModel!(material):undefined});
  const key=`common-public-browser-usage:${policy.ref}`;
  const physical=()=>{const at=now();if(!Number.isSafeInteger(at)||at<policy.createdAt||at>=policy.expiresAt||storage.kv.get('do_name')!==policy.doName||storage.kv.get('telegram_subject')!==policy.subject||storage.kv.get('telegram_unlinked')===true||env.TELEGRAM_OWNER_DO?.idFromName(policy.doName).toString()!==actualDoId)throw Error('common public browser policy unavailable');};
  const read=():Usage=>{
   const retained=storage.kv.get<Usage>(key);
   if(!retained)return {policy,allocationMicrousd:spend.allocationMicrousd,allocations:0,reservedBrowserMs:0,taskGrants:[]};
-  if(retained.allocationMicrousd!==spend.allocationMicrousd||JSON.stringify(retained.policy)!==JSON.stringify(policy)||!Number.isSafeInteger(retained.allocations)||retained.allocations<0||retained.allocations>policy.maxAllocations||!Number.isSafeInteger(retained.reservedBrowserMs)||retained.reservedBrowserMs<0||retained.reservedBrowserMs>policy.maxReservedBrowserMs||!Array.isArray(retained.taskGrants)||retained.taskGrants.length>policy.maxAllocations
-   ||retained.allocations*policy.lifetimeMs*2!==retained.reservedBrowserMs
-   ||typeof retained.custodyDigest!=='string'||!/^[a-f0-9]{64}$/.test(retained.custodyDigest)
-   ||new Set(retained.taskGrants.map(grant=>grant.taskId)).size!==retained.taskGrants.length
-   ||retained.taskGrants.some(grant=>!grant||!grant.taskId||JSON.stringify(grant)!==JSON.stringify({ref:policy.ref,ownerId:`prn_${policy.directoryOwnerId.toLowerCase().replaceAll('-','')}`,taskId:grant.taskId,expiresAt:policy.expiresAt,allowedOrigins:policy.allowedOrigins,lifetimeMs:policy.lifetimeMs,maxScreenshotBytes:policy.maxScreenshotBytes})))throw Error('common public browser retained policy conflict');
+  assertCommonPublicBrowserUsage(retained,policy,spend.allocationMicrousd);
   return retained;
  };
  const owner=async()=>{physical();const row=await directory.resolve('telegram',policy.subject,policy.doName);physical();if(!row||row.directoryOwnerId!==policy.directoryOwnerId.toLowerCase())throw Error('common public browser owner unavailable');return {ownerId:`prn_${row.directoryOwnerId.replaceAll('-','')}`,custodyDigest:row.custodyDigest};};

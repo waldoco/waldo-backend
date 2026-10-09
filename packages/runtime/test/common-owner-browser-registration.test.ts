@@ -48,13 +48,13 @@ const allocate = async (fixture: ReturnType<typeof setup>, runtime: ReturnType<R
   expect(await runtime.read({ name: 'browse_page' } as never).handle({ provider: 'cloudflare_playwright', url: 'https://example.com/a', instruction: 'Read' },
     { authenticatedUserId: 'owner', runScope: fixture.scope, turnId: 'funded-turn', toolCallId: 'funded-call', egressAllowlist: ['*'] } as never)).toMatchObject({ ok: true });
 };
-it('removing registration cannot bypass a funded run model meter after reconstruction', async () => {
+it('removing trial registration preserves ordinary model admission without resetting retained browser spend', async () => {
   const fixture = setup(), runtime = fixture.runtime(); await allocate(fixture, runtime);
   expect(await runtime.gateway()!.complete(request(fixture.scope))).toMatchObject({ ok: true });
   expect(provider.calls).toHaveLength(1); const retained = structuredClone([...fixture.rows]);
   fixture.env.COMMON_BROWSER_REGISTRATION = '';
-  await expect(fixture.runtime().gateway()!.complete(request(fixture.scope))).rejects.toThrow();
-  expect(provider.calls).toHaveLength(1); expect([...fixture.rows]).toEqual(retained);
+  expect(await fixture.runtime().gateway()!.complete(request(fixture.scope))).toMatchObject({ok:true});
+  expect(provider.calls).toHaveLength(2); expect([...fixture.rows]).toEqual(retained);
 });
 it('concurrent funded model calls share ordinals and reconstruction cannot refill exhausted allowance', async () => {
   const fixture = setup(); fixture.operator.spend.maxCalls = 20;
@@ -103,6 +103,15 @@ it('cleanup survives registration removal and unlink without funding another ses
   expect([...fixture.rows].find(([key]) => key.startsWith('common-spend:'))![1].reservedMicrousd).toBe(ledger.reservedMicrousd);
   expect(await fixture.runtime().read({ name: 'browse_page' } as never).handle(args, ctx)).toMatchObject({ ok: false });
 });
+it.each(['expired','unavailable'])('a changed retained ref cannot hide behind %s configuration',async kind=>{
+ const fixture=setup(),runtime=fixture.runtime();await allocate(fixture,runtime);
+ fixture.operator.policy.ref='changed-ref';
+ if(kind==='expired'){fixture.operator.policy.expiresAt=Date.now()-1;fixture.operator.spend.validUntil=fixture.operator.policy.expiresAt;}else{delete (fixture.env as any).BROWSER;}
+ fixture.env.COMMON_BROWSER_REGISTRATION=JSON.stringify(fixture.operator);const retained=structuredClone([...fixture.rows]);
+ await expect(fixture.runtime().gateway()!.complete(request(fixture.scope))).rejects.toThrow('reconciliation');
+ expect(await fixture.runtime().read({name:'browse_page'} as never).handle({provider:'cloudflare_playwright',url:'https://example.com/a',instruction:'Read'},{authenticatedUserId:'owner',runScope:fixture.scope,turnId:'new',toolCallId:'new',egressAllowlist:['*']} as never)).toMatchObject({ok:false});
+ expect(provider.calls).toHaveLength(0);expect(commonBrowserFixture.allocations).toBe(1);expect([...fixture.rows]).toEqual(retained);
+});
 
 it('manual registration spend cannot be bypassed by switching to an automatic policy ref', async () => {
   const fixture = setup();
@@ -113,15 +122,17 @@ it('manual registration spend cannot be bypassed by switching to an automatic po
   expect([...fixture.rows]).toEqual(retained);
 });
 
-it('an expired operator denies browser work while ordinary admitted model work stays available', async () => {
+it('an expired trial permits a normal accounted public read and ordinary model work without renewing registration', async () => {
   const fixture = setup();
   fixture.operator.policy.expiresAt = Date.now() - 1;
   fixture.operator.spend.validUntil = fixture.operator.policy.expiresAt;
   fixture.env.COMMON_BROWSER_REGISTRATION = JSON.stringify(fixture.operator);
   const runtime = fixture.runtime();
   expect(await runtime.gateway()!.complete(request(fixture.scope))).toMatchObject({ ok: true });
-  expect(await runtime.read({ name: 'browse_page' } as never).handle({ provider: 'cloudflare_playwright', url: 'https://example.com/a', instruction: 'Read' }, { authenticatedUserId: 'owner', runScope: fixture.scope, turnId: 'turn', toolCallId: 'call', egressAllowlist: ['*'] } as never)).toMatchObject({ ok: false });
-  expect(provider.calls).toHaveLength(1); expect(commonBrowserFixture.allocations).toBe(0);
+  expect(await runtime.read({ name: 'browse_page' } as never).handle({ provider: 'cloudflare_playwright', url: 'https://example.com/a', instruction: 'Read' }, { authenticatedUserId: 'owner', runScope: fixture.scope, turnId: 'turn', toolCallId: 'call', egressAllowlist: ['*'] } as never)).toMatchObject({ ok: true });
+  expect(provider.calls).toHaveLength(1); expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.ends).toBe(1);
+  expect(fixture.rows.get('owner-public-browser-spend:v2').reservedMicrousd).toBeLessThanOrEqual(1250);
+  expect(fixture.rows.get('owner-public-browser-spend:v2').reservations[0].settled).toBe(true);
   expect(fixture.rows.has('common_owner_browser_registration_v1')).toBe(false);
 });
 
