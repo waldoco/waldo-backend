@@ -4,7 +4,7 @@ import type { TelegramWebhookEnv } from './telegram-webhook';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { commonBrowserHost, maintainCommonBrowsers, revokeCommonBrowsers } from './common-browser-host';
 import { commonPublicBrowserConfiguration } from './common-public-browser-configuration';
-import { commonBrowserSdk, commonStagingRegistration } from './common-staging-registration';
+import { COMMON_TEST_CEILING_MICROUSD, commonBrowserSdk, commonStagingRegistration } from './common-staging-registration';
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { armAlarm } from '../scheduler/alarm-slot';
 import { commonOwnerBrowserRegistration,CommonBrowserRegistrationUnavailable } from './common-owner-browser-registration';
@@ -32,13 +32,14 @@ export function ownerBrowserRuntime(options: Readonly<{
   };
   let maintenance:Promise<void>|undefined;
   const automatic = commonOwnerBrowserRegistration({ ...options, loadSdk: commonBrowserSdk() });
-  const configuration = (cleanupOnly = false) => {
-    const registered = commonStagingRegistration(options.env, cleanupOnly ? 'retained_read' : 'admission');
+  const configuration = (cleanupOnly = false, normalRead = false) => {
+    const registered = commonStagingRegistration(options.env, cleanupOnly || normalRead ? 'retained_read' : 'admission');
+    if (normalRead && registered && registered.policy.expiresAt > Date.now() && registered.spend.policy.validUntil > Date.now()) commonStagingRegistration(options.env);
     return commonPublicBrowserConfiguration({ ...options, cleanupOnly, ...(registered ? {
       policy: registered.policy, spend: registered.spend, loadSdk: commonBrowserSdk(),
     } : {}) });
   };
-  const selectedConfiguration = async (cleanupOnly = false) => automatic.selected || automatic.hasRetained() ? automatic.configuration(cleanupOnly) : configuration(cleanupOnly);
+  const selectedConfiguration = async (cleanupOnly = false, normalRead = false) => automatic.selected || automatic.hasRetained() ? automatic.configuration(cleanupOnly) : configuration(cleanupOnly, normalRead);
   const assertOwner = async () => {
       const doName = options.storage.kv.get<string>('do_name'), subject = options.storage.kv.get<string>('telegram_subject');
       const physical = () => { if (!doName || !subject || options.storage.kv.get('do_name') !== doName || options.storage.kv.get('telegram_subject') !== subject
@@ -114,7 +115,7 @@ export function ownerBrowserRuntime(options: Readonly<{
           // Retained session handles still select their existing exact-session host.
           if(!args.session_handle){
             let retainedConfiguration;
-            try{retainedConfiguration=await selectedConfiguration();}catch(cause){traceBrowserFailure('public_read_configuration',cause);if(!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;}
+            try{retainedConfiguration=await selectedConfiguration(false, true);}catch(cause){traceBrowserFailure('public_read_configuration',cause);if(!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;}
             let expiredSpend=false;
             if(options.env.COMMON_BROWSER_REGISTRATION){try{expiredSpend=JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.validUntil<=Date.now();}catch(cause){traceBrowserFailure('public_read_registration',cause);/* invalid descriptor is checked before reservation */}}
             if(!retainedConfiguration||retainedConfiguration.expiresAt<=Date.now()||expiredSpend){
@@ -130,7 +131,8 @@ export function ownerBrowserRuntime(options: Readonly<{
                 await assertReadCurrent();
                 const scope=options.activeScope()!;
                 const declaredLimitMicrousd=options.env.COMMON_BROWSER_REGISTRATION?JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.limitMicrousd:undefined;
-                return reserveOwnerPublicBrowser({storage:options.storage,ownerId,custodyDigest:owner.custodyDigest,intent:`${scope.runId}:${scope.attempt}:${ctx.toolCallId}`,reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now:Date.now(),declaredLimitMicrousd,assertCurrent:()=>{scope.admit();if(options.activeScope()!==scope||options.storage.kv.get('telegram_unlinked')===true)throw new ClosedRunError();}});
+                const effectiveLimitMicrousd=Number.isSafeInteger(declaredLimitMicrousd)?Math.min(declaredLimitMicrousd,COMMON_TEST_CEILING_MICROUSD):declaredLimitMicrousd;
+                return reserveOwnerPublicBrowser({storage:options.storage,ownerId,custodyDigest:owner.custodyDigest,intent:`${scope.runId}:${scope.attempt}:${ctx.toolCallId}`,reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now:Date.now(),declaredLimitMicrousd:effectiveLimitMicrousd,assertCurrent:()=>{scope.admit();if(options.activeScope()!==scope||options.storage.kv.get('telegram_unlinked')===true)throw new ClosedRunError();}});
               }});
               return read(args,{...ctx,authenticatedUserId:ownerId,assertTaskSourceCurrent:assertReadCurrent});
             }
