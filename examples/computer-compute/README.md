@@ -44,3 +44,5 @@ The original blocked action was `docker build --platform linux/amd64 -t waldo-co
 The approved scope was local Docker Desktop socket access, official GHCR/Docker Hub downloads, local image/cache writes and the fixed synthetic test. Docker is a privileged host interface; the helper requests no host mounts, secret forwarding, public listener, image push, deployment or Cloudflare execution.
 
 Independent source review at `3930c45b3778e23e95aa8c75c728227c0b3182e8` found no additional source blockers within scope and independently passed all 10 adapter tests. Its verdict was trial-only with the documented general resource gap. The execution adapter and native worker remain unchanged; this checkpoint corrects only the local fixture date and adds reproducible proof/evidence.
+
+Independent review of the five-file proof/helper delta at `7e6eeb18b8b8a7daab407e9f4b6402f14e4c8f94` passed with no blocking findings. The reviewer checked cleanup and proof boundaries without rerunning Docker. This final evidence checkpoint changes only documentation.
