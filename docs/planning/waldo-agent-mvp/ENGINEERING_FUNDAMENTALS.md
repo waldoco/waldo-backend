@@ -609,7 +609,7 @@ A fresh staging Cloudflare public read uses the existing reader without requirin
 
 - [ ] Compute acceptance crosses authenticated console CSV upload, normal owner tools and channel delivery: an explicit old input revision must remain exact after a newer upload, the returned PDF link must be acknowledged for the correct owner, and restart readback must preserve its hash without another provider execution. Fixtures must include the trusted ingress origin and a chat-bound channel acknowledgment.
 
-- [ ] Known command failure retains bounded terminal diagnostics and no output artifact; reopen reads the same receipt without execution. The registered tool failure must preserve a useful diagnostic preview within the dispatcher error limit, and a corrected command needs a new invocation. Failed intents without a result remain uncertain; revoked authority cannot expose late results.
+- [ ] Known command failure retains bounded terminal diagnostics and no output artifact; reopen reads the same receipt without execution. The registered tool failure must preserve a useful diagnostic preview within the dispatcher error limit, and a corrected command needs a new invocation. Failed intents without a result remain uncertain; revoked authority cannot expose late results. When receipt semantics change, update replay-registry evidence to the actual guard and test both known failure readback and unresolved-command refusal.
 
 ### Ordinary retained browser journeys
 
