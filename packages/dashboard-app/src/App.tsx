@@ -15,6 +15,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { exactTime, relativeTime } from './time';
 import type { OverviewV1 } from './model';
 import { fetchOverview, SignInRequired } from './model';
+import { nextLiveDelay, sameRecord, shouldPoll } from './live';
 import './style.css';
 
 export type Route = 'not-found' | 'today' | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
@@ -134,6 +135,7 @@ export function App() {
   const [state, setState] = useState<FeedbackState | { kind: 'ready'; data: OverviewV1 }>({ kind: 'loading' });
   const [retry, setRetry] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  const [livePaused, setLivePaused] = useState(false);
   const [adminState, setAdminState] = useState<AdminState>({kind:'loading'});
   const adminAbort = useRef<AbortController | null>(null);
   const refreshAdmin = async () => {
@@ -160,6 +162,32 @@ export function App() {
     }).finally(() => { if (!controller.signal.aborted) setRefreshing(false); });
     return () => controller.abort();
   }, [retry]);
+  // Live updates: while the page is open and visible, re-read the overview in the background.
+  // Failures keep the last good record on screen, back off, and say updates are paused.
+  const hasData = state.kind === 'ready';
+  useEffect(() => {
+    if (!hasData) return;
+    let stopped = false, failures = 0, timer = 0, controller: AbortController | null = null;
+    const schedule = () => { window.clearTimeout(timer); if (!stopped) timer = window.setTimeout(run, nextLiveDelay(failures)); };
+    const run = () => {
+      if (stopped) return;
+      if (!shouldPoll(document.visibilityState)) { schedule(); return; }
+      controller?.abort(); controller = new AbortController(); const mine = controller;
+      fetchOverview(mine.signal).then((data) => {
+        if (mine.signal.aborted) return;
+        failures = 0; setLivePaused(false);
+        setState(previous => previous.kind === 'ready' && sameRecord(previous.data, data) ? previous : { kind: 'ready', data });
+      }).catch((error: unknown) => {
+        if (mine.signal.aborted) return;
+        if (error instanceof SignInRequired) { setState({ kind: 'error', message: error.message, signedOut: true }); stopped = true; return; }
+        failures += 1; setLivePaused(true);
+      }).finally(() => { if (!mine.signal.aborted) schedule(); });
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') { window.clearTimeout(timer); run(); } };
+    document.addEventListener('visibilitychange', onVisible);
+    schedule();
+    return () => { stopped = true; window.clearTimeout(timer); controller?.abort(); document.removeEventListener('visibilitychange', onVisible); };
+  }, [hasData]);
   // Linear-style jumps: G, then T, W, M or P. Ignored while typing.
   useEffect(() => {
     let armed = 0;
@@ -187,7 +215,7 @@ export function App() {
       : state.kind !== 'ready' ? <DashboardFeedback state={state} onRetry={() => setRetry((n) => n + 1)}/>
       : <div className="route" key={route.split('/')[0]}><Dashboard data={state.data} route={route} now={now} isAdmin={isAdmin}/></div>}</main>
     <footer><p><a href="/console/legacy">Classic console</a> · <a href="#/connections">Connections</a> · <a href="#/files">Files</a> · <a href="#/invites">Invites</a></p>
-      {ready && <p><span title={`${exactTime(ready.as_of, ready.timezone)} · ${ready.timezone}`}>Updated {relativeTime(ready.as_of, now)}</span><button type="button" className="refresh" aria-busy={refreshing} disabled={refreshing} onClick={() => setRetry((n) => n + 1)}><Icon name="retry"/>Refresh records</button></p>}
+      {ready && <p><span title={`${exactTime(ready.as_of, ready.timezone)} · ${ready.timezone}`}>Updated {relativeTime(ready.as_of, now)}</span><span className="live-status" role="status" aria-live="polite">{livePaused ? ' · Live updates paused, retrying' : ' · Live'}</span><button type="button" className="refresh" aria-busy={refreshing} disabled={refreshing} onClick={() => setRetry((n) => n + 1)}><Icon name="retry"/>Refresh records</button></p>}
       <p>Recorded activity can include attempts and failures. Check the result before treating work as done.</p>
     </footer>
   </div>;
