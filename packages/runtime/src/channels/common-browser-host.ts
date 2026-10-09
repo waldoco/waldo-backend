@@ -10,11 +10,13 @@ import type {workspaceOwnerHost} from './workspace-host';
 import {generalDigest} from './general-browser-observation';
 import {browserScreenshotToWorkspace} from './browser-screenshot-workspace';
 import type { GeneralBrowserAction } from './general-browser-actions';
-export type CommonBrowserGrant = Readonly<{ ref:string;taskId:string;ownerId:string;expiresAt:number;allowedOrigins:readonly string[];maxScreenshotBytes:number;lifetimeMs:number }>;
+export type CommonBrowserGrant = Readonly<{ ref:string;taskId:string;ownerId:string;expiresAt:number;allowedOrigins:readonly string[];maxScreenshotBytes:number;lifetimeMs:number;keepAliveMs?:number }>;
 // Private registered host capability. Neither model arguments nor environment switches mint it.
 export type CommonBrowserConfiguration = Readonly<{
  // Trusted owner runtime capability; direct hosts default to close-before-detach.
  retainInteractions?:true;
+ ownsGrant?(grant:CommonBrowserGrant):boolean;
+ allocationClosed?(grant:CommonBrowserGrant,session:BrowserSession):Promise<void>;
  binding:BrowserWorker;loadSdk:CloudflareBrowserSdkLoader;
  bindingForOperation?(grant:CommonBrowserGrant,operationId:string):BrowserWorker;
  cleanupBinding?(grant:CommonBrowserGrant,providerSessionId:string):BrowserWorker;
@@ -47,7 +49,7 @@ export function commonBrowserHost(options:Readonly<{
  const checked=async()=>{await options.assertCurrent();const task=snapshot();if(!task.ready||!task.sources.includes('browser')&&!task.sources.includes('web'))throw Error('common browser source unavailable');return task;};
  const granted=async()=>{
   const task=await checked();const supplied=await options.config.grant(task,options.ownerId);const grant=Object.freeze({...supplied,allowedOrigins:Object.freeze([...supplied.allowedOrigins])});await checked();
-  if(grant.ownerId!==options.ownerId||grant.taskId!==task.taskId||grant.expiresAt<=options.now()||!grant.ref||!Number.isSafeInteger(grant.expiresAt)||!Number.isSafeInteger(grant.lifetimeMs)||grant.lifetimeMs<10000||grant.lifetimeMs>600000||!Number.isSafeInteger(grant.maxScreenshotBytes)||grant.maxScreenshotBytes<1||!grant.allowedOrigins.length||grant.allowedOrigins.some(origin=>{if(origin===PUBLIC_WEB_ORIGIN)return false;try{const url=new URL(origin);return url.protocol!=='https:'||url.origin!==origin||!!url.username||!!url.password;}catch{return true;}}))throw Error('common browser grant rejected');
+  if(grant.ownerId!==options.ownerId||grant.taskId!==task.taskId||grant.expiresAt<=options.now()||!grant.ref||!Number.isSafeInteger(grant.expiresAt)||!Number.isSafeInteger(grant.lifetimeMs)||grant.lifetimeMs<10000||!Number.isSafeInteger(grant.keepAliveMs??grant.lifetimeMs)||(grant.keepAliveMs??grant.lifetimeMs)<10000||(grant.keepAliveMs??grant.lifetimeMs)>600000||!Number.isSafeInteger(grant.maxScreenshotBytes)||grant.maxScreenshotBytes<1||!grant.allowedOrigins.length||grant.allowedOrigins.some(origin=>{if(origin===PUBLIC_WEB_ORIGIN)return false;try{const url=new URL(origin);return url.protocol!=='https:'||url.origin!==origin||!!url.username||!!url.password;}catch{return true;}}))throw Error('common browser grant rejected');
   await options.config.assertGrantCurrent(grant);return grant;
  };
  type Record=BrowserRecord;
@@ -71,7 +73,7 @@ export function commonBrowserHost(options:Readonly<{
  const publishObservation=async(grant:CommonBrowserGrant,record:Record,observed:GeneralSnapshot,ctx:ToolDispatcherContext)=>{
   await checked();await ctx.assertTaskSourceCurrent?.();
   const latest=options.storage.kv.get<Record>(key(grant.taskId));
-  if(!latest||latest.cleanup||!sameSession(latest,record)||images.length>=4)throw Error('common browser custody changed');
+  if(!latest||latest.cleanup||!sameSession(latest,record))throw Error('common browser custody changed');
   const {image:_,...observation}=observed;
   const checkpoint={...latest,observation,tabs:observed.observation.tabs.map(tab=>({url:tab.url,ref:tab.ref}))};
   if(encodedCheckpointBytes(checkpoint)>COMMON_BROWSER_CHECKPOINT_BYTES-1024){
@@ -82,7 +84,8 @@ export function commonBrowserHost(options:Readonly<{
   }
   save(checkpoint,key(grant.taskId));
   let binary='';for(const byte of observed.image.bytes)binary+=String.fromCharCode(byte);
-  images.push({kind:'image',filename:`browser-${images.length+1}.png`,mime_type:observed.image.mime_type,data_base64:btoa(binary)});
+  if(images.length>=4)images.shift();
+  images.push({kind:'image',filename:`browser-${observed.observation.revision}.png`,mime_type:observed.image.mime_type,data_base64:btoa(binary)});
   return {ok:true as const,data:{...observed.observation,session_handle:record.session.id,text:observed.observation.text.slice(0,8000),elements:observed.observation.elements.slice(0,64),tabs:observed.observation.tabs.slice(0,8),
    field_values:observed.state.elements.slice(0,64).flatMap((element,index)=>['input','textarea','select'].includes(element.tag)&&!['password','file','hidden'].includes(element.type)?[{ref:observed.observation.elements[index]!.ref,name:element.name,value:element.value}]:[]),
    ...(latest.action?.state==='uncertain'||latest.action?.state==='prepared'?{action_outcome:'uncertain'}:{})},source_taint:'external' as const};
@@ -97,19 +100,18 @@ export function commonBrowserHost(options:Readonly<{
     if(record&&(JSON.stringify(record.grant)!==JSON.stringify(grant)||record.session.ownerId!==options.ownerId||record.cleanup||record.allocation!=='observed'))throw Error('common browser retained identity uncertain');
     if(!record){
      const now=options.now();record={grant,allocation:'prepared',tabs:[],session:browserSessionSchema.parse({id:crypto.randomUUID(),ownerId:options.ownerId,provider:'cloudflare_playwright',providerSessionId:'pending',contextHandle:null,mode:'public',state:'starting',generation:1,expiresAt:Math.min(grant.expiresAt,now+grant.lifetimeMs),updatedAt:now})};
-     await driver.start(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)?'public':grant.allowedOrigins.map(origin=>new URL(origin).hostname),grant.lifetimeMs,async()=>{await options.config.reserveAllocation(grant);await checked();save(record!,storageKey);},async id=>{options.storage.transactionSync(()=>{const retained=options.storage.kv.get<Record>(storageKey);if(!retained||retained.session.id!==record!.session.id||retained.session.generation!==record!.session.generation||JSON.stringify(retained.grant)!==JSON.stringify(grant))throw Error('common browser allocation custody changed');record={...retained,cleanupFailed:undefined,allocation:'observed',session:{...retained.session,providerSessionId:id,state:retained.cleanup?retained.session.state:'active',updatedAt:options.now()}};save(record!,storageKey);});},()=>publishCleanup(options.storage,storageKey,record!,true));
+     await driver.start(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)?'public':grant.allowedOrigins.map(origin=>new URL(origin).hostname),grant.keepAliveMs??grant.lifetimeMs,async()=>{await options.config.reserveAllocation(grant);await checked();save(record!,storageKey);},async id=>{options.storage.transactionSync(()=>{const retained=options.storage.kv.get<Record>(storageKey);if(!retained||retained.session.id!==record!.session.id||retained.session.generation!==record!.session.generation||JSON.stringify(retained.grant)!==JSON.stringify(grant))throw Error('common browser allocation custody changed');record={...retained,cleanupFailed:undefined,allocation:'observed',session:{...retained.session,providerSessionId:id,state:retained.cleanup?retained.session.state:'active',updatedAt:options.now()}};save(record!,storageKey);});},async()=>{await options.config.allocationClosed?.(grant,record!.session);publishCleanup(options.storage,storageKey,record!,true);});
     }
-    if(images.length>=4)throw Error('common browser image budget exhausted');
     // Trusted interaction preparation can retain the guarded connection in a
     // turn; default serving reads close documents before disconnect. Stop
     // terminates the exact separately funded session in either mode.
     const recovering=!!record.observation&&!driver.hasRetainedConnection();
     const observed=record.observation?.observation.url===args.url&&driver.hasRetainedConnection()?await driver.observe(record.session,record.observation.observation.tab_ref):await driver.navigate(record.session,args.url);
     const published=await publishObservation(grant,record,observed,ctx);
-    return {...published,data:{...published.data,...(recovering?{document_state:'recreated',previous_document_lost:true}:{})}};
+    return {...published,data:{...published.data,...(recovering?{document_state:'recreated',previous_document_lost:true,document_notice:'The prior browser document was lost. Unsent form values and old action refs are unavailable. The page was recreated in the same paid session; no effect was replayed.'}:{})}};
    }catch(error){return {ok:false,code:'rejected',error:'Public browser read is unavailable or uncertain. Inspect retained task state before retrying; no successful read is claimed.'+(error instanceof GeneralBrowserError?' Browser diagnostic: '+JSON.stringify({browser_code:error.code,...(error.diagnostic?{diagnostic:error.diagnostic}:{}),...(error.cleanup_failed?{cleanup_failed:true}:{}),...(error.release_failed?{release_failed:true}:{})}):''),source_taint:'external'};}
   }};
- const actionHandler:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>={name:'browse_act',description:'Interact with the current Cloudflare public page using observed refs: goto, read, inspect, type, click, scroll. File selection, page sends and native submits are unsupported. Unknown outcomes block repeated effects; read evidence before deciding what completed.',schema:browseActArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_act')),autonomy_gated:false,
+ const actionHandler:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>={name:'browse_act',description:'Interact with the current Cloudflare public page using observed refs: goto, read, inspect, type, click, select, set_checked, scroll. File selection, page sends and native submits are unsupported. Unknown outcomes block repeated effects; read evidence before deciding what completed.',schema:browseActArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_act')),autonomy_gated:false,
   async handle(args,ctx){let storageKey:string|undefined,digest:string|undefined;
    try{
     if(options.config.retainInteractions!==true)throw Error('retained interaction capability unavailable');
@@ -119,7 +121,6 @@ export function commonBrowserHost(options:Readonly<{
     const command=args.command;
     if(command.operation==='cancel'){await api.cancel();return {ok:true,data:{ended:true},source_taint:'external'};}
     const driver=executionDriver(grant,ctx),before=record.observation;
-    if(images.length>=4)throw Error('common browser image budget exhausted');
     let observed:GeneralSnapshot;
     if(command.operation==='read'||command.operation==='inspect'||command.operation==='screenshot'||command.operation==='switch_tab')observed=await driver.observe(record.session,command.operation==='switch_tab'?command.tab_ref:before.observation.tab_ref);
     else {
@@ -133,7 +134,7 @@ export function commonBrowserHost(options:Readonly<{
      else if(command.operation==='close_tab'){await driver.closeTab(record.session,command.tab_ref,prepare);observed=await driver.observe(record.session);}
      else if(command.operation==='goto'){await prepare(await generalDigest(JSON.stringify({revision:before.observation.revision,...command})));observed=await driver.navigate(record.session,command.url,before.observation.tab_ref);}
      else {
-      const action:GeneralBrowserAction|undefined=command.operation==='click'?{operation:'click',element_ref:command.element_ref}:command.operation==='type'?command.key?{operation:'press',element_ref:command.element_ref,key:command.key}:{operation:'fill',element_ref:command.element_ref,value:command.value!}:command.operation==='scroll'?{operation:'scroll',delta:command.delta}:undefined;
+      const action:GeneralBrowserAction|undefined=command.operation==='click'?{operation:'click',element_ref:command.element_ref}:command.operation==='select'?{operation:'select',element_ref:command.element_ref,value:command.value}:command.operation==='set_checked'?{operation:'set_checked',element_ref:command.element_ref,checked:command.checked}:command.operation==='type'?command.key?{operation:'press',element_ref:command.element_ref,key:command.key}:{operation:'fill',element_ref:command.element_ref,value:command.value!}:command.operation==='scroll'?{operation:'scroll',delta:command.delta}:undefined;
       if(!action)throw Error('unsupported current browser command');
       const element=action.operation==='scroll'?undefined:before.state.elements[before.observation.elements.findIndex(row=>row.ref===action.element_ref)];
       if(element?.inForm&&(action.operation==='press'&&action.key==='Enter'||action.operation==='click'&&(element.tag==='button'&&element.type!=='button'||element.tag==='input'&&['submit','image'].includes(element.type))))throw Error('native browser submit approval required');
@@ -156,12 +157,16 @@ export function commonBrowserHost(options:Readonly<{
   }};
  const api={handler,actionHandler,
 resetAttachments(){images=[];},sessionHandle:()=>options.storage.kv.get<Record>(key(snapshot().taskId))?.session.id,attachments:()=>[...images],async cancel(){images=[];const task=snapshot();const record=options.storage.kv.get<Record>(key(task.taskId));if(!record||record.cleanup==='closed')return;
+  if(record.cleanupFailed)throw new GeneralBrowserError('cleanup_unconfirmed');
   save({...record,observation:undefined,tabs:[],cleanup:'pending'},key(task.taskId));
   if(record.session.providerSessionId==='pending')throw Error('common browser allocation uncertain');
   try{await execution?.driver.disconnect();}catch{/* Exact physical termination below is the authoritative cleanup. */}finally{execution=undefined;}
   // Cleanup does not depend on a still-live execution lease.
-  await makeDriver(record.grant).terminate(record.session);
-  publishCleanup(options.storage,key(task.taskId),record,true);
+  try{
+   await makeDriver(record.grant).terminate(record.session);
+   await options.config.allocationClosed?.(record.grant,record.session);
+   publishCleanup(options.storage,key(task.taskId),record,true);
+  }catch(error){publishCleanup(options.storage,key(task.taskId),record,false);throw error;}
  }};return api;
 }
 
@@ -169,12 +174,13 @@ resetAttachments(){images=[];},sessionHandle:()=>options.storage.kv.get<Record>(
 // A failed physical termination stays explicitly unresolved, never an endless I/O retry.
 export async function maintainCommonBrowsers(storage:DurableObjectStorage,config:CommonBrowserConfiguration,now:number){
  for(const [key,row] of [...storage.kv.list<BrowserRecord>({prefix:'common-browser:'})]) {
-  if(row.cleanup==='closed'||row.cleanupFailed||row.session.expiresAt>now&&row.cleanup!=='pending')continue;
+  if(config.ownsGrant&&!config.ownsGrant(row.grant)||row.cleanup==='closed'||row.cleanupFailed||row.session.expiresAt>now&&row.cleanup!=='pending')continue;
   storage.transactionSync(()=>storage.kv.put(key,{...row,cleanup:'pending'}));
   try {
    if(row.session.providerSessionId==='pending')throw Error('allocation identity uncertain');
    const driver=cloudflareGeneralBrowser({ownerId:row.session.ownerId,binding:config.binding,cleanupBinding:config.cleanupBinding? id=>config.cleanupBinding!(row.grant,id):undefined,loadSdk:config.loadSdk,now:()=>now,deadline:()=>now,cleanupTimeoutMs:10000,maxScreenshotBytes:row.grant.maxScreenshotBytes,admit:async()=>{throw Error('cleanup only');},authorizeRequest:async()=>false});
    await driver.terminate(row.session);
+   await config.allocationClosed?.(row.grant,row.session);
    publishCleanup(storage,key,row,true);
   }catch{publishCleanup(storage,key,row,false);}
  }

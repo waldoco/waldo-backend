@@ -600,3 +600,8 @@ A fresh staging Cloudflare public read uses the existing reader without requirin
 | Failure | Regression | Boundary |
 | --- | --- | --- |
 | Expired $17.91 registration hit new $10 admission validation before normal-read fallback; removing its descriptor could restore the historical ceiling | common-owner-browser-registration.test.ts automatic/manual real-handler reads, $8 control, live/future/pin/owner/custody refusals and descriptor removal; owner-browser-public-read.test.ts unchanged legacy aggregates and retained test ceilings | Exact historical pins, refs, charges and funded cleanup remain intact; only new ordinary admission is bounded, with no reset/refund or environment mutation |
+
+### Ordinary retained browser journeys
+
+- [ ] Ordinary interactive requests select `retain_session` through the published model schema and dispatcher, receive DOM/native AX/PNG, continue beyond four observations and across an owner reply, then prove exact-session absence before settling duration. Read-only requests keep one-shot cleanup. Bound image history independently of actions; separate provider inactivity from the real admitted task deadline. Preserve existing charges and ceilings without issuing/refilling trial authority.
+- [ ] Malformed or duplicate provider session IDs cannot certify absence. Lost connections invalidate old refs and disclose recreated document state; wrong/expired handles or changed owner custody never allocate a replacement or replay an effect.

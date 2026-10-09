@@ -12,6 +12,7 @@ import type { LLMGatewayAdapter } from '../llm/provider';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import { workspaceOwnerHost, workspaceMetadata } from './workspace-host';
 import {cloudflarePublicRead,PUBLIC_READ_RESERVED_BROWSER_MS} from './cloudflare-public-read';
+import {ordinaryPublicBrowserConfiguration} from './ordinary-public-browser-configuration';
 import {reserveOwnerPublicBrowser} from './owner-public-browser-spend';
 const browserFailureClass=(cause:unknown)=>cause instanceof CommonBrowserRegistrationUnavailable?'CommonBrowserRegistrationUnavailable':cause instanceof ClosedRunError?'ClosedRunError':cause instanceof TypeError?'TypeError':cause instanceof RangeError?'RangeError':cause instanceof SyntaxError?'SyntaxError':cause instanceof Error?'Error':'UnknownError';
 const traceBrowserFailure=(operation:string,cause:unknown)=>console.warn(JSON.stringify({event:'owner_browser_failure',operation,error_class:browserFailureClass(cause)}));
@@ -67,9 +68,22 @@ export function ownerBrowserRuntime(options: Readonly<{
     const admit=async()=>{await assertCurrent();scope?.admit();if(scope&&options.activeScope()!==scope||options.storage.kv.get('do_name')!==doName)throw new ClosedRunError();const owner=await assertOwner();if(ownerId!==owner.directoryOwnerId&&ownerId!==`prn_${owner.directoryOwnerId.replaceAll('-','')}`)throw new ClosedRunError();const bound=workspaceMetadata(options.storage,scope).transaction(state=>state.binding);if(bound&&bound.ownerId!==owner.directoryOwnerId)throw new ClosedRunError();await assertCurrent();};
     await admit();const workspace=await workspaceOwnerHost(options.env,options.storage,options.actualDoId,doName,fetch,scope,admit);await admit();const origin=options.storage.kv.get<string>('origin');if(!origin)throw new ClosedRunError();return {workspace,origin};
   };
-  const bindHost=async(ctx:ToolDispatcherContext,sessionHandle?:string)=>{
+  const bindHost=async(ctx:ToolDispatcherContext,sessionHandle?:string,retainSession=false)=>{
     const assertCurrent=current(ctx);await assertCurrent();
-    const scope=options.activeScope()!,config=await selectedConfiguration();await assertCurrent();
+    const scope=options.activeScope()!,pointerBefore=retainedTask();
+    const ordinary=!!options.storage.kv.get(`ordinary-public-browser-grant:${sessionHandle?pointerBefore?.taskId:active?.taskId??scope.runId}`);
+    let config;
+    if(!ordinary){try{config=await selectedConfiguration(false,retainSession);}catch(cause){if(!retainSession||!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;}}
+    let expiredSpend=false;
+    if(options.env.COMMON_BROWSER_REGISTRATION)expiredSpend=JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.validUntil<=Date.now();
+    if(ordinary||retainSession&&(!config||config.expiresAt<=Date.now()||expiredSpend)){
+      const sdk=commonBrowserSdk();if(options.env.WALDO_ENVIRONMENT!=='staging'||!options.env.BROWSER||!sdk)throw new ClosedRunError();
+      const owner=await assertOwner();await assertCurrent();
+      config=ordinaryPublicBrowserConfiguration({storage:options.storage,binding:options.env.BROWSER,loadSdk:sdk,owner:{ownerId:`prn_${owner.directoryOwnerId.replaceAll('-','')}`,custodyDigest:owner.custodyDigest},deadline:scope.deadline,now:Date.now,assertCurrent:async()=>{const admitted=lease;if(!admitted)throw new ClosedRunError();await admitted.assertCurrent();if(lease!==admitted)throw new ClosedRunError();},
+        declaredLimitMicrousd:options.env.COMMON_BROWSER_REGISTRATION?JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.limitMicrousd:undefined,
+        assertOwner:async()=>{const fresh=await assertOwner();return {ownerId:`prn_${fresh.directoryOwnerId.replaceAll('-','')}`,custodyDigest:fresh.custodyDigest};}});
+    }
+    await assertCurrent();
     if(!config)throw new ClosedRunError();
     if(active&&options.storage.kv.get<{cleanup?:string}>(`common-browser:${active.taskId}`)?.cleanup==='closed'){active=undefined;lease=undefined;options.storage.kv.put(continuationKey,null);}
     const pointer=retainedTask();
@@ -105,15 +119,20 @@ export function ownerBrowserRuntime(options: Readonly<{
       } };
     },
     read(fallback: ToolHandler<BrowsePageArgs, unknown, ToolDispatcherContext>): ToolHandler<BrowsePageArgs, unknown, ToolDispatcherContext> {
-      return { ...fallback, schema: browsePageArgsSchema, async handle(args, ctx) {
+      return { ...fallback, schema: browsePageArgsSchema, description: fallback.description+' For interactive tasks use retain_session:true to receive DOM/accessibility, a PNG and session_handle, then call browse_act with that handle and current refs. Omit for a one-shot read.', async handle(args, ctx) {
         try {
           const assertCurrent = current(ctx); await assertCurrent();
           // Browserbase remains an explicit choice. Cloudflare failure never switches providers.
-          if(args.provider==='browserbase_stagehand_http_v3'&&args.session_handle)throw new ClosedRunError();
-          if (args.provider === 'browserbase_stagehand_http_v3' || !args.provider && !args.session_handle && options.env.WALDO_ENVIRONMENT !== 'staging') return fallback.handle(args, { ...ctx, assertTaskSourceCurrent: assertCurrent });
+          if(args.provider==='browserbase_stagehand_http_v3'&&(args.session_handle||args.retain_session))throw new ClosedRunError();
+          if (args.provider === 'browserbase_stagehand_http_v3' || !args.provider && !args.session_handle && !args.retain_session && options.env.WALDO_ENVIRONMENT !== 'staging') return fallback.handle(args, { ...ctx, assertTaskSourceCurrent: assertCurrent });
+          // Omitted lifecycle fields must not silently discard an owner's
+          // unsent page state or buy a second browser during a retained journey.
+          const heldPointer=options.storage.kv.get<{taskId:string;sessionHandle:string}>(continuationKey);
+          const held=heldPointer?options.storage.kv.get<{cleanup?:string;session:{id:string}}>(`common-browser:${heldPointer.taskId}`):undefined;
+          if(!args.session_handle&&!args.retain_session&&heldPointer&&held?.session.id===heldPointer.sessionHandle&&held.cleanup!=='closed'&&options.storage.kv.get(`ordinary-public-browser-grant:${heldPointer.taskId}`))return {ok:false,code:'rejected',error:'An owner browser journey is already retained. Use its returned session_handle to read the current page, or cancel that session before starting a fresh one-shot read.',source_taint:'external'};
           // A normal fresh public read does not require a paid-test registration.
           // Retained session handles still select their existing exact-session host.
-          if(!args.session_handle){
+          if(!args.session_handle&&!args.retain_session){
             let retainedConfiguration;
             try{retainedConfiguration=await selectedConfiguration(false, true);}catch(cause){traceBrowserFailure('public_read_configuration',cause);if(!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;}
             let expiredSpend=false;
@@ -137,13 +156,13 @@ export function ownerBrowserRuntime(options: Readonly<{
               return read(args,{...ctx,authenticatedUserId:ownerId,assertTaskSourceCurrent:assertReadCurrent});
             }
           }
-          const bound=await bindHost(ctx,args.session_handle);
+          const bound=await bindHost(ctx,args.session_handle,args.retain_session);
           const result=await bound.active.host.handler.handle(args,bound.context);publishPointer();return result;
         } catch(cause) { traceBrowserFailure('read',cause);return { ok: false, code: 'rejected', error: `The browser owner or retained session is unavailable (${browserFailureClass(cause)}). No replacement was allocated.`, source_taint: 'external' }; }
       } };
     },
     act(fallback:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>):ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>{
-      return {...fallback,schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page first. Native actions: type, click, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, cancel. session_handle explicitly continues an existing owner session. File selection and page sends are unsupported; uncertain effects cannot repeat. Browserbase remains an explicit alternative.',async handle(args,ctx){
+      return {...fallback,schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page retain_session:true first, then use its session_handle. Native actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, cancel. session_handle explicitly continues an existing owner session. File selection and page sends are unsupported; uncertain effects cannot repeat. Browserbase remains an explicit alternative.',async handle(args,ctx){
         try{
           const assertCurrent=current(ctx);await assertCurrent();
           if(args.provider==='browserbase_stagehand_http_v3'&&(args.command||args.session_handle))throw new ClosedRunError();
@@ -220,9 +239,13 @@ export function ownerBrowserRuntime(options: Readonly<{
     stop() { revokeCommonBrowsers(options.storage, Date.now()); },
     maintain() {
       return maintenance??=(async()=>{
-        if(active){const row=options.storage.kv.get<{cleanup?:string;session:{expiresAt:number}}>(`common-browser:${active.taskId}`);if(row&&(row.cleanup||row.session.expiresAt<=Date.now())){const held=active;await held.host.cancel();if(active===held){active=undefined;lease=undefined;}}}
+        if(active){const row=options.storage.kv.get<{cleanup?:string;cleanupFailed?:boolean;session:{expiresAt:number}}>(`common-browser:${active.taskId}`);if(row&&!row.cleanupFailed&&(row.cleanup||row.session.expiresAt<=Date.now())){const held=active;await held.host.cancel();if(active===held){active=undefined;lease=undefined;}}}
         const config=await automatic.configuration(true)??(automatic.selected?undefined:configuration(true));
         if(config)await maintainCommonBrowsers(options.storage,config,Date.now());
+        const sdk=commonBrowserSdk();if(options.env.BROWSER&&sdk){
+          const cleanup=ordinaryPublicBrowserConfiguration({storage:options.storage,binding:options.env.BROWSER,loadSdk:sdk,now:Date.now,assertCurrent:async()=>{throw new ClosedRunError();},assertOwner:async()=>{throw new ClosedRunError();}});
+          await maintainCommonBrowsers(options.storage,cleanup,Date.now());
+        }
       })().finally(()=>{maintenance=undefined;});
     },
   };

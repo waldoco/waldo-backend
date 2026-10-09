@@ -30,7 +30,7 @@ it('one explicit bounded operator policy serves two existing owners and a newly 
       const id = `private-provider-${crypto.randomUUID()}`, subject = proof.subject;
       const row = { subject, pages: [] as any[], context: undefined as any };
       row.context = { close:async()=>{row.pages=[];},serviceWorkers: () => [], addInitScript: async () => {}, routeWebSocket: async () => {}, pages: () => row.pages.slice(), route: async () => {}, unroute: async () => {},
-        newCDPSession: async (page: any) => ({ send: async () => ({ targetInfo: { targetId: page.id } }), detach: async () => {} }),
+        newCDPSession: async (page: any) => ({ send: async (method:string) => method==='Accessibility.getFullAXTree'?{nodes:[{nodeId:'owner-page',role:{value:'heading'},name:{value:`Owner ${subject} ${page.url()}`},properties:[]}]}:({ targetInfo: { targetId: page.id } }), detach: async () => {} }),
         newPage: async () => {
           let url = 'about:blank';
           const page = { id: crypto.randomUUID(), url: () => url, title: async () => `Owner ${subject}`, setDefaultTimeout() {}, goto: async (target: string) => { url = target; return { status: () => 200 }; },
