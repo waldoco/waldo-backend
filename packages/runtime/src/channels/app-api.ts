@@ -146,3 +146,27 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
   const messages = shown.slice(start, end).reverse().map(entry => ({ id: entry.id, role: entry.role, text: entry.appPayload, parts: [{ type: 'text', text: entry.appPayload }], channel: entry.surface, parent_id: entry.parentId }));
   return { messages, next_cursor: start > 0 ? String(taken + messages.length) : null };
 };
+
+// App turns reuse the telegram-shaped update pipeline. The owner id the pipeline sees is a stable number derived from the owner's directory name.
+export const APP_UPDATE_BASE = 8_000_000_000_000;
+export const appSubjectFor = (doName: string): number => {
+  let hash = 2166136261;
+  for (let i = 0; i < doName.length; i += 1) { hash ^= doName.charCodeAt(i); hash = Math.imul(hash, 16777619) >>> 0; }
+  return 7_000_000_000_000 + hash;
+};
+
+export const parseAppSend = (raw: string): Readonly<{ clientMessageId: string; text: string }> | null => {
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { return null; }
+  if (!value || typeof value !== 'object') return null;
+  const { client_message_id: id, text } = value as Record<string, unknown>;
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(id) || typeof text !== 'string') return null;
+  const trimmed = text.trim();
+  return trimmed.length > 0 && trimmed.length <= 4000 ? { clientMessageId: id, text: trimmed } : null;
+};
+
+// Replies reach the app through the transcript, so outbound sends on this channel are accepted and not delivered anywhere else.
+export const appSinkCaller = () => async (method: string, body: unknown): Promise<unknown> => {
+  if (method === 'sendMessage') return { message_id: 1, chat: { id: (body as { chat_id?: number }).chat_id ?? 0 } };
+  return undefined;
+};
