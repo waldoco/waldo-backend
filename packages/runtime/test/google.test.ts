@@ -15,7 +15,8 @@ const fakeFetch = (calls: { url: string; init?: RequestInit }[]) => (async (inpu
     { id: 'e3', summary: 'Declined sync', attendees: [{ self: true, responseStatus: 'declined' }, {}], start: { dateTime: '2026-09-23T20:00:00+05:30' }, end: { dateTime: '2026-09-23T20:30:00+05:30' } },
   ] });
   if (url.includes('/gmail/v1/users/me/drafts')) return Response.json({ id: 'd1', message: { id: 'm1', threadId: 't1' } });
-  if (url.includes('tasks.googleapis.com/tasks/v1/lists/@default/tasks')) return Response.json({ items: [
+  if (url.includes('tasks.googleapis.com/tasks/v1/users/@me/lists')) return Response.json({ kind: 'tasks#taskLists', items: [{ id: '@default', title: 'Tasks' }] });
+  if (url.includes('tasks.googleapis.com/tasks/v1/lists/%40default/tasks') || url.includes('tasks.googleapis.com/tasks/v1/lists/@default/tasks')) return Response.json({ kind: 'tasks#tasks', items: [
     { id: 't1', title: 'Buy stamps', status: 'needsAction', updated: '2026-09-23T06:00:00Z' },
     { id: 't2', title: 'Pay rent', status: 'needsAction', due: '2026-09-30T00:00:00Z', updated: '2026-09-22T06:00:00Z' },
     { id: 't3', title: 'Renew license', status: 'completed', updated: '2026-09-21T06:00:00Z' },
@@ -477,18 +478,27 @@ describe('Calendar mutation notification compatibility', () => {
   ] as const)('%s with marker=%s preserves provider notification defaults and version fences', async (action, marker) => {
     const calls: { url: URL; init: RequestInit }[] = [];
     const start = '2026-10-11T10:00:00Z', end = '2026-10-11T11:00:00Z';
+    let current: Record<string, unknown> = { id: 'stable-event', summary: 'Synthetic meeting', start: { dateTime: start }, end: { dateTime: end }, etag: 'v2' };
+    let deleted = false;
     const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
       if (url.hostname === 'oauth2.googleapis.com') return Response.json({ access_token: 'synthetic' });
       calls.push({ url, init: init! });
-      if (init?.method === 'DELETE') return new Response(null, { status: 204 });
-      return Response.json({ id: 'stable-event', summary: 'Synthetic meeting', start: { dateTime: start }, end: { dateTime: end }, etag: 'v2' });
+      if (init?.method === 'DELETE') { deleted = true; return new Response(null, { status: 204 }); }
+      if (deleted) return Response.json({ error: { message: 'gone' } }, { status: 404 });
+      if (init?.body) {
+        const body = JSON.parse(String(init.body));
+        const endpoint = (value: Record<string, unknown>) => Object.fromEntries(Object.entries(value).filter(([, field]) => field !== null));
+        current = { ...current, ...body, ...(body.start ? { start: endpoint(body.start) } : {}), ...(body.end ? { end: endpoint(body.end) } : {}) };
+      }
+      return Response.json(current);
     }) as typeof fetch;
     const client = googleClient(app, { refresh_token: 'synthetic' }, fetcher);
     if (action === 'create') await client.createEvent({ id: 'stable-event', title: 'Synthetic meeting', start, end, operationMarker: marker });
     else if (action === 'move') await client.moveEvent('stable-event', start, end, 'v1', marker);
     else await client.cancelEvent('stable-event', 'v1', marker);
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
+    expect(calls.filter(call => call.init.method)).toHaveLength(1);
     const { url, init } = calls[0]!;
     expect(url.searchParams.has('sendUpdates')).toBe(false);
     expect(url.searchParams.has('sendNotifications')).toBe(false);
