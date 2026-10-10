@@ -240,7 +240,7 @@ describe('otlpTurnExporter', () => {
       'langfuse.trace.name': 'telegram.turn', 'langfuse.user.id': 'telegram:1', 'langfuse.session.id': 'telegram-dm:1',
       'langfuse.environment': 'staging', 'langfuse.release': 'abc1234',
       'langfuse.trace.tags': ['channel:telegram', 'feature:reactions', 'feature:reply'],
-      'langfuse.trace.metadata.schema_version': '5', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
+      'langfuse.trace.metadata.schema_version': '6', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
     });
     expect(attrs(receipt!)).toMatchObject({ 'langfuse.observation.metadata.hop': 'receipt', 'langfuse.observation.metadata.feature': 'reactions', 'langfuse.observation.type': 'tool' });
     expect(hopFeature('brand_new_hop')).toBe('other');
@@ -271,6 +271,28 @@ describe('otlpTurnExporter', () => {
     expect(attrs(on.spans(0)[0]!)).toMatchObject({ 'langfuse.observation.input': text.input, 'langfuse.observation.output': JSON.stringify({ reasoning: 'greet back', text: 'hello' }) });
     expect(attrs(on.spans(0)[0]!)).toMatchObject({ 'langfuse.trace.input': text.input, 'langfuse.trace.output': JSON.stringify({ reasoning: 'greet back', text: 'hello' }) });
     expect(attrs(off.spans(0)[0]!)['langfuse.trace.input']).toBeUndefined();
+  });
+
+  it('exports what fills a model call\'s context as numeric metadata on its generation', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    await log({ trace: 'tg-ctx', hop: 'llm_reply', ms: 5, ok: true,
+      usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 100, output: 10, cached: 0 },
+      shape: { system_bytes: 40, request_bytes: 90, context: {
+        tools_count: 3, tools_bytes: 1200, tool_turns_bytes: 0, history_messages: 2, history_bytes: 30, current_bytes: 12, attachments: 0,
+        system_sections: { behavior: 20, clock: 8, memory: 8 } } } });
+    await log({ trace: 'tg-ctx', hop: 'turn', ms: 10, ok: true });
+    const generation = spans(0).find((span) => span.name === 'llm_reply')!;
+    expect(attrs(generation)).toMatchObject({
+      'langfuse.observation.metadata.context_system_bytes': '40',
+      'langfuse.observation.metadata.context_tools_count': '3',
+      'langfuse.observation.metadata.context_tools_bytes': '1200',
+      'langfuse.observation.metadata.context_history_messages': '2',
+      'langfuse.observation.metadata.context_history_bytes': '30',
+      'langfuse.observation.metadata.context_current_bytes': '12',
+      'langfuse.observation.metadata.context_system_behavior_bytes': '20',
+      'langfuse.observation.metadata.context_system_memory_bytes': '8',
+    });
   });
 
   it('keeps every hop of one long turn that exceeds the outstanding-export budget', async () => {
