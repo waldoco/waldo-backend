@@ -1,0 +1,124 @@
+{
+  "note": "Fictional identifiers and key (hostKey). Bodies are the exact raw bytes; signatures are computed over them.",
+  "hostKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "redeem": {
+    "path": "/channels/imessage/v1/pair/redeem",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": "{\"version\":1,\"code\":\"wim_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"hostVersion\":\"example-host-1\",\"transportVersion\":\"waldo-imessage-http-v1\",\"databaseGeneration\":\"example-generation\"}",
+    "response": {
+      "status": 200,
+      "body": {
+        "version": 1,
+        "state": "pending_verification",
+        "bridgeId": "imb_11111111111111111111111111111111",
+        "accountId": "ima_22222222222222222222222222222222",
+        "credential": {
+          "kind": "hmac-sha256",
+          "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "expiresAtMs": 1760090400000
+      }
+    }
+  },
+  "heartbeat": {
+    "path": "/channels/imessage/v1/heartbeat",
+    "headers": {
+      "content-type": "application/json",
+      "x-waldo-imessage-s2": "{\"version\":1,\"bridgeId\":\"imb_11111111111111111111111111111111\",\"accountId\":\"ima_22222222222222222222222222222222\",\"atMs\":1760090000000,\"nonce\":\"example-nonce-1\",\"signature\":\"cf4a9165a43c2892d31faf776f6e77e7e228cd587edc2abbe94e4dfd90473139\"}"
+    },
+    "body": "{\"version\":1,\"bridgeId\":\"imb_11111111111111111111111111111111\",\"accountId\":\"ima_22222222222222222222222222222222\",\"databaseGeneration\":\"example-generation\",\"status\":\"online\"}",
+    "response": {
+      "status": 200,
+      "body": {
+        "version": 1,
+        "accepted": true
+      }
+    }
+  },
+  "event": {
+    "path": "/channels/imessage/v1/events",
+    "headers": {
+      "content-type": "application/json",
+      "x-waldo-imessage-s2": "{\"version\":1,\"bridgeId\":\"imb_11111111111111111111111111111111\",\"accountId\":\"ima_22222222222222222222222222222222\",\"atMs\":1760090001000,\"nonce\":\"example-nonce-2\",\"signature\":\"055baea441037b6ef10efaa21aed000626279df078ca2bd6d4d4ea60e92bc3d1\"}"
+    },
+    "body": "{\"version\":1,\"bridgeId\":\"imb_11111111111111111111111111111111\",\"accountId\":\"ima_22222222222222222222222222222222\",\"eventId\":\"example-event-1\",\"cursor\":{\"databaseGeneration\":\"example-generation\",\"value\":\"1\"},\"occurredAt\":\"2026-10-10T10:00:00Z\",\"service\":\"iMessage\",\"senderHandle\":\"owner@example.invalid\",\"chatGuid\":\"iMessage;-;owner@example.invalid\",\"participants\":[\"owner@example.invalid\"],\"isGroup\":false,\"isFromMe\":false,\"messageGuid\":\"example-guid-1\",\"partIndex\":0,\"kind\":\"message\",\"text\":\"Hello Waldo\",\"attachments\":[]}",
+    "response": {
+      "status": 200,
+      "body": {
+        "admitted": true,
+        "eventId": "example-event-1",
+        "digest": "6e3414db6111ff6c50b50f61d4b4425afc884265e50250dfe9d8917416140024"
+      }
+    }
+  },
+  "pull": {
+    "path": "/channels/imessage/v1/commands/pull",
+    "headers": {
+      "content-type": "application/json",
+      "x-waldo-imessage-s2": "{\"version\":1,\"bridgeId\":\"imb_11111111111111111111111111111111\",\"accountId\":\"ima_22222222222222222222222222222222\",\"atMs\":1760090002000,\"nonce\":\"example-nonce-3\",\"signature\":\"81de16bc12f1bee46e5e4b58ee76f7ac60cdbc36cebb097e4d7396c06ee5e220\"}"
+    },
+    "body": "{\"version\":1,\"bridgeId\":\"imb_11111111111111111111111111111111\",\"accountId\":\"ima_22222222222222222222222222222222\"}",
+    "response": {
+      "status": 200,
+      "body": {
+        "version": 1,
+        "delivery": {
+          "deliveryId": "00000000-0000-4000-8000-0000000000d1",
+          "attempt": 1,
+          "body": "{\"version\":1,\"commandId\":\"wrc_example\",\"ownerId\":\"00000000-0000-4000-8000-000000000001\",\"binding\":{\"ownerId\":\"00000000-0000-4000-8000-000000000001\",\"presenceId\":\"00000000-0000-4000-8000-000000000002\",\"subject\":\"owner@example.invalid\",\"bridgeId\":\"imb_11111111111111111111111111111111\",\"accountId\":\"ima_22222222222222222222222222222222\",\"chatGuid\":\"iMessage;-;owner@example.invalid\",\"verified\":true,\"conversationKind\":\"direct\",\"service\":\"iMessage\"},\"target\":{\"bridgeId\":\"imb_11111111111111111111111111111111\",\"accountId\":\"ima_22222222222222222222222222222222\",\"chatGuid\":\"iMessage;-;owner@example.invalid\"},\"service\":\"iMessage\",\"allowSMSFallback\":false,\"operation\":\"send\",\"text\":\"Hi, here is your answer.\",\"attachments\":[]}",
+          "headers": {
+            "version": 1,
+            "bridgeId": "imb_11111111111111111111111111111111",
+            "accountId": "ima_22222222222222222222222222222222",
+            "atMs": 1760090000500,
+            "nonce": "cloud-nonce-1",
+            "signature": "98fbae7266972c22d73529688c0dfdea1b06d7a81e3a79d454ed34eef0fd3b13"
+          },
+          "commitment": {
+            "version": 1,
+            "commandDigest": "35cff403ca67e09b187df86ec44ce2dcc8f868bbbf9ebf828c4c05a6e38700de",
+            "expiresAtMs": 1760090430000,
+            "signature": "00c8c653226cf894c0ef77048f6b4f3048c6a4327740ec1df7510af332469bfb"
+          }
+        }
+      }
+    }
+  },
+  "result": {
+    "path": "/channels/imessage/v1/commands/result",
+    "headers": {
+      "content-type": "application/json",
+      "x-waldo-imessage-s2": "{\"version\":1,\"bridgeId\":\"imb_11111111111111111111111111111111\",\"accountId\":\"ima_22222222222222222222222222222222\",\"atMs\":1760090003000,\"nonce\":\"example-nonce-4\",\"signature\":\"166701af1c2f6f73d3b329ad908494ae7590623a690c0c543d667f187f52470c\"}"
+    },
+    "body": "{\"version\":1,\"bridgeId\":\"imb_11111111111111111111111111111111\",\"accountId\":\"ima_22222222222222222222222222222222\",\"deliveryId\":\"00000000-0000-4000-8000-0000000000d1\",\"commandId\":\"wrc_example\",\"commandDigest\":\"35cff403ca67e09b187df86ec44ce2dcc8f868bbbf9ebf828c4c05a6e38700de\",\"result\":{\"version\":1,\"commandId\":\"wrc_example\",\"target\":{\"bridgeId\":\"imb_11111111111111111111111111111111\",\"accountId\":\"ima_22222222222222222222222222222222\",\"chatGuid\":\"iMessage;-;owner@example.invalid\"},\"state\":\"local_recorded\",\"messageGuid\":\"example-sent-guid\",\"evidence\":{\"kind\":\"local_database\",\"reference\":\"example-row\"}}}",
+    "response": {
+      "status": 200,
+      "body": {
+        "version": 1,
+        "accepted": true
+      }
+    }
+  },
+  "errors": {
+    "unauthenticated": {
+      "status": 401,
+      "body": {
+        "error": "invalid_request"
+      }
+    },
+    "conflict": {
+      "status": 409,
+      "body": {
+        "error": "event_conflict"
+      }
+    },
+    "tooLarge": {
+      "status": 413,
+      "body": {
+        "error": "request_too_large"
+      }
+    }
+  }
+}
