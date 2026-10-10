@@ -132,11 +132,12 @@ describe('main chat transcript page', () => {
   });
   it('attaches the approval parts presented for a run to the assistant reply to that run', () => {
     const part: import('../src/channels/surfaces/app').AppApprovalPart = { type: 'approval', approval_id: 'p1', kind: 'calendar_change', review: 'Proposed: Walk', payload_digest: `sha256:${'b'.repeat(64)}`, actions: ['approve', 'edit', 'skip'], expires_at: Date.UTC(2026, 9, 10, 15), fallback_text: 'Walk' };
-    const user = entry(10, 'user', 'app'), reply = { ...entry(11, 'assistant', 'app'), parentId: 'e10' };
+    const user = entry(10, 'user', 'app'), first = { ...entry(11, 'assistant', 'app'), parentId: 'e10' }, reply = { ...entry(12, 'assistant', 'app'), parentId: 'e10' };
     const asked: string[] = [];
-    const page = appTranscriptPage([user, reply], null, 10, parentId => { asked.push(parentId); return parentId === 'e10' ? [part] : []; });
-    expect(page.messages[0]!.parts).toEqual([{ type: 'text', text: 'text 11' }, part]);
-    expect(page.messages[1]!.parts).toEqual([{ type: 'text', text: 'text 10' }]);
+    const page = appTranscriptPage([user, first, reply], null, 10, parentId => { asked.push(parentId); return parentId === 'e10' ? [part] : []; });
+    expect(page.messages[0]!.parts).toEqual([{ type: 'text', text: 'text 12' }, part]);
+    expect(page.messages[1]!.parts).toEqual([{ type: 'text', text: 'text 11' }]);
+    expect(page.messages[2]!.parts).toEqual([{ type: 'text', text: 'text 10' }]);
     expect(asked).toEqual(['e10']);
   });
   it('skips rows with no role and treats a bad cursor as the start', () => {

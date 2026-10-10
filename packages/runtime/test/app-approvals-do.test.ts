@@ -96,7 +96,7 @@ it('approves from the app with exactly one effect, refuses a stale digest, and r
       const decision = { approval_id: part.approval_id, action: 'approve', expected_digest: part.payload_digest, request_id: 'move-decision-0001' };
       const approved = await app('/approvals/decisions', decision, credential);
       expect(approved.status).toBe(200);
-      expect(appApprovalDecisionResultV1Schema.parse(await approved.json())).toMatchObject({ receipt: { state: 'recorded' }, duplicate: false, approval_state: 'done' });
+      expect(appApprovalDecisionResultV1Schema.parse(await approved.json())).toMatchObject({ receipt: { state: 'recorded', message: 'Done.' }, duplicate: false, approval_state: 'done' });
       expect(proof.moved).toBe(1);
       expect(effects()).toMatchObject([{ owner_ref: `prn_${OWNER.replaceAll('-', '')}`, tool: 'calendar_change', state: 'done' }]);
       const repeated = await app('/approvals/decisions', decision, credential);

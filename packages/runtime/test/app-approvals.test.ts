@@ -4,7 +4,7 @@ import { expect, it } from 'vitest';
 import { appApprovalDecisionResultV1Schema, appApprovalListV1Schema } from '../../contracts/src/app/approvals';
 import { appApprovalsRequest } from '../src/channels/app-approvals';
 import { approvalDesk } from '../src/channels/approvals';
-import { appApprovalLink, appApprovalPart, appCaller } from '../src/channels/surfaces/app';
+import { appApprovalLink, appCaller } from '../src/channels/surfaces/app';
 import { sha256Hex, type GoogleClient } from '../src/connectors/google';
 
 const CSRF = 'c'.repeat(64);
@@ -20,7 +20,7 @@ it('lists app approvals and decides them once against the reviewed digest, with 
       event: async () => ({ id: 'ev1', etag: eventTag, status: 'confirmed' }),
       cancelEvent: async () => undefined,
     } as unknown as GoogleClient;
-    const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_001, call: appCaller(), appJournal: appApprovalPart, appLink: appApprovalLink,
+    const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_001, call: appCaller(), appLink: appApprovalLink,
       google: async () => client, newId: () => `app${++n}`, now: () => Date.now(), timezone: 'UTC', log: () => {}, currentRunRef: () => 'app-message-0001' });
     const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => { current++; }, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
     const get = (query = '') => appApprovalsRequest(new Request(`https://telegram-owner/app/v1/approvals${query}`), host);
@@ -73,5 +73,27 @@ it('lists app approvals and decides them once against the reviewed digest, with 
     const undo = await decide({ approval_id: calendar, action: 'undo', expected_digest: walk!.payload_digest, request_id: 'calendar-0002' });
     expect(undo.status).toBe(409);
     expect(appApprovalDecisionResultV1Schema.parse(await undo.json())).toMatchObject({ receipt: { state: 'rejected' }, approval_state: 'done' });
+  });
+});
+
+it('app receipts carry fixed text, never provider errors or the desk message', async () => {
+  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`app-approvals-receipts-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_instance, state) => {
+    let n = 0, providerDown = true;
+    const client = { sendRaw: async () => ({ message_id: 'g1' }), findSentByMessageId: async (id: string) => ({ message_id: 'g1', thread_id: 't', rfc822_message_id: id, label_ids: ['SENT'] }) } as unknown as GoogleClient;
+    const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_001, call: appCaller(), newId: () => `rcpt${++n}`, now: () => Date.now(), timezone: 'UTC', log: () => {},
+      google: async () => { if (providerDown) throw new Error('PROVIDER-SECRET invalid_grant for owner@example.test'); return client; } });
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+    const decide = async (body: unknown) => { const response = await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), host); return { status: response.status, text: await response.text() }; };
+    const raw = 'To: a@x.test\r\nSubject: Hi\r\n\r\nPRIVATE-BODY-TEXT';
+    const id = await desk.proposeSendEmail({ to: ['a@x.test'], subject: 'Hi', body: 'PRIVATE-BODY-TEXT', message_id: '<rcpt@waldo-send>', raw, digest: await sha256Hex(raw) });
+    const [item] = await desk.approvals(Date.now(), { id });
+    const failed = await decide({ approval_id: id, action: 'approve', expected_digest: item!.payload_digest, request_id: 'receipt-0001' });
+    expect(failed.status).toBe(409);
+    expect(JSON.parse(failed.text)).toMatchObject({ receipt: { state: 'rejected', message: 'That did not work. Nothing else ran.' }, approval_state: 'open' });
+    providerDown = false;
+    const sent = await decide({ approval_id: id, action: 'approve', expected_digest: item!.payload_digest, request_id: 'receipt-0002' });
+    expect(JSON.parse(sent.text)).toMatchObject({ receipt: { state: 'recorded', message: 'Sent. This cannot be undone.' }, approval_state: 'done' });
+    for (const body of [failed.text, sent.text]) expect(body).not.toMatch(/PROVIDER-SECRET|invalid_grant|owner@example\.test|PRIVATE-BODY-TEXT|a@x\.test/);
   });
 });

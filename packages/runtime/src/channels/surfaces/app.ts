@@ -4,9 +4,9 @@ import type { z } from 'zod';
 export type AppApprovalPart = z.infer<typeof replyApprovalPartV1Schema>;
 export const APP_REVIEW_MAX_CHARS = REPLY_TEXT_MAX_CHARS;
 
-// The app's journal form of an approval card: the exact part the app renders, checked against the
-// pinned contract. A part that does not parse is never journaled, so it can never open a row.
-export const appApprovalPart = (part: Omit<AppApprovalPart, 'type'>): string => JSON.stringify(replyApprovalPartV1Schema.parse({ type: 'approval', ...part }));
+// The app's form of an approval card, checked against the pinned contract. A card that does not
+// parse is never presented, so it can never open a row.
+export const appApprovalPart = (part: AppApprovalPart): AppApprovalPart => replyApprovalPartV1Schema.parse(part);
 export const appApprovalLink = (approvalId: string): string => `waldo://approvals/${approvalId}`;
 
 // Replies reach the app through the transcript, so a plain send is accepted here and delivered nowhere
