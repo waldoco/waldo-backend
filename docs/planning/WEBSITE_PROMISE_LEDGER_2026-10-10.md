@@ -293,7 +293,7 @@ Booking, payments, logged-in browser errands, parallel workers, rich file output
 Staging deploy of beta-mvp `e24d6974` (runtime only) was approved by the owner on 10 October and handed to the handoff session to run.
 
 ### Findings that set the order
-- Health: nothing writes `health_context_daily` on the Waldo-MVP project. The app's legacy `health-sync` targets the older Supabase project. So health replies say "no health context" until the ingest route exists. The owner approved ingest on 10 October. The app emits zones as energized, steady, flagging and depleted, but the backend bridge expects low, moderate, good and high, so the ingest contract must pin the row vocabulary. The app's Weight score is currently physical strain only.
+- Health: nothing writes `health_context_daily` on the Waldo-MVP project. The app's legacy `health-sync` targets the older Supabase project. So health replies say "no health context" until the ingest route exists. The owner approved ingest on 10 October. The app uploads zones as low, moderate, good, high or unknown, mapped from its display words, which matches the backend bridge; the ingest contract still pins that vocabulary. Per the app session, the upload is daily aggregates only, one object per device-local day, with no timezone string. HRV is SDNN on iOS and RMSSD on Android, and body mass is never uploaded. The app's Weight score is currently physical strain only.
 - Streaming: the runtime has no model streaming, and replies pass post-model guards whole. Step lines for the work log are feasible through a new read route. Text deltas need a chunked-guard design first.
 
 ### Next, one at a time (this lane)
