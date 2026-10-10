@@ -24,7 +24,7 @@ Much of what the site promises already exists as source on unmerged branches.
 - 45 open PRs target `beta-mvp`, most of them drafts. The Google stack (#903 → #905/#907 → #919), the browser stack (#881, #894, #895, #908, #911, #941, #966, #987) and the grant stack (#918 → #932) overlap.
 - #998 is 279 files and +52.8k lines from staging base `1206d7a8`. CI at its head shows 76 failing tests, all in-branch (CI is green at `1206d7a8`, `a13c1fb5` and `957a2cbb`), and its gate stopped at `verify:supabase`, so most suites never ran. Against `957a2cbb` it conflicts in 21 files, and where it overlaps #999 it holds the older copy. It carries most of the health plane, threads, rights, files/voice refs, artifacts and Gmail/Calendar watch calls.
 - The app is split into two lines pinned to different backend contracts. Before #999, neither signed in against `beta-mvp` (16-hex `session_ref`, no `account_ref` or `absolute_expires_at`, `channels/app-api.ts:82-108` @ `a13c1fb5`). #999 is now merged; app line `a7a560d1` pins #999 at `153ba016`, so it re-pins to the merged contract and needs a device run against a staging deploy of `957a2cbb`.
-- Staging runs an older release than `beta-mvp`; merged work (including `recovery.v1` and #992) is not deployed (`docs/app/codex-handover/README.md:9-10,52`). Staging deploys need the owner's Cloudflare login on the machine that deploys.
+- Staging was deployed with `957a2cbb` on 10 October with migrations through `20261010040000` applied, from the owner's Mac (GitHub Actions dispatch was disabled for the account). A merge is not a deploy: report merge, migration and deploy separately and check `/healthz`.
 
 Wave 0 lands and converges existing work before new features start.
 
@@ -33,7 +33,7 @@ Wave 0 lands and converges existing work before new features start.
 A promise is shipped only when all three hold:
 
 1. **App at full capability.** Threads, sessions, approval cards, generated UI (AG-UI parts), charts, quick-reply chips, files, voice, push.
-2. **Messaging surfaces at their own maximum, degrading honestly.** WhatsApp and iMessage carry text, images, files, URLs and voice notes. Where a surface has no native buttons, threads or charts, the same output degrades: a chart becomes an image, quick replies become a short numbered line, a thread becomes a model-routed topic inside one chat. A surface never claims an affordance it cannot render.
+2. **Messaging surfaces at their own maximum, degrading honestly.** WhatsApp and iMessage carry text, images, files, URLs and voice notes. Where a surface has no native buttons or charts, the same output degrades: a chart becomes an image, quick replies become a short numbered line. Threads and sessions exist in the app and console only (owner ruling, 10 October); messaging surfaces keep one main chat, and a follow-up there continues the main chat anchored to the referenced message. A surface never claims an affordance it cannot render.
 3. **One state across surfaces.** Start on one surface, continue or approve on another, one receipt. Context, approvals, responsibilities and history belong to the owner, not the channel.
 
 Telegram traces are development evidence, not acceptance.
@@ -52,7 +52,7 @@ Telegram traces are development evidence, not acceptance.
 | No file is sent into any chat; delivery is a console link | no `sendDocument`; `workspace-delivery.ts:6-19` |
 | No APNs sender | no APNs code on `beta-mvp` |
 
-#915 slice C (one owner-DO loop for every surface) fixes the loop half. The output half is one surface-neutral reply contract (text, card, approval, quick replies, chart series, file, artifact, UI part) that the loop produces and each surface adapter renders to its capability. That is Wave 1.
+#915 slice C's single loop has landed: Telegram, WhatsApp and app turns all reach one responder through `this.turn`, and proactive jobs use `responder.prompt`. Its surface-adapter part (C-3) has not: `channels/surfaces/whatsapp.ts` is never imported and the final outbox is keyed by Telegram `chat_id` (`telegram-final-outbox.ts:195`). App history also lives in a separate canonical store from the main transcript. The output half is one surface-neutral reply contract (text, card, approval, quick replies, chart series, file, artifact, UI part) that the loop produces and each surface adapter renders to its capability. That is Wave 1.
 
 ## 3. Status vocabulary
 
@@ -101,7 +101,7 @@ Telegram traces are development evidence, not acceptance.
 
 | Promise | Site label | Now | Lands via | Notes |
 |---|---|---|---|---|
-| Threads | Working today | CONTRACT-ONLY on beta (`contracts/src/tools/schemas/threading.ts:59`, no handlers). PR #998 `threads.v1` routes; app `1980a9d1` wired | #998 threads slice | Messaging surfaces: model-routed topics in one chat |
+| Threads | Working today | CONTRACT-ONLY on beta (`contracts/src/tools/schemas/threading.ts:59`, no handlers). PR #998 `threads.v1` routes; app `1980a9d1` wired | #998 threads slice | App and console only; messaging surfaces keep one main chat |
 | Follow up on anything ("Tell me more") | Coming next | Telegram reply-quote only (`owner-turn.ts:480-499`); decision reason stored, not exposed (`approvals.ts:611-620`) | Wave 1 anchor + Wave 2 provenance | Provenance recorded at action time |
 | Quick replies | Working today | NOTHING (capability flag only, `contracts/src/adapters/channel.ts:35,68`) | Wave 1 | — |
 | Charts in replies | Working today | NOTHING | Wave 1 part + Wave 3 data | Health series only on the owner's own surfaces |
@@ -214,7 +214,7 @@ The owner turned capture on to debug model inputs and outputs (`OBSERVABILITY.md
   17. rights (`20261010050000`, add `force row level security`; pgTAP fails without it);
   18. personal day; 19. proactivity, after #1002.
   Browser stays held. The 43 "frozen fixture" failures need their repairs re-derived; only hashes exist. #998's docs describe a retired lane and are not landed verbatim.
-- #915 slices in order: S0, A, D, B, E, C, F, G, H.
+- #915 status at `957a2cbb`: S0, A, B, C (loop), E, F and H mostly merged; leftovers are D-2 (one output budget, measured effort), D-4 (drop the reduced-context retry), E-3 (meal recall filter), B-3 (proactive gate on retained recall), A-8 (mail list OTP blanking) and C-3 (surface adapters). G (#931) and I (#932) are stale drafts; J and L modules exist but are not wired on the owner path; K is not started. I, J and L need owner-DO migrations.
 - Google stack #903 → #919.
 - Close superseded drafts (for example the `DO NOT MERGE` pin branches #840 and #847). One critical-path slice in flight at a time.
 
