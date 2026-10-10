@@ -185,6 +185,9 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
   return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };
 };
 
+// The owner's stable principal ref, independent of which surface they arrive on.
+export const ownerPrincipalRef = (ownerId: string): string => `prn_${ownerId.toLowerCase().replaceAll('-', '')}`;
+
 // App turns reuse the telegram-shaped update pipeline. The owner id the pipeline sees is a stable number derived from the owner's directory name.
 export const APP_UPDATE_BASE = 8_000_000_000_000;
 export const appSubjectFor = (doName: string): number => {

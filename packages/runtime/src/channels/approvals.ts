@@ -82,6 +82,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   effects?: OwnerEffectLedger;
   call: TelegramCall;
   owner: number;
+  // The owner's effect identity, shared by every surface's desk; aliases are earlier per-surface refs.
+  ownerRef?: () => string;
+  ownerRefAliases?: () => readonly string[];
   google(intent?: ProxyIntent, feature?: 'mail' | 'calendar', account?: string): Promise<GoogleClient | null>;
   newId(): string;
   now(): number;
@@ -112,7 +115,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
   const effect = async (operationId: string, tool: string, payload: unknown, dispatch: () => Promise<EffectReceipt>, reconcile: () => Promise<EffectReadback>) => {
     if (!deps.effects) return dispatch();
-    return deps.effects.execute({ operationId, owner_ref: String(deps.owner), tool, payload }, { dispatch, reconcile });
+    return deps.effects.execute({ operationId, owner_ref: deps.ownerRef?.() ?? String(deps.owner), tool, payload }, { dispatch, reconcile }, undefined, deps.ownerRefAliases?.());
   };
   // Owner turns run serially; keep only the current turn, never a cross-turn cache.
   let proposalTurn: string | undefined;

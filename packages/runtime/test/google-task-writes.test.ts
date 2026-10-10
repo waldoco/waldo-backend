@@ -48,7 +48,7 @@ const fixture = () => {
       if (!state.unpinned) pinProxyIntentRoute(sql, intent, 'google:tasks', [candidate], candidate);
       return googleClient(app, { refresh_token: 'fixture' }, fetcher, undefined, { connection_id: candidate.id, email: candidate.email });
     } };
-    const adapter = googleTaskApprovals({ sql, google, effects, ownerRef: 'owner' });
+    const adapter = googleTaskApprovals({ sql, google, effects, ownerRef: () => 'owner' });
     const desk = approvalDesk(sql, { googleTasks: () => adapter, effects, owner: 42, google: (intent, feature, account) => google.client(feature, intent, undefined, account), call: async (_method, body) => { const text = (body as { text?: string }).text; if (text) state.cards.push(text); return state.cardUnconfirmed ? null : { message_id: 1 }; }, newId: () => String(++sequence), now: () => 1000, timezone: 'UTC', log: () => {} });
     return { adapter, effects, desk };
   };

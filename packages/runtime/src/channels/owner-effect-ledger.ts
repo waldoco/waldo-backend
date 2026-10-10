@@ -48,12 +48,15 @@ export const ownerEffectLedger = (storage: DurableObjectStorage, now: () => numb
   const rows = () => [...storage.kv.list<EffectRecord>({ prefix: PREFIX })].map(([, value]) => value);
   const get = (operationId: string) => structuredClone(storage.kv.get<EffectRecord>(PREFIX + operationId) ?? null);
   const usage = (key: GrantUsageKey, records = rows()) => records.filter(row => row.quota && sameUsage(row.quota, key) && row.state !== 'rejected').length;
-  const reserve = (intent: EffectIntent, suppliedOriginRunRef?: string): EffectRecord => storage.transactionSync(() => {
+  // Aliases are this owner's earlier refs for the same intent (a per-surface subject before the
+  // principal ref); a matching prior record keeps its stored identity. Quota rows never alias.
+  const reserve = (intent: EffectIntent, suppliedOriginRunRef?: string, aliases: readonly string[] = []): EffectRecord => storage.transactionSync(() => {
     if (!intent.operationId || !intent.owner_ref || !intent.tool) throw Error('effect identity required');
     const identity = canonical(intent);
     const prior = get(intent.operationId);
     if (prior) {
-      if (prior.identity !== identity) throw Error('effect identity conflict');
+      if (prior.identity !== identity && (intent.quota || prior.quota || !aliases.includes(prior.owner_ref)
+        || canonical({ ...intent, owner_ref: prior.owner_ref }) !== prior.identity)) throw Error('effect identity conflict');
       return structuredClone(prior);
     }
     if (intent.quota && (intent.quota.owner_ref !== intent.owner_ref || !Number.isSafeInteger(intent.quota.max_per_day) || intent.quota.max_per_day < 0)) throw Error('invalid effect quota');
@@ -89,8 +92,8 @@ export const ownerEffectLedger = (storage: DurableObjectStorage, now: () => numb
 
     async execute(intent: EffectIntent, adapter: Readonly<{
       dispatch(): Promise<EffectReceipt>; reconcile(): Promise<EffectReadback>;
-    }>, originRunRef?: string): Promise<EffectReceipt> {
-      const record = reserve(intent, originRunRef);
+    }>, originRunRef?: string, aliases?: readonly string[]): Promise<EffectReceipt> {
+      const record = reserve(intent, originRunRef, aliases);
       if (record.state === 'done') return record.receipt!;
       if (record.state === 'rejected') throw new EffectNotAppliedError();
       if (active!.has(intent.operationId)) throw new EffectUnknownError();

@@ -112,7 +112,7 @@ import { googleTaskHandlers } from '../tools/live/tasks';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
-import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_UPDATE_BASE, appSinkCaller, appSubjectFor, appTranscriptPage, parseAppSend } from './app-api';
+import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_UPDATE_BASE, appSinkCaller, appSubjectFor, appTranscriptPage, ownerPrincipalRef, parseAppSend } from './app-api';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
@@ -553,7 +553,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Authentication and physical routing precede the first identity write.
     let authority;
     try{authority=await appSessionAuthority(this.env)(name,hash);}catch{return fail();}
-    this.ctx.storage.kv.put('do_name',name);
+    const principal=ownerPrincipalRef(authority.ownerId),knownPrincipal=this.ctx.storage.kv.get<string>('owner_principal_ref');
+    if(knownPrincipal!==undefined&&knownPrincipal!==principal)return fail();
+    this.ctx.storage.kv.put('do_name',name);if(knownPrincipal===undefined)this.ctx.storage.kv.put('owner_principal_ref',principal);
     const origin=request.headers.get('x-waldo-app-origin');if(origin)this.ctx.storage.kv.put('origin',origin);
     if(path===APP_CHAT_SEND_PATH&&request.method==='POST')return this.appSend(request,authority.ownerId);
     if(path.startsWith(APP_CHAT_SEND_PATH+'/')&&request.method==='GET'){
@@ -648,7 +650,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const name=request.headers.get('x-waldo-do-name')!,hash=request.headers.get('x-waldo-app-session-hash')!,send=parseAppSend(await request.text());
     if(!send)return Response.json({error:'unavailable'},{status:403});
     const subject=appSubjectFor(name);if(this.ctx.storage.kv.get<string>('app_subject')!==String(subject)){this.ctx.storage.kv.put('app_subject',String(subject));this.runtimes={};}
-    const conversationRef=`owner:prn_${ownerId.replaceAll('-','')}`;
+    const conversationRef=`owner:${ownerPrincipalRef(ownerId)}`;
     const result=await this.appInbox.admit(name,hash,send.clientMessageId,send.text,conversationRef);
     if(result.kind==='conflict'||result.kind==='capacity')return Response.json({error:result.kind},{status:result.kind==='conflict'?409:503});
     this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
@@ -1791,9 +1793,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     } });
     const currentRunRef = () => this.activeApp?.id ?? this.activeScope?.runId;
     const effects = ownerEffectLedger(storage, () => deps.now(), currentRunRef);
-    const googleTasks = googleTaskApprovals({ sql: storage.sql, google, effects, ownerRef: String(owner) });
+    const ownerRef = () => identity.get<string>('owner_principal_ref') ?? String(owner);
+    const ownerRefAliases = () => [...new Set([identity.get<string>('telegram_subject'), identity.get<string>('whatsapp_subject'), identity.get<string>('app_subject'), String(owner)])].filter((ref): ref is string => !!ref && ref !== '0');
+    const googleTasks = googleTaskApprovals({ sql: storage.sql, google, effects, ownerRef, ownerRefAliases });
     const desk = approvalDesk(storage.sql, {
-      effects, googleTasks: () => googleTasks, currentRunRef,
+      effects, googleTasks: () => googleTasks, currentRunRef, ownerRef, ownerRefAliases,
       call: routedCall, owner, google: (intent,feature,account) => google.client(feature??'calendar',intent,undefined,account), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
       timezone: clock.timezone, log,
       reviewUrl: async () => {
