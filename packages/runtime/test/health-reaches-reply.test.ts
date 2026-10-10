@@ -23,13 +23,18 @@ const row: HealthContextRow = {
 };
 
 // The owner's shared health context is the input for every health promise. A turn that has it
-// must still complete: the composer fails closed on any source it cannot attest.
+// must still complete: the composer fails closed on any source it cannot attest. The material is
+// read during composition, as the owner DO reads it, so the read happens after the turn's snapshot.
+const readNow = async () => {
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const material = toContextHealthMaterial(row, clock);
+  expect(material).not.toBeNull();
+  return material;
+};
 const reply = async (name: string, withHealth: boolean) =>
   runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async () => {
     seen.bodies = [];
-    const material = toContextHealthMaterial(row, clock);
-    expect(material).not.toBeNull();
-    const health = async () => withHealth ? material : null;
+    const health = async () => withHealth ? readNow() : null;
     const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, health);
     return responder.respond({ traceId: 'tg-health-1', conversationRef: 'owner', surface: 'telegram', text: 'how am I doing today?' }, (_name, work) => work());
   });
@@ -41,8 +46,7 @@ it('an owner turn completes when shared health context is present', async () => 
 
 it('a scheduled prompt such as the Brief completes when shared health context is present', async () => {
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('health-brief-completes')), async () => {
-    const material = toContextHealthMaterial(row, clock);
-    const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, async () => material);
+    const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, readNow);
     await expect(responder.prompt('card:brief:1', 'owner', 'Write the morning brief.', async (_hop, work) => work())).resolves.toBeTypeOf('string');
   });
 });

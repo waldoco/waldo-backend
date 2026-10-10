@@ -57,7 +57,7 @@ describe('toContextHealthMaterial', () => {
       source_kind: 'derived_health_view',
       scope: 'principal',
       source_taint: null,
-      produced_at: NOW.getTime(),
+      produced_at: Date.parse('2026-09-28T04:30:00.000Z'),
     });
   });
 
@@ -129,6 +129,7 @@ describe('toContextHealthMaterial', () => {
     const material = toContextHealthMaterial(row(), clock);
     expect(material).not.toBeNull();
     expect(Date.parse(material!.narrative.compiled_at)).toBeLessThanOrEqual(fixture.snapshot_at);
+    expect(material!.source.produced_at).toBeLessThanOrEqual(fixture.snapshot_at);
   });
 
   it('degrades to absence: no context, no Form score, or an unmapped pillar', () => {
@@ -143,6 +144,10 @@ describe('toContextHealthMaterial', () => {
       toContextHealthMaterial(row({ context: { ...row().context!, compiled_at: 'not-a-date' } }), clock, (error) => errors.push(error)),
     ).toBeNull();
     expect(errors).toHaveLength(1);
+    expect(
+      toContextHealthMaterial(row({ context: { ...row().context!, compiled_at: '2026-09-28T10:00:01.000Z' } }), clock, (error) => errors.push(error)),
+    ).toBeNull();
+    expect(errors).toHaveLength(2);
   });
 });
 

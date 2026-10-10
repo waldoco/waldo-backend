@@ -168,6 +168,11 @@ export const toContextHealthMaterial = (
       onError?.(new Error('health context row has no valid compiled_at'));
       return null;
     }
+    // A stamp ahead of this read (clock skew) cannot be attested before the turn's snapshot.
+    if (Date.parse(compiledAt) > now) {
+      onError?.(new Error('health context row compiled_at is in the future'));
+      return null;
+    }
     const viewParsed = derivedHealthDestinationViewSchema.safeParse(view);
     const narrativeParsed = narrativeContextSchema.safeParse({
       zone,
@@ -191,7 +196,9 @@ export const toContextHealthMaterial = (
         source_kind: 'derived_health_view',
         scope: 'principal',
         source_taint: null,
-        produced_at: now,
+        // When the app produced it. The read happens during composition, after the turn's
+        // snapshot, and the composer rejects a source produced after its snapshot.
+        produced_at: Date.parse(compiledAt),
       },
     };
   } catch (error) {
