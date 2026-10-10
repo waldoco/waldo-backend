@@ -88,7 +88,7 @@ it('every tool name is classified deny or allow, and denies() agrees with the cl
       expect(s.denies(name)).toBe(SOURCE_SCOPE_CLASS[name] === 'deny');
     }
     expect(Object.keys(SOURCE_SCOPE_CLASS).sort()).toEqual([...toolNameSchema.options].sort());
-    for (const name of ['search_communication', 'get_communication', 'read_thread', 'read_drive', 'query_calendar', 'query_availability', 'web_search', 'browse_page', 'browse_act', 'read_memory', 'read_owner_context', 'search_episodes', 'read_document', 'search_connector', 'read_tool_output', 'workspace_read', 'workspace_list', 'read_mcp_tool', 'call_mcp_tool'] as const) expect(s.denies(name)).toBe(true);
+    for (const name of ['search_communication', 'get_communication', 'read_thread', 'read_drive', 'query_calendar', 'query_availability', 'web_search', 'browse_page', 'browse_act', 'read_memory', 'read_owner_context', 'search_episodes', 'read_document', 'search_connector', 'read_tool_output', 'workspace_read', 'workspace_list', 'workspace_compute', 'read_mcp_tool', 'call_mcp_tool'] as const) expect(s.denies(name)).toBe(true);
     for (const name of ['get_context', 'set_reminder', 'list_reminders', 'cancel_reminder', 'draft_email', 'set_proactivity'] as const) expect(s.denies(name)).toBe(false);
   });
 });

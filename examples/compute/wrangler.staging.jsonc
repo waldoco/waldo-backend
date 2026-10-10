@@ -1,0 +1,19 @@
+{
+  "name": "waldo-owner-compute-staging",
+  "main": "staging-worker.ts",
+  "build": { "command": "node staging-owner-roster.mjs" },
+  "compatibility_date": "2026-10-07",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": false },
+  "containers": [{
+    "class_name": "OwnerComputeContainer",
+    "scheduling_policy": "durable_object",
+    "observability": { "enabled": false },
+    "images": { "compute": { "dockerfile": "./Dockerfile" } }
+  }],
+  "durable_objects": {
+    "bindings": [{ "class_name": "OwnerComputeContainer", "name": "OWNER_COMPUTE" }]
+  },
+  "exports": { "OwnerComputeContainer": { "type": "durable-object", "storage": "sqlite" } }
+}
