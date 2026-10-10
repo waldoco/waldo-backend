@@ -290,6 +290,31 @@ try {
   assert.equal(psql(`select count(*) from waldo.presences where provider='imessage' and state='active'`), '0');
   report('9 revoke committed canonically; heartbeat/events/pull rejected afterwards; presence unlinked');
 
+  // Real concurrency (parallel PostgreSQL connections through PostgREST): one-use consumption and live-subject uniqueness.
+  const rpc = async (fn, op, params) => {
+    const locator = JSON.stringify(Object.values(params)), at = Math.floor(Date.now() / 1000);
+    const sig = hmac(routerSecret, `${at}.imsg.${op}.${sha256(locator)}`);
+    const r = await fetch(`${restOrigin}/rpc/${fn}`, { method: 'POST', headers: { 'content-type': 'application/json', 'content-profile': 'waldo' }, body: JSON.stringify({ ...params, p_locator: locator, p_at: at, p_sig: sig }) });
+    assert.equal(r.status, 200, `${fn} reachable`); return r.json();
+  };
+  const raceCode = sha256(`race-${randomBytes(8).toString('hex')}`);
+  assert.equal(await rpc('imessage_issue_invitation', 'invite', { p_do_name: otherDo, p_environment: 'test', p_code_hash: raceCode, p_lifetime_seconds: 600 }), true);
+  const racers = await Promise.all(Array.from({ length: 6 }, (_, i) => rpc('imessage_redeem_invitation', 'redeem', { p_code_hash: raceCode, p_environment: 'test',
+    p_bridge_id: `imb_${randomBytes(16).toString('hex')}`, p_account_id: `ima_${randomBytes(16).toString('hex')}`, p_wrapped_credential: `v1.${'0'.repeat(24)}.${'ab'.repeat(20)}`,
+    p_host_version: 'race', p_transport_version: 'race', p_generation: `race-${i}`, p_pending_seconds: 600 })));
+  assert.equal(racers.filter(r => r !== null).length, 1, 'six parallel redemptions of one invitation: exactly one wins');
+  const raceSubject = `race-${randomBytes(4).toString('hex')}@example.invalid`, raceChat = `iMessage;-;${raceSubject}`;
+  const raceOwners = [0, 1].map(i => ({ id: `40000000-0000-4000-8000-00000000000${i}`, name: `${doName}-race-${i}`, bridge: `imb_${randomBytes(16).toString('hex')}` }));
+  psql(raceOwners.map(o => `insert into waldo.owners(id, do_name, email) values ('${o.id}', '${o.name}', '${o.name}@example.invalid');
+    insert into waldo.imessage_bridges(bridge_id, account_id, owner_id, environment, state, wrapped_credential, host_version, transport_version, database_generation, pending_expires_at,
+      expected_subject, expected_chat_guid, challenge_hash, challenge_expires_at, observed_subject, observed_chat_guid, observed_at)
+    values ('${o.bridge}', 'ima_${randomBytes(16).toString('hex')}', '${o.id}', 'test', 'pending', 'v1.${'0'.repeat(24)}.${'ab'.repeat(20)}', 'race', 'race', 'race', now() + interval '10 minutes',
+      '${raceSubject}', '${raceChat}', '${'c'.repeat(64)}', now() + interval '10 minutes', '${raceSubject}', '${raceChat}', now());`).join('\n'));
+  const activations = await Promise.all(raceOwners.map(o => rpc('imessage_activate', 'activate', { p_do_name: o.name, p_bridge_id: o.bridge, p_subject: raceSubject, p_chat_guid: raceChat })));
+  assert.equal(activations.filter(a => a !== null).length, 1, 'two owners racing for one Apple sender: exactly one activation');
+  assert.equal(psql(`select count(*) from waldo.presences where provider='imessage' and subject='${raceSubject}' and state='active'`), '1');
+  report('concurrency: 6 parallel redemptions -> 1 winner; 2 owners racing one sender -> 1 active binding (real PostgreSQL transactions)');
+
   // 12. Egress and log redaction.
   assert.deepEqual(outbound.forbidden, [], 'forbidden outbound network must be zero');
   for (const s of secrets) assert.ok(!workerLog.includes(s), 'worker logs never contain keys, codes or challenges');
