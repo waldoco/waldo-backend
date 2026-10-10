@@ -120,6 +120,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   appJournal?: (part: Omit<AppApprovalPart, 'type'>) => string | null;
   appLink?: (approvalId: string) => string;
   commit?: <T>(work: () => T) => T;
+  // Clears a messaging card's decision buttons once another surface decided; best effort.
+  retire?: (presentation: Readonly<{ surface: string; message_ref: string }>) => Promise<void>;
+  // Whether an approved message can go out on its named channel; checked before the decision is claimed.
+  canSendMessage?: (channel: string) => boolean;
 }>): ApprovalDesk => {
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
@@ -493,6 +497,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           out = { toast: "Can't be undone", message: 'A sent message cannot be undone. Nothing was reversed.' };
         } else if (!deps.sendMessage) {
           out = { toast: 'Messaging is not set up', message: 'I could not send that because messaging is not set up on this Waldo yet.' };
+        } else if (deps.canSendMessage?.(mp.channel) === false) {
+          out = { toast: 'Channel not connected', message: `I could not send that because ${mp.channel} is not connected to this Waldo. Nothing was sent.` };
         } else if (!recovering && (() => { const holder = keyHolder(mp.idempotency_key, id); if (!holder) return false; const held = JSON.parse(holder.payload_json) as MessageSendProposal; return held.channel !== mp.channel || held.content !== mp.content ? 'conflict' : holder.status; })()) {
           const holder = keyHolder(mp.idempotency_key, id)!;
           const held = JSON.parse(holder.payload_json) as MessageSendProposal;
@@ -612,8 +618,24 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       return { toast: 'That failed', message: `That didn't work: ${error instanceof Error ? error.message : String(error)}` };
     }
   };
+  // Once a decision moves a row off its cards, every card is retired: durably first, then the
+  // messaging buttons are cleared outside any transaction. The tapped card already cleared its own.
+  const retire = async (id: string, via: ApprovalVia) => {
+    const live = sql.exec<{ surface: string; message_ref: string }>('SELECT surface, message_ref FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', id).toArray();
+    sql.exec('UPDATE approval_presentations SET retired_at = ? WHERE approval_id = ? AND retired_at IS NULL', deps.now(), id);
+    for (const p of live) {
+      if (p.surface === 'app' || p.surface === 'legacy' || (p.surface === via.surface && p.message_ref === via.messageRef)) continue;
+      await deps.retire?.({ surface: p.surface, message_ref: p.message_ref }).catch(() => deps.log({ trace: id, hop: 'approval_retire', ms: 0, ok: false, code: 'retire_failed' }));
+    }
+  };
+  const decideOnce = async (id: string, action: 'a' | 's' | 'e' | 'u', trace: string, via: ApprovalVia = { surface }): Promise<ApprovalDecision> => {
+    const before = row(id)?.status;
+    const out = await decide(id, action, trace, via);
+    if ((before === 'open' || before === 'review_only') && row(id)?.status !== before) await retire(id, via);
+    return out;
+  };
   return {
-    decide,
+    decide: decideOnce,
     async proposeGoogleTaskChange(args, operationRef, ctx) {
       const originRunRef = deps.currentRunRef?.();
       if (!deps.googleTasks || !deps.effects) throw new Error('Google task approval custody is unavailable');
@@ -804,7 +826,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const answer = (text: string) => deps.call('answerCallbackQuery', { callback_query_id: query.id, text }).catch(() => undefined);
       if (query.from.id !== deps.owner || !id || !['a', 's', 'e', 'u'].includes(action)) return void (await answer('Not available.'));
       if (query.message) await deps.call('editMessageReplyMarkup', { chat_id: query.message.chat.id, message_id: query.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
-      const out = await decide(id, action as 'a' | 's' | 'e' | 'u', trace, { surface, ...(query.message ? { messageRef: `${query.message.chat.id}:${query.message.message_id}` } : {}) });
+      const out = await decideOnce(id, action as 'a' | 's' | 'e' | 'u', trace, { surface, ...(query.message ? { messageRef: `${query.message.chat.id}:${query.message.message_id}` } : {}) });
       // An uncertain card may have reached the owner before a channel timeout. It has
       // no valid send approval until reconciled, so tell the owner what to do next.
       const unconfirmedRow = out.toast === 'Already handled.' ? row(id) : undefined;

@@ -1019,7 +1019,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
               }
               if(action.action.startsWith('approval.')){
                 const decision=action.action==='approval.approve'?'a':action.action==='approval.skip'?'s':'u';
-                const outcome=await runtime.desk.decide(action.id,decision,'console:approval');
+                const outcome=await runtime.desk.decide(action.id,decision,'console:approval',{surface:'console'});
                 return approvalControlReceipt(outcome);
               }
               return runtime.act(action);
@@ -1094,7 +1094,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         // Approve stays gated to calendar changes with full review (consoleMayApprove); skip
         // and undo are safe-direction decisions desk.decide validates by ledger state.
         if (action.action === 'approval.approve' && !consoleMayApprove(desk.pending(Date.now()).find((item) => item.id === action.id))) return back('invalid');
-        const out = await desk.decide(action.id, key[action.action as keyof typeof key], 'console:approval');
+        const out = await this.serial(() => desk.decide(action.id, key[action.action as keyof typeof key], 'console:approval', { surface: 'console' }));
         return new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${encodeURIComponent(out.message.slice(0, 200))}` } });
       }
       if (action?.action === 'account.delete') {
@@ -1799,9 +1799,17 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const ownerRef = () => identity.get<string>('owner_principal_ref') ?? String(owner);
     const ownerRefAliases = () => [...new Set([identity.get<string>('telegram_subject'), identity.get<string>('whatsapp_subject'), identity.get<string>('app_subject'), String(owner)])].filter((ref): ref is string => !!ref && ref !== '0');
     const googleTasks = googleTaskApprovals({ sql: storage.sql, google, effects, ownerRef, ownerRefAliases });
+    // A decision's effect follows the proposal's destination, not the surface that decided. Other
+    // surfaces resolve lazily at decision time; the app is never a send destination.
+    const destination = (name: string) => name === channel && channel !== 'app' ? { call: routedCall, owner } : name === 'telegram' || name === 'whatsapp' ? this.setup(name) : null;
     const desk = approvalDesk(storage.sql, {
       effects, googleTasks: () => googleTasks, currentRunRef, ownerRef, ownerRefAliases,
       surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work),
+      retire: async ({ surface, message_ref }) => {
+        const [chat = '', message = ''] = message_ref.split(':');
+        if (surface !== 'telegram' || !/^-?\d+$/.test(chat) || !/^\d+$/.test(message)) return;
+        await destination('telegram')!.call('editMessageReplyMarkup', { chat_id: Number(chat), message_id: Number(message), reply_markup: { inline_keyboard: [] } });
+      },
       appJournal: part => channel === 'app' || identity.get<string>('app_subject') || identity.get<string>('owner_principal_ref') ? appApprovalPart(part) : null,
       call: routedCall, owner, google: (intent,feature,account) => google.client(feature??'calendar',intent,undefined,account), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
       timezone: clock.timezone, log,
@@ -1812,12 +1820,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       browserSubmit: (proposal, approval) => proposal.continuation ? browserApproval.submit(proposal, approval) : executeBrowserSubmit(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, proposal),
       browserReceiptVerified: browserApproval.receiptVerified,
       browserDeny: browserApproval.deny,
-      // Approved sends go out this Waldo's own channel chat, verbatim, through the same routed
-      // call the cards use. A proposal naming another channel fails honestly instead of
-      // rerouting silently.
+      // Approved sends go out verbatim on the channel the proposal names, through that channel's
+      // egress-gated call, whichever surface approved them.
+      canSendMessage: name => { try { const target = destination(name); return !!target && target.owner > 0 && identity.get<boolean>(`${name}_unlinked`) !== true; } catch { return false; } },
       sendMessage: async (proposal) => {
-        if (proposal.channel !== channel) throw new Error(`this Waldo's channel is ${channel}, not ${proposal.channel}`);
-        const sent = await routedCall('sendMessage', { chat_id: owner, text: proposal.content }) as { message_id?: number; messages?: { id: string }[] } | undefined;
+        const target = destination(proposal.channel);
+        if (!target) throw new Error(`${proposal.channel} is not a channel this Waldo sends on`);
+        const sent = await target.call('sendMessage', { chat_id: target.owner, text: proposal.content }) as { message_id?: number; messages?: { id: string }[] } | undefined;
         const providerId = sent?.message_id ?? sent?.messages?.[0]?.id;
         if (!providerId) throw new Error('message provider receipt unavailable');
         return { provider_id: String(providerId) };

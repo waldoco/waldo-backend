@@ -1054,3 +1054,61 @@ describe('app approval projection', () => {
     });
   });
 });
+
+describe('decisions from any surface', () => {
+  const NOW = Date.UTC(2026, 9, 10, 9, 0, 0);
+  it('two surface desks on one owner decide one proposal once, and the first decision retires the other cards', async () => {
+    const { appApprovalPart, appApprovalLink, appCaller } = await import('../src/channels/surfaces/app');
+    const { ownerEffectLedger } = await import('../src/channels/owner-effect-ledger');
+    const { sha256Hex } = await import('../src/connectors/google');
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-any-surface-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let n = 0, sends = 0; const telegram: { method: string; body: Record<string, unknown> }[] = []; const retired: unknown[] = [];
+      const client = { sendRaw: async () => { sends++; return { message_id: 'g1' }; }, findSentByMessageId: async (id: string) => ({ message_id: 'g1', thread_id: 't', rfc822_message_id: id, label_ids: ['SENT'] }) } as unknown as GoogleClient;
+      const shared = { google: async () => client, newId: () => `any${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, appJournal: appApprovalPart, appLink: appApprovalLink,
+        effects: ownerEffectLedger(state.storage, () => NOW), ownerRef: () => 'prn_10000000000000000000000000000001', ownerRefAliases: () => ['42'], retire: async (p: unknown) => { retired.push(p); } };
+      const onTelegram = approvalDesk(state.storage.sql, { ...shared, owner: 42, call: async (method, body) => { telegram.push({ method, body: body as Record<string, unknown> }); return method === 'sendMessage' ? { message_id: telegram.length, chat: { id: 42 } } : true; } });
+      const inApp = approvalDesk(state.storage.sql, { ...shared, owner: 7_000_000_000_001, surface: 'app', call: appCaller() });
+      const raw = 'To: a@x.test\r\nSubject: Hi\r\n\r\nHello';
+      const id = await onTelegram.proposeSendEmail({ to: ['a@x.test'], subject: 'Hi', body: 'Hello', message_id: '<any@waldo-send>', raw, digest: await sha256Hex(raw) });
+      const card = telegram.find(call => call.method === 'sendMessage')!;
+      expect((await inApp.decide(id, 'a', 'trace', { surface: 'app' })).toast).toBe('Sent');
+      expect(sends).toBe(1);
+      expect([...state.storage.kv.list<{ owner_ref: string }>({ prefix: 'owner:effect:' })].map(([, record]) => record.owner_ref)).toEqual(['prn_10000000000000000000000000000001']);
+      expect(retired).toEqual([{ surface: 'telegram', message_ref: `42:${telegram.indexOf(card) + 1}` }]);
+      expect(state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', id).one().n).toBe(0);
+      telegram.length = 0;
+      await onTelegram.callback({ id: 'late', from: { id: 42 }, data: `a:${id}`, message: { message_id: 1, chat: { id: 42 } } }, 'trace');
+      expect(telegram.find(call => call.method === 'answerCallbackQuery')?.body.text).toBe('Already handled.');
+      expect(sends).toBe(1);
+
+      retired.length = 0;
+      const second = await onTelegram.proposeSendEmail({ to: ['b@x.test'], subject: 'Hi', body: 'Hello', message_id: '<any2@waldo-send>', raw, digest: await sha256Hex(raw) });
+      const tapped = telegram.filter(call => call.method === 'sendMessage').at(-2)!;
+      await onTelegram.callback({ id: 'tap', from: { id: 42 }, data: `s:${second}`, message: { message_id: telegram.indexOf(tapped) + 1, chat: { id: 42 } } }, 'trace');
+      expect(retired).toEqual([]);
+      expect((await inApp.decide(second, 'a', 'trace', { surface: 'app' })).toast).toBe('Already handled.');
+      expect(state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL", second).one().n).toBe(0);
+    });
+  });
+
+  it('a message to a channel this Waldo cannot send on is refused before it is claimed, and the console needs a full-review card', async () => {
+    const { appApprovalPart, appCaller } = await import('../src/channels/surfaces/app');
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-any-surface-send-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let n = 0; const sent: string[] = [];
+      const desk = approvalDesk(state.storage.sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), appJournal: appApprovalPart, google: async () => null, newId: () => `send${++n}`, now: () => NOW, timezone: 'UTC', log: () => {},
+        canSendMessage: channel => channel === 'telegram', sendMessage: async proposal => { sent.push(`${proposal.channel}:${proposal.content}`); return { provider_id: 'tg-9' }; } });
+      const whatsapp = await desk.proposeSendMessage({ channel: 'whatsapp', content: 'Hi', idempotency_key: 'wa-1' });
+      expect((await desk.decide(whatsapp, 'a', 'trace')).toast).toBe('Channel not connected');
+      expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', whatsapp).one().status).toBe('open');
+      expect([...state.storage.kv.list({ prefix: 'owner:effect:' })]).toEqual([]);
+      const telegram = await desk.proposeSendMessage({ channel: 'telegram', content: 'On my way', idempotency_key: 'tg-1' });
+      expect((await desk.decide(telegram, 'a', 'trace', { surface: 'console' })).toast).toBe('Sent');
+      expect(sent).toEqual(['telegram:On my way']);
+      const blocked = approvalDesk(state.storage.sql, { owner: 42, call: async () => undefined, google: async () => null, newId: () => `send${++n}`, now: () => NOW, timezone: 'UTC', log: () => {} });
+      await expect(blocked.proposeSendMessage({ channel: 'telegram', content: 'x', idempotency_key: 'tg-2' })).rejects.toThrow('Approval card not confirmed');
+      expect((await desk.decide(`send${n}`, 'a', 'trace', { surface: 'console' })).toast).toBe('Already handled.');
+    });
+  });
+});
