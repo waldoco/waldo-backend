@@ -15,7 +15,7 @@ A route counts as **served** only when the runtime dispatches it in source at th
 
 | What | Value | Evidence |
 |---|---|---|
-| `beta-mvp` tip | `ce80802f` (#1030, merged 2026-10-10T18:58:04Z). CI `verify` at this SHA was **in progress** at 19:03Z; no result is claimed. | V (`gh pr view`, `gh run list`) |
+| `beta-mvp` tip | `ce80802f` (#1030, merged 2026-10-10T18:58:04Z). CI `verify` on push at this SHA: completed, success (read 19:10Z). | V (`gh pr view`, `gh run list`) |
 | Merged since the first read | #1022 H2 health plane (`bf477a4e`), #1028 health contract (`1757beb2`), #1026 ledger with owner rulings 11 to 17 (`4b7f7b10`), #1025, #1027, #1030 | V |
 | Staging release | `fec37a43`; `/healthz` returned `{"ok":true,"release":"fec37a43"}` at 2026-10-10T19:03:51Z | V live |
 | Deployed code | `fec37a43` contains #999, #1011, #1013, #1015, #1019, #1020, #1021, #1023. It does **not** contain #1024 or anything merged after it. | V (`git merge-base --is-ancestor`) |
