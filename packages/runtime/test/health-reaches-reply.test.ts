@@ -75,6 +75,19 @@ it('a messaging owner turn without shared health says so once', async () => {
   expectAbsent(lastInstructions());
 });
 
+it('a Recovery-first row reaches the model with Load stated as unavailable', async () => {
+  const recoveryOnly: HealthContextRow = { context: { ...row.context!, form: null, weight: null }, previous: null };
+  await inOwner('health-recovery-only', async () => {
+    const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, async () => toContextHealthMaterial(recoveryOnly, clock));
+    await responder.respond({ traceId: 'tg-health-3', conversationRef: 'owner', surface: 'telegram', text: 'how am I doing today?' }, (_name, work) => work());
+  });
+  const told = lastInstructions();
+  expect(count(told, 'Recovery zone: solid.')).toBe(1);
+  expect(told).toContain('Load: unavailable.');
+  expect(told).not.toContain('undefined');
+  expect(told).not.toContain(ABSENT);
+});
+
 it('a scheduled prompt such as the Brief tells the model the shared health context', async () => {
   await inOwner('health-brief-with', async () => {
     await expect(responderWith(true).prompt('card:brief:1', 'owner', 'Write the morning brief.', async (_hop, work) => work())).resolves.toBeTypeOf('string');

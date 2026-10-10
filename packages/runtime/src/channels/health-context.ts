@@ -1,22 +1,20 @@
 import {
   derivedHealthDestinationViewSchema,
   formZoneOf,
+  fromRowZone,
   narrativeContextSchema,
   type DerivedHealthDestinationView,
-  type NarrativeContext,
 } from '@waldo/contracts';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import type { OwnerClock } from '../tools/live/get-context';
 import { localIso } from './reminders';
 import { md5Hex } from './md5';
 
-// D5 health context read (Art-9 read-only slice): the app computes Form/Recovery/Load and
-// stores derived pillar results; this channel reads them over the signed router rail and
-// redacts them to the zone-word material the composer threads into the system prompt
-// (ADR-0024: zones cross the boundary, raw biometric values never do). Every string that
-// could carry a number (app-authored drivers/tags) is dropped before it can ride the
-// narrative. Absence is truthful: no rows, no link, or an unmapped pillar all compose as
-// "no derived health context", exactly as turns did before this slice.
+// D5 health context read (Art-9 read-only slice): derived pillar results are stored in the
+// read model; this channel reads them over the signed router rail and redacts them to the
+// zone-word material the composer threads into the system prompt. Every string that could
+// carry a number (drivers/tags) is dropped before it can ride the narrative. Absence is
+// truthful: no rows, no link, or no readable Recovery compose as "no derived health context".
 
 type SignedCall = (fn: string, message: string, args: Record<string, string | number>) => Promise<unknown>;
 
@@ -40,29 +38,10 @@ export type HealthContextRow = Readonly<{
   previous: Readonly<{ day: string; form_score: unknown }> | null;
 }>;
 
-// The app's PillarScore vocabulary (supabase/functions/_shared/contracts.ts): zone words are
-// low/moderate/good/high/unknown - a different vocabulary from the backend's CRS enums. The
-// backend never maps numbers for Recovery/Load (no ADR-pinned bands exist); it bridges the
-// app's own zone words, and an 'unknown' zone means the app itself declined to call it, so
-// the whole material degrades to absence rather than inventing a descriptor.
-const RECOVERY_DESCRIPTOR: Readonly<Record<string, NarrativeContext['recovery_descriptor']>> = {
-  high: 'excellent',
-  good: 'solid',
-  moderate: 'mixed',
-  low: 'compromised',
-};
-const LOAD_DESCRIPTOR: Readonly<Record<string, NarrativeContext['load_descriptor']>> = {
-  low: 'light',
-  moderate: 'moderate',
-  good: 'heavy',
-  high: 'peak',
-};
-
-// The material builds only from a complete pillar set (Recovery/Load descriptors require the
-// app's own zone words; an absent or 'unknown' pillar degrades the whole material to truthful
-// absence rather than an invented descriptor), so an emitted view always reports no missing
-// components. Finer per-pillar absence needs the app to publish pillar coverage explicitly -
-// a contracts change, deliberately not guessed here.
+// Stored zone words map through the contracts bridge (one table for writer and reader). An
+// unknown or foreign word is absence for that pillar, never a guess. Recovery is the spine:
+// without it there is no material. Form and Load are added when readable and stated as
+// unavailable otherwise, so a Recovery-first day still reaches the prompt.
 
 // A previous-day Form swing beyond this delta is a trend; smaller moves are steady. Pinned
 // here (single owner) rather than derived per turn.
@@ -102,21 +81,19 @@ export const toContextHealthMaterial = (
   try {
     const context = row.context;
     if (context === null) return null;
-    // Form score is the material's spine: the backend owns the ADR-0024 bands, so the zone
-    // comes from formZoneOf(score), never from the app's zone word. No score, no material.
+    const recovery = fromRowZone('recovery', pillarZone(context.recovery));
+    if (recovery === null) return null;
+    // Form's zone comes from the backend's own bands (formZoneOf), never the stored word.
     const formScore = pillarScore(context.form);
-    if (formScore === null) return null;
-    const zone = formZoneOf(formScore);
-    const recovery = RECOVERY_DESCRIPTOR[pillarZone(context.recovery) ?? ''];
-    const load = LOAD_DESCRIPTOR[pillarZone(context.weight) ?? ''];
-    if (recovery === undefined || load === undefined) return null;
+    const zone = formScore === null ? undefined : formZoneOf(formScore);
+    const load = fromRowZone('weight', pillarZone(context.weight)) ?? undefined;
 
     const previousScore =
       row.previous !== null && typeof row.previous.form_score === 'number' && Number.isFinite(row.previous.form_score)
         ? row.previous.form_score
         : null;
     const trend: DerivedHealthDestinationView['trend'] =
-      previousScore === null
+      previousScore === null || formScore === null
         ? 'insufficient'
         : formScore - previousScore > TREND_DELTA
           ? 'improving'
@@ -135,21 +112,17 @@ export const toContextHealthMaterial = (
     const confidenceBand: DerivedHealthDestinationView['confidence_band'] =
       confidence === null ? 'low' : confidence >= 0.66 ? 'high' : confidence >= 0.33 ? 'medium' : 'low';
 
-    const view: DerivedHealthDestinationView = {
-      authority: 'backend',
-      algorithm_version: 'form.safte-fast.v1',
-      form_zone: zone,
-      trend,
-      freshness,
-      missing_components: [],
-      confidence_band: confidenceBand,
-      provenance_refs: [`hpr_${md5Hex(`health-context.${context.id}`)}`],
-      destination_eligibility: ['trigger_prompt'],
+    const common = {
+      authority: 'backend' as const, trend, freshness, missing_components: [], confidence_band: confidenceBand,
+      provenance_refs: [`hpr_${md5Hex(`health-context.${context.id}`)}`], destination_eligibility: ['trigger_prompt' as const],
     };
+    const view: DerivedHealthDestinationView = zone === undefined
+      ? { ...common, algorithm_version: 'recovery.v1', recovery_zone: recovery }
+      : { ...common, algorithm_version: 'form.safte-fast.v1', form_zone: zone };
 
     const drivers = [...new Set([...pillarDrivers(context.form), ...wordList(context.drivers, 4)])].slice(0, 4);
     const tags = wordList(context.tags, 4);
-    const summaryParts = [`Form ${zone}; recovery ${recovery}; load ${load}.`];
+    const summaryParts = [`${zone === undefined ? '' : `Form ${zone}; `}${zone === undefined ? 'Recovery' : 'recovery'} ${recovery}; load ${load ?? 'unavailable'}.`];
     if (drivers.length > 0) summaryParts.push(`Drivers: ${drivers.join('; ')}.`);
     if (tags.length > 0) summaryParts.push(`Tags: ${tags.join(', ')}.`);
 
@@ -175,9 +148,9 @@ export const toContextHealthMaterial = (
     }
     const viewParsed = derivedHealthDestinationViewSchema.safeParse(view);
     const narrativeParsed = narrativeContextSchema.safeParse({
-      zone,
+      ...(zone === undefined ? {} : { zone }),
       recovery_descriptor: recovery,
-      load_descriptor: load,
+      ...(load === undefined ? {} : { load_descriptor: load }),
       day_summary: summaryParts.join(' '),
       active_goals: [],
       upcoming_high_stakes: [],

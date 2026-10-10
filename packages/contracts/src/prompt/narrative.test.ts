@@ -29,6 +29,12 @@ describe('narrativeContext', () => {
     expect(narrativeContextSchema.safeParse(fullContext).success).toBe(true);
   });
 
+  it('accepts a Recovery-only block: no Form zone and no Load yet', () => {
+    const { zone: _zone, load_descriptor: _load, ...recoveryOnly } = baseContext;
+    expect(narrativeContextSchema.safeParse(recoveryOnly).success).toBe(true);
+    expect(narrativeContextSchema.safeParse({ ...recoveryOnly, load_descriptor: 'energized' }).success).toBe(false);
+  });
+
   it('defaults absent goal lists to empty arrays', () => {
     const parsed = narrativeContextSchema.parse(baseContext);
     expect(parsed.active_goals).toEqual([]);
