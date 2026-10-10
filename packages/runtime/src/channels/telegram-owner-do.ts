@@ -106,7 +106,7 @@ import { googleProxy } from '../connectors/connections';
 import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition } from '../connectors/google-reconnect';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
-import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
+import { appApprovalParts, approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { googleTaskApprovals } from './google-task-approvals';
 import { googleTaskHandlers } from '../tools/live/tasks';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
@@ -114,6 +114,7 @@ import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi }
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
 import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, ownerPrincipalRef, parseAppSend } from './app-api';
 import { appApprovalLink, appApprovalPart, appCaller } from './surfaces/app';
+import { appApprovalsRequest } from './app-approvals';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
@@ -565,7 +566,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       this.appInbox.recover(this.appAttempts);
       const receipt=this.appInbox.receipt(name,client);return receipt?Response.json(receipt,{headers:{'cache-control':'no-store'}}):fail(404);
     }
-    if(path==='/app/v1/controls'||path==='/app/v1/actions'||path.startsWith('/app/v1/actions/')){
+    if(path==='/app/v1/controls'||path==='/app/v1/actions'||path.startsWith('/app/v1/actions/')||path==='/app/v1/approvals'||path==='/app/v1/approvals/decisions'){
       return this.serial(async()=>{
         const auth=consoleAuth(this.env)!;
         const current=async()=>{await this.appAuthority(name,hash);};
@@ -574,11 +575,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           if(!row)return fail();
           const expires=Date.parse(row.created_at)+12*60*60_000,session={token:hash,csrf:hash,expires};
           const runtime=this.setup('app');
-          return await appControlsRequest(request,{...session,storage:this.ctx.storage,assertCurrent:current,
+          const host={...session,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.created_at)+12*60*60_000})),
-            view:async page=>{const view=await runtime.view(session,null,page);await current();const rows=await auth.listSessions(name);return {...view,sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.created_at,until:new Date(Date.parse(row.created_at)+12*60*60_000).toISOString(),current:row.session===hash}))};},
-            act:action=>runtime.act(action,current),
-          });
+            view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=await auth.listSessions(name);return {...view,sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.created_at,until:new Date(Date.parse(row.created_at)+12*60*60_000).toISOString(),current:row.session===hash}))};},
+            act:(action:ConsoleAction)=>runtime.act(action,current),
+          };
+          return await (path.startsWith('/app/v1/approvals')?appApprovalsRequest(request,host):appControlsRequest(request,host));
         }catch{return fail(503);}
       });
     }
@@ -588,7 +590,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       try{
         const context=await this.appContext(name,hash,'Read my main conversation.','history:'+scope.attempt,now,scope);
         const {entries}=await canonicalOwnerConversationStore(this.ctx.storage,context).load();
-        const url=new URL(request.url);return Response.json(appTranscriptPage(entries,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20)),{headers:{'cache-control':'no-store'}});
+        const url=new URL(request.url);return Response.json(appTranscriptPage(entries,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),appApprovalParts(this.ctx.storage.sql)),{headers:{'cache-control':'no-store'}});
       }catch{return fail(503);}finally{abort.abort();}
     }
     return fail(404);

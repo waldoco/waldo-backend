@@ -1,5 +1,6 @@
 import type { ConversationEntry } from '@waldo/contracts';
 import { APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
+import type { AppApprovalPart } from './surfaces/app';
 import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
@@ -9,6 +10,8 @@ import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LI
 export const APP_PATH = '/app/v1';
 export const APP_CHAT_PATH = `${APP_PATH}/chat/main`;
 export const APP_CHAT_SEND_PATH = `${APP_CHAT_PATH}/messages`;
+export const APP_APPROVALS_PATH = `${APP_PATH}/approvals`;
+export const APP_APPROVAL_DECISIONS_PATH = `${APP_APPROVALS_PATH}/decisions`;
 const MAX_BODY_BYTES = 8192;
 
 type AppEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
@@ -135,7 +138,8 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   if (who === 'unavailable') return fail(503);
   if (who === 'unauthenticated') return fail(401);
   if (!env.RESPONSIBILITY_RATE_LIMITER) return fail(503);
-  try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${request.method === 'POST' ? 'app-chat-send' : 'app-read'}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
+  const bucket = request.method !== 'POST' ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : 'app-chat-send';
+  try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${bucket}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
 
   if (url.pathname === `${APP_PATH}/session`) {
     if (request.method !== 'GET') return fail(405);
@@ -151,9 +155,9 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     return ok({ result: revoked ? 'revoked' : 'already_gone' });
   }
 
-  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`)) {
+  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH) {
     const sending = url.pathname === APP_CHAT_SEND_PATH;
-    if (!['GET', 'POST'].includes(request.method) || (url.pathname === APP_CHAT_PATH && request.method !== 'GET') || (sending && request.method !== 'POST')) return fail(405);
+    if (!['GET', 'POST'].includes(request.method) || ((url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH) && request.method !== 'POST')) return fail(405);
     const mutating = request.method === 'POST';
     const maxBytes = APP_SEND_MAX_WIRE_BYTES;
     const length = request.headers.get('content-length');
@@ -173,15 +177,17 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
 // are added without changing existing fields, and a reader must ignore any part type it does not know and fall back to `text`.
 export type AppMessage = AppMessageV1;
 
-// Newest-first immutable row cursor. New arrivals cannot shift an older page.
-export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
+// Newest-first immutable row cursor. New arrivals cannot shift an older page. An assistant reply also
+// carries the approval parts presented for the run it answers.
+export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, parts: (parentId: string) => readonly AppApprovalPart[] = () => []): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
   const shown = entries.filter((entry): entry is ConversationEntry & { role: 'user' | 'assistant' } => entry.role === 'user' || entry.role === 'assistant');
   const taken = cursor !== null && /^\d{1,9}$/.test(cursor) ? Number(cursor) : 0; // old consumers can finish an offset page
   const size = Math.min(Math.max(Math.trunc(limit) || 20, 1), 50);
   const before = cursor?.startsWith('before:') ? shown.findIndex(entry => entry.id === cursor.slice(7)) : -1;
   const end = cursor?.startsWith('before:') ? Math.max(before, 0) : Math.max(shown.length - taken, 0);
   const start = Math.max(end - size, 0);
-  const messages = shown.slice(start, end).reverse().map(entry => ({ id: entry.id, role: entry.role, text: entry.appPayload, parts: [{ type: 'text' as const, text: entry.appPayload }], channel: entry.surface, parent_id: entry.parentId }));
+  const messages = shown.slice(start, end).reverse().map(entry => ({ id: entry.id, role: entry.role, text: entry.appPayload,
+    parts: [{ type: 'text' as const, text: entry.appPayload }, ...(entry.role === 'assistant' && entry.parentId ? parts(entry.parentId) : [])], channel: entry.surface, parent_id: entry.parentId }));
   return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };
 };
 
