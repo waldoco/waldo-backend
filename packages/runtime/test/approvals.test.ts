@@ -906,13 +906,13 @@ describe('approval presentations', () => {
       const opened = await mirrored.proposeSendMessage({ ...message, idempotency_key: 'late-4' });
       expect(status(sql, opened)).toBe('open');
       expect(shown(sql, opened)).toEqual([{ surface: 'app', message_ref: `approval:${opened}`, approvable: 1, retired_at: null }]);
-      expect(mirrored.placement(opened)).toEqual({ here: false, app: true, appApprovable: true });
+      expect(mirrored.placement(opened)).toEqual({ here: false, hereApprovable: false, app: true, appApprovable: true });
 
       const email = approvalDesk(sql, { ...base, call: async (method: string) => method === 'sendMessage' ? { message_id: 501, chat: { id: 42 } } : true });
       const raw = 'To: a@x.test\r\nSubject: Hi\r\n\r\nHello';
       const sent = await email.proposeSendEmail({ to: ['a@x.test'], subject: 'Hi', body: 'Hello', message_id: '<pres@waldo-send>', raw, digest: await sha256Hex(raw) });
       expect(shown(sql, sent)).toEqual([{ surface: 'telegram', message_ref: '42:501', approvable: 1, retired_at: null }]);
-      expect(email.placement(sent)).toEqual({ here: true, app: false, appApprovable: false });
+      expect(email.placement(sent)).toEqual({ here: true, hereApprovable: true, app: false, appApprovable: false });
 
       const fromApp = approvalDesk(sql, { ...app, currentRunRef: () => 'app-message-0001' });
       const proposed = await fromApp.propose({ action: 'create', title: 'Walk', start: iso('2026-10-10T15:00:00Z'), end: iso('2026-10-10T15:30:00Z'), reason: 'afternoon slot' });
@@ -1042,7 +1042,7 @@ describe('app approval projection', () => {
       expect(byId[message]!.exact).toEqual({ recipients: { to: ['whatsapp'], cc: [], bcc: [] } });
       expect(byId[browser]).toMatchObject({ exact: { scope: 'https://reservations.example/book' }, actions: ['skip'], review: 'Approve a browser action on https://reservations.example/book?', expires_at: NOW + 30 * 60_000 });
       expect(byId[mcp]).toMatchObject({ exact: { scope: 'lookup on the crm server' }, actions: ['skip'], review: 'Run lookup on the crm server.' });
-      for (const id of [browser, mcp]) expect(desk.placement(id)).toEqual({ here: true, app: true, appApprovable: false });
+      for (const id of [browser, mcp]) expect(desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: false });
       expect(JSON.stringify(listed)).not.toMatch(/secret-ish|secret-hold|18:30|4242|party=/);
       const fromApp = approvalDesk(sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), newId: () => `proj${++n}`, now: () => now, timezone: 'UTC', log: () => {}, google: async () => null, currentRunRef: () => 'app-run-0001' });
       const appBrowser = await fromApp.proposeBrowserSubmit(page), appMcp = await fromApp.proposeMcpCall({ server: 'crm', tool: 'lookup', args: { q: 'secret-ish' } });
@@ -1218,7 +1218,18 @@ describe('decisions from any surface', () => {
       expect(status(await send.handle({ channel: 'telegram', content: 'Hi', idempotency_key: 'status-1' }, {} as never))).toBe('sent to the owner with Send it / Modify / Not now buttons');
       telegramUp = false;
       expect(status(await send.handle({ channel: 'telegram', content: 'Hi again', idempotency_key: 'status-2' }, {} as never))).toBe('The review card is in the Waldo app; it could not be shown here. Nothing was sent.');
-      expect(status(await mcp.handle({ server: 'crm', tool: 'lookup', args: { q: 'x' } }, {} as never))).toBe('Only a summary card reached the Waldo app; the full card could not be shown here, so it cannot be approved yet. Nothing has run.');
+      expect(status(await mcp.handle({ server: 'crm', tool: 'lookup', args: { q: 'x' } }, {} as never))).toBe('Only a summary card could be shown, so it cannot be approved yet. Nothing has run.');
+      const inApp = approvalDesk(state.storage.sql, { owner: 7_000_000_000_001, surface: 'app', call: async () => undefined, google: async () => null, newId: () => `tool${++n}`, now: () => NOW, timezone: 'UTC', log: () => {} });
+      const fromApp = status(await callMcpToolHandler(JSON.stringify([{ name: 'crm', url: 'https://mcp.test/rpc' }]), inApp).handle({ server: 'crm', tool: 'lookup', args: { q: 'x' } }, {} as never));
+      expect(fromApp).toBe('Only a summary card could be shown, so it cannot be approved yet. Nothing has run.');
+      expect(fromApp).not.toMatch(/Do it/);
+      telegramUp = true;
+      const { proposalStatus } = await import('../src/channels/approvals');
+      const { sha256Hex } = await import('../src/connectors/google');
+      const raw = `To: a@x.test\r\nSubject: Long\r\n\r\n${'x'.repeat(5000)}`;
+      const long = await desk.proposeSendEmail({ to: ['a@x.test'], subject: 'Long', body: 'x'.repeat(5000), message_id: '<status-long@waldo-send>', raw, digest: await sha256Hex(raw) });
+      expect(desk.placement(long)).toEqual({ here: true, hereApprovable: false, app: true, appApprovable: true });
+      expect(proposalStatus(desk.placement(long), 'review card requested in chat; nothing was sent', 'Nothing was sent.')).toBe('The full review card is in the Waldo app; it could not be shown in full here. Nothing was sent.');
     });
   });
 });

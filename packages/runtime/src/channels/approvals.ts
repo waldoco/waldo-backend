@@ -72,13 +72,13 @@ export type ApprovalReview =
   | Readonly<{ kind: 'message_send'; channel: string; content: string }>
   | Readonly<{ kind: 'google_task_change'; account: string; proposal: GoogleTaskProposal; proposal_digest: string }>
   | Readonly<{ kind: 'calendar_change'; account?: string; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string }>;
-// Where a proposal's card landed: on the proposing desk's own surface, in the app, and whether the app card can approve.
-export type CardPlacement = Readonly<{ here: boolean; app: boolean; appApprovable: boolean }>;
-// What a proposing tool tells the model about the card, so a reply never points at a card that is not there.
+// Where a proposal's card landed, and where a card that can approve it landed: on the proposing desk's own surface and in the app.
+export type CardPlacement = Readonly<{ here: boolean; hereApprovable: boolean; app: boolean; appApprovable: boolean }>;
+// What a proposing tool tells the model about the card, so a reply never points at buttons that are not there.
 export const proposalStatus = (placement: CardPlacement | undefined, shownHere: string, nothingDone: string): string =>
-  !placement || placement.here ? shownHere
-    : placement.appApprovable ? `The review card is in the Waldo app; it could not be shown here. ${nothingDone}`
-      : `Only a summary card reached the Waldo app; the full card could not be shown here, so it cannot be approved yet. ${nothingDone}`;
+  !placement || placement.hereApprovable ? shownHere
+    : placement.appApprovable ? `${placement.here ? 'The full review card is in the Waldo app; it could not be shown in full here.' : 'The review card is in the Waldo app; it could not be shown here.'} ${nothingDone}`
+      : `Only a summary card could be shown, so it cannot be approved yet. ${nothingDone}`;
 export type ApprovalItem = Readonly<{ id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; undoable: boolean; review: ApprovalReview | null }>;
 export type ApprovalDesk = Readonly<{
   propose(args: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string): Promise<string>;
@@ -838,7 +838,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     },
     placement(id) {
       const shown = sql.exec<{ surface: string; approvable: number }>('SELECT surface, approvable FROM approval_presentations WHERE approval_id = ?', id).toArray();
-      return { here: shown.some(p => p.surface === surface), app: shown.some(p => p.surface === 'app'), appApprovable: shown.some(p => p.surface === 'app' && p.approvable === 1) };
+      const on = (where: string, approvable = false) => shown.some(p => p.surface === where && (!approvable || p.approvable === 1));
+      return { here: on(surface), hereApprovable: on(surface, true), app: on('app'), appApprovable: on('app', true) };
     },
     async approvals(now, filter = {}) {
       const statuses = filter.state ? (Object.keys(APP_APPROVAL_STATE) as DeskStatus[]).filter(status => APP_APPROVAL_STATE[status] === filter.state) : null;
