@@ -9,7 +9,7 @@ import type { BrowserSubmitOutcome } from '../tools/live/browser';
 import type { TurnLogEntry } from './telegram-listener';
 import { APP_REVIEW_MAX_CHARS, type AppApprovalPart } from './surfaces/app';
 import { replyApprovalPartV1Schema } from '@waldo/contracts';
-import type { AppApprovalStateV1, AppApprovalV1 } from '../../../contracts/src/app/approvals';
+import { appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
 
 export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
@@ -218,7 +218,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (entry.kind === 'message_send') return { recipients: { to: [p.channel], cc: [], bcc: [] } };
     if (entry.kind === 'browser_submit') return { scope: p.url };
     if (entry.kind === 'mcp_call') return { scope: `${p.tool} on the ${p.server} server` };
-    // v1 has no form for a cleared due date; such a row fails the item parse and stays decidable only where its card was shown.
+    // v1 has no form for a cleared due date; present() then journals no app card, so the app never shows what it cannot decide.
     if (entry.kind === 'google_task_change') return { task: googleTaskExact(googleTaskProposalSchema.parse(p)) as NonNullable<AppApprovalV1['exact']['task']> };
     return { changes: { action: p.action, title: p.title ?? null, start: p.start ?? null, end: p.end ?? null } };
   };
@@ -238,8 +238,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const shown: { surface: string; message_ref: string; approvable: boolean; part_json: string | null }[] = [];
     let journalFailure: unknown, sendFailure: unknown, part: string | null = null;
     try {
-      part = deps.appJournal?.({ approval_id: id, kind: entry.kind as AppApprovalPart['kind'], review: appApprovable ? card : unreviewable(title, entry.summary), payload_digest: digest,
-        actions: appApprovable ? buttons.map(([, data]) => DECISION[data[0] as keyof typeof DECISION]) : ['skip'], expires_at: expiresAt(entry), fallback_text: entry.summary.slice(0, 4000) }) ?? null;
+      const review = appApprovable ? card : unreviewable(title, entry.summary), expires_at = expiresAt(entry);
+      const actions: AppApprovalPart['actions'] = appApprovable ? buttons.map(([, data]) => DECISION[data[0] as keyof typeof DECISION]) : ['skip'];
+      const built = deps.appJournal?.({ approval_id: id, kind: entry.kind as AppApprovalPart['kind'], review, payload_digest: digest, actions, expires_at, fallback_text: entry.summary.slice(0, 4000) }) ?? null;
+      // The app may show only a card it can also decide: the approvals-list item must parse first.
+      if (built) appApprovalV1Schema.parse({ approval_id: id, kind: entry.kind, state: appApprovable ? 'open' : 'review_only', review, exact: exactFor(entry), payload_digest: digest, expires_at, actions });
+      part = built;
     } catch (error) {
       journalFailure = error;
       deps.log({ trace: id, hop: 'approval_app_journal', ms: 0, ok: false, error: String(error) });
