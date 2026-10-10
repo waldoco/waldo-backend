@@ -85,7 +85,7 @@ const APPROVAL_RECEIPT_TEXT:Readonly<Record<string,string>>={
 };
 const APPROVAL_RECEIPT_FALLBACK:Readonly<Record<ControlReceipt['state'],string>>={recorded:'The decision was recorded.',incomplete:'The decision was only partly applied. Refresh the records.',
  rejected:'That decision was not carried out. Refresh the records and try again.',unconfirmed:'The proposal outcome could not be confirmed. Check the records and chat before retrying.'};
-const approvalReceiptState=(out:ApprovalDecision):ControlReceipt['state']=>['Done','Undone','Not now','Sent','Already sent','Verified'].includes(out.toast)?'recorded':out.toast==='Outcome unknown'?'unconfirmed'
+const approvalReceiptState=(out:ApprovalDecision):ControlReceipt['state']=>['Done','Undone','Not now','Sent','Already sent','Verified','Tell me what to change'].includes(out.toast)?'recorded':out.toast==='Outcome unknown'?'unconfirmed'
  :['Already handled.','This proposal expired','Google is not connected','The event changed','The task changed','Nothing was changed','Too late to undo','Not available','Not available here','Review it in the app','Channel not connected'].includes(out.toast)?'rejected':'unconfirmed';
 // The console derives the state from the decision; the app passes the state its status transition proved.
 // A desk refusal the console treats as unconfirmed is still a definite "nothing was done" once the
