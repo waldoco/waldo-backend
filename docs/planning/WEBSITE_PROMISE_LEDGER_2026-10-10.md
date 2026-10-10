@@ -188,11 +188,13 @@ No landing edits are planned.
 
 ADR changes publish in Brain first: [Pin4sf/waldo-brain#34](https://github.com/Pin4sf/waldo-brain/pull/34) covers 0010/0014, 0015/0042/0072, 0018/0019, 0081 and the pinned launch contract. After it merges, this repo repins the CLAUDE.md launch-contract link and regenerates `docs/foundation/accepted-adrs.json`.
 
-## 8. Live risk: health text in staging traces
+## 8. Health text in staging traces (decided)
 
-Staging exports model input and output text to Langfuse (`packages/runtime/wrangler.jsonc:82`; the deploy command also passes `--var LANGFUSE_CAPTURE_TEXT:true`, `docs/ops/OBSERVABILITY.md:73`). With capture on, the trace gate returns entries unchanged (`observability/trace-privacy.ts:40-42`) and text goes out as attributes (`observability/otlp-turns.ts:92-106`). Since #992, owner replies may carry the owner's health readings; `log_workout` / `log_meal` already put self-reported health into turns. CLAUDE.md bans health from traces, and forget and delete do not reach Langfuse.
+Staging exports model input and output text to Langfuse (`packages/runtime/wrangler.jsonc:82`; the deploy command also passes `--var LANGFUSE_CAPTURE_TEXT:true`). Since #992, owner replies may carry health readings, and history carries them into later turns.
 
-The owner turned capture on to debug model inputs and outputs (`OBSERVABILITY.md:64`), so the fix keeps it and withholds text per turn: a turn whose trace shows health context present or a health tool call exports no text and no free-form error, on the root and every hop, and the trace says why. Other turns keep text. The gate relies on the health read sharing its turn's trace key; owner, app, reminder, standing-order, heartbeat and nightly turns do (`channels/owner-turn.ts` sets the read's trace from the turn id), and a responder test pins it. Day cards (Brief, check-in, Close) and update cards log no root hop, so their traces are never exported at all: no leak, but those moments are invisible in Langfuse today. Owner-typed health in an ordinary message is not covered by this structural gate; ingress classification is the follow-up. This lands before any staging deploy at or after `7f9aa7e8`.
+Owner ruling (10 October): keep text capture on for every opted-in alpha and beta tester, health included, because the traces are needed to make the agent deliver. Production never captures text (`observability/trace-privacy.ts` `resolveCaptureText` forces it off). The health-turn withholding gate (#1003) was closed. Before outside testers join, the opt-in they accept should name trace capture of health data. Health in traces is revisited with the other launch guardrails before production. CLAUDE.md records the exception; the mirrored Brain `security-checklist.md` still says health never reaches spans and needs the matching amendment there.
+
+Day cards and update cards used to log no root hop, so their traces were never exported; #1007 closes them so they reach Langfuse.
 
 ## 9. Waves, in dependency order
 
@@ -251,7 +253,7 @@ Booking, payments, logged-in browser errands, parallel workers, rich file output
 
 ## 12. First slices
 
-1. **Health-turn trace text withheld** (§8). Implemented with tests in `observability/otlp-turns.ts`; documented in `docs/ops/OBSERVABILITY.md`.
+1. **Card traces reach Langfuse** (§8, #1007). The health-turn withholding gate was dropped by owner ruling.
 2. **#999 post-merge fixes that gate the staging deploy.** An independent review found no CRITICAL or HIGH issues and two blockers:
    - M1, alarm hot loop during a directory outage for Telegram-linked owners: `AppInbox.deferWake` moves the app wake out 30 s when authority is unavailable (`channels/app-inbox.ts`, `telegram-owner-do.ts` `drainApp`). Unit and DO tests pin it.
    - M3, the push functions in `20261010040000` had no tests before their first hosted apply: `supabase/tests/waldo_app_push_custody.sql` (32 assertions: register, list, revoke, revoke-all, replay receipts, cross-owner refusal, forged signatures, signout trigger). The Vault foreign key on a hosted apply stays unverified until staging.
