@@ -101,7 +101,9 @@ export class BridgeStore {
   }
   /** Handed = durably given to the owner inbox (which dedups); acknowledged = classified non-turn evidence. */
   settleEvent(seq: number, state: Exclude<EventState, 'pending'>, reason: string | null) {
-    this.tx(() => this.sql.exec('UPDATE events SET state=?, reason=? WHERE seq=?', state, reason, seq));
+    // Handed/acknowledged rows keep only identity + digest (enough for duplicate receipts); the private
+    // body is dropped. Held rows keep the body as retained evidence (media, revoked scope).
+    this.tx(() => this.sql.exec("UPDATE events SET state=?, reason=?, body=CASE WHEN ? = 'held' THEN body ELSE '' END WHERE seq=?", state, reason, state, seq));
   }
   eventCounts(): Record<EventState, number> {
     const out: Record<EventState, number> = { pending: 0, handed: 0, acknowledged: 0, held: 0 };
