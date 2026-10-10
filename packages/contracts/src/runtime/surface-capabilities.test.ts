@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { channelNameSchema } from '../adapters/channel';
+import * as appSurfaces from '../app/surfaces';
 import { REPLY_FALLBACK_MAX_CHARS } from './reply-parts';
 import {
   messagingSurfaceV1Schema,
@@ -11,7 +12,9 @@ import {
 describe('surfaceNameV1', () => {
   it('is the first-party app and console plus messaging channels drawn from the channel vocabulary', () => {
     expect(surfaceNameV1Schema.options).toEqual(['app', 'telegram', 'whatsapp', 'imessage', 'console']);
-    for (const channel of messagingSurfaceV1Schema.options) expect(channelNameSchema.safeParse(channel).success).toBe(true);
+    expect(surfaceNameV1Schema).toBe(appSurfaces.surfaceNameV1Schema);
+    expect(messagingSurfaceV1Schema).toBe(appSurfaces.messagingSurfaceV1Schema);
+    for (const channel of appSurfaces.messagingSurfaceV1Schema.options) expect(channelNameSchema.options).toContain(channel);
     expect(surfaceNameV1Schema.safeParse('in_app').success).toBe(false);
     expect(messagingSurfaceV1Schema.safeParse('app').success).toBe(false);
   });

@@ -10,12 +10,14 @@ const connections = {
 const projection = (data: object) => ({ version: 1, state: 'available', revision, view: 'connections', data });
 
 describe('channel link actions', () => {
-  it('adds channel.unlink and channel.link_start, naming a messaging channel in id', () => {
-    for (const action of ['channel.unlink', 'channel.link_start']) {
-      for (const id of ['telegram', 'whatsapp', 'imessage']) {
-        expect(appControlActionV1Schema.safeParse({ view: 'connections', action, id, revision, request_id: 'request-0002' }).success).toBe(true);
-      }
+  it('adds channel.unlink, naming a messaging channel in id', () => {
+    for (const id of ['telegram', 'whatsapp', 'imessage']) {
+      expect(appControlActionV1Schema.safeParse({ view: 'connections', action: 'channel.unlink', id, revision, request_id: 'request-0002' }).success).toBe(true);
     }
+  });
+
+  it('leaves link start to its own non-durable route', () => {
+    expect(appControlActionV1Schema.safeParse({ view: 'connections', action: 'channel.link_start', id: 'telegram', revision, request_id: 'request-0002' }).success).toBe(false);
   });
 
   it('rejects a channel action without a messaging channel, and leaves existing actions unchanged', () => {

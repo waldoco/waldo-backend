@@ -1,12 +1,9 @@
 import { z } from 'zod';
-import { channelNameSchema } from '../adapters/channel';
-import { QUICK_REPLY_MAX_CHOICES, REPLY_FALLBACK_MAX_CHARS, REPLY_TEXT_MAX_CHARS } from './reply-parts';
+import { QUICK_REPLY_MAX_CHOICES, REPLY_FALLBACK_MAX_CHARS, REPLY_TEXT_MAX_CHARS } from '../app/parts';
+import { surfaceNameV1Schema, type SurfaceNameV1 } from '../app/surfaces';
 
-// Messaging surfaces take their literals from the channel vocabulary (ADR-0012); app and console
-// are the first-party session surfaces.
-const MESSAGING_SURFACES = ['telegram', 'whatsapp', 'imessage'] as const;
-export const messagingSurfaceV1Schema = channelNameSchema.extract(MESSAGING_SURFACES);
-export const surfaceNameV1Schema = z.enum(['app', ...MESSAGING_SURFACES, 'console']);
+export { messagingSurfaceV1Schema, surfaceNameV1Schema } from '../app/surfaces';
+export type { MessagingSurfaceV1, SurfaceNameV1 } from '../app/surfaces';
 
 // A renderer never emits an affordance these deny; it degrades to the part's fallback_text.
 export const surfaceCapabilitiesV1Schema = z.strictObject({
@@ -21,7 +18,6 @@ export const surfaceCapabilitiesV1Schema = z.strictObject({
   max_text_chars: z.int().min(REPLY_FALLBACK_MAX_CHARS).max(REPLY_TEXT_MAX_CHARS),
 });
 
-export type SurfaceNameV1 = z.infer<typeof surfaceNameV1Schema>;
 export type SurfaceCapabilitiesV1 = z.infer<typeof surfaceCapabilitiesV1Schema>;
 
 // Declares only what each surface renders today: the console shows approvals but no chat parts,

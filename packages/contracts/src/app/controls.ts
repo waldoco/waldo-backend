@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { messagingSurfaceV1Schema } from '../runtime/surface-capabilities';
+import { messagingSurfaceV1Schema } from './surfaces';
 
 const text = z.string();
 const count = z.int().nonnegative();
@@ -11,12 +11,12 @@ export const appControlQueryV1Schema = z.strictObject({ view: appControlViewV1Sc
   if (query.view !== 'activity' && (query.trace_before !== undefined || query.runs_before !== undefined)) ctx.addIssue({ code: 'custom', message: 'Activity cursors require the activity view' });
 });
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'channel.link_start']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   revision, request_id: appControlRequestIdV1Schema,
 }).superRefine((action, ctx) => {
-  if (action.action.startsWith('channel.') && !messagingSurfaceV1Schema.safeParse(action.id).success) ctx.addIssue({ code: 'custom', path: ['id'], message: 'Channel actions name a messaging channel in id' });
+  if (action.action === 'channel.unlink' && !messagingSurfaceV1Schema.safeParse(action.id).success) ctx.addIssue({ code: 'custom', path: ['id'], message: 'channel.unlink names a messaging channel in id' });
 });
 
 export const appControlDayDataV1Schema = z.strictObject({

@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import {
-  replyApprovalPartV1Schema, replyCardPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema,
-  replyQuickRepliesPartV1Schema, replyVisibilityV1Schema, replyVoicePartV1Schema,
-} from '../runtime/reply-parts';
+  replyApprovalPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyQuickRepliesPartV1Schema,
+  replyVisibilityV1Schema, replyVoicePartV1Schema,
+} from './parts';
 
 export const APP_AGENT_VERSION = 'app.v1' as const;
 export const APP_SEND_MAX_WIRE_BYTES = 32768;
@@ -39,7 +39,7 @@ export const appMessagePartV1Schema = z.union([
   z.strictObject({ type: z.literal('text'), text: z.string() }),
   z.strictObject({ type: z.literal('operation'), operation_id: z.string(), state: z.enum(['admitted', 'running', 'completed', 'interrupted', 'revoked']), message: z.string() }),
   z.strictObject({ type: z.literal('artifact'), artifact_id: z.string(), revision: z.int().positive(), title: z.string(), download_path: z.string() }),
-  replyCardPartV1Schema, replyApprovalPartV1Schema, replyQuickRepliesPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyVoicePartV1Schema,
+  replyApprovalPartV1Schema, replyQuickRepliesPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyVoicePartV1Schema,
 ]);
 export const appMessageV1Schema = z.strictObject({
   id: z.string(), role: z.enum(['user', 'assistant']), text: z.string(), parts: z.array(appMessagePartV1Schema),

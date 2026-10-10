@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as appParts from '../app/parts';
 import { waldoCardSchema } from '../ui/card';
 import {
   approvalActionV1Schema,
@@ -11,6 +12,7 @@ import {
   replyEnvelopeV1Schema,
   replyPartV1Schema,
 } from './reply-parts';
+import * as runtimeParts from './reply-parts';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const fallback_text = 'Open Waldo to see this.';
@@ -38,6 +40,14 @@ const envelope = {
 } as const;
 
 describe('replyPartV1', () => {
+  it('reuses the app leaf schemas, so app and runtime share one representation', () => {
+    for (const name of ['approvalIdV1Schema', 'approvalKindV1Schema', 'approvalActionV1Schema', 'payloadDigestV1Schema', 'replyVisibilityV1Schema',
+      'replyApprovalPartV1Schema', 'replyQuickRepliesPartV1Schema', 'replyChartSeriesPartV1Schema', 'replyFilePartV1Schema', 'replyVoicePartV1Schema'] as const) {
+      expect(runtimeParts[name]).toBe(appParts[name]);
+    }
+    expect(runtimeParts.REPLY_FALLBACK_MAX_CHARS).toBe(appParts.REPLY_FALLBACK_MAX_CHARS);
+  });
+
   it('accepts one instance of every part type and nothing named ui_part', () => {
     for (const part of Object.values(parts)) expect(replyPartV1Schema.safeParse(part).success).toBe(true);
     expect(replyPartV1Schema.safeParse({ type: 'ui_part', component: 'Chart', props: {}, fallback_text }).success).toBe(false);
@@ -79,6 +89,7 @@ describe('replyPartV1', () => {
     expect(replyPartV1Schema.safeParse({ ...parts.approval, payload_digest: 'a'.repeat(64) }).success).toBe(false);
     expect(replyPartV1Schema.safeParse({ ...parts.approval, review: '' }).success).toBe(false);
     expect(replyPartV1Schema.safeParse({ ...parts.approval, expires_at: -1 }).success).toBe(false);
+    expect(replyPartV1Schema.safeParse({ ...parts.approval, expires_at: 1_760_000_000 }).success).toBe(false);
   });
 
   it('bounds quick replies: 1..10 unique ids, labels short enough for every surface', () => {

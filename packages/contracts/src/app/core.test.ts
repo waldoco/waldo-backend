@@ -4,8 +4,7 @@ import { appErrorCodeV1Schema, appHistoryResultV1Schema, appMessageV1Schema, app
 const fallback_text = 'Open Waldo to see this.';
 const row = { id: 'entry-1', role: 'assistant', text: 'Done.', parts: [{ type: 'text', text: 'Done.' }], channel: 'app', parent_id: null } as const;
 const newParts = [
-  { type: 'card', card: { kind: 'brief_card', card_id: 'card-1', data: { source_refs: ['src-1'], variant: 'morning' } }, fallback_text },
-  { type: 'approval', approval_id: 'p1', kind: 'email_send', review: 'To: a@example.com\nSubject: Hi\n\nHello.', payload_digest: `sha256:${'d'.repeat(64)}`, actions: ['approve', 'edit', 'skip'], expires_at: 1, fallback_text },
+  { type: 'approval', approval_id: 'p1', kind: 'email_send', review: 'To: a@example.com\nSubject: Hi\n\nHello.', payload_digest: `sha256:${'d'.repeat(64)}`, actions: ['approve', 'edit', 'skip'], expires_at: 1_760_000_000_000, fallback_text },
   { type: 'quick_replies', choices: [{ id: 'yes', label: 'Yes' }], fallback_text },
   { type: 'chart_series', title: 'Focus blocks', unit: 'blocks', series: [{ label: 'Week', points: [{ t: 1, v: 2 }] }], alt_text: 'Two focus blocks.', fallback_text },
   { type: 'file', file_ref: 'file:1', name: 'notes.txt', mime: 'text/plain', bytes: 12, sha256: 'e'.repeat(64), fallback_text },
@@ -24,13 +23,15 @@ describe('app history rows', () => {
     expect(appMessageV1Schema.safeParse({ ...row, parts: [row.parts[0], ...newParts] }).success).toBe(true);
   });
 
-  it('requires fallback_text on every new part and keeps one artifact shape', () => {
+  it('requires fallback_text on every new part, keeps one artifact shape and carries no card part', () => {
     for (const part of newParts) {
       const { fallback_text: _dropped, ...bare } = part;
       expect(appMessageV1Schema.safeParse({ ...row, parts: [bare] }).success).toBe(false);
     }
     expect(appMessageV1Schema.safeParse({ ...row, parts: [{ type: 'artifact', artifact_id: 'art:1', revision: 1, fallback_text }] }).success).toBe(false);
     expect(appMessageV1Schema.safeParse({ ...row, parts: [{ type: 'ui_part', fallback_text }] }).success).toBe(false);
+    const card = { type: 'card', card: { kind: 'brief_card', card_id: 'card-1', data: { source_refs: ['src-1'], variant: 'morning' } }, fallback_text };
+    expect(appMessageV1Schema.safeParse({ ...row, parts: [card] }).success).toBe(false);
   });
 
   it('carries visibility as an optional closed field and keeps text required', () => {
