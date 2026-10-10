@@ -13,8 +13,8 @@ const fakeAuth = (over: Partial<ConsoleAuth> = {}) => {
     throttle: async () => true,
     sendCode: async (email: string) => { calls.push(`send:${email}`); return email === 'member@example.test'; },
     verify: async (email: string, code: string) => (email === 'member@example.test' && code === '123456' ? 'owner-1' : null),
-    ownerCookie: async () => CREDENTIAL,
-    readOwnerCookie: async (request: Request) => ((request.headers.get('cookie') ?? '').includes(CREDENTIAL) ? 'owner-1' : null),
+    ownerAppCredential: async () => CREDENTIAL,
+    readAppCredential: async (credential: string) => (credential === CREDENTIAL ? 'owner-1' : null),
     listSessions: async () => revoked ? [] : [{session:await linkCodeHash(SESSION),created_at:new Date().toISOString(),last_seen_at:new Date().toISOString()}],
     revokeSession: async () => { calls.push('revoke'); revoked=true; return true; },
     ...over,
@@ -47,10 +47,10 @@ describe('app sign-in and main chat routes', () => {
     expect(response!.headers.get('cache-control')).toBe('no-store');
   });
   it('says needs_invite for a wrong code without opening a session', async () => {
-    const ownerCookie = vi.fn(async () => CREDENTIAL);
-    const response = await handleApp(post('/app/v1/auth/verify', { email: 'member@example.test', code: '000000' }), env(), fakeAuth({ ownerCookie }).auth);
+    const ownerAppCredential = vi.fn(async () => CREDENTIAL);
+    const response = await handleApp(post('/app/v1/auth/verify', { email: 'member@example.test', code: '000000' }), env(), fakeAuth({ ownerAppCredential }).auth);
     expect(await response!.json()).toEqual({ state: 'needs_invite' });
-    expect(ownerCookie).not.toHaveBeenCalled();
+    expect(ownerAppCredential).not.toHaveBeenCalled();
   });
   it('rejects without a valid credential, generically', async () => {
     const response = await handleApp(new Request('https://w.test/app/v1/session'), env(), fakeAuth().auth);
@@ -59,8 +59,8 @@ describe('app sign-in and main chat routes', () => {
     expect(bad!.status).toBe(401);
   });
   it('fails closed when the session check is unavailable', async () => {
-    const readOwnerCookie = async () => { throw new Error('down'); };
-    const response = await handleApp(new Request('https://w.test/app/v1/session', { headers: { authorization: `Bearer ${CREDENTIAL}` } }), env(), fakeAuth({ readOwnerCookie }).auth);
+    const readAppCredential = async () => { throw new Error('down'); };
+    const response = await handleApp(new Request('https://w.test/app/v1/session', { headers: { authorization: `Bearer ${CREDENTIAL}` } }), env(), fakeAuth({ readAppCredential }).auth);
     expect(response!.status).toBe(503);
   });
   it('signs out by revoking exactly its own session', async () => {

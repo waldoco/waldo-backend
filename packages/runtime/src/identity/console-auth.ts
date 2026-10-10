@@ -35,6 +35,10 @@ export type ConsoleAuth = Readonly<{
   // opened (storage down) so sign-in fails loudly instead of issuing an unverifiable cookie.
   ownerCookie(doName: string): Promise<string | null>;
   readOwnerCookie(request: Request): Promise<string | null>;
+  // The mobile app's bearer: the same kind of server-side session, signed under its own context so it is never
+  // accepted as a console cookie, and a console cookie is never accepted as an app bearer.
+  ownerAppCredential(doName: string): Promise<string | null>;
+  readAppCredential(credential: string): Promise<string | null>;
   listSessions(doName: string): Promise<readonly ConsoleSession[]>;
   revokeSession(doName: string, sessionHash: string): Promise<boolean>;
   signOutAll(doName: string): Promise<number>;
@@ -69,6 +73,32 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     return decode(response);
   });
   const cookieSig = (doName: string, sessionId: string) => routerSignature(secret, 0, `cookie.${doName}.${sessionId}`);
+  const appSig = (doName: string, sessionId: string) => routerSignature(secret, 0, `appbearer.${doName}.${sessionId}`);
+  const mint = async (doName: string, sign: (doName: string, sessionId: string) => Promise<string>): Promise<string | null> => {
+    const sessionId = newSessionId();
+    const sessionHash = await linkCodeHash(sessionId);
+    const opened = await rpc('console_session_open', `consolesess.open.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
+    if (opened !== true) return null;
+    return `${encodeURIComponent(doName)}.${sessionId}.${await sign(doName, sessionId)}`;
+  };
+  // A malformed artifact is simply not valid: it never throws, so a bad value cannot read as an outage.
+  const readSigned = async (raw: string | null | undefined, sign: (doName: string, sessionId: string) => Promise<string>): Promise<string | null> => {
+    const sigDot = raw?.lastIndexOf('.') ?? -1;
+    if (!raw || sigDot < 1) return null;
+    const sessionDot = raw.lastIndexOf('.', sigDot - 1);
+    if (sessionDot < 1) return null;
+    let doName: string;
+    try { doName = decodeURIComponent(raw.slice(0, sessionDot)); } catch { return null; }
+    const sessionId = raw.slice(sessionDot + 1, sigDot);
+    const expected = new TextEncoder().encode(await sign(doName, sessionId));
+    const given = new TextEncoder().encode(raw.slice(sigDot + 1));
+    let diff = expected.length ^ given.length;
+    for (let i = 0; i < expected.length; i += 1) diff |= expected[i]! ^ (given[i] ?? 0);
+    if (diff !== 0) return null;
+    const sessionHash = await linkCodeHash(sessionId);
+    const live = await rpc('console_session_touch', `consolesess.touch.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
+    return live === true ? doName : null;
+  };
   return {
     async throttle(key, limit, windowSeconds) {
       return (await rpc('console_auth_throttle', `throttle.${key}.${limit}.${windowSeconds}`, { p_key: key, p_limit: limit, p_window_seconds: windowSeconds })) === true;
@@ -123,30 +153,13 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     unlinkTelegram: async (doName) => (await rpc('unlink_presence', `unlink.${doName}.telegram`, { p_do_name: doName, p_provider: 'telegram' })) === true,
     assertChannelPresence: async (doName, provider, subject) => (await rpc('assert_channel_presence', `presence.${doName}.${provider}.${subject}`, { p_do_name: doName, p_provider: provider, p_subject: subject })) === true,
     deleteOwner: async (doName) => (await rpc('delete_owner', `delown.${doName}`, { p_do_name: doName })) === true,
-    async ownerCookie(doName) {
-      const sessionId = newSessionId();
-      const sessionHash = await linkCodeHash(sessionId);
-      const opened = await rpc('console_session_open', `consolesess.open.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
-      if (opened !== true) return null;
-      return `${encodeURIComponent(doName)}.${sessionId}.${await cookieSig(doName, sessionId)}`;
-    },
-    async readOwnerCookie(request) {
-      const raw = (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${OWNER_COOKIE}=`))?.slice(OWNER_COOKIE.length + 1);
-      const sigDot = raw?.lastIndexOf('.') ?? -1;
-      if (!raw || sigDot < 1) return null;
-      const sessionDot = raw.lastIndexOf('.', sigDot - 1);
-      if (sessionDot < 1) return null;
-      const doName = decodeURIComponent(raw.slice(0, sessionDot));
-      const sessionId = raw.slice(sessionDot + 1, sigDot);
-      const expected = new TextEncoder().encode(await cookieSig(doName, sessionId));
-      const given = new TextEncoder().encode(raw.slice(sigDot + 1));
-      let diff = expected.length ^ given.length;
-      for (let i = 0; i < expected.length; i += 1) diff |= expected[i]! ^ (given[i] ?? 0);
-      if (diff !== 0) return null;
-      const sessionHash = await linkCodeHash(sessionId);
-      const live = await rpc('console_session_touch', `consolesess.touch.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
-      return live === true ? doName : null;
-    },
+    ownerCookie: (doName) => mint(doName, cookieSig),
+    readOwnerCookie: (request) => readSigned(
+      (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${OWNER_COOKIE}=`))?.slice(OWNER_COOKIE.length + 1),
+      cookieSig,
+    ),
+    ownerAppCredential: (doName) => mint(doName, appSig),
+    readAppCredential: (credential) => readSigned(credential, appSig),
     async listSessions(doName) {
       const rows = await rpc('console_session_list', `consolesess.list.${doName}`, { p_do_name: doName });
       // An invalid authority response cannot prove that a session is absent.

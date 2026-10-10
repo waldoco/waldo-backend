@@ -1,6 +1,6 @@
 import type { ConversationEntry } from '@waldo/contracts';
 import { APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
-import { consoleAuth, OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
+import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { signedRpc } from '../identity/owner-directory';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
@@ -37,9 +37,7 @@ const bearer = (request: Request): string | null => {
   return match ? match[1]! : null;
 };
 
-// The app credential is the console session artifact itself, so the same server-side session row backs it.
-// The existing validator reads that artifact from a cookie header; the bearer value is handed to it unchanged.
-const asCookieRequest = (credential: string) => new Request('https://app.invalid/', { headers: { cookie: `${OWNER_COOKIE}=${credential}` } });
+// The app credential is its own signed artifact backed by a server-side session row; it is never a console cookie.
 const sessionIdOf = (credential: string): string | null => {
   const sigDot = credential.lastIndexOf('.');
   const sessionDot = sigDot > 0 ? credential.lastIndexOf('.', sigDot - 1) : -1;
@@ -50,7 +48,7 @@ const authenticate = async (request: Request, auth: ConsoleAuth): Promise<{ doNa
   const credential = bearer(request);
   if (!credential) return 'unauthenticated';
   try {
-    const doName = await auth.readOwnerCookie(asCookieRequest(credential));
+    const doName = await auth.readAppCredential(credential);
     return doName ? { doName, credential } : 'unauthenticated';
   } catch { return 'unavailable'; }
 };
@@ -111,7 +109,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     try { doName = await auth.verify(email, code); } catch { return fail(503); }
     if (!doName) return ok({ state: 'needs_invite' });
     let credential: string | null;
-    try { credential = await auth.ownerCookie(doName); } catch { credential = null; }
+    try { credential = await auth.ownerAppCredential(doName); } catch { credential = null; }
     if (!credential) return fail(503);
     try { return ok({ ...await sessionView(auth, doName, credential), credential }); } catch { return fail(503); }
   }
