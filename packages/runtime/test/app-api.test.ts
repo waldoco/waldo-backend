@@ -134,7 +134,7 @@ describe('main chat transcript page', () => {
     const part: import('../src/channels/surfaces/app').AppApprovalPart = { type: 'approval', approval_id: 'p1', kind: 'calendar_change', review: 'Proposed: Walk', payload_digest: `sha256:${'b'.repeat(64)}`, actions: ['approve', 'edit', 'skip'], expires_at: Date.UTC(2026, 9, 10, 15), fallback_text: 'Walk' };
     const user = entry(10, 'user', 'app'), first = { ...entry(11, 'assistant', 'app'), parentId: 'e10' }, reply = { ...entry(12, 'assistant', 'app'), parentId: 'e10' };
     const asked: string[] = [];
-    const page = appTranscriptPage([user, first, reply], null, 10, parentId => { asked.push(parentId); return parentId === 'e10' ? [part] : []; });
+    const page = appTranscriptPage([user, first, reply], null, 10, parentId => { asked.push(parentId); return parentId === 'e10' ? { live: [part], fallbacks: [part.fallback_text] } : { live: [], fallbacks: [] }; });
     expect(page.messages[0]!.parts).toEqual([{ type: 'text', text: 'text 12' }, part]);
     expect(page.messages[1]!.parts).toEqual([{ type: 'text', text: 'text 11' }]);
     expect(page.messages[2]!.parts).toEqual([{ type: 'text', text: 'text 10' }]);
@@ -143,10 +143,12 @@ describe('main chat transcript page', () => {
   it('gives a reply that carries an approval part readable text of its own, for readers that drop the part', () => {
     const part: import('../src/channels/surfaces/app').AppApprovalPart = { type: 'approval', approval_id: 'p2', kind: 'google_task_change', review: 'Google task change to review', payload_digest: `sha256:${'c'.repeat(64)}`, actions: ['approve', 'edit', 'skip'], expires_at: Date.UTC(2026, 9, 10, 15), fallback_text: 'update Google task “Buy milk” in Errands (me@example.com).' };
     const user = entry(20, 'user', 'app'), silent = { ...entry(21, 'assistant', 'app'), parentId: 'e20', appPayload: '  ' };
-    const [reply] = appTranscriptPage([user, silent], null, 10, () => [part]).messages;
+    const [reply] = appTranscriptPage([user, silent], null, 10, () => ({ live: [part], fallbacks: [part.fallback_text] })).messages;
     expect(reply).toMatchObject({ id: 'e21', text: part.fallback_text, parts: [{ type: 'text', text: part.fallback_text }, part] });
     const spoken = { ...silent, appPayload: 'I prepared the task change.' };
-    expect(appTranscriptPage([user, spoken], null, 10, () => [part]).messages[0]).toMatchObject({ text: 'I prepared the task change.', parts: [{ type: 'text', text: 'I prepared the task change.' }, part] });
+    expect(appTranscriptPage([user, spoken], null, 10, () => ({ live: [part], fallbacks: [part.fallback_text] })).messages[0]).toMatchObject({ text: 'I prepared the task change.', parts: [{ type: 'text', text: 'I prepared the task change.' }, part] });
+    const decided = appTranscriptPage([user, silent], null, 10, () => ({ live: [], fallbacks: [part.fallback_text] })).messages[0]!;
+    expect(decided).toEqual({ id: 'e21', role: 'assistant', text: part.fallback_text, parts: [{ type: 'text', text: part.fallback_text }], channel: 'app', parent_id: 'e20' });
   });
   it('skips rows with no role and treats a bad cursor as the start', () => {
     const { role: _role, ...bare } = entry(9, 'user');

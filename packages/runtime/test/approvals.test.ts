@@ -920,11 +920,11 @@ describe('approval presentations', () => {
       expect(appCalls).toEqual([]);
       expect(sql.exec<{ origin_run_ref: string }>('SELECT origin_run_ref FROM ledger WHERE id = ?', proposed).one().origin_run_ref).toBe('app-message-0001');
       expect(shown(sql, proposed)).toMatchObject([{ surface: 'app', message_ref: 'run:app-message-0001', approvable: 1 }]);
-      const [part] = appApprovalParts(sql)('app-message-0001');
+      const [part] = appApprovalParts(sql)('app-message-0001').live;
       const payload = sql.exec<{ payload_json: string }>('SELECT payload_json FROM ledger WHERE id = ?', proposed).one().payload_json;
       expect(part).toMatchObject({ type: 'approval', approval_id: proposed, kind: 'calendar_change', actions: ['approve', 'edit', 'skip'], payload_digest: `sha256:${await sha256Hex(payload)}`, expires_at: Date.parse('2026-10-10T15:00:00Z') });
       expect(part!.review).toContain('Add "Walk"');
-      expect(appApprovalParts(sql)('another-run')).toEqual([]);
+      expect(appApprovalParts(sql)('another-run')).toEqual({ live: [], fallbacks: [] });
       expect(sql.exec<{ name: string }>('PRAGMA table_info(approval_presentations)').toArray().map(column => column.name)).toEqual(['approval_id', 'surface', 'message_ref', 'presented_at', 'approvable', 'payload_digest', 'retired_at']);
       expect(unpresented(sql)).toBe(0);
     });
@@ -1046,7 +1046,7 @@ describe('app approval projection', () => {
       expect(JSON.stringify(listed)).not.toMatch(/secret-ish|secret-hold|18:30|4242|party=/);
       const fromApp = approvalDesk(sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), newId: () => `proj${++n}`, now: () => now, timezone: 'UTC', log: () => {}, google: async () => null, currentRunRef: () => 'app-run-0001' });
       const appBrowser = await fromApp.proposeBrowserSubmit(page), appMcp = await fromApp.proposeMcpCall({ server: 'crm', tool: 'lookup', args: { q: 'secret-ish' } });
-      const parts = appApprovalParts(sql)('app-run-0001');
+      const parts = appApprovalParts(sql)('app-run-0001').live;
       expect(parts.map(part => [part.approval_id, part.actions])).toEqual([[appBrowser, ['skip']], [appMcp, ['skip']]]);
       expect(JSON.stringify(parts)).not.toMatch(/secret-ish|secret-hold|18:30|4242|party=/);
       expect(parts.map(part => part.fallback_text)).toEqual(['Approve a browser action on https://reservations.example/book?', 'Run lookup on the crm server.']);
@@ -1295,7 +1295,7 @@ describe('approval desk round two', () => {
     });
   });
 
-  it('history cards offer decisions only while the approval is still open on the app, and one bad row drops only its card', async () => {
+  it('history carries a card only while its approval is live, keeps every card readable, and one bad row drops only its card', async () => {
     const { appApprovalParts } = await import('../src/channels/approvals');
     const { appCaller } = await import('../src/channels/surfaces/app');
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-two-history-${crypto.randomUUID()}`));
@@ -1306,12 +1306,17 @@ describe('approval desk round two', () => {
       const first = await desk.proposeSendMessage({ channel: 'telegram', content: 'One', idempotency_key: 'h-1' });
       const second = await desk.proposeSendMessage({ channel: 'telegram', content: 'Two', idempotency_key: 'h-2' });
       const third = await desk.proposeSendMessage({ channel: 'telegram', content: 'Three', idempotency_key: 'h-3' });
-      const actionsOf = () => Object.fromEntries(appApprovalParts(state.storage.sql)('run-history-1').map(part => [part.approval_id, part.actions]));
+      const history = () => appApprovalParts(state.storage.sql)('run-history-1');
+      const actionsOf = () => Object.fromEntries(history().live.map(part => [part.approval_id, part.actions]));
       expect(actionsOf()).toEqual({ [first]: ['approve', 'edit', 'skip'], [second]: ['approve', 'edit', 'skip'], [third]: ['approve', 'edit', 'skip'] });
+      const fallbacks = history().fallbacks;
+      expect(fallbacks).toHaveLength(3);
       expect((await desk.decide(first, 'a', 'trace')).toast).toBe('Sent');
       state.storage.sql.exec('UPDATE approval_presentations SET retired_at = ? WHERE approval_id = ?', NOW, second);
+      expect(actionsOf()).toEqual({ [third]: ['approve', 'edit', 'skip'] });
+      expect(history().fallbacks).toEqual(fallbacks);
       state.storage.sql.exec("UPDATE ledger SET payload_json = 'not json' WHERE id = ?", third);
-      expect(actionsOf()).toEqual({ [first]: [], [second]: [] });
+      expect(history()).toEqual({ live: [], fallbacks: fallbacks.slice(0, 2) });
     });
   });
 });

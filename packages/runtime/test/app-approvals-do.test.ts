@@ -98,6 +98,8 @@ it('approves from the app with exactly one effect, refuses a stale digest, and r
       expect(approved.status).toBe(200);
       expect(appApprovalDecisionResultV1Schema.parse(await approved.json())).toMatchObject({ receipt: { state: 'recorded', message: 'Done.' }, duplicate: false, approval_state: 'done' });
       expect(proof.moved).toBe(1);
+      const decidedReply = appHistoryResultV1Schema.parse(await (await app('/chat/main', undefined, credential)).json()).messages.find(message => message.role === 'assistant' && message.parent_id === sent.message_id)!;
+      expect(decidedReply.parts.map(candidate => candidate.type)).toEqual(['text']); expect(decidedReply.text.trim()).not.toBe('');
       expect(effects()).toMatchObject([{ owner_ref: `prn_${OWNER.replaceAll('-', '')}`, tool: 'calendar_change', state: 'done' }]);
       const repeated = await app('/approvals/decisions', decision, credential);
       expect(appApprovalDecisionResultV1Schema.parse(await repeated.json())).toMatchObject({ duplicate: true, approval_state: 'done' });

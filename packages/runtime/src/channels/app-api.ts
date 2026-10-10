@@ -1,6 +1,6 @@
 import type { ConversationEntry } from '@waldo/contracts';
 import { APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
-import type { AppApprovalPart } from './surfaces/app';
+import type { AppApprovalCards } from './approvals';
 import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
@@ -173,13 +173,15 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   return fail(404);
 };
 
-// `text` is the row's plain text, or for a reply with none of its own, the fallback text of the approval cards it carries.
-// `parts` is the typed form: that text, plus the approval parts. A reader must ignore any part it cannot read and show `text`.
+// `text` is the row's plain text, or for a reply with none of its own, the fallback text of every approval card presented
+// for its run. `parts` is the typed form: that text, plus a part for each approval still live. A reader must ignore any part
+// it cannot read and show `text`.
 export type AppMessage = AppMessageV1;
 
 // Newest-first immutable row cursor. New arrivals cannot shift an older page. The newest assistant reply
-// to a run also carries the approval parts presented for that run.
-export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, parts: (parentId: string) => readonly AppApprovalPart[] = () => []): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
+// to a run also carries the approval cards presented for that run.
+const NO_CARDS: AppApprovalCards = { live: [], fallbacks: [] };
+export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, cards: (parentId: string) => AppApprovalCards = () => NO_CARDS): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
   const shown = entries.filter((entry): entry is ConversationEntry & { role: 'user' | 'assistant' } => entry.role === 'user' || entry.role === 'assistant');
   const taken = cursor !== null && /^\d{1,9}$/.test(cursor) ? Number(cursor) : 0; // old consumers can finish an offset page
   const size = Math.min(Math.max(Math.trunc(limit) || 20, 1), 50);
@@ -188,10 +190,10 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
   const start = Math.max(end - size, 0);
   const newestReply = new Map(shown.filter(entry => entry.role === 'assistant' && entry.parentId).map(entry => [entry.parentId!, entry.id]));
   const messages = shown.slice(start, end).reverse().map(entry => {
-    const attached = entry.parentId && newestReply.get(entry.parentId) === entry.id ? parts(entry.parentId) : [];
-    // A reader that cannot parse a part shows only `text`, so a reply carrying a card is never textless.
-    const text = entry.appPayload.trim() || !attached.length ? entry.appPayload : attached.map(part => part.fallback_text).join('\n\n');
-    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...attached], channel: entry.surface, parent_id: entry.parentId };
+    const presented = entry.parentId && newestReply.get(entry.parentId) === entry.id ? cards(entry.parentId) : NO_CARDS;
+    // A reader that cannot parse a part shows only `text`, and a decided card is no longer a part, so a reply that presented cards is never textless.
+    const text = entry.appPayload.trim() || !presented.fallbacks.length ? entry.appPayload : presented.fallbacks.join('\n\n');
+    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...presented.live], channel: entry.surface, parent_id: entry.parentId };
   });
   return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };
 };

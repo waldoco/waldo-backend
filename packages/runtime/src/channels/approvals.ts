@@ -890,23 +890,24 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
 };
 
-// The app cards presented for one run, rendered from their ledger rows: the history view of the
-// assistant reply to that run. A card offers decisions only while its approval is still undecided
-// and its app card is live; one row that cannot render drops only its own card.
-export const appApprovalParts = (sql: SqlStorage) => (parentId: string): AppApprovalPart[] => {
-  if (!sql.exec('PRAGMA table_info(approval_presentations)').toArray().length) return [];
+// The app cards presented for one run, rendered from their ledger rows, for the history view of the
+// assistant reply to that run. Only a live approval (undecided, card not retired) is carried as a
+// part; every card's fallback text stays available so the reply never reads blank. The current
+// state of each approval comes from the approvals list. One row that cannot render drops only its card.
+export type AppApprovalCards = Readonly<{ live: readonly AppApprovalPart[]; fallbacks: readonly string[] }>;
+export const appApprovalParts = (sql: SqlStorage) => (parentId: string): AppApprovalCards => {
+  if (!sql.exec('PRAGMA table_info(approval_presentations)').toArray().length) return { live: [], fallbacks: [] };
+  const live: AppApprovalPart[] = [], fallbacks: string[] = [];
   let dropped = 0;
-  const parts = sql.exec<LedgerRow & { approvable: number; payload_digest: string; retired_at: number | null }>("SELECT l.*, p.approvable, p.payload_digest, p.retired_at FROM approval_presentations p JOIN ledger l ON l.id = p.approval_id WHERE p.surface = 'app' AND p.message_ref = ? ORDER BY p.presented_at, l.id", `run:${parentId}`).toArray()
-    .flatMap(entry => {
-      try {
-        const live = entry.retired_at === null && (entry.status === 'open' || entry.status === 'review_only');
-        const actions: AppApprovalPart['actions'] = !live ? [] : entry.status === 'open' && entry.approvable === 1 && appShowsInFull(entry) ? approveActions(entry) : ['skip'];
-        const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions, payload_digest: entry.payload_digest }));
-        if (part.success) return [part.data];
-      } catch { /* counted below */ }
-      dropped++;
-      return [];
-    });
+  for (const entry of sql.exec<LedgerRow & { approvable: number; payload_digest: string; retired_at: number | null }>("SELECT l.*, p.approvable, p.payload_digest, p.retired_at FROM approval_presentations p JOIN ledger l ON l.id = p.approval_id WHERE p.surface = 'app' AND p.message_ref = ? ORDER BY p.presented_at, l.id", `run:${parentId}`).toArray()) {
+    try {
+      const approvable = entry.status === 'open' && entry.approvable === 1 && appShowsInFull(entry);
+      const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions: approvable ? approveActions(entry) : ['skip'], payload_digest: entry.payload_digest }));
+      if (!part.success) { dropped++; continue; }
+      fallbacks.push(part.data.fallback_text);
+      if (entry.retired_at === null && (entry.status === 'open' || entry.status === 'review_only')) live.push(part.data);
+    } catch { dropped++; }
+  }
   if (dropped) console.error(JSON.stringify({ hop: 'app_approval_parts', ok: false, dropped }));
-  return parts;
+  return { live, fallbacks };
 };
