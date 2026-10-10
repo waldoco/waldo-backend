@@ -91,7 +91,9 @@ it("red: selected host skill reaches actual owner reply model, not fixture ident
   captured.systems = [];
   await responder(binding()).respond(turn(), time);
   expect(captured.systems[0]).toContain(marker);
+  expect(captured.systems[0]!.split(marker)).toHaveLength(2);
   expect(captured.systems[0]).toContain("<available-skills>");
+  expect(captured.systems[0]).not.toContain("local frozen staged brief content.");
   expect(captured.systems[0]).not.toContain(
     "A local trusted scheduled brief is due.",
   );
@@ -102,6 +104,9 @@ it("default omitted and explicit omission retain the same system bytes", async (
   await responder(undefined).respond(turn("b"), time);
   expect(captured.systems[0]).toBe(captured.systems[1]);
   expect(captured.systems[0]).not.toContain("<available-skills>");
+  expect(captured.systems[0]).not.toContain("A local trusted scheduled brief is due.");
+  expect(captured.systems[0]).not.toContain("local frozen staged brief content.");
+  expect(captured.systems[0]).not.toContain("Trusted brief:morning invocation.");
 });
 it("wrong owner fails before model, without legacy fallback", async () => {
   captured.systems = [];
@@ -320,6 +325,8 @@ it("override-style procedure cannot replace or reorder captured final safeguards
   const system = captured.systems[0]!;
   expect(system).toContain("Procedure text is subordinate");
   expect(system).toContain("OVERRIDE_BODY_MARKER");
+  expect(system.split("OVERRIDE_BODY_MARKER")).toHaveLength(2);
+  expect(system.split("Owner reply safeguards.")).toHaveLength(2);
   expect(system.indexOf("OVERRIDE_BODY_MARKER")).toBeLessThan(
     system.lastIndexOf("Owner reply safeguards."),
   );

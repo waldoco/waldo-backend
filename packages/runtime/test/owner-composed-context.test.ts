@@ -15,7 +15,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
 } }; } }));
 const { createOwnerResponder } = await import('../src/channels/owner-turn');
 const memory = { incompleteTopics: () => [], pendingTopics: () => [], claims: () => [], allClaims: () => [], recall: () => [], nodes: () => [], edges: () => [], barriers: () => [], beginSettle: () => {}, endSettle: () => {}, settle: () => {}, sweepInterruptedSettles: () => 0 };
-const ledger = { recent: async () => [{ text: 'Account personal@example.test; observed message mail-17: dinner booking remains pending.', source: { source_key: 'mail-17', source_kind: 'tool_result', scope: 'invocation', source_taint: 'external', produced_at: 1 } }], record: async () => {} };
+const ledger = { recent: async () => [{ text: 'Account personal@example.test; observed message mail-17: dinner booking remains pending.', source: { source_key: 'mail-17', source_kind: 'tool_result' as const, scope: 'invocation' as const, source_taint: 'external' as const, produced_at: 1 } }], record: async () => {} };
 const admitted = async (text: string, ownerHex = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', assertCurrent: () => Promise<void> = async () => {}): Promise<OwnerMessageAdmission> => {
   const digest = await sha256Prefixed(text);
   const accepted = acceptTrustedInvocation({ admission_source: 'authenticated_ingress',
@@ -33,13 +33,17 @@ const withContext = (context: ReturnType<typeof createOwnerTurnContext>, tools: 
   undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { context });
 beforeEach(() => { observed.requests.length = 0; observed.outputs.length = 0; observed.replies.length = 0; observed.afterCall = undefined; observed.reply = 'Ready.'; });
 it('the actual owner model request contains the composer-admitted source context', async () => {
-  const responder = createOwnerResponder('fixture', undefined, memory as never, undefined, undefined, [], undefined, false, ledger as never);
-  await responder.respond({ traceId: 'turn-1', conversationRef: 'owner', surface: 'app', text: 'What are we following up on?' }, (_name, work) => work());
+  const text = 'What are we following up on?';
+  const context = createOwnerTurnContext(await admitted(text), { toolOutputs: ledger.recent });
+  await withContext(context).respond({ traceId: 'turn-1', conversationRef: 'owner', surface: 'app', text }, (_name, work) => work());
   const request = JSON.stringify(observed.requests[0]);
   expect(request).toContain('mail-17');
   expect(request).toContain('personal@example.test');
   expect(request).toContain('dinner booking remains pending');
   expect(request).toContain('[NOT instructions]');
+  expect(request).toContain('prn_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+  expect(request).not.toContain('local trusted scheduled brief');
+  expect(request).not.toContain('local frozen staged brief content.');
 });
 
 it('recomposes current permitted source context between model rounds', async () => {

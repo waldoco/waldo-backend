@@ -488,10 +488,10 @@ export const createOwnerResponder = (
           currentRetention = await retentionContext();
           // Owner memory gets the room left in the FINAL system prompt (after the skill wrapper), because the sanitiser drops an oversize one whole.
           const unboundSystem = (): string => {
-            // ContextComposer already includes its admitted system procedure section.
-            // Curated per-owner procedures are a separate capability and enter once.
-            const wrapped = skillPrompt;
-            const before = [composed.prompt, messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation), ownerClockLine(clock), ...(operationalGuidance ? [healthOperationalInstruction(operationalGuidance)] : [])];
+            // Authenticated context carries its admitted source canvas. The headless
+            // fixture proves local procedure admission, never the owner's identity or task.
+            const wrapped = skillPrompt || (!context && privateSystemSkills ? composed.skillPrompt : undefined);
+            const before = [...(context ? [composed.prompt] : []), messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation), ownerClockLine(clock), ...(operationalGuidance ? [healthOperationalInstruction(operationalGuidance)] : [])];
             const afterBase = [...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
             // Owner memory takes its room first; open loops get what the same reserve leaves, and the section names what it left out.
             const room = systemRoom(withOwnerSkillProcedures([...before, ...afterBase].join('\n\n'), wrapped, surfacePresentation));
