@@ -1,5 +1,5 @@
 import { appApprovalDecisionResultV1Schema, appApprovalDecisionV1Schema, appApprovalListQueryV1Schema, appApprovalListV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
-import { controlRevision, loadReceiptBook, receiptCapacityReached, RECEIPT_BOOK_KEY, type ControlReceipt } from './dashboard-control-actions';
+import { approvalControlReceipt, controlRevision, loadReceiptBook, receiptCapacityReached, RECEIPT_BOOK_KEY, type ControlReceipt } from './dashboard-control-actions';
 import { APP_APPROVAL_DECISIONS_PATH, APP_APPROVALS_PATH } from './app-api';
 import type { ApprovalDesk } from './approvals';
 
@@ -49,8 +49,7 @@ export async function appApprovalsRequest(request: Request, host: AppApprovalsHo
   try {
     const out = await host.desk.decide(id, LETTER[action], 'app:approval', { surface: 'app' });
     state = (await listed({ id }))[0]?.state ?? 'outcome_unknown';
-    receipt = state === TARGET[action] && item.state !== state ? { state: 'recorded', message: out.message }
-      : state === 'outcome_unknown' ? { state: 'unconfirmed', message: out.message } : { state: 'rejected', message: out.message };
+    receipt = approvalControlReceipt(out, state === TARGET[action] && item.state !== state ? 'recorded' : state === 'outcome_unknown' ? 'unconfirmed' : 'rejected');
     status = receipt.state === 'recorded' ? 200 : receipt.state === 'unconfirmed' ? 503 : 409;
   } catch { console.error('app approval decision outcome unconfirmed'); }
   book[key] = { fingerprint, status, receipt, expires: host.expires, approval_state: state }; await host.storage.put(RECEIPT_BOOK_KEY, book);

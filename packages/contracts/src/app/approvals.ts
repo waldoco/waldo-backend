@@ -25,7 +25,7 @@ export const appApprovalTaskExactV1Schema = z.strictObject({
   changes: z.strictObject({
     title: change(taskText).optional(),
     notes: z.strictObject({ before: z.string().max(100_000).nullable(), after: z.string().max(8192).nullable() }).optional(),
-    due_date: change(z.iso.date()).optional(), status: change(z.enum(['todo', 'done'])).optional(),
+    due_date: z.strictObject({ before: z.iso.date().nullable(), after: z.iso.date().nullable() }).optional(), status: change(z.enum(['todo', 'done'])).optional(),
   }),
 });
 // Derived from the frozen desk payload, exposing no more than the desk review does: never raw MIME,

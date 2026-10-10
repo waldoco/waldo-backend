@@ -66,9 +66,32 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
  return reply({receipt,duplicate:false},status);
 }
 
-export function approvalControlReceipt(out:ApprovalDecision):ControlReceipt {
- if(['Done','Undone','Not now'].includes(out.toast))return {state:'recorded',message:out.message};
- if(out.toast==='Outcome unknown')return {state:'unconfirmed',message:'The operation outcome is unknown. Check the result before retrying; nothing was run again.'};
- if(['Already handled.','This proposal expired','Google is not connected','The event changed','The task changed','Nothing was changed','Too late to undo','Not available'].includes(out.toast))return {state:'rejected',message:out.message};
- return {state:'unconfirmed',message:'The proposal outcome could not be confirmed. Check the records and chat before retrying.'};
+// Fixed receipt text per decision outcome. The desk's own message is never echoed: it can carry
+// provider errors or external tool output, and receipts reach surfaces that render them as given.
+const APPROVAL_RECEIPT_TEXT:Readonly<Record<string,string>>={
+ Done:'Done.',Sent:'Sent. This cannot be undone.','Already sent':'That exact message already went out once; nothing was sent twice.',Verified:'Done, and the result was verified.',Undone:'Undone.',
+ 'Not now':'Left it. Nothing changed.','Tell me what to change':'Tell Waldo in the chat what to change.','Already handled.':'That was already handled.',
+ 'This proposal expired':'That proposal expired, so nothing happened. Ask again if you still want it.',Expired:'That request expired. Ask again.',
+ 'Google is not connected':'Google is not connected, so nothing happened.','The event changed':'The event changed after the proposal, so nothing was changed.',
+ 'The task changed':'The Google task changed after your review, so nothing was changed.','Nothing was changed':'Nothing was changed. Ask again to retry.',
+ 'Too late to undo':'The 10-minute undo window has passed, so it was left as it is.',"Can't be undone":'This cannot be undone from here. Nothing was reversed.',
+ 'Not available':'This approval cannot be applied here. Nothing was changed.','Not available here':'That approval was not shown in full here, so nothing was done.',
+ 'Review it in the app':'That approval was not shown in full here, so nothing was done.','Channel not connected':'That channel is not connected, so nothing was sent.',
+ 'Messaging is not set up':'Messaging is not set up, so nothing was sent.','Browsing is not set up':'Browsing is not set up, so nothing was done.','MCP is not set up':'MCP is not set up, so nothing ran.',
+ 'Email changed':'The stored email no longer matches what was approved, so nothing was sent.','Key already used':'A different message already used this send key, so nothing was sent.',
+ 'Not done':'The browser action was not done.','That failed':'That did not work. Nothing else ran.',
+ 'Outcome unknown':'The operation outcome is unknown. Check the result before retrying; nothing was run again.',
+ 'Result not verified':'The result could not be verified. Check it before retrying.','Receipt not checked':'The result could not be verified. Check it before retrying.',
+};
+const APPROVAL_RECEIPT_FALLBACK:Readonly<Record<ControlReceipt['state'],string>>={recorded:'The decision was recorded.',incomplete:'The decision was only partly applied. Refresh the records.',
+ rejected:'That decision was not carried out. Refresh the records and try again.',unconfirmed:'The proposal outcome could not be confirmed. Check the records and chat before retrying.'};
+const approvalReceiptState=(out:ApprovalDecision):ControlReceipt['state']=>['Done','Undone','Not now','Sent','Already sent','Verified'].includes(out.toast)?'recorded':out.toast==='Outcome unknown'?'unconfirmed'
+ :['Already handled.','This proposal expired','Google is not connected','The event changed','The task changed','Nothing was changed','Too late to undo','Not available','Not available here','Review it in the app','Channel not connected'].includes(out.toast)?'rejected':'unconfirmed';
+// The console derives the state from the decision; the app passes the state its status transition proved.
+// A desk refusal the console treats as unconfirmed is still a definite "nothing was done" once the
+// app's transition proves the row did not move; unknown outcomes never read as refusals.
+export function approvalControlReceipt(out:ApprovalDecision,state=approvalReceiptState(out)):ControlReceipt {
+ const natural=approvalReceiptState(out),unknown=['Outcome unknown','Result not verified','Receipt not checked'].includes(out.toast);
+ const fits=natural===state||state==='rejected'&&natural==='unconfirmed'&&!unknown;
+ return {state,message:fits?APPROVAL_RECEIPT_TEXT[out.toast]??APPROVAL_RECEIPT_FALLBACK[state]:APPROVAL_RECEIPT_FALLBACK[state]};
 }

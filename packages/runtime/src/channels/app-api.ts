@@ -173,12 +173,12 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   return fail(404);
 };
 
-// `text` is always the plain-text form of the row. `parts` is the typed form: v1 emits only type 'text'. Later part types (cards)
-// are added without changing existing fields, and a reader must ignore any part type it does not know and fall back to `text`.
+// `text` is always the plain-text form of the row. `parts` is the typed form: a text part, plus an approval part on the reply
+// that presented one. A reader must ignore any part type it does not know and fall back to `text`.
 export type AppMessage = AppMessageV1;
 
-// Newest-first immutable row cursor. New arrivals cannot shift an older page. An assistant reply also
-// carries the approval parts presented for the run it answers.
+// Newest-first immutable row cursor. New arrivals cannot shift an older page. The newest assistant reply
+// to a run also carries the approval parts presented for that run.
 export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, parts: (parentId: string) => readonly AppApprovalPart[] = () => []): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
   const shown = entries.filter((entry): entry is ConversationEntry & { role: 'user' | 'assistant' } => entry.role === 'user' || entry.role === 'assistant');
   const taken = cursor !== null && /^\d{1,9}$/.test(cursor) ? Number(cursor) : 0; // old consumers can finish an offset page
@@ -186,8 +186,9 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
   const before = cursor?.startsWith('before:') ? shown.findIndex(entry => entry.id === cursor.slice(7)) : -1;
   const end = cursor?.startsWith('before:') ? Math.max(before, 0) : Math.max(shown.length - taken, 0);
   const start = Math.max(end - size, 0);
+  const newestReply = new Map(shown.filter(entry => entry.role === 'assistant' && entry.parentId).map(entry => [entry.parentId!, entry.id]));
   const messages = shown.slice(start, end).reverse().map(entry => ({ id: entry.id, role: entry.role, text: entry.appPayload,
-    parts: [{ type: 'text' as const, text: entry.appPayload }, ...(entry.role === 'assistant' && entry.parentId ? parts(entry.parentId) : [])], channel: entry.surface, parent_id: entry.parentId }));
+    parts: [{ type: 'text' as const, text: entry.appPayload }, ...(entry.parentId && newestReply.get(entry.parentId) === entry.id ? parts(entry.parentId) : [])], channel: entry.surface, parent_id: entry.parentId }));
   return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };
 };
 

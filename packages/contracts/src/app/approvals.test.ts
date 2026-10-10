@@ -90,6 +90,9 @@ describe('appApprovalV1', () => {
     expect(appApprovalV1Schema.safeParse({ ...task, exact: { task: { ...task.exact.task, action: 'delete' } } }).success).toBe(false);
     expect(appApprovalV1Schema.safeParse({ ...task, exact: { task: { ...task.exact.task, account: 'not-an-address' } } }).success).toBe(false);
     expect(appApprovalV1Schema.safeParse({ ...task, exact: { task: { ...task.exact.task, changes: { due_date: { before: null, after: 'Friday' } } } } }).success).toBe(false);
+    expect(appApprovalV1Schema.safeParse({ ...task, exact: { task: { ...task.exact.task, changes: { due_date: { before: '2026-10-12', after: null } } } } }).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse({ ...task, exact: { task: { ...task.exact.task, changes: { notes: { before: 'Oat, not dairy', after: null } } } } }).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse({ ...task, exact: { task: { ...task.exact.task, changes: { title: { before: 'Buy milk', after: null } } } } }).success).toBe(false);
     expect(appApprovalV1Schema.safeParse({ ...task, exact: { task: { ...task.exact.task, changes: { notes: { before: null, after: 'x'.repeat(8193) } } } } }).success).toBe(false);
     const { approval_id, kind, review, payload_digest, expires_at } = task;
     expect(replyApprovalPartV1Schema.safeParse({ type: 'approval', approval_id, kind, review, payload_digest, expires_at, actions: ['approve', 'edit', 'skip'], fallback_text: review }).success).toBe(true);

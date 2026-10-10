@@ -10,7 +10,7 @@ import { sha256Hex } from '../../connectors/google';
 import { ProxyIntentError, type ProxyIntent } from '../../connectors/proxy-intent';
 import { isGoogleFeature, isReadOnlyGoogleFeature, type GoogleFeature } from '../../connectors/google';
 import { callMcpToolArgsSchema, triggerTypeSchema, TOOL_PERMISSIONS, type CallMcpToolArgs, type ToolHandler, type ToolName, type ToolResult } from '@waldo/contracts';
-import type { McpCallProposal } from '../../channels/approvals';
+import { proposalStatus, type CardPlacement, type McpCallProposal } from '../../channels/approvals';
 import { callMcpTransport, McpAuthError, McpToolError, type McpTransportServer } from '../../connectors/mcp-transport';
 import type { ToolDispatcherContext } from '../dispatcher';
 
@@ -104,6 +104,7 @@ const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger)
 
 export type McpDesk = Readonly<{
   proposeMcpCall(proposal: McpCallProposal): Promise<string>;
+  placement?(id: string): CardPlacement;
 }>;
 
 // Auth failures are a typed intent, never a URL in text (S4): the responder sees `connect` and
@@ -128,7 +129,7 @@ export const callMcpToolHandler = (serversRaw: string | undefined, desk?: McpDes
       const proposal_id = await desk.proposeMcpCall({ server, tool, args, operation_ref: await ownerEffectOperationRef(ctx) });
       // call_mcp_tool is external-origin by contract: the stamp holds even though nothing
       // external ran yet (the dispatcher rejects a null stamp on this tool).
-      return { ok: true, data: { proposal_id, status: 'sent to the owner with Do it / Not now buttons', applied: false }, source_taint: 'external' };
+      return { ok: true, data: { proposal_id, status: proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Do it / Not now buttons', 'Nothing has run.'), applied: false }, source_taint: 'external' };
     }
     try {
       const { content, protocolVersion } = await executeMcp(found, tool, args, googleAuth);
