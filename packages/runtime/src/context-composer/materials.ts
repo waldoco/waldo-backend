@@ -36,9 +36,9 @@ import type {
   StagedInputResolver,
 } from './types';
 
-const MAX_INPUT_CHARS = 2_000;
-const MAX_INPUT_TOTAL_CHARS = 6_000;
-const MAX_CONTEXT_FRAGMENT_CHARS = 2_000;
+const MAX_INPUT_CHARS = 4_000;
+const MAX_INPUT_TOTAL_CHARS = 12_000;
+const MAX_CONTEXT_FRAGMENT_CHARS = 4_000;
 const MAX_WORKSPACE_FRAGMENTS = 4;
 const MAX_TOOL_OUTPUT_FRAGMENTS = 6;
 
