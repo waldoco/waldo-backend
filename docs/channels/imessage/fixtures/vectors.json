@@ -1,0 +1,55 @@
+{
+  "note": "Fictional key and identifiers. HMAC key = UTF-8 bytes of the 64-hex key string.",
+  "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "s2": [
+    {
+      "name": "heartbeat",
+      "body": "{\"version\":1,\"bridgeId\":\"fixture-bridge\",\"accountId\":\"fixture-account\",\"databaseGeneration\":\"fixture-generation\",\"status\":\"online\"}",
+      "headers": {
+        "version": 1,
+        "bridgeId": "fixture-bridge",
+        "accountId": "fixture-account",
+        "atMs": 1760100000000,
+        "nonce": "fixture-nonce-1",
+        "signature": "cbf18a2e54738b9a498ad00da1510a512954f18a1ddcf265024f19e12214ab6b"
+      }
+    },
+    {
+      "name": "unicode-body",
+      "body": "{\"version\":1,\"bridgeId\":\"fixture-bridge\",\"accountId\":\"fixture-account\",\"note\":\"héllo 👋 \\\"quoted\\\"\\n\"}",
+      "headers": {
+        "version": 1,
+        "bridgeId": "fixture-bridge",
+        "accountId": "fixture-account",
+        "atMs": 1760100000001,
+        "nonce": "fixture-nonce-2",
+        "signature": "96f57fd31bdded531452f5b149e39d77ad7d3775811324b4a68cdf6be6cdbf82"
+      }
+    },
+    {
+      "name": "empty-body",
+      "body": "",
+      "headers": {
+        "version": 1,
+        "bridgeId": "fixture-bridge",
+        "accountId": "fixture-account",
+        "atMs": 1760100000002,
+        "nonce": "fixture-nonce-3",
+        "signature": "48215251a9fb254cfdafef5f8be5fa18851a307e9e0d6a227753b676ca76035e"
+      }
+    }
+  ],
+  "commitment": {
+    "fields": {
+      "bridgeId": "fixture-bridge",
+      "accountId": "fixture-account",
+      "deliveryId": "fixture-delivery",
+      "commandId": "fixture-command",
+      "commandDigest": "01cd3bd0512b48698b98d74f732fc8b57473ab85d2e4017399cf5a2c8844feff",
+      "expiresAtMs": 1760100030000
+    },
+    "signedText": "[\"waldo-imessage-http-v1:commitment\",1,\"fixture-bridge\",\"fixture-account\",\"fixture-delivery\",\"fixture-command\",\"01cd3bd0512b48698b98d74f732fc8b57473ab85d2e4017399cf5a2c8844feff\",1760100030000]",
+    "signature": "d5e4e1588549599615556c81933c81a8321eef12ccdd703e6097c5f52f5fb9df",
+    "commandBody": "{\"version\":1,\"commandId\":\"fixture-command\"}"
+  }
+}

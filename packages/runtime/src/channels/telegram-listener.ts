@@ -27,7 +27,7 @@ import type { TurnLogEntry, TurnTimer } from './owner-turn-types';
 
 export type TelegramOwnerListenerOptions = Readonly<{
   ownerTelegramId: number;
-  surface?: 'telegram' | 'whatsapp' | 'app';
+  surface?: 'telegram' | 'whatsapp' | 'app' | 'imessage';
   api: TelegramOwnerApi;
   respond(turn: TelegramInboundTurn, time: TurnTimer): Promise<string>;
   queueFinal?(turn: TelegramInboundTurn, payload: TelegramFinalPayload, reaction: string): Promise<void>;
@@ -147,7 +147,8 @@ export class TelegramOwnerListener {
       // The responder has already applied current-turn artifact receipt admission.
       // Rich formatting is confined to this final reply, never progress/events/errors.
       const guardedText = redactSecretUrls(text).text;
-      const rich = this.options.surface === 'whatsapp' ? {text: guardedText} : telegramRichReply(guardedText);
+      // WhatsApp and iMessage render plain text; Telegram HTML would arrive escaped.
+      const rich = this.options.surface === 'whatsapp' || this.options.surface === 'imessage' ? {text: guardedText} : telegramRichReply(guardedText);
       if (this.options.queueFinal) {
         const chosen = telegramReaction(readyChoice);
         const finalReaction = chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌';

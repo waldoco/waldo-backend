@@ -47,10 +47,13 @@ import {
 // own modules, never re-exported here (pinned by test/worker-entry-exports.test.ts).
 export { RunLoopDO } from './run-loop/do';
 export { DeviceBridgeDO } from './devices/device-bridge-do';
+export { IMessageBridgeDO } from './channels/imessage/bridge-do';
 export { TelegramOwnerDO } from './channels/telegram-owner-do';
 export { TracerDO } from './tracer/tracer-do';
 import type { RunLoopDO } from './run-loop/do';
 import type { TracerDO } from './tracer/tracer-do';
+import type { IMessageBridgeDO } from './channels/imessage/bridge-do';
+import { handleIMessageHost, isIMessageHostPath } from './channels/imessage/http';
 
 // Augment the ambient worker env so both the DO base (typed on Cloudflare.Env)
 // and the test's `env` import (also Cloudflare.Env) see the DO bindings.
@@ -75,6 +78,11 @@ declare global {
       TRACER_DO: DurableObjectNamespace<TracerDO>;
       TELEGRAM_OWNER_DO?: DurableObjectNamespace;
       DEVICE_BRIDGE_DO?: DurableObjectNamespace<DeviceBridgeDO>;
+      IMESSAGE_BRIDGE_DO?: DurableObjectNamespace<IMessageBridgeDO>;
+      IMESSAGE_CONNECTOR_ENABLED?: string;
+      IMESSAGE_CONNECTOR_POLICY?: string;
+      IMESSAGE_CREDENTIAL_WRAPPING_KEY?: string;
+      WALDO_ENVIRONMENT?: string;
       TELEGRAM_BOT_TOKEN?: string;
       TELEGRAM_WEBHOOK_SECRET?: string;
       GOOGLE_CLIENT_ID?: string;
@@ -167,6 +175,8 @@ export default {
     const appResponse = await handleApp(request, env);
     if (appResponse) return appResponse;
     const devicePath = new URL(request.url).pathname;
+    // iMessage host profile waldo-imessage-http-v1: registered before generic routes/assets; 404 unless composed.
+    if (isIMessageHostPath(devicePath)) return handleIMessageHost(request, env as never);
     if (devicePath === '/devices/redeem') return request.method === 'POST' ? handleDeviceRedeem(request, env) : genericReject();
     if (devicePath === '/devices/connect') return request.method === 'GET' ? handleDeviceConnect(request, env) : genericReject();
     if (new URL(request.url).pathname === '/healthz') {

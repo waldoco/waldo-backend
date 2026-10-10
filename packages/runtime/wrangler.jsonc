@@ -17,7 +17,7 @@
   // (never copied from staging); empty string keeps the single-owner fallback disabled there.
   // WALDO_EGRESS_ALLOWLIST: browse-tool egress host list. Empty in production = fail-closed;
   // staging opens the public web with "*" (private and internal addresses stay blocked; "-host" entries add a deny list). guard-wrangler-local-bindings requires the key in both.
-  "vars": { "WALDO_ENVIRONMENT": "production", "WALDO_OWNER_DO_NAMESPACE": "", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "", "CALENDAR_GROUNDED_PREP": "0", "DRIVE_READS": "0", "MAIL_SOURCE_FOLLOWUPS": "0", "MCP_READ_INTENTS": "0", "LANGFUSE_CAPTURE_TEXT": "false", "WALDO_EGRESS_ALLOWLIST": "" },
+  "vars": { "WALDO_ENVIRONMENT": "production", "WALDO_OWNER_DO_NAMESPACE": "", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "", "CALENDAR_GROUNDED_PREP": "0", "DRIVE_READS": "0", "MAIL_SOURCE_FOLLOWUPS": "0", "MCP_READ_INTENTS": "0", "LANGFUSE_CAPTURE_TEXT": "false", "WALDO_EGRESS_ALLOWLIST": "", "IMESSAGE_CONNECTOR_ENABLED": "0", "IMESSAGE_CONNECTOR_POLICY": "" },
   "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },
   "durable_objects": {
     "bindings": [
@@ -25,7 +25,8 @@
       { "name": "RUN_LOOP_DO", "class_name": "RunLoopDO" },
       { "name": "TRACER_DO", "class_name": "TracerDO" },
       { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" },
-      { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" }
+      { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" },
+      { "name": "IMESSAGE_BRIDGE_DO", "class_name": "IMessageBridgeDO" }
     ]
   },
   // A5 artifact bodies (metadata lives in the owner DO; DO namespaces are per-worker, so
@@ -58,7 +59,8 @@
         { "name": "RUN_LOOP_DO", "class_name": "RunLoopDO" },
         { "name": "TRACER_DO", "class_name": "TracerDO" },
         { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" },
-      { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" }
+      { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" },
+      { "name": "IMESSAGE_BRIDGE_DO", "class_name": "IMessageBridgeDO" }
       ]
     },
     "ratelimits": [
@@ -79,7 +81,7 @@
         "logs": { "enabled": true, "invocation_logs": false },
         "traces": { "enabled": false }
       },
-      "vars": { "WALDO_ENVIRONMENT": "staging", "WALDO_OWNER_DO_NAMESPACE": "5fe34e5daa754791b45bd80638402ac6", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "5458446350", "CALENDAR_GROUNDED_PREP": "1", "MAIL_SOURCE_FOLLOWUPS": "1", "DRIVE_READS": "1", "MCP_READ_INTENTS": "0", "LANGFUSE_CAPTURE_TEXT": "true", "WALDO_EGRESS_ALLOWLIST": "*" },
+      "vars": { "WALDO_ENVIRONMENT": "staging", "WALDO_OWNER_DO_NAMESPACE": "5fe34e5daa754791b45bd80638402ac6", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "5458446350", "CALENDAR_GROUNDED_PREP": "1", "MAIL_SOURCE_FOLLOWUPS": "1", "DRIVE_READS": "1", "MCP_READ_INTENTS": "0", "LANGFUSE_CAPTURE_TEXT": "true", "WALDO_EGRESS_ALLOWLIST": "*", "IMESSAGE_CONNECTOR_ENABLED": "0", "IMESSAGE_CONNECTOR_POLICY": "" },
       "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },
       "durable_objects": {
         "bindings": [
@@ -87,7 +89,8 @@
           { "name": "RUN_LOOP_DO", "class_name": "RunLoopDO" },
           { "name": "TRACER_DO", "class_name": "TracerDO" },
           { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" },
-      { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" }
+      { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" },
+      { "name": "IMESSAGE_BRIDGE_DO", "class_name": "IMessageBridgeDO" }
         ]
       },
       "r2_buckets": [
@@ -105,7 +108,8 @@
         { "tag": "v2", "new_sqlite_classes": ["TracerDO"] },
         { "tag": "v3", "new_sqlite_classes": ["RunLoopDO"] },
         { "tag": "v4", "new_sqlite_classes": ["TelegramOwnerDO"] },
-    { "tag": "v5", "new_sqlite_classes": ["DeviceBridgeDO"] }
+    { "tag": "v5", "new_sqlite_classes": ["DeviceBridgeDO"] },
+    { "tag": "v6", "new_sqlite_classes": ["IMessageBridgeDO"] }
       ],
       "ai": { "binding": "AI" },
       "vectorize": [
@@ -118,6 +122,7 @@
     { "tag": "v2", "new_sqlite_classes": ["TracerDO"] },
     { "tag": "v3", "new_sqlite_classes": ["RunLoopDO"] },
     { "tag": "v4", "new_sqlite_classes": ["TelegramOwnerDO"] },
-    { "tag": "v5", "new_sqlite_classes": ["DeviceBridgeDO"] }
+    { "tag": "v5", "new_sqlite_classes": ["DeviceBridgeDO"] },
+    { "tag": "v6", "new_sqlite_classes": ["IMessageBridgeDO"] }
   ]
 }

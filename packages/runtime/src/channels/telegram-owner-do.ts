@@ -1,5 +1,10 @@
 import { appControlsRequest } from './app-controls';
 import { AppInbox, type AppInboxRecord } from './app-inbox';
+import { iMessageComposition, type IMessageEnv, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
+import { IMessageFinalOutbox } from './imessage/final-outbox';
+import { CONSOLE_IMESSAGE_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
+import { IMessageOwnerInbox, type IMessageInboxRecord } from './imessage/owner-inbox';
+import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, iMessageOwnerContext, type OwnerHost } from './imessage/owner-runtime';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { surfaceOwnerAdmission } from '../identity/surface-owner-admission';
@@ -196,8 +201,10 @@ export const resolveOwnerTelegramId = (
   return env.WALDO_OWNER_TELEGRAM_ID ? Number(env.WALDO_OWNER_TELEGRAM_ID) : 0;
 };
 
-type ChannelKind = 'telegram' | 'whatsapp' | 'app';
-const offsetKeyOf = (channel: ChannelKind) => channel === 'whatsapp' ? 'wa_offset' : channel === 'app' ? 'app_offset' : 'offset';
+type ChannelKind = 'telegram' | 'whatsapp' | 'app' | 'imessage';
+const offsetKeyOf = (channel: ChannelKind) => channel === 'whatsapp' ? 'wa_offset' : channel === 'app' ? 'app_offset' : channel === 'imessage' ? 'imessage_offset' : 'offset';
+// Channels whose replies never use Telegram transport, commands or reactions.
+const nativeSurface = (channel: ChannelKind) => channel === 'app' || channel === 'imessage';
 const WHATSAPP_PENDING_PREFIX = 'wa_pending:';
 // How often an unfinished WhatsApp payload is looked at again. A cadence, not a limit on how long a turn may run.
 const WHATSAPP_PENDING_CHECK_MS = 60_000;
@@ -515,6 +522,48 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly appAttempts = new Set<string>();
   private activeApp: AppInboxRecord | null = null;
   private get appInbox(): AppInbox { return new AppInbox(this.ctx.storage); }
+  // iMessage owner channel: bridge DO -> durable owner inbox -> existing responder -> frozen reply outbox.
+  private readonly imessageAttempts = new Set<string>();
+  private activeIMessage: IMessageInboxRecord | null = null;
+  private get imessageHost(): OwnerHost { return { storage: this.ctx.storage, id: this.ctx.id, env: this.env as unknown as IMessageEnv, ownerNamespace: this.env.TELEGRAM_OWNER_DO }; }
+  /** Bridge DO RPC: at-least-once handoff of an admitted inbound turn; deduplicated here. */
+  async admitIMessageTurn(input: IMessageTurnHandoff): Promise<'admitted' | 'duplicate' | 'conflict' | 'capacity' | 'refused'> {
+    const outcome = await admitIMessageHandoff(this.imessageHost, input);
+    if (outcome === 'admitted') {
+      const subject = String(appSubjectFor(input.ownerDoName));
+      if (this.ctx.storage.kv.get<string>('imessage_subject') !== subject) { this.ctx.storage.kv.put('imessage_subject', subject); this.runtimes = {}; }
+      this.ctx.waitUntil(this.serial(() => this.drainIMessage()).catch(() => { console.error('imessage inbox drain deferred'); }));
+    }
+    return outcome;
+  }
+  /** Bridge DO RPC: terminal native result for a frozen reply (first terminal result wins). */
+  async recordIMessageResult(input: IMessageResultReport): Promise<boolean> {
+    try { return new IMessageFinalOutbox(this.ctx.storage).settle(input.replyRef, input.commandId, input.result); } catch { return false; }
+  }
+  private async drainIMessage(): Promise<void> {
+    const composition = iMessageComposition(this.imessageHost.env);
+    if (!composition) return;
+    const inbox = new IMessageOwnerInbox(this.ctx.storage);
+    inbox.recover(this.imessageAttempts);
+    for (const pending of inbox.records().filter(row => row.state === 'admitted')) {
+      let current = false;
+      try { await currentIMessageAuthority(this.imessageHost.env, pending); current = true; }
+      catch (error) { if (!(error instanceof ClosedRunError)) { inbox.deferWake(30_000); break; } }
+      const record = inbox.claim(pending.id, current); if (!record) continue;
+      this.imessageAttempts.add(record.attempt!); this.activeIMessage = record;
+      const abort = new AbortController(), scope = inbox.scope(record, abort.signal);
+      this.activeScope = scope; this.activeAbort = abort; let completed = false;
+      const timeout = setTimeout(() => abort.abort(), Math.max(0, scope.deadline - Date.now()));
+      try {
+        const subject = appSubjectFor(record.ownerDoName);
+        await this.turn({ update_id: record.updateId, message: { message_id: record.updateId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: record.text } }, 'imessage', true, scope);
+        completed = true;
+      } catch { console.error('imessage execution outcome unconfirmed'); }
+      finally { clearTimeout(timeout); inbox.settle(record, completed); abort.abort(); this.imessageAttempts.delete(record.attempt!); this.activeIMessage = null; if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; } }
+    }
+    await drainIMessageOutbox(this.imessageHost, composition.policy.replyHandoffMaxAgeMs);
+    await rearmSharedAlarm(this.ctx.storage, null, Date.now());
+  }
   private async appAuthority(name: string, hash: string) {
     if (!name || this.env.TELEGRAM_OWNER_DO?.idFromName(name).toString() !== this.ctx.id.toString()
       || this.ctx.storage.kv.get<string>('do_name') !== name) throw new ClosedRunError();
@@ -884,8 +933,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return new Response(renderDevices(rows, session.csrf), { headers: DEVICE_PAGE_HEADERS });
       } catch { return new Response('Devices unavailable.', { status: 503, headers: DEVICE_PAGE_HEADERS }); }
     }
+    if (url.pathname === CONSOLE_IMESSAGE_PATH && request.method === 'GET') return iMessageConsolePage(this.imessageHost.env, this.ctx.storage.kv.get<string>('do_name') ?? '', session.csrf);
     if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST') {
       const form = await request.clone().formData();
+      if (isIMessageConsoleAction(form.get('action'))) return iMessageConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', this.imessageHost.env, (bridgeDoName) => {
+        new IMessageOwnerInbox(this.ctx.storage).revokeBridge(bridgeDoName);
+        if (this.activeIMessage?.bridgeDoName === bridgeDoName) this.activeAbort?.abort();
+      });
       if (form.get('action') === 'device.pair' || form.get('action') === 'device.revoke' || form.get('action') === 'device.query' || form.get('action') === 'device.notify') return deviceConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', deviceDirectory(this.env), this.env.DEVICE_BRIDGE_DO);
     }
     if (url.pathname === BROWSER_TRIAL_PATH) {
@@ -1161,6 +1215,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(mode){await this.serial(()=>this.drainLink(mode));return;}
     await this.serial(async () => {
       await this.drainApp();
+      await this.drainIMessage();
       // Directory-backed owner alarms require the same physical binding as owner ingress.
       // Keep retained work and transport recovery wakes; do not boot provider work on an orphan.
       if (consoleAuth(this.env)) {
@@ -1315,6 +1370,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async turn(update: unknown, channel: ChannelKind = 'telegram', durable = false, scope?: RunEffectScope): Promise<void> {
     const { listener, owner, call, desk, ledger, updates, control, log, ready } = this.setup(channel);
     await ready;
+    if (channel === 'imessage') {
+      const record = this.activeIMessage;
+      if (!scope || !record || record.id !== scope.runId || record.attempt !== scope.attempt) throw new ClosedRunError();
+      scope.admit();
+      await currentIMessageAuthority(this.imessageHost.env, record);
+      scope.admit();
+    }
     if (channel === 'app') {
       const record = this.activeApp;
       if (!scope || !record || record.id !== scope.runId || record.attempt !== scope.attempt) throw new ClosedRunError();
@@ -1335,13 +1397,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!durable) await this.ctx.storage.put(offsetKey, raw.update_id + 1);
       return log({ trace: ownerTurnTrace(channel, raw.update_id), hop: 'steer', ms: 0, ok: true, detail: 'answered inside the running turn' });
     }
-    if (channel !== 'app' && fromOwner && raw.message?.text?.trim() === '/stop') {
+    if (!nativeSurface(channel) && fromOwner && raw.message?.text?.trim() === '/stop') {
       if (raw.update_id === undefined || raw.update_id < offset) return;
       if (!durable) await this.ctx.storage.put(offsetKey, raw.update_id + 1);
       return void (await call('sendMessage', { chat_id: owner, text: 'Nothing is running right now.' }));
     }
-    const harness = channel !== 'app' && fromOwner ? parseHarnessCommand(raw.message?.text) : null;
-    const handledDirectly = channel !== 'app' && (raw.callback_query !== undefined || harness !== null || (fromOwner && raw.message?.text?.trim() === '/ledger'));
+    const harness = !nativeSurface(channel) && fromOwner ? parseHarnessCommand(raw.message?.text) : null;
+    const handledDirectly = !nativeSurface(channel) && (raw.callback_query !== undefined || harness !== null || (fromOwner && raw.message?.text?.trim() === '/ledger'));
     if (handledDirectly) {
       if (raw.update_id === undefined || raw.update_id < offset) return;
       // Commands run outside the listener turn pipeline, so without this receipt they left no
@@ -1449,7 +1511,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private setup(channel: ChannelKind = 'telegram'): OwnerRuntime {
     const { TELEGRAM_BOT_TOKEN: token, OPENAI_API_KEY: key } = this.env;
     const identity = this.ctx.storage.kv;
-    const currentOwner = channel === 'whatsapp' || channel === 'app'
+    const currentOwner = channel === 'whatsapp' || nativeSurface(channel)
       ? Number(identity.get<string>(`${channel}_subject`) ?? '0') || 0
       : resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
     const cached = this.runtimes[channel];
@@ -1458,7 +1520,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     // consoleAuth is non-null exactly when the Supabase directory backs this deploy.
     // WhatsApp identity is the E.164-digit subject bound at ingress; a directory-backed DO with
     // no whatsapp_subject resolves owner 0 and every send drops at the gate (same rule as d3a050c).
-    const owner = channel === 'whatsapp' || channel === 'app'
+    const owner = channel === 'whatsapp' || nativeSurface(channel)
       ? Number(identity.get<string>(`${channel}_subject`) ?? '0') || 0
       : resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
     if (channel === 'whatsapp' && (!this.env.WHATSAPP_ACCESS_TOKEN || !this.env.WHATSAPP_PHONE_NUMBER_ID)) throw new Error('whatsapp owner runtime is unconfigured');
@@ -1509,7 +1571,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date(deps.now()) };
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
-    const healthLogs = healthLogBook(signedRpc(this.env), identity.get<string>('do_name') ?? null, channel === 'app' ? 'console' : channel, clock, (error) =>
+    const healthLogs = healthLogBook(signedRpc(this.env), identity.get<string>('do_name') ?? null, nativeSurface(channel) ? 'console' : channel as 'telegram' | 'whatsapp', clock, (error) =>
       log({ trace: `health:${channel}`, hop: 'health_log', ms: 0, ok: false, error: String(error) }),
     );
     // D5: derived health context for the system prompt's health material (zones only). Read
@@ -1518,7 +1580,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       (error, trace) => log({ trace: trace ?? `health:${channel}`, hop: 'health_context', ms: 0, ok: false, error: String(error), code: 'read_failed' }),
       (present, trace) => log({ trace: trace ?? `health:${channel}`, hop: 'health_context', ms: 0, ok: true, code: present ? 'present' : 'absent' }),
     );
-    const baseCall = channel === 'app'
+    const baseCall = nativeSurface(channel)
       ? appSinkCaller()
       : channel === 'whatsapp'
         ? whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? '')
@@ -1529,7 +1591,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const call = egressGuardedCaller(
       gatedCaller(baseCall, egressGate(
         () => owner === 0 || identity.get<boolean>(`${channel}_unlinked`) === true,
-        channel === 'app' ? undefined : presenceRecheck(egressAuth, egressDoName, channel, egressSubject),
+        nativeSurface(channel) ? undefined : presenceRecheck(egressAuth, egressDoName, channel, egressSubject),
       )),
       (count, method) => log({ trace: 'egress', hop: 'egress_redacted', ms: 0, ok: true, detail: `${method}: ${count} link(s)` }),
     );
@@ -1846,8 +1908,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
     // Media reads are per-channel: Telegram file ids go through getFile; WhatsApp media ids go
     // through the Graph two-step (W4). Both feed the same transcriber/attachment pipeline.
-    const download = channel === 'app'
-      ? async (): Promise<Uint8Array> => { throw new Error('app chat has no attachments'); }
+    const download = nativeSurface(channel)
+      ? async (): Promise<Uint8Array> => { throw new Error(`${channel} chat has no attachments`); }
       : channel === 'whatsapp'
         ? createWhatsAppMediaDownloader(this.env.WHATSAPP_ACCESS_TOKEN!)
         : createTelegramFileDownloader(token ?? '');
@@ -1882,7 +1944,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const updates = updateBook(storage.sql);
     // Native chat initialization cannot launch unrequested background model work.
-    const ready = channel === 'app' ? this.browserReady : Promise.all([backfillEpisodes(kv, episodes), (schedPrefs.enabled('nightly') ? armNightly(scheduler, clock.timezone, Date.now()) : Promise.resolve()), (schedPrefs.enabled('event_briefs') ? armBriefSweep(scheduler, Date.now()) : Promise.resolve()), (schedPrefs.enabled('daily_brief') ? armDayCards(scheduler, plans, clock.timezone, Date.now()) : Promise.resolve(false)), (schedPrefs.enabled('heartbeat') ? armHeartbeat(scheduler, Date.now()) : Promise.resolve()), this.browserReady])
+    const ready = nativeSurface(channel) ? this.browserReady : Promise.all([backfillEpisodes(kv, episodes), (schedPrefs.enabled('nightly') ? armNightly(scheduler, clock.timezone, Date.now()) : Promise.resolve()), (schedPrefs.enabled('event_briefs') ? armBriefSweep(scheduler, Date.now()) : Promise.resolve()), (schedPrefs.enabled('daily_brief') ? armDayCards(scheduler, plans, clock.timezone, Date.now()) : Promise.resolve(false)), (schedPrefs.enabled('heartbeat') ? armHeartbeat(scheduler, Date.now()) : Promise.resolve()), this.browserReady])
       .then(async ([, , , seeded]) => {
         await reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now() });
         const scrubbed = await scrubConversationHistory(storage);
@@ -1993,6 +2055,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const context=await this.appContext(record.owner,record.sessionHash,record.text,record.id,record.admittedAt,scope);
         if(context.conversationRef!==record.conversationRef)throw new ClosedRunError();
         return context;
+      }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context)} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
+        const record=this.activeIMessage;
+        if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
+        return iMessageOwnerContext(this.imessageHost,record,scope);
       }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context)} : undefined,
     );
     const migrateCoreFiles = async (trace: string) => {
@@ -2010,7 +2076,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const listener = owner > 0 ? new TelegramOwnerListener({
       ownerTelegramId: owner, surface: channel, api, ...responder, log,
       // Native chat has no reaction surface; do not start a parallel unbound model call.
-      chooseReaction: channel === 'app' ? undefined : turn => {
+      chooseReaction: nativeSurface(channel) ? undefined : turn => {
         turn.runScope?.admit();
         return responder.chooseReaction(turn);
       },
@@ -2018,6 +2084,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (turn.media) files.record(turn.media, turn.text ?? '', Date.now());
         return responder.respond(turn, time);
       },
+      // Freeze the reply text, stable commandId and exact target together with the turn's closure.
+      ...(channel === 'imessage' ? { queueFinal: async (turn: import('./telegram-polling').TelegramInboundTurn, payload: import('./telegram-final-outbox').FinalPayload) => {
+        const record = this.activeIMessage;
+        if (!turn.runScope || !record || record.id !== turn.runScope.runId || record.attempt !== turn.runScope.attempt || record.updateId !== turn.updateId) throw new ClosedRunError();
+        const text = redactSecretUrls(payload.text).text;
+        turn.runScope.commit(() => { new IMessageFinalOutbox(this.ctx.storage).freeze(record, text); new IMessageOwnerInbox(this.ctx.storage).closeFinal(record); });
+        this.ctx.waitUntil(this.serial(() => drainIMessageOutbox(this.imessageHost, iMessageComposition(this.imessageHost.env)?.policy.replyHandoffMaxAgeMs ?? 0).then(() => rearmSharedAlarm(this.ctx.storage, null, Date.now()))).catch(() => { console.error('imessage outbox drain deferred'); }));
+      } } : {}),
       ...(channel === 'telegram' ? { queueFinal: async (turn: import('./telegram-polling').TelegramInboundTurn, payload: import('./telegram-final-outbox').FinalPayload, emoji: string) => {
         // Capture probes remain inert and exercise the original immediate mock path.
         if (probeCapture.current !== null) { await api.sendMessage(payload); return; }
