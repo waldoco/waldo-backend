@@ -1,36 +1,24 @@
-# Ownership boundary: agent-capability backend vs app and app-enabling backend
+# Ownership: one writer for the backend and the app
 
-Rule: one writer per path. A PR that must touch the other side's path stops and asks the other owner; it does not edit across the line. Instinct remains sole merger on `beta-mvp`. Staging only. Held until the owner says: #973, #987. Kennel is Ashish's lane.
+Owner ruling, 10 October 2026. The owner and the owner's Claude Code sessions are the sole writer and merger for `waldo-backend` (all of `beta-mvp`) and `Pin4sf/waldo-app`. The earlier split between an agent-capability lane (Instinct), an app and health lane (Codex) and a browser lane (Dalda) is retired. Open PRs from those lanes are inputs to land, re-cut or close, not owned work in flight.
 
-## Agent-capability backend (Instinct)
+## Delegation
 
-Memory, tools, Google connectors, proactivity, prompt and loop quality.
-- `packages/runtime/src/memory`, `recall`, `context-composer`, `prompt`, `scribe`, `skills`, `goals`, `responsibility`, `scheduler`, `triage`, `loop-governor`, `run-loop`, `run-journal`, `delivery-gate`, `hooks`, `llm`
-- `packages/runtime/src/tools/**` and `connectors/google.ts` (Tasks all lists, calendar-list, Gmail readback, `sendUpdates` trace)
-- Tests under `packages/runtime/test` for the above.
+Instinct may take a delegated slice when all of these hold:
+- The slice touches files no other in-flight slice touches.
+- It has a written acceptance bar: tests to pass, a scenario to trace, and what must not change.
+- It runs in its own worktree and branch.
+- The owner's session reviews it before merge.
 
-## App and app-enabling backend (Codex)
+Good delegation candidates are self-contained connector depth (calendar list, all task lists, task writes, Gmail triage actions) and the weather and location tool.
 
-App shell, sign-in, sessions and transport; anything that couples a non-Telegram client to the owner.
-- `packages/runtime/src/channels/app-api.ts`, the `/app/v1/*` route table and request/response envelopes
-- `identity/**`: owner-message-admission, common-message-ingress, owner-directory, console-auth and signup (Telegram identity coupling, admission, who may call)
-- `POST /app/v1/auth/start`, session and device tables, bearer issuance (`packages/mint-agent-jwt`), push and thread transport
-- `packages/contracts/src/{auth,channels,ui,public,protocol}` for wire shapes the app consumes; `packages/dashboard-app`
-- The app repo (Pin4sf/waldo-app) entirely.
+Kennel's own repository stays Ashish's. The WhatsApp surface adapter is Ashish's; the backend keeps its surface-neutral seam so WhatsApp plugs in like any other surface.
 
-## Health (Codex, end to end)
+## Rules that do not change with ownership
 
-Health contracts (`contracts/src/health`, `recovery.v1` and Form views), Recovery producer, ingest route and handler, health and consent tables, wearable read tool, retention, and app integration. Already-merged health work stays and Codex builds on it. Standing owner rules bind: the agent sees readings end to end, but the egress, memory and external-taint denies stay (keep the pinned denial tests meaningful), and the hard gate before any outside user stays. Instinct reviews and merges these PRs; the ingest/consent design note and any migration follow the owner approval rule (staging only).
+- One writer per aggregate and one in-flight critical-path slice at a time.
+- Changes to the owner-turn input shape, the approval ledger, or the egress and taint rules keep the existing denial tests meaningful.
+- Health: the agent sees the owner's readings end to end; egress, external-taint and trace denials stay. The hard gate before any outside user stays.
+- Merges to `beta-mvp`, staging deploys, migrations on hosted databases, secrets, force-pushes and anything touching `main` or production are confirmed with the owner per action.
 
-## Shared contracts (change only by a PR both sides can read)
-
-- Any change to the owner-turn input shape, the approval ledger, or the egress/taint rules: Instinct reviews, and the change must keep the existing denial tests meaningful.
-- Reading the other side's files is always fine.
-
-## Browser and compute (Dalda, held)
-
-`channels/browser-*`, `common-browser-*`, `cloudflare-*`, `general-browser-*`, compute lane (#973), upload (#987). Not in either list.
-
-## Conflicts
-
-If two PRs touch the same file, the first green PR merges and the second rebases. Flag any write to `beta` or `main`, force-push, production, secrets or destructive SQL to the parent instead of merging.
+The delivery order and per-promise status live in the [website promise ledger](../../planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md).
