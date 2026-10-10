@@ -59,7 +59,7 @@ describe('update cards', () => {
     const fetcher = (async (input: string) => {
       urls.push(input);
       if (input.startsWith('https://oauth2')) return Response.json({ access_token: 'a' });
-      if (input.includes('/events?')) return Response.json({ items: [{ id: 'x', status: 'cancelled', created: '2026-09-01T00:00:00Z' }] });
+      if (input.includes('/events?')) return Response.json({ kind: 'calendar#events', items: [{ id: 'x', status: 'cancelled', created: '2026-09-01T00:00:00Z' }] });
       if (input.includes('/messages?')) return Response.json({ messages: [{ id: 'm1' }] });
       return Response.json({ snippet: 'hi', internalDate: String(t0), payload: { headers: [{ name: 'From', value: 'A <a@x.test>' }, { name: 'Subject', value: 'Hello' }] } });
     }) as unknown as typeof fetch;

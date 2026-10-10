@@ -5,7 +5,7 @@ import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { approvalDesk } from '../src/channels/approvals';
 import { googleHandlers } from '../src/tools/live/google';
 import { workspaceToolHandlers } from '../src/tools/live/workspace';
-import type { GoogleClient } from '../src/connectors/google';
+import { b64url, buildMime, type DraftInput, type GoogleClient } from '../src/connectors/google';
 
 it.each(['exact marker', 'missing marker', 'wrong marker'] as const)('calendar response loss reads back a stable event id before replay: %s', async evidence => {
   const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`effect-calendar-readback-${evidence}`));
@@ -28,8 +28,13 @@ it('draft response loss reconciles by host Message-ID and reuses the receipt', a
   const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('effect-draft-readback'));
   await runInDurableObject(stub, async (_instance, state) => {
     const effects = ownerEffectLedger(state.storage, () => 1000);
-    let sends = 0; let messageId = '';
-    const client = { draft: async (input: { messageId: string }) => { sends++; messageId = input.messageId; throw Error('lost response'); }, findDraftByMessageId: async (id: string) => { expect(id).toBe(messageId); return { draft_id: 'draft-provider' }; } } as unknown as GoogleClient;
+    let sends = 0; let frozen: DraftInput | undefined;
+    // A recovered draft counts as done only when its readback matches the frozen payload.
+    const client = {
+      draft: async (input: DraftInput) => { sends++; frozen = input; throw Error('lost response'); },
+      findDraftByMessageId: async (id: string) => { expect(id).toBe(frozen!.messageId); return { draft_id: 'draft-provider' }; },
+      readDraft: async (draftId: string) => ({ draft_id: draftId, message_id: 'message-provider', thread_id: 'thread-provider', raw: b64url(new TextEncoder().encode(buildMime(frozen!))) }),
+    } as unknown as GoogleClient;
     const handler = googleHandlers({ client: async () => client }, { propose: async () => '', proposeSendEmail: async () => '', record: () => {} }, { timezone: 'UTC', now: () => new Date(1000) }, undefined, effects).find(tool => tool.name === 'draft_email')!;
     const ctx = { authenticatedUserId: 'owner', turnId: 'turn', toolCallId: 'call' } as never;
     const args = { to: ['friend@example.test'], subject: 'Hi', body_markdown: 'Hello' };
