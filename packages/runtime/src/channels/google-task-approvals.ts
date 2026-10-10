@@ -30,6 +30,30 @@ export const describeGoogleTaskChange = (p: GoogleTaskProposal): string => {
   return `${p.args.action} Google task “${f.title}” in ${p.list.title} (${p.account.email}).${p.args.changes?.due_date !== undefined ? ` Due date: ${f.due_date ?? 'none'}.` : ''} ${p.args.reason}`;
 };
 
+// The owner approves exactly what this shows: only fields that change, before → after,
+// built from the frozen proposal rather than re-read from the provider.
+export const reviewGoogleTaskChange = (p: GoogleTaskProposal): string => {
+  const was = p.before, will = finalFields(p);
+  const text = (value: string | null) => value ? `“${value}”` : 'none';
+  const state = (value: string) => value === 'done' ? 'Done' : 'To do';
+  const line = (label: string, before: string | undefined, after: string) => `- ${label}: ${before === undefined ? '' : `${before} → `}${after}`;
+  const creating = !was;
+  const changes = [
+    ...(creating || was.title !== will.title ? [line('Title', creating ? undefined : text(was.title), text(will.title))] : []),
+    ...(creating ? (will.notes ? [line('Notes', undefined, text(will.notes))] : []) : was.notes !== will.notes ? [line('Notes', text(was.notes), text(will.notes))] : []),
+    ...(creating ? (will.due_date ? [line('Due', undefined, will.due_date)] : []) : was.due_date !== will.due_date ? [line('Due', was.due_date ?? 'none', will.due_date ?? 'none')] : []),
+    ...(!creating && was.status !== will.status ? [line('Status', state(was.status), state(will.status))] : []),
+  ];
+  const action = { create: 'Add', update: 'Edit', complete: 'Complete', reopen: 'Reopen' }[p.args.action];
+  return [
+    'Google task change to review',
+    `Action: ${action}`, `Account: ${p.account.email}`, `List: ${p.list.title}`,
+    ...(was ? [`Task: ${text(was.title)}`] : []),
+    'Changes:', ...(changes.length ? changes : ['- Nothing differs from the current task']),
+    `Reason: ${p.args.reason}`,
+  ].join('\n');
+};
+
 // Provider adapter only. The shared approval desk owns owner authentication, cards,
 // proposal expiry and lifecycle. The existing effect ledger owns dispatch/recovery.
 export const googleTaskApprovals = (deps: Readonly<{ sql: SqlStorage; google: GoogleAccess; effects: OwnerEffectLedger; ownerRef: string }>) => {

@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
-import { googleClient } from '../src/connectors/google';
+import { googleClient, sha256Hex } from '../src/connectors/google';
 import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { googleTaskApprovals } from '../src/channels/google-task-approvals';
 import { pinProxyIntentRoute } from '../src/connectors/proxy-intent-route';
@@ -70,6 +70,43 @@ describe('Google Tasks approval and readback journey', () => {
     expect(f.state.writes).toBe(1);
     expect(await f.open().desk.decide(id, 'a', 'trace')).toMatchObject({ toast: 'Already handled.' });
     expect(f.state.writes).toBe(1);
+    f.db.close();
+  });
+  it('shows an edit as the account, list and each changed field before and after, never raw JSON', async () => {
+    const f = fixture(); const first = f.open();
+    await first.desk.proposeGoogleTaskChange!({ source: 'google_tasks', action: 'update', task_list_id: 'work/team', task_id: 'existing', changes: { title: 'Revised', notes: 'New notes', due_date: '2026-10-14' }, reason: 'Owner moved the deadline' });
+    const card = f.state.cards[0]!;
+    for (const shown of ['owner@example.test', 'Team work', '“Original” → “Revised”', '“Owner notes” → “New notes”', '2026-10-10 → 2026-10-14', 'Owner moved the deadline']) expect(card).toContain(shown);
+    for (const hidden of ['"args"', 'connection', 'etag', 'list-version', '{']) expect(card).not.toContain(hidden);
+    f.db.close();
+  });
+  it('shows completion as the status change on the named task and leaves unchanged fields out', async () => {
+    const f = fixture(); const first = f.open();
+    await first.desk.proposeGoogleTaskChange!({ source: 'google_tasks', action: 'complete', task_list_id: 'work/team', task_id: 'existing', reason: 'Owner said it is finished' });
+    const card = f.state.cards[0]!;
+    expect(card).toContain('“Original”'); expect(card).toContain('To do → Done');
+    expect(card).not.toContain('Owner notes'); expect(card).not.toContain('Due');
+    f.db.close();
+  });
+  it('shows cleared notes and a removed due date as becoming none', async () => {
+    const f = fixture(); const first = f.open();
+    await first.desk.proposeGoogleTaskChange!({ source: 'google_tasks', action: 'update', task_list_id: 'work/team', task_id: 'existing', changes: { notes: null, due_date: null }, reason: 'Owner dropped both' });
+    const card = f.state.cards[0]!;
+    expect(card).toContain('“Owner notes” → none'); expect(card).toContain('2026-10-10 → none'); expect(card).not.toContain('Title');
+    f.db.close();
+  });
+  it('shows a new task as its title, notes and due date', async () => {
+    const f = fixture(); const first = f.open();
+    await first.desk.proposeGoogleTaskChange!(create);
+    const card = f.state.cards[0]!;
+    for (const shown of ['Add', 'Team work', '“Prepare proposal”', '“Exact body”', '2026-10-11', 'Agreed next step']) expect(card).toContain(shown);
+    f.db.close();
+  });
+  it('keeps the stored digest equal to the hash of the stored proposal bytes', async () => {
+    const f = fixture(); const first = f.open();
+    const id = await first.desk.proposeGoogleTaskChange!(create);
+    const row = f.db.prepare('SELECT payload_json, proposal_digest FROM ledger WHERE id = ?').get(id) as { payload_json: string; proposal_digest: string };
+    expect(row.proposal_digest).toBe(await sha256Hex(row.payload_json));
     f.db.close();
   });
   it('does not offer truncated notes as an approvable shared card', async () => {

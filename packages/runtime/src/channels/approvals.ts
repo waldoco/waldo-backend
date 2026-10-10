@@ -3,7 +3,7 @@ import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
 import { googleTaskProposalSchema, proposeGoogleTaskChangeArgsSchema, type BrowserTaskContinuation, type ProposeCalendarChangeArgs, type ProposeGoogleTaskChangeArgs } from '@waldo/contracts';
 import { GoogleError, sha256Hex, verifiedSent, type GoogleClient } from '../connectors/google';
-import { describeGoogleTaskChange, type GoogleTaskApprovalAdapter, type GoogleTaskProposal } from './google-task-approvals';
+import { describeGoogleTaskChange, reviewGoogleTaskChange, type GoogleTaskApprovalAdapter, type GoogleTaskProposal } from './google-task-approvals';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { BrowserSubmitOutcome } from '../tools/live/browser';
 import type { TurnLogEntry } from './telegram-listener';
@@ -499,7 +499,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const summary = describeGoogleTaskChange(proposal);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, proposal_digest) VALUES (?, 'google_task_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL, ?)", id, summary, JSON.stringify(proposal), deps.now(), digest);
       bindOrigin(id, originRunRef);
-      const review = `Proposed Google task change:\n${JSON.stringify(proposal, null, 2)}`;
+      const review = reviewGoogleTaskChange(proposal);
       await sayCard(id, review.length <= REVIEW_BUDGET ? review : unreviewable('Google task change?', summary), review.length <= REVIEW_BUDGET ? [['Do it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]], review.length <= REVIEW_BUDGET);
       return id;
     },
