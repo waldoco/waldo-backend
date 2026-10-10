@@ -8,6 +8,8 @@ const AUTH = 'https://www.googleapis.com/auth/';
 export const GOOGLE_FEATURE_SCOPES = {
   calendar: [`${AUTH}calendar.events`],
   availability: [`${AUTH}calendar.events.freebusy`],
+  // Which calendars the owner can see. Explicit and read-only: event access alone cannot name them.
+  calendar_list: [`${AUTH}calendar.calendarlist.readonly`],
   mail: [`${AUTH}gmail.readonly`, `${AUTH}gmail.send`, `${AUTH}gmail.compose`],
   tasks: [`${AUTH}tasks`],
   // Read-only Workspace scopes for Google's MCP servers (draft: takes effect only when the owner deploys it
@@ -23,10 +25,12 @@ const WORKSPACE_READ_FEATURES: readonly GoogleFeature[] = ['drive', 'docs', 'she
 // Features whose only scopes are read-only (GOOGLE_FEATURE_SCOPES lists no write scope for them).
 export const isReadOnlyGoogleFeature = (feature: GoogleFeature): boolean => WORKSPACE_READ_FEATURES.includes(feature);
 export const isGoogleFeature = (value: string): value is GoogleFeature => Object.hasOwn(GOOGLE_FEATURE_SCOPES, value);
-// Legacy null grants retain old features, never a newly introduced availability scope.
+// Legacy null grants retain old features, never a newly introduced availability or calendar-list scope.
 export const googleHas = (scopes: readonly string[] | null | undefined, feature: GoogleFeature): boolean =>
   feature === 'availability'
     ? ['calendar.events.freebusy','calendar.freebusy','calendar.readonly','calendar'].some(scope => scopes?.includes(`${AUTH}${scope}`) ?? false)
+    : feature === 'calendar_list'
+    ? ['calendar.calendarlist.readonly','calendar.calendarlist','calendar.readonly','calendar'].some(scope => scopes?.includes(`${AUTH}${scope}`) ?? false)
     : WORKSPACE_READ_FEATURES.includes(feature)
       ? GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false)
       : scopes === null || GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false);
@@ -80,7 +84,7 @@ export async function readConsentState(secret: string, state: string): Promise<R
   return (await sign(secret, `${owner}.${nonce}`)) === mac ? { owner, nonce } : null;
 }
 
-export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.availability, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks, ...new Set([...GOOGLE_FEATURE_SCOPES.drive, ...GOOGLE_FEATURE_SCOPES.docs, ...GOOGLE_FEATURE_SCOPES.sheets, ...GOOGLE_FEATURE_SCOPES.slides])];
+export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.availability, ...GOOGLE_FEATURE_SCOPES.calendar_list, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks, ...new Set([...GOOGLE_FEATURE_SCOPES.drive, ...GOOGLE_FEATURE_SCOPES.docs, ...GOOGLE_FEATURE_SCOPES.sheets, ...GOOGLE_FEATURE_SCOPES.slides])];
 
 export function googleConsentUrl(app: GoogleApp, state: string, codeChallenge: string): string {
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
@@ -212,6 +216,7 @@ export type TaskStatusFilter = 'todo' | 'in_progress' | 'done' | 'all';
 export type TaskItem = Readonly<{ id: string; title: string; status: 'todo' | 'done'; due?: string; updated?: string; notes?: string; parent?: string; position?: string; completed?: string; web_view_link?: string; task_list_id?: string }>;
 type GoogleTask = Readonly<{ id: string; title?: string; status: string; due?: string; updated?: string; notes?: string; parent?: string; position?: string; completed?: string; webViewLink?: string; etag?: string; deleted?: boolean; assignmentInfo?: Record<string, unknown> }>;
 export type TaskListItem = Readonly<{ id: string; title: string; updated?: string; etag?: string }>;
+export type CalendarListItem = Readonly<{ id: string; title: string; timezone?: string; access_role: 'freeBusyReader' | 'reader' | 'writer' | 'owner' | 'writerWithoutPrivateAccess'; primary: boolean; selected: boolean; hidden: boolean; etag?: string }>;
 export type GoogleCollectionPage<T> = Readonly<{ items: readonly T[]; next_page_token: string | null; fetched_count: number; account: CalendarPage['account']; observed_at: string }>;
 export type TasksPage = Readonly<{ tasks: readonly TaskItem[]; next_page_token: string | null; fetched_count: number; task_list_ids: readonly string[]; account: CalendarPage['account']; observed_at: string }>;
 
@@ -264,6 +269,7 @@ export type GoogleClient = Readonly<{
   driveGetFileMetadata?(input: Readonly<{ fileId: string }>): Promise<DriveFileMeta>;
   driveReadFileContent?(input: import('./drive-rest').DriveContentArgs): Promise<import('./drive-rest').DriveFileContent>;
   calendarPage?(calendarId: string, from: string, to: string, limit: number, includeDeclined: boolean, pageToken?: string): Promise<CalendarPage>;
+  calendarListsPage?(limit: number, includeHidden: boolean, pageToken?: string): Promise<GoogleCollectionPage<CalendarListItem>>;
   taskListsPage?(limit: number, pageToken?: string): Promise<GoogleCollectionPage<TaskListItem>>;
   tasksPage?(taskListId: string, status: TaskStatusFilter, limit: number, pageToken?: string): Promise<TasksPage>;
   allTasksPage?(status: TaskStatusFilter, limit: number, pageToken?: string): Promise<TasksPage>;
@@ -296,7 +302,7 @@ export type GoogleClient = Readonly<{
 // Single source for the connector-proxy allowlist: the runtime's vault client and the Supabase
 // connector-proxy Edge Function both build from this list, so a method added to GoogleClient but
 // missed here fails `satisfies` / the parity test instead of breaking live calls on Vault installs.
-export const GOOGLE_METHODS = ['calendarPage','taskListsPage','tasksPage','allTasksPage','taskList','task','createTask','patchTask','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent'] as const satisfies readonly (keyof GoogleClient)[];
+export const GOOGLE_METHODS = ['calendarPage','calendarListsPage','taskListsPage','tasksPage','allTasksPage','taskList','task','createTask','patchTask','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent'] as const satisfies readonly (keyof GoogleClient)[];
 export type GoogleMethod = (typeof GOOGLE_METHODS)[number];
 
 const b64urlDecode = (data: string): string => {
@@ -410,6 +416,17 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     const items = collectionItems(data, 'tasks#taskLists', limit, 'task-list');
     if (!items.every(item => isObject(item) && validGoogleId(item.id) && typeof item.title === 'string' && item.title.length <= 2000 && optionalInstant(item.updated) && optionalText(item.etag, 1024))) throw new Error('invalid task-list page response');
     return { items: items.map(item => ({ id: item.id as string, title: item.title as string, ...(item.updated ? { updated: item.updated as string } : {}), ...(item.etag ? { etag: item.etag as string } : {}) })), next_page_token: await cursor.next(data.nextPageToken as string | undefined), fetched_count: items.length, account, observed_at: new Date().toISOString() };
+  };
+  const calendarListsPage = async (limit: number, includeHidden: boolean, pageToken?: string): Promise<GoogleCollectionPage<CalendarListItem>> => {
+    if (!validPageLimit(limit, 250) || typeof includeHidden !== 'boolean') throw new Error('invalid Calendar-list page request');
+    const cursor = await providerCursor('Calendar-list', [limit, includeHidden], pageToken);
+    const url = new URL('https://www.googleapis.com/calendar/v3/users/me/calendarList');
+    url.search = new URLSearchParams({ maxResults: String(limit), showHidden: String(includeHidden), showDeleted: 'false', ...(cursor.token ? { pageToken: cursor.token } : {}) }).toString();
+    const data = await call(url.toString(), { signal: AbortSignal.timeout(30_000) });
+    const items = collectionItems(data, 'calendar#calendarList', limit, 'Calendar-list');
+    const roles = ['freeBusyReader', 'reader', 'writer', 'owner', 'writerWithoutPrivateAccess'];
+    if (!items.every(item => validGoogleId(item.id) && typeof item.summary === 'string' && item.summary.length <= 2000 && roles.includes(String(item.accessRole)) && optionalText(item.timeZone, 128) && optionalText(item.etag, 1024) && [item.primary, item.selected, item.hidden].every(value => value === undefined || typeof value === 'boolean'))) throw new Error('invalid Calendar-list page response');
+    return { items: items.map(item => ({ id: item.id as string, title: item.summary as string, access_role: item.accessRole as CalendarListItem['access_role'], primary: item.primary === true, selected: item.selected === true, hidden: item.hidden === true, ...(item.timeZone ? { timezone: item.timeZone as string } : {}), ...(item.etag ? { etag: item.etag as string } : {}) })), next_page_token: await cursor.next(data.nextPageToken as string | undefined), fetched_count: items.length, account, observed_at: new Date().toISOString() };
   };
   const tasksPage = async (taskListId: string, status: TaskStatusFilter, limit: number, pageToken?: string): Promise<TasksPage> => {
     if (!validGoogleId(taskListId) || !validTaskStatus(status) || !validPageLimit(limit, 100)) throw new Error('invalid Tasks page request');
@@ -526,7 +543,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
   };
   return {
     account,
-    taskListsPage, tasksPage, allTasksPage, changedEventsPage,
+    calendarListsPage, taskListsPage, tasksPage, allTasksPage, changedEventsPage,
     async taskList(taskListId) {
       if (!validGoogleId(taskListId)) throw new Error('invalid Google task list target');
       const value = await call(`https://tasks.googleapis.com/tasks/v1/users/@me/lists/${encodeURIComponent(taskListId)}`, { signal: AbortSignal.timeout(30_000) });

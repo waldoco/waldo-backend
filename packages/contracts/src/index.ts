@@ -4,6 +4,7 @@ export * from './core/trigger';
 export * from './model/roster';
 export * from './model/context-budget';
 export * from './health/crs';
+export * from './health/zone-bridge';
 export * from './memory/pattern-id';
 export * from './memory/trust';
 export * from './memory/sanitise';

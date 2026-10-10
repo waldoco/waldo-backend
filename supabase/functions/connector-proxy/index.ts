@@ -147,6 +147,7 @@ const handle = async (body: Body): Promise<Response> => {
     }
     if(body.method==='calendarPage'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar'))return fail(403,'insufficient scopes');
     if(body.method==='freeBusy'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'availability'))return fail(403,'insufficient scopes');
+    if(body.method==='calendarListsPage'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar_list'))return fail(403,'insufficient scopes');
     const required = body.method==='sendRaw' ? 'gmail.send' : body.method==='draft' ? 'gmail.compose' : ['createTask','patchTask'].includes(body.method!) ? 'tasks' : ['createEvent','moveEvent','cancelEvent'].includes(body.method!) ? 'calendar.events' : null;
     if(required && (!Array.isArray(grant.scopes)||!grant.scopes.includes(`https://www.googleapis.com/auth/${required}`)))return fail(body.intent_id?503:403,body.intent_id?'intent_unavailable':'insufficient scopes');
     const token=grant.secret;
