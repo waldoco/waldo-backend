@@ -15,23 +15,27 @@ import { workspaceOwnerHost, workspaceMetadata } from './workspace-host';
 import {cloudflarePublicRead,PUBLIC_READ_RESERVED_BROWSER_MS} from './cloudflare-public-read';
 import {ordinaryPublicBrowserConfiguration} from './ordinary-public-browser-configuration';
 import {reserveOwnerPublicBrowser} from './owner-public-browser-spend';
+import type {OwnerBrowserIdentity} from './owner-browser-identity';
+export type {OwnerBrowserIdentity} from './owner-browser-identity';
 const browserFailureClass=(cause:unknown)=>cause instanceof CommonBrowserRegistrationUnavailable?'CommonBrowserRegistrationUnavailable':cause instanceof ClosedRunError?'ClosedRunError':cause instanceof TypeError?'TypeError':cause instanceof RangeError?'RangeError':cause instanceof SyntaxError?'SyntaxError':cause instanceof Error?'Error':'UnknownError';
 const traceBrowserFailure=(operation:string,cause:unknown)=>console.warn(JSON.stringify({event:'owner_browser_failure',operation,error_class:browserFailureClass(cause)}));
+export type OwnerBrowserHandoffIdentity = Readonly<{session_handle:string;generation:number;handoff_id:string}>;
 
 // The browser task follows the authenticated owner run. It needs no topic classifier
 // or canonical execution activation; provider identity and budget stay in the DO.
 export function ownerBrowserRuntime(options: Readonly<{
   env: TelegramWebhookEnv; storage: DurableObjectStorage; actualDoId: string;
   activeScope(): RunEffectScope | undefined;
+  identity?: OwnerBrowserIdentity;
 }>) {
   fenceLostNativeHandoffs(options.storage,Date.now());
   let active: { scope?: RunEffectScope; taskId:string; ownerId:string; host: ReturnType<typeof commonBrowserHost> } | undefined;
   let lease: Readonly<{scope?:RunEffectScope;deadline:number;assertCurrent():Promise<void>}>|undefined;
   const continuationKey='common-browser-current:v1';
-  const retainedTask=()=>{
+  const retainedTask=(cleanupOnly=false)=>{
     const pointer=options.storage.kv.get<{taskId:string;sessionHandle:string}>(continuationKey);
     const row=pointer?options.storage.kv.get<{session:{id:string;state:string;expiresAt:number};cleanup?:string}>(`common-browser:${pointer.taskId}`):undefined;
-    return pointer&&row&&!row.cleanup&&row.session.state==='active'&&row.session.id===pointer.sessionHandle&&row.session.expiresAt>Date.now()?pointer:undefined;
+    return pointer&&row&&row.session.id===pointer.sessionHandle&&(cleanupOnly?row.cleanup!=='closed':!row.cleanup&&row.session.state==='active'&&row.session.expiresAt>Date.now())?pointer:undefined;
   };
   let maintenance:Promise<void>|undefined;
   const automatic = commonOwnerBrowserRegistration({ ...options, loadSdk: commonBrowserSdk() });
@@ -44,6 +48,13 @@ export function ownerBrowserRuntime(options: Readonly<{
   };
   const selectedConfiguration = async (cleanupOnly = false, normalRead = false) => automatic.selected || automatic.hasRetained() ? automatic.configuration(cleanupOnly) : configuration(cleanupOnly, normalRead);
   const assertOwner = async () => {
+      if(options.identity){
+        const identity=options.identity,binding=identity.snapshot(),doName=options.storage.kv.get<string>('do_name');
+        const physical=()=>{if(!binding||!doName||identity.snapshot()!==binding||options.storage.kv.get('do_name')!==doName||options.env.TELEGRAM_OWNER_DO?.idFromName(doName).toString()!==options.actualDoId)throw new ClosedRunError();};
+        physical();await identity.assertCurrent(binding!);physical();const owner=await identity.resolve(binding!);await identity.assertCurrent(binding!);physical();
+        if(!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(owner.directoryOwnerId)||!/^[a-f0-9]{64}$/.test(owner.custodyDigest))throw new ClosedRunError();
+        return {directoryOwnerId:owner.directoryOwnerId.toLowerCase(),custodyDigest:owner.custodyDigest};
+      }
       const doName = options.storage.kv.get<string>('do_name'), subject = options.storage.kv.get<string>('telegram_subject');
       const physical = () => { if (!doName || !subject || options.storage.kv.get('do_name') !== doName || options.storage.kv.get('telegram_subject') !== subject
         || options.storage.kv.get('telegram_unlinked') === true || options.env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== options.actualDoId) throw new ClosedRunError(); };
@@ -52,17 +63,19 @@ export function ownerBrowserRuntime(options: Readonly<{
     };
   const current = (ctx: ToolDispatcherContext) => {
     const scope = options.activeScope(), supplied = ctx.runScope;
-    const doName = options.storage.kv.get<string>('do_name'), subject = options.storage.kv.get<string>('telegram_subject');
+    const doName = options.storage.kv.get<string>('do_name'), subject = options.identity?options.identity.snapshot():options.storage.kv.get<string>('telegram_subject');
     // Hooks copy the context object, but retain these host-created functions.
     if (!scope || !supplied || supplied.runId !== scope.runId || supplied.attempt !== scope.attempt
       || supplied.deadline !== scope.deadline || supplied.admit !== scope.admit || supplied.commit !== scope.commit
       || !doName || !subject || !ctx.authenticatedUserId) throw new ClosedRunError();
     return async () => {
       scope.admit();
-      if (options.activeScope() !== scope || options.storage.kv.get('do_name') !== doName
-        || options.storage.kv.get('telegram_subject') !== subject || options.storage.kv.get('telegram_unlinked') === true
-        || options.env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== options.actualDoId) throw new ClosedRunError();
-      scope.admit();
+      const physical=()=>{if (options.activeScope() !== scope || options.storage.kv.get('do_name') !== doName
+        || (options.identity?options.identity.snapshot()!==subject:options.storage.kv.get('telegram_subject') !== subject || options.storage.kv.get('telegram_unlinked') === true)
+        || options.env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== options.actualDoId) throw new ClosedRunError();};
+      physical();
+      await options.identity?.assertCurrent(subject);
+      scope.admit();physical();
     };
   };
   const commonFiles=async(assertCurrent:()=>Promise<void>,ownerId:string)=>{
@@ -70,12 +83,12 @@ export function ownerBrowserRuntime(options: Readonly<{
     const admit=async()=>{await assertCurrent();scope?.admit();if(scope&&options.activeScope()!==scope||options.storage.kv.get('do_name')!==doName)throw new ClosedRunError();const owner=await assertOwner();if(ownerId!==owner.directoryOwnerId&&ownerId!==`prn_${owner.directoryOwnerId.replaceAll('-','')}`)throw new ClosedRunError();const bound=workspaceMetadata(options.storage,scope).transaction(state=>state.binding);if(bound&&bound.ownerId!==owner.directoryOwnerId)throw new ClosedRunError();await assertCurrent();};
     await admit();const workspace=await workspaceOwnerHost(options.env,options.storage,options.actualDoId,doName,fetch,scope,admit);await admit();const origin=options.storage.kv.get<string>('origin');if(!origin)throw new ClosedRunError();return {workspace,origin};
   };
-  const bindHost=async(ctx:ToolDispatcherContext,sessionHandle?:string,retainSession=false)=>{
+  const bindHost=async(ctx:ToolDispatcherContext,sessionHandle?:string,retainSession=false,cleanupOnly=false)=>{
     const assertCurrent=current(ctx);await assertCurrent();
-    const scope=options.activeScope()!,pointerBefore=retainedTask();
+    const scope=options.activeScope()!,pointerBefore=retainedTask(cleanupOnly);
     const ordinary=!!options.storage.kv.get(`ordinary-public-browser-grant:${sessionHandle?pointerBefore?.taskId:active?.taskId??scope.runId}`);
     let config;
-    if(!ordinary){try{config=await selectedConfiguration(false,retainSession);}catch(cause){if(!retainSession||!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;}}
+    if(!ordinary){try{config=await selectedConfiguration(cleanupOnly,retainSession);}catch(cause){if(!retainSession||!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;}}
     let expiredSpend=false;
     if(options.env.COMMON_BROWSER_REGISTRATION)expiredSpend=JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.validUntil<=Date.now();
     if(ordinary||retainSession&&(!config||config.expiresAt<=Date.now()||expiredSpend)){
@@ -88,7 +101,7 @@ export function ownerBrowserRuntime(options: Readonly<{
     await assertCurrent();
     if(!config)throw new ClosedRunError();
     if(active&&options.storage.kv.get<{cleanup?:string}>(`common-browser:${active.taskId}`)?.cleanup==='closed'){active=undefined;lease=undefined;options.storage.kv.put(continuationKey,null);}
-    const pointer=retainedTask();
+    const pointer=retainedTask(cleanupOnly);
     if(sessionHandle&&pointer?.sessionHandle!==sessionHandle)throw new ClosedRunError();
     if(active){
       if(active.ownerId!==config.ownerId||active.scope&&active.scope!==scope||active.scope!==scope&&active.host.sessionHandle()!==sessionHandle)throw new ClosedRunError();
@@ -109,8 +122,41 @@ export function ownerBrowserRuntime(options: Readonly<{
   };
   const publishPointer=()=>{const handle=active?.host.sessionHandle();if(active&&handle)options.storage.kv.put(continuationKey,{taskId:active.taskId,sessionHandle:handle});};
   const funded=(scope:RunEffectScope)=>active?.scope===scope||options.storage.kv.get(`common-browser:${scope.runId}`)!==undefined||options.storage.kv.get(`common-browser-run:${scope.runId}`)!==undefined;
+  const matchesHandoff=(state:Readonly<{session_handle:string;generation:number;handoff_id:string}>,expected:OwnerBrowserHandoffIdentity)=>state.session_handle===expected.session_handle&&state.generation===expected.generation&&state.handoff_id===expected.handoff_id;
+  const checkedHandoff=async(assertSession:()=>Promise<void>,ownerId:string,expected?:OwnerBrowserHandoffIdentity)=>{
+    await assertSession();const held=active;
+    if(!held)return undefined;
+    const principal=/^[a-f0-9-]{36}$/i.test(ownerId)?`prn_${ownerId.toLowerCase().replaceAll('-','')}`:ownerId;
+    if(held.ownerId!==ownerId&&held.ownerId!==principal)throw new ClosedRunError();
+    const state=await held.host.handoffStatus();await assertSession();
+    if(active!==held)throw new ClosedRunError();
+    if(state&&expected&&!matchesHandoff(state,expected))throw new ClosedRunError();
+    return state?{held,state}:undefined;
+  };
   return {
     current,
+    async handoffState(assertSession:()=>Promise<void>,ownerId:string){return (await checkedHandoff(assertSession,ownerId))?.state;},
+    async openOwnerHandoff(assertSession:()=>Promise<void>,ownerId:string,expected:OwnerBrowserHandoffIdentity){
+      const before=await checkedHandoff(assertSession,ownerId,expected);if(!before)throw new ClosedRunError();
+      const openedAt=Date.now(),url=await before.held.host.openHandoff();const after=await checkedHandoff(assertSession,ownerId,expected);
+      if(!after||after.held!==before.held)throw new ClosedRunError();
+      // The caller returns this one-purpose URL ephemerally; it is never a checkpoint or receipt.
+      return {...after.state,expiresAt:Math.min(after.state.expiresAt,openedAt+300_000),url};
+    },
+    async revokeOwnerHandoff(assertSession:()=>Promise<void>,ownerId:string,expected:OwnerBrowserHandoffIdentity){
+      const before=await checkedHandoff(assertSession,ownerId,expected);if(!before)throw new ClosedRunError();
+      await before.held.host.cancel();await assertSession();
+      const row=options.storage.kv.get<{cleanup?:string;session:{id:string;generation:number}}>(`common-browser:${before.held.taskId}`);
+      if(!row||row.session.id!==expected.session_handle||row.session.generation!==expected.generation||row.cleanup!=='closed')throw new ClosedRunError();
+      if(active===before.held){active=undefined;lease=undefined;options.storage.kv.put(continuationKey,null);}
+      return {ended:true as const,session_handle:expected.session_handle,generation:expected.generation};
+    },
+    async resumeOwnerHandoff(ctx:ToolDispatcherContext,expected:OwnerBrowserHandoffIdentity){
+      const bound=await bindHost(ctx,expected.session_handle),row=options.storage.kv.get<{session:{id:string;generation:number};handoff?:{handoffId?:string;origin:string}}>(`common-browser:${bound.active.taskId}`);
+      if(!row?.handoff||row.session.id!==expected.session_handle||row.session.generation!==expected.generation||row.handoff.handoffId!==expected.handoff_id)throw new ClosedRunError();
+      const result=await bound.active.host.actionHandler.handle({provider:'cloudflare_playwright',url:row.handoff.origin,task:'Resume the owner-authorized browser handoff.',max_actions:1,session_handle:expected.session_handle,command:{operation:'resume_owner_login'}},bound.context);
+      publishPointer();return result;
+    },
     consoleHandoff(request:Request,csrf:string,assertSession:()=>Promise<void>){
       const held=active;
       const admit=async()=>{await assertSession();if(held){const owner=await assertOwner();await assertSession();if(active!==held||held.ownerId!==`prn_${owner.directoryOwnerId.replaceAll('-','')}`&&held.ownerId!==owner.directoryOwnerId)throw new ClosedRunError();}};
@@ -159,7 +205,7 @@ export function ownerBrowserRuntime(options: Readonly<{
                 const scope=options.activeScope()!;
                 const declaredLimitMicrousd=options.env.COMMON_BROWSER_REGISTRATION?JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.limitMicrousd:undefined;
                 const effectiveLimitMicrousd=Number.isSafeInteger(declaredLimitMicrousd)?Math.min(declaredLimitMicrousd,COMMON_TEST_CEILING_MICROUSD):declaredLimitMicrousd;
-                return reserveOwnerPublicBrowser({storage:options.storage,ownerId,custodyDigest:owner.custodyDigest,intent:`${scope.runId}:${scope.attempt}:${ctx.toolCallId}`,reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now:Date.now(),declaredLimitMicrousd:effectiveLimitMicrousd,assertCurrent:()=>{scope.admit();if(options.activeScope()!==scope||options.storage.kv.get('telegram_unlinked')===true)throw new ClosedRunError();}});
+                return reserveOwnerPublicBrowser({storage:options.storage,ownerId,custodyDigest:owner.custodyDigest,intent:`${scope.runId}:${scope.attempt}:${ctx.toolCallId}`,reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now:Date.now(),declaredLimitMicrousd:effectiveLimitMicrousd,assertCurrent:()=>{scope.admit();if(options.activeScope()!==scope||!options.identity&&options.storage.kv.get('telegram_unlinked')===true)throw new ClosedRunError();}});
               }});
               return read(args,{...ctx,authenticatedUserId:ownerId,assertTaskSourceCurrent:assertReadCurrent});
             }
@@ -178,7 +224,7 @@ export function ownerBrowserRuntime(options: Readonly<{
           // A configured synthetic task keeps its existing typed host. Never
           // reinterpret native commands or explicit Cloudflare as a paid fallback.
           if(!args.provider&&!args.session_handle&&args.command&&!options.env.COMMON_BROWSER_REGISTRATION&&!automatic.hasRetained()&&!active)return fallback.handle(args,{...ctx,assertTaskSourceCurrent:assertCurrent});
-          const bound=await bindHost(ctx,args.session_handle);
+          const bound=await bindHost(ctx,args.session_handle,false,args.command?.operation==='cancel');
           const result=await bound.active.host.actionHandler.handle(args,bound.context);
           if(args.command?.operation==='owner_login'&&result.ok){const origin=options.storage.kv.get<string>('origin');if(origin&&new URL(origin).protocol==='https:'&&'data' in result&&result.data&&typeof result.data==='object')Object.assign(result.data,{console_url:new URL('/console/browser-handoff',origin).href});}
           if(args.command?.operation==='cancel'&&result.ok){active=undefined;lease=undefined;options.storage.kv.put(continuationKey,null);}else publishPointer();return result;

@@ -23,6 +23,11 @@ describe('reauth notice transition', () => {
 });
 
 describe('readback feature', () => {
+  it('explicit Calendar discovery requires its own scope even if event reads work', () => {
+    expect(readbackFeature([`${AUTH}calendar.events`], 'calendar_list')).toBeNull();
+    expect(readbackFeature([`${AUTH}calendar.events`, `${AUTH}calendar.calendarlist.readonly`], 'calendar_list')).toBe('calendar_list');
+    expect(readbackFeature(null, 'calendar_list')).toBeNull();
+  });
   it('a full consent grant confirms on calendar first', () => {
     expect(readbackFeature([`${AUTH}calendar.events`, `${AUTH}gmail.readonly`, `${AUTH}tasks`])).toBe('calendar');
   });
@@ -43,6 +48,12 @@ describe('readback feature', () => {
 const client = (overrides: Record<string, unknown>) => overrides as never;
 
 describe('confirmGoogleReadback', () => {
+  it('Calendar discovery confirmation reads the actual calendar list on the fresh grant', async () => {
+    const calls: unknown[][] = [];
+    await confirmGoogleReadback(client({ calendarListsPage: async (...args: unknown[]) => { calls.push(args); return { items: [], next_page_token: null }; } }), 'calendar_list', 0);
+    expect(calls).toEqual([[1, false]]);
+    await expect(confirmGoogleReadback(client({ events: async () => [] }), 'calendar_list', 0)).rejects.toBeInstanceOf(GoogleReadbackError);
+  });
   it('calendar readback lists at most one event in a one-hour window', async () => {
     const calls: unknown[][] = [];
     await confirmGoogleReadback(client({ events: async (...args: unknown[]) => { calls.push(args); return []; } }), 'calendar', Date.parse('2026-10-08T07:00:00Z'));

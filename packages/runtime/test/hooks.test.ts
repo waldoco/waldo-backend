@@ -925,3 +925,28 @@ describe('hook registry', () => {
     });
   });
 });
+
+
+describe('browser failure host metadata',()=>{
+ const metadata=()=>({version:1,provider:'cloudflare_playwright',stage:'observation',code:'empty_content',retained:{session_handle:'10000000-0000-4000-8000-000000000001',generation:1,expires_at:1700000060000,state:'unobserved',observation_revision:null},diagnostic:{status:200},recovery:{can_cancel:true,can_inspect:true,can_navigate:true,requires_same_session:true}});
+ const context={canaryTokens:['1111111111111111','2222222222222222','3333333333333333'],sourceTaint:'external',sanitise} as HookRuntimeContext;
+ const payload=(browser:unknown)=>({event:'PostToolUse',tool:'browse_page',latency_ms:1,result:{ok:false,error:'The page has no observed content.',code:'rejected',source_taint:'external',browser}} as HookPayload);
+ it('keeps strict same-session failure handles through real Scribe without calling browser recovery a health score',async()=>{
+  const result=await runHooks('PostToolUse',payload(metadata()),context,{registry:[scribeSanitisePostToolUseHook]});
+  expect(result).toMatchObject({result:{ok:false,browser:metadata()}});
+ });
+ it('omits a secret provider identifier while preserving validated exact cleanup custody',async()=>{
+  const browser={...metadata(),diagnostic:{status:403,code:'sk-fixturesecret12345678901234567890'}};
+  const result=await runHooks('PostToolUse',payload(browser),context,{registry:[scribeSanitisePostToolUseHook]});
+  expect(result).toMatchObject({result:{browser:{retained:metadata().retained,diagnostic:{status:403}}}});
+  expect(JSON.stringify(result)).not.toContain('sk-fixturesecret');
+ });
+ it.each([{...metadata(),provider_payload:{hrv:42}},{...metadata(),retained:{...metadata().retained,observation_revision:'HRV 42 ms'}}])('cannot smuggle arbitrary source data into the host metadata branch',async browser=>{
+  await expect(runHooks('PostToolUse',payload(browser),context,{registry:[scribeSanitisePostToolUseHook]})).rejects.toThrow('browser failure metadata invalid');
+ });
+ it('human diagnostic text still passes through Scribe without exposing raw health values',async()=>{
+  const raw=payload(metadata()) as any;raw.result.error='HRV 42 ms';
+  const result=await runHooks('PostToolUse',raw,context,{registry:[scribeSanitisePostToolUseHook]});
+  expect(JSON.stringify(result)).not.toContain('HRV 42');expect(result).toMatchObject({result:{browser:metadata()}});
+ });
+});

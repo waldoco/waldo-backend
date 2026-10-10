@@ -49,6 +49,9 @@ export async function runToolLoop(input: Readonly<{
   ctx: ToolDispatcherContext;
   maxSteps: number;
   offload?: ToolOutputStore;
+  // Host custody can withdraw ordinary offload after a protected handler runs.
+  // Recheck at actual put boundaries, not once before the awaited handler.
+  offloadCurrent?(): ToolOutputStore | undefined;
   onTool?: (event: ToolLoopEvent) => void;
   // Fired once, just before the loop returns, with the truthful exit classification.
   onSettle?: (exit: LoopExit) => void;
@@ -176,7 +179,7 @@ export async function runToolLoop(input: Readonly<{
       const replayNote = previous && !previous.ok
         ? '\n[repeat: cached failure from this turn; no new tool execution]'
         : '';
-      const output = capToolOutput(JSON.stringify(result), input.offload, call.call_id) + replayNote + budgetNote;
+      const output = capToolOutput(JSON.stringify(result), input.offloadCurrent ? input.offloadCurrent() : input.offload, call.call_id) + replayNote + budgetNote;
       turns.push({ call, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
       firstCall = false;
       // The typed code/reason ride the span as their own fields so a failed hop stays
@@ -198,7 +201,7 @@ export async function runToolLoop(input: Readonly<{
 
 async function dispatch(
   call: LLMToolCall,
-  input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext; offload?: ToolOutputStore }>,
+  input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext; offload?: ToolOutputStore; offloadCurrent?(): ToolOutputStore | undefined }>,
 ): Promise<Readonly<{ ok: boolean; data?: unknown; error?: string; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent }>> {
   const name = toolNameSchema.safeParse(call.name);
   if (!name.success) return { ok: false, error: `Unknown tool ${call.name}.` };
@@ -208,7 +211,7 @@ async function dispatch(
   } catch {
     return { ok: false, error: 'Arguments were not valid JSON.' };
   }
-  const result = await dispatchTool({ id: call.call_id, name: name.data, args }, input.ctx, { handlers: input.handlers, ...(input.offload === undefined ? {} : { offload: input.offload }) });
+  const result = await dispatchTool({ id: call.call_id, name: name.data, args }, input.ctx, { handlers: input.handlers, get offload() { return input.offloadCurrent ? input.offloadCurrent() : input.offload; } });
   // The untrusted marker crosses the model boundary on BOTH arms: a successful external result
   // keeps source_taint 'external' in the JSON the model reads, so provider text never presents
   // as internal truth (security review 2026-09-26); the failure arm keeps it for the same reason.

@@ -1,13 +1,13 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
+import { routerSignature } from '../src/identity/owner-directory';
 import {workspaceStore} from '@waldo/workspace';
 import {workspaceOwnerHost} from '../src/channels/workspace-host';
 import { configureCommonPublicBrowser } from '../src/channels/common-public-browser-configuration';
 import { commonBrowserFixture, commonBrowserMeteredFixtureLoader } from './fixtures/common-browser-sdk';
 
 const proof = vi.hoisted(() => ({ inputs: [] as any[], delivered: [] as string[], directoryOwner: '10000000-0000-0000-0000-000000000001', doName: '', subject: '81101',normalCalls:0,phase:'main',phaseCalls:0,sessionHandle:'',tabRef:'',outputs:[] as any[],bodies:new Map<string,Uint8Array>() }));
-vi.mock('../src/identity/common-owner-authority', () => ({ commonOwnerAuthority: () => ({ resolve: async () => ({ directoryOwnerId: proof.directoryOwner, custodyDigest: 'a'.repeat(64) }) }) }));
 vi.mock('../src/channels/workspace-host',async load=>{
  const actual=await load<typeof import('../src/channels/workspace-host')>();
  return {...actual,workspaceOwnerHost:async(_env:any,storage:any,_physical:any,doName:string,_fetch:any,scope:any,assertCurrent?:()=>Promise<void>)=>workspaceStore({
@@ -46,9 +46,31 @@ it('ordinary owner loop reads, types, reobserves and continues two public tabs w
     { policy: { ref, ownerId: `prn_${proof.directoryOwner.replaceAll('-', '')}`, validUntil: now + 60000, limitMicrousd: 10000, maxCalls: 100 }, quote: kind => kind === 'browser' ? 0 : 1, allocationMicrousd: 100 });
   const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(doName));
   await runInDurableObject(stub, async (_instance, state) => {
-    const denied = vi.spyOn(globalThis, 'fetch').mockRejectedValue(Error('live network forbidden'));
+    const directoryOrigin='https://public-browser-owner.fixture.invalid', routerSecret='synthetic-public-browser-router-secret-000000000000';
+    const directoryCalls:string[]=[];
+    const directory = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input,init) => {
+      const url=new URL(String(input));
+      if(url.origin!==directoryOrigin||!url.pathname.startsWith('/rest/v1/rpc/'))throw Error('live network forbidden');
+      const fn=url.pathname.split('/').at(-1)!,args=JSON.parse(String(init?.body));directoryCalls.push(fn);
+      if(fn==='common_owner_authority') {
+        expect(args.p_sig).toBe(await routerSignature(routerSecret,args.p_at,`common.owner.${args.p_locator}`));
+        return Response.json(args.p_provider==='telegram'&&args.p_subject===String(subject)&&args.p_do_name===doName?{
+          owner_id:proof.directoryOwner,auth_user_id:'20000000-0000-0000-0000-000000000001',presence_id:'30000000-0000-0000-0000-000000000001',provider:'telegram',subject:String(subject),do_name:doName,state_version:0,admission_revision:'1',
+        }:null);
+      }
+      if(fn==='owner_runtime_authority') {
+        expect(args.p_sig).toBe(await routerSignature(routerSecret,args.p_at,`owner.runtime.${args.p_do_name}`));
+        return Response.json(args.p_do_name===doName?{owner_id:proof.directoryOwner,auth_user_id:'20000000-0000-0000-0000-000000000001',do_name:doName,state_version:0,admission_revision:'1'}:null);
+      }
+      if(fn==='assert_channel_presence') {
+        expect(args.p_sig).toBe(await routerSignature(routerSecret,args.p_at,`presence.${args.p_do_name}.${args.p_provider}.${args.p_subject}`));
+        return Response.json(args.p_do_name===doName&&args.p_provider==='telegram'&&args.p_subject===String(subject));
+      }
+      if(fn==='health_context_read'||fn==='health_plane')return Response.json(null);
+      throw Error(`unlisted signed directory RPC ${fn}`);
+    });
     const binding = { fetch: vi.fn(async () => new Response('{}', { status: 200 })) };
-    const publicEnv = { ...env, COMMON_OWNER_TASKS: '0', WALDO_ENVIRONMENT: 'staging', LANGFUSE_CAPTURE_TEXT: 'true', WALDO_EGRESS_ALLOWLIST: '*', WALDO_TOOL_OFFLOAD: '0', BROWSER: binding as never, TELEGRAM_BOT_TOKEN: '12345:fictional', TELEGRAM_WEBHOOK_SECRET: 'synthetic-public-browser-secret', OPENAI_API_KEY: 'synthetic-model-key' };
+    const publicEnv = { ...env, SUPABASE_PROJECT_URL:directoryOrigin,SUPABASE_PUBLISHABLE_KEY:'synthetic-public-key',WALDO_ROUTER_HMAC_SECRET:routerSecret, COMMON_OWNER_TASKS: '0', WALDO_ENVIRONMENT: 'staging', LANGFUSE_CAPTURE_TEXT: 'true', WALDO_EGRESS_ALLOWLIST: '*', WALDO_TOOL_OFFLOAD: '0', BROWSER: binding as never, TELEGRAM_BOT_TOKEN: '12345:fictional', TELEGRAM_WEBHOOK_SECRET: 'synthetic-public-browser-secret', OPENAI_API_KEY: 'synthetic-model-key' };
     let instance = new TelegramOwnerDO(state, publicEnv);
     let updateId = 9981000;
     const send = async (text: string) => {
@@ -99,7 +121,7 @@ it('ordinary owner loop reads, types, reobserves and continues two public tabs w
       const image=await workspace.export(receipt.file_id,receipt.revision);expect(image.meta.sha256).toBe(receipt.sha256);expect(image.bytes.slice(0,8)).toEqual(new Uint8Array([137,80,78,71,13,10,26,10]));
       expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.attachments).toBe(1);
       expect(state.storage.kv.get<any>(`common-spend:${ref}`).calls.length).toBeGreaterThan(beforeContinuation);
-      expect(binding.fetch).toHaveBeenCalled(); expect(denied).not.toHaveBeenCalled();
+      expect(binding.fetch).toHaveBeenCalled();expect(directoryCalls).toContain('common_owner_authority');expect(directoryCalls).toContain('owner_runtime_authority');
       await send(`Cancel browser ${proof.sessionHandle}.`);
       expect(commonBrowserFixture.ends).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(0);
       proof.phase='fresh';proof.phaseCalls=0;
@@ -116,6 +138,6 @@ it('ordinary owner loop reads, types, reobserves and continues two public tabs w
       expect(ledger.reservedMicrousd).toBeGreaterThanOrEqual(100);
       expect(ledger.calls.filter((call: any) => call.id.startsWith('model:')).length).toBeGreaterThanOrEqual(3);
       expect(ledger.reservedMicrousd).toBeLessThanOrEqual(10000);
-    } finally { await state.storage.deleteAlarm(); denied.mockRestore(); }
+    } finally { await state.storage.deleteAlarm(); directory.mockRestore(); }
   });
 });

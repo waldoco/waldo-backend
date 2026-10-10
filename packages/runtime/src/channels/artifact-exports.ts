@@ -3,19 +3,23 @@ import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { OwnerClock } from '../tools/live/get-context';
 import type { ArtifactBook, ArtifactBodies } from './artifacts';
 import { renderMarkdownPdf } from './artifact-export';
+import { sha256Hex } from '../connectors/google';
+import type { OwnerByteCustody, OwnerByteInvocation } from '../rights/write-custody';
+import { RightsError } from '../rights/jobs';
+import type { RunEffectScope } from './run-effect-scope';
 
 // Binary store for exported files. Same owner-scope key prefix idea as r2ArtifactBodies, but bytes.
 export type ArtifactBinaries = Readonly<{
-  putBytes(key: string, bytes: Uint8Array): Promise<void>;
+  putBytes(key: string, bytes: Uint8Array, invocation?: OwnerByteInvocation): Promise<void>;
   // maxBytes, when given, bounds the read itself: an object larger than it throws before any body is read.
   getBytes(key: string, maxBytes?: number): Promise<Uint8Array | null>;
 }>;
 
-export const r2ArtifactBinaries = (bucket: R2Bucket, ownerScope: string): ArtifactBinaries => {
+export const r2ArtifactBinaries = (bucket: R2Bucket, ownerScope: string, custody?: OwnerByteCustody): ArtifactBinaries => {
   if (typeof ownerScope !== 'string' || !ownerScope.trim()) throw new Error('Artifact owner scope is required');
   const scoped = (key: string) => `artifacts/exports/by-owner/${encodeURIComponent(ownerScope)}/${encodeURIComponent(key)}`;
   return {
-    putBytes: async (key, bytes) => { await bucket.put(scoped(key), bytes); },
+    putBytes: async (key, bytes, invocation) => { if (!custody) throw new RightsError('unavailable'); const objectKey = scoped(key); await custody.put(objectKey, bytes, immutable => bucket.put(objectKey, immutable), invocation); },
     getBytes: async (key, maxBytes) => {
       const object = await bucket.get(scoped(key));
       if (object === null) return null;
@@ -48,8 +52,9 @@ export const artifactExports = (sql: Sql, book: ArtifactBook, bodies: ArtifactBo
     // Exact-id lookup for the download helper. Returns the stored row or null; callers validate it.
     byId: (id: string): ExportRow | null => sql.exec<ExportRow>('SELECT * FROM artifact_exports WHERE id = ?', id).toArray()[0] ?? null,
     rows: (artifactId: string) => sql.exec<ExportRow>('SELECT * FROM artifact_exports WHERE source_artifact_id = ?', artifactId).toArray(),
-    async exportPdf(args: ExportArtifactArgs, assertSourceCurrent?: () => Promise<void>) {
-      await assertSourceCurrent?.();
+    async exportPdf(args: ExportArtifactArgs, assertSourceCurrent?: () => Promise<void>, scope?: RunEffectScope) {
+      const admit = async () => { scope?.admit(); await assertSourceCurrent?.(); scope?.admit(); };
+      await admit();
       if (args.format !== 'pdf') return { ok: false as const, code: 'unsupported_format' };
       const meta = book.byId(args.artifact_id);
       if (meta === null) return { ok: false as const, code: 'not_found' };
@@ -64,29 +69,40 @@ export const artifactExports = (sql: Sql, book: ArtifactBook, bodies: ArtifactBo
         // The stored receipt is only true while its file still exists. A missing or unreadable object (bucket lifecycle, manual delete,
         // size no longer matching the row) drops the stale row and renders again, so a repeat export never hands back a link that 404s.
         let stillStored = false;
-        try { stillStored = await binaries.getBytes(prior.r2_key, prior.byte_size) !== null; } catch { stillStored = false; }
+        try {
+          if (Number.isSafeInteger(prior.byte_size) && prior.byte_size > 0 && prior.byte_size <= 5 * 1024 * 1024) {
+            const bytes = await binaries.getBytes(prior.r2_key, prior.byte_size);
+            if (bytes !== null && bytes.length === prior.byte_size) {
+              const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(value => value.toString(16).padStart(2, '0')).join('');
+              stillStored = digest === prior.sha256;
+            }
+          }
+        } catch { stillStored = false; }
+        await admit();
         if (stillStored) return receipt(prior);
         sql.exec('DELETE FROM artifact_exports WHERE id = ?', prior.id);
       }
-      await assertSourceCurrent?.();
+      await admit();
       const body = await bodies.get(meta.r2_key);
-      await assertSourceCurrent?.();
+      await admit();
       if (body === null) return { ok: false as const, code: 'not_found' };
+      if (new TextEncoder().encode(body).byteLength !== meta.byte_size || meta.sha256 && await sha256Hex(body) !== meta.sha256) return { ok: false as const, code: 'body_unavailable' };
       const rendered = await renderMarkdownPdf(body);
       if (rendered.status !== 'exported') return { ok: false as const, code: rendered.status };
       const id = `exp:${newId()}`;
       const key = `${meta.id}/r${meta.revision}/${id}`;
-      await assertSourceCurrent?.();
-      await binaries.putBytes(key, rendered.bytes);
-      await assertSourceCurrent?.();
+      await admit();
+      await binaries.putBytes(key, rendered.bytes, { scope, assertCurrent: assertSourceCurrent });
+      await admit();
       // Re-check the source did not move while we wrote bytes; orphan bytes are harmless, a stale row is not.
       const after = book.byId(args.artifact_id);
       if (after === null || after.revision !== args.expected_revision) return { ok: false as const, code: 'conflict', current_revision: after?.revision ?? 0 };
       // Two exports of the same revision can interleave across the awaits above; the first row wins and this one's bytes are an orphan.
       const raced = lookup();
       if (raced !== undefined) return receipt(raced);
-      sql.exec('INSERT INTO artifact_exports (id, source_artifact_id, source_revision, format, mime_type, byte_size, sha256, r2_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      const commit = () => sql.exec('INSERT INTO artifact_exports (id, source_artifact_id, source_revision, format, mime_type, byte_size, sha256, r2_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
         id, meta.id, meta.revision, 'pdf', rendered.mime_type, rendered.bytes.length, rendered.sha256, key, clock.now().getTime());
+      if (scope) scope.commit(commit); else commit();
       return { ok: true as const, id, bytes: rendered.bytes.length, mime_type: rendered.mime_type, sha256: rendered.sha256, key, deduped: false };
     },
   };
@@ -104,7 +120,7 @@ export const exportArtifactHandler = (exporter: ReturnType<typeof artifactExport
   autonomy_gated: false,
   mutates_state: true,
   handle: async (args: ExportArtifactArgs, ctx?: ToolDispatcherContext) => {
-    const r = await exporter.exportPdf(args, ctx?.assertTaskSourceCurrent);
+    const r = await exporter.exportPdf(args, ctx?.assertTaskSourceCurrent, ctx?.runScope);
     // Discriminated: only status 'exported' is ok:true. Every failure is ok:false with its real reason.
     if (r.ok) {
       let url: string | null = null;

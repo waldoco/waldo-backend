@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { artifactMarker, extractArtifacts, onlyArtifacts, quarantineArtifacts } from '../src/security/artifact-hygiene';
+import { artifactMarker, extractArtifactFields, extractArtifacts, onlyArtifacts, quarantineArtifacts } from '../src/security/artifact-hygiene';
 
 const ARTIFACTS: ReadonlyArray<{ text: string; kinds: string[]; stolen: string }> = [
   // gmail-class OTPs
@@ -77,6 +77,19 @@ describe('artifact hygiene quarantine', () => {
 });
 
 describe('extractArtifacts (owner-ruled OTP parity)', () => {
+  it('removes a known credential echoed across fields without discarding unrelated source context', () => {
+    const result = extractArtifactFields(['Your verification code: 123456', 'Your one-time password is 123456. The form is due November 2.']);
+    expect(result.artifacts).toEqual([{ kind: 'otp', value: '123456' }]);
+    expect(result.texts.join('\n')).not.toContain('123456');
+    expect(result.texts[1]).toContain('November 2');
+  });
+  it('deduplicates relay values while removing known URL echoes across fields', () => {
+    const link = 'https://example.test/auth/v1/verify?token_hash=opaque&type=magiclink';
+    const result = extractArtifactFields([link, `Sign in ${link}`, 'Your code is 654321', 'Verification code: 654321']);
+    expect(result.artifacts).toHaveLength(2);
+    expect(result.texts.join(' ')).not.toContain('token_hash');
+    expect(result.texts.join(' ')).not.toContain('654321');
+  });
   it('captures the bare code from the surrounding phrase, deduped by value', () => {
     const { text, artifacts } = extractArtifacts('Your login code is 123456. Again: your otp is 123456.');
     expect(artifacts).toEqual([{ kind: 'otp', value: '123456' }]);

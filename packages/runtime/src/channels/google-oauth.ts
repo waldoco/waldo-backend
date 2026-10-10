@@ -4,6 +4,10 @@ import type { ConsentOutcome } from '../connectors/google-consent';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 
+// Preserve existing in-flight Telegram-key state; canonical-only deployments use the
+// existing router credential with a distinct OAuth protocol domain. No credential is minted.
+export const googleConsentSecret=(env:Pick<TelegramWebhookEnv,'TELEGRAM_WEBHOOK_SECRET'> & OwnerDirectoryEnv):string|undefined=>env.TELEGRAM_WEBHOOK_SECRET??(env.WALDO_ROUTER_HMAC_SECRET?`google-oauth.v1:${env.WALDO_ROUTER_HMAC_SECRET}`:undefined);
+
 export const GOOGLE_FINISH_PATH = '/google/consent';
 export type ConsentReply = Readonly<{ outcome: ConsentOutcome; bot: string | null }>;
 
@@ -70,7 +74,8 @@ const rejected = (reason: string) => console.log(JSON.stringify({ trace: 'oauth'
 // Google redirects the owner here after consent. The signed state names the owner's Durable Object and
 // a one-time attempt; that Durable Object settles the attempt, so a reloaded callback never exchanges twice.
 export const handleGoogleCallback = async (request: Request, env: TelegramWebhookEnv & OwnerDirectoryEnv): Promise<Response> => {
-  const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, TELEGRAM_WEBHOOK_SECRET: secret, TELEGRAM_OWNER_DO: owners } = env;
+  const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, TELEGRAM_OWNER_DO: owners } = env;
+  const secret=googleConsentSecret(env);
   if (!clientId || !clientSecret || !secret || !owners) return new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   const params = new URL(request.url).searchParams;
   const error = params.get('error');

@@ -1,3 +1,4 @@
+import { retainOwnerConversationEntries, type OwnerResponseRetention } from './owner-turn-response';
 import type { RunEffectScope } from './run-effect-scope';
 import { literalTextRedactor, redactConversationEntry, type ConversationEntry, type ConversationTree } from '@waldo/contracts';
 import { redactSecretUrls } from './egress-guard';
@@ -6,7 +7,7 @@ import { asciiLiteralIncludes, forgetSourceBatch, type ForgetSource, type Forget
 
 export type ConversationStore = Readonly<{
   load(): Promise<Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null }>>;
-  save(entries: readonly ConversationEntry[], leafId: string, scope?: RunEffectScope): Promise<void>;
+  save(entries: readonly ConversationEntry[], leafId: string, scope?: RunEffectScope, responseRetention?: OwnerResponseRetention): Promise<void>;
   persistOwnerInput?(entry: ConversationEntry, scope: RunEffectScope): Promise<void>;
   forgetSources?(topic: string): Promise<{ sources: ForgetSource[]; incomplete: boolean }>;
   forgetSourceBatch?(topic: string): Promise<ForgetBatch>;
@@ -36,7 +37,8 @@ export const durableConversationStore = (storage: KeyValueStorage): Conversation
     const rows = await storage.list<ConversationEntry>({ prefix: 'conv:' });
     return { entries: [...rows.values()], leafId: (await storage.get<string>('conv-leaf')) ?? null };
   },
-  async save(entries, leafId, scope) {
+  async save(rawEntries, leafId, scope, responseRetention) {
+    const entries = retainOwnerConversationEntries(rawEntries, responseRetention);
     const count = (await storage.get<number>('conv-count')) ?? 0;
     const scrubbed = entries.map((entry) => {
       const model = redactSecretUrls(entry.modelPayload);

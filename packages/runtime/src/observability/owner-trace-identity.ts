@@ -28,10 +28,10 @@ export const ownerTraceFields = (identity: OwnerTraceIdentity | undefined) => ({
 
 type Occurrence = Readonly<{ updateId: number; doName: string; subject: string; traceIdentity?: OwnerTraceIdentity }>;
 // Lookup is local and occurrence-bound: a newer inbound email must not relabel an older turn's delayed hops.
-export const enrichOwnerTrace = (entry: TurnLogEntry, rows: readonly Occurrence[], doName: string, subject: string): TurnLogEntry => {
+export const enrichOwnerTrace = (entry: TurnLogEntry, rows: readonly Occurrence[], doName: string, subject: string, canonicalIdentity?: OwnerTraceIdentity): TurnLogEntry => {
   const match = /^tg-(\d+)$/.exec(entry.trace);
   const row = match ? rows.find(row => row.updateId === Number(match[1]) && row.doName === doName && row.subject === subject) : undefined;
-  return { ...entry, owner: doName || 'unresolved', ...ownerTraceFields(ownerTraceIdentity(row?.traceIdentity)) };
+  return { ...entry, owner: doName || 'unresolved', ...ownerTraceFields(ownerTraceIdentity(row?.traceIdentity) ?? ownerTraceIdentity(canonicalIdentity)) };
 };
 
 // What is persisted at rest follows the same capture switch as the sinks: owner_id stays, the email is dropped when capture is off.

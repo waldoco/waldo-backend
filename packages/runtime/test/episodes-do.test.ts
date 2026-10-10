@@ -51,6 +51,18 @@ describe('episode history', () => {
     });
   });
 
+  it('retains only metadata for a protected assistant response across storage and episodes', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('episodes-protected'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const index = episodeIndex(state.storage.sql);
+      const store = indexedConversationStore(durableConversationStore(state.storage), index, () => 100);
+      await store.save([{ ...entry('app-reply', 'Synthetic raw physiology 420'), role: 'assistant' as const }], 'app-reply', undefined, 'volatile_owner_health');
+      expect(JSON.stringify(await store.load())).not.toContain('420');
+      expect(JSON.stringify(index.since(0, 10000))).not.toContain('420');
+      expect(index.search('physiology', 5)).toEqual([]);
+    });
+  });
+
   it('re-anchors a future stale-zone nightly row without replaying an occurrence', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('nightly-zone-reconcile'));
     await runInDurableObject(stub, async (_instance, state) => {

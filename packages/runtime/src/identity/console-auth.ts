@@ -149,14 +149,29 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     },
     async listSessions(doName) {
       const rows = await rpc('console_session_list', `consolesess.list.${doName}`, { p_do_name: doName });
-      return Array.isArray(rows) ? (rows as ConsoleSession[]) : [];
+      // An invalid authority response cannot prove that a session is absent.
+      if (!Array.isArray(rows)) throw new Error('session inventory unavailable');
+      const seen = new Set<string>();
+      return rows.map((raw: unknown) => {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('session inventory unavailable');
+        const row = raw as Record<string, unknown>;
+        if (Object.keys(row).sort().join(',') !== 'created_at,last_seen_at,session'
+          || typeof row.session !== 'string' || !/^[a-f0-9]{64}$/.test(row.session) || seen.has(row.session)
+          || typeof row.created_at !== 'string' || !Number.isFinite(Date.parse(row.created_at))
+          || typeof row.last_seen_at !== 'string' || !Number.isFinite(Date.parse(row.last_seen_at))) throw new Error('session inventory unavailable');
+        seen.add(row.session);
+        return { session: row.session, created_at: row.created_at, last_seen_at: row.last_seen_at };
+      });
     },
     async revokeSession(doName, sessionHash) {
-      return (await rpc('console_session_revoke', `consolesess.revoke.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash })) === true;
+      const revoked = await rpc('console_session_revoke', `consolesess.revoke.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
+      if (typeof revoked !== 'boolean') throw new Error('session revocation unavailable');
+      return revoked;
     },
     async signOutAll(doName) {
       const count = await rpc('console_signout_all', `consolesess.signout.${doName}`, { p_do_name: doName });
-      return typeof count === 'number' ? count : 0;
+      if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) throw new Error('session signout unavailable');
+      return count;
     },
   };
 };

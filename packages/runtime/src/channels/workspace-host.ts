@@ -1,11 +1,13 @@
 import { WorkspaceError, r2Bodies, workspaceStore, type Admission, type Metadata, type OwnerBinding, type WorkspaceState } from '@waldo/workspace';
 import { signedRpc, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import type { RunEffectScope } from './run-effect-scope';
+import { ownerByteCustody, type OwnerByteCustody } from '../rights/write-custody';
 
 // SQLite callback is synchronous. No network, body writes or thenables belong here.
 export const workspaceMetadata = (storage: Pick<DurableObjectStorage, 'sql' | 'transactionSync'>, scope?: RunEffectScope): Metadata => ({
   transaction<T>(work: (state: WorkspaceState) => T): T {
     const transaction = () => {
+      if ('kv' in storage && (storage as DurableObjectStorage).kv.get('rights:owner-lock')) throw new WorkspaceError('rejected');
       storage.sql.exec('CREATE TABLE IF NOT EXISTS workspace_manifest (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), state_json TEXT NOT NULL)');
       const row = storage.sql.exec<{ state_json: string }>('SELECT state_json FROM workspace_manifest WHERE singleton = 1').toArray()[0];
       const state: WorkspaceState = row ? JSON.parse(row.state_json) : { binding: null, files: [], bodies: [], operations: [] };
@@ -35,6 +37,7 @@ export const workspaceOwnerHost = async (
   fetcher: typeof fetch = fetch,
   scope?: RunEffectScope,
   assertSourceCurrent?: () => Promise<void>,
+  byteCustody?: OwnerByteCustody,
 ) => {
   const call = signedRpc(env, async (input,init) => {
     const controller = new AbortController();
@@ -69,9 +72,11 @@ export const workspaceOwnerHost = async (
   if (!binding || binding.environment !== environment || binding.namespace !== namespace || binding.doName !== doName || binding.doId !== actualDoId) throw new WorkspaceError('rejected');
   const admit: Admission = async supplied => {
     try {
+      if ('kv' in storage && (storage as DurableObjectStorage).kv.get('rights:owner-lock')) return { status: 'rejected' };
       const current = await resolve();
       await assertSourceCurrent?.();
       scope?.admit();
+      if ('kv' in storage && (storage as DurableObjectStorage).kv.get('rights:owner-lock')) return { status: 'rejected' };
       if (!current) return { status: 'rejected' };
       if (Object.keys(binding).some(key => supplied[key as keyof OwnerBinding] !== current[key as keyof OwnerBinding])) return { status: 'rejected' };
       return { status: 'ok' };
@@ -80,8 +85,14 @@ export const workspaceOwnerHost = async (
   // Capture the invocation capability, never a mutable current-turn slot. Admission at
   // the raw bucket boundary prevents an async mapping check from granting later I/O.
   const bucket = env.ARTIFACTS;
+  const custody = byteCustody ?? ownerByteCustody(storage, async () => {
+    await assertSourceCurrent?.(); scope?.admit();
+    if ((await admit(binding, 'write')).status !== 'ok') throw new WorkspaceError('rejected');
+  });
   const bodies = await r2Bodies({
-    put: async (key, bytes) => { await assertSourceCurrent?.(); scope?.admit(); return bucket.put(key, bytes); },
+    writeSettled: (key: string) => custody.settled(key),
+    reconcileWrite: (key, bytes) => custody.reconcile(key, bytes),
+    put: async (key, bytes) => { await assertSourceCurrent?.(); scope?.admit(); return custody.put(key, bytes, immutable => bucket.put(key, immutable)); },
     get: async key => { await assertSourceCurrent?.(); scope?.admit(); return bucket.get(key); },
     delete: key => { scope?.admit(); return bucket.delete(key); },
   }, binding, admit);

@@ -1,0 +1,29 @@
+# Protected owner health serving candidate
+
+This is local engineering evidence. It is not deployment, native-device, clinical-validation, live transport, or independent review evidence.
+
+## Admission and factory wiring
+
+The authenticated owner host constructs one `createOwnerHealthTurnSources(service,clock)` per admitted turn, bound to the owner's signed health service. Install it with `context.withOwnerHealthSources(sources.read,sources.assertCurrent,[healthReadingsHandler(sources)])`. `read()` admits no numeric health merely because health is enabled. The model selects the existing `get_health` capability when the task needs health. Its host-only WeakMap custody stamp cannot be forged by a tool name or argument. The source captures exact source/storage/model purpose epochs and checks them before and after every read/model/delivery boundary. Missing grants leave general work available; an admitted source's withdrawal/regrant invalidates the whole protected turn.
+
+`get_health` supplies bounded observed daily/series readings, source/method/time/coverage, and truthful unavailable calculations. Range is at most31days and at most256 samples per source. A clipped/dense result reports partial coverage and asks for a narrower request; it cannot claim a complete export. The owner raw HTTP endpoint has its separate source/query/revision-bound cursor. Source-native origins remain data, not authentication or permission. HRV/RHR/sleep eligibility follows the reviewed producer contract and never invents overnight provenance.
+
+## Useful effects without raw replay
+
+Ordinary tasks with health enabled use their existing tools without a numeric health read. After explicit `get_health`, raw-phase handlers permit only protected health/local context reads. Browser jobs, stored files, memory, outbound drafts and child/background runs cannot receive raw-phase tool arguments. Exceptions and model/tool observers contain fixed codes/shape/count metadata, not raw body/error text.
+
+When the original owner task requires further planning/effects, a separate model judgment may emit `healthOperationalGuidanceSchema`: `continue_owner_task` Boolean and closed enums for day load, spacing, exercise, sleep and meals. No free string, number, date, raw measurement, source ID or rationale is admitted. A malformed projection performs no further effects. The fresh general loop starts with the authenticated original owner messages and those optional minimum operational preferences. Raw tool turns, replay cache, offloaded output and attachments are absent. Protected custody withdraws the ordinary offload store at both dispatcher and tool-loop put boundaries; results over the inline bound explicitly report cut content and require a narrower read. Every protected turn exit, including failure, clears the ordinary cache. Numeric rereads, memory mutations, offload reads and delegate/background work stay unavailable in that phase. Existing tool ACL, approvals, owner/run fences and source-current checks still apply. Instructions require ordinary task content without health rationale or persisted guidance. The entire combined owner reply remains protected.
+
+This does not establish model obedience under arbitrary live prompts. Independent security review and real provider/model negative-sink inspection remain required before external serving. A source/version/clinical acceptance receipt for scoring is a separate prerequisite; no activation receipt is self-ratified by these tests.
+
+## Typed response and retention
+
+`OwnerTurnResponse` carries text plus custody. A health-derived receipt exposes original execution `assertCurrent()` and independent captured health `assertHealthCurrent()`. Legacy string-only consumers fail closed. Joined conversation path/publication replay, durable/canonical conversation stores and episode wrapper retain only a neutral protected-response notice with model projection omitted. Numeric assistant text never becomes transcript/episode/audit/R2/tool-ledger or bulk memory. Duplicate protected publication requires a new current read rather than replaying a lost body.
+
+Telegram/WhatsApp protected owner transport bypasses the durable outbox, rechecks exact current authority before and after actual dispatch, and returns actual transport evidence. This is a runtime adapter seam, not proof of live WhatsApp/iMessage or Telegram provider integration. Protected app delivery publishes a metadata-only `protected_health` message part. Its raw body lives only in `appProtectedResponses()` per-instance Map, bound to principal+app session+conversation, capacity<=16 and expiry<=5minutes. Registration uses original receipt custody before/after; later authenticated GET uses independent captured health epochs plus fresh owner/session/conversation guard, without keeping a completed execution scope alive. All responses are private/no-store. Restart, expiry, revoke or deletion returns410; there is no durable plaintext or false delivered-body ACK.
+
+## Evidence and limits
+
+Synthetic Worker journeys exercise app-only general work with enabled health, actual signed-service numeric selection through the model tool, strict enum projection, fresh useful agenda effect, raw-free replay/log/history, malformed projection refusal and withdrawal after projection. Direct storage/episode tests cover alternate retention paths; readback tests cover cross-owner/session/conversation denial, post-await revoke, expiry/restart, and erase. Transport tests use synthetic adapters, not real providers.
+
+The isolated SQL lane exercises actual source-purpose/18+/epoch fences, sample/native provenance and dense continuation. Formula/source/vector review pins identify a candidate to review, not scientific validation. Acceptance, independent exact-head review, staging application, physical device consent/backfill/delete and real provider/source spending remain coordinated by the parent release owner.

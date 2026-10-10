@@ -3,12 +3,12 @@ export type OwnerBinding = Readonly<{ ownerId: string; environment: string; name
 export type Provenance = 'owner_upload' | 'agent_generated' | 'provider_import' | 'sandbox_output';
 export type FileMeta = Readonly<{ file_id: string; path: string; revision: number; mime: string; byte_size: number; sha256: string; provenance: Provenance; source_taint: 'external'; created_at: number; updated_at: number; state: 'ready' | 'tombstoned' }>;
 export type BodyRevision = Readonly<{ file_id: string; blob_id: string; revision: number; mime: string; provenance: Provenance; created_at: number; byte_size: number; sha256: string; binding: OwnerBinding }>;
-export type Operation = Readonly<{ operation_id: string; fingerprint: string; meta: FileMeta; body: BodyRevision; status: 'pending' | 'committed'; reserved_at: number }>;
+export type Operation = Readonly<{ operation_id: string; fingerprint: string; intent?: string; meta: FileMeta; body: BodyRevision; status: 'pending' | 'committed' | 'cancel_requested' | 'cancelled'; write_state?: 'reserved' | 'in_flight' | 'settled' | 'uncertain'; reserved_at: number }>;
 export type WorkspaceState = { binding: OwnerBinding | null; files: FileMeta[]; bodies: BodyRevision[]; operations: Operation[] };
 // Callback must be synchronous and atomic: thrown callbacks roll back ALL changes.
 // Host stores the full map/body inventory durably; a process-local implementation is test-only.
 export type Metadata = { transaction<T>(work: (state: WorkspaceState) => T): T };
-export type Bodies = { put(body: BodyRevision, bytes: Uint8Array): Promise<void>; get(body: BodyRevision): Promise<Uint8Array | null>; remove(body: BodyRevision): Promise<void> };
+export type Bodies = { put(body: BodyRevision, bytes: Uint8Array): Promise<void>; get(body: BodyRevision): Promise<Uint8Array | null>; remove(body: BodyRevision): Promise<void>; settled?(body: BodyRevision): boolean };
 export type Admission = (binding: OwnerBinding, action: 'construct' | 'read' | 'write' | 'finalize' | 'export' | 'delete') => Promise<Readonly<{ status: 'ok' | 'unavailable' | 'rejected' }>>;
 export type WorkspaceHost = Readonly<{ binding: OwnerBinding; admit: Admission; metadata: Metadata; bodies: Bodies; now(): number; newId(): string }>;
 export const LIMITS = { fileBytes: 10 * 1024 * 1024, ownerBytes: 100 * 1024 * 1024, files: 500, retainedBodies: 500, operationReceipts: 500, textWriteBytes: 256 * 1024, textReadBytes: 8192, searchBytes: 4 * 1024 * 1024, searchSnippetBytes: 240, pageRows: 50, uploadMs: 60_000 } as const;
@@ -26,12 +26,13 @@ export const validatePath = (path: string): void => {
 export const digest = async (bytes: Uint8Array): Promise<string> => [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.slice().buffer))].map(b => b.toString(16).padStart(2, '0')).join('');
 const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 const decode = (bytes: Uint8Array): string => { try { return utf8.decode(bytes); } catch { return fail('invalid'); } };
-const byteTotal = (state: WorkspaceState): number => state.bodies.reduce((s, b) => s + b.byte_size, 0) + state.operations.filter(o => o.status === 'pending').reduce((s, o) => s + o.body.byte_size, 0);
+const unresolved = (operation: Operation) => operation.status === 'pending' || operation.status === 'cancel_requested';
+const byteTotal = (state: WorkspaceState): number => state.bodies.reduce((s, b) => s + b.byte_size, 0) + state.operations.filter(unresolved).reduce((s, o) => s + o.body.byte_size, 0);
 const copyMeta = (meta: FileMeta): FileMeta => ({ ...meta });
 export type LiteralEdit = Readonly<{ before: string; after: string }>;
 export type TextRevision = Readonly<{ path: string; expected_revision: number; operation_id: string; mime: string; text?: string; edits?: readonly LiteralEdit[] }>;
 const REDACTION_MARKERS = ['[REDACTED_EMAIL]', '[REDACTED_PHONE]', '[REDACTED_ADDRESS]', '[REDACTED_CREDIT_CARD]', '[REDACTED_ATTENDEE_NAME]', '[REDACTED_INSTRUCTION]'] as const;
-export type Write = Readonly<{ path: string; bytes: Uint8Array; mime: string; expected_revision: number; provenance: Provenance; operation_id: string }>;
+export type Write = Readonly<{ path: string; bytes: Uint8Array; mime: string; expected_revision: number; provenance: Provenance; operation_id: string; intent?: string }>;
 export const workspaceStore = async (host: WorkspaceHost) => {
   validateBinding(host.binding);
   const binding = Object.freeze({ ...host.binding });
@@ -75,6 +76,7 @@ export const workspaceStore = async (host: WorkspaceHost) => {
     const saved = state.operations[index]!;
     if (saved.body.binding.stateVersion !== binding.stateVersion) fail('rejected');
     if (saved.status === 'committed') return copyMeta(saved.meta);
+    if (saved.status !== 'pending') fail('pending');
     const file = state.files.find(f => f.path === saved.meta.path);
     if ((file?.revision ?? 0) !== saved.meta.revision - 1 || file?.state === 'tombstoned') fail('conflict');
     state.files = [...state.files.filter(f => f.file_id !== saved.meta.file_id), saved.meta];
@@ -149,6 +151,15 @@ export const workspaceStore = async (host: WorkspaceHost) => {
       if (!validId(fileId)) fail('invalid');
       return transact(state => { const file = state.files.find(f => f.file_id === fileId && f.state === 'ready'); return file ? copyMeta(file) : null; });
     },
+    async revisions(fileId: string) {
+      await admit('read');
+      if (!validId(fileId)) fail('invalid');
+      return transact(state => {
+        if (!state.files.some(file => file.file_id === fileId && file.state === 'ready')) fail('not_found');
+        return state.bodies.filter(body => body.file_id === fileId).sort((a, b) => b.revision - a.revision)
+          .map(({ revision, mime, provenance, created_at, byte_size, sha256 }) => ({ revision, mime, provenance, created_at, byte_size, sha256 }));
+      });
+    },
     async write(args: Write): Promise<FileMeta> {
       await admit('write');
       validatePath(args.path);
@@ -156,20 +167,21 @@ export const workspaceStore = async (host: WorkspaceHost) => {
       const bytes = args.bytes.slice();
       if (bytes.byteLength > LIMITS.fileBytes) fail('quota');
       const hash = await digest(bytes);
-      const fingerprint = JSON.stringify([args.path, args.mime, args.expected_revision, args.provenance, bytes.byteLength, hash]);
+      if (args.intent !== undefined && (typeof args.intent !== 'string' || new TextEncoder().encode(args.intent).length > 4096)) fail('invalid');
+      const fingerprint = JSON.stringify([args.path, args.mime, args.expected_revision, args.provenance, bytes.byteLength, hash, ...(args.intent === undefined ? [] : [args.intent])]);
       const reserved = transact(state => {
         const prior = state.operations.find(o => o.operation_id === args.operation_id);
         if (prior) { if (prior.fingerprint !== fingerprint) fail('conflict'); return { operation: prior, fresh: false }; }
-        if (state.operations.length >= LIMITS.operationReceipts || state.bodies.length + state.operations.filter(o => o.status === 'pending').length >= LIMITS.retainedBodies) fail('capacity');
+        if (state.operations.length >= LIMITS.operationReceipts || state.bodies.length + state.operations.filter(unresolved).length >= LIMITS.retainedBodies) fail('capacity');
         const current = state.files.find(f => f.path === args.path);
         if ((current?.revision ?? 0) !== args.expected_revision || current?.state === 'tombstoned') fail('conflict');
-        if (state.operations.some(o => o.status === 'pending')) fail('pending');
+        if (state.operations.some(unresolved)) fail('pending');
         if ((!current && state.files.filter(f => f.state === 'ready').length >= LIMITS.files) || byteTotal(state) + bytes.byteLength > LIMITS.ownerBytes) fail('quota');
         const fileId = current?.file_id ?? host.newId(); const blobId = host.newId();
         if (!validId(fileId) || !validId(blobId) || state.bodies.some(b => b.blob_id === blobId) || state.operations.some(o => o.body.blob_id === blobId) || (!current && state.files.some(f => f.file_id === fileId))) fail('unavailable');
         const now = host.now();
         const meta: FileMeta = { file_id: fileId, path: args.path, revision: args.expected_revision + 1, mime: args.mime, byte_size: bytes.byteLength, sha256: hash, provenance: args.provenance, source_taint: 'external', created_at: current?.created_at ?? now, updated_at: now, state: 'ready' };
-        const operation: Operation = { operation_id: args.operation_id, fingerprint, meta, body: { file_id: fileId, blob_id: blobId, revision: meta.revision, mime: meta.mime, provenance: meta.provenance, created_at: now, byte_size: bytes.byteLength, sha256: hash, binding }, status: 'pending', reserved_at: now };
+        const operation: Operation = { operation_id: args.operation_id, fingerprint, ...(args.intent === undefined ? {} : { intent: args.intent }), meta, body: { file_id: fileId, blob_id: blobId, revision: meta.revision, mime: meta.mime, provenance: meta.provenance, created_at: now, byte_size: bytes.byteLength, sha256: hash, binding }, status: 'pending', write_state: 'reserved', reserved_at: now };
         state.operations.push(operation);
         return { operation, fresh: true };
       });
@@ -178,9 +190,12 @@ export const workspaceStore = async (host: WorkspaceHost) => {
         if (current?.state !== 'ready') fail('not_found');
         return copyMeta(reserved.operation.meta);
       }
+      if (reserved.operation.status !== 'pending') fail('pending');
       if (!reserved.fresh) { if (reserved.operation.body.binding.stateVersion !== binding.stateVersion) fail('rejected'); await verifyBody(reserved.operation.body); return commit(reserved.operation); }
       await admit('write');
-      await bounded(() => host.bodies.put(reserved.operation.body, bytes));
+      transact(state => { const index = state.operations.findIndex(o => o.operation_id === args.operation_id); if (index < 0 || state.operations[index]!.status !== 'pending') fail('pending'); state.operations[index] = { ...state.operations[index]!, write_state: 'in_flight' }; });
+      const settle = (write_state: 'settled' | 'uncertain') => transact(state => { const index = state.operations.findIndex(o => o.operation_id === args.operation_id); if (index >= 0) state.operations[index] = { ...state.operations[index]!, write_state }; });
+      await bounded(() => host.bodies.put(reserved.operation.body, bytes).then(() => settle('settled'), error => { settle('uncertain'); throw error; }));
       return commit(reserved.operation);
     },
     // Literal spans address only changed bytes. Redacted model views never supply a whole
@@ -220,11 +235,13 @@ export const workspaceStore = async (host: WorkspaceHost) => {
       return store.write({ path: args.path, bytes, mime: args.mime,
         expected_revision: args.expected_revision, operation_id: args.operation_id, provenance: 'agent_generated' });
     },
-    async reconcile(operationId: string): Promise<FileMeta> {
+    async reconcile(operationId: string, intent?: string): Promise<FileMeta> {
       await admit('finalize');
       if (!validId(operationId)) fail('invalid');
       const operation = transact(state => state.operations.find(o => o.operation_id === operationId));
       if (!operation) fail('not_found');
+      if (intent !== undefined && operation!.intent !== intent) fail('conflict');
+      if (operation!.status !== 'pending' && operation!.status !== 'committed') fail('pending');
       if (operation!.status === 'committed') {
         if (!transact(state => state.files.some(f => f.file_id === operation!.meta.file_id && f.state === 'ready'))) fail('not_found');
         return copyMeta(operation!.meta);
@@ -232,6 +249,37 @@ export const workspaceStore = async (host: WorkspaceHost) => {
       if (operation!.body.binding.stateVersion !== binding.stateVersion) fail('rejected');
       await verifyBody(operation!.body);
       return commit(operation!);
+    },
+    async operation(operationId: string) {
+      await admit('read'); if (!validId(operationId)) fail('invalid');
+      const operation = transact(state => state.operations.find(o => o.operation_id === operationId));
+      if (!operation) fail('not_found');
+      const fingerprint = await digest(new TextEncoder().encode(operation!.fingerprint)); await admit('read');
+      return { fingerprint, state: operation!.status, reserved_at: operation!.reserved_at,
+        file: operation!.status === 'committed' && transact(state => state.files.some(f => f.file_id === operation!.meta.file_id && f.state === 'ready')) ? copyMeta(operation!.meta) : null };
+    },
+    async cancel(operationId: string, expectedFingerprint: string) {
+      const prior = await store.operation(operationId); if (prior.fingerprint !== expectedFingerprint) fail('conflict');
+      await admit('delete');
+      const operation = transact(state => {
+        const index = state.operations.findIndex(o => o.operation_id === operationId); if (index < 0) fail('not_found');
+        const saved = state.operations[index]!; if (saved.status === 'committed') fail('conflict');
+        state.operations[index] = saved.status === 'cancelled' ? saved : { ...saved, status: 'cancel_requested' };
+        return state.operations[index]!;
+      });
+      if (operation.status === 'cancelled') return store.operation(operationId);
+      // A live/uncertain put can recreate an object after delete. Wait for actual
+      // settlement, retaining quota and the cancellation receipt across restart.
+      if (operation.write_state !== 'reserved' && operation.write_state !== 'settled' && host.bodies.settled?.(operation.body) !== true) {
+        try { await verifyBody(operation.body); } catch { return store.operation(operationId); }
+        if (host.bodies.settled?.(operation.body) !== true) return store.operation(operationId);
+      }
+      try {
+        if (operation.write_state !== 'reserved') { await bounded(() => host.bodies.remove(operation.body)); if (await bounded(() => host.bodies.get(operation.body)) !== null) return store.operation(operationId); }
+        await admit('delete');
+        transact(state => { const index = state.operations.findIndex(o => o.operation_id === operationId); if (index < 0 || state.operations[index]!.status !== 'cancel_requested') fail('conflict'); state.operations[index] = { ...state.operations[index]!, status: 'cancelled' }; });
+      } catch { /* The retained cancellation receipt makes uncertain cleanup visible. */ }
+      return store.operation(operationId);
     },
     async read(fileId: string, revision: number, offset: number, length: number) {
       if (!validId(fileId) || !Number.isSafeInteger(revision) || revision < 1 || !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 1 || length > LIMITS.textReadBytes) fail('invalid');
@@ -255,7 +303,7 @@ export const workspaceStore = async (host: WorkspaceHost) => {
         if (index < 0) fail('not_found');
         const meta = state.files[index]!;
         if (meta.revision !== expectedRevision) fail('conflict');
-        if (state.operations.some(o => o.status === 'pending' && o.meta.file_id === fileId)) fail('pending');
+        if (state.operations.some(o => unresolved(o) && o.meta.file_id === fileId)) fail('pending');
         state.files[index] = { ...meta, state: 'tombstoned' };
         return state.bodies.filter(b => b.file_id === fileId).map(b => ({ ...b }));
       });

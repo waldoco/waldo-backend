@@ -1,4 +1,4 @@
-import { b64url, consentState, googleConsentUrl, type ConsentSurface, type GoogleApp } from './google';
+import { b64url, consentState, googleConsentUrl, type ConsentSurface, type GoogleApp, type GoogleFeature } from './google';
 
 // One record per consent attempt, kept in the owner's Durable Object: a single-use nonce (the OAuth
 // state), its PKCE verifier and its outcome. The callback settles a record once; a repeat callback
@@ -18,6 +18,9 @@ export type ConsentOutcome =
 export type ConsentFlow = Readonly<{
   // Set when the attempt was minted from a /c/<ticket> connect session (S3): the session's ticket hash.
   session?: string;
+  surface?: ConsentSurface;
+  authoritySessionHash?:string;
+  feature?: GoogleFeature;
   expires: number;
   verifier: string;
   redirect_uri: string;
@@ -42,18 +45,19 @@ const challengeFor = async (verifier: string) => b64url(new Uint8Array(await cry
 const prune = (flows: Record<string, ConsentFlow>, now: number) =>
   Object.fromEntries(Object.entries(flows).filter(([, flow]) => (flow.settled ? (flow.settled_at ?? 0) + KEEP_SETTLED_MS : flow.expires) > now));
 
-export async function startConsent(deps: ConsentDeps, app: GoogleApp, secret: string, owner: string, opts?: Readonly<{ session?: string; surface?: ConsentSurface }>): Promise<Readonly<{ url: string; nonce: string }>> {
+export async function startConsent(deps: ConsentDeps, app: GoogleApp, secret: string, owner: string, opts?: Readonly<{ session?: string; surface?: ConsentSurface; authoritySessionHash?:string; feature?: GoogleFeature }>): Promise<Readonly<{ url: string; nonce: string }>> {
   const random = deps.random ?? randomBytes;
   const nonce = b64url(random(32));
   const verifier = b64url(random(32));
   const now = deps.now();
   const flows = prune(await deps.store.read(), now);
-  await deps.store.write({ ...flows, [nonce]: { expires: now + CONSENT_TTL_MS, verifier, redirect_uri: app.redirectUri, ...(opts?.session ? { session: opts.session } : {}) } });
-  return { url: googleConsentUrl(app, await consentState(secret, owner, nonce, opts?.surface), await challengeFor(verifier)), nonce };
+  const url = googleConsentUrl(app, await consentState(secret, owner, nonce, opts?.surface), await challengeFor(verifier), opts?.feature);
+  await deps.store.write({ ...flows, [nonce]: { expires: now + CONSENT_TTL_MS, verifier, redirect_uri: app.redirectUri, ...(opts?.session ? { session: opts.session } : {}), ...(opts?.surface?{surface:opts.surface}:{}), ...(opts?.authoritySessionHash?{authoritySessionHash:opts.authoritySessionHash}:{}), ...(opts?.feature === 'calendar_list' ? { feature: opts.feature } : {}) } });
+  return { url, nonce };
 }
 
 export type ConsentCallback = Readonly<{ nonce: string; code?: string | null; error?: string | null }>;
-export type ConsentExchange = (code: string, verifier: string, redirectUri: string) => Promise<ConsentGrant | null>;
+export type ConsentExchange = (code: string, verifier: string, redirectUri: string, feature?: GoogleFeature) => Promise<ConsentGrant | null>;
 
 // fresh is true only for the call that settled the attempt; a replayed callback gets fresh false,
 // so the owner is told once.
@@ -74,7 +78,7 @@ export async function finishConsent(
   if (input.error) return { outcome: await settle({ kind: 'denied' }), fresh: true };
   if (!input.code) return { outcome: { kind: 'invalid' }, fresh: false };
   try {
-    const grant = await exchange(input.code, flow.verifier, flow.redirect_uri);
+    const grant = flow.feature ? await exchange(input.code, flow.verifier, flow.redirect_uri, flow.feature) : await exchange(input.code, flow.verifier, flow.redirect_uri);
     if (!grant) return { outcome: await settle({ kind: 'failed', reason: 'no account returned' }), fresh: true };
     return { outcome: await settle({ kind: 'linked', email: grant.email ?? null, scopes: [...(grant.scopes ?? [])] }), fresh: true };
   } catch (error) {

@@ -1,6 +1,11 @@
-import type { ConversationEntry } from '@waldo/contracts';
+import { APP_FILE_MAX_REQUEST_BYTES, APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1, type ConversationEntry } from '@waldo/contracts';
 import { consoleAuth, OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { signedRpc } from '../identity/owner-directory';
+import { createHealthProduction, healthProductionRequest } from '../health/production';
+import { readRightsCapability } from '../rights/capability';
+import { appSessionRevocation } from '../rights/session-revocation';
+import { appPushDirectory } from '../rights/push-directory';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
 
 export const APP_PATH = '/app/v1';
@@ -16,9 +21,18 @@ const ok = (body: object, status = 200) => Response.json(body, { status, headers
 
 const readJson = async (request: Request): Promise<Record<string, unknown> | null> => {
   if (!(request.headers.get('content-type') ?? '').toLowerCase().startsWith('application/json')) return null;
-  const text = await request.text();
-  if (text.length > MAX_BODY_BYTES) return null;
+  const bytes = await readBoundedBody(request, MAX_BODY_BYTES);
+  if (!bytes) return null;
+  let text: string; try { text = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true}).decode(bytes); } catch { return null; }
   try { const value: unknown = JSON.parse(text); return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null; } catch { return null; }
+};
+const readBoundedBody = async (request:Request, max:number):Promise<Uint8Array|null> => {
+  if (!request.body) return new Uint8Array();
+  const reader=request.body.getReader(), chunks:Uint8Array[]=[]; let size=0, expired=false;
+  const timer=setTimeout(()=>{expired=true;void reader.cancel();},5000);
+  try { for(;;){const part=await reader.read();if(expired)return null;if(part.done)break;size+=part.value.byteLength;if(size>max){await reader.cancel();return null;}chunks.push(part.value);} }
+  catch{return null;} finally{clearTimeout(timer);reader.releaseLock();}
+  const bytes=new Uint8Array(size);let at=0;for(const chunk of chunks){bytes.set(chunk,at);at+=chunk.byteLength;}return bytes;
 };
 
 const bearer = (request: Request): string | null => {
@@ -57,7 +71,15 @@ const admit = async (env: AppEnv, auth: ConsoleAuth, request: Request, kind: 'se
   } catch { return 'unavailable'; }
 };
 
-const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,255}$/;
+const sessionView = async (auth: ConsoleAuth, doName: string, credential: string) => {
+  const sessionId = sessionIdOf(credential);
+  if (!sessionId) throw new Error('invalid session');
+  const hash = await linkCodeHash(sessionId);
+  const row = (await auth.listSessions(doName)).find(value => value.session === hash);
+  const created = row ? Date.parse(row.created_at) : NaN;
+  if (!Number.isFinite(created) || created + 12 * 60 * 60_000 <= Date.now()) throw new Error('expired session');
+  return appSessionV1Schema.parse({ state: 'active', session_ref: `sess_${hash}`, account_ref: `acct_${await linkCodeHash(doName)}`, surface: 'app', absolute_expires_at: created + 12 * 60 * 60_000 });
+};
 
 // App sign-in and the shared main chat. Returns null for paths outside /app/v1 so the caller keeps routing.
 export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth | null = consoleAuth(env)): Promise<Response | null> => {
@@ -70,7 +92,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (request.method !== 'POST') return fail(405);
     const body = await readJson(request);
     const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
-    if (!EMAIL.test(email)) return fail(403);
+    if (!appCodeRequestSchema.safeParse(body).success) return fail(403);
     const gate = await admit(env, auth, request, 'send', email);
     if (gate === 'limited') return fail(429);
     if (gate === 'unavailable') return fail(503);
@@ -84,7 +106,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const body = await readJson(request);
     const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
     const code = typeof body?.code === 'string' ? body.code.trim() : '';
-    if (!EMAIL.test(email) || !/^\d{4,10}$/.test(code)) return fail(403);
+    if (!appVerifyRequestV1Schema.safeParse(body).success) return fail(403);
     const gate = await admit(env, auth, request, 'verify', email);
     if (gate === 'limited') return fail(429);
     if (gate === 'unavailable') return fail(503);
@@ -94,18 +116,39 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     let credential: string | null;
     try { credential = await auth.ownerCookie(doName); } catch { credential = null; }
     if (!credential) return fail(503);
-    const sessionId = sessionIdOf(credential);
-    return ok({ state: 'active', credential, session_ref: sessionId ? (await linkCodeHash(sessionId)).slice(0, 16) : null, surface: 'app' });
+    try { return ok({ ...await sessionView(auth, doName, credential), credential }); } catch { return fail(503); }
   }
 
+  // These bounded capabilities deliberately survive session revocation. They
+  // authorize only the exact deletion submission or metadata-only receipt status.
+  if (url.pathname === `${APP_PATH}/rights/delete/submit` || url.pathname === `${APP_PATH}/rights/receipts/status`) {
+    if(request.method!=='POST' || url.search || !env.WALDO_ROUTER_HMAC_SECRET || !env.RESPONSIBILITY_RATE_LIMITER)return fail(403);
+    try {
+      if(!(await env.RESPONSIBILITY_RATE_LIMITER.limit({key:`app-rights-capability:${request.headers.get('cf-connecting-ip')??'unknown'}`})).success)return fail(429);
+      const body=await readJson(request);const kind=url.pathname.endsWith('/submit')?'submit':'status';
+      const field=kind==='submit'?'submission_capability':'status_capability';
+      if(!body||typeof body[field]!=='string'||(kind==='submit'?Object.keys(body).length!==2||body.confirmed!==true:Object.keys(body).length!==1))return fail(403);
+      const claim=await readRightsCapability(env.WALDO_ROUTER_HMAC_SECRET,body[field],kind,Date.now());if(!claim)return fail(403);
+      return await owners.get(owners.idFromName(claim.owner)).fetch(new Request(`https://telegram-owner${url.pathname}`,{method:'POST',headers:{'x-waldo-do-name':claim.owner,'x-waldo-rights-capability':kind,'content-type':'application/json'},body:JSON.stringify(body)}));
+    } catch{return fail(503);}
+  }
   const who = await authenticate(request, auth);
   if (who === 'unavailable') return fail(503);
   if (who === 'unauthenticated') return fail(401);
 
+  if (url.pathname.startsWith(`${APP_PATH}/health/`)) {
+    if (!env.RESPONSIBILITY_RATE_LIMITER) return fail(503);
+    try {
+      if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-health:${who.doName}` })).success) return fail(429);
+      // Raw physiological samples stay in the existing signed health data plane,
+      // outside owner-DO history, queues, traces and artifact buckets.
+      return await healthProductionRequest(request, createHealthProduction(signedRpc(env), who.doName));
+    } catch { return fail(503); }
+  }
+
   if (url.pathname === `${APP_PATH}/session`) {
     if (request.method !== 'GET') return fail(405);
-    const sessionId = sessionIdOf(who.credential);
-    return ok({ state: 'active', session_ref: sessionId ? (await linkCodeHash(sessionId)).slice(0, 16) : null, surface: 'app' });
+    try { return ok(await sessionView(auth, who.doName, who.credential)); } catch { return fail(503); }
   }
 
   if (url.pathname === `${APP_PATH}/auth/signout`) {
@@ -113,23 +156,27 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const sessionId = sessionIdOf(who.credential);
     if (!sessionId) return fail(401);
     let revoked: boolean;
-    try { revoked = await auth.revokeSession(who.doName, await linkCodeHash(sessionId)); } catch { return fail(503); }
+    try { const hash=await linkCodeHash(sessionId); revoked = await appSessionRevocation(who.doName,auth,appPushDirectory(env,who.doName,hash)).revokeHash(hash); if(!revoked)return fail(503); } catch { return fail(503); }
     return ok({ result: revoked ? 'revoked' : 'already_gone' });
   }
 
-  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH) {
+  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname.startsWith(`${APP_PATH}/chat/protected-responses/`) || url.pathname === `${APP_CHAT_PATH}/events` || ['/controls', '/actions', '/files', '/artifacts', '/threads', '/work', '/devices', '/rights','/access','/profile','/onboarding','/personal','/memory','/channels'].some(prefix => url.pathname === `${APP_PATH}${prefix}` || url.pathname.startsWith(`${APP_PATH}${prefix}/`))) {
     const sending = url.pathname === APP_CHAT_SEND_PATH;
-    if (request.method !== (sending ? 'POST' : 'GET')) return fail(405);
-    const body = sending ? await request.text() : '';
-    if (body.length > MAX_BODY_BYTES) return fail(413);
-    if (sending) {
+    if (!['GET', 'POST'].includes(request.method) || (url.pathname === APP_CHAT_PATH && request.method !== 'GET') || (sending && request.method !== 'POST')) return fail(405);
+    const mutating = request.method === 'POST';
+    if (mutating) {
       if (!env.RESPONSIBILITY_RATE_LIMITER) return fail(503);
       try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-chat-send:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
     }
+    const streamingFile = mutating && url.pathname === `${APP_PATH}/files`;
+    const maxBytes = streamingFile ? APP_FILE_MAX_REQUEST_BYTES : 98304;
+    const length = request.headers.get('content-length');
+    if (length && (!/^\d+$/.test(length) || Number(length) > (sending ? APP_SEND_MAX_WIRE_BYTES : maxBytes))) return fail(413);
+    const body=mutating&&!streamingFile?await readBoundedBody(request,sending?APP_SEND_MAX_WIRE_BYTES:maxBytes):new Uint8Array();if(!body)return fail(413);
     const forwarded = new Request(`https://telegram-owner${url.pathname}${url.search}`, {
       method: request.method,
-      headers: { 'x-waldo-do-name': who.doName, 'content-type': 'application/json' },
-      ...(sending ? { body } : {}),
+      headers: { 'x-waldo-do-name': who.doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionIdOf(who.credential)!), 'x-waldo-app-origin': url.origin, 'content-type': request.headers.get('content-type') ?? 'application/json' },
+      ...(mutating ? { body: streamingFile ? request.body : body } : {}),
     });
     try { return await owners.get(owners.idFromName(who.doName)).fetch(forwarded); } catch { return fail(503); }
   }
@@ -138,17 +185,18 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
 
 // `text` is always the plain-text form of the row. `parts` is the typed form: v1 emits only type 'text'. Later part types (cards)
 // are added without changing existing fields, and a reader must ignore any part type it does not know and fall back to `text`.
-export type AppMessage = Readonly<{ id: string; role: 'user' | 'assistant'; text: string; parts: readonly Readonly<{ type: string; text?: string }>[]; channel: string; parent_id: string | null }>;
+export type AppMessage = AppMessageV1;
 
-// Newest-first page over the one shared transcript. The cursor is how many rows were already returned from the newest end.
+// Newest-first immutable row cursor. New arrivals cannot shift an older page.
 export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
   const shown = entries.filter((entry): entry is ConversationEntry & { role: 'user' | 'assistant' } => entry.role === 'user' || entry.role === 'assistant');
-  const taken = cursor !== null && /^\d{1,9}$/.test(cursor) ? Number(cursor) : 0;
+  const taken = cursor !== null && /^\d{1,9}$/.test(cursor) ? Number(cursor) : 0; // old consumers can finish an offset page
   const size = Math.min(Math.max(Math.trunc(limit) || 20, 1), 50);
-  const end = Math.max(shown.length - taken, 0);
+  const before = cursor?.startsWith('before:') ? shown.findIndex(entry => entry.id === cursor.slice(7)) : -1;
+  const end = cursor?.startsWith('before:') ? Math.max(before, 0) : Math.max(shown.length - taken, 0);
   const start = Math.max(end - size, 0);
-  const messages = shown.slice(start, end).reverse().map(entry => ({ id: entry.id, role: entry.role, text: entry.appPayload, parts: [{ type: 'text', text: entry.appPayload }], channel: entry.surface, parent_id: entry.parentId }));
-  return { messages, next_cursor: start > 0 ? String(taken + messages.length) : null };
+  const messages = shown.slice(start, end).reverse().map(entry => ({ id: entry.id, role: entry.role, text: entry.appPayload, parts: [{ type: 'text' as const, text: entry.appPayload }], channel: entry.surface, parent_id: entry.parentId }));
+  return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };
 };
 
 // App turns reuse the telegram-shaped update pipeline. The owner id the pipeline sees is a stable number derived from the owner's directory name.
@@ -159,14 +207,11 @@ export const appSubjectFor = (doName: string): number => {
   return 7_000_000_000_000 + hash;
 };
 
-export const parseAppSend = (raw: string): Readonly<{ clientMessageId: string; text: string }> | null => {
+export const parseAppSend = (raw: string): (import('../../../contracts/src/app/core').AppSendV1 & Readonly<{ clientMessageId: string }>) | null => {
   let value: unknown;
   try { value = JSON.parse(raw); } catch { return null; }
-  if (!value || typeof value !== 'object') return null;
-  const { client_message_id: id, text } = value as Record<string, unknown>;
-  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(id) || typeof text !== 'string') return null;
-  const trimmed = text.trim();
-  return trimmed.length > 0 && trimmed.length <= 4000 ? { clientMessageId: id, text: trimmed } : null;
+  const parsed = appSendRequestV1Schema.safeParse(value);
+  return parsed.success ? { ...parsed.data, clientMessageId: parsed.data.client_message_id } : null;
 };
 
 // Replies reach the app through the transcript, so outbound sends on this channel are accepted and not delivered anywhere else.

@@ -1,4 +1,6 @@
 import type { ConversationStore } from './conversation-store';
+import { retainOwnerConversationEntries } from './owner-turn-response';
+import type { ConversationEntry } from '@waldo/contracts';
 import { localIso, localToEpoch, nextAfter } from './reminders';
 import type { Scheduler } from '../scheduler/multiplexer';
 
@@ -19,6 +21,15 @@ export type EpisodeIndex = Readonly<{
 }>;
 
 export const speakerOf = (entryId: string): Speaker => (entryId.endsWith('-reply') ? 'waldo' : entryId.startsWith('tg-') ? 'owner' : 'system');
+
+export const episodeSpeaker = (entry: ConversationEntry): Speaker => {
+  if (entry.role === 'assistant') return 'waldo';
+  if (entry.inputOrigin === 'owner') return 'owner';
+  if (entry.inputOrigin === 'machine') return 'system';
+  // Older rows have no authenticated origin stamp; preserve their historical
+  // transport classification without treating a new arbitrary id as owner proof.
+  return speakerOf(entry.id);
+};
 
 // Model text becomes plain quoted terms, so FTS5 operators and quotes in a question can't
 // break the query; OR keeps recall and BM25 does the ranking.
@@ -66,10 +77,11 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
 export const indexedConversationStore = (store: ConversationStore, index: EpisodeIndex, now: () => number): ConversationStore => ({
   ...store,
   load: () => store.load(),
-  async save(entries, leafId, scope) {
-    await store.save(entries, leafId, scope);
+  async save(entries, leafId, scope, retention) {
+    const retained = retainOwnerConversationEntries(entries, retention);
+    await store.save(retained, leafId, scope, retention);
     const at = now();
-    const commit = () => { for (const entry of entries) index.add(entry.id, speakerOf(entry.id), entry.appPayload, at); };
+    const commit = () => { for (const entry of retained) index.add(entry.id, episodeSpeaker(entry), entry.appPayload, at); };
     if (scope) scope.commit(commit); else commit();
   },
 });
@@ -78,7 +90,7 @@ export const indexedConversationStore = (store: ConversationStore, index: Episod
 export const backfillEpisodes = async (store: ConversationStore, index: EpisodeIndex): Promise<number> => {
   if (index.count() > 0) return 0;
   const { entries } = await store.load();
-  for (const entry of entries) index.add(entry.id, speakerOf(entry.id), entry.appPayload, 0);
+  for (const entry of entries) index.add(entry.id, episodeSpeaker(entry), entry.appPayload, 0);
   return entries.length;
 };
 

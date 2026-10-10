@@ -36,7 +36,7 @@ export function ordinaryPublicBrowserConfiguration(options:Readonly<{
   retainInteractions:true,binding:options.binding,loadSdk:options.loadSdk,
   ownsGrant:grant=>storage.kv.get<Retained>(prefix+grant.taskId)?.grant.ref===grant.ref,
   cleanupBinding:(grant,providerSessionId)=>{exact(grant,{providerSessionId});return options.binding;},
-  allocationClosed:async(grant,session)=>{const row=exact(grant,session);settleOwnerPublicBrowser({storage,...row.custody,intent:row.intent!,durationMs:options.now()-row.startedAt!});},
+  allocationClosed:async(grant,session,terminatedAt=options.now())=>{const row=exact(grant,session);if(!Number.isSafeInteger(terminatedAt)||terminatedAt<row.startedAt!||terminatedAt>options.now())throw Error('ordinary browser termination time invalid');settleOwnerPublicBrowser({storage,...row.custody,intent:row.intent!,durationMs:terminatedAt-row.startedAt!});},
   grant:async(task,ownerId)=>{
    await options.assertCurrent();const owner=await options.assertOwner();await options.assertCurrent();
    if(!options.owner||JSON.stringify(owner)!==JSON.stringify(options.owner)||owner.ownerId!==ownerId||!task.ready||!task.sources.some(source=>source==='browser'||source==='web'))throw Error('ordinary browser source unavailable');

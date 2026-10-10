@@ -104,4 +104,17 @@ describe('responsibilities', () => {
       expect(book.get(b.id)).toMatchObject({ status: 'done', next_check_at: '2026-10-09' });
     });
   });
+  it('adopts a source-backed hypothesis once without overwriting existing owner responsibility context', async () => {
+    await withSql(async sql => {
+      let n = 0;
+      const loops = loopBook(sql, { newId: () => String(++n), now: () => 5 }), book = mk(sql);
+      const first = loops.open({ title: 'Check the source', due: null });
+      expect(book.adoptLoops(id => id === first.id ? 'A bounded source hypothesis, with completion unknown.' : null)).toBe(1);
+      expect(book.get(first.id)!.intent).toContain('completion unknown');
+      const second = loops.open({ title: 'Different check', due: null });
+      expect(book.adoptLoops(id => id === first.id ? 'Overwrite old context' : 'A new hypothesis')).toBe(1);
+      expect(book.get(first.id)!.intent).toContain('completion unknown');
+      expect(book.get(second.id)!.intent).toBe('A new hypothesis');
+    });
+  });
 });

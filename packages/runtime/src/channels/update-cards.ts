@@ -7,9 +7,15 @@ type Sql = Pick<SqlStorage, 'exec'>;
 type WatchKey = 'calendar_since' | 'mail_since';
 export const changeLines = (changes: readonly Change[]): string => changes.map((change) => `- ${change.source} ${change.kind}: ${change.detail}${change.source_ref ? ` [source_ref ${change.source_ref}]` : ''}`).join('\n');
 
-export type Change = Readonly<{ source: 'calendar' | 'mail'; kind: 'added' | 'changed' | 'cancelled' | 'new'; detail: string; source_message_id?: string; source_ref?: string }>;
+export type Change = Readonly<{ source: 'calendar' | 'mail'; kind: 'added' | 'changed' | 'cancelled' | 'new'; detail: string; source_message_id?: string; source_ref?: string; account_id?: string; calendar_id?: string }>;
+type Collection = Readonly<{
+  key: string; accountId: string | null; calendarId: string; through: number; calendarSince: number | null; mailSince: number | null;
+  calendarToken: string | null; mailToken: string | null; calendarDone: boolean; mailDone: boolean; changes: readonly Change[];
+  observations: readonly Readonly<{ sourceRef: string; threadId: string; at: number; messageId: string }>[]; cardId: number | null;
+}>;
+const stateKey = (key: WatchKey, scope?: string) => scope ? `${key}:${scope}` : key;
 
-export const updateBook = (sql: Sql) => {
+export const updateBook = (sql: Sql, transaction: <T>(work: () => T) => T = work => work()) => {
   sql.exec('CREATE TABLE IF NOT EXISTS observed_mail (source_ref TEXT PRIMARY KEY, thread_id TEXT NOT NULL, observed_at INTEGER NOT NULL, message_id TEXT NOT NULL, judged INTEGER NOT NULL DEFAULT 0, update_id INTEGER, attached INTEGER NOT NULL DEFAULT 0)');
   sql.exec('CREATE TABLE IF NOT EXISTS watch_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
   sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (
@@ -22,6 +28,11 @@ export const updateBook = (sql: Sql) => {
   }
   const state = (key: string) => sql.exec<{ value: string }>('SELECT value FROM watch_state WHERE key = ?', key).toArray()[0]?.value ?? null;
   const setState = (key: string, value: string) => sql.exec('INSERT INTO watch_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', key, value);
+  const insertCard = (day: string, at: number, changes: readonly Change[], text: string | null): number => {
+    const id = sql.exec<{ id: number }>('INSERT INTO update_cards (at, day, changes, text, pushed) VALUES (?, ?, ?, ?, ?) RETURNING id', at, day, JSON.stringify(changes), text, text === null ? 0 : 1).one().id;
+    for (const change of changes) if (change.source_ref) sql.exec('UPDATE observed_mail SET update_id = ? WHERE source_ref = ? AND message_id = ? AND update_id IS NULL', id, change.source_ref, change.source_message_id ?? change.source_ref);
+    return id;
+  };
   return {
     observeMail(source_ref: string, thread_id: string, at: number, message_id = source_ref): void {
       sql.exec('INSERT INTO observed_mail (source_ref, thread_id, observed_at, message_id) VALUES (?, ?, ?, ?) ON CONFLICT (source_ref) DO UPDATE SET observed_at = excluded.observed_at, message_id = excluded.message_id, judged = 0, update_id = NULL WHERE observed_mail.message_id != excluded.message_id AND observed_mail.observed_at <= excluded.observed_at', source_ref, thread_id, at, message_id);
@@ -38,17 +49,41 @@ export const updateBook = (sql: Sql) => {
     pruneMail(now: number): void {
       sql.exec('DELETE FROM observed_mail WHERE attached = 0 AND observed_at < ?', now - 7 * DAY_MS);
     },
-    since(key: WatchKey): number | null {
-      const value = state(key);
+    since(key: WatchKey, scope?: string): number | null {
+      const value = state(stateKey(key, scope));
       return value === null ? null : Number(value);
     },
-    mark(key: WatchKey, now: number): void {
-      setState(key, String(now));
+    mark(key: WatchKey, now: number, scope?: string): void {
+      setState(stateKey(key, scope), String(now));
+    },
+    collection(key: string): Collection | null { const value = state(`collection:${key}`); return value === null ? null : JSON.parse(value) as Collection; },
+    stageCollection(value: Collection): void { setState(`collection:${value.key}`, JSON.stringify(value)); },
+    completeCollection(value: Collection): Collection {
+      if (!value.calendarDone || !value.mailDone) throw new Error('collection coverage incomplete');
+      return transaction(() => {
+        for (const observation of value.observations) this.observeMail(observation.sourceRef, observation.threadId, observation.at, observation.messageId);
+        // Persist the accepted change list before advancing either watermark. A crash can
+        // replay this card, rather than silently skipping source changes after the old cap.
+        const cardId = value.changes.length ? insertCard(new Date(value.through).toISOString().slice(0, 10), value.through, value.changes, null) : null;
+        const complete = { ...value, cardId }; this.stageCollection(complete);
+        if (value.calendarSince !== null) this.mark('calendar_since', value.through, value.accountId ? JSON.stringify([value.accountId, value.calendarId]) : undefined);
+        if (value.mailSince !== null) this.mark('mail_since', value.through, value.accountId ?? undefined);
+        if (value.changes.length === 0) sql.exec('DELETE FROM watch_state WHERE key = ?', `collection:${value.key}`);
+        return complete;
+      });
     },
     record(day: string, at: number, changes: readonly Change[], text: string | null): number {
-      const id = sql.exec<{ id: number }>('INSERT INTO update_cards (at, day, changes, text, pushed) VALUES (?, ?, ?, ?, ?) RETURNING id', at, day, JSON.stringify(changes), text, text === null ? 0 : 1).one().id;
-      for (const change of changes) if (change.source_ref) sql.exec('UPDATE observed_mail SET update_id = ? WHERE source_ref = ? AND message_id = ? AND update_id IS NULL', id, change.source_ref, change.source_message_id ?? change.source_ref);
-      return id;
+      return transaction(() => {
+        const pending = sql.exec<{ key: string; value: string }>("SELECT key, value FROM watch_state WHERE key LIKE 'collection:%'").toArray().map(row => ({ key: row.key, collection: JSON.parse(row.value) as Collection }));
+        const previous = pending.find(row => row.collection.cardId !== null && JSON.stringify(row.collection.changes) === JSON.stringify(changes));
+        if (previous) {
+          const id = previous.collection.cardId!;
+          sql.exec('UPDATE update_cards SET day = ?, text = ?, pushed = ? WHERE id = ?', day, text, text === null ? 0 : 1, id);
+          sql.exec('DELETE FROM watch_state WHERE key = ?', previous.key);
+          return id;
+        }
+        return insertCard(day, at, changes, text);
+      });
     },
     pushed(id: number, text: string): void { sql.exec('UPDATE update_cards SET text = ?, pushed = 1 WHERE id = ?', text, id); },
     rate(id: number, feedback: 'useful' | 'not useful'): boolean {
@@ -76,20 +111,62 @@ const toChange = (item: CalendarChange, since: number): Change => {
   return { source: 'calendar', kind, detail: JSON.stringify(calendarPromptProjection(event)) };
 };
 
-export const collectChanges = async (book: UpdateBook, google: GoogleClient, now: number, sourceFollowups = false): Promise<readonly Change[]> => {
-  const calendarSince = book.since('calendar_since');
-  const mailSince = book.since('mail_since');
-  const calendar = calendarSince === null ? [] : (await google.changedEvents(calendarSince, now, now + 2 * DAY_MS)).map((item) => toChange(item, calendarSince));
-  const mail = mailSince === null ? [] : (await google.newMail(mailSince, 10)).map((item): Change => {
-    const detail = JSON.stringify(mailPromptProjection(item));
-    if (!sourceFollowups) return { source: 'mail', kind: 'new', detail };
-    const source_ref = `mail:${item.thread_id || item.id}`;
-    book.observeMail(source_ref, item.thread_id, Date.parse(item.at), item.id);
-    return { source: 'mail', kind: 'new', detail, source_ref, source_message_id: item.id };
-  });
-  book.mark('calendar_since', now);
-  book.mark('mail_since', now);
-  return [...calendar, ...mail];
+export const collectChanges = async (book: UpdateBook, google: GoogleClient, now: number, sourceFollowups = false, options: Readonly<{ accountId?: string; calendarId?: string; calendar?: boolean; mail?: boolean; maxPages?: number }> = {}): Promise<readonly Change[]> => {
+  const accountId = options.accountId ?? google.account?.connection_id ?? google.account?.email ?? null, calendarId = options.calendarId ?? 'primary';
+  const calendarScope = accountId ? JSON.stringify([accountId, calendarId]) : undefined, mailScope = accountId ?? undefined;
+  const collectionKey = JSON.stringify([accountId, calendarId, options.calendar !== false, options.mail !== false, sourceFollowups]);
+  const durable = typeof book.collection === 'function';
+  let collection = durable ? book.collection(collectionKey) : null;
+  if (collection?.cardId !== null && collection?.cardId !== undefined) return collection.changes;
+  if (!collection) {
+    const calendarSince = options.calendar === false ? null : book.since('calendar_since', calendarScope), mailSince = options.mail === false ? null : book.since('mail_since', mailScope);
+    if (options.calendar !== false && calendarSince === null) book.mark('calendar_since', now, calendarScope);
+    if (options.mail !== false && mailSince === null) book.mark('mail_since', now, mailScope);
+    collection = { key: collectionKey, accountId, calendarId, through: now, calendarSince, mailSince, calendarToken: null, mailToken: null, calendarDone: calendarSince === null, mailDone: mailSince === null, changes: [], observations: [], cardId: null };
+    if (durable) book.stageCollection(collection);
+  }
+  const persist = (next: Collection) => { collection = next; if (durable) book.stageCollection(next); };
+  for (let page = 0; page < (options.maxPages ?? 4) && !collection.calendarDone; page++) {
+    const since = collection.calendarSince!;
+    const result = google.changedEventsPage
+      ? await google.changedEventsPage(calendarId, since, collection.through, collection.through + 2 * DAY_MS, 50, collection.calendarToken ?? undefined)
+      : { events: await google.changedEvents(since, collection.through, collection.through + 2 * DAY_MS), next_page_token: null, calendar_id: calendarId, account: google.account };
+    if (!google.changedEventsPage && result.events.length >= 50) throw new Error('Calendar change coverage needs the resumable page adapter');
+    if (result.calendar_id !== calendarId || google.account?.connection_id && result.account?.connection_id !== google.account.connection_id || result.next_page_token && result.next_page_token === collection.calendarToken) throw new Error('Calendar change page does not match its source or make progress');
+    const changes = result.events.map(item => ({ ...toChange(item, since), ...(accountId ? { account_id: accountId, calendar_id: calendarId } : {}) }));
+    persist({ ...collection, changes: [...collection.changes, ...changes], calendarToken: result.next_page_token, calendarDone: result.next_page_token === null });
+  }
+  for (let page = 0; page < (options.maxPages ?? 4) && !collection.mailDone; page++) {
+    const since = collection.mailSince!;
+    // Freeze both bounds across all pages. The one-second overlap covers subsecond
+    // watermark precision; source IDs and observed-mail identity suppress repeated work.
+    const query = `in:inbox category:primary after:${Math.max(0, Math.floor(since / 1000) - 1)} before:${Math.ceil(collection.through / 1000) + 1}`;
+    const result = google.mailPage
+      ? await google.mailPage(query, 100, collection.mailToken ?? undefined)
+      : { messages: await google.newMail(since, 10), next_page_token: null };
+    if (!google.mailPage && result.messages.length >= 10) throw new Error('Gmail change coverage needs the resumable page adapter');
+    if (result.next_page_token && result.next_page_token === collection.mailToken) throw new Error('Gmail change pagination made no progress');
+    const changes: Change[] = [], observations: Collection['observations'][number][] = [];
+    for (const item of result.messages) {
+      const at = Date.parse(item.at);
+      if (!Number.isFinite(at)) throw new Error('Gmail change date unavailable');
+      if (at < since || at > collection.through) continue;
+      const detail = JSON.stringify(mailPromptProjection(item)), source_ref = accountId ? `mail:${encodeURIComponent(accountId)}:${item.thread_id || item.id}` : `mail:${item.thread_id || item.id}`;
+      changes.push({ source: 'mail', kind: 'new', detail, ...(accountId ? { account_id: accountId } : {}), ...(sourceFollowups ? { source_ref, source_message_id: item.id } : {}) });
+      if (sourceFollowups) observations.push({ sourceRef: source_ref, threadId: item.thread_id, at, messageId: item.id });
+    }
+    persist({ ...collection, changes: [...collection.changes, ...changes], observations: [...collection.observations, ...observations], mailToken: result.next_page_token, mailDone: result.next_page_token === null });
+  }
+  if (!collection.calendarDone || !collection.mailDone) {
+    if (!durable) throw new Error('Change coverage needs durable continuation');
+    return [];
+  }
+  if (durable) return book.completeCollection(collection).changes;
+  // Minimal injected books are used by pure prompt-projection callers. Production books
+  // always persist a card and page continuation before advancing source watermarks.
+  if (collection.calendarSince !== null) book.mark('calendar_since', collection.through, calendarScope);
+  if (collection.mailSince !== null) book.mark('mail_since', collection.through, mailScope);
+  return collection.changes;
 };
 
 // One candidate, one existing responder turn, one frozen owner-only intent. The

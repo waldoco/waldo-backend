@@ -15,6 +15,22 @@ const gap = (note: string): Row => ({ kind: 'KNOWN_GAP', note });
 const TEXT_JSON = 'text-bearing JSON or free text; no purge wired, contents not inspected';
 
 const TABLES: Record<string, Row> = {
+  // New native source custody is not a claim that literal topic-forget purges it.
+  artifact_revisions: gap('immutable owner-made artifact name/caption metadata; literal topic forget does not remove artifact revisions'),
+  google_task_effect_ack: gap('exact provider acknowledgement JSON can contain task title/notes; effect recovery custody has no literal topic purge'),
+  loop_sources: exempt('loop/source reference IDs only; owner text remains in loops'),
+  observed_sources: exempt('provider account/resource/revision references and observed time; no source bodies'),
+  owner_byte_writes: gap('pending immutable object key/byte digest and cleanup state; account erasure reaches custody, literal topic forget does not inspect object-key metadata'),
+  owner_personal_day: gap('authored day overview/moments and source-backed titles; no literal topic purge wired'),
+  owner_proactivity_adapter: gap('source epochs/cursors and adapter delivery receipts; no literal topic purge inspection'),
+  owner_proactivity_policy: exempt('policy revisions, flags, time windows and timezone only'),
+  owner_proactivity_access: exempt('source/account/collection IDs, epochs and connected flag only'),
+  owner_proactivity_sweep: exempt('source references, source cursor/page token, state and timestamps; no source body'),
+  owner_proactivity_coverage: exempt('source references, source cursor, completed time and applied count only'),
+  owner_proactivity_observation: exempt('source/resource/revision references, content pointer, observed time and deleted flag; no source body'),
+  owner_proactivity_watch: exempt('responsibility/source/audience references, condition enum/clock/cadence/resource IDs, subscription IDs and state; no owner instructions'),
+  owner_proactivity_wake: exempt('watch/event/decision references, checked time and state only'),
+  owner_proactivity_delivery: gap('model-authored notification text/rationale and receipt metadata; no literal topic purge wired'),
   // Memory and derived stores
   reminder_notes: purged('memory-forget-do-provider.test.ts'),
   claims: purged('forget-coverage.test.ts'), episodes: purged('forget-coverage.test.ts'),
@@ -79,7 +95,15 @@ const sources: Record<string, string> = import.meta.glob('../src/**/*.ts', { que
 // @ts-expect-error vite-only API
 const tests: Record<string, string> = import.meta.glob(['./forget*.test.ts', './memory-forget*.test.ts'], { query: '?raw', import: 'default', eager: true });
 const created = new Set<string>();
-for (const text of Object.values(sources)) for (const m of text.matchAll(/CREATE (?:VIRTUAL )?TABLE (?:IF NOT EXISTS )?([a-z][a-z0-9_]*)/g)) if (!m[1]!.endsWith('_next')) created.add(m[1]!);
+for (const text of Object.values(sources)) for (const m of text.matchAll(/CREATE (?:VIRTUAL )?TABLE (?:IF NOT EXISTS )?([a-z][a-z0-9_]*)/g)) {
+  if (text.slice(m.index! + m[0].length).startsWith('${')) continue;
+  if (!m[1]!.endsWith('_next')) created.add(m[1]!);
+}
+// Expand the concrete bounded table suffixes from the actual producer, rather
+// than treating its template prefix as a fictitious SQLite table.
+const proactivitySource = sources['../src/proactivity/book.ts'] ?? '';
+const proactivitySuffixes = /for \(const table of \[([^\]]+)\]\) sql\.exec\(`CREATE TABLE IF NOT EXISTS owner_proactivity_/.exec(proactivitySource)?.[1];
+if (proactivitySuffixes) for (const m of proactivitySuffixes.matchAll(/'([a-z_]+)'/g)) created.add(`owner_proactivity_${m[1]}`);
 // The shared manifests list substrate tables that are created through the same statements.
 const manifest = new Set<string>();
 for (const list of ['DO_PRODUCT_TABLES', 'DO_RUNTIME_SUBSTRATE_TABLES']) {

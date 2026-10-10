@@ -1,3 +1,4 @@
+import type { OwnerTurnResponse } from './owner-turn-response';
 import type { RunEffectScope } from './run-effect-scope';
 import { llmRequestSchema, type ToolName, type LLMAttachment } from '@waldo/contracts';
 import type { TurnTimer } from './owner-turn-types';
@@ -43,9 +44,13 @@ export type OwnerTurnEnvelope = Readonly<{
 }>;
 export type OwnerResponder = Readonly<{
   respond(turn: OwnerTurnEnvelope, time: TurnTimer): Promise<string>;
+  respondReceipt(turn: OwnerTurnEnvelope, time: TurnTimer): Promise<OwnerTurnResponse>;
   chooseReaction(turn: OwnerTurnEnvelope): Promise<string | null>;
   remind(id: string, conversationRef: string, note: string, time: TurnTimer, surface?: string): Promise<string>;
+  remindReceipt(id: string, conversationRef: string, note: string, time: TurnTimer, surface?: string): Promise<OwnerTurnResponse>;
   prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>): Promise<string>;
+  promptReceipt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>): Promise<OwnerTurnResponse>;
+  judge(request: Readonly<{ traceId: string; context: import('../context-composer/owner-turn').OwnerContextCapability; instruction: string; input: unknown; format: Readonly<{ name: string; schema: Record<string, unknown> }>; current(): Promise<void> }>, time: TurnTimer): Promise<string>;
   consolidate(trace: string, day: string, sides?: { owner: string; waldo: string }): Promise<string>;
   migrate(trace: string, input: string): Promise<string>;
   promote(trace: string): Promise<string>;

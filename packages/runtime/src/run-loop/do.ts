@@ -1,3 +1,6 @@
+import { ownerWorkProjectionFromHost } from '../channels/owner-work-projection';
+import { ownerRuntimeAuthority } from '../identity/owner-runtime-authority';
+import type { OwnerWorkProjectionRequest } from '../identity/owner-work-projection-request';
 import { armAlarm, COMMON_EXECUTION_DUE_KEY } from '../scheduler/alarm-slot';
 import { EXECUTION_LEASE_MAX_DURATION_MS_V04 } from '../coordinator/planning-execution-module';
 import { verifyCommonExecutionRequest, type CommonExecutionRequest } from '../identity/common-execution-request';
@@ -439,6 +442,14 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   ) {
     this.#assertLocalTestSeam();
     return this.waldoCoordinator.createTrustedJudgmentRequestV05(proposal, authority);
+  }
+
+  async readOwnerWorkProjectionFromHost(request: OwnerWorkProjectionRequest) {
+    const physical = this.envBindings.TELEGRAM_OWNER_DO, roots = this.envBindings.RUN_LOOP_DO;
+    if (!physical || !roots) throw Error('owner Work source unavailable');
+    return ownerWorkProjectionFromHost({ secret: this.envBindings.WALDO_ROUTER_HMAC_SECRET, now: this.deps.now,
+      actualRootDoId: this.ctx.id.toString(), physicalDoIdForName: name => physical.idFromName(name).toString(), rootDoIdForName: name => roots.idFromName(name).toString(),
+      directory: ownerRuntimeAuthority(this.envBindings), readUnits: (ownerId, subject) => this.waldoCoordinator.readOwnerWorkUnits(ownerId, subject) }, request);
   }
 
   async commonExecutionFromHost(ingress: CommonMessageIngress, request: CommonExecutionRequest) {

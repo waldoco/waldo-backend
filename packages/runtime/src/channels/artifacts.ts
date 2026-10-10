@@ -8,6 +8,9 @@ import {
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { DeliverArtifact } from './artifact-delivery';
 import type { OwnerClock } from '../tools/live/get-context';
+import { sha256Hex } from '../connectors/google';
+import type { OwnerByteCustody, OwnerByteInvocation } from '../rights/write-custody';
+import { RightsError } from '../rights/jobs';
 
 // A5 (BUILD_PLAN_2026-09-25; the adaptation audit's typed-workspace answer): the agent's own
 // working artifacts - the research brief built over an hour, the shortlist refined across
@@ -23,6 +26,7 @@ export type ArtifactMeta = Readonly<{
   kind: ArtifactKind;
   revision: number;
   byte_size: number;
+  sha256?: string | null;
   r2_key: string;
   provenance: string;
   taint: string;
@@ -30,24 +34,30 @@ export type ArtifactMeta = Readonly<{
   updated_at: number;
 }>;
 
-// The R2 subset the book needs - an in-memory stub satisfies it in tests and in a deploy
-// missing the binding (degraded to per-DO-memory artifacts rather than crashing turns).
+// The R2 subset the book needs. Missing durable bindings fail artifact writes
+// explicitly; in-memory storage is for tests only.
 export type ArtifactBodies = Readonly<{
-  put(key: string, body: string): Promise<void>;
+  put(key: string, body: string, invocation?: OwnerByteInvocation): Promise<void>;
   get(key: string): Promise<string | null>;
 }>;
 
 // Metadata is DO-local, but the bucket is shared. The immutable DO identity,
 // supplied by the authenticated host rather than tool args, scopes every body.
 // Never fall back to old unscoped keys: their owner cannot be proven by the key.
-export const r2ArtifactBodies = (bucket: R2Bucket, ownerScope: string): ArtifactBodies => {
+export const r2ArtifactBodies = (bucket: R2Bucket, ownerScope: string, custody?: OwnerByteCustody): ArtifactBodies => {
   if (typeof ownerScope !== 'string' || !ownerScope.trim()) throw new Error('Artifact owner scope is required');
   const scoped = (key: string) => `artifacts/by-owner/${encodeURIComponent(ownerScope)}/${encodeURIComponent(key)}`;
   return {
-    put: async (key, body) => { await bucket.put(scoped(key), body); },
+    put: async (key, body, invocation) => { if (!custody) throw new RightsError('unavailable'); const objectKey = scoped(key); await custody.put(objectKey, new TextEncoder().encode(body), immutable => bucket.put(objectKey, immutable), invocation); },
     get: async (key) => (await bucket.get(scoped(key)))?.text() ?? null,
   };
 };
+
+// Missing durable storage degrades only artifact operations, keeping ordinary
+// owner conversation available without claiming a volatile artifact was saved.
+export const unavailableArtifactBodies = (): ArtifactBodies => ({
+  put: async () => { throw new RightsError('unavailable'); }, get: async () => null,
+});
 
 export const inMemoryArtifactBodies = (): ArtifactBodies => {
   const map = new Map<string, string>();
@@ -67,11 +77,13 @@ export type ReadResult = Readonly<{
 }>;
 
 export type ArtifactBook = Readonly<{
-  create(args: CreateArtifactArgs, provenance: string, scope?: RunEffectScope): Promise<ArtifactMeta>;
-  revise(args: ReviseArtifactArgs, provenance: string, scope?: RunEffectScope): Promise<ReviseResult>;
+  create(args: CreateArtifactArgs, provenance: string, scope?: RunEffectScope, assertSourceCurrent?: () => Promise<void>): Promise<ArtifactMeta>;
+  revise(args: ReviseArtifactArgs, provenance: string, scope?: RunEffectScope, assertSourceCurrent?: () => Promise<void>): Promise<ReviseResult>;
   list(kind?: ArtifactKind): readonly ArtifactMeta[];
-  read(id: string, offset: number, length: number): Promise<ReadResult | null>;
+  read(id: string, offset: number, length: number, revision?: number): Promise<ReadResult | null>;
   byId(id: string): ArtifactMeta | null;
+  byRevision(id: string, revision: number): ArtifactMeta | null;
+  revisions(id: string): readonly ArtifactMeta[];
 }>;
 
 type Sql = Pick<SqlStorage, 'exec'>;
@@ -82,63 +94,94 @@ export const artifactBook = (sql: Sql, bodies: ArtifactBodies, clock: OwnerClock
     revision INTEGER NOT NULL CHECK (revision > 0), byte_size INTEGER NOT NULL,
     r2_key TEXT NOT NULL, provenance TEXT NOT NULL, taint TEXT NOT NULL,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
+  sql.exec(`CREATE TABLE IF NOT EXISTS artifact_revisions (
+    id TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision > 0), metadata_json TEXT NOT NULL,
+    PRIMARY KEY(id, revision))`);
+  if(!sql.exec<{name:string}>('PRAGMA table_info(artifacts)').toArray().some(column=>column.name==='sha256'))sql.exec('ALTER TABLE artifacts ADD COLUMN sha256 TEXT');
   const byId = (id: string): ArtifactMeta | null =>
     sql.exec<ArtifactMeta>('SELECT * FROM artifacts WHERE id = ?', id).toArray()[0] ?? null;
+  // Current rows also serve legacy artifacts. Snapshot the old row before moving it:
+  // a crash can leave extra immutable history, never lose the previous saved version.
+  const remember = (meta: ArtifactMeta) => sql.exec('INSERT OR IGNORE INTO artifact_revisions (id, revision, metadata_json) VALUES (?, ?, ?)', meta.id, meta.revision, JSON.stringify(meta));
+  const byRevision = (id: string, revision: number): ArtifactMeta | null => {
+    const current = byId(id);
+    if (!current || !Number.isSafeInteger(revision) || revision < 1) return null;
+    if (current.revision === revision) return current;
+    const row = sql.exec<{ metadata_json: string }>('SELECT metadata_json FROM artifact_revisions WHERE id = ? AND revision = ?', id, revision).toArray()[0];
+    return row ? JSON.parse(row.metadata_json) as ArtifactMeta : null;
+  };
   return {
     byId,
-    async create(args, provenance, scope) {
+    byRevision,
+    revisions(id) {
+      const current = byId(id);
+      if (!current) return [];
+      return [...sql.exec<{ metadata_json: string }>('SELECT metadata_json FROM artifact_revisions WHERE id = ? ORDER BY revision DESC', id).toArray()
+        .map(row => JSON.parse(row.metadata_json) as ArtifactMeta).filter(meta => meta.revision !== current.revision), current]
+        .sort((a, b) => b.revision - a.revision);
+    },
+    async create(args, provenance, scope, assertSourceCurrent) {
       const id = `art:${newId()}`;
       const r2Key = `artifacts/${id}/r1/${crypto.randomUUID()}`;
+      const sha256=await sha256Hex(args.body_markdown);
       scope?.admit();
-      await bodies.put(r2Key, args.body_markdown);
+      await bodies.put(r2Key, args.body_markdown, { scope, assertCurrent: assertSourceCurrent });
+      await assertSourceCurrent?.();
       const now = clock.now().getTime();
       const meta: ArtifactMeta = {
         id, name: args.name, kind: args.kind, revision: 1,
         byte_size: new TextEncoder().encode(args.body_markdown).length,
+        sha256,
         r2_key: r2Key, provenance, taint: 'external', created_at: now, updated_at: now,
       };
       const commit = () => sql.exec(
-        'INSERT INTO artifacts (id, name, kind, revision, byte_size, r2_key, provenance, taint, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        meta.id, meta.name, meta.kind, meta.revision, meta.byte_size, meta.r2_key, meta.provenance, meta.taint, meta.created_at, meta.updated_at,
+        'INSERT INTO artifacts (id, name, kind, revision, byte_size, r2_key, provenance, taint, created_at, updated_at, sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        meta.id, meta.name, meta.kind, meta.revision, meta.byte_size, meta.r2_key, meta.provenance, meta.taint, meta.created_at, meta.updated_at,sha256,
       );
       if (scope) scope.commit(commit); else commit();
       return meta;
     },
-    async revise(args, provenance, scope) {
+    async revise(args, provenance, scope, assertSourceCurrent) {
       const current = byId(args.artifact_id);
       if (current === null) return { status: 'not_found' };
       if (current.revision !== args.expected_revision) return { status: 'conflict', current_revision: current.revision };
       // Bodies are immutable per revision: the new body lands under a new key BEFORE the row
       // moves, so a crash between the two never leaves the row pointing at a missing body.
       const r2Key = `artifacts/${args.artifact_id}/r${current.revision + 1}/${crypto.randomUUID()}`;
+      const sha256=await sha256Hex(args.body_markdown);
       scope?.admit();
-      await bodies.put(r2Key, args.body_markdown);
+      await bodies.put(r2Key, args.body_markdown, { scope, assertCurrent: assertSourceCurrent });
+      await assertSourceCurrent?.();
       const meta: ArtifactMeta = {
         ...current, revision: current.revision + 1,
         byte_size: new TextEncoder().encode(args.body_markdown).length,
+        sha256,
         r2_key: r2Key, provenance, updated_at: clock.now().getTime(),
       };
       // Recheck after body I/O and compare-and-swap in the same synchronous SQL operation.
       const after = byId(args.artifact_id);
       if (after === null) return { status: 'not_found' };
       if (after.revision !== args.expected_revision) return { status: 'conflict', current_revision: after.revision };
-      const commit = () => sql.exec(
-        'UPDATE artifacts SET revision = ?, byte_size = ?, r2_key = ?, provenance = ?, updated_at = ? WHERE id = ? AND revision = ?',
-        meta.revision, meta.byte_size, meta.r2_key, meta.provenance, meta.updated_at, meta.id, args.expected_revision,
-      );
+      const commit = () => {
+        remember(current);
+        sql.exec('UPDATE artifacts SET revision = ?, byte_size = ?, r2_key = ?, provenance = ?, updated_at = ?, sha256 = ? WHERE id = ? AND revision = ?',
+          meta.revision, meta.byte_size, meta.r2_key, meta.provenance, meta.updated_at, sha256,meta.id, args.expected_revision);
+      };
       if (scope) scope.commit(commit); else commit();
       return { status: 'ok', meta };
     },
     list: (kind) => (kind === undefined
       ? sql.exec<ArtifactMeta>('SELECT * FROM artifacts ORDER BY updated_at DESC').toArray()
       : sql.exec<ArtifactMeta>('SELECT * FROM artifacts WHERE kind = ? ORDER BY updated_at DESC', kind).toArray()),
-    async read(id, offset, length) {
-      const meta = byId(id);
+    async read(id, offset, length, revision) {
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 1) return null;
+      const meta = revision === undefined ? byId(id) : byRevision(id, revision);
       if (meta === null) return null;
       // R2 is the system of record for bodies; a missing body means the artifact is
       // unreadable, so the handler reports not_found rather than inventing content.
       const body = await bodies.get(meta.r2_key);
       if (body === null) return null;
+      if(new TextEncoder().encode(body).byteLength!==meta.byte_size || meta.sha256 && await sha256Hex(body)!==meta.sha256)return null;
       const text = body.slice(offset, offset + length);
       const next = offset + text.length;
       return { meta, text, total_chars: body.length, next_offset: next < body.length ? next : null };
@@ -158,7 +201,9 @@ export const artifactHandlers = (book: ArtifactBook, deliver?: DeliverArtifact) 
     mutates_state: true,
     // A mutation ack (id + revision), not stored content: taint-null like the other write tools.
     handle: async (args: CreateArtifactArgs, ctx?: ToolDispatcherContext) => {
-      const meta = await book.create(args, 'tool:create_artifact', ctx?.runScope);
+      let meta: ArtifactMeta;
+      try { meta = await book.create(args, 'tool:create_artifact', ctx?.runScope, ctx?.assertTaskSourceCurrent); }
+      catch (error) { if (error instanceof RightsError && error.code === 'unavailable') return { ok: false as const, code: 'transient' as const, error: 'Artifact storage is unavailable. No artifact was saved.' }; throw error; }
       ctx?.runScope?.admit();
       return { ok: true, data: { artifact_id: meta.id, revision: meta.revision, stored_chars: args.body_markdown.length, delivery: deliver ? await deliver(meta) : { status: 'saved_internal', url: null, audience: 'unverified' } }, source_taint: null };
     },
@@ -171,7 +216,9 @@ export const artifactHandlers = (book: ArtifactBook, deliver?: DeliverArtifact) 
     autonomy_gated: false,
     mutates_state: true,
     handle: async (args: ReviseArtifactArgs, ctx?: ToolDispatcherContext) => {
-      const result = await book.revise(args, 'tool:revise_artifact', ctx?.runScope);
+      let result: ReviseResult;
+      try { result = await book.revise(args, 'tool:revise_artifact', ctx?.runScope, ctx?.assertTaskSourceCurrent); }
+      catch (error) { if (error instanceof RightsError && error.code === 'unavailable') return { ok: false as const, code: 'transient' as const, error: 'Artifact storage is unavailable. No revision was saved.' }; throw error; }
       if (result.status === 'not_found') return { ok: false, code: 'not_found', error: 'No artifact with that id. Use list_artifacts to see what exists.' };
       if (result.status === 'conflict') return { ok: false, code: 'rejected', error: `Revision mismatch: the artifact is at revision ${result.current_revision}. Read it again and retry with expected_revision ${result.current_revision}.` };
       ctx?.runScope?.admit();

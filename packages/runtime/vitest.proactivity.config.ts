@@ -1,0 +1,2 @@
+import { defineConfig } from 'vitest/config';
+export default defineConfig({ test: { environment: 'node', include: ['test/google-mail-body-node.test.ts', 'test/owner-scheduler-admission.test.ts', 'test/proactivity-ledger-node.test.ts', 'test/proactivity-collector-node.test.ts', 'test/owner-proactivity-node.test.ts', 'test/proactivity-windows.test.ts', 'test/owner-day-plan-node.test.ts', 'test/google-push-node.test.ts'] } });

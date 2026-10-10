@@ -25,6 +25,8 @@ export type TelegramInboundTurn = Readonly<{
   media?: TelegramMedia;
   replyTo?: ReplyContext;
   runScope?: RunEffectScope;
+  // Populated only by an authenticated host after resolving exact owner file revisions.
+  admittedMedia?: Pick<import('./owner-turn-envelope').OwnerTurnEnvelope, 'attachments' | 'attachmentRefs' | 'mediaNote'>;
 }>;
 
 export type TelegramUnsupportedTurn = Omit<TelegramInboundTurn, 'text' | 'sentAt' | 'media'> & Readonly<{ note?: string }>;

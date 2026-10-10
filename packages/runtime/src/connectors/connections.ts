@@ -53,7 +53,7 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
         // moveEvent/cancelEvent's etag) would cross the wire as null and fail typed validation.
         const wireArgs = [...args];
         while (wireArgs.length > 0 && wireArgs[wireArgs.length - 1] === undefined) wireArgs.pop();
-        const effect = ['draft','sendRaw','createEvent','moveEvent','cancelEvent'].includes(method);
+        const effect = ['draft','sendRaw','createEvent','moveEvent','cancelEvent','createTask','patchTask'].includes(method);
         if(effect&&!intent)throw new ProxyIntentError('intent_required');
         const { data } = await post({ do_name: doName, op: 'call', connection, method, args: wireArgs, ...(effect?{intent_id:intent!.id}:{}) });
         health?.('');
