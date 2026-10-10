@@ -65,6 +65,12 @@ insert into waldo.owners(do_name,email,auth_user_id) values
 insert into public.health_context_daily(user_id,day,form,updated_at) values
   ('00000000-0000-0000-0000-00000000ac01','2026-09-30','{"zone":"low"}','2000-01-01T00:00:00Z'),
   ('00000000-0000-0000-0000-00000000ac02','2026-09-30','{"zone":"good"}','2000-01-01T00:00:00Z');
+insert into waldo.health_consents(owner_id,source,purpose,version,age_attested_18_plus)
+  select o.id,'apple',p,2,true from waldo.owners o, unnest(array['storage_compute','model_processing']) p where o.do_name in ('health-access-a','health-access-b');
+insert into waldo.health_scopes(owner_id,source,purpose,epoch,consent_id)
+  select c.owner_id,c.source,c.purpose,1,c.id from waldo.health_consents c join waldo.owners o on o.id=c.owner_id where o.do_name in ('health-access-a','health-access-b');
+insert into waldo.health_context_basis(owner_id,day,consent_basis,timezone)
+  select o.id,'2026-09-30','[{"source":"apple","consent_epoch":1}]'::jsonb,'UTC' from waldo.owners o where o.do_name in ('health-access-a','health-access-b');
 create temporary table health_before as select * from public.health_context_daily;
 
 set local role authenticated;
