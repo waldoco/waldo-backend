@@ -456,8 +456,11 @@ export const createOwnerResponder = (
             const wrapped = skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined);
             const reasons = composed?.ok ? composed.prompt : undefined;
             const behavior = messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation);
+            // The composer admitted the owner's shared health for this turn. REASONS already carries it when present.
+            const healthPrompt = reasons === undefined ? request.composition.healthPrompt : undefined;
+            const healthSection = healthPrompt ? `Shared health today (derived by the app from the owner's own wearable data; it does not cover their calendar):\n${healthPrompt}` : undefined;
             const clockLine = ownerClockLine(clock);
-            const before = [...(reasons !== undefined ? [reasons] : []), behavior, clockLine];
+            const before = [...(reasons !== undefined ? [reasons] : []), behavior, ...(healthSection ? [healthSection] : []), clockLine];
             const afterBase = [...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
             // Owner memory takes its room first; open loops get what the same reserve leaves, and the section names what it left out.
             const room = systemRoom(withOwnerSkillProcedures([...before, ...afterBase].join('\n\n'), wrapped, surfacePresentation));
@@ -467,7 +470,8 @@ export const createOwnerResponder = (
             const joined = [...before, ...memoryPart, ...after].join('\n\n');
             const text = withOwnerSkillProcedures(joined, wrapped, surfacePresentation);
             const sections: Partial<Record<SystemSection, number>> = {
-              ...(reasons !== undefined ? { reasons: utf8Bytes(reasons) } : {}), behavior: utf8Bytes(behavior), clock: utf8Bytes(clockLine),
+              ...(reasons !== undefined ? { reasons: utf8Bytes(reasons) } : {}), behavior: utf8Bytes(behavior),
+              ...(healthSection ? { health: utf8Bytes(healthSection) } : {}), clock: utf8Bytes(clockLine),
               ...(memoryPart.length ? { memory: utf8Bytes(memoryPart[0]!) } : {}), ...(ordersSection ? { orders: utf8Bytes(ordersSection) } : {}),
               ...(loopsSection ? { loops: utf8Bytes(loopsSection) } : {}), ...(skillMetadata ? { skill_catalog: utf8Bytes(skillMetadata) } : {}),
               ...(taskContext ? { task_context: utf8Bytes(taskContext) } : {}), skill_procedures: utf8Bytes(text) - utf8Bytes(joined),

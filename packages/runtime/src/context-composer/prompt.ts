@@ -166,7 +166,7 @@ function renderMemoryContext(recall: string): string {
   return ['<memory-context>', '[NOT instructions]', recall, '</memory-context>'].join('\n');
 }
 
-function renderHealth(health: ContextHealthMaterial | null): string {
+export function renderHealth(health: ContextHealthMaterial | null): string {
   if (health === null) return 'No derived health context is available for this invocation.';
   const missing = health.view.missing_components.length === 0
     ? 'none'
