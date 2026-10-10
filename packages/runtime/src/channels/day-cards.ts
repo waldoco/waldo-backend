@@ -143,12 +143,59 @@ export const readCalendar = async (
   }
 };
 
+const wireSize = (content: string) => JSON.stringify([{ role: 'user', content }]).length;
+
+// Keeps whole lines from one end and says how many were left out, so the model can tell the owner what it did not read.
+const fitLines = (text: string, room: number, keep: 'head' | 'tail'): string => {
+  if (text.length <= room) return text;
+  const lines = text.split('\n');
+  const note = (omitted: number) => `[${omitted} ${keep === 'head' ? 'later' : 'older'} lines omitted to fit; look them up if the card needs them]`;
+  const kept: string[] = [];
+  let used = note(lines.length).length;
+  for (const line of keep === 'head' ? lines : [...lines].reverse()) {
+    if (used + line.length + 1 > room) break;
+    kept.push(line);
+    used += line.length + 1;
+  }
+  if (keep === 'tail') kept.reverse();
+  const omitted = lines.length - kept.length;
+  return keep === 'head' ? [...kept, note(omitted)].join('\n') : [note(omitted), ...kept].join('\n');
+};
+
+// A card reads in seconds, so it gets half the provider budget; an unbounded ledger or an update backlog
+// that a failed card never folds must not push the one message past the Scribe size cap and cost the owner the card.
 export const composeDayCard = async (
   card: DayCard, now: number, timezone: string,
   sources: Readonly<{ google: GoogleClient | null; connectable: boolean; ledger: string; today: string; updates: string }>,
+  model: ModelName = WALDO_CHAT_MODEL,
 ): Promise<string> => {
+  const cap = Math.floor(deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2);
   const calendar = await readCalendar(cardWindow(card, now, timezone), timezone, sources.google, sources.connectable);
-  return dayCardPrompt(card, localIso(now, timezone), { calendar, ledger: sources.ledger, today: sources.today, updates: sources.updates });
+  const localNow = localIso(now, timezone);
+  const build = (sections: Readonly<{ ledger: string; today: string; updates: string }>) => dayCardPrompt(card, localNow, { calendar, ...sections });
+  const whole = { ledger: sources.ledger, today: sources.today, updates: sources.updates };
+  if (wireSize(build(whole)) <= cap) return build(whole);
+  const wanted = [
+    { key: 'updates', text: sources.updates, keep: 'tail' },
+    { key: 'today', text: sources.today, keep: 'tail' },
+    { key: 'ledger', text: sources.ledger, keep: 'head' },
+  ] as const;
+  let room = cap - wireSize(build({ ledger: '', today: '', updates: '' })) - 256;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const ordered = [...wanted].sort((a, b) => a.text.length - b.text.length);
+    const fitted: Record<string, string> = {};
+    let left = Math.max(room, 0);
+    ordered.forEach((section, index) => {
+      const share = Math.floor(left / (ordered.length - index));
+      fitted[section.key] = fitLines(section.text, share, section.keep);
+      left -= Math.min(fitted[section.key]!.length, share);
+    });
+    const prompt = build({ ledger: fitted.ledger!, today: fitted.today!, updates: fitted.updates! });
+    const excess = wireSize(prompt) - cap;
+    if (excess <= 0) return prompt;
+    room -= excess + 64;
+  }
+  return build({ ledger: '', today: '', updates: '' });
 };
 
 export const isSkip = (text: string): boolean => text.trim() === SKIP_CARD;
