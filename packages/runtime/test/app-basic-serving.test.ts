@@ -1,6 +1,7 @@
 import { appSessionV1Schema, appVerifyResultV1Schema, appHistoryResultV1Schema, appMessageReceiptV1Schema } from '../../contracts/src/app/core';
 import { appControlProjectionV1Schema, appControlResultV1Schema } from '../../contracts/src/app/controls';
 import { AppInbox } from '../src/channels/app-inbox';
+import { APP_INBOX_DUE_KEY } from '../src/scheduler/alarm-slot';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
@@ -124,7 +125,8 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       expect(afterRecovery.messages.filter((m:any)=>m.role==='assistant'&&m.parent_id===blocked.message_id)).toHaveLength(0);expect(afterRecovery.messages.filter((m:any)=>m.role==='assistant'&&m.parent_id===queued.message_id)).toHaveLength(1);
       const retryInterrupted=await app('/chat/main/messages',{client_message_id:blockedId,text:'Interrupted in-flight turn'},credential);expect(await retryInterrupted.json()).toMatchObject({state:'interrupted'});
       const inbox=new AppInbox(state.storage),pending=await inbox.admit(name,hash!,'revoked-pending-client','Pending then revoked',`owner:prn_${OWNER.replaceAll('-','')}`);expect(pending.kind).toBe('admitted');
-      directoryUnavailable=true;await instance.alarm();expect(inbox.receipt(name,'revoked-pending-client')?.state).toBe('admitted');directoryUnavailable=false;
+      directoryUnavailable=true;const outageAt=Date.now();await instance.alarm();expect(inbox.receipt(name,'revoked-pending-client')?.state).toBe('admitted');
+      expect(await state.storage.get<number>(APP_INBOX_DUE_KEY)).toBeGreaterThanOrEqual(outageAt+30_000);directoryUnavailable=false;
       expect(proof.inputs.some(input=>input.text?.format?.name==='reaction')).toBe(false);
       const total=proof.inputs.length;
       expect((await app('/chat/main',undefined,credential.slice(0,-1)+'!')).status).toBe(401);

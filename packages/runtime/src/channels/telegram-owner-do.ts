@@ -656,7 +656,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     this.appInbox.recover(this.appAttempts);
     for(const pending of this.appInbox.records().filter(row=>row.state==='admitted')){
       let current=false;
-      try{await this.appAuthority(pending.owner,pending.sessionHash);current=true;}catch(error){if(error instanceof AppSessionAuthorityError&&error.kind==='unavailable'){await rearmSharedAlarm(this.ctx.storage,null,Date.now(),30_000);return;}}
+      try{await this.appAuthority(pending.owner,pending.sessionHash);current=true;}catch(error){if(error instanceof AppSessionAuthorityError&&error.kind==='unavailable'){this.appInbox.deferWake(30_000);await rearmSharedAlarm(this.ctx.storage,null,Date.now(),30_000);return;}}
       const record=this.appInbox.claim(pending.id,current);if(!record)continue;
       this.appAttempts.add(record.attempt!);this.activeApp=record;
       const abort=new AbortController(),scope=this.appInbox.scope(record,abort.signal);
