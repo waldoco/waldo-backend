@@ -209,8 +209,28 @@ export const sha256Hex = async (text: string): Promise<string> => {
 };
 
 export type TaskStatusFilter = 'todo' | 'in_progress' | 'done' | 'all';
-export type TaskItem = Readonly<{ id: string; title: string; status: 'todo' | 'done'; due?: string; updated?: string }>;
-type GoogleTask = Readonly<{ id: string; title?: string; status: string; due?: string; updated?: string }>;
+export type TaskItem = Readonly<{ id: string; title: string; status: 'todo' | 'done'; due?: string; updated?: string; notes?: string; parent?: string; position?: string; completed?: string; web_view_link?: string; task_list_id?: string }>;
+type GoogleTask = Readonly<{ id: string; title?: string; status: string; due?: string; updated?: string; notes?: string; parent?: string; position?: string; completed?: string; webViewLink?: string }>;
+export type TaskListItem = Readonly<{ id: string; title: string; updated?: string; etag?: string }>;
+export type GoogleCollectionPage<T> = Readonly<{ items: readonly T[]; next_page_token: string | null; fetched_count: number; account: CalendarPage['account']; observed_at: string }>;
+export type TasksPage = Readonly<{ tasks: readonly TaskItem[]; next_page_token: string | null; fetched_count: number; task_list_ids: readonly string[]; account: CalendarPage['account']; observed_at: string }>;
+
+const validPageLimit = (value: number, max: number) => Number.isSafeInteger(value) && value >= 1 && value <= max;
+const validGoogleId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 1024 && !/[\r\n\0]/.test(value);
+const validProviderToken = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 2048;
+const optionalText = (value: unknown, max: number) => value === undefined || (typeof value === 'string' && value.length <= max);
+const optionalInstant = (value: unknown) => value === undefined || validCalendarInstant(value);
+const validTaskStatus = (value: string): value is TaskStatusFilter => ['todo', 'in_progress', 'done', 'all'].includes(value);
+const collectionItems = (data: Record<string, unknown>, kind: string, limit: number, label: string): Record<string, unknown>[] => {
+  if (!isObject(data) || data.kind !== kind || Object.hasOwn(data, 'error') || (data.items !== undefined && (!Array.isArray(data.items) || data.items.length > limit || !data.items.every(isObject))) || (data.nextPageToken !== undefined && !validProviderToken(data.nextPageToken))) throw new Error(`invalid ${label} page response`);
+  return (data.items ?? []) as Record<string, unknown>[];
+};
+const validGoogleTask = (value: unknown): value is GoogleTask => isObject(value) && validGoogleId(value.id) && ['needsAction', 'completed'].includes(String(value.status)) && optionalText(value.title, 2000) && optionalText(value.notes, 100_000) && optionalText(value.parent, 1024) && optionalText(value.position, 1024) && optionalText(value.webViewLink, 2048) && optionalInstant(value.due) && optionalInstant(value.updated) && optionalInstant(value.completed);
+const taskItem = (task: GoogleTask, taskListId: string): TaskItem => ({
+  id: task.id, title: task.title ?? '(no title)', status: task.status === 'completed' ? 'done' : 'todo', task_list_id: taskListId,
+  ...(task.due ? { due: task.due } : {}), ...(task.updated ? { updated: task.updated } : {}), ...(task.completed ? { completed: task.completed } : {}),
+  ...(task.notes ? { notes: task.notes } : {}), ...(task.parent ? { parent: task.parent } : {}), ...(task.position ? { position: task.position } : {}), ...(task.webViewLink ? { web_view_link: task.webViewLink } : {}),
+});
 
 // Provider calendars are untrusted even when transport returned HTTP 200.
 export const validFreeBusyCalendar = (row: unknown): row is FreeBusyResult['calendars'][string] => {
@@ -224,6 +244,7 @@ export const validFreeBusyCalendar = (row: unknown): row is FreeBusyResult['cale
 export type FreeBusyResult=Readonly<{from:string;to:string;calendars:Readonly<Record<string,Readonly<{busy:readonly Readonly<{start:string;end:string}>[];errors?:readonly Readonly<{reason?:string}>[]}>>>}>;
 
 export type CalendarPage = Readonly<{ events: readonly CalendarItem[]; next_page_token: string | null; fetched_count: number; account: Readonly<{connection_id: string | null; email: string | null}>; observed_at: string }>;
+export type CalendarChangesPage = Readonly<{ events: readonly CalendarChange[]; next_page_token: string | null; fetched_count: number; calendar_id: string; account: CalendarPage['account']; observed_at: string }>;
 
 // Drive metadata only (REST, drive.readonly or narrower). Exactly these fields cross the boundary: no body, description,
 // snippet, owner or permission data. The runtime re-projects any reply to this shape.
@@ -237,6 +258,9 @@ export type GoogleClient = Readonly<{
   driveGetFileMetadata?(input: Readonly<{ fileId: string }>): Promise<DriveFileMeta>;
   driveReadFileContent?(input: import('./drive-rest').DriveContentArgs): Promise<import('./drive-rest').DriveFileContent>;
   calendarPage?(calendarId: string, from: string, to: string, limit: number, includeDeclined: boolean, pageToken?: string): Promise<CalendarPage>;
+  taskListsPage?(limit: number, pageToken?: string): Promise<GoogleCollectionPage<TaskListItem>>;
+  tasksPage?(taskListId: string, status: TaskStatusFilter, limit: number, pageToken?: string): Promise<TasksPage>;
+  allTasksPage?(status: TaskStatusFilter, limit: number, pageToken?: string): Promise<TasksPage>;
   freeBusy(from:string,to:string,calendarIds:readonly string[],timezone:string):Promise<FreeBusyResult>;
   events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<readonly CalendarItem[]>;
   findDraftByMessageId?(messageId: string): Promise<Readonly<{ draft_id: string; message_id?: string }> | null>;
@@ -248,6 +272,7 @@ export type GoogleClient = Readonly<{
   moveEvent(id: string, start: string, end: string, etag?: string, operationMarker?: string): Promise<CalendarItem>;
   cancelEvent(id: string, etag?: string, operationMarker?: string): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
+  changedEventsPage?(calendarId: string, since: number, from: number, to: number, limit: number, pageToken?: string): Promise<CalendarChangesPage>;
   mailPage(query:string,limit:number,pageToken?:string):Promise<Readonly<{messages:readonly MailItem[];next_page_token:string|null;result_size_estimate:number|null}>>;
   newMail(since: number, limit: number): Promise<readonly MailItem[]>;
   searchMail(query: string, limit: number): Promise<readonly MailItem[]>;
@@ -259,7 +284,7 @@ export type GoogleClient = Readonly<{
 // Single source for the connector-proxy allowlist: the runtime's vault client and the Supabase
 // connector-proxy Edge Function both build from this list, so a method added to GoogleClient but
 // missed here fails `satisfies` / the parity test instead of breaking live calls on Vault installs.
-export const GOOGLE_METHODS = ['calendarPage','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent'] as const satisfies readonly (keyof GoogleClient)[];
+export const GOOGLE_METHODS = ['calendarPage','taskListsPage','tasksPage','allTasksPage','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent'] as const satisfies readonly (keyof GoogleClient)[];
 export type GoogleMethod = (typeof GOOGLE_METHODS)[number];
 
 const b64urlDecode = (data: string): string => {
@@ -306,7 +331,7 @@ export async function googleAccessToken(app: GoogleApp, tokens: GoogleTokens, fe
 }
 
 // Only an invalid grant marks connection health; provider outages and client configuration do not require owner reconnect.
-export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void, account: CalendarPage['account'] = {connection_id: null, email: tokens.email ?? null}): GoogleClient & Required<Pick<GoogleClient, 'calendarPage'>> {
+export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void, account: CalendarPage['account'] = {connection_id: null, email: tokens.email ?? null}): GoogleClient & Required<Pick<GoogleClient, 'calendarPage' | 'taskListsPage' | 'tasksPage' | 'allTasksPage' | 'changedEventsPage'>> {
   let access: { token: string; until: number } | null = null;
   const bearer = async () => {
     if (access && access.until > Date.now()) return access.token;
@@ -323,6 +348,114 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     const json = response.status === 204 ? {} : await response.json() as Record<string, unknown>;
     if (!response.ok) throw new GoogleError(response.status, `google ${response.status}: ${(json.error as { message?: string } | undefined)?.message ?? 'request failed'}`, googleErrorReason(json));
     return json;
+  };
+  // A continuation is authority to resume this exact account/query, never to select another
+  // resource. The grant signs it; reconnecting with another grant requires a fresh first page.
+  const collectionCursor = async (kind: string, query: readonly unknown[]) => {
+    const binding = JSON.stringify([kind, account, ...query]);
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(tokens.refresh_token), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const signature = async (body: string) => [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${binding}.${body}`)))].map(b => b.toString(16).padStart(2, '0')).join('');
+    return {
+      async encode(value: unknown): Promise<string> {
+        const body = b64url(new TextEncoder().encode(JSON.stringify(value)));
+        const cursor = `${body}.${await signature(body)}`;
+        if (cursor.length > 16_384) throw new Error(`invalid ${kind} continuation size`);
+        return cursor;
+      },
+      async decode(cursor: string): Promise<unknown> {
+        try {
+          if (typeof cursor !== 'string' || !cursor || cursor.length > 16_384) throw new Error();
+          const parts = cursor.split('.');
+          if (parts.length !== 2) throw new Error();
+          const expected = await signature(parts[0]!);
+          let mismatch = expected.length ^ parts[1]!.length;
+          for (let i = 0; i < expected.length; i++) mismatch |= expected.charCodeAt(i) ^ (parts[1]!.charCodeAt(i) || 0);
+          if (mismatch) throw new Error();
+          return JSON.parse(b64urlDecode(parts[0]!));
+        } catch { throw new Error(`invalid ${kind} cursor or query binding`); }
+      },
+    };
+  };
+  const providerCursor = async (kind: string, query: readonly unknown[], cursor?: string) => {
+    const codec = await collectionCursor(kind, query);
+    let token: string | undefined;
+    if (cursor !== undefined) {
+      const state = await codec.decode(cursor);
+      if (!isObject(state) || Object.keys(state).length !== 2 || state.v !== 1 || !validProviderToken(state.token)) throw new Error(`invalid ${kind} cursor or query binding`);
+      token = state.token;
+    }
+    return { token, next: (nextToken: string | undefined) => {
+      if (token !== undefined && nextToken === token) throw new Error(`${kind} pagination made no progress`);
+      return nextToken ? codec.encode({ v: 1, token: nextToken }) : Promise.resolve(null);
+    } };
+  };
+  const taskListsPage = async (limit: number, pageToken?: string): Promise<GoogleCollectionPage<TaskListItem>> => {
+    if (!validPageLimit(limit, 1000)) throw new Error('invalid task-list page request');
+    const cursor = await providerCursor('task-list', [limit], pageToken);
+    const url = new URL('https://tasks.googleapis.com/tasks/v1/users/@me/lists');
+    url.search = new URLSearchParams({ maxResults: String(limit), ...(cursor.token ? { pageToken: cursor.token } : {}) }).toString();
+    const data = await call(url.toString(), { signal: AbortSignal.timeout(30_000) });
+    const items = collectionItems(data, 'tasks#taskLists', limit, 'task-list');
+    if (!items.every(item => isObject(item) && validGoogleId(item.id) && typeof item.title === 'string' && item.title.length <= 2000 && optionalInstant(item.updated) && optionalText(item.etag, 1024))) throw new Error('invalid task-list page response');
+    return { items: items.map(item => ({ id: item.id as string, title: item.title as string, ...(item.updated ? { updated: item.updated as string } : {}), ...(item.etag ? { etag: item.etag as string } : {}) })), next_page_token: await cursor.next(data.nextPageToken as string | undefined), fetched_count: items.length, account, observed_at: new Date().toISOString() };
+  };
+  const tasksPage = async (taskListId: string, status: TaskStatusFilter, limit: number, pageToken?: string): Promise<TasksPage> => {
+    if (!validGoogleId(taskListId) || !validTaskStatus(status) || !validPageLimit(limit, 100)) throw new Error('invalid Tasks page request');
+    const cursor = await providerCursor('Tasks', [taskListId, status, limit], pageToken);
+    const url = new URL(`https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(taskListId)}/tasks`);
+    url.search = new URLSearchParams({ maxResults: String(limit), showDeleted: 'false', showAssigned: 'true', showHidden: status === 'done' || status === 'all' ? 'true' : 'false', showCompleted: status === 'done' || status === 'all' ? 'true' : 'false', ...(cursor.token ? { pageToken: cursor.token } : {}) }).toString();
+    const data = await call(url.toString(), { signal: AbortSignal.timeout(30_000) });
+    const items = collectionItems(data, 'tasks#tasks', limit, 'Tasks');
+    if (!items.every(validGoogleTask)) throw new Error('invalid Tasks page response');
+    const want = status === 'done' ? 'completed' : 'needsAction';
+    return { tasks: (items as GoogleTask[]).filter(task => status === 'all' || task.status === want).map(task => taskItem(task, taskListId)), next_page_token: await cursor.next(data.nextPageToken as string | undefined), fetched_count: items.length, task_list_ids: [taskListId], account, observed_at: new Date().toISOString() };
+  };
+  const allTasksPage = async (status: TaskStatusFilter, limit: number, pageToken?: string): Promise<TasksPage> => {
+    if (!validTaskStatus(status) || !validPageLimit(limit, 100)) throw new Error('invalid all-list Tasks page request');
+    const codec = await collectionCursor('all-list Tasks', [status, limit]);
+    type State = { v: 1; list_id: string | null; list_token: string | null; task_token: string | null; lists_exhausted: boolean };
+    let state: State = { v: 1, list_id: null, list_token: null, task_token: null, lists_exhausted: false };
+    if (pageToken !== undefined) {
+      const value = await codec.decode(pageToken);
+      if (!isObject(value) || Object.keys(value).length !== 5 || value.v !== 1 || (value.list_id !== null && !validGoogleId(value.list_id)) || (value.list_token !== null && typeof value.list_token !== 'string') || (value.task_token !== null && typeof value.task_token !== 'string') || typeof value.lists_exhausted !== 'boolean' || (!value.list_id && value.task_token) || (!value.list_id && value.lists_exhausted)) throw new Error('invalid all-list Tasks cursor or query binding');
+      state = value as State;
+    }
+    const tasks: TaskItem[] = [];
+    const lists = new Set<string>();
+    let fetched = 0;
+    // Bound one tool invocation while retaining the next provider step. Even empty lists or
+    // filtered completed pages cannot silently consume an unbounded request budget.
+    for (let reads = 0; reads < 10 && tasks.length < limit; reads++) {
+      if (state.list_id === null) {
+        if (state.lists_exhausted) break;
+        const page = await taskListsPage(1, state.list_token ?? undefined);
+        state.list_token = page.next_page_token;
+        state.lists_exhausted = page.next_page_token === null;
+        state.list_id = page.items[0]?.id ?? null;
+        if (state.list_id === null) continue;
+      }
+      lists.add(state.list_id);
+      // A stable size keeps the inner provider cursor bound across separate invocations.
+      const page = await tasksPage(state.list_id, status, limit, state.task_token ?? undefined);
+      tasks.push(...page.tasks);
+      fetched += page.fetched_count;
+      state.task_token = page.next_page_token;
+      if (page.next_page_token === null) state.list_id = null;
+      // One provider task page may use the entire output allowance. Do not request another
+      // list with a smaller size then replay its cursor at the original size after restart.
+      if (tasks.length > 0) break;
+    }
+    return { tasks, fetched_count: fetched, task_list_ids: [...lists], next_page_token: state.list_id === null && state.lists_exhausted ? null : await codec.encode(state), account, observed_at: new Date().toISOString() };
+  };
+  const changedEventsPage = async (calendarId: string, since: number, from: number, to: number, limit: number, pageToken?: string): Promise<CalendarChangesPage> => {
+    if (!validGoogleId(calendarId) || ![since, from, to].every(value => Number.isSafeInteger(value) && Number.isFinite(new Date(value).getTime())) || from >= to || !validPageLimit(limit, 50)) throw new Error('invalid Calendar changes page request');
+    const cursor = await providerCursor('Calendar changes', [calendarId, since, from, to, limit], pageToken);
+    const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`);
+    url.search = new URLSearchParams({ updatedMin: new Date(since).toISOString(), timeMin: new Date(from).toISOString(), timeMax: new Date(to).toISOString(), singleEvents: 'true', showDeleted: 'true', maxResults: String(limit), ...(cursor.token ? { pageToken: cursor.token } : {}) }).toString();
+    const data = await call(url.toString(), { signal: AbortSignal.timeout(30_000) });
+    const items = collectionItems(data, 'calendar#events', limit, 'Calendar changes');
+    if (!items.every(item => validCalendarEvent(item) && optionalInstant(item.updated) && optionalInstant(item.created))) throw new Error('invalid Calendar changes page response');
+    return { events: (items as GoogleEvent[]).filter(event => event.status === 'cancelled' || event.attendees?.find(a => a.self)?.responseStatus !== 'declined').map(event => ({ ...toItem({ ...event, start: event.start ?? {}, end: event.end ?? {} }), status: event.status ?? 'confirmed', created: event.created ?? '' })), next_page_token: await cursor.next(data.nextPageToken as string | undefined), fetched_count: items.length, calendar_id: calendarId, account, observed_at: new Date().toISOString() };
   };
   const EVENTS = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
   const match = (etag?: string): Record<string, string> => (etag ? { 'if-match': etag } : {});
@@ -366,6 +499,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
   };
   return {
     account,
+    taskListsPage, tasksPage, allTasksPage, changedEventsPage,
     freeBusy:async(from,to,calendarIds,timezone)=>{
       if(![from,to].every(s=>typeof s==='string'&&/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/.test(s)&&Number.isFinite(Date.parse(s)))||Date.parse(from)>=Date.parse(to)||!Array.isArray(calendarIds)||!calendarIds.length||calendarIds.length>50||calendarIds.some(id=>typeof id!=='string'||!id.trim()||id.length>256)||new Set(calendarIds).size!==calendarIds.length)throw new Error('invalid freebusy request');
       const data=await call('https://www.googleapis.com/calendar/v3/freeBusy',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({timeMin:from,timeMax:to,timeZone:timezone,calendarExpansionMax:50,items:calendarIds.map(id=>({id}))})});
@@ -414,6 +548,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       if (items.length > limit || !items.every(validCalendarEvent)) throw new Error('invalid Calendar page response');
       let continuation: string | null = null;
       if (data.nextPageToken) {
+        if (data.nextPageToken === providerToken) throw new Error('Calendar pagination made no progress');
         const payload = b64url(new TextEncoder().encode(JSON.stringify({v:1,token:data.nextPageToken})));
         continuation = `${payload}.${await signature(payload)}`;
       }
@@ -429,12 +564,18 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         .map(toItem);
     },
     async changedEvents(since, from, to) {
-      const url = new URL(EVENTS);
-      url.search = new URLSearchParams({ updatedMin: new Date(since).toISOString(), timeMin: new Date(from).toISOString(), timeMax: new Date(to).toISOString(), singleEvents: 'true', showDeleted: 'true', maxResults: '50' }).toString();
-      const json = await call(url.toString()) as { items?: GoogleEvent[] };
-      return (json.items ?? [])
-        .filter((event) => event.attendees?.find((a) => a.self)?.responseStatus !== 'declined')
-        .map((event) => ({ ...toItem({ ...event, start: event.start ?? {}, end: event.end ?? {} }), status: event.status ?? 'confirmed', created: event.created ?? '' }));
+      const changes: CalendarChange[] = [];
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      for (let pages = 0; pages < 100; pages++) {
+        const page = await changedEventsPage('primary', since, from, to, 50, cursor);
+        changes.push(...page.events);
+        if (!page.next_page_token) return changes;
+        if (seen.has(page.next_page_token)) throw new Error('Calendar change pagination made no progress; use the resumable page adapter');
+        seen.add(page.next_page_token);
+        cursor = page.next_page_token;
+      }
+      throw new Error('Calendar change collection needs continuation; use the resumable page adapter');
     },
     async mailPage(query,limit,pageToken) {
       if(typeof query!=='string'||!query.trim()||!Number.isSafeInteger(limit)||limit<1||limit>500||(pageToken!==undefined&&(typeof pageToken!=='string'||!pageToken)))throw new Error('invalid Gmail page request');
@@ -481,6 +622,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       return { draft_id: json.id, ...(json.message?.id ? { message_id: json.message.id } : {}), ...(json.message?.threadId ? { thread_id: json.message.threadId } : {}) };
     },
     async findDraftByMessageId(messageId) {
+      if (!validMessageId(messageId)) throw new Error('invalid draft Message-ID');
       const list = new URL('https://gmail.googleapis.com/gmail/v1/users/me/drafts');
       list.search = new URLSearchParams({ q: `rfc822msgid:${messageId}`, maxResults: '1' }).toString();
       const { drafts = [] } = await call(list.toString()) as { drafts?: { id: string; message?: { id: string } }[] };
@@ -519,6 +661,7 @@ const validCalendarInstant = (value: unknown): value is string => {
   return Number.isFinite(Date.parse(day)) && new Date(day).toISOString().slice(0,10) === day;
 };
 
+// A timed event may have start equal to end (for example endTimeUnspecified); that is provider data, not a malformed page.
 const validCalendarEvent = (value: unknown): value is GoogleEvent => {
   const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
   if (!object(value) || typeof value.id !== 'string' || !value.id || value.id.length > 1024) return false;
@@ -530,7 +673,7 @@ const validCalendarEvent = (value: unknown): value is GoogleEvent => {
     return null;
   };
   const start=endpoint(value.start),end=endpoint(value.end);
-  return !!start && !!end && start.allDay===end.allDay && start.at<end.at && ['summary','location','description','etag'].every(k => value[k] === undefined || typeof value[k] === 'string') && (value.attendees === undefined || (Array.isArray(value.attendees) && value.attendees.every(a => object(a) && (a.self === undefined || typeof a.self === 'boolean') && (a.responseStatus === undefined || typeof a.responseStatus === 'string'))));
+  return !!start && !!end && start.allDay===end.allDay && start.at<=end.at && ['summary','location','description','etag'].every(k => value[k] === undefined || typeof value[k] === 'string') && (value.attendees === undefined || (Array.isArray(value.attendees) && value.attendees.every(a => object(a) && (a.self === undefined || typeof a.self === 'boolean') && (a.responseStatus === undefined || typeof a.responseStatus === 'string'))));
 };
 
 const calendarSourceUrl = (value: string | undefined): string | undefined => {

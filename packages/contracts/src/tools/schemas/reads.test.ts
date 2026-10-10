@@ -120,6 +120,12 @@ describe('taskStatusFilter / getTasksArgs', () => {
     expect(getTasksArgsSchema.safeParse({ status: 'blocked' }).success).toBe(false);
     expect(getTasksArgsSchema.safeParse({ limit: 101 }).success).toBe(false);
   });
+
+  it('accepts additive list discovery, selection and bounded continuation without changing defaults', () => {
+    expect(getTasksArgsSchema.parse({ operation: 'list_task_lists' })).toEqual({ operation: 'list_task_lists', status: 'todo', limit: 20 });
+    expect(getTasksArgsSchema.safeParse({ task_list_id: 'work/list', status: 'done', page_token: 'bound-cursor' }).success).toBe(true);
+    for (const args of [{ operation: 'list_task_lists', task_list_id: 'work' }, { operation: 'list_task_lists', status: 'done' }, { page_token: '' }, { page_token: 'x'.repeat(16_385) }, { task_list_id: '' }]) expect(getTasksArgsSchema.safeParse(args).success).toBe(false);
+  });
 });
 
 describe('getMasterMetricsArgs', () => {
