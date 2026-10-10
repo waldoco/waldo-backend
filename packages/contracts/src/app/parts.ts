@@ -25,8 +25,7 @@ export const replyVisibilityV1Schema = z.enum(['shared', 'app_only']);
 export const replyApprovalPartV1Schema = z.strictObject({
   type: z.literal('approval'), approval_id: approvalIdV1Schema, kind: approvalKindV1Schema,
   review: approvalReviewV1Schema, payload_digest: payloadDigestV1Schema,
-  // Empty once the approval is decided or its card is retired: a history card then offers nothing.
-  actions: z.array(approvalActionV1Schema.exclude(['undo'])).max(3).refine(distinct, 'actions repeat'),
+  actions: z.array(approvalActionV1Schema.exclude(['undo'])).min(1).max(3).refine(distinct, 'actions repeat'),
   expires_at: epochMsV1Schema, fallback_text: fallbackTextV1Schema,
 });
 export const replyQuickRepliesPartV1Schema = z.strictObject({
