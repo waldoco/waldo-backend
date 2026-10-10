@@ -731,6 +731,11 @@ it('due transport backlog yields every second alarm to due scheduled work', asyn
     await instance.alarm();
     expect(scheduler.read('fair-reminder')).toBeNull();
     expect((state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? []).filter(r => r.status === 'pending')).toHaveLength(1);
+    // The yielded final goes out on the next alarm. Left pending with its wake at 0, a platform alarm sends it during a later test.
+    await instance.alarm();
+    const fixtures = (state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? []).filter(r => r.id.startsWith('fair-'));
+    expect(fixtures.filter(r => r.status === 'pending').map(r => r.id), worldNote(state)).toEqual([]);
+    expect(state.storage.kv.get<number>('telegram_final_outbox_due_v1')).toBeGreaterThan(Date.now());
   });
 });
 
