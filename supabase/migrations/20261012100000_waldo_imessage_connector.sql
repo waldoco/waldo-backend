@@ -34,6 +34,8 @@ create table waldo.imessage_bridges (
   host_version text not null check (octet_length(host_version) between 1 and 128),
   transport_version text not null check (octet_length(transport_version) between 1 and 128),
   database_generation text not null check (octet_length(database_generation) between 1 and 512),
+  -- A pending credential is usable only for setup, and only until this time (extended by a fresh challenge).
+  pending_expires_at timestamptz not null,
   expected_subject text check (octet_length(expected_subject) between 1 and 512),
   expected_chat_guid text check (octet_length(expected_chat_guid) between 1 and 512),
   challenge_hash text check (challenge_hash ~ '^[0-9a-f]{64}$'),
@@ -121,19 +123,22 @@ end $$;
 -- Host redeems: consumes the invitation and creates a PENDING bridge. Owner/DO come from the
 -- invitation row, never from the caller. Pending credentials cannot reach owner turns.
 create function waldo.imessage_redeem_invitation(p_code_hash text, p_environment text, p_bridge_id text, p_account_id text, p_wrapped_credential text,
-  p_host_version text, p_transport_version text, p_generation text, p_locator text, p_at bigint, p_sig text) returns jsonb
+  p_host_version text, p_transport_version text, p_generation text, p_pending_seconds integer, p_locator text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare v_invite waldo.imessage_invitations; v_do text;
 begin
-  perform waldo.imessage_signed('redeem', p_locator, jsonb_build_array(p_code_hash, p_environment, p_bridge_id, p_account_id, p_wrapped_credential, p_host_version, p_transport_version, p_generation), p_at, p_sig);
+  perform waldo.imessage_signed('redeem', p_locator, jsonb_build_array(p_code_hash, p_environment, p_bridge_id, p_account_id, p_wrapped_credential, p_host_version, p_transport_version, p_generation, p_pending_seconds), p_at, p_sig);
+  if p_pending_seconds is null or p_pending_seconds not between 60 and 3600 then return null; end if;
   select * into v_invite from waldo.imessage_invitations where code_hash = p_code_hash and used_at is null for update;
   if v_invite.code_hash is null or v_invite.expires_at <= clock_timestamp() or v_invite.environment <> p_environment then return null; end if;
   select do_name into v_do from waldo.owners where id = v_invite.owner_id and state = 'active';
   if v_do is null then return null; end if;
   update waldo.imessage_invitations set used_at = clock_timestamp() where code_hash = p_code_hash;
-  insert into waldo.imessage_bridges(bridge_id, account_id, owner_id, environment, state, wrapped_credential, host_version, transport_version, database_generation)
-    values (p_bridge_id, p_account_id, v_invite.owner_id, p_environment, 'pending', p_wrapped_credential, p_host_version, p_transport_version, p_generation);
-  return jsonb_build_object('bridge_id', p_bridge_id, 'account_id', p_account_id, 'do_name', v_do);
+  insert into waldo.imessage_bridges(bridge_id, account_id, owner_id, environment, state, wrapped_credential, host_version, transport_version, database_generation, pending_expires_at)
+    values (p_bridge_id, p_account_id, v_invite.owner_id, p_environment, 'pending', p_wrapped_credential, p_host_version, p_transport_version, p_generation,
+      clock_timestamp() + make_interval(secs => p_pending_seconds));
+  return jsonb_build_object('bridge_id', p_bridge_id, 'account_id', p_account_id, 'do_name', v_do,
+    'expires_at_ms', (extract(epoch from clock_timestamp() + make_interval(secs => p_pending_seconds)) * 1000)::bigint);
 exception when unique_violation or check_violation then return null;
 end $$;
 
@@ -150,6 +155,7 @@ begin
   if r.bridge_id is null then return null; end if;
   return jsonb_build_object(
     'state', case when r.owner_state <> 'active' then 'owner_inactive'
+                  when r.state = 'pending' and clock_timestamp() >= greatest(r.pending_expires_at, coalesce(r.challenge_expires_at, r.pending_expires_at)) then 'expired'
                   when r.state = 'active' and (r.presence_state is distinct from 'active') then 'revoked'
                   else r.state end,
     'bridge_id', r.bridge_id, 'account_id', r.account_id, 'owner_id', r.owner_id, 'do_name', r.do_name,
@@ -260,7 +266,7 @@ begin
   foreach f in array array[
     'waldo.imessage_throttle(text,integer,integer,text,bigint,text)',
     'waldo.imessage_issue_invitation(text,text,text,integer,text,bigint,text)',
-    'waldo.imessage_redeem_invitation(text,text,text,text,text,text,text,text,text,bigint,text)',
+    'waldo.imessage_redeem_invitation(text,text,text,text,text,text,text,text,integer,text,bigint,text)',
     'waldo.imessage_bridge_authority(text,text,text,text,bigint,text)',
     'waldo.imessage_set_expected_scope(text,text,text,text,text,integer,text,bigint,text)',
     'waldo.imessage_record_challenge(text,text,text,text,text,text,text,text,text,text,bigint,text)',

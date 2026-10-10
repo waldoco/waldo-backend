@@ -13,10 +13,10 @@ create function pg_temp.wrapped() returns text language sql as $$ select 'v1.' |
 
 create function pg_temp.invite(o text, code text, life int default 600, env text default 'test') returns boolean language sql as $$
   select waldo.imessage_issue_invitation(o, env, code, life, jsonb_build_array(o, env, code, life)::text, pg_temp.at(), pg_temp.isig('invite', jsonb_build_array(o, env, code, life)::text)) $$;
-create function pg_temp.redeem(code text, b text, a text, env text default 'test') returns jsonb language sql as $$
-  select waldo.imessage_redeem_invitation(code, env, b, a, pg_temp.wrapped(), 'host-1', 'http-v1', 'gen-1',
-    jsonb_build_array(code, env, b, a, pg_temp.wrapped(), 'host-1', 'http-v1', 'gen-1')::text, pg_temp.at(),
-    pg_temp.isig('redeem', jsonb_build_array(code, env, b, a, pg_temp.wrapped(), 'host-1', 'http-v1', 'gen-1')::text)) $$;
+create function pg_temp.redeem(code text, b text, a text, env text default 'test', pend int default 600) returns jsonb language sql as $$
+  select waldo.imessage_redeem_invitation(code, env, b, a, pg_temp.wrapped(), 'host-1', 'http-v1', 'gen-1', pend,
+    jsonb_build_array(code, env, b, a, pg_temp.wrapped(), 'host-1', 'http-v1', 'gen-1', pend)::text, pg_temp.at(),
+    pg_temp.isig('redeem', jsonb_build_array(code, env, b, a, pg_temp.wrapped(), 'host-1', 'http-v1', 'gen-1', pend)::text)) $$;
 create function pg_temp.auth(b text, a text, env text default 'test') returns jsonb language sql as $$
   select waldo.imessage_bridge_authority(env, b, a, jsonb_build_array(env, b, a)::text, pg_temp.at(), pg_temp.isig('authority', jsonb_build_array(env, b, a)::text)) $$;
 create function pg_temp.scope(o text, b text, s text, c text, ch text, life int default 600) returns boolean language sql as $$
@@ -72,6 +72,11 @@ select is(pg_temp.auth(pg_temp.bid('1'), pg_temp.aid('1')) ->> 'subject', null, 
 select is(pg_temp.auth(pg_temp.bid('1'), pg_temp.aid('1'), 'staging'), null, 'authority scoped by environment');
 select is(pg_temp.auth(pg_temp.bid('1'), pg_temp.aid('2')), null, 'authority scoped by exact account');
 select is((pg_temp.auth(pg_temp.bid('1'), pg_temp.aid('1')) ? 'key'), false, 'authority never returns a raw key field');
+select pg_temp.invite('im-c', pg_temp.h('8'));
+select is(pg_temp.redeem(pg_temp.h('8'), pg_temp.bid('8'), pg_temp.aid('8'), 'test', 30), null, 'pending window below bound refused');
+select ok((pg_temp.redeem(pg_temp.h('8'), pg_temp.bid('8'), pg_temp.aid('8')) ->> 'expires_at_ms')::bigint > 0, 'redeem reports the pending expiry');
+update waldo.imessage_bridges set pending_expires_at = now() where bridge_id = pg_temp.bid('8');
+select is(pg_temp.auth(pg_temp.bid('8'), pg_temp.aid('8')) ->> 'state', 'expired', 'unverified pending credential expires');
 
 -- Expected scope and challenge: only the exact sender/chat before expiry; one use.
 select is(pg_temp.scope('im-b', pg_temp.bid('1'), 'owner@example.invalid', 'iMessage;-;owner@example.invalid', pg_temp.h('c')), false, 'other owner cannot set scope');
