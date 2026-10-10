@@ -34,3 +34,31 @@ describe('owner health readings reach the owner-bound model destinations', () =>
     expect(run('HRV 58 ms 1111111111111111', 'owner_reply', null)).toMatchObject({ ok: false, check: 'canary_token' });
   });
 });
+
+describe('recovery.v1 derived view', () => {
+  const view = {
+    authority: 'backend',
+    algorithm_version: 'recovery.v1',
+    recovery_zone: 'mixed',
+    trend: 'steady',
+    freshness: 'fresh',
+    missing_components: [],
+    confidence_band: 'high',
+    provenance_refs: ['hpr_0123456789abcdef0123456789abcdef'],
+    destination_eligibility: ['trigger_prompt', 'volatile_run', 'runtime_trace'],
+  };
+
+  it('is recognised as a derived view at the model destinations and the trace', () => {
+    expect(run(view, 'internal_context', null)).toMatchObject({ ok: true });
+    expect(run(view, 'audit_log', null)).toMatchObject({ ok: true });
+  });
+
+  it('is denied where it is not eligible, even for the owner', () => {
+    expect(run({ ...view, destination_eligibility: ['trigger_prompt'] }, 'audit_log', null)).toMatchObject({ ok: false, check: 'health_value' });
+    expect(run(view, 'send_message', null)).toMatchObject({ ok: false, check: 'health_value' });
+  });
+
+  it('a view that carries a raw field is not a view and is denied outside the owner destinations', () => {
+    expect(run({ ...view, recovery_score: 41 }, 'audit_log', null)).toMatchObject({ ok: false, check: 'health_value' });
+  });
+});

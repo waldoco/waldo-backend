@@ -14,7 +14,7 @@ import type {
   ContextCompositionPhase,
 } from './types';
 import { CONTEXT_LAYERS } from './types';
-import { assembleReasonsPrompt, renderProviderPrompt } from './prompt';
+import { assembleReasonsPrompt, renderHealth, renderProviderPrompt } from './prompt';
 import { snapshotData, validateRuntimeInputs } from './admission';
 import { loadSystemSkills } from './skills';
 import {
@@ -89,7 +89,7 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
           deps.recall,
           owner,
           recallKey,
-          health?.view.form_zone,
+          health?.view.algorithm_version === 'form.safte-fast.v1' ? health.view.form_zone : undefined,
           skills.selected[0]?.trigger_condition,
           inputs,
           provenance,
@@ -141,6 +141,7 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
           ok: true as const,
           prompt,
           ...(skills.selected.length ? { skillPrompt: wrapSkills(skills.selected) } : {}),
+          healthPrompt: renderHealth(health),
           checkpoint: checkedCheckpoint.data,
           evidence,
         });

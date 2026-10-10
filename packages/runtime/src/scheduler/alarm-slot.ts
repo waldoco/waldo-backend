@@ -7,6 +7,15 @@ export async function armAlarm(storage: Pick<DurableObjectStorage, 'setAlarm'>, 
   await storage.setAlarm(scheduledTimeMs);
 }
 
+export const APP_INBOX_DUE_KEY = 'app_inbox_due_v1';
+
+// Admission publishes its payload and wake atomically before acknowledging the send.
+export async function persistAppInboxWake(txn: DurableObjectTransaction, due: number): Promise<void> {
+  await txn.put(APP_INBOX_DUE_KEY, due);
+  const existing = await txn.getAlarm();
+  await armAlarm(txn, existing === null ? due : Math.min(existing, due));
+}
+
 export const COMMON_EXECUTION_DUE_KEY = 'common_execution_due_v1';
 
 export const WHATSAPP_PENDING_DUE_KEY = 'whatsapp_pending_due_v1';
@@ -27,7 +36,8 @@ export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDu
   const commonBrowserDue=(await storage.get<number|null>('common_browser_due_v1'))??null;
   const whatsappDue = (await storage.get<number | null>(WHATSAPP_PENDING_DUE_KEY)) ?? null;
   const commonExecutionDue = (await storage.get<number | null>(COMMON_EXECUTION_DUE_KEY)) ?? null;
-  const bounds = [commonExecutionDue, scheduleDue, outboxDue, inboxDue, linkDue, browserDue, commonBrowserDue, whatsappDue].filter((v): v is number => v !== null);
+  const appDue = (await storage.get<number | null>(APP_INBOX_DUE_KEY)) ?? null;
+  const bounds = [appDue, commonExecutionDue, scheduleDue, outboxDue, inboxDue, linkDue, browserDue, commonBrowserDue, whatsappDue].filter((v): v is number => v !== null);
   if (!bounds.length) { await storage.deleteAlarm(); return; }
   await armAlarm(storage, Math.max(Math.min(...bounds), now + retryDelayMs));
 }

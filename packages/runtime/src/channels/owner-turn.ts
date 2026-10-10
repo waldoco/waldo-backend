@@ -1,3 +1,4 @@
+import type { OwnerContextCapability } from '../context-composer/owner-turn';
 import { OWNER_REQUEST_HOP } from './harness';
 import { narrowHeldJson, withholdHeldTurns } from '../conversation/held-turns';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
@@ -6,7 +7,7 @@ import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { OwnerTurnEnvelope } from './owner-turn-envelope';
 import { ownerContextHandler } from '../tools/live/owner-context';
 import {
-  EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
+  deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
@@ -24,13 +25,15 @@ import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
-import { messagingSystemPrompt, ownerClockLine, withOwnerSkillProcedures } from '../prompt/messaging-behavior';
+import { messagingSystemPrompt, ownerClockLine, unconnectedLine, withOwnerSkillProcedures } from '../prompt/messaging-behavior';
+import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
+import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
-import { restoreConversation, type ConversationStore } from './conversation-store';
+import type { ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
-import type { TurnLogEntry, TurnTimer } from './owner-turn-types';
+import type { SystemSection, TurnLogEntry, TurnTimer } from './owner-turn-types';
 import { ownerTurnAttachments, REPLY_QUOTE_LIMIT, type OwnerResponder, type ReplyContext } from './owner-turn-envelope';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import type { LLMAttachment } from '@waldo/contracts';
@@ -60,7 +63,14 @@ const MAX_TOOL_ROUNDS = 25;
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
 export type OwnerSkillHost = Readonly<{ browserAttachments?(scope?: RunEffectScope): readonly LLMAttachment[]; prepare(turn: OwnerTurnEnvelope, contextOwnerId: string, scope: RunEffectScope): Promise<OwnerSkillCapability | undefined> }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability }>;
+export type OwnerContextHost = Readonly<{ prepare(turn: OwnerTurnEnvelope, scope: RunEffectScope): Promise<OwnerContextCapability> }>;
+export type OwnerHistoryFactory = (context: OwnerContextCapability, scope: RunEffectScope) => ConversationStore;
+export type OwnerContextIntegration = Readonly<{ contextHost: OwnerContextHost; history?: OwnerHistoryFactory }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory }>;
+
+const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
+// The reply's system prompt with the byte size of each joined section, so a trace shows what fills it.
+type SystemPrompt = Readonly<{ text: string; sections: Readonly<Partial<Record<SystemSection, number>>> }>;
 
 export const createOwnerResponder = (
   openaiApiKey: string,
@@ -109,7 +119,9 @@ export const createOwnerResponder = (
   privateOwner?: PrivateOwner,
 ): OwnerResponder => {
   const skills = privateOwner?.skills;
-  const invocation = (() => {
+  const context = privateOwner?.context;
+  const conversationStore = context && privateRunScope && privateOwner?.history ? privateOwner.history(context, privateRunScope) : store;
+  const invocation = context?.invocation ?? (() => {
     const accepted = acceptTrustedInvocation(localTrustedBriefScheduleInput().admission);
     if (!accepted.ok) throw new Error('fixture admission failed');
     return accepted.value;
@@ -119,7 +131,7 @@ export const createOwnerResponder = (
   const cleanupLedger = toolLedger;
   let backgroundCurrent: (() => Promise<void>) | undefined;
   let transientDecision = false;
-  const assertCurrent = async () => { privateRunScope?.admit(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
+  const assertCurrent = async () => { privateRunScope?.admit(); await context?.assertCurrent(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
   const ownerId = invocation.verified_authority.principal_ref;
   const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;
@@ -153,8 +165,9 @@ export const createOwnerResponder = (
     recent: [...recentOwnerTurns.values()].filter(turn => !holdsHeldTopic(turn.text)).concat(control.heard().map((text, index) => ({ message_ref: `${traceId}-steer-${index}`, text }))),
   } } : {};
   let expectedProcedure: string | undefined;
-  const complete = async (trace: string, purpose: string, system: string, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName) => {
+  const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName) => {
     await assertCurrent();
+    const system = typeof systemPrompt === 'string' ? systemPrompt : systemPrompt.text;
     const started = Date.now();
     const mark = (detail: string) => log({ trace, hop: 'complete_phase', ms: Date.now() - started, ok: true, detail: `${purpose}:${detail}` });
     mark('enter');
@@ -171,7 +184,7 @@ export const createOwnerResponder = (
     }));
     mark(`messages=${userMessages.length}`);
     const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
-    const admittedGateway: LLMGatewayAdapter = skills || backgroundCurrent ? { complete: async request => {
+    const admittedGateway: LLMGatewayAdapter = context || skills || backgroundCurrent ? { complete: async request => {
       await assertCurrent();
       if (transientDecision && (request.context !== 'full_context' || new TextEncoder().encode(JSON.stringify(request.request)).byteLength > MODEL_CONTEXT_MAX_CHARS)) throw new Error('background decision context bound');
       if (!transientDecision && skills && expectedProcedure !== undefined) await skills.assertProcedureCurrent(expectedProcedure, CANARIES);
@@ -198,13 +211,23 @@ export const createOwnerResponder = (
     await assertCurrent();
     privateRunScope?.admit();
     const input = JSON.stringify([{ role: 'system', content: system }, ...userMessages, ...(turns ?? [])]);
+    const shape = {
+      system_bytes: utf8Bytes(system), request_bytes: utf8Bytes(input),
+      context: {
+        tools_count: tools?.length ?? 0, tools_bytes: tools?.length ? utf8Bytes(JSON.stringify(tools)) : 0,
+        tool_turns_bytes: turns?.length ? utf8Bytes(JSON.stringify(turns)) : 0,
+        history_messages: Math.max(0, userMessages.length - 1), history_bytes: utf8Bytes(JSON.stringify(userMessages.slice(0, -1))),
+        current_bytes: utf8Bytes(userMessages.at(-1)?.content ?? ''), attachments: attachments?.length ?? 0,
+        ...(typeof systemPrompt === 'string' ? {} : { system_sections: systemPrompt.sections }),
+      },
+    };
     const response = result.ok ? result.response : undefined;
     const metadataOnly = transientDecision || purpose.startsWith('memory') || purpose.startsWith('task_source');
-    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.detail].filter(Boolean).join(':'), shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength }, ...(metadataOnly ? {} : { text: { input } }) });
+    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.detail].filter(Boolean).join(':'), shape, ...(metadataOnly ? {} : { text: { input } }) });
     else log({
       trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true,
       usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens },
-      shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength },
+      shape,
       ...(metadataOnly ? {} : { text: { input, output: response!.text || JSON.stringify(response!.tool_calls), ...(reasoning ? { reasoning } : {}) } }),
     });
     if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.destination, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);
@@ -270,14 +293,21 @@ export const createOwnerResponder = (
     if (added === null) return null;
     return added;
   };
-  const path = new JoinedConversationPath(adapters.contextComposer!, {
+  const composer = context?.composer ?? adapters.contextComposer!;
+  const contextInputs = () => ({ ...(context?.snapshot() ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null });
+  const path = new JoinedConversationPath(composer, {
     complete: async (request) => {
       await assertCurrent();
         const trace = traceId;
       // Capture-mode probe turns run on the stripped handler set; delegation wraps that
       // same set so probe confinement applies to children too (children are read-only by
       // construction, and the strip list is not widened here).
-      const admittedHandlers = handlers.filter(handler => (backgroundToolNames === undefined || backgroundToolNames.includes(handler.name)) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn && activeOwnerTurn.memoryWrites !== false && !probeGuard?.suppressMemory)));
+      // Eligibility is read once here, so every round of this turn offers the same tool array.
+      const eligibilityStarted = Date.now();
+      const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (backgroundToolNames === undefined || backgroundToolNames.includes(handler.name)) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn && activeOwnerTurn.memoryWrites !== false && !probeGuard?.suppressMemory))));
+      await assertCurrent();
+      if (eligibility.not_connected + eligibility.not_configured + eligibility.check_failed > 0) log({ trace, hop: 'tool_eligibility', ms: Date.now() - eligibilityStarted, ok: true, detail: `not_connected=${eligibility.not_connected} not_configured=${eligibility.not_configured} check_failed=${eligibility.check_failed}` });
+      const connections = unconnectedLine(eligibility.unconnected);
       const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => {
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertCurrent();
@@ -425,16 +455,37 @@ export const createOwnerResponder = (
           if (control.revision() !== contextSteering) throw new ClosedRunError();
           const skillMetadata = skills ? skills.metadata() : '';
           // Owner memory gets the room left in the FINAL system prompt (after the skill wrapper), because the sanitiser drops an oversize one whole.
-          const unboundSystem = (): string => {
+          const composed = context ? await composer.compose(invocation, contextInputs()) : undefined;
+          if (composed && !composed.ok) throw new Error(`owner context failed: ${composed.failure.code}`);
+          await assertCurrent();
+          const unboundSystem = (): SystemPrompt => {
             const wrapped = skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined);
-            const before = [messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation), ownerClockLine(clock)];
-            const afterBase = [...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
+            const reasons = composed?.ok ? composed.prompt : undefined;
+            const behavior = messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation);
+            // The composer admitted the owner's shared health for this turn. REASONS already carries it when present.
+            const healthPrompt = reasons === undefined ? request.composition.healthPrompt : undefined;
+            const healthSection = healthPrompt ? `Shared health today (derived by the app from the owner's own wearable data):\n${healthPrompt}` : undefined;
+            const clockLine = ownerClockLine(clock);
+            // Stable head (behavior, catalog, orders, loops), then the procedure, then the per-turn tail; REASONS opens with the owner's text.
+            const headWith = (loops = '') => [behavior, skillMetadata, ordersSection, loops].filter(Boolean).join('\n\n');
+            const tailWith = (memoryPart: readonly string[]) => [...memoryPart, reasons, healthSection, clockLine, taskContext, connections].filter(Boolean).join('\n\n');
             // Owner memory takes its room first; open loops get what the same reserve leaves, and the section names what it left out.
-            const room = systemRoom(withOwnerSkillProcedures([...before, ...afterBase].join('\n\n'), wrapped, surfacePresentation));
+            const room = systemRoom(withOwnerSkillProcedures(headWith(), wrapped, tailWith([])));
             const memoryPart = memory ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText, room)] : [];
-            const loopsSection = loopsSectionFor(Math.max(0, systemRoom(withOwnerSkillProcedures([...before, ...memoryPart, ...afterBase].join('\n\n'), wrapped, surfacePresentation))));
-            const after = [...(ordersSection ? [ordersSection] : []), ...(loopsSection ? [loopsSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
-            return withOwnerSkillProcedures([...before, ...memoryPart, ...after].join('\n\n'), wrapped, surfacePresentation);
+            const loopsSection = loopsSectionFor(Math.max(0, systemRoom(withOwnerSkillProcedures(headWith(), wrapped, tailWith(memoryPart)))));
+            const head = headWith(loopsSection);
+            const tail = tailWith(memoryPart);
+            const joined = `${head}\n\n${tail}`;
+            const text = withOwnerSkillProcedures(head, wrapped, tail);
+            const sections: Partial<Record<SystemSection, number>> = {
+              ...(reasons ? { reasons: utf8Bytes(reasons) } : {}), behavior: utf8Bytes(behavior),
+              ...(healthSection ? { health: utf8Bytes(healthSection) } : {}), clock: utf8Bytes(clockLine),
+              ...(memoryPart.length ? { memory: utf8Bytes(memoryPart[0]!) } : {}), ...(ordersSection ? { orders: utf8Bytes(ordersSection) } : {}),
+              ...(loopsSection ? { loops: utf8Bytes(loopsSection) } : {}), ...(skillMetadata ? { skill_catalog: utf8Bytes(skillMetadata) } : {}),
+              ...(taskContext ? { task_context: utf8Bytes(taskContext) } : {}), ...(connections ? { connections: utf8Bytes(connections) } : {}),
+              skill_procedures: utf8Bytes(text) - utf8Bytes(joined),
+            };
+            return { text, sections };
           };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
           const attachments = [...(pending ?? []), ...browserImages];
@@ -460,7 +511,7 @@ export const createOwnerResponder = (
       });
     },
   }, tree, undefined, pathObservers);
-  let parentId: string | null = null;
+  const conversationLeaves = new Map<string, string>();
   // Set by converse() for the duration of one submit: delegate_task rides owner chat turns
   // only, never reminder/scheduled machine turns that flow through the same closure.
   let ownerTurnActive = false;
@@ -503,7 +554,7 @@ export const createOwnerResponder = (
   };
   let restorePromise: Promise<void> | undefined;
   const restored = async () => {
-    await (restorePromise ??= store ? restoreConversation(tree, store).then(leafId => { parentId = leafId; }) : Promise.resolve());
+    await (restorePromise ??= conversationStore ? conversationStore.load().then(({entries,leafId}) => { for(const entry of entries){tree.append(entry);conversationLeaves.set(entry.chatId,entry.id);} }) : Promise.resolve());
     const ids = forgettingState?.claims('purging').map(claim => claim.id) ?? [];
     const topics = forgettingState?.pendingTopics() ?? [];
     if (forgettingState && (ids.length || topics.length)) {
@@ -519,32 +570,35 @@ export const createOwnerResponder = (
     }
   };
   const converse = async (id: string, conversationRef: string, said: string, time: TurnTimer, fromOwner = false, surface = 'agent', toolNames?: readonly string[]) => {
+    conversationRef = context?.conversationRef ?? conversationRef;
     backgroundToolNames = fromOwner ? undefined : toolNames;
     traceId = id;
     ownerTurnActive = fromOwner;
     turnToolEvents = [];
     control.begin(fromOwner);
     try {
+      const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const };
+      if(fromOwner && context && privateRunScope) await conversationStore?.persistOwnerInput?.(userEntry,privateRunScope);
       const publication = await time('joined_path', () => path.submit({
         ...(privateRunScope ? { runScope: privateRunScope } : {}),
         authenticatedOwnerId: ownerId, invocation,
-        context: { ...localTrustedBriefTurnSnapshot(), canary_tokens: CANARIES, replay_context_ref: null },
-        userEntry: tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: parentId !== null && tree.get(parentId)?.chatId === conversationRef ? parentId : null, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' }, role:'user' },
+        context: contextInputs(),
+        userEntry,
         assistantEntryId: `${id}-reply`,
       })).finally(() => { ownerTurnActive = false; backgroundToolNames = undefined; control.end(); });
       privateRunScope?.admit();
       await assertCurrent();
+      const reply = tree.get(publication.leafId)!.appPayload;
+      // Native delivery reads durable history, so the visible effect receipt belongs in that row.
+      const receipts = fromOwner ? receiptLine(turnToolEvents) : null;
+      const out = receipts ? `${reply}\n\n${receipts}` : reply;
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
-      const savedEntries = [tree.get(id)!, tree.get(publication.leafId)!].map(entry => redactConversationEntry(entry, redact));
-      await store?.save(savedEntries, publication.leafId, privateRunScope);
+      const savedEntries = [tree.get(id)!, { ...tree.get(publication.leafId)!, ...(context ? { appPayload: out } : {}) }].map(entry => redactConversationEntry(entry, redact));
+      await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }
       privateRunScope?.admit();
       await assertCurrent();
-      parentId = publication.leafId;
-      const reply = tree.get(publication.leafId)!.appPayload;
-      // S2b: effect tools this turn get a receipt line from typed tool results; read-only turns get none.
-      const receipts = fromOwner ? receiptLine(turnToolEvents) : null;
-      const out = receipts ? `${reply}\n\n${receipts}` : reply;
+      conversationLeaves.set(conversationRef,publication.leafId);
       lastReply = out;
       return out;
     } finally { activeOwnerTurn = undefined; }
@@ -554,8 +608,9 @@ export const createOwnerResponder = (
       const memoryWrites = turn.memoryWrites !== false;
       if (turn.runScope && privateRunScope !== turn.runScope) {
         const capturedTurn = { ...turn, memoryWrites };
-        const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}) });
+        const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
+        const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
+        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}) });
         control.route(scoped.control);
         try { return await scoped.respond(capturedTurn, time); }
         finally { control.unroute(scoped.control); }
@@ -563,6 +618,7 @@ export const createOwnerResponder = (
       privateRunScope?.admit();
       await assertCurrent();
       if (skills?.admission && (await skills.admission.readInput()).text !== turn.text) throw new Error('owner input mismatch');
+      await context?.assertInput(turn.text ?? '');
       await restored();
       const id = turn.traceId;
       surfacePresentation = turn.presentation;
@@ -588,7 +644,9 @@ export const createOwnerResponder = (
       pending = undefined;
       return converse(id, conversationRef, `[Reminder due now, set earlier by the owner: "${note}"] Send the reminder briefly in your own words. Do not add a sentence explaining that they asked for it.`, time, false, surface);
     },
-    async prompt(id, conversationRef, said, time, surface, toolNames, current, decision) {
+    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision) {
+      // Cards read in seconds, so a job's prompt gets half the provider budget; the guard keeps the opening and closing and cuts the data between.
+      const said = fitPromptToBudget(jobText, Math.floor(deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2));
       backgroundCurrent = current;
       transientDecision = decision !== undefined;
       try {

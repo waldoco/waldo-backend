@@ -27,6 +27,7 @@ export const readDriveHandler = (google: GoogleAccess, enabled = false, contentE
   trigger_allowlist: allowlist,
   autonomy_gated: false,
   requires_connector: true,
+  eligible: () => enabled ? { ok: true } : { ok: false, reason: 'not_configured' },
   handle: async (args: ReadDriveArgs, ctx): Promise<ToolResult<unknown>> => {
     if (!enabled) return { ok: false, code: 'forbidden', error: 'Drive reads are not enabled on this Waldo yet.', source_taint: 'external' };
     if (args.action === 'content' && !contentEnabled) return { ok: false, code: 'forbidden', error: 'Drive content reads are not enabled on this Waldo yet.', source_taint: 'external' };

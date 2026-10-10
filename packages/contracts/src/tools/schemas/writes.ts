@@ -77,6 +77,52 @@ export const updateTaskArgsSchema = z.strictObject({
 });
 export type UpdateTaskArgs = z.infer<typeof updateTaskArgsSchema>;
 
+// Google Tasks is an explicitly selected provider surface. Local Hall task tools keep
+// their original meaning. Due dates are calendar dates: this API discards time of day.
+export const googleTaskChangesSchema = z.strictObject({
+  title: z.string().trim().min(1).max(1024).optional(),
+  notes: z.string().max(8192).nullable().optional(),
+  due_date: z.iso.date().nullable().optional(),
+});
+export const proposeGoogleTaskChangeArgsSchema = z.strictObject({
+  source: z.literal('google_tasks'),
+  account: z.email().optional(),
+  action: z.enum(['create', 'update', 'complete', 'reopen']),
+  task_list_id: z.string().trim().min(1).max(1024),
+  task_id: z.string().trim().min(1).max(1024).optional(),
+  changes: googleTaskChangesSchema.optional(),
+  reason: z.string().trim().min(1).max(500),
+}).superRefine((args, ctx) => {
+  const fail = (message: string) => ctx.addIssue({ code: 'custom', message });
+  if (args.action === 'create') {
+    if (args.task_id || !args.changes?.title) fail('Creation requires a title and no existing task id');
+  } else if (!args.task_id) fail('Existing Google task changes require the exact task id');
+  if (args.action === 'update' && (!args.changes || !Object.keys(args.changes).length)) fail('Update requires at least one explicit change');
+  if ((args.action === 'complete' || args.action === 'reopen') && args.changes !== undefined) fail('Completion and reopening only change status');
+});
+export type ProposeGoogleTaskChangeArgs = z.infer<typeof proposeGoogleTaskChangeArgsSchema>;
+export type GoogleTaskChanges = z.infer<typeof googleTaskChangesSchema>;
+// Re-projected evidence from an exact provider read. No credentials or implicit account
+// selection enter a proposal; the host pins connection+email before displaying approval.
+export const googleTaskResourceSchema = z.strictObject({
+  id: z.string().min(1).max(1024), task_list_id: z.string().min(1).max(1024),
+  title: z.string().max(2000), status: z.enum(['todo', 'done']),
+  notes: z.string().max(100_000).nullable(), due_date: z.iso.date().nullable(),
+  etag: z.string().min(1).max(1024), parent: z.string().max(1024).nullable(),
+  deleted: z.boolean(), assigned: z.boolean(),
+});
+export type GoogleTaskResource = z.infer<typeof googleTaskResourceSchema>;
+export const googleTaskProposalSchema = z.strictObject({
+  args: proposeGoogleTaskChangeArgsSchema,
+  operation_ref: z.string().min(1).max(256).optional(),
+  account: z.strictObject({ connection_id: z.string().min(1).max(1024), email: z.email() }),
+  list: z.strictObject({ id: z.string().min(1).max(1024), title: z.string().max(2000), etag: z.string().min(1).max(1024) }),
+  before: googleTaskResourceSchema.nullable(),
+}).superRefine((p, ctx) => {
+  if (p.list.id !== p.args.task_list_id || p.args.account && p.args.account.toLowerCase() !== p.account.email.toLowerCase() || (p.args.action === 'create' ? p.before !== null : !p.before || p.before.id !== p.args.task_id || p.before.task_list_id !== p.args.task_list_id)) ctx.addIssue({ code: 'custom', message: 'Google task proposal target identity differs' });
+});
+export type GoogleTaskProposal = z.infer<typeof googleTaskProposalSchema>;
+
 // destination reuses the DocProvider vocabulary (ADR-0025): 'r2_scratch' is the one
 // representation of the R2 scratch space, so a bare 'scratch' is a parse failure.
 export const draftDocumentArgsSchema = z.strictObject({

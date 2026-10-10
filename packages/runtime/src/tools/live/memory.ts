@@ -127,7 +127,12 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         if (incomplete) return fail('Memory cleanup could not be verified. The topic stays recorded and hidden from recall until a forget completes with verified cleanup.');
         // Nothing selected and no derived store changed means nothing was forgotten: a success receipt would tell the owner it is gone while recall still holds it.
         if (selected.size === 0 && !touched) return fail('No stored memory carries that topic or span. Read memory, then pass claim_ids or a literal topic that appears in the stored text.');
-        return success({ removed_ids: [...selected.keys()], scope_note: args.scope_note, scope: 'removed from memory and recall; copies in older chat history are hidden; messages already in the Telegram chat cannot be deleted by Waldo; backups expire per retention' });
+        // Chat history is redacted by exact text. A topic or span names the literal the owner said, so restatements carrying it are swept too; an id alone only knows the saved wording, and a reworded copy elsewhere (an earlier reply, a summary) is not reached. The receipt says which one happened.
+        const swept = args.topic !== undefined || args.source !== undefined;
+        const history = swept
+          ? 'copies in older chat history carrying that text are hidden'
+          : 'older chat history is hidden only where it quotes the saved wording exactly; a restated or reworded copy may remain, and forgetting by the literal topic from the owner message sweeps those';
+        return success({ removed_ids: [...selected.keys()], scope_note: args.scope_note, history_swept: swept ? 'topic_literal' : 'saved_wording_only', scope: `removed from memory and recall; ${history}; messages already in the Telegram chat cannot be deleted by Waldo; backups expire per retention` });
       } },
   ];
 };

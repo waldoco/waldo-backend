@@ -90,6 +90,23 @@ describe('consoleAuth', () => {
     expect(await consoleAuth({ ...env, WALDO_ROUTER_HMAC_SECRET: 'other' })!.readOwnerCookie(withCookie(cookie!))).toBeNull();
   });
 
+  it('the app credential is its own artifact: same kind of server session, never a console cookie', async () => {
+    const fetcher = vi.fn(async () => json(true));
+    const auth = consoleAuth(env, fetcher as unknown as typeof fetch, now)!;
+    const app = (await auth.ownerAppCredential('do-a'))!;
+    const cookie = (await auth.ownerCookie('do-a'))!;
+    expect(app.split('.')).toHaveLength(3);
+    expect(await auth.readAppCredential(app)).toBe('do-a');
+    expect(await auth.readOwnerCookie(withCookie(app))).toBeNull();
+    expect(await auth.readAppCredential(cookie)).toBeNull();
+    expect(await auth.readAppCredential(app.replace('do-a', 'do-b'))).toBeNull();
+    expect(await auth.readAppCredential('')).toBeNull();
+    expect(await auth.readAppCredential('%E0%A4%A.session.sig')).toBeNull();
+    expect(await consoleAuth({ ...env, WALDO_ROUTER_HMAC_SECRET: 'other' })!.readAppCredential(app)).toBeNull();
+    const dead = vi.fn(async (input: RequestInfo) => json(!String(input).includes('console_session_touch')));
+    expect(await consoleAuth(env, dead as unknown as typeof fetch, now)!.readAppCredential(app)).toBeNull();
+  });
+
   it('a killed session invalidates its cookie and sign-in fails when the session cannot open', async () => {
     const alive = vi.fn(async () => json(true));
     const auth = consoleAuth(env, alive as unknown as typeof fetch, now)!;
@@ -122,4 +139,15 @@ it('legacy signup cannot send an unverified phone to the atomic owner creation p
   expect(await consoleAuth(env, fetcher as typeof fetch, now)!.verify('new@example.com', '123456', '+14155550100', 'ABCDEFGHJKLMNPQRSTUV')).toBeNull();
   const payload = JSON.parse(String(fetcher.mock.calls[1]?.[1].body));
   expect(payload.p_phone).toBe('');
+});
+
+
+it('malformed signed session inventory cannot prove absence or revocation', async () => {
+  const row={session:'a'.repeat(64),created_at:new Date().toISOString(),last_seen_at:new Date().toISOString()};
+  for(const invalid of [null,{},[{}],[{...row,session:'short'}],[{...row,created_at:'invalid'}],[{...row,extra:true}],[row,row]]) {
+    const auth=consoleAuth(env,vi.fn().mockResolvedValue(json(invalid)) as unknown as typeof fetch,now)!;
+    await expect(auth.listSessions('owner')).rejects.toThrow('session inventory unavailable');
+  }
+  const auth=consoleAuth(env,vi.fn().mockResolvedValue(json('true')) as unknown as typeof fetch,now)!;
+  await expect(auth.revokeSession('owner',row.session)).rejects.toThrow('session revocation unavailable');
 });

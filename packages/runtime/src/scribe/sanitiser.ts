@@ -402,6 +402,7 @@ function isEligibleHealthView(value: object, destination: SanitiseDestination): 
 function looksLikeDerivedHealthView(value: Record<string, JsonValue>): boolean {
   if (
     Object.hasOwn(value, 'form_zone') ||
+    Object.hasOwn(value, 'recovery_zone') ||
     Object.hasOwn(value, 'missing_components') ||
     Object.hasOwn(value, 'confidence_band') ||
     Object.hasOwn(value, 'provenance_refs')
@@ -410,7 +411,7 @@ function looksLikeDerivedHealthView(value: Record<string, JsonValue>): boolean {
   }
   if (
     typeof value.algorithm_version === 'string' &&
-    value.algorithm_version.startsWith('form.')
+    (value.algorithm_version.startsWith('form.') || value.algorithm_version.startsWith('recovery.'))
   ) {
     return true;
   }

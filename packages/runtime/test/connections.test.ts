@@ -41,6 +41,26 @@ describe('google proxy', () => {
   });
 
 
+  it('sends Google Tasks writes with their approval intent, as the edge only dispatches them through the intent ledger', async () => {
+    const fetcher = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ data: { id: 't1' } })));
+    const client = proxyOf(fetcher).client('do-a', 'c-1', undefined, { id: 'approval:fixture:apply' });
+    await client.createTask!('list-a', { title: 'Task' });
+    await client.patchTask!('list-a', 't1', { title: 'Task' }, 'etag-1');
+    for (const call of [0, 1]) expect(JSON.parse(String(sent(fetcher, call)[1].body))).toMatchObject({ method: call ? 'patchTask' : 'createTask', intent_id: 'approval:fixture:apply' });
+  });
+  it('refuses a Google Tasks write that has no approval intent before anything leaves the runtime', async () => {
+    const fetcher = vi.fn();
+    const client = proxyOf(fetcher).client('do-a', 'c-1');
+    await expect(client.createTask!('list-a', { title: 'Task' })).rejects.toMatchObject({ message: 'intent_required' });
+    await expect(client.patchTask!('list-a', 't1', { title: 'Task' }, 'etag-1')).rejects.toMatchObject({ message: 'intent_required' });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('does not require an intent for a Google Tasks read', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ data: { id: 't1' } })));
+    await proxyOf(fetcher).client('do-a', 'c-1').task!('list-a', 't1');
+    expect(JSON.parse(String(sent(fetcher)[1].body))).not.toHaveProperty('intent_id');
+  });
+
   it('is off without Supabase', () => {
     expect(googleProxy({})).toBeNull();
   });

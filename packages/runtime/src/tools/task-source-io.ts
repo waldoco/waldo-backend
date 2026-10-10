@@ -2,7 +2,7 @@ import type { ToolDispatcherContext } from './dispatcher';
 
 // Host-only currentness check at every client operation, including operations after
 // awaited authentication and multi-page reads. The original client remains the receiver.
-export const taskSourceClient = <T extends object>(client: T, ctx?: ToolDispatcherContext): T => !ctx?.assertTaskSourceCurrent ? client : new Proxy(client, {
+export const taskSourceClient = <T extends object>(client: T, ctx?: Pick<ToolDispatcherContext,'assertTaskSourceCurrent'>): T => !ctx?.assertTaskSourceCurrent ? client : new Proxy(client, {
   get(target, property, receiver) {
     const value = Reflect.get(target, property, receiver);
     if (typeof value !== 'function') return value;
@@ -17,5 +17,7 @@ export const taskSourceClient = <T extends object>(client: T, ctx?: ToolDispatch
 
 export const taskSourceFetch = (assertCurrent: (() => Promise<void>) | undefined, fetcher: typeof fetch = fetch): typeof fetch => !assertCurrent ? fetcher : async (input, init) => {
   await assertCurrent();
-  return fetcher(input, init);
+  const response = await fetcher(input, init);
+  await assertCurrent();
+  return response;
 };

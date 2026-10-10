@@ -48,17 +48,38 @@ export type DerivedHealthDestinationEligibility = z.infer<
   typeof derivedHealthDestinationEligibilitySchema
 >;
 
-export const derivedHealthDestinationViewSchema = z.strictObject({
+const derivedViewCommon = {
   authority: z.literal('backend'),
-  algorithm_version: z.literal('form.safte-fast.v1'),
-  form_zone: formZoneSchema,
   trend: z.enum(['improving', 'steady', 'declining', 'insufficient']),
   freshness: z.enum(['fresh', 'stale']),
-  missing_components: z.array(crsPillarSchema),
   confidence_band: z.enum(['high', 'medium', 'low']),
   provenance_refs: z.array(opaqueHealthProvenanceRefSchema).min(1).max(4),
   destination_eligibility: z.array(derivedHealthDestinationEligibilitySchema).min(1),
+} as const;
+
+export const formHealthViewSchema = z.strictObject({
+  ...derivedViewCommon,
+  algorithm_version: z.literal('form.safte-fast.v1'),
+  form_zone: formZoneSchema,
+  missing_components: z.array(crsPillarSchema),
 });
+export type FormHealthView = z.infer<typeof formHealthViewSchema>;
+
+// Recovery is the only Stage 1 score. It is built from sleep and HRV, so those are the only
+// components that can be reported missing.
+export const recoveryComponentSchema = z.enum(['sleep', 'hrv']);
+export const recoveryHealthViewSchema = z.strictObject({
+  ...derivedViewCommon,
+  algorithm_version: z.literal('recovery.v1'),
+  recovery_zone: recoveryZoneSchema,
+  missing_components: z.array(recoveryComponentSchema),
+});
+export type RecoveryHealthView = z.infer<typeof recoveryHealthViewSchema>;
+
+export const derivedHealthDestinationViewSchema = z.discriminatedUnion('algorithm_version', [
+  formHealthViewSchema,
+  recoveryHealthViewSchema,
+]);
 export type DerivedHealthDestinationView = z.infer<typeof derivedHealthDestinationViewSchema>;
 
 // The sensor-named pillar key must never sit directly against a numeric literal in non-test

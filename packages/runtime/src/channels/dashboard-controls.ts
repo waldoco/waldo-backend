@@ -26,6 +26,7 @@ const safeReview = (review: ApprovalReview | null): ApprovalReview | null => {
   if (!review) return null;
   if (review.kind === 'email_send') return { kind: review.kind, to: [...review.to], cc: [...review.cc], bcc: [...review.bcc], subject: review.subject, body: review.body };
   if (review.kind === 'message_send') return { kind: review.kind, channel: review.channel, content: review.content };
+  if (review.kind === 'google_task_change') return { kind: review.kind, account: review.account, proposal: review.proposal, proposal_digest: review.proposal_digest };
   return { kind: review.kind, action: review.action, title: review.title, event_id: review.event_id, start: review.start, end: review.end, reason: review.reason };
 };
 

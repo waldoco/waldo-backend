@@ -718,6 +718,50 @@ describe('ContextComposer', () => {
     expect(result.checkpoint.sources.some((item) => item.source_kind === 'recall')).toBe(false);
   });
 
+  it('composes a recovery.v1 health view, requires its zone to match the narrative, and skips the Form recall zone', async () => {
+    const base = dependencies();
+    const withRecovery = (recoveryZone: 'mixed' | 'solid') => ({
+      ...base,
+      materials: {
+        async load(request: Parameters<typeof base.materials.load>[0]) {
+          const material = await base.materials.load(request);
+          if (material.health === null) throw new Error('health fixture missing');
+          return {
+            ...material,
+            health: {
+              ...material.health,
+              view: {
+                authority: 'backend' as const,
+                algorithm_version: 'recovery.v1' as const,
+                recovery_zone: recoveryZone,
+                trend: 'steady' as const,
+                freshness: 'fresh' as const,
+                missing_components: [],
+                confidence_band: 'high' as const,
+                provenance_refs: ['hpr_88888888888888888888888888888888'],
+                destination_eligibility: ['trigger_prompt' as const, 'volatile_run' as const],
+              },
+              narrative: narrativeContextSchema.parse({
+                recovery_descriptor: 'solid',
+                load_descriptor: 'moderate',
+                day_summary: 'The day has room for one focused block and a brief reset.',
+                compiled_at: '2026-07-15T11:00:00.000Z',
+              }),
+            },
+          };
+        },
+      },
+    });
+    const ok = await createContextComposer({ ...withRecovery('solid'), phase_observer: (p: string) => console.log('PHASE', p), unexpected_error_observer: { record: async (e: unknown) => console.log('UNEXPECTED', JSON.stringify(e)) } }).compose(trustedEnvelope(), RUNTIME_INPUTS);
+    expect(ok.ok, ok.ok ? undefined : ok.failure.code).toBe(true);
+    if (ok.ok) {
+      expect(ok.prompt).toContain('Recovery zone: solid.');
+      expect(ok.prompt).not.toContain('Form zone:');
+    }
+    const mismatch = await createContextComposer(withRecovery('mixed')).compose(trustedEnvelope(), RUNTIME_INPUTS);
+    expect(mismatch).toEqual({ ok: false, failure: { code: 'health_context_invalid' } });
+  });
+
   it('fails closed for missing safeguards, unsafe derived health, external prompt injection, and an owner-mismatched recall snapshot', async () => {
     const base = dependencies();
     const missingSafeguards = await createContextComposer({
@@ -1503,9 +1547,9 @@ describe('ContextComposer', () => {
 // user_message ACL ceiling wording, 2026-09-25; delegate_task joined it, 2026-09-26; the A9
 // health tools joined it, 2026-09-27; the A7 standing-order tools the A1 gmail tools and the A5 artifact tools joined it, 2026-09-27);
 // query_availability and read_owner_context joined it 2026-09-30. read_mcp_tool joined it 2026-10-02. export_artifact joined it 2026-10-02. workspace_list, workspace_read and workspace_write joined it 2026-10-02. workspace_render and curated skills lifecycle tools joined it 2026-10-03.
-// set_schedule_preference joined it 2026-10-07.
+// set_schedule_preference joined it 2026-10-07. propose_google_task_change joined it 2026-10-10.
 // determinism is proven by first===second above.
-    expect(first.checkpoint.context_ref).toBe('ctx_f828e927288a55408dedb06674014fa4');
+    expect(first.checkpoint.context_ref).toBe('ctx_74358242ca2c7b5f25a945fc97576a20');
     expect(first.prompt.indexOf('Workspace source key a- marker.')).toBeLessThan(
       first.prompt.indexOf('Workspace source key a: marker.'),
     );

@@ -1,7 +1,7 @@
 import type {BrowserSubmitProposal} from './approvals';
 import type {BrowserSubmitOutcome} from '../tools/live/browser';
 import {browserHandoffConsole} from './browser-handoff-console';
-import { browsePageArgsSchema, browseActArgsSchema, WALDO_CHAT_MODEL, type BrowseActArgs, type BrowsePageArgs, type LLMAttachment, type ToolHandler } from '@waldo/contracts';
+import { browsePageArgsSchema, browseActArgsSchema, WALDO_CHAT_MODEL, type BrowseActArgs, type BrowsePageArgs, type LLMAttachment, type ToolEligibility, type ToolHandler } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
@@ -46,6 +46,9 @@ export function ownerBrowserRuntime(options: Readonly<{
     } : {}) });
   };
   const selectedConfiguration = async (cleanupOnly = false, normalRead = false) => automatic.selected || automatic.hasRetained() ? automatic.configuration(cleanupOnly) : configuration(cleanupOnly, normalRead);
+  // Staging, a registered common browser or a retained one serve browsing natively, without the fallback's provider keys.
+  const eligibleWith = (fallback: Readonly<{ eligible?(): ToolEligibility | Promise<ToolEligibility> }>) => (): ToolEligibility | Promise<ToolEligibility> =>
+    options.env.WALDO_ENVIRONMENT === 'staging' || options.env.COMMON_BROWSER_REGISTRATION || automatic.selected || automatic.hasRetained() || active ? { ok: true } : fallback.eligible?.() ?? { ok: true };
   const assertOwner = async () => {
       const doName = options.storage.kv.get<string>('do_name'), subject = options.storage.kv.get<string>('telegram_subject');
       const physical = () => { if (!doName || !subject || options.storage.kv.get('do_name') !== doName || options.storage.kv.get('telegram_subject') !== subject
@@ -139,7 +142,7 @@ export function ownerBrowserRuntime(options: Readonly<{
       } };
     },
     read(fallback: ToolHandler<BrowsePageArgs, unknown, ToolDispatcherContext>): ToolHandler<BrowsePageArgs, unknown, ToolDispatcherContext> {
-      return { ...fallback, schema: browsePageArgsSchema, description: fallback.description+' For interactive tasks use retain_session:true to receive DOM/accessibility, a PNG and session_handle, then call browse_act with that handle and current refs. Omit for a one-shot read.', async handle(args, ctx) {
+      return { ...fallback, eligible: eligibleWith(fallback), schema: browsePageArgsSchema, description: fallback.description+' For interactive tasks use retain_session:true to receive DOM/accessibility, a PNG and session_handle, then call browse_act with that handle and current refs. Omit for a one-shot read.', async handle(args, ctx) {
         try {
           const assertCurrent = current(ctx); await assertCurrent();
           // Browserbase remains an explicit choice. Cloudflare failure never switches providers.
@@ -183,7 +186,7 @@ export function ownerBrowserRuntime(options: Readonly<{
     },
     act(fallback:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>,proposeUpload?:((proposal:BrowserSubmitProposal)=>Promise<string>)):ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>{
       uploadProposer=proposeUpload;
-      return {...fallback,schema:browseActArgsSchema,description:'Use observed refs in the selected Cloudflare owner session. First call browse_page with retain_session:true; continue with its session_handle. Actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download saves an authenticated GET attachment to the private workspace and returns a verified exact-revision owner link; blob/data and POST exports are unsupported. owner_login pauses for human sign-in in the console: end this turn, resume on the owner reply after Done, and verify the intended account from fresh evidence. Uncertain effects cannot repeat. Browserbase requires explicit selection.'+(proposeUpload?' upload proposes an exact workspace file_id/revision for an observed POST-form file input. Owner approval precedes selection. Verification requires a server JSON filename/byte_size/sha256 acknowledgment.':''),async handle(args,ctx){
+      return {...fallback,eligible:eligibleWith(fallback),schema:browseActArgsSchema,description:'Use observed refs in the selected Cloudflare owner session. First call browse_page with retain_session:true; continue with its session_handle. Actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download saves an authenticated GET attachment to the private workspace and returns a verified exact-revision owner link; blob/data and POST exports are unsupported. owner_login pauses for human sign-in in the console: end this turn, resume on the owner reply after Done, and verify the intended account from fresh evidence. Uncertain effects cannot repeat. Browserbase requires explicit selection.'+(proposeUpload?' upload proposes an exact workspace file_id/revision for an observed POST-form file input. Owner approval precedes selection. Verification requires a server JSON filename/byte_size/sha256 acknowledgment.':''),async handle(args,ctx){
         try{
           const assertCurrent=current(ctx);await assertCurrent();
           if(args.provider==='browserbase_stagehand_http_v3'&&(args.command||args.session_handle))throw new ClosedRunError();

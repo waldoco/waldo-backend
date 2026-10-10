@@ -54,6 +54,18 @@ describe('live owner memory', () => {
     for (const query of ['AI', 'I', 'in', '\" OR NEAR(AI*)']) expect(await s.call('read_memory', { query }, s.ctx('hi'))).toMatchObject({ ok: true, data: { claims: [expect.objectContaining({ id: 1 })] } });
     expect(await s.call('read_memory', { hall: 'preferences' }, s.ctx('hi'))).toMatchObject({ ok: true, data: { claims: [] } });
   });
+  it('does not claim restated chat copies were hidden when forgetting by id alone', async () => {
+    const s = setup();
+    await s.call('remember', { kind: 'fact', text: 'Project codename is copper-lantern', evidence_quote: 'copper-lantern' }, s.ctx('project codename is copper-lantern'));
+    const byId = await s.call('forget_memory', { claim_ids: [1], scope_note: 'codename' }, s.ctx('forget the codename'));
+    expect(byId).toMatchObject({ ok: true, data: { removed_ids: [1], history_swept: 'saved_wording_only' } });
+    expect(JSON.stringify(byId)).not.toContain('older chat history are hidden');
+    expect(JSON.stringify(byId)).toMatch(/restated|reworded/);
+    const s2 = setup();
+    await s2.call('remember', { kind: 'fact', text: 'Project codename is copper-lantern', evidence_quote: 'copper-lantern' }, s2.ctx('project codename is copper-lantern'));
+    const byTopic = await s2.call('forget_memory', { topic: 'copper-lantern', scope_note: 'codename' }, s2.ctx('forget copper-lantern'));
+    expect(byTopic).toMatchObject({ ok: true, data: { history_swept: 'topic_literal' } });
+  });
   it('validates every forget selector before any mutation and barriers re-admission', async () => {
     const s = setup();
     await s.call('remember', { kind: 'preference', text: 'Prefers tea', evidence_quote: 'tea' }, s.ctx('tea'));

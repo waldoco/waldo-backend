@@ -52,6 +52,8 @@ const auth = (overrides: Partial<ConsoleAuth> = {}): ConsoleAuth => ({
   revokeInvite: vi.fn(async () => false),
   ownerCookie: vi.fn(async (doName: string) => `${doName}.session.sig`),
   readOwnerCookie: vi.fn(async () => null),
+  ownerAppCredential: vi.fn(async () => null),
+  readAppCredential: vi.fn(async () => null),
   listSessions: vi.fn(async () => []),
   revokeSession: vi.fn(async () => true),
   signOutAll: vi.fn(async () => 2),

@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
+import { connectIntentSchema } from '../connect-intent';
 import {
   callMcpToolArgsSchema,
   callMcpToolResultSchema,
+  connectServiceArgsSchema,
   executeActionArgsSchema,
   getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema,
   queryAvailabilityArgsSchema, readOwnerContextArgsSchema,
@@ -13,7 +15,7 @@ import {
   getTasksArgsSchema,
   readDriveArgsSchema,
   healthMetricSelectorSchema,
-  calendarPageSchema, queryCalendarArgsSchema,
+  calendarPageSchema, queryCalendarArgsSchema, googleCalendarListPageSchema,
   readDocumentArgsSchema,
   readDocumentResultSchema,
   readMemoryArgsSchema,
@@ -33,6 +35,14 @@ import {
 // external-origin results unrepresentable untainted. Failure modes caught: enum drift,
 // loosened bounds, a taint field gone nullable, and provider vocabulary re-declared away
 // from its single owner.
+
+describe('connectServiceArgs', () => {
+  it('accepts a connect intent feature and rejects a free-text one', () => {
+    expect(connectServiceArgsSchema.safeParse({ service: 'google', feature: 'mail' }).success).toBe(true);
+    expect(connectServiceArgsSchema.safeParse({ service: 'google' }).success).toBe(true);
+    expect(connectServiceArgsSchema.safeParse({ service: 'google', feature: 'gmail' }).success).toBe(false);
+  });
+});
 
 describe('get_communication page size', () => {
   it('accepts a page the model can read inline and rejects one that would be offloaded', () => {
@@ -119,6 +129,12 @@ describe('taskStatusFilter / getTasksArgs', () => {
   it('rejects an out-of-domain status and limit over 100', () => {
     expect(getTasksArgsSchema.safeParse({ status: 'blocked' }).success).toBe(false);
     expect(getTasksArgsSchema.safeParse({ limit: 101 }).success).toBe(false);
+  });
+
+  it('accepts additive list discovery, selection and bounded continuation without changing defaults', () => {
+    expect(getTasksArgsSchema.parse({ operation: 'list_task_lists' })).toEqual({ operation: 'list_task_lists', status: 'todo', limit: 20 });
+    expect(getTasksArgsSchema.safeParse({ task_list_id: 'work/list', status: 'done', page_token: 'bound-cursor' }).success).toBe(true);
+    for (const args of [{ operation: 'list_task_lists', task_list_id: 'work' }, { operation: 'list_task_lists', status: 'done' }, { page_token: '' }, { page_token: 'x'.repeat(16_385) }, { task_list_id: '' }]) expect(getTasksArgsSchema.safeParse(args).success).toBe(false);
   });
 });
 
@@ -406,4 +422,28 @@ it('validates explicit native filter choices without executable selectors or coe
  expect(browseActArgsSchema.safeParse({...base,command:{operation:'select',element_ref:'e:observed:0',value:''}}).success).toBe(true);
  expect(browseActArgsSchema.safeParse({...base,command:{operation:'set_checked',element_ref:'e:observed:1',checked:false}}).success).toBe(true);
  for(const command of [{operation:'set_checked',element_ref:'e:observed:1',checked:'true'},{operation:'select',element_ref:'e:observed:0',value:'north',selector:'input'},{operation:'set_checked',checked:true}])expect(browseActArgsSchema.safeParse({...base,command}).success).toBe(false);
+});
+
+describe('Calendar discovery', () => {
+  const account = { connection_id: 'connection', email: 'owner@example.test' };
+  const item = { id: 'team@group.calendar.google.com', title: 'Team', timezone: 'Asia/Kolkata', access_role: 'reader' as const, primary: false, selected: true, hidden: false };
+  const page = { items: [item], next_page_token: null, fetched_count: 1, account, observed_at: '2026-10-10T00:00:00.000Z' };
+  it('discovers calendars without an event query, defaulting to the visible ones', () => {
+    expect(queryCalendarArgsSchema.parse({ operation: 'list_calendars' })).toMatchObject({ operation: 'list_calendars', calendar_id: 'primary', include_declined: false });
+    expect(queryCalendarArgsSchema.safeParse({ operation: 'list_calendars', include_hidden: true, limit: 50 }).success).toBe(true);
+    expect(queryCalendarArgsSchema.safeParse({ operation: 'list_calendars', page_token: 'next' }).success).toBe(true);
+  });
+  it('keeps event queries and calendar discovery apart', () => {
+    const range = { from: '2026-10-10T00:00:00Z', to: '2026-10-11T00:00:00Z' };
+    for (const args of [{ operation: 'list_calendars', date_range: range }, { operation: 'list_calendars', calendar_id: 'team' }, { operation: 'list_calendars', include_declined: true }, { include_hidden: true }, { operation: 'list_events', include_hidden: true }, { operation: 'list_all' }]) expect(queryCalendarArgsSchema.safeParse(args).success).toBe(false);
+    expect(queryCalendarArgsSchema.safeParse({ operation: 'list_events', date_range: range }).success).toBe(true);
+    expect(queryCalendarArgsSchema.safeParse({ date_range: range, calendar_id: 'team' }).success).toBe(true);
+  });
+  it('validates a provider calendar-list receipt before claiming coverage', () => {
+    expect(googleCalendarListPageSchema.safeParse(page).success).toBe(true);
+    for (const bad of [{ ...page, fetched_count: 2 }, { ...page, items: [{ ...item, access_role: 'admin' }] }, { ...page, items: [{ ...item, id: '' }] }, { ...page, items: [{ ...item, primary: 'yes' }] }, { ...page, items: [{ ...item, extra: true }] }, { ...page, items: Array.from({ length: 51 }, () => item), fetched_count: 51 }]) expect(googleCalendarListPageSchema.safeParse(bad).success).toBe(false);
+  });
+  it('lets a connect intent name the calendar-list feature', () => {
+    expect(connectIntentSchema.safeParse({ status: 'auth_required', service: 'google', reason: 'scope_missing', feature: 'calendar_list' }).success).toBe(true);
+  });
 });
