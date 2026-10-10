@@ -105,7 +105,10 @@ create function waldo.health_consent_view(p_scope waldo.health_scopes) returns j
     'status',case when c.id is null then 'not_granted' when c.withdrawn_at is null then 'granted' else 'withdrawn' end,'epoch',p_scope.epoch,
     'granted_at',to_char(c.granted_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
     'withdrawn_at',to_char(c.withdrawn_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-    'deletion_state',case when c.withdrawn_at is null then 'not_required' else 'completed' end)
+    'deletion_state',case when c.withdrawn_at is null then 'not_required'
+      when p_scope.purpose = 'model_processing' and exists (select 1 from waldo.health_scopes s2 join waldo.health_consents c2 on c2.id = s2.consent_id
+        where s2.owner_id = p_scope.owner_id and s2.source = p_scope.source and s2.purpose = 'storage_compute' and c2.withdrawn_at is null) then 'not_required'
+      else 'completed' end)
   from (select 1) x left join waldo.health_consents c on c.id = p_scope.consent_id $$;
 revoke all on function waldo.health_consent_view(waldo.health_scopes) from public, anon, authenticated, service_role;
 
@@ -166,6 +169,9 @@ begin
     if v_epoch is distinct from (v_prior.response->'consent'->>'epoch')::integer then return '{"error":"epoch_conflict"}'; end if;
     return jsonb_set(v_prior.response, '{replayed}', 'true');
   end if;
+  -- Model use sits on top of storage: it can be granted only while the same source holds live storage consent.
+  if v_purpose = 'model_processing' and not exists (select 1 from waldo.health_scopes s join waldo.health_consents c on c.id = s.consent_id
+    where s.owner_id = v_owner and s.source = v_source and s.purpose = 'storage_compute' and c.withdrawn_at is null) then return '{"error":"consent_required"}'; end if;
   if (v_body->>'expected_epoch')::integer <> v_epoch
     or exists (select 1 from waldo.health_consents c where c.owner_id = v_owner and c.source = v_source and c.purpose = v_purpose and c.withdrawn_at is null) then return '{"error":"epoch_conflict"}'; end if;
   insert into waldo.health_consents(owner_id, source, purpose, version, age_attested_18_plus) values (v_owner, v_source, v_purpose, 2, true) returning * into v_consent;
@@ -179,7 +185,7 @@ end $$;
 create function waldo.health_consent_withdraw(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
-  v_owner uuid; v_auth uuid; v_body jsonb; v_source text; v_purpose text; v_id text; v_prior waldo.health_requests; v_scope waldo.health_scopes; v_result jsonb;
+  v_owner uuid; v_auth uuid; v_body jsonb; v_source text; v_purpose text; v_id text; v_prior waldo.health_requests; v_scope waldo.health_scopes; v_result jsonb; v_live integer; v_routed boolean;
 begin
   if p_do_name is null or length(p_do_name) not between 1 and 240 or p_payload is null
     or waldo.router_signed('health.consent_withdraw.' || p_do_name || '.' || md5(p_payload), p_at, p_sig) is distinct from true then
@@ -199,23 +205,34 @@ begin
     if v_prior.operation <> 'consent_withdraw' or v_prior.payload_digest <> md5(p_payload) then return '{"error":"idempotency_conflict"}'; end if;
     return jsonb_set(v_prior.response, '{replayed}', 'true');
   end if;
-  if not exists (select 1 from waldo.health_scopes where owner_id = v_owner and source = v_source) then return '{"error":"consent_required"}'; end if;
   select * into v_scope from waldo.health_scopes where owner_id = v_owner and source = v_source and purpose = v_purpose for update;
-  if (v_body->>'expected_epoch')::integer <> coalesce(v_scope.epoch, 0) then return '{"error":"epoch_conflict"}'; end if;
-  -- Withdrawing either purpose withdraws both for this source and removes its data: a storage upload queued
-  -- before the withdrawal cannot repopulate it, and new processing needs fresh explicit grants. The derived rows
-  -- may mix sources, so they are removed whole and rebuilt from what remains. Upload receipts go with the data;
-  -- consent receipts stay so a replayed request still gets its answer.
-  update waldo.health_consents set withdrawn_at = now() where owner_id = v_owner and source = v_source and withdrawn_at is null;
-  insert into waldo.health_scopes(owner_id, source, purpose) select v_owner, v_source, p from unnest(array['storage_compute','model_processing']) p on conflict do nothing;
-  update waldo.health_scopes set epoch = epoch + 1 where owner_id = v_owner and source = v_source;
-  delete from waldo.health_samples where owner_id = v_owner and source = v_source;
-  delete from waldo.health_anchors where owner_id = v_owner and source = v_source;
-  delete from waldo.health_requests where owner_id = v_owner and operation = 'ingest' and response->>'source' = v_source;
-  delete from public.health_context_daily where user_id = v_auth;
-  delete from waldo.health_context_basis where owner_id = v_owner;
+  if v_scope.owner_id is null then return '{"error":"consent_required"}'; end if;
+  if (v_body->>'expected_epoch')::integer <> v_scope.epoch then return '{"error":"epoch_conflict"}'; end if;
+  if v_purpose = 'model_processing' then
+    -- Model use only: the owner stops Waldo using the data, which stays stored and keeps flowing. Nothing is deleted
+    -- and ingest is not fenced. Re-granting the purpose releases what was stored before, because the data was never
+    -- removed and the owner chose to grant again.
+    update waldo.health_consents set withdrawn_at = now() where owner_id = v_owner and source = v_source and purpose = 'model_processing' and withdrawn_at is null;
+    get diagnostics v_live = row_count;
+    if v_live > 0 then update waldo.health_scopes set epoch = epoch + 1 where owner_id = v_owner and source = v_source and purpose = 'model_processing'; end if;
+    v_routed := false;
+  else
+    -- Withdrawing storage withdraws both purposes for this source and removes its data: an upload queued before the
+    -- withdrawal cannot repopulate it, and new processing needs fresh explicit grants. The derived rows may mix
+    -- sources, so they are removed whole and rebuilt from what remains. Upload receipts go with the data; consent
+    -- receipts stay so a replayed request still gets its answer.
+    update waldo.health_consents set withdrawn_at = now() where owner_id = v_owner and source = v_source and withdrawn_at is null;
+    get diagnostics v_live = row_count;
+    if v_live > 0 then update waldo.health_scopes set epoch = epoch + 1 where owner_id = v_owner and source = v_source; end if;
+    delete from waldo.health_samples where owner_id = v_owner and source = v_source;
+    delete from waldo.health_anchors where owner_id = v_owner and source = v_source;
+    delete from waldo.health_requests where owner_id = v_owner and operation = 'ingest' and response->>'source' = v_source;
+    delete from public.health_context_daily where user_id = v_auth;
+    delete from waldo.health_context_basis where owner_id = v_owner;
+    v_routed := true;
+  end if;
   select * into v_scope from waldo.health_scopes where owner_id = v_owner and source = v_source and purpose = v_purpose;
-  v_result := jsonb_build_object('consent', waldo.health_consent_view(v_scope), 'replayed', false, 'deletion_routed', true);
+  v_result := jsonb_build_object('consent', waldo.health_consent_view(v_scope), 'replayed', false, 'deletion_routed', v_routed);
   insert into waldo.health_requests(owner_id, request_id, operation, payload_digest, response) values (v_owner, v_id, 'consent_withdraw', md5(p_payload), v_result);
   return v_result;
 end $$;
@@ -338,7 +355,7 @@ begin
     raise exception 'unsigned router call' using errcode = '42501';
   end if;
   -- Erasure and retention do not depend on the owner being active: a suspended owner's data must still age out.
-  select o.id, o.auth_user_id into v_owner, v_auth from waldo.owners o join auth.users u on u.id = o.auth_user_id where o.do_name = p_do_name for update of o;
+  select o.id, o.auth_user_id into v_owner, v_auth from waldo.owners o where o.do_name = p_do_name for update of o;
   if v_owner is null then return '{"error":"not_linked"}'; end if;
   update waldo.health_consents set withdrawn_at = now() where owner_id = v_owner and withdrawn_at is null;
   get diagnostics v_revoked = row_count;
@@ -361,7 +378,7 @@ begin
     or waldo.router_signed('health.retention.' || p_do_name || '.' || md5(p_payload), p_at, p_sig) is distinct from true then
     raise exception 'unsigned router call' using errcode = '42501';
   end if;
-  select o.id into v_owner from waldo.owners o join auth.users u on u.id = o.auth_user_id where o.do_name = p_do_name for update of o;
+  select o.id into v_owner from waldo.owners o where o.do_name = p_do_name for update of o;
   if v_owner is null then return '{"error":"not_linked"}'; end if;
   delete from waldo.health_samples where owner_id = v_owner
     and ((payload is not null and end_at < now() - interval '90 days') or (payload is null and deleted_at < now() - interval '90 days'));
@@ -402,9 +419,9 @@ begin
       or jsonb_typeof(b->'consent_epoch') is distinct from 'number' or b->>'consent_epoch' !~ '^[0-9]{1,9}$')
     or (select count(distinct b->>'source') from jsonb_array_elements(v_body->'basis') b) <> jsonb_array_length(v_body->'basis') then return '{"error":"invalid_request"}'; end if;
   foreach v_pillar in array array['form','recovery','weight'] loop
+    -- Every pillar is present, either available or unavailable with its reason, so the app never has to guess one.
     v_p := v_body->v_pillar;
-    if v_p is null or jsonb_typeof(v_p) = 'null' then continue; end if;
-    if jsonb_typeof(v_p) <> 'object' then return '{"error":"invalid_request"}'; end if;
+    if jsonb_typeof(v_p) is distinct from 'object' then return '{"error":"invalid_request"}'; end if;
     if v_p ? 'reason' then
       -- An unavailable pillar says why and carries nothing else.
       if (select count(*) from jsonb_object_keys(v_p)) <> 1 or v_p->>'reason' not in ('not_linked','consent_required','consent_withdrawn','no_readings','baseline_immature','missing_sleep',
@@ -416,12 +433,13 @@ begin
       or jsonb_typeof(v_p->'activation') is distinct from 'string' or (v_p->>'activation') not in ('candidate_unaccepted','accepted')
       or (v_p ? 'hrv_method' and jsonb_typeof(v_p->'hrv_method') <> 'null' and (jsonb_typeof(v_p->'hrv_method') is distinct from 'string' or (v_p->>'hrv_method') not in ('rmssd','sdnn')))
       or (v_p ? 'confidence' and jsonb_typeof(v_p->'confidence') <> 'null' and (jsonb_typeof(v_p->'confidence') is distinct from 'number' or (v_p->>'confidence')::numeric not between 0 and 1))
-      or (v_p ? 'drivers' and (jsonb_typeof(v_p->'drivers') is distinct from 'array' or jsonb_array_length(v_p->'drivers') > 8)) then return '{"error":"invalid_request"}'; end if;
+      or (v_p ? 'drivers' and (jsonb_typeof(v_p->'drivers') is distinct from 'array' or jsonb_array_length(v_p->'drivers') > 8
+        or exists (select 1 from jsonb_array_elements(v_p->'drivers') d where jsonb_typeof(d) <> 'string' or char_length(d #>> '{}') > 80))) then return '{"error":"invalid_request"}'; end if;
   end loop;
   if (v_body ? 'drivers' and (jsonb_typeof(v_body->'drivers') is distinct from 'array' or jsonb_array_length(v_body->'drivers') > 8 or exists (select 1 from jsonb_array_elements(v_body->'drivers') d where jsonb_typeof(d) <> 'string' or char_length(d #>> '{}') > 80)))
     or (v_body ? 'tags' and (jsonb_typeof(v_body->'tags') is distinct from 'array' or jsonb_array_length(v_body->'tags') > 10 or exists (select 1 from jsonb_array_elements(v_body->'tags') t where jsonb_typeof(t) <> 'string' or char_length(t #>> '{}') > 40)))
     or (v_body ? 'confidence' and v_body->'confidence' <> 'null'::jsonb and (jsonb_typeof(v_body->'confidence') is distinct from 'number' or (v_body->>'confidence')::numeric not between 0 and 1))
-    or (v_body ? 'freshness' and v_body->'freshness' <> 'null'::jsonb and (v_body->>'freshness') not in ('fresh','stale','expired')) then return '{"error":"invalid_request"}'; end if;
+    or jsonb_typeof(v_body->'freshness') is distinct from 'string' or (v_body->>'freshness') not in ('fresh','stale','expired') then return '{"error":"invalid_request"}'; end if;
   for v_entry in select value from jsonb_array_elements(v_body->'basis') loop
     select * into v_scope from waldo.health_scopes where owner_id = v_owner and source = v_entry->>'source' and purpose = 'storage_compute';
     select * into v_consent from waldo.health_consents where id = v_scope.consent_id;
@@ -431,8 +449,8 @@ begin
   v_conf := case when jsonb_typeof(v_body->'confidence') = 'number' then (v_body->>'confidence')::numeric else null end;
   insert into public.health_context_daily(user_id, day, form, recovery, weight, drivers, confidence, freshness, tags)
     values (v_auth, v_day,
-      case when jsonb_typeof(v_body->'form') = 'object' then v_body->'form' end, case when jsonb_typeof(v_body->'recovery') = 'object' then v_body->'recovery' end, case when jsonb_typeof(v_body->'weight') = 'object' then v_body->'weight' end,
-      coalesce(v_body->'drivers', '[]'::jsonb), v_conf, case when jsonb_typeof(v_body->'freshness') = 'string' then v_body->>'freshness' end,
+      v_body->'form', v_body->'recovery', v_body->'weight',
+      coalesce(v_body->'drivers', '[]'::jsonb), v_conf, v_body->>'freshness',
       coalesce((select array_agg(t) from jsonb_array_elements_text(v_body->'tags') t), '{}'::text[]))
     on conflict (user_id, day) do update set form = excluded.form, recovery = excluded.recovery, weight = excluded.weight, drivers = excluded.drivers,
       confidence = excluded.confidence, freshness = excluded.freshness, tags = excluded.tags;

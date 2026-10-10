@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(194);
+select plan(216);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -60,8 +60,8 @@ create function pg_temp.spo2(id text,rev bigint,val numeric,start_ts timestamptz
 create function pg_temp.rd(owner text) returns jsonb language plpgsql as $$
 declare a bigint:=extract(epoch from now())::bigint;
 begin return waldo.health_context_read(owner,a,pg_temp.sig('healthctx.read.'||owner,a)); end $$;
-create function pg_temp.epoch_of(owner text,src text,purpose text) returns int language sql as $$
-  select s.epoch from waldo.health_scopes s join waldo.owners o on o.id=s.owner_id where o.do_name=owner and s.source=src and s.purpose=purpose $$;
+create function pg_temp.epoch_of(p_owner text,p_src text,p_purpose text) returns int language sql as $$
+  select s.epoch from waldo.health_scopes s join waldo.owners o on o.id=s.owner_id where o.do_name=p_owner and s.source=p_src and s.purpose=p_purpose $$;
 
 -- Consent: explicit, versioned, owner-keyed, never created by an upload.
 select is(pg_temp.h('ingest','health-owner-a',pg_temp.batch('ingest-pre-0001',0,null,'a0',jsonb_build_array(pg_temp.steps('s1',1,10))))->>'error','consent_required','an upload cannot create consent');
@@ -157,13 +157,13 @@ select is(pg_temp.h('ingest','health-owner-a',pg_temp.batch('hrv-a-000002',1,nul
   jsonb_build_object('sample_id','hrv-wake-start','revision',1,'signal','overnight_hrv','unit','milliseconds','method','rmssd','value',50,'day',((date_trunc('day',now() at time zone 'UTC')-interval '26 hours'))::date,'start_at',pg_temp.iso(date_trunc('day',now())-interval '26 hours'),'end_at',pg_temp.iso(date_trunc('day',now())-interval '18 hours'),'utc_offset_minutes',0),
   jsonb_build_object('sample_id','hrv-wake-end','revision',1,'signal','overnight_hrv','unit','milliseconds','method','rmssd','value',51,'day',((date_trunc('day',now() at time zone 'UTC')-interval '18 hours'))::date,'start_at',pg_temp.iso(date_trunc('day',now())-interval '26 hours'),'end_at',pg_temp.iso(date_trunc('day',now())-interval '18 hours'),'utc_offset_minutes',0))))->>'accepted','2','a night is dated by either its start or its end, like a sleep session');
 
--- Withdrawal removes the source, withdraws every purpose, and fences late work.
+-- Withdrawing storage removes the source, withdraws both purposes, and fences late work.
 select is(pg_temp.h('consent_grant','health-owner-a',pg_temp.grant_body('grant-a-model001','apple','model_processing'))->'consent'->>'purpose','model_processing','a separate model purpose is a separate grant');
 select is(pg_temp.h('consent_withdraw','health-owner-a',jsonb_build_object('request_id','withdraw-a-bad01','source','apple','purpose','storage_compute','expected_epoch',9))->>'error','epoch_conflict','a withdrawal at the wrong epoch is refused');
 select is(pg_temp.h('consent_withdraw','health-owner-a',jsonb_build_object('request_id','withdraw-a-0001','source','apple','purpose','storage_compute','expected_epoch',1))->>'deletion_routed','true','a withdrawal routes deletion');
 select is(pg_temp.n('health-owner-a'),0,'withdrawal deletes the source readings');
 select is((select count(*)::int from waldo.health_anchors a join waldo.owners o on o.id=a.owner_id where o.do_name='health-owner-a' and a.source='apple'),0,'withdrawal deletes the source anchor');
-select is((select count(*)::int from waldo.health_consents c join waldo.owners o on o.id=c.owner_id where o.do_name='health-owner-a' and c.source='apple' and c.withdrawn_at is null),0,'withdrawing one purpose withdraws both for the source');
+select is((select count(*)::int from waldo.health_consents c join waldo.owners o on o.id=c.owner_id where o.do_name='health-owner-a' and c.source='apple' and c.withdrawn_at is null),0,'withdrawing storage withdraws both purposes for the source');
 select is((select count(*)::int from waldo.health_consents c join waldo.owners o on o.id=c.owner_id where o.do_name='health-owner-a' and c.source='health_connect' and c.withdrawn_at is null),1,'another source is untouched');
 select is(pg_temp.h('consent_withdraw','health-owner-a',jsonb_build_object('request_id','withdraw-a-0001','source','apple','purpose','storage_compute','expected_epoch',1))->>'replayed','true','replaying a withdrawal is stable');
 select is((select count(*)::int from waldo.health_requests r join waldo.owners o on o.id=r.owner_id where o.do_name='health-owner-a' and r.operation='ingest' and r.response->>'source'='apple'),0,'withdrawal removes the source upload receipts');
@@ -195,8 +195,11 @@ select is(pg_temp.h('context_write','health-owner-b',pg_temp.ctx('not-a-date'))-
 select is(pg_temp.h('context_write','health-owner-b',pg_temp.ctx()||'{"owner_id":"x"}')->>'error','invalid_request','an unknown field is refused');
 select is(pg_temp.h('context_write','health-owner-a',pg_temp.ctx(null,'apple',3))->>'written','true','owner A with a live grant can write');
 select is((select count(*)::int from public.health_context_daily),2,'each owner has only their own row');
-select is(pg_temp.h('context_write','health-owner-b',pg_temp.ctx()||'{"form":null}')->>'written','true','a pillar may be absent');
-select is((select form from public.health_context_daily where user_id='b1000000-0000-0000-0000-0000000000b1') is null,true,'an absent pillar is stored as absent');
+select is(pg_temp.h('context_write','health-owner-b',pg_temp.ctx()||'{"form":null}')->>'error','invalid_request','a pillar cannot be left null');
+select is(pg_temp.h('context_write','health-owner-b',pg_temp.ctx()-'weight')->>'error','invalid_request','a missing pillar is refused');
+select is(pg_temp.h('context_write','health-owner-b',pg_temp.ctx()-'freshness')->>'error','invalid_request','a row must say how fresh it is');
+select is(pg_temp.h('context_write','health-owner-b',pg_temp.ctx()||'{"freshness":null}')->>'error','invalid_request','a null freshness is refused');
+select is(pg_temp.h('context_write','health-owner-b',pg_temp.ctx()||jsonb_build_object('form',jsonb_set(pg_temp.ctx()->'form','{drivers}','[1]')))->>'error','invalid_request','a pillar driver must be a short string');
 select is(pg_temp.h('context_write','health-owner-b',pg_temp.ctx(null,'apple',1)||jsonb_build_object('form','{"reason":"missing_sleep"}'::jsonb))->>'written','true','an unavailable pillar carries its reason');
 select is(pg_temp.h('context_write','health-owner-b',pg_temp.ctx()||jsonb_build_object('form','{"reason":"because"}'::jsonb))->>'error','invalid_request','a reason outside the contract list is refused');
 select is(pg_temp.h('context_write','health-owner-b',pg_temp.ctx()||jsonb_build_object('form','{"reason":"missing_sleep","score":50}'::jsonb))->>'error','invalid_request','an unavailable pillar cannot also carry a score');
@@ -251,6 +254,20 @@ select is(pg_temp.h('context_write','health-owner-e',pg_temp.ctx(to_char((now() 
 select is(pg_temp.rd('health-owner-e')->'previous'->>'form_score',null,'a previous row from a source without the model purpose is not shared');
 select is(pg_temp.h('consent_grant','health-owner-e',pg_temp.grant_body('grant-e-hconn-md1','health_connect','model_processing'))->'consent'->>'status','granted','Health Connect gets its own model purpose');
 select is(pg_temp.rd('health-owner-e')->'previous'->>'form_score','72','with its model purpose the previous row joins');
+-- Withdrawing model use alone stops model use only: nothing is deleted, storage keeps flowing, and a regrant releases what was stored.
+select is(pg_temp.h('ingest','health-owner-e',pg_temp.batch('ingest-e-000001',1,null,'e1',jsonb_build_array(pg_temp.steps('e-step',2,5)),'[]','health_connect'))->>'accepted','1','owner E stores a reading for Health Connect');
+select is(pg_temp.h('consent_withdraw','health-owner-e',jsonb_build_object('request_id','withdraw-e-mdl01','source','health_connect','purpose','model_processing','expected_epoch',pg_temp.epoch_of('health-owner-e','health_connect','model_processing')))->>'deletion_routed','false','withdrawing model use alone routes no deletion');
+select is(pg_temp.h('consent_withdraw','health-owner-e',jsonb_build_object('request_id','withdraw-e-mdl01','source','health_connect','purpose','model_processing','expected_epoch',pg_temp.epoch_of('health-owner-e','health_connect','model_processing')-1))->'consent'->>'status','withdrawn','replaying that withdrawal answers the same');
+select is(pg_temp.h('consent_list','health-owner-e')->'consents' @> '[{"source":"health_connect","purpose":"model_processing","status":"withdrawn","deletion_state":"not_required"}]'::jsonb,true,'the model consent is withdrawn and says no deletion was needed');
+select is(pg_temp.n('health-owner-e','health_connect'),1,'the stored reading is still there');
+select is(pg_temp.h('ingest','health-owner-e',pg_temp.batch('ingest-e-000002',1,null,'e2',jsonb_build_array(pg_temp.steps('e-step2',3,6)),'[]','health_connect'))->>'accepted','1','storage keeps accepting uploads');
+select is(pg_temp.epoch_of('health-owner-e','health_connect','storage_compute'),1,'and the storage epoch did not move');
+select is(pg_temp.rd('health-owner-e')->'previous'->>'form_score',null,'the row computed from that source is no longer shared with the model');
+select is(pg_temp.h('scores_read','health-owner-e')->'scores'->>'day',to_char(now() at time zone 'UTC','YYYY-MM-DD'),'the owner still sees their own scores');
+select is(pg_temp.h('consent_withdraw','health-owner-e',jsonb_build_object('request_id','withdraw-e-mdl02','source','health_connect','purpose','model_processing','expected_epoch',2))->'consent'->>'epoch','2','withdrawing again changes nothing');
+select is(pg_temp.h('consent_withdraw','health-owner-e',jsonb_build_object('request_id','withdraw-e-mdl03','source','health_connect','purpose','model_processing','expected_epoch',99))->>'error','epoch_conflict','a model withdrawal checks the epoch');
+select is(pg_temp.h('consent_grant','health-owner-e',pg_temp.grant_body('grant-e-hconn-md2','health_connect','model_processing',pg_temp.epoch_of('health-owner-e','health_connect','model_processing')))->'consent'->>'status','granted','the owner grants model use again');
+select is(pg_temp.rd('health-owner-e')->'previous'->>'form_score','72','rows computed before the withdrawal return to the model, because the data was never removed');
 select is(pg_temp.h('context_write','health-owner-e',pg_temp.ctx(null,'apple',9))->>'error','epoch_conflict','a row computed from a stale consent epoch is refused');
 select is(pg_temp.h('context_write','health-owner-e',pg_temp.ctx(null,'samsung',1))->>'error','consent_required','a source without storage consent cannot be the basis');
 select is(pg_temp.h('context_write','health-owner-e',pg_temp.ctx()-'basis')->>'error','invalid_request','a row without its basis is refused');
@@ -271,10 +288,16 @@ select is(pg_temp.h('context_write','health-owner-e',pg_temp.ctx(to_char((now() 
 select is(pg_temp.h('context_write','health-owner-e',pg_temp.ctx('2020-01-01','health_connect',1))->>'error','invalid_request','a day beyond the aggregate retention is refused');
 -- Withdrawing a purpose that was never granted still withdraws the source.
 select is(pg_temp.h('consent_grant','health-owner-e',pg_temp.grant_body('grant-e-sams-st1','samsung','storage_compute'))->'consent'->>'status','granted','owner E grants only storage for Samsung');
-select is(pg_temp.h('consent_withdraw','health-owner-e',jsonb_build_object('request_id','withdraw-e-0003','source','samsung','purpose','model_processing','expected_epoch',4))->>'error','epoch_conflict','withdrawing a purpose never granted still checks the epoch');
-select is(pg_temp.h('consent_withdraw','health-owner-e',jsonb_build_object('request_id','withdraw-e-0002','source','samsung','purpose','model_processing','expected_epoch',0))->>'deletion_routed','true','withdrawing a purpose never granted still removes the source');
-select is((select count(*)::int from waldo.health_consents c join waldo.owners o on o.id=c.owner_id where o.do_name='health-owner-e' and c.source='samsung' and c.withdrawn_at is null),0,'both purposes are withdrawn');
-select is(pg_temp.h('consent_withdraw','health-owner-d',jsonb_build_object('request_id','withdraw-d-0001','source','apple','purpose','model_processing','expected_epoch',0))->>'error','consent_required','withdrawing from a source never granted is refused');
+select is(pg_temp.h('consent_withdraw','health-owner-e',jsonb_build_object('request_id','withdraw-e-0004','source','samsung','purpose','model_processing','expected_epoch',0))->>'error','consent_required','a purpose never granted has nothing to withdraw');
+select is(pg_temp.h('consent_withdraw','health-owner-e',jsonb_build_object('request_id','withdraw-e-0003','source','samsung','purpose','storage_compute','expected_epoch',4))->>'error','epoch_conflict','a storage withdrawal checks the epoch');
+select is(pg_temp.h('consent_withdraw','health-owner-e',jsonb_build_object('request_id','withdraw-e-0002','source','samsung','purpose','storage_compute','expected_epoch',1))->'consent'->>'source','samsung','the answer to a withdrawal names the source');
+select is(pg_temp.h('consent_withdraw','health-owner-e',jsonb_build_object('request_id','withdraw-e-0002','source','samsung','purpose','storage_compute','expected_epoch',1))->'consent'->>'epoch','2','and the epoch it moved to');
+select is((select count(*)::int from waldo.health_consents c join waldo.owners o on o.id=c.owner_id where o.do_name='health-owner-e' and c.source='samsung' and c.withdrawn_at is null),0,'withdrawing storage withdraws the source');
+select is(pg_temp.h('consent_withdraw','health-owner-e',jsonb_build_object('request_id','withdraw-e-0005','source','samsung','purpose','storage_compute','expected_epoch',2))->'consent'->>'epoch','2','withdrawing a source already withdrawn does not move its epoch again');
+select is(pg_temp.h('consent_withdraw','health-owner-d',jsonb_build_object('request_id','withdraw-d-0001','source','apple','purpose','storage_compute','expected_epoch',0))->>'error','consent_required','withdrawing from a source never granted is refused');
+select is(pg_temp.h('consent_grant','health-owner-d',pg_temp.grant_body('grant-d-model-01','apple','model_processing'))->>'error','consent_required','model use cannot be granted without storage');
+select is(pg_temp.h('consent_grant','health-owner-e',pg_temp.grant_body('grant-e-apple-st2','apple','storage_compute',pg_temp.epoch_of('health-owner-e','apple','storage_compute')))->'consent'->>'status','granted','owner E grants Apple storage again');
+select is((select count(*)::int from waldo.health_consents c join waldo.owners o on o.id=c.owner_id where o.do_name='health-owner-e' and c.source='apple' and c.purpose='model_processing' and c.withdrawn_at is null),0,'granting storage again never restores model use');
 -- A suspended owner's data still ages out and can still be erased.
 select is(pg_temp.h('consent_grant','health-owner-f',pg_temp.grant_body('grant-f-apple-st1','apple','storage_compute'))->'consent'->>'status','granted','owner F consents');
 select is(pg_temp.h('ingest','health-owner-f',pg_temp.batch('ingest-f-000001',1,null,'f1',jsonb_build_array(pg_temp.steps('f-old',2,1),pg_temp.steps('f-new',3,2))))->>'accepted','2','owner F stores readings');
