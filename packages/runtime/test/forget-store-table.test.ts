@@ -35,6 +35,11 @@ const TABLES: Record<string, Row> = {
   meta: exempt('per-device schema version, socket generation, heartbeat time and revoke fence'),
   commands: gap('per-device owner-requested notification wire text until result/expiry/cancellation; isolated device custody, literal owner forget does not reach it; revoke clears storage after replay horizon'),
   notify_issues: exempt('per-device notification identifiers and issuance times only'),
+  // Per iMessage bridge/account custody (IMessageBridgeDO). nonces/meta rows above also cover its replay nonces and bridge meta (ids, generation, cursor, heartbeat, capability report, quarantine reason).
+  events: gap('per-bridge inbound event identity and raw digest; the message body is dropped once handed/acknowledged, but held events (media, revoked scope) keep their text as evidence; a literal owner forget does not reach this isolated custody'),
+  deliveries: gap('per-bridge frozen reply command bytes (reply text) and result until revoke/retention policy; isolated custody, literal owner forget does not reach it'),
+  result_conflicts: exempt('later conflicting host result envelopes: ids, message GUID, state and reason codes; no owner-authored text'),
+  sent_messages: exempt('message GUID, command id and result state for receipt correlation'),
   frames: exempt('per-device logical fingerprints, protocol type, identifiers and time; no full frame or answer text'),
   // Operational: counters, flags, hashes, leases, ids, times
   class_state: exempt('counts and times per push class'), daily_push_budget: exempt('counts per day'), event_cooldowns: exempt('event id and time'),

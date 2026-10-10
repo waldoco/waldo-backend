@@ -121,3 +121,18 @@ it('a quarantined lane survives eviction and rejects new replies; a late result 
     await expect(enqueueInput('q2').then(i => store.enqueue(i))).rejects.toThrow('lane_quarantined');
   });
 });
+
+it('handed and acknowledged events keep only identity and digest; held evidence keeps its body', async () => {
+  const s = stub();
+  await runInDurableObject(s, async (_i, state) => {
+    const store = new BridgeStore(state.storage, PROPOSED_LOCAL_TEST_POLICY);
+    for (const id of ['k1', 'k2']) { const body = JSON.stringify(event(id, `private ${id}`)); store.admitEvent(h(), body, await sha256Hex(body), event(id, `private ${id}`)); }
+    store.settleEvent(store.nextPendingEvent()!.seq, 'handed', 'handed');
+    store.settleEvent(store.nextPendingEvent()!.seq, 'held', 'media_unsupported');
+    const rows = state.storage.sql.exec('SELECT event_id, body, digest FROM events ORDER BY seq').toArray() as { event_id: string; body: string; digest: string }[];
+    expect(rows[0]).toMatchObject({ event_id: 'k1', body: '' });
+    expect(rows[1]!.body).toContain('private k2');
+    const again = JSON.stringify(event('k1', 'private k1'));
+    expect(store.admitEvent(h(), again, await sha256Hex(again), event('k1', 'private k1'))).toEqual({ duplicate: true }); // dedup still works
+  });
+});
