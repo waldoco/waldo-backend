@@ -123,3 +123,14 @@ it('legacy signup cannot send an unverified phone to the atomic owner creation p
   const payload = JSON.parse(String(fetcher.mock.calls[1]?.[1].body));
   expect(payload.p_phone).toBe('');
 });
+
+
+it('malformed signed session inventory cannot prove absence or revocation', async () => {
+  const row={session:'a'.repeat(64),created_at:new Date().toISOString(),last_seen_at:new Date().toISOString()};
+  for(const invalid of [null,{},[{}],[{...row,session:'short'}],[{...row,created_at:'invalid'}],[{...row,extra:true}],[row,row]]) {
+    const auth=consoleAuth(env,vi.fn().mockResolvedValue(json(invalid)) as unknown as typeof fetch,now)!;
+    await expect(auth.listSessions('owner')).rejects.toThrow('session inventory unavailable');
+  }
+  const auth=consoleAuth(env,vi.fn().mockResolvedValue(json('true')) as unknown as typeof fetch,now)!;
+  await expect(auth.revokeSession('owner',row.session)).rejects.toThrow('session revocation unavailable');
+});

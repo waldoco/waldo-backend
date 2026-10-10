@@ -46,6 +46,8 @@ const expectedMigrations = [
   '20261007040100_common_owner_authority.sql',
   '20261008000000_browser_owner_binding.sql',
   '20261008000100_waldo_device_bridge.sql',
+  '20261010010000_app_session_authority.sql',
+  '20261010040000_app_push_custody.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

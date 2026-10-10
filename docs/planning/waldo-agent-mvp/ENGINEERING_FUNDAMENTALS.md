@@ -626,3 +626,11 @@ A fresh staging Cloudflare public read uses the existing reader without requirin
 | Failure | Regression | Boundary |
 | --- | --- | --- |
 | Google recovery added undisclosed sendUpdates=none across Calendar mutation paths | google.test.ts six synthetic wire cases for marked/unmarked create, move and cancellation; google-recovery-journey.test.ts existing approved apply/Undo, replay and later-edit controls | Restore baseline omission, not a new sendUpdates=all policy. Marked cancellation remains atomic PATCH status=cancelled plus marker under If-Match. Provider guest-delivery behavior and tombstone marker retention still require staging acceptance |
+
+### Basic native admission and recovery
+
+- [ ] App text admission commits payload and wake together before ACK; a storage/alarm fault rolls both back. Preserve earlier sibling wakes, quarantine recovered running attempts without provider replay, retain queued custody on directory outage, and deny revoked pending sessions. Canonical history requires signed current session, physical owner routing and matching principal/tenant witnesses. Cover strict session DTO, maximum text input, same-ID body conflicts, settings action receipts and push-first signout with fresh validated absence.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Legacy app acknowledged a volatile turn and trusted a do-name header; a separated wake could strand committed work | app-basic-serving and app-inbox signed no-Telegram journey, reconstruction/alarm, malformed authority and atomic wake fault | Local synthetic OTP/directory/model proof; native, live provider and staged namespace acceptance remain separate |

@@ -1,3 +1,4 @@
+import { linkCodeHash } from '../src/identity/owner-directory';
 import { describe, expect, it, vi } from 'vitest';
 import { appTranscriptPage, handleApp } from '../src/channels/app-api';
 import type { ConsoleAuth } from '../src/identity/console-auth';
@@ -7,13 +8,15 @@ const CREDENTIAL = `owner-1.${SESSION}.sig`;
 
 const fakeAuth = (over: Partial<ConsoleAuth> = {}) => {
   const calls: string[] = [];
+  let revoked = false;
   const auth = {
     throttle: async () => true,
     sendCode: async (email: string) => { calls.push(`send:${email}`); return email === 'member@example.test'; },
     verify: async (email: string, code: string) => (email === 'member@example.test' && code === '123456' ? 'owner-1' : null),
     ownerCookie: async () => CREDENTIAL,
     readOwnerCookie: async (request: Request) => ((request.headers.get('cookie') ?? '').includes(CREDENTIAL) ? 'owner-1' : null),
-    revokeSession: async () => { calls.push('revoke'); return true; },
+    listSessions: async () => revoked ? [] : [{session:await linkCodeHash(SESSION),created_at:new Date().toISOString(),last_seen_at:new Date().toISOString()}],
+    revokeSession: async () => { calls.push('revoke'); revoked=true; return true; },
     ...over,
   } as unknown as ConsoleAuth;
   return { auth, calls };
@@ -22,6 +25,7 @@ const forwards: Request[] = [];
 const env = () => ({
   TELEGRAM_OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async (r: Request) => { forwards.push(r); return Response.json({ forwarded: true }); } }) },
   RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) },
+  SUPABASE_PROJECT_URL:'https://directory.fixture.invalid',SUPABASE_PUBLISHABLE_KEY:'fictional-public-key',WALDO_ROUTER_HMAC_SECRET:'fictional-router-secret-00000000000000000',
 }) as never;
 const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
   new Request(`https://w.test${path}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
@@ -61,7 +65,9 @@ describe('app sign-in and main chat routes', () => {
   });
   it('signs out by revoking exactly its own session', async () => {
     const { auth, calls } = fakeAuth();
+    const push=vi.spyOn(globalThis,'fetch').mockResolvedValue(Response.json(0));
     const response = await handleApp(post('/app/v1/auth/signout', {}, { authorization: `Bearer ${CREDENTIAL}` }), env(), auth);
+    push.mockRestore();
     expect(await response!.json()).toEqual({ result: 'revoked' });
     expect(calls).toContain('revoke');
   });
@@ -94,7 +100,7 @@ describe('main chat transcript page', () => {
     const page = appTranscriptPage(all, null, 2);
     expect(page.messages.map(m => m.text)).toEqual(['text 4', 'text 3']);
     expect(page.messages[0]).toMatchObject({ id: 'e4', role: 'user', channel: 'app', parent_id: null, parts: [{ type: 'text', text: 'text 4' }] });
-    expect(page.next_cursor).toBe('2');
+    expect(page.next_cursor).toBe('before:e3');
     const older = appTranscriptPage(all, page.next_cursor, 10);
     expect(older.messages.map(m => m.text)).toEqual(['text 2', 'text 1', 'text 0']);
     expect(older.messages[2]!.channel).toBe('telegram');
@@ -104,4 +110,17 @@ describe('main chat transcript page', () => {
     const { role: _role, ...bare } = entry(9, 'user');
     expect(appTranscriptPage([bare as never, ...all], 'zzz', 50).messages).toHaveLength(5);
   });
+});
+
+
+it('requires valid fresh inventory for session DTO and push-first verified signout',async()=>{
+  const headers={authorization:`Bearer ${CREDENTIAL}`};
+  const missing=fakeAuth({listSessions:async()=>[]}).auth;
+  expect((await handleApp(new Request('https://w.test/app/v1/session',{headers}),env(),missing))!.status).toBe(503);
+  const stillLive=fakeAuth({revokeSession:async()=>true}).auth;
+  const fetcher=vi.spyOn(globalThis,'fetch').mockResolvedValue(Response.json(0));
+  try{expect((await handleApp(post('/app/v1/auth/signout',{},headers),env(),stillLive))!.status).toBe(503);}finally{fetcher.mockRestore();}
+  const {auth,calls}=fakeAuth();
+  const failedPush=vi.spyOn(globalThis,'fetch').mockResolvedValue(Response.json({revoked:true}));
+  try{expect((await handleApp(post('/app/v1/auth/signout',{},headers),env(),auth))!.status).toBe(503);expect(calls).not.toContain('revoke');}finally{failedPush.mockRestore();}
 });

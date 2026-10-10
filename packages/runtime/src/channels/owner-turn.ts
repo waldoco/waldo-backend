@@ -1,3 +1,4 @@
+import type { OwnerContextCapability } from '../context-composer/owner-turn';
 import { OWNER_REQUEST_HOP } from './harness';
 import { narrowHeldJson, withholdHeldTurns } from '../conversation/held-turns';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
@@ -28,7 +29,7 @@ import { messagingSystemPrompt, ownerClockLine, withOwnerSkillProcedures } from 
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
-import { restoreConversation, type ConversationStore } from './conversation-store';
+import type { ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
 import type { TurnLogEntry, TurnTimer } from './owner-turn-types';
 import { ownerTurnAttachments, REPLY_QUOTE_LIMIT, type OwnerResponder, type ReplyContext } from './owner-turn-envelope';
@@ -60,7 +61,10 @@ const MAX_TOOL_ROUNDS = 25;
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
 export type OwnerSkillHost = Readonly<{ browserAttachments?(scope?: RunEffectScope): readonly LLMAttachment[]; prepare(turn: OwnerTurnEnvelope, contextOwnerId: string, scope: RunEffectScope): Promise<OwnerSkillCapability | undefined> }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability }>;
+export type OwnerContextHost = Readonly<{ prepare(turn: OwnerTurnEnvelope, scope: RunEffectScope): Promise<OwnerContextCapability> }>;
+export type OwnerHistoryFactory = (context: OwnerContextCapability, scope: RunEffectScope) => ConversationStore;
+export type OwnerContextIntegration = Readonly<{ contextHost: OwnerContextHost; history?: OwnerHistoryFactory }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory }>;
 
 export const createOwnerResponder = (
   openaiApiKey: string,
@@ -109,7 +113,9 @@ export const createOwnerResponder = (
   privateOwner?: PrivateOwner,
 ): OwnerResponder => {
   const skills = privateOwner?.skills;
-  const invocation = (() => {
+  const context = privateOwner?.context;
+  const conversationStore = context && privateRunScope && privateOwner?.history ? privateOwner.history(context, privateRunScope) : store;
+  const invocation = context?.invocation ?? (() => {
     const accepted = acceptTrustedInvocation(localTrustedBriefScheduleInput().admission);
     if (!accepted.ok) throw new Error('fixture admission failed');
     return accepted.value;
@@ -119,7 +125,7 @@ export const createOwnerResponder = (
   const cleanupLedger = toolLedger;
   let backgroundCurrent: (() => Promise<void>) | undefined;
   let transientDecision = false;
-  const assertCurrent = async () => { privateRunScope?.admit(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
+  const assertCurrent = async () => { privateRunScope?.admit(); await context?.assertCurrent(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
   const ownerId = invocation.verified_authority.principal_ref;
   const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;
@@ -171,7 +177,7 @@ export const createOwnerResponder = (
     }));
     mark(`messages=${userMessages.length}`);
     const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
-    const admittedGateway: LLMGatewayAdapter = skills || backgroundCurrent ? { complete: async request => {
+    const admittedGateway: LLMGatewayAdapter = context || skills || backgroundCurrent ? { complete: async request => {
       await assertCurrent();
       if (transientDecision && (request.context !== 'full_context' || new TextEncoder().encode(JSON.stringify(request.request)).byteLength > MODEL_CONTEXT_MAX_CHARS)) throw new Error('background decision context bound');
       if (!transientDecision && skills && expectedProcedure !== undefined) await skills.assertProcedureCurrent(expectedProcedure, CANARIES);
@@ -270,7 +276,9 @@ export const createOwnerResponder = (
     if (added === null) return null;
     return added;
   };
-  const path = new JoinedConversationPath(adapters.contextComposer!, {
+  const composer = context?.composer ?? adapters.contextComposer!;
+  const contextInputs = () => ({ ...(context?.snapshot() ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null });
+  const path = new JoinedConversationPath(composer, {
     complete: async (request) => {
       await assertCurrent();
         const trace = traceId;
@@ -425,9 +433,12 @@ export const createOwnerResponder = (
           if (control.revision() !== contextSteering) throw new ClosedRunError();
           const skillMetadata = skills ? skills.metadata() : '';
           // Owner memory gets the room left in the FINAL system prompt (after the skill wrapper), because the sanitiser drops an oversize one whole.
+          const composed = context ? await composer.compose(invocation, contextInputs()) : undefined;
+          if (composed && !composed.ok) throw new Error(`owner context failed: ${composed.failure.code}`);
+          await assertCurrent();
           const unboundSystem = (): string => {
             const wrapped = skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined);
-            const before = [messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation), ownerClockLine(clock)];
+            const before = [...(composed?.ok ? [composed.prompt] : []), messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation), ownerClockLine(clock)];
             const afterBase = [...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
             // Owner memory takes its room first; open loops get what the same reserve leaves, and the section names what it left out.
             const room = systemRoom(withOwnerSkillProcedures([...before, ...afterBase].join('\n\n'), wrapped, surfacePresentation));
@@ -460,7 +471,7 @@ export const createOwnerResponder = (
       });
     },
   }, tree, undefined, pathObservers);
-  let parentId: string | null = null;
+  const conversationLeaves = new Map<string, string>();
   // Set by converse() for the duration of one submit: delegate_task rides owner chat turns
   // only, never reminder/scheduled machine turns that flow through the same closure.
   let ownerTurnActive = false;
@@ -503,7 +514,7 @@ export const createOwnerResponder = (
   };
   let restorePromise: Promise<void> | undefined;
   const restored = async () => {
-    await (restorePromise ??= store ? restoreConversation(tree, store).then(leafId => { parentId = leafId; }) : Promise.resolve());
+    await (restorePromise ??= conversationStore ? conversationStore.load().then(({entries,leafId}) => { for(const entry of entries){tree.append(entry);conversationLeaves.set(entry.chatId,entry.id);} }) : Promise.resolve());
     const ids = forgettingState?.claims('purging').map(claim => claim.id) ?? [];
     const topics = forgettingState?.pendingTopics() ?? [];
     if (forgettingState && (ids.length || topics.length)) {
@@ -519,28 +530,31 @@ export const createOwnerResponder = (
     }
   };
   const converse = async (id: string, conversationRef: string, said: string, time: TurnTimer, fromOwner = false, surface = 'agent', toolNames?: readonly string[]) => {
+    conversationRef = context?.conversationRef ?? conversationRef;
     backgroundToolNames = fromOwner ? undefined : toolNames;
     traceId = id;
     ownerTurnActive = fromOwner;
     turnToolEvents = [];
     control.begin(fromOwner);
     try {
+      const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const };
+      if(fromOwner && context && privateRunScope) await conversationStore?.persistOwnerInput?.(userEntry,privateRunScope);
       const publication = await time('joined_path', () => path.submit({
         ...(privateRunScope ? { runScope: privateRunScope } : {}),
         authenticatedOwnerId: ownerId, invocation,
-        context: { ...localTrustedBriefTurnSnapshot(), canary_tokens: CANARIES, replay_context_ref: null },
-        userEntry: tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: parentId !== null && tree.get(parentId)?.chatId === conversationRef ? parentId : null, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' }, role:'user' },
+        context: contextInputs(),
+        userEntry,
         assistantEntryId: `${id}-reply`,
       })).finally(() => { ownerTurnActive = false; backgroundToolNames = undefined; control.end(); });
       privateRunScope?.admit();
       await assertCurrent();
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
       const savedEntries = [tree.get(id)!, tree.get(publication.leafId)!].map(entry => redactConversationEntry(entry, redact));
-      await store?.save(savedEntries, publication.leafId, privateRunScope);
+      await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }
       privateRunScope?.admit();
       await assertCurrent();
-      parentId = publication.leafId;
+      conversationLeaves.set(conversationRef,publication.leafId);
       const reply = tree.get(publication.leafId)!.appPayload;
       // S2b: effect tools this turn get a receipt line from typed tool results; read-only turns get none.
       const receipts = fromOwner ? receiptLine(turnToolEvents) : null;
@@ -554,8 +568,9 @@ export const createOwnerResponder = (
       const memoryWrites = turn.memoryWrites !== false;
       if (turn.runScope && privateRunScope !== turn.runScope) {
         const capturedTurn = { ...turn, memoryWrites };
-        const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}) });
+        const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
+        const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
+        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}) });
         control.route(scoped.control);
         try { return await scoped.respond(capturedTurn, time); }
         finally { control.unroute(scoped.control); }
@@ -563,6 +578,7 @@ export const createOwnerResponder = (
       privateRunScope?.admit();
       await assertCurrent();
       if (skills?.admission && (await skills.admission.readInput()).text !== turn.text) throw new Error('owner input mismatch');
+      await context?.assertInput(turn.text ?? '');
       await restored();
       const id = turn.traceId;
       surfacePresentation = turn.presentation;
