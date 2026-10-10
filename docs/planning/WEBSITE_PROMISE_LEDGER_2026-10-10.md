@@ -251,26 +251,31 @@ Day cards and update cards used to log no root hop, so their traces were never e
 
 Booking, payments, logged-in browser errands, parallel workers, rich file outputs and person-to-person agent coordination came from the Instinct comparison. They set the quality bar for Waves 1–2 (claim verification, receipts, recovery, parallel workers) and stay separate from the website commitment.
 
-## 12. Status and next slices (10 October, evening)
+## 12. Status and next slices (10 October, night)
 
-Lanes: the app-backend handoff session takes #998 steps 1–4 (zod dependency, app route registry, Google paging, health-leak guard) and then the proposed identity, files, memory correction, onboarding, channels, Tasks/Calendar effects, rights, personal day, health and proactivity slices. This session owns the ledger, traces, the omnipresence slices (contracts, app delivery and approvals, routing, desk, transcript, threads) and context engineering. The app session owns waldo-app and re-pins to merged contract SHAs.
+Lanes: the app-backend handoff session took #998 steps 1, 3 and 5 (zod dependency, Google paging, identity authority) and now runs G2, Tasks and Calendar effects, with the effect-ledger reconcile rail inside it. Step 2, the route registry, waits for its first consumer, and step 4, the health-leak guard, comes with the numeric-scores slice here. This session owns the ledger, traces, health in context, the omnipresence slices (contracts, app delivery and approvals, routing, desk, transcript, threads) and context engineering. The app session owns waldo-app and re-pins to merged contract SHAs.
 
 | PR | What | State |
 |---|---|---|
 | #1004 | App inbox outage wake; push custody pgTAP | merged (`9eef2ad9`), not deployed |
 | #1003 | Health-turn trace withholding | closed by ruling (§8) |
-| #1007 | Day and update card traces close and reach Langfuse | open |
-| #1010 | Per-section context accounting on every model call (trace schema 6) | open |
-| #1011 | Slice 0 contracts: reply parts, surface capabilities, app approvals, channel status, error codes | open; revising for the app lane's review (self-contained app pin, kind-dependent `exact`, drop `channel.link_start`, approvals state filter, `request_id`) |
-| #1012 | Owner turns no longer fail when shared health context is present | open |
+| #1007 | Day and update card traces close and reach Langfuse | merged (`67381c61`), not deployed |
+| #1009 | zod as a direct runtime dependency | merged (`9007f45b`), not deployed |
+| #1010 | Per-section context accounting on every model call (trace schema 6) | merged (`31db392b`), not deployed |
+| #1013 | Owner runtime authority without a messaging surface (`20261010060000`) | merged; migration not applied to any hosted database |
+| #1008 | Google collection paging, reads only | merged (`65f7e233`), not deployed |
+| #1011 | Slice 0 contracts: reply parts, surface capabilities, app approvals, channel status, error codes | open, green at `2e46005d`; app lane acked the five-file pin |
+| #1012 | Health turns no longer fail: source key, and `produced_at` from the row's compile time | open, green |
+| #1014 | Health reaches the reply model on every surface, as a measured section | open, stacked on #1012 |
 | #1005 | This ledger, the omnipresence design, the trace ruling | open |
 
-Health finding (verified by test): derived health reaches the reply model on no surface. Telegram and WhatsApp compose it and discard it, and the app composer passes `health: null`. Before #1012, real health material made the turn fail outright. Every health promise (Recovery, Form, Weight, health-aware Briefs) depends on the next slice.
+Health finding (verified by test): before #1014, derived health reached the reply model on no surface. Telegram and WhatsApp composed it and discarded it, and the app composer passed `health: null`, so the app prompt said none existed. Before #1012, any live read of real health material failed the turn.
 
 Next, one at a time:
-1. Health into the reply prompt as its own measured section, after #1010 merges (both edit `unboundSystem()`).
-2. Slice 1: app renderer and approvals from the app, on the revised #1011.
-3. Context: stable-prefix ordering on the app (the per-turn REASONS block currently sits first, so the behavior block never caches), measured with #1010.
-4. Slice 2: proactive routing to the app and scheduled work for app-only owners.
+1. Numeric Recovery, Form and Load scores in context: a view-schema change and the health-leak guard (#998 step 4).
+2. Health in background decisions (interruption judgment and fewer pings).
+3. Slice 1: app renderer and approvals from the app, on merged #1011 and on G2's `approvals.ts`.
+4. Context: stable-prefix ordering on the app (the per-turn REASONS block currently sits first, so the behavior block never caches), measured with #1010.
+5. Slice 2: proactive routing to the app and scheduled work for app-only owners, using #1013's owner runtime authority.
 
-Deploy bundle waiting on the owner: #1004, #1007 and #1010 together. #1010's value needs about a day of staging traces after deploy.
+Deploy bundle waiting on the owner's go (the handoff session runs it from the Mac): #1004, #1007, #1009, #1010 and #1008, plus #1012 once merged, which keeps health-bearing turns from failing. No migration. #1010's value needs about a day of staging traces after deploy.
