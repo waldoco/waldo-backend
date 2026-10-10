@@ -173,8 +173,8 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   return fail(404);
 };
 
-// `text` is always the plain-text form of the row. `parts` is the typed form: a text part, plus an approval part on the reply
-// that presented one. A reader must ignore any part type it does not know and fall back to `text`.
+// `text` is the row's plain text, or for a reply with none of its own, the fallback text of the approval cards it carries.
+// `parts` is the typed form: that text, plus the approval parts. A reader must ignore any part it cannot read and show `text`.
 export type AppMessage = AppMessageV1;
 
 // Newest-first immutable row cursor. New arrivals cannot shift an older page. The newest assistant reply

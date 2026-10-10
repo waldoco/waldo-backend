@@ -281,7 +281,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<GetTasksArgs, unknown, ToolDispatcherContext>,
   {
     name: 'propose_calendar_change',
-    description: "Propose adding, moving or cancelling an event on the owner's calendar. The owner gets Do it / Modify / Not now buttons; nothing changes until they approve. Include the event title.",
+    description: "Propose adding, moving or cancelling an event on the owner's calendar. The owner gets a review card to approve, change or skip; nothing changes until they approve. Include the event title.",
     schema: proposeCalendarChangeArgsSchema,
     trigger_allowlist: allowlist('propose_calendar_change'),
     autonomy_gated: false,
@@ -326,7 +326,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
   {
     name: 'send_email',
-    description: "Send an email from the owner's Gmail. The owner gets Send it / Modify / Not now buttons showing the exact recipients, subject and body; nothing sends until they approve. Use draft_email instead when the owner wants to review or edit it in Gmail themselves. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it.",
+    description: "Send an email from the owner's Gmail. The owner gets a review card showing the exact recipients, subject and body; nothing sends until they approve. Use draft_email instead when the owner wants to review or edit it in Gmail themselves. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it.",
     schema: sendEmailArgsSchema,
     trigger_allowlist: allowlist('send_email'),
     autonomy_gated: false,

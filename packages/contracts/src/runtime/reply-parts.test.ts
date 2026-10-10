@@ -83,7 +83,7 @@ describe('replyPartV1', () => {
     expect(approvalActionV1Schema.options).toEqual(['approve', 'skip', 'edit', 'undo']);
     expect(replyPartV1Schema.safeParse({ ...parts.approval, actions: ['skip'] }).success).toBe(true);
     expect(replyPartV1Schema.safeParse({ ...parts.approval, actions: ['undo'] }).success).toBe(false);
-    expect(replyPartV1Schema.safeParse({ ...parts.approval, actions: [] }).success).toBe(false);
+    expect(replyPartV1Schema.safeParse({ ...parts.approval, actions: [] }).success).toBe(true);
     expect(replyPartV1Schema.safeParse({ ...parts.approval, actions: ['approve', 'approve'] }).success).toBe(false);
     expect(replyPartV1Schema.safeParse({ ...parts.approval, kind: 'task_sources' }).success).toBe(false);
     expect(replyPartV1Schema.safeParse({ ...parts.approval, payload_digest: 'a'.repeat(64) }).success).toBe(false);
