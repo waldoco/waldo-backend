@@ -22,6 +22,7 @@ import { pageMemoryGraph } from './memory-graph-page';
 import {TelegramLinkInbox,LINK_MODE,type LinkBinding} from './telegram-link-inbox';
 import {drainLinkReceipt} from './telegram-link-controller';
 import {ownerDirectory} from '../identity/owner-directory';
+import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/owner-runtime-authority';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
@@ -176,6 +177,8 @@ type OwnerRuntime = Readonly<{
 }>;
 
 const LATE_FIRE_MS = 5 * 60_000;
+// A directory outage at the alarm leaves the app owner's scheduled work waiting; this is how soon the alarm asks again.
+const APP_ADMISSION_RETRY_MS = 60_000;
 
 const validZone = (zone: string): boolean => {
   try {
@@ -522,6 +525,49 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       || this.ctx.storage.kv.get<string>('do_name') !== name) throw new ClosedRunError();
     return appSessionAuthority(this.env)(name, hash);
   }
+  // Set only inside the alarm's unit of work while an app-only owner's scheduled jobs run (see serial()).
+  private scheduledAppDelivery: ((text: string) => Promise<void>) | null = null;
+
+  // An owner who never linked Telegram still has scheduled work. The app binding written at their first app message names
+  // the owner locally; the directory then says whether the account is still admitted. A revoked or rejected account runs
+  // nothing and stays dormant; a directory outage runs nothing now and asks the alarm to try again.
+  private async appOwnerLookup(): Promise<Readonly<{ kind: 'admitted'; authority: OwnerRuntimeAuthority } | { kind: 'dormant' } | { kind: 'retry' }>> {
+    const kv = this.ctx.storage.kv, doName = kv.get<string>('do_name'), owners = this.env.TELEGRAM_OWNER_DO;
+    if (!doName || !owners || kv.get<boolean>('app_unlinked') === true || kv.get<string>('app_subject') !== String(appSubjectFor(doName))) return { kind: 'dormant' };
+    try {
+      const authority = await ownerRuntimeAuthority(this.env).resolve({ doName, actualDoId: this.ctx.id.toString(), expectedDoId: name => owners.idFromName(name).toString(),
+        assertCurrent: () => { if (kv.get<string>('do_name') !== doName || kv.get<boolean>('app_unlinked') === true) throw new ClosedRunError(); } });
+      return { kind: 'admitted', authority };
+    } catch (error) {
+      return error instanceof ClosedRunError || (error instanceof Error && error.message.startsWith('owner runtime authority')) ? { kind: 'dormant' } : { kind: 'retry' };
+    }
+  }
+
+  // Writes a scheduled message as an assistant row in the owner's app transcript, after re-asking the directory.
+  private appDeliveryFor(authority: OwnerRuntimeAuthority): (text: string) => Promise<void> {
+    return async text => {
+      const now = Date.now(), abort = new AbortController();
+      const scope: RunEffectScope = { runId: 'app-scheduled', attempt: crypto.randomUUID(), deadline: now + 60_000, signal: abort.signal,
+        admit: () => { if (abort.signal.aborted || Date.now() >= now + 60_000) throw new ClosedRunError(); },
+        commit: work => this.ctx.storage.transactionSync(work) };
+      const lookup = async () => {
+        scope.admit(); const current = await this.appOwnerLookup(); scope.admit();
+        if (current.kind !== 'admitted') throw new ClosedRunError();
+        const { ownerId, doName, admissionRevision } = current.authority;
+        return { ownerId, bindingRef: `runtime:${doName}`, revision: admissionRevision, physicalDoId: this.ctx.id.toString() };
+      };
+      try {
+        const context = await surfaceOwnerAdmission({ scope, lookup, expectedPhysicalDoId: this.ctx.id.toString(), surface: 'app', subject: authority.doName,
+          occurrenceKey: `scheduled:${crypto.randomUUID()}`, occurredAt: now, text: 'Deliver a scheduled message.' });
+        const store = canonicalOwnerConversationStore(this.ctx.storage, context);
+        const { leafId } = await store.load();
+        const ownerRef = context.invocation.verified_authority.principal_ref, id = `scheduled-${crypto.randomUUID()}`;
+        await store.save([{ id, ownerId: ownerRef, chatId: `owner:${ownerRef}`, parentId: leafId, threadAnchorId: null, surface: 'app',
+          modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role: 'assistant' }], id, scope);
+      } finally { abort.abort(); }
+    };
+  }
+
   private async appContext(name: string, hash: string, text: string, occurrence: string, occurredAt: number, scope: RunEffectScope, sources?: OwnerContextSources) {
     const lookup=async()=>{
       scope.admit(); const session=await this.appAuthority(name,hash); scope.admit();
@@ -1172,19 +1218,24 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       await this.drainApp();
       // Directory-backed owner alarms require the same physical binding as owner ingress.
       // Keep retained work and transport recovery wakes; do not boot provider work on an orphan.
+      // An owner with no Telegram link runs on the app when the directory still admits their account.
+      let channel: ChannelKind = 'telegram';
       if (consoleAuth(this.env)) {
         const doName = this.ctx.storage.kv.get<string>('do_name');
         const subject = this.ctx.storage.kv.get<string>('telegram_subject');
-        if (!doName || !subject || !/^\d+$/.test(subject) || !Number.isSafeInteger(Number(subject)) || Number(subject) <= 0
-          || this.ctx.storage.kv.get<boolean>('telegram_unlinked') === true
-          || !this.env.TELEGRAM_OWNER_DO || this.env.TELEGRAM_OWNER_DO.idFromName(doName).toString() !== this.ctx.id.toString()) {
+        const telegramBound = doName && subject && /^\d+$/.test(subject) && Number.isSafeInteger(Number(subject)) && Number(subject) > 0
+          && this.ctx.storage.kv.get<boolean>('telegram_unlinked') !== true
+          && this.env.TELEGRAM_OWNER_DO && this.env.TELEGRAM_OWNER_DO.idFromName(doName).toString() === this.ctx.id.toString();
+        const appOwner = telegramBound ? null : await this.appOwnerLookup();
+        if (appOwner?.kind === 'admitted') { channel = 'app'; this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority); }
+        if (!telegramBound && appOwner?.kind !== 'admitted') {
           if (Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity,
             this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity) <= Date.now()) this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()]));
-          await rearmSharedAlarm(this.ctx.storage, null, Date.now(), 30_000);
+          await rearmSharedAlarm(this.ctx.storage, appOwner?.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
           return;
         }
       }
-      const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal, call, owner, calendarPrepCurrent, retainedRecallAvailable } = this.setup();
+      const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal, call, owner, calendarPrepCurrent, retainedRecallAvailable } = this.setup(channel);
       await ready;
       await finalOutbox.maintain();
       // Reconcile finals before quarantining recovered claims with committed payloads.
@@ -1214,7 +1265,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           allowed: async r => (!r.commonExecution || r.commonExecution.settled===true) && (!(r.mailFollowup || r.calendarPrep) || retainedRecallAvailable()) && r.payload.chat_id === owner && r.ownerSubject === String(owner)
             && (!r.bot || r.bot === this.env.TELEGRAM_BOT_TOKEN?.split(':')[0])
             && r.doName === (this.ctx.storage.kv.get<string>('do_name') ?? '')
-            && this.ctx.storage.kv.get<boolean>('telegram_unlinked') !== true
+            && this.ctx.storage.kv.get<boolean>(`${channel}_unlinked`) !== true
             && (!r.mailFollowup || (loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume !== 'low' && loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).reviewEligible(r.mailFollowup, this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')))
             && (!r.calendarPrep || await calendarPrepCurrent(r.calendarPrep))
             && heartbeatEligible(r, this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', Date.now()),
@@ -1246,7 +1297,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   private serial<T>(work: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(work);
+    // The alarm sets a scheduled app delivery inside its unit of work; no later unit, and no turn, inherits it.
+    const run = this.queue.then(work).finally(() => { this.scheduledAppDelivery = null; });
     this.queue = run.catch(() => undefined);
     return run;
   }
@@ -1528,7 +1580,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       (present, trace) => log({ trace: trace ?? `health:${channel}`, hop: 'health_context', ms: 0, ok: true, code: present ? 'present' : 'absent' }),
     );
     const baseCall = channel === 'app'
-      ? appSinkCaller()
+      ? appSinkCaller(() => this.scheduledAppDelivery)
       : channel === 'whatsapp'
         ? whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? '')
         : createTelegramCaller(token!);
