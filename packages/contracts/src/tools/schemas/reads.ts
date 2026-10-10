@@ -3,6 +3,7 @@ import { docProviderSchema, docReadResultSchema } from '../../adapters/doc';
 import { iso8601Schema } from '../../core/error';
 import { hallTypeSchema } from '../../memory/hall';
 import { sourceTaintSchema } from '../../memory/sanitise';
+import { connectIntentSchema } from '../connect-intent';
 
 // Model-supplied argument shapes for the read-cluster tools (ADR-0008/0021 surface). The
 // dispatcher validates args at the PreToolUse Zod gate (ADR-0032) before any handler runs,
@@ -70,9 +71,11 @@ export const calendarPageSchema = z.strictObject({
 }).refine(page=>page.fetched_count>=page.events.length,'returned events exceed fetched count');
 
 // Connect intent is its own tool, never a side effect of a failed service call: the consent
-// URL must be reachable on demand (owner direction 2026-09-24).
+// URL must be reachable on demand (owner direction 2026-09-24). feature names an ungranted account
+// feature to offer, so an owner whose tools for it are left out can still get the button.
 export const connectServiceArgsSchema = z.strictObject({
   service: z.enum(['google']),
+  feature: connectIntentSchema.shape.feature,
 });
 export type ConnectServiceArgs = z.infer<typeof connectServiceArgsSchema>;
 

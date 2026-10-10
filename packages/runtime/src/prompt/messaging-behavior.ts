@@ -127,6 +127,11 @@ export function ownerClockLine(clock: MessagingClock): string {
   return `The owner's current local time: ${local} (${zone}). The local day began ${sinceMidnight} ago. Anchor greetings and time-of-day references to this; call get_context if you need fresh precision mid-turn. When the local day is only just under way, "today" in a request usually means the day that just ended; search or read the last 24 hours instead of the new calendar day, and say which window you used. This applies only to a bare "today": a named date or a relative day such as "tomorrow" means exactly that day.`;
 }
 
+// A host fact from granted scopes: tools for these features were left out, so the model offers the connection instead of denying the ability.
+export function unconnectedLine(features: readonly string[]): string {
+  return features.length ? `Google features not connected for this owner: ${features.join(', ')}. Their tools are left out of this turn. If the owner asks for one, call connect_service with that feature so a connect button is sent.` : '';
+}
+
 // These canonical restrictions remain last on the private skill-enabled reply path.
 // Procedure bodies are instructions, but cannot create authority or rewrite these rules.
 export const OWNER_SKILL_SAFEGUARDS = [

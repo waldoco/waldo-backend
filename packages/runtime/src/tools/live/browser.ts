@@ -106,6 +106,7 @@ export const browsePageHandler = (
   schema: browsePageArgsSchema,
   trigger_allowlist: allowlist('browse_page'),
   autonomy_gated: false,
+  eligible: () => providers.cloudflare || (providers.allowBrowserbase && apiKey && projectId) ? { ok: true } : { ok: false, reason: 'not_configured' },
   async handle({ url, instruction, provider }: BrowsePageArgs, ctx) {
     const selected = provider ?? providers.defaultProvider;
     if (selected === 'cloudflare_playwright') {
@@ -200,6 +201,7 @@ export const browseActHandler = (
   trigger_allowlist: allowlist('browse_act'),
   autonomy_gated: false,
   mutates_state: true,
+  eligible: () => apiKey && projectId ? { ok: true } : { ok: false, reason: 'not_configured' },
   async handle({ url, task, max_actions, command }: BrowseActArgs, ctx) {
     if (command) return { ok: false, code: 'rejected', error: 'Typed browser commands require a configured current task host.', source_taint: 'external' };
     if (!apiKey || !projectId) return { ok: false, code: 'auth_failed', error: 'Browsing is not set up on this Waldo yet.', source_taint: 'external' };

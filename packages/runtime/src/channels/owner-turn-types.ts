@@ -2,7 +2,7 @@ import type { CostKind } from '../llm/cost-ledger';
 import type { ModelUsage } from '../llm/pricing';
 
 // What fills one model call, in UTF-8 bytes: numeric metadata only, never text.
-export type SystemSection = 'reasons' | 'behavior' | 'health' | 'clock' | 'memory' | 'orders' | 'loops' | 'skill_catalog' | 'task_context' | 'skill_procedures';
+export type SystemSection = 'reasons' | 'behavior' | 'health' | 'clock' | 'memory' | 'orders' | 'loops' | 'skill_catalog' | 'task_context' | 'connections' | 'skill_procedures';
 export type ContextShape = Readonly<{
   tools_count: number; tools_bytes: number; tool_turns_bytes: number;
   history_messages: number; history_bytes: number; current_bytes: number; attachments: number;
