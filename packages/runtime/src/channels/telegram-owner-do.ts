@@ -1992,7 +1992,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const listener = owner > 0 ? new TelegramOwnerListener({
       ownerTelegramId: owner, surface: channel, api, ...responder, log,
-      chooseReaction: turn => {
+      // Native chat has no reaction surface; do not start a parallel unbound model call.
+      chooseReaction: channel === 'app' ? undefined : turn => {
         turn.runScope?.admit();
         return responder.chooseReaction(turn);
       },

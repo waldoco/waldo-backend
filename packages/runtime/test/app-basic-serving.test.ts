@@ -124,6 +124,7 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       const retryInterrupted=await app('/chat/main/messages',{client_message_id:blockedId,text:'Interrupted in-flight turn'},credential);expect(await retryInterrupted.json()).toMatchObject({state:'interrupted'});
       const inbox=new AppInbox(state.storage),pending=await inbox.admit(name,hash!,'revoked-pending-client','Pending then revoked',`owner:prn_${OWNER.replaceAll('-','')}`);expect(pending.kind).toBe('admitted');
       directoryUnavailable=true;await instance.alarm();expect(inbox.receipt(name,'revoked-pending-client')?.state).toBe('admitted');directoryUnavailable=false;
+      expect(proof.inputs.some(input=>input.text?.format?.name==='reaction')).toBe(false);
       const total=proof.inputs.length;
       expect((await app('/chat/main',undefined,credential.slice(0,-1)+'!')).status).toBe(401);
       const foreign='foreign-basic-owner',sid='b'.repeat(32),foreignCredential=`${foreign}.${sid}.${await routerSignature(SECRET,0,`cookie.${foreign}.${sid}`)}`;
