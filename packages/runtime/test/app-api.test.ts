@@ -92,6 +92,24 @@ describe('app sign-in and main chat routes', () => {
       expect((await handleApp(new Request(`https://w.test/app/v1${path}`,{headers:{authorization:`Bearer ${CREDENTIAL}`}}),limited,auth))!.status).toBe(429);
     }
   });
+  it('forwards approval reads and decisions to the credential owner DO, with decisions in their own rate bucket', async () => {
+    forwards.length = 0; const keys: string[] = [];
+    const counted = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success: true }; } } } as never;
+    const auth = fakeAuth().auth, bearer = { authorization: `Bearer ${CREDENTIAL}` };
+    expect(await (await handleApp(new Request('https://w.test/app/v1/approvals?state=open', { headers: bearer }), counted, auth))!.json()).toEqual({ forwarded: true });
+    const decision = { approval_id: 'p1', action: 'approve', expected_digest: `sha256:${'a'.repeat(64)}`, request_id: 'decision-0001', owner: 'someone-else' };
+    expect(await (await handleApp(post('/app/v1/approvals/decisions', decision, bearer), counted, auth))!.json()).toEqual({ forwarded: true });
+    expect(forwards.map(r => `${r.method} ${new URL(r.url).pathname}${new URL(r.url).search}`)).toEqual(['GET /app/v1/approvals?state=open', 'POST /app/v1/approvals/decisions']);
+    expect(forwards.map(r => r.headers.get('x-waldo-do-name'))).toEqual(['owner-1', 'owner-1']);
+    expect(keys).toEqual(['app-read:owner-1', 'app-approval-decision:owner-1']);
+    expect((await handleApp(post('/app/v1/approvals', {}, bearer), counted, auth))!.status).toBe(405);
+    expect((await handleApp(new Request('https://w.test/app/v1/approvals/decisions', { headers: bearer }), counted, auth))!.status).toBe(405);
+    const anonymous = await handleApp(post('/app/v1/approvals/decisions', decision), counted, auth);
+    expect([anonymous!.status, await anonymous!.json()]).toEqual([401, { error: 'unavailable' }]);
+    const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
+    expect((await handleApp(post('/app/v1/approvals/decisions', decision, bearer), limited, auth))!.status).toBe(429);
+    expect(forwards).toHaveLength(2);
+  });
   it('rate limits sign-in attempts', async () => {
     const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
     const response = await handleApp(post('/app/v1/auth/code', { email: 'member@example.test' }), limited, fakeAuth().auth);
@@ -111,6 +129,15 @@ describe('main chat transcript page', () => {
     expect(older.messages.map(m => m.text)).toEqual(['text 2', 'text 1', 'text 0']);
     expect(older.messages[2]!.channel).toBe('telegram');
     expect(older.next_cursor).toBeNull();
+  });
+  it('attaches the approval parts presented for a run to the assistant reply to that run', () => {
+    const part: import('../src/channels/surfaces/app').AppApprovalPart = { type: 'approval', approval_id: 'p1', kind: 'calendar_change', review: 'Proposed: Walk', payload_digest: `sha256:${'b'.repeat(64)}`, actions: ['approve', 'edit', 'skip'], expires_at: Date.UTC(2026, 9, 10, 15), fallback_text: 'Walk' };
+    const user = entry(10, 'user', 'app'), reply = { ...entry(11, 'assistant', 'app'), parentId: 'e10' };
+    const asked: string[] = [];
+    const page = appTranscriptPage([user, reply], null, 10, parentId => { asked.push(parentId); return parentId === 'e10' ? [part] : []; });
+    expect(page.messages[0]!.parts).toEqual([{ type: 'text', text: 'text 11' }, part]);
+    expect(page.messages[1]!.parts).toEqual([{ type: 'text', text: 'text 10' }]);
+    expect(asked).toEqual(['e10']);
   });
   it('skips rows with no role and treats a bad cursor as the start', () => {
     const { role: _role, ...bare } = entry(9, 'user');

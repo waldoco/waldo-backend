@@ -978,3 +978,79 @@ describe('approval presentations', () => {
     expect(await call('editMessageReplyMarkup', { chat_id: 7, message_id: 1 })).toBeUndefined();
   });
 });
+
+describe('app approval projection', () => {
+  const NOW = Date.UTC(2026, 9, 10, 9, 0, 0);
+  it('maps every desk status to one app state, shows the exact block per kind and the stored digest, and offers undo only with undo data', async () => {
+    const { APP_APPROVAL_STATE } = await import('../src/channels/approvals');
+    const { appApprovalStateV1Schema, appApprovalV1Schema } = await import('../../contracts/src/app/approvals');
+    expect(Object.keys(APP_APPROVAL_STATE).sort()).toEqual(['card_unconfirmed', 'changing', 'done', 'expired', 'failed', 'open', 'rejected', 'review_only', 'skipped', 'stale', 'uncertain', 'undone', 'unverified']);
+    for (const state of Object.values(APP_APPROVAL_STATE)) expect(appApprovalStateV1Schema.safeParse(state).success).toBe(true);
+    expect(APP_APPROVAL_STATE).toMatchObject({ changing: 'edit_requested', rejected: 'not_done', failed: 'not_done', stale: 'not_done', uncertain: 'outcome_unknown', unverified: 'outcome_unknown', card_unconfirmed: 'unconfirmed' });
+
+    const { appApprovalPart } = await import('../src/channels/surfaces/app');
+    const { ownerEffectLedger } = await import('../src/channels/owner-effect-ledger');
+    const { sha256Hex } = await import('../src/connectors/google');
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-projection-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const sql = state.storage.sql; let n = 0; let now = NOW;
+      const client = { createEvent: async () => ({ id: 'ev1', etag: 'e1' }), event: async () => ({ id: 'ev1', etag: 'e1', status: 'confirmed' }) } as unknown as GoogleClient;
+      const before = { id: 't1', task_list_id: 'l1', title: 'Buy milk', status: 'todo' as const, notes: null, due_date: null, etag: '"e1"', parent: null, deleted: false, assigned: false };
+      const args = { source: 'google_tasks' as const, action: 'update' as const, task_list_id: 'l1', task_id: 't1', changes: { title: 'Buy oat milk', due_date: '2026-10-12' }, reason: 'Owner asked' };
+      const desk = approvalDesk(sql, { owner: 42, newId: () => `proj${++n}`, now: () => now, timezone: 'UTC', log: () => {}, appJournal: appApprovalPart, google: async () => client,
+        call: async (method: string) => method === 'sendMessage' ? { message_id: 900 + n, chat: { id: 42 } } : true,
+        effects: ownerEffectLedger(state.storage, () => now),
+        googleTasks: () => ({ prepare: async () => ({ args, account: { connection_id: 'conn-1', email: 'me@example.com' }, list: { id: 'l1', title: 'Errands', etag: '"le"' }, before }) }) as never });
+      const calendar = await desk.propose({ action: 'create', title: 'Walk', start: iso('2026-10-10T15:00:00Z'), end: iso('2026-10-10T15:30:00Z'), reason: 'afternoon slot' });
+      const raw = 'To: a@x.test\r\nSubject: Hi\r\n\r\nHello';
+      const email = await desk.proposeSendEmail({ account: 'me@example.com', to: ['a@x.test'], cc: ['c@x.test'], subject: 'Hi', body: 'Hello', message_id: '<proj@waldo-send>', raw, digest: await sha256Hex(raw) });
+      const message = await desk.proposeSendMessage({ channel: 'whatsapp', content: 'Running late.', idempotency_key: 'proj-1' });
+      const browser = await desk.proposeBrowserSubmit({ url: 'https://reservations.example/book', action: { selector: '#book', description: 'Book the table' }, binding: { time: '18:30' }, steps: [] });
+      const mcp = await desk.proposeMcpCall({ server: 'crm', tool: 'lookup', args: { q: 'secret-ish' } });
+      const task = await desk.proposeGoogleTaskChange(args);
+      desk.record('email_draft', 'Drafted "Hi"', { draft: true });
+      const listed = await desk.approvals(now);
+      expect(listed.map(item => item.approval_id).sort()).toEqual([browser, calendar, email, mcp, message, task].sort());
+      for (const item of listed) expect(appApprovalV1Schema.safeParse(item).success).toBe(true);
+      const byId = Object.fromEntries(listed.map(item => [item.approval_id, item]));
+      expect(byId[calendar]).toMatchObject({ kind: 'calendar_change', state: 'open', actions: ['approve', 'edit', 'skip'], expires_at: Date.parse('2026-10-10T15:00:00Z'),
+        exact: { changes: { action: 'create', title: 'Walk', start: '2026-10-10T15:00:00Z', end: '2026-10-10T15:30:00Z' } } });
+      expect([...byId[calendar]!.presented_surfaces!].sort()).toEqual(['app', 'telegram']);
+      expect(byId[email]!.exact).toEqual({ recipients: { to: ['a@x.test'], cc: ['c@x.test'], bcc: [] }, scope: 'me@example.com' });
+      expect(byId[email]!.review).toContain('Cc: c@x.test');
+      expect(byId[message]!.exact).toEqual({ recipients: { to: ['whatsapp'], cc: [], bcc: [] } });
+      expect(byId[browser]).toMatchObject({ exact: { scope: 'https://reservations.example/book' }, actions: ['approve', 'skip'], expires_at: NOW + 30 * 60_000 });
+      expect(byId[mcp]).toMatchObject({ exact: { scope: 'lookup on the crm server' }, actions: ['approve', 'skip'] });
+      expect(byId[task]!.exact).toEqual({ task: { action: 'update', account: 'me@example.com', list: 'Errands', task: 'Buy milk', changes: { title: { before: 'Buy milk', after: 'Buy oat milk' }, due_date: { before: null, after: '2026-10-12' } } } });
+      for (const item of listed) {
+        const stored = sql.exec<{ payload_json: string; proposal_digest: string | null }>('SELECT payload_json, proposal_digest FROM ledger WHERE id = ?', item.approval_id).one();
+        expect(item.payload_digest).toBe(`sha256:${await sha256Hex(stored.payload_json)}`);
+        if (item.kind === 'google_task_change') expect(item.payload_digest).toBe(`sha256:${stored.proposal_digest}`);
+      }
+      expect((await desk.approvals(now, { state: 'open' })).length).toBe(6);
+      expect(await desk.approvals(now, { state: 'done' })).toEqual([]);
+      expect((await desk.approvals(now, { id: email })).map(item => item.approval_id)).toEqual([email]);
+
+      expect((await desk.decide(calendar, 'a', 'trace', { surface: 'app' })).toast).toBe('Done');
+      expect((await desk.decide(message, 's', 'trace', { surface: 'app' })).toast).toBe('Not now');
+      const done = (await desk.approvals(now, { id: calendar }))[0]!;
+      expect(done).toMatchObject({ state: 'done', actions: ['undo'] });
+      expect((await desk.approvals(now + 11 * 60_000, { id: calendar }))[0]).toMatchObject({ state: 'done', actions: [] });
+      expect((await desk.approvals(now, { id: message }))[0]).toMatchObject({ state: 'skipped', actions: [] });
+      expect((await desk.approvals(now, { state: 'done' })).map(item => item.approval_id)).toEqual([calendar]);
+    });
+
+    const legacyStub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-projection-legacy-${crypto.randomUUID()}`));
+    await runInDurableObject(legacyStub, async (_instance, state) => {
+      const sql = state.storage.sql;
+      sql.exec('CREATE TABLE ledger (id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL, undo_json TEXT, created_at INTEGER NOT NULL, decided_at INTEGER)');
+      sql.exec("INSERT INTO ledger VALUES ('pold1', 'message_send', 'open', 'Send this on telegram: \"Hi\"', ?, NULL, ?, NULL)", JSON.stringify({ channel: 'telegram', content: 'Hi', idempotency_key: 'old-1' }), NOW);
+      const desk = approvalDesk(sql, { owner: 42, newId: () => 'unused', now: () => NOW, timezone: 'UTC', log: () => {}, google: async () => null, call: async () => ({ message_id: 1 }), sendMessage: async () => ({ provider_id: 'tg-1' }) });
+      const [legacy] = await desk.approvals(NOW);
+      expect(legacy).toMatchObject({ approval_id: 'pold1', state: 'open', actions: ['skip'] });
+      expect(legacy!.presented_surfaces).toBeUndefined();
+      expect((await desk.decide('pold1', 'a', 'trace', { surface: 'app' })).toast).toBe('Not available here');
+      expect((await desk.decide('pold1', 'a', 'trace', { surface: 'telegram' })).toast).toBe('Sent');
+    });
+  });
+});

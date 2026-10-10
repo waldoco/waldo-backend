@@ -4,8 +4,17 @@ import {DASHBOARD_OVERVIEW_HEADERS} from './dashboard-overview';
 export const CONTROL_ACTION_PATH='/console/dashboard/api/v1/actions';
 type Projection=Readonly<{view:string;csrf:string;data:unknown}>;
 export type ControlReceipt=Readonly<{state:'recorded'|'incomplete'|'rejected'|'unconfirmed';message:string;navigation?:string; signed_out?:boolean}>;
-type Stored=Readonly<{fingerprint:string;status:number;receipt:ControlReceipt;expires:number}>;
+export type StoredReceipt=Readonly<{fingerprint:string;status:number;receipt:ControlReceipt;expires:number;approval_state?:string}>;
 type Store=Readonly<{get<T>(key:string):Promise<T|undefined>;put(key:string,value:unknown):Promise<void>}>;
+export const RECEIPT_BOOK_KEY='console:control-receipts';
+// One receipt book per owner: rows live while their session does, and a session's capacity is bounded.
+export async function loadReceiptBook(store:Store,sessions:()=>Promise<readonly {csrf:string;expires:number}[]>):Promise<Record<string,StoredReceipt>>{
+ const book=await store.get<Record<string,StoredReceipt>>(RECEIPT_BOOK_KEY)??{};
+ const live=new Map(await Promise.all((await sessions()).map(async session=>[await controlRevision(session.csrf),session.expires] as const)));
+ for(const [id,row] of Object.entries(book)){const renewed=live.get(id.split(':')[0]!);if(renewed!==undefined&&renewed>row.expires)book[id]={...row,expires:renewed};if((book[id]?.expires??0)<Date.now())delete book[id];}
+ return book;
+}
+export const receiptCapacityReached=(book:Readonly<Record<string,StoredReceipt>>,session:string)=>Object.keys(book).filter(id=>id.startsWith(session+':')).length>=100||Object.keys(book).length>=1000;
 export type ControlActionDeps=Readonly<{csrf:string;expires:number;sessions():Promise<readonly {csrf:string;expires:number}[]>;projection(view:string,id?:string):Promise<Projection|null>;view():Promise<ConsoleView>;act(action:ConsoleAction):Promise<boolean|string|ControlReceipt>;store:Store}>;
 const allowed:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','node.forget'],day:['timezone.set','proactivity.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','session.signout','session.signout.all'],waiting:['approval.approve','approval.skip','approval.undo'],files:['file.remove']};
 const reply=(value:object,status=200)=>Response.json(value,{status,headers:DASHBOARD_OVERVIEW_HEADERS});
@@ -36,26 +45,24 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
  if(!/^[A-Za-z0-9_-]{8,80}$/.test(requestId))return reply({error:'request_id_required'},400);
  const fingerprint=await controlRevision({view,action,revision:form.get('revision')});
  const session=await controlRevision(deps.csrf),key=`${session}:${requestId}`;
- const book=await deps.store.get<Record<string,Stored>>('console:control-receipts')??{};
- const live=new Map(await Promise.all((await deps.sessions()).map(async session=>[await controlRevision(session.csrf),session.expires] as const)));
- for(const [id,row] of Object.entries(book)){const renewed=live.get(id.split(':')[0]!);if(renewed!==undefined&&renewed>row.expires)book[id]={...row,expires:renewed};if((book[id]?.expires??0)<Date.now())delete book[id];}
+ const book=await loadReceiptBook(deps.store,deps.sessions);
  const prior=book[key];
  if(prior)return prior.fingerprint===fingerprint?reply({receipt:prior.receipt,duplicate:true},prior.status):reply({error:'request_reused'},409);
- if(Object.keys(book).filter(id=>id.startsWith(session+':')).length>=100||Object.keys(book).length>=1000)return reply({error:'receipt_capacity',message:'This session has reached its change limit. Sign in again after this session expires; existing receipts remain available.'},429);
+ if(receiptCapacityReached(book,session))return reply({error:'receipt_capacity',message:'This session has reached its change limit. Sign in again after this session expires; existing receipts remain available.'},429);
  const projection=await deps.projection(view,action.id);
  if(!projection)return reply({error:'unavailable'},503);
  if(await controlRevision(projection)!==form.get('revision'))return reply({error:'stale_read',message:'These records changed. Refresh and review again before applying a change.'},409);
  const current=await deps.view();
  if(!eligible(action,current))return reply({error:'no_longer_eligible',message:'This action is no longer available. Refresh the records.'},409);
- const pending:Stored={fingerprint,expires:deps.expires,status:503,receipt:{state:'unconfirmed',message:'The outcome is not confirmed. Refresh the records before attempting another change.'}};
- book[key]=pending;await deps.store.put('console:control-receipts',book);
+ const pending:StoredReceipt={fingerprint,expires:deps.expires,status:503,receipt:{state:'unconfirmed',message:'The outcome is not confirmed. Refresh the records before attempting another change.'}};
+ book[key]=pending;await deps.store.put(RECEIPT_BOOK_KEY,book);
  let receipt:ControlReceipt,status=200;
  try{
   const result=await deps.act(action);
   receipt=typeof result==='object'?result:typeof result==='string'?result===action.action?{state:'recorded',message:NOTICES[result]??'The change was recorded.'}:(result==='spot.forget.incomplete'||result==='node.forget.incomplete')?{state:'incomplete',message:NOTICES[result]!}:result==='invalid'||result.endsWith('.failed')?{state:'rejected',message:NOTICES[result]??'The change could not be applied.'}:pending.receipt:result?{state:'recorded',message:NOTICES[action.action]??'The change was recorded.'}:{state:'rejected',message:'That change could not be applied. Refresh the records and try again.'};
   if(receipt.state==='rejected')status=409;else if(receipt.state==='unconfirmed')status=503;
  }catch{receipt=pending.receipt;status=503;}
- book[key]={fingerprint,status,receipt,expires:deps.expires};await deps.store.put('console:control-receipts',book);
+ book[key]={fingerprint,status,receipt,expires:deps.expires};await deps.store.put(RECEIPT_BOOK_KEY,book);
  return reply({receipt,duplicate:false},status);
 }
 
