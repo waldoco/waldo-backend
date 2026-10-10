@@ -51,6 +51,12 @@ describe('messagingSystemPrompt', () => {
     expect(MESSAGING_BEHAVIOR).not.toContain('cleanup is pending or incomplete');
   });
 
+  it('names the three scores as the app and website do: Weight is the day, not body mass', () => {
+    expect(WALDO_VOCABULARY).toContain('Weight: what the day is asking of them');
+    expect(WALDO_VOCABULARY).toContain('Load is its physical part');
+    expect(WALDO_VOCABULARY).not.toContain('Weight means body mass only');
+  });
+
   it('keeps the vocabulary block and the health lines', () => {
     expect(MESSAGING_BEHAVIOR).toContain(WALDO_VOCABULARY);
     expect(MESSAGING_BEHAVIOR).toContain('Health is core');
