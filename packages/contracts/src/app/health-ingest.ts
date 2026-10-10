@@ -14,9 +14,11 @@ export const HEALTH_AGGREGATE_RETENTION_MONTHS_V1 = 24;
 
 export const healthSourceV1Schema = z.enum(['apple', 'samsung', 'health_connect']);
 // Purposes are separate grants, requested together on one consent screen: storage_compute (store and compute the
-// owner's health data) and model_processing (let Waldo use it when it talks to the owner). The backend enforces each
-// independently, so an owner who grants only storage gets an explicit consent_required for model use. Withdrawing
-// either purpose withdraws both for the source.
+// owner's health data and show the owner their scores) and model_processing (let Waldo use it when it talks to the
+// owner). Model use needs both, so granting model_processing without a live storage grant is consent_required, and an
+// owner who grants only storage gets consent_required for model use. Withdrawing model_processing stops model use only
+// and deletes nothing. Withdrawing storage_compute withdraws both for the source and purges its data. Re-granting
+// storage never restores model use.
 export const healthPurposeV1Schema = z.enum(['storage_compute', 'model_processing']);
 export const healthRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,96}$/);
 export const healthDayV1Schema = z.iso.date();
