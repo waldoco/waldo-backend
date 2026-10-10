@@ -1,0 +1,19 @@
+LOCAL trace: local-target guard ok (loopback origins only, local docker context, no inherited endpoints)
+LOCAL trace: real PostgreSQL 15: 47 canonical migrations applied (last 20261010120000_waldo_imessage_connector.sql)
+LOCAL trace: PostgREST on 127.0.0.1 (loopback-published port)
+LOCAL trace: real workerd (production bundle) on 127.0.0.1; durable objects persisted to a scratch dir
+LOCAL trace: 1 invitation/redeem ok; pending credential: heartbeat 200, pull 401, owner turn 401; DB holds only wrapped credential
+LOCAL trace: 2 wrong sender/challenge 401; exact challenge + owner confirmation activated a real presence row
+LOCAL trace: 3 heartbeat + verified text capability accepted
+LOCAL trace: 4 signed event ACKed with raw digest; one genuine owner turn (scripted model); one frozen reply to the exact chat
+LOCAL trace: 5 host verified S2 + commitment, journaled, posted local_recorded (not delivered)
+LOCAL trace: 6 lost ACK retry same receipt, no second turn; changed body 409
+LOCAL trace: 7 terminal repeat 200; workerd restart (persisted DOs): no redelivery, one native send
+LOCAL trace: 8 wrong digest/target 409; unknown result accepted and quarantines; late success 409
+LOCAL trace: 11 quarantine survived restart; new replies not published; console status still available
+LOCAL trace: 10 group/SMS/echo/stranger produced no turns; cross-owner revoke and cross-account pulls refused
+LOCAL trace: 9 revoke committed canonically; heartbeat/events/pull rejected afterwards; presence unlinked
+LOCAL trace: concurrency: 6 parallel redemptions -> 1 winner; 2 owners racing one sender -> 1 active binding (real PostgreSQL transactions)
+LOCAL trace: 12 outbound: 313 loopback database calls, 3 in-process scripted model calls, forbidden egress 0; 8905 bytes of worker stdout/stderr captured, none containing keys, codes, challenges or the sender handle
+LOCAL trace: PASS in 43399 ms. Simulated host only; real host, Apple delivery, recipient readback and deployment UNVERIFIED.
+LOCAL trace: owned containers and network removed
