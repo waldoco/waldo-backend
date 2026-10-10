@@ -22,6 +22,8 @@ export type ConversationEntry = Readonly<{
   // Stamped by the conversation path that appends the entry. Optional only for rows stored
   // before the seam existed; modelContext derives those from the assistant-entry id convention.
   role?: ConversationRole;
+  // Canonical owner-history ingress evidence; older rows remain unstamped.
+  inputOrigin?: 'owner' | 'machine';
 }>;
 
 // Privacy redaction uses literal text only; it never decides what the owner meant.
