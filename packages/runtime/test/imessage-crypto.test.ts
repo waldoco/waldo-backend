@@ -47,3 +47,16 @@ it('credential wrapping is bound to environment/bridge/account/revision and the 
   expect(await unwrapCredential('v1.garbage', scope, wrapping)).toBeNull();
   await expect(wrapCredential(key, scope, 'short')).rejects.toThrow('imessage_wrapping_key_invalid');
 });
+
+it('host packet examples verify with the Worker implementation (signatures, digests, commitment)', async () => {
+  const { default: ex } = await import('../../../docs/channels/imessage/fixtures/http-examples.json');
+  for (const name of ['heartbeat', 'event', 'pull', 'result'] as const) {
+    const e = (ex as any)[name];
+    expect(await verifyS2(e.body, JSON.parse(e.headers['x-waldo-imessage-s2']), ex.hostKey), name).toBe(true);
+  }
+  expect((ex as any).event.response.body.digest).toBe(await sha256Hex((ex as any).event.body));
+  const d = (ex as any).pull.response.body.delivery, command = JSON.parse(d.body);
+  expect(await verifyS2(d.body, d.headers, ex.hostKey)).toBe(true);
+  expect(d.commitment.commandDigest).toBe(await sha256Hex(d.body));
+  expect(await verifyCommitment({ bridgeId: command.binding.bridgeId, accountId: command.binding.accountId, deliveryId: d.deliveryId, commandId: command.commandId, commandDigest: d.commitment.commandDigest, expiresAtMs: d.commitment.expiresAtMs }, d.commitment.signature, ex.hostKey)).toBe(true);
+});
