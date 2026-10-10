@@ -200,8 +200,13 @@ export const parseAppSend = (raw: string): (import('../../../contracts/src/app/c
   return parsed.success ? { ...parsed.data, clientMessageId: parsed.data.client_message_id } : null;
 };
 
-// Replies reach the app through the transcript, so outbound sends on this channel are accepted and not delivered anywhere else.
-export const appSinkCaller = () => async (method: string, body: unknown): Promise<unknown> => {
-  if (method === 'sendMessage') return { message_id: 1, chat: { id: (body as { chat_id?: number }).chat_id ?? 0 } };
-  return undefined;
+// A turn's reply reaches the app through the transcript its own turn writes, so a send during a turn is accepted and goes nowhere
+// else. Scheduled work has no turn: while the alarm holds a delivery, the text is written to the transcript, and a failed write
+// throws so the job fails instead of recording a message the owner never got.
+export const appSinkCaller = (scheduledDelivery: () => ((text: string) => Promise<void>) | null = () => null) => async (method: string, body: unknown): Promise<unknown> => {
+  if (method !== 'sendMessage') return undefined;
+  const { chat_id: chatId, text } = body as { chat_id?: number; text?: string };
+  const deliver = scheduledDelivery();
+  if (deliver) await deliver(text ?? '');
+  return { message_id: 1, chat: { id: chatId ?? 0 } };
 };
