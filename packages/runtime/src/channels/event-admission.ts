@@ -22,5 +22,9 @@ export const eventAdmission = (storage:Storage) => {
   finish(source:string,delivery:string):void {
    sql.exec("UPDATE event_admissions SET state='completed' WHERE source=? AND delivery=? AND state='unknown'",source,delivery);
   },
+  // The send was refused before it left the Worker. Still terminal: a redelivery must not notify later.
+  undelivered(source:string,delivery:string):void {
+   sql.exec("UPDATE event_admissions SET state='undelivered' WHERE source=? AND delivery=? AND state='unknown'",source,delivery);
+  },
  };
 };
