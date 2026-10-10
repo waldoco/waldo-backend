@@ -5,6 +5,11 @@ import { sha256Hex, stableJson } from '../context-composer/canonical';
 import { redactSecretUrls } from './egress-guard';
 
 const PREFIX = 'app:inbox-record:';
+// A finished row keeps its receipt, and so the idempotency of its client_message_id, for this long. After that a late
+// retry of the same id is a new message. Bounded per admit so one send never does unbounded storage work.
+export const APP_INBOX_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const PRUNE_PER_ADMIT = 512;
+const finished = (row: AppInboxRecord) => row.state === 'completed' || row.state === 'interrupted' || row.state === 'revoked';
 export type AppInboxRecord = {
   id: string; updateId: number; clientId: string; digest: string; text: string;
   owner: string; sessionHash: string; conversationRef: string; admittedAt: number;
@@ -27,7 +32,12 @@ export class AppInbox {
     const digest=await sha256Hex(stableJson({text,conversationRef}));
     return this.storage.transaction(async txn=>{
       assertCurrent?.();
-      const rows=[...(await txn.list<AppInboxRecord>({prefix:PREFIX})).values()];
+      const all=[...(await txn.list<AppInboxRecord>({prefix:PREFIX})).values()];
+      const cutoff=this.now()-APP_INBOX_RETENTION_MS;
+      const stale=all.filter(row=>finished(row)&&(row.closedAt??row.admittedAt)<cutoff).sort((a,b)=>(a.closedAt??a.admittedAt)-(b.closedAt??b.admittedAt)).slice(0,PRUNE_PER_ADMIT);
+      for(const row of stale)await txn.delete(PREFIX+row.id);
+      const gone=new Set(stale.map(row=>row.id));
+      const rows=all.filter(row=>!gone.has(row.id));
       const previous=rows.find(row=>row.clientId===clientId);
       if(previous)return previous.owner===owner&&previous.digest===digest?{kind:'duplicate' as const,record:previous}:{kind:'conflict' as const};
       if(rows.length>=4096||rows.filter(row=>row.state==='admitted'||row.state==='running').length>=256)return {kind:'capacity' as const};
