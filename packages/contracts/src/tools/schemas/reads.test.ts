@@ -57,7 +57,7 @@ describe('getCrsArgs', () => {
 });
 
 describe('healthMetricSelector', () => {
-  it('is exactly the six selectors, in order', () => {
+  it('includes all final-state health views alongside observed selectors, in order', () => {
     expect(healthMetricSelectorSchema.options).toEqual([
       'hrv',
       'hr',
@@ -65,7 +65,16 @@ describe('healthMetricSelector', () => {
       'spo2',
       'strain',
       'recovery',
+      'form',
+      'weight',
+      'sleep_debt',
     ]);
+  });
+
+  it('bounds requested source, range, sample count and selector list', () => {
+    expect(getHealthArgsSchema.parse({})).toEqual({ range_days: 1, max_samples: 128 });
+    for (const args of [{ source: 'foreign_owner' }, { range_days: 32 }, { max_samples: 257 }, { metrics: Array(10).fill('sleep') }, { owner_id: 'other' }]) expect(getHealthArgsSchema.safeParse(args).success).toBe(false);
+    expect(getHealthArgsSchema.safeParse({ source: 'apple', range_days: 31, max_samples: 256, metrics: ['form', 'weight', 'sleep_debt'] }).success).toBe(true);
   });
 
   it('accepts a selector list and rejects an out-of-domain metric', () => {

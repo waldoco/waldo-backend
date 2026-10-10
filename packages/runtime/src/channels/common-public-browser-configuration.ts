@@ -7,11 +7,12 @@ import type {CloudflareBrowserSdkLoader} from './public-fixture-browser';
 import type {TelegramWebhookEnv} from './telegram-webhook';
 import {COMMON_BROWSER_MONTH_CEILING_MICROUSD} from './common-staging-registration';
 import {assertOwnerPublicBrowserCapacity} from './owner-public-browser-spend';
+import type {OwnerBrowserIdentity} from './owner-browser-identity';
 
 // Deployment/test host policy must be supplied within owner-approved testing scope.
 // This module does not create an owner decision, widen fixture authorization or enable BROWSER.
 export type CommonPublicReadPolicy=Readonly<{
- ref:string;doName:string;subject:string;directoryOwnerId:string;createdAt:number;expiresAt:number;
+ ref:string;doName:string;subject?:string;authority?:'verified_owner';directoryOwnerId:string;createdAt:number;expiresAt:number;
  allowedOrigins:readonly string[];maxAllocations:number;maxReservedBrowserMs:number;lifetimeMs:number;maxScreenshotBytes:number;
 }>;
 export type CommonBrowserSpendRegistration=Readonly<{policy:CommonSpendPolicy;quote:CommonSpendQuote;allocationMicrousd:number;countModel?(material:unknown):Promise<number>}>;
@@ -26,7 +27,7 @@ const freezeSpend=(spend:CommonBrowserSpendRegistration):CommonBrowserSpendRegis
 };
 const freezePolicy=(policy:CommonPublicReadPolicy):CommonPublicReadPolicy=>{
  const row={...policy,allowedOrigins:[...policy.allowedOrigins]};
- if(!row.ref||!row.doName||!/^\d{1,32}$/.test(row.subject)||!/^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(row.directoryOwnerId)
+ if(!row.ref||!row.doName||(row.authority==='verified_owner'?row.subject!==undefined:row.authority!==undefined||typeof row.subject!=='string'||!/^\d{1,32}$/.test(row.subject))||!/^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(row.directoryOwnerId)
   ||![row.createdAt,row.expiresAt,row.maxAllocations,row.maxReservedBrowserMs,row.lifetimeMs,row.maxScreenshotBytes].every(Number.isSafeInteger)
   ||row.createdAt<0||row.expiresAt<=row.createdAt||row.maxAllocations<1||row.maxReservedBrowserMs<row.lifetimeMs*2||row.lifetimeMs<10000||row.lifetimeMs>600000||row.maxScreenshotBytes<1
   ||!row.allowedOrigins.length||new Set(row.allowedOrigins).size!==row.allowedOrigins.length||row.allowedOrigins.some(origin=>{if(origin==='*')return false;try{const url=new URL(origin);return url.protocol!=='https:'||url.origin!==origin||!!url.username||!!url.password;}catch{return true;}}))throw Error('common public browser policy invalid');
@@ -40,27 +41,36 @@ export function assertCommonPublicBrowserUsage(retained:Usage,policy:CommonPubli
    ||new Set(retained.taskGrants.map(grant=>grant.taskId)).size!==retained.taskGrants.length
    ||retained.taskGrants.some(grant=>!grant||!grant.taskId||!Number.isSafeInteger(grant.expiresAt)||grant.expiresAt<=policy.createdAt||grant.expiresAt>policy.expiresAt||JSON.stringify(grant)!==JSON.stringify({ref:policy.ref,ownerId:`prn_${policy.directoryOwnerId.toLowerCase().replaceAll('-','')}`,taskId:grant.taskId,expiresAt:grant.expiresAt,allowedOrigins:policy.allowedOrigins,lifetimeMs:policy.lifetimeMs,maxScreenshotBytes:policy.maxScreenshotBytes})))throw Error('common public browser retained policy conflict');
 }
-export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramWebhookEnv;storage:DurableObjectStorage;actualDoId:string;policy?:CommonPublicReadPolicy;loadSdk?:CloudflareBrowserSdkLoader;spend?:CommonBrowserSpendRegistration;cleanupOnly?:boolean;now?:()=>number}>):(CommonBrowserConfiguration & Readonly<{ownerId:string;lifetimeMs:number;expiresAt:number}>)|undefined{
+export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramWebhookEnv;storage:DurableObjectStorage;actualDoId:string;identity?:OwnerBrowserIdentity;policy?:CommonPublicReadPolicy;loadSdk?:CloudflareBrowserSdkLoader;spend?:CommonBrowserSpendRegistration;cleanupOnly?:boolean;now?:()=>number}>):(CommonBrowserConfiguration & Readonly<{ownerId:string;lifetimeMs:number;expiresAt:number}>)|undefined{
  const {env,storage,actualDoId}=options,selected=options.policy?{policy:options.policy,loadSdk:options.loadSdk,spend:options.spend}:registration;
  if(env.WALDO_ENVIRONMENT!=='staging'||!env.BROWSER||!selected?.loadSdk||!selected.spend)return undefined;
  const policy=freezePolicy(selected.policy),now=options.now??Date.now,directory=commonOwnerAuthority(env);
  // This registration belongs to one physical owner. Selecting it on another
  // owner would also install its model spend gate and break unrelated chat.
  if(env.TELEGRAM_OWNER_DO?.idFromName(policy.doName).toString()!==actualDoId)return undefined;
- if(!options.cleanupOnly&&(storage.kv.get('do_name')!==policy.doName||storage.kv.get('telegram_subject')!==policy.subject))return undefined;
+ const identityBinding=options.identity?.snapshot();
+ if(!options.cleanupOnly&&(storage.kv.get('do_name')!==policy.doName||(options.identity?!identityBinding:policy.authority==='verified_owner'||storage.kv.get('telegram_subject')!==policy.subject)))return undefined;
  const spend=freezeSpend(selected.spend);
  if(spend.policy.ownerId!==`prn_${policy.directoryOwnerId.toLowerCase().replaceAll('-','')}`||spend.policy.validUntil>policy.expiresAt)throw Error('common browser spend policy rejected');
  const ledger=commonSpendReservation(storage,spend.policy,now,()=>physical(),additional=>assertOwnerPublicBrowserCapacity(storage,spend.policy.ownerId,spend.policy.limitMicrousd,additional));
  const calls=commonSpendCalls(ledger,(kind,request)=>{const bound=spend.quote(kind,request);if(kind==='browser'&&bound!==0)throw Error('common browser allocation price changed');return bound;},{countModel:spend.countModel?material=>spend.countModel!(material):undefined});
  const key=`common-public-browser-usage:${policy.ref}`;
- const physical=()=>{const at=now();if(!Number.isSafeInteger(at)||at<policy.createdAt||at>=policy.expiresAt||storage.kv.get('do_name')!==policy.doName||storage.kv.get('telegram_subject')!==policy.subject||storage.kv.get('telegram_unlinked')===true||env.TELEGRAM_OWNER_DO?.idFromName(policy.doName).toString()!==actualDoId)throw Error('common public browser policy unavailable');};
+ const physical=()=>{const at=now();if(!Number.isSafeInteger(at)||at<policy.createdAt||at>=policy.expiresAt||storage.kv.get('do_name')!==policy.doName||(options.identity?!identityBinding||options.identity.snapshot()!==identityBinding:policy.authority==='verified_owner'||storage.kv.get('telegram_subject')!==policy.subject||storage.kv.get('telegram_unlinked')===true)||env.TELEGRAM_OWNER_DO?.idFromName(policy.doName).toString()!==actualDoId)throw Error('common public browser policy unavailable');};
  const read=():Usage=>{
   const retained=storage.kv.get<Usage>(key);
   if(!retained)return {policy,allocationMicrousd:spend.allocationMicrousd,allocations:0,reservedBrowserMs:0,taskGrants:[]};
   assertCommonPublicBrowserUsage(retained,policy,spend.allocationMicrousd);
   return retained;
  };
- const owner=async()=>{physical();const row=await directory.resolve('telegram',policy.subject,policy.doName);physical();if(!row||row.directoryOwnerId!==policy.directoryOwnerId.toLowerCase())throw Error('common public browser owner unavailable');return {ownerId:`prn_${row.directoryOwnerId.replaceAll('-','')}`,custodyDigest:row.custodyDigest};};
+ const owner=async()=>{
+  physical();
+  let row:Readonly<{directoryOwnerId:string;custodyDigest:string}>|null;
+  if(options.identity){await options.identity.assertCurrent(identityBinding!);physical();row=await options.identity.resolve(identityBinding!);await options.identity.assertCurrent(identityBinding!);}
+  else row=await directory.resolve('telegram',policy.subject!,policy.doName);
+  physical();
+  if(!row||row.directoryOwnerId.toLowerCase()!==policy.directoryOwnerId.toLowerCase()||!/^[a-f0-9]{64}$/.test(row.custodyDigest))throw Error('common public browser owner unavailable');
+  return {ownerId:`prn_${row.directoryOwnerId.toLowerCase().replaceAll('-','')}`,custodyDigest:row.custodyDigest};
+ };
  const verify=async(grant:CommonBrowserGrant)=>{const current=await owner();if(current.ownerId!==grant.ownerId)throw Error('common public browser owner changed');const row=read();if(row.custodyDigest!==current.custodyDigest)throw Error('common public browser authority changed');if(!row.taskGrants.some(retained=>JSON.stringify(retained)===JSON.stringify(grant)))throw Error('common public browser grant changed');};
  return {
   ownsGrant:grant=>grant.ref===policy.ref,

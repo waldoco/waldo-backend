@@ -36,6 +36,7 @@ import {
 } from '../hooks/registry';
 import { guardForOffload } from '../scribe/sanitiser';
 import type { ToolOutputStore } from '../conversation/tool-output-store';
+import {browserFailureV1Schema,type BrowserFailureV1} from '../../../contracts/src/runtime/browser-result';
 
 export type RuntimeToolCall = {
   id: string;
@@ -82,6 +83,7 @@ export type DispatchToolResult = (
       source_taint?: 'external';
       // S4 (CONNECT_FLOW_DESIGN 4.4): typed auth intent for the responder's offerConnect seam.
       connect?: ConnectIntent;
+      browser?: BrowserFailureV1;
       // Typed sanitise/offload-guard diagnostic: strict enums only (stage + reason), built
       // solely from the guard's own check/reason vocabulary - never payload content. Trace
       // sinks carry it with text capture off, where free-form error is stripped.
@@ -388,6 +390,10 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
         'tool returned oversized error',
         finalResult.code,
         'tool_result_error',
+        finalResult.source_taint,
+        finalResult.connect,
+        undefined,
+        finalResult.browser,
       ), settledTrustedEffect);
     }
 
@@ -399,6 +405,8 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       'tool_result_error',
       finalResult.source_taint,
       finalResult.connect,
+      undefined,
+      finalResult.browser,
     ), settledTrustedEffect);
   }
 
@@ -590,6 +598,10 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
         'tool returned oversized error',
         finalResult.code,
         'tool_result_error',
+        finalResult.source_taint,
+        finalResult.connect,
+        undefined,
+        finalResult.browser,
       ), input.effect);
     }
     return withTrustedEffect(failDispatch(
@@ -599,6 +611,9 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
       finalResult.code,
       'tool_result_error',
       finalResult.source_taint,
+      finalResult.connect,
+      undefined,
+      finalResult.browser,
     ), input.effect);
   }
   const size = jsonCharLength(finalResult, true);
@@ -906,10 +921,12 @@ function failDispatch(
   sourceTaint?: SourceTaint,
   connect?: ConnectIntent,
   guard?: GuardDiagnostic,
+  browser?: BrowserFailureV1,
 ): DispatchToolResult {
   const extra = {
     ...(connect === undefined ? {} : { connect }),
     ...(guard === undefined ? {} : { guard }),
+    ...(browser === undefined ? {} : { browser }),
   };
   return sourceTaint === 'external'
     ? { ok: false, call_id: callId, tool, error, code, reason, source_taint: 'external', ...extra }
@@ -958,7 +975,7 @@ function reasonFromHook(hook: string): ToolDispatchErrorReason {
 
 type ParsedToolResult =
   | { ok: true; data: unknown; source_taint: SourceTaint; card?: WaldoCard }
-  | { ok: false; error: string; code: ErrorCode; source_taint?: 'external'; connect?: ConnectIntent };
+  | { ok: false; error: string; code: ErrorCode; source_taint?: 'external'; connect?: ConnectIntent; browser?: BrowserFailureV1 };
 
 function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | null {
   if (!isRecord(value) || typeof value.ok !== 'boolean') {
@@ -990,7 +1007,7 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
   if (
     !hasOnlyKeys(
       value,
-      expectsExternal || value.source_taint === null ? ['ok', 'error', 'code', 'source_taint', 'connect'] : ['ok', 'error', 'code', 'connect'],
+      expectsExternal || value.source_taint === null ? ['ok', 'error', 'code', 'source_taint', 'connect', 'browser'] : ['ok', 'error', 'code', 'connect'],
     )
   ) {
     return null;
@@ -1003,6 +1020,8 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
   // rather than failing the whole result - the fixed model-facing text already stands alone.
   const connect = value.connect === undefined ? undefined : connectIntentSchema.safeParse(value.connect);
   if (connect !== undefined && !connect.success) return null;
+  const browser=value.browser===undefined?undefined:browserFailureV1Schema.safeParse(value.browser);
+  if(browser!==undefined&&(!browser.success||tool!=='browse_page'&&tool!=='browse_act'))return null;
 
   if (expectsExternal) {
     if (value.source_taint !== 'external') return null;
@@ -1012,6 +1031,7 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
       code: code.data,
       source_taint: 'external',
       ...(connect?.success ? { connect: connect.data } : {}),
+      ...(browser?.success?{browser:browser.data}:{}),
     };
   }
   return { ok: false, error: value.error, code: code.data, ...(connect?.success ? { connect: connect.data } : {}) };

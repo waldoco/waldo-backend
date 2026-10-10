@@ -9,6 +9,8 @@ export type EffectIntent = Readonly<{
   quota?: GrantUsageKey & Readonly<{ max_per_day: number }>;
 }>;
 export type EffectRecord = EffectIntent & Readonly<{
+  // Host-derived correlation only; it never grants execution authority.
+  origin_run_ref?: string;
   identity: string; state: 'reserved' | 'attempting' | 'unknown' | 'done' | 'rejected';
   created_at: number; receipt?: EffectReceipt;
 }>;
@@ -40,13 +42,13 @@ const sameUsage = (a: GrantUsageKey, b: GrantUsageKey) => a.owner_ref === b.owne
 
 // The host supplies identity and quota after approval/authority validation. This ledger
 // never grants permission. Intent and quota are committed together without an await.
-export const ownerEffectLedger = (storage: DurableObjectStorage, now: () => number) => {
+export const ownerEffectLedger = (storage: DurableObjectStorage, now: () => number, currentRunRef?: () => string | undefined) => {
   let active = activeByStorage.get(storage);
   if (!active) { active = new Set(); activeByStorage.set(storage, active); }
   const rows = () => [...storage.kv.list<EffectRecord>({ prefix: PREFIX })].map(([, value]) => value);
   const get = (operationId: string) => structuredClone(storage.kv.get<EffectRecord>(PREFIX + operationId) ?? null);
   const usage = (key: GrantUsageKey, records = rows()) => records.filter(row => row.quota && sameUsage(row.quota, key) && row.state !== 'rejected').length;
-  const reserve = (intent: EffectIntent): EffectRecord => storage.transactionSync(() => {
+  const reserve = (intent: EffectIntent, suppliedOriginRunRef?: string): EffectRecord => storage.transactionSync(() => {
     if (!intent.operationId || !intent.owner_ref || !intent.tool) throw Error('effect identity required');
     const identity = canonical(intent);
     const prior = get(intent.operationId);
@@ -56,7 +58,11 @@ export const ownerEffectLedger = (storage: DurableObjectStorage, now: () => numb
     }
     if (intent.quota && (intent.quota.owner_ref !== intent.owner_ref || !Number.isSafeInteger(intent.quota.max_per_day) || intent.quota.max_per_day < 0)) throw Error('invalid effect quota');
     if (intent.quota && usage(intent.quota) >= intent.quota.max_per_day) throw new EffectQuotaError();
-    const record: EffectRecord = { ...structuredClone(intent), identity, state: 'reserved', created_at: now() };
+    const origin = suppliedOriginRunRef ?? currentRunRef?.();
+    if (origin !== undefined && (!origin || origin.length > 256 || /[\u0000-\u001f]/.test(origin))) throw Error('invalid effect origin');
+    // Metadata is excluded from intent identity: a later native decision/readback
+    // must retain the original correlation without changing exact replay custody.
+    const record: EffectRecord = { ...structuredClone(intent), ...(origin ? { origin_run_ref: origin } : {}), identity, state: 'reserved', created_at: now() };
     storage.kv.put(PREFIX + intent.operationId, record);
     return structuredClone(record);
   });
@@ -80,10 +86,34 @@ export const ownerEffectLedger = (storage: DurableObjectStorage, now: () => numb
     get, reserve,
     isActive: (operationId: string) => active!.has(operationId),
     count: async (key: GrantUsageKey): Promise<number> => usage(key),
+    // Explicit recovery rail: readback can settle a recorded attempt but can
+    // never dispatch an effect, including a still-reserved operation.
+    async reconcile(operationId: string, adapter: Readonly<{
+      readback(): Promise<EffectReadback>; assertCurrent?(): Promise<void>;
+    }>): Promise<EffectReadback> {
+      await adapter.assertCurrent?.();
+      const record = get(operationId);
+      if (!record) return { status: 'unknown' };
+      if (record.state === 'done') return { status: 'done', receipt: record.receipt! };
+      if (record.state === 'rejected') return { status: 'not_applied' };
+      if (active!.has(operationId)) return { status: 'unknown' };
+      active!.add(operationId);
+      try {
+        let outcome: EffectReadback;
+        try { outcome = await adapter.readback(); }
+        catch { await adapter.assertCurrent?.(); outcome = { status: 'unknown' }; }
+        await adapter.assertCurrent?.();
+        // A source revoked during provider readback cannot publish a receipt.
+        if (outcome.status === 'done') update(operationId, 'done', outcome.receipt);
+        else update(operationId, outcome.status === 'not_applied' ? 'rejected' : 'unknown');
+        return outcome;
+      } finally { active!.delete(operationId); }
+    },
+
     async execute(intent: EffectIntent, adapter: Readonly<{
       dispatch(): Promise<EffectReceipt>; reconcile(): Promise<EffectReadback>;
-    }>): Promise<EffectReceipt> {
-      const record = reserve(intent);
+    }>, originRunRef?: string): Promise<EffectReceipt> {
+      const record = reserve(intent, originRunRef);
       if (record.state === 'done') return record.receipt!;
       if (record.state === 'rejected') throw new EffectNotAppliedError();
       if (active!.has(intent.operationId)) throw new EffectUnknownError();

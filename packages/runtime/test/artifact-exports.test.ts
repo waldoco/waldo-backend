@@ -1,3 +1,4 @@
+import { testByteCustody } from './helpers/byte-custody';
 import { describe, expect, it, vi } from 'vitest';
 import { exportArtifactArgsSchema } from '@waldo/contracts';
 import { artifactBook, inMemoryArtifactBodies, type ArtifactMeta } from '../src/channels/artifacts';
@@ -6,20 +7,24 @@ import { artifactExports, exportArtifactHandler, inMemoryArtifactBinaries, r2Art
 type Row = ArtifactMeta;
 const fakeSql = () => {
   const rows = new Map<string, Row>();
+  const history = new Map<string, string>();
   const exportsRows: unknown[][] = [];
   return {
     rows,
     exec(query: string, ...args: unknown[]) {
+      if (query.startsWith('PRAGMA')) return { toArray: () => [{ name: 'sha256' }] };
       if (query.startsWith('CREATE TABLE')) return { toArray: () => [] as Row[] };
+      if (query.startsWith('INSERT OR IGNORE INTO artifact_revisions')) { history.set(`${args[0]}:${args[1]}`, args[2] as string); return { toArray: () => [] }; }
+      if (query.startsWith('SELECT metadata_json FROM artifact_revisions')) return { toArray: () => [...history.entries()].filter(([key]) => args.length === 2 ? key === `${args[0]}:${args[1]}` : key.startsWith(`${args[0]}:`)).map(([, metadata_json]) => ({ metadata_json })) };
       if (query.startsWith('INSERT INTO artifacts')) {
-        const [id, name, kind, revision, byte_size, r2_key, provenance, taint, created_at, updated_at] = args as [string, string, Row['kind'], number, number, string, string, string, number, number];
-        rows.set(id, { id, name, kind, revision, byte_size, r2_key, provenance, taint, created_at, updated_at });
+        const [id, name, kind, revision, byte_size, r2_key, provenance, taint, created_at, updated_at, sha256] = args as [string, string, Row['kind'], number, number, string, string, string, number, number, string];
+        rows.set(id, { id, name, kind, revision, byte_size, r2_key, provenance, taint, created_at, updated_at, sha256 });
         return { toArray: () => [] as Row[] };
       }
       if (query.startsWith('UPDATE artifacts SET')) {
-        const [revision, byte_size, r2_key, provenance, updated_at, id] = args as [number, number, string, string, number, string];
+        const [revision, byte_size, r2_key, provenance, updated_at, sha256, id, expected] = args as [number, number, string, string, number, string, string, number];
         const row = rows.get(id)!;
-        rows.set(id, { ...row, revision, byte_size, r2_key, provenance, updated_at });
+        if (row?.revision === expected) rows.set(id, { ...row, revision, byte_size, r2_key, provenance, updated_at, sha256 });
         return { toArray: () => [] as Row[] };
       }
       if (query.startsWith('SELECT * FROM artifacts WHERE id')) {
@@ -121,6 +126,18 @@ describe('export_artifact', () => {
     expect(await handler.handle(args(meta.id))).toMatchObject({ ok: true, data: { deduped: false } });
     expect(ex.rows(meta.id)[0]!.id).not.toBe(old.id);
   });
+  it('a same-size corrupted PDF is repaired instead of returning a false completed export receipt', async () => {
+    let n = 0;
+    const { meta, ex, bins, handler } = await setup('# Original\n\nSource detail', () => `e${++n}`);
+    await handler.handle(args(meta.id));
+    const old = ex.rows(meta.id)[0]!;
+    const bytes = (await bins.getBytes(old.r2_key))!.slice(); bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 1;
+    await bins.putBytes(old.r2_key, bytes);
+    expect(await handler.handle(args(meta.id))).toMatchObject({ ok: true, data: { deduped: false } });
+    const row = ex.rows(meta.id)[0]!;
+    expect(row.id).not.toBe(old.id);
+    expect(await hex((await bins.getBytes(row.r2_key))!)).toBe(row.sha256);
+  });
   it('two exports of one revision racing across the write leave one row and both get the same receipt', async () => {
     let n = 0;
     const { meta, ex, handler } = await setup('# Hi\n\ntext', () => `e${++n}`);
@@ -131,7 +148,7 @@ describe('export_artifact', () => {
   it('owner-scoped R2 keys cannot read across owners', async () => {
     const store = new Map<string, Uint8Array>();
     const bucket = { put: async (k: string, v: Uint8Array) => { store.set(k, v); }, get: async (k: string) => (store.has(k) ? { arrayBuffer: async () => store.get(k)!.buffer } : null) } as never;
-    const a = r2ArtifactBinaries(bucket, 'owner-a'); const b = r2ArtifactBinaries(bucket, 'owner-b');
+    const a = r2ArtifactBinaries(bucket, 'owner-a', testByteCustody()); const b = r2ArtifactBinaries(bucket, 'owner-b', testByteCustody());
     await a.putBytes('k', new Uint8Array([1, 2]));
     expect(await b.getBytes('k')).toBeNull();
     expect([...(await a.getBytes('k'))!]).toEqual([1, 2]);

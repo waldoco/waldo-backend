@@ -33,6 +33,10 @@ describe('update cards', () => {
       expect(asked).toEqual([['calendar', t0, t1, t1 + 2 * 86_400_000], ['mail', t0, 10]]);
       expect(changes.map((change) => [change.source, change.kind])).toEqual([['calendar', 'added'], ['calendar', 'changed'], ['calendar', 'cancelled'], ['mail', 'new']]);
       expect(changes[3]!.detail).toContain('Deck by 5?');
+      // Until the caller accepts the durable card, restart returns the exact saved
+      // change list instead of advancing and dropping it or re-reading the provider.
+      expect(await collectChanges(book, fake([], []), t1 + 1)).toEqual(changes);
+      book.record('2026-09-23', t1, changes, null);
       const broken = { changedEvents: async () => { throw new Error('google 500'); } } as unknown as GoogleClient;
       await expect(collectChanges(book, broken, t1 + 60_000)).rejects.toThrow('google 500');
       expect(book.since('calendar_since')).toBe(t1);
@@ -59,7 +63,7 @@ describe('update cards', () => {
     const fetcher = (async (input: string) => {
       urls.push(input);
       if (input.startsWith('https://oauth2')) return Response.json({ access_token: 'a' });
-      if (input.includes('/events?')) return Response.json({ items: [{ id: 'x', status: 'cancelled', created: '2026-09-01T00:00:00Z' }] });
+      if (input.includes('/events?')) return Response.json({ kind: 'calendar#events', items: [{ id: 'x', status: 'cancelled', created: '2026-09-01T00:00:00Z' }] });
       if (input.includes('/messages?')) return Response.json({ messages: [{ id: 'm1' }] });
       return Response.json({ snippet: 'hi', internalDate: String(t0), payload: { headers: [{ name: 'From', value: 'A <a@x.test>' }, { name: 'Subject', value: 'Hello' }] } });
     }) as unknown as typeof fetch;

@@ -19,7 +19,7 @@ const fixture = () => {
   } } as unknown as SqlStorage;
   const values = new Map<string, unknown>();
   const storage = { kv: { get: (key: string) => structuredClone(values.get(key)), put: (key: string, value: unknown) => values.set(key, structuredClone(value)), list: ({ prefix }: { prefix: string }) => new Map([...values].filter(([key]) => key.startsWith(prefix))) }, transactionSync: <T>(work: () => T) => work() } as unknown as DurableObjectStorage;
-  const state = { writes: 0, unavailable: false, responseLost: false, wrongReadback: false, preconditionRejected: false, wrongMutationId: false, revoked: false, wrongAccount: false, cardUnconfirmed: false, cards: [] as string[], task: { kind: 'tasks#task', id: 'existing', title: 'Original', notes: 'Owner notes', due: '2026-10-10T00:00:00.000Z', status: 'needsAction', etag: 'v1' } as Record<string, unknown>, requests: [] as { method: string; url: URL; body: any; headers: Headers }[] };
+  const state = { writes: 0, unavailable: false, responseLost: false, wrongReadback: false, preconditionRejected: false, wrongMutationId: false, revoked: false, wrongAccount: false, cardUnconfirmed: false, onMutation: null as (() => void) | null, cards: [] as string[], task: { kind: 'tasks#task', id: 'existing', title: 'Original', notes: 'Owner notes', due: '2026-10-10T00:00:00.000Z', status: 'needsAction', etag: 'v1' } as Record<string, unknown>, requests: [] as { method: string; url: URL; body: any; headers: Headers }[] };
   let sequence = 0;
   const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -32,6 +32,7 @@ const fixture = () => {
       state.writes++;
       state.task = { ...state.task, ...body, id: method === 'POST' ? 'created' : state.task.id, etag: 'v2' };
       for (const key of ['due', 'notes', 'completed']) if (state.task[key] === null) delete state.task[key];
+      state.onMutation?.();
       if (state.responseLost) throw Error('response lost after provider accepted');
       return Response.json(state.wrongMutationId ? { ...state.task, id: 'different-target' } : state.task);
     }
@@ -184,6 +185,23 @@ describe('Google Tasks approval and readback journey', () => {
     await expect(first.adapter.prepare('proposal', create, { assertTaskSourceCurrent: async () => { throw new Error('source revoked'); } } as never)).rejects.toThrow('source revoked');
     expect(f.state.requests).toHaveLength(0);
     f.db.close();
+  });
+  it('does not publish a task ACK after source revocation at the provider response and never retries on regrant', async () => {
+    const f = fixture(), first = f.open(), proposal = await first.adapter.prepare('proposal', create);
+    const guard = async () => { if (f.state.revoked) throw Error('source revoked'); };
+    f.state.onMutation = () => { f.state.revoked = true; };
+    expect(await first.adapter.apply('proposal', proposal, undefined, { assertTaskSourceCurrent: guard })).toEqual({ status: 'unknown' });
+    expect(f.db.prepare('SELECT * FROM google_task_effect_ack').all()).toHaveLength(0); expect(f.state.writes).toBe(1);
+    f.state.revoked = false; f.state.onMutation = null;
+    expect(await f.open().adapter.apply('proposal', proposal, undefined, { assertTaskSourceCurrent: guard })).toEqual({ status: 'unknown' }); expect(f.state.writes).toBe(1);
+    f.db.close();
+  });
+  it('projects unknown task effects with their frozen review but no new approve action', async () => {
+    const f = fixture(), first = f.open(), id = await first.desk.proposeGoogleTaskChange!(create);
+    f.state.responseLost = true; expect((await first.desk.decide(id, 'a', 'native')).toast).toBe('Outcome unknown');
+    const projected = await f.open().desk.workApprovals(1000);
+    expect(projected.find(proposal => proposal.id === id)).toMatchObject({ state: 'unconfirmed', review: { kind: 'google_task_change', account: account.email }, proposal_digest: expect.stringMatching(/^[a-f0-9]{64}$/), actions: [] });
+    expect(f.state.writes).toBe(1); f.db.close();
   });
   it('closes an authoritative conditional rejection as stale without applying or retrying', async () => {
     const f = fixture(); const first = f.open(); const p = await first.adapter.prepare('proposal', { source: 'google_tasks', action: 'complete', task_list_id: create.task_list_id, task_id: 'existing', reason: 'Owner request' });

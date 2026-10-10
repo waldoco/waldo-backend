@@ -5,6 +5,7 @@ import { isExternalSourceTaint, sourceTaintSchema, type SourceTaint } from '../m
 import { waldoCardSchema, type WaldoCard } from '../ui/card';
 import { connectIntentSchema, type ConnectIntent } from './connect-intent';
 import { TOOL_PERMISSIONS, type ToolName } from './permissions';
+import { browserFailureV1Schema, type BrowserFailureV1 } from '../runtime/browser-result';
 
 // Runtime form of core/error's AdapterResult at the tool seam (ADR-0029): every dispatched
 // tool resolves a coded discriminated union, never throws. core/error keeps AdapterResult a
@@ -19,14 +20,14 @@ export const toolResultSchema = <Data extends z.ZodType>(dataSchema: Data) =>
       card: waldoCardSchema.optional(),
       source_taint: z.null(),
     }),
-    z.strictObject({ ok: z.literal(false), error: z.string().min(1), code: errorCodeSchema, source_taint: sourceTaintSchema.optional(), connect: connectIntentSchema.optional() }),
+    z.strictObject({ ok: z.literal(false), error: z.string().min(1), code: errorCodeSchema, source_taint: sourceTaintSchema.optional(), connect: connectIntentSchema.optional(), browser: browserFailureV1Schema.optional() }),
   ]);
 
 export type ToolResult<T> =
   | { ok: true; data: T; source_taint: SourceTaint; card?: WaldoCard }
   // connect (CONNECT_FLOW_DESIGN 4.4): a typed auth intent the responder turns into the channel's
   // connect affordance. Never a URL - the model only ever sees fixed words.
-  | { ok: false; error: string; code: ErrorCode; source_taint?: SourceTaint; connect?: ConnectIntent };
+  | { ok: false; error: string; code: ErrorCode; source_taint?: SourceTaint; connect?: ConnectIntent; browser?: BrowserFailureV1 };
 
 // The trusted RunLoop V2 path provides this content-free capability only after it has committed
 // a durable effect intent. A handler that cannot reconcile a retry on this key must not be used
@@ -79,6 +80,7 @@ export const externalToolResultSchema = <Data extends z.ZodType>(dataSchema: Dat
       code: errorCodeSchema,
       source_taint: z.literal('external'),
       connect: connectIntentSchema.optional(),
+      browser: browserFailureV1Schema.optional(),
     }),
   ]);
 

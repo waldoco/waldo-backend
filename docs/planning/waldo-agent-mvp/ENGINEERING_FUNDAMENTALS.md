@@ -626,3 +626,51 @@ A fresh staging Cloudflare public read uses the existing reader without requirin
 | Failure | Regression | Boundary |
 | --- | --- | --- |
 | Google recovery added undisclosed sendUpdates=none across Calendar mutation paths | google.test.ts six synthetic wire cases for marked/unmarked create, move and cancellation; google-recovery-journey.test.ts existing approved apply/Undo, replay and later-edit controls | Restore baseline omission, not a new sendUpdates=all policy. Marked cancellation remains atomic PATCH status=cancelled plus marker under If-Match. Provider guest-delivery behavior and tombstone marker retention still require staging acceptance |
+
+### Durable byte custody and reviewed account erasure
+
+- [ ] Every workspace, artifact body and binary put reserves an immutable key, byte count and SHA in durable owner custody before physical dispatch. Reservation and the current owner deletion lock share one synchronous transaction. Cached adapters carry the exact invocation's run/source checks across asynchronous admission and provider awaits; a newer active run cannot authorize an older invocation. Settled provider bytes permit cleanup, never late metadata publication.
+- [ ] A live or uncertain put retains cleanup inventory and quota across interruption and eviction. Absence cannot settle a put that might finish later; exact size/SHA readback may settle lost acknowledgement only when no local provider request is running. Cancellation stays requested until verified deletion and fresh absence; truncated listings without valid advancing cursors cannot certify account erasure.
+- [ ] Account deletion reviews the current inventory and retained/offline/provider/backup limitations before an explicit user confirmation. Persist the owner lock before awaiting cancellation, require the exact reviewed receipt for every cleanup phase, and report incomplete/unconfirmed phases honestly. Save only the narrow private status capability for manual recovery after ambient sessions disappear.
+- [ ] Signed push receipts correlate installation, provider, environment, device epoch and state with the exact request. Shape-valid foreign/stale receipts cannot establish registration or revocation. Tokens remain outside app projections and operation digests, and app-only session authority requires the canonical owner/session lifecycle without any Telegram identity.
+
+| Date | Failure | Surface | Regression | Rule |
+| --- | --- | --- | --- | --- |
+| 2026-10-10 | Artifact/workspace puts could bypass durable custody; already granted admission and cached newer scopes could write after reviewed deletion or run closure | Owner bytes / account erasure | owner-byte-custody.test.ts actual DO lock, immutable snapshot, captured old-run admission/provider races and eviction; owner-rights-host.test.ts late real put then verified scoped purge; workspace-owner-integration.test.ts absent/corrupt uncertain cancellation after eviction then exact readback purge without replay | Reserve before physical dispatch inside the owner lock; captured invocation authority survives cached adapters; uncertain cleanup remains incomplete |
+| 2026-10-10 | Push adapter accepted correctly shaped receipts for another installation or epoch | Native app device authority | rights-authority-adapters.test.ts foreign/mismatched register and revoke RED/GREEN, exact signed correlations and app-only revoked-session controls | Authenticate the full request/receipt tuple, not only response shape |
+
+### Browser readiness, diagnostics and exact absence
+
+- [ ] Bound generic same-session content readiness separately from provider navigation failure. A readiness timeout may return empty_content with the actual navigation status; preserve a typed provider refusal/status/request identifier instead of changing it to empty200. Do not infer a provider-wide cause from one failed site or allocate a fresh session while retaining the previous one.
+- [ ] PostToolUse validates the closed BrowserFailureV1 metadata schema and sanitizes prose/optional diagnostic strings separately. Host integers, hashes and recovery booleans survive the dispatcher; unknown raw payloads and revisions stay rejected. Failure metadata is evidence of the attempt, never effect authority.
+- [ ] Confirmed exact provider session absence closes durable custody before settlement and disables navigation while preserving the original allocation. Freeze termination time and retain pending settlement if callback bookkeeping fails. Bounded bookkeeping retries neither terminate nor allocate again.
+
+| Date | Failure | Surface | Regression | Rule |
+| --- | --- | --- | --- | --- |
+| 2026-10-10 | Generic content readiness and provider diagnostics were conflated, and typed browser failure metadata could disappear at PostToolUse | Owner browser / dispatcher | general-browser-driver.test.ts readiness/provider-diagnostics controls; hooks.test.ts five typed metadata cases; common-owner-browser-registration.test.ts strict actual dispatcher | Preserve real status and closed typed recovery diagnostics without promoting provider payloads |
+| 2026-10-10 | Confirmed provider absence could leave custody open or lose pending settlement after a bookkeeping callback failed | Browser session lifetime | common-browser-host.test.ts exact absent-provider closure and final three bounded settlement controls | Close once from exact absence; persist settlement debt and never allocate/terminate again for bookkeeping |
+
+### Direct owner memory correction
+
+- [ ] Explicit app correction uses the canonical owner/DO/session, an exact claim-state revision and fresh claim read inside the synchronized correction/operation-receipt commit. Generate stated owner evidence and occurrence from the authenticated submission, never client extractor metadata. Reject stale rows, changed operation bodies, another owner/session, incomplete-forget matches and different-provenance duplicates; validate rollback and eviction readback through the real ClaimStore. Correction changes context, never grants or action authority.
+
+| Date | Boundary | Regression | Evidence |
+| --- | --- | --- | --- |
+| 2026-10-10 | App had no direct owner memory correction serving path | app-memory.test.ts five actual DO cases plus contracts/app/memory.test.ts strict input/receipt cases | Atomic retirement/replacement and content-free operation receipt, canonical owner/scoped SHA CAS, exact owner evidence, concurrent/source/session denial, rollback and eviction; no model extractor authority |
+
+### Native installation owner switch
+
+- [ ] A live provider/environment installation and provider token each belong to one owner. A rotated token cannot leave the previous owner active on the same installation. Require canonical prior-session revocation before reuse; an installation UUID does not authorize guessed revocation of another owner. Canonical server session deletion removes Vault token custody even when the app lost its local bearer before push-specific cleanup. SQL unique conflicts roll back Vault allocation. Registration requires current owner/Auth/session; future push delivery must freshly recheck the same lifecycle.
+
+| Date | Failure | Regression | Boundary |
+| --- | --- | --- | --- |
+| 2026-10-10 | A changed provider token could activate the same installation for ownerB while ownerA retained active custody | assert-app-push-candidate.sql shared-installation denial, canonical signout without JS push revoke, ownerB reuse, prior-owner absence and unique-conflict Vault rollback controls | Global live installation/token uniqueness and signed current session admission; no arbitrary reattribution, actual APNs/FCM consumer and live delivery remain unavailable |
+
+
+### Verified session revocation
+
+- [ ] Session deletion/sign-out success requires fresh signed absence after settling push custody. A canonical delete returning false may be an already-gone replay, but absence still needs readback. Malformed/duplicate inventory, invalid session hashes/timestamps, nonboolean revoke receipts and invalid sign-out counts are unavailable authority, never empty state. Console redirects and cookie clearing must not certify remaining/unconfirmed sessions.
+
+| Date | Failure | Regression | Boundary |
+| --- | --- | --- | --- |
+| 2026-10-10 | Malformed session RPC responses became empty inventory/zero count and console sign-out redirected without fresh absence | console-auth.test.ts strict decode controls; app-session-revocation.test.ts already-gone replay and unavailable readback; console-signin.test.ts actual signed push request and remaining/unavailable authority503 | Signed canonical session authority and actual absence establish success; local cookie removal alone cannot certify server sign-out |

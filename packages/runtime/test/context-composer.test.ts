@@ -821,6 +821,19 @@ describe('ContextComposer', () => {
     expect(mismatchedRecall).toEqual({ ok: false, failure: { code: 'recall_integrity' } });
   });
 
+  it('accepts volatile owner-derived health with honest source kind and rejects external or wider audience health', async () => {
+    for (const source_taint of [null, 'external'] as const) for (const scope of ['principal', 'tenant'] as const) {
+      const base = dependencies();
+      const result = await createContextComposer({ ...base, materials: { load: async request => ({ ...await base.materials.load(request),
+        workspace: [{ text: 'Current owner reading: HRV 42 ms, observed today, wearable method.',
+          source: source('volatile-owner-health', { source_kind: 'derived_health_view', source_taint, scope }) }] }) } }).compose(trustedEnvelope(), RUNTIME_INPUTS);
+      if (source_taint !== null || scope !== 'principal') { expect(result.ok).toBe(false); continue; }
+      expect(result.ok).toBe(true); if (!result.ok) continue;
+      expect(result.prompt).toContain('HRV 42 ms');
+      expect(result.checkpoint.sources).toContainEqual(expect.objectContaining({ source_kind: 'derived_health_view', source_taint: null, scope: 'principal' }));
+    }
+  });
+
   it('keeps safe external workspace provenance externally tainted after sanitisation', async () => {
     const base = dependencies();
     const result = await createContextComposer({
@@ -1548,8 +1561,9 @@ describe('ContextComposer', () => {
 // health tools joined it, 2026-09-27; the A7 standing-order tools the A1 gmail tools and the A5 artifact tools joined it, 2026-09-27);
 // query_availability and read_owner_context joined it 2026-09-30. read_mcp_tool joined it 2026-10-02. export_artifact joined it 2026-10-02. workspace_list, workspace_read and workspace_write joined it 2026-10-02. workspace_render and curated skills lifecycle tools joined it 2026-10-03.
 // set_schedule_preference joined it 2026-10-07.
+// propose_google_task_change joined it 2026-10-10.
 // determinism is proven by first===second above.
-    expect(first.checkpoint.context_ref).toBe('ctx_f828e927288a55408dedb06674014fa4');
+    expect(first.checkpoint.context_ref).toBe('ctx_42c322d4531732f025f89705fc6441ba');
     expect(first.prompt.indexOf('Workspace source key a- marker.')).toBeLessThan(
       first.prompt.indexOf('Workspace source key a: marker.'),
     );

@@ -10,6 +10,8 @@ export async function armAlarm(storage: Pick<DurableObjectStorage, 'setAlarm'>, 
 export const COMMON_EXECUTION_DUE_KEY = 'common_execution_due_v1';
 
 export const WHATSAPP_PENDING_DUE_KEY = 'whatsapp_pending_due_v1';
+export const APP_INBOX_DUE_KEY = 'app_inbox_due_v1';
+export const OWNER_PROACTIVITY_DUE_KEY = 'owner_proactivity_due_v1';
 
 // Wake for a WhatsApp payload admitted but not finished. Keeps an earlier alarm; never touches the Telegram due keys.
 export async function armWhatsappPendingWake(storage: DurableObjectStorage, due: number): Promise<void> {
@@ -27,7 +29,9 @@ export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDu
   const commonBrowserDue=(await storage.get<number|null>('common_browser_due_v1'))??null;
   const whatsappDue = (await storage.get<number | null>(WHATSAPP_PENDING_DUE_KEY)) ?? null;
   const commonExecutionDue = (await storage.get<number | null>(COMMON_EXECUTION_DUE_KEY)) ?? null;
-  const bounds = [commonExecutionDue, scheduleDue, outboxDue, inboxDue, linkDue, browserDue, commonBrowserDue, whatsappDue].filter((v): v is number => v !== null);
+  const appDue = (await storage.get<number | null>(APP_INBOX_DUE_KEY)) ?? null;
+  const proactivityDue=(await storage.get<number|null>(OWNER_PROACTIVITY_DUE_KEY))??null;
+  const bounds = [proactivityDue, commonExecutionDue, scheduleDue, outboxDue, inboxDue, linkDue, browserDue, commonBrowserDue, whatsappDue, appDue].filter((v): v is number => v !== null);
   if (!bounds.length) { await storage.deleteAlarm(); return; }
   await armAlarm(storage, Math.max(Math.min(...bounds), now + retryDelayMs));
 }
@@ -50,4 +54,10 @@ export async function persistInboxWake(txn: DurableObjectTransaction, records: u
     const existing = await txn.getAlarm();
     await armAlarm(txn, Math.max(Date.now() + 250, existing === null ? due : Math.min(existing, due)));
   }
+}
+
+// Canonical owner work participates in the same alarm arbiter as every surface.
+export async function persistProactivityWake(storage: DurableObjectStorage, due: number|null): Promise<void> {
+  if(due!==null&&(!Number.isSafeInteger(due)||due<0))throw Error('invalid proactivity wake');
+  await storage.transaction(async txn=>{await txn.put(OWNER_PROACTIVITY_DUE_KEY,due);if(due!==null){const current=await txn.getAlarm();await armAlarm(txn,Math.max(Date.now()+250,current===null?due:Math.min(current,due)));}});
 }

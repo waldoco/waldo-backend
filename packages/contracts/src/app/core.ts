@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { appProtectedHealthPartV1Schema, appProtectedResponseQueryV1Schema, appProtectedResponseV1Schema } from './protected';
+export * from './protected';
+import { appMediaInputV1Schema } from './media';
 
 export const APP_AGENT_VERSION = 'app.v1' as const;
 export const APP_SEND_MAX_WIRE_BYTES = 32768;
@@ -25,12 +28,15 @@ export const appVerifyResultV1Schema = z.union([
 export const appSignoutResultV1Schema = z.strictObject({ result: z.enum(['revoked', 'already_gone']) });
 export const appSendRequestV1Schema = z.strictObject({
   client_message_id: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/), text: z.string().trim().min(1).max(4000),
+  ...appMediaInputV1Schema.shape,
 });
 export const appSendResultV1Schema = z.strictObject({
   accepted: z.literal(true), message_id: z.string().min(1),
   state: z.enum(['admitted', 'running', 'completed', 'interrupted', 'revoked']).optional(),
 });
+export const appMessageReceiptV1Schema=appSendResultV1Schema.extend({state:z.enum(['admitted','running','completed','interrupted','revoked']),closed_reason:z.enum(['interrupted','session_revoked','cancelled','archived','deleted','thread_changed']).optional(),effects_unconfirmed:z.boolean().optional()});
 export const appMessagePartV1Schema = z.union([
+  appProtectedHealthPartV1Schema,
   z.strictObject({ type: z.literal('text'), text: z.string() }),
   z.strictObject({ type: z.literal('operation'), operation_id: z.string(), state: z.enum(['admitted', 'running', 'completed', 'interrupted', 'revoked']), message: z.string() }),
   z.strictObject({ type: z.literal('artifact'), artifact_id: z.string(), revision: z.int().positive(), title: z.string(), download_path: z.string() }),
@@ -46,6 +52,8 @@ export const appCoreRoutesV1 = [
   { method: 'POST', path: '/app/v1/auth/verify', request: appVerifyRequestV1Schema, response: appVerifyResultV1Schema, authenticated: false, success_status: 200 },
   { method: 'GET', path: '/app/v1/session', response: appSessionV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/signout', response: appSignoutResultV1Schema, authenticated: true, success_status: 200 },
+  { method: 'GET', path: '/app/v1/chat/protected-responses/{response_ref}', query: appProtectedResponseQueryV1Schema, response: appProtectedResponseV1Schema, authenticated: true, success_status: 200 },
+  {method:'GET',path:'/app/v1/chat/main/messages/{client_message_id}',response:appMessageReceiptV1Schema,authenticated:true,success_status:200},
   { method: 'GET', path: '/app/v1/chat/main', response: appHistoryResultV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/chat/main/messages', request: appSendRequestV1Schema, response: appSendResultV1Schema, authenticated: true, success_status: 202, max_request_bytes: APP_SEND_MAX_WIRE_BYTES },
 ] as const;

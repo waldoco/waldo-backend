@@ -1,0 +1,42 @@
+{
+  "outcome": "accepted_engineering_candidate",
+  "formula_review_ref": "health-formula-renewal-20261010-d2401520e2f6-0fdbeb14d895",
+  "reviewer": "/root/independent_health_review",
+  "reviewed_at": "2026-10-10T04:05:28.445969Z",
+  "source_base_head": "330b52d525887e91f1d8146493074ee7691b7bbd",
+  "algorithm_source_sha256": "d2401520e2f694f1e8d99dbba3f4d1ce455fd387887b09247617dc79c677511b",
+  "vectors_sha256": "0fdbeb14d895e10b0d374be7e6569bac643438d375ba240a3f61552e6db88ff0",
+  "versions": {
+    "recovery": "recovery.candidate.v1",
+    "form": "form.candidate.v1",
+    "weight": "weight.candidate.v1",
+    "sleep_debt": "sleep-debt.candidate.v1"
+  },
+  "scope": "Independent exact-vector renewal of prior engineering review, independently reproduced old bytes and seven schema-only wrappers; current oracle and timestamp probes. Dirty source, not final committed-head, privacy, release or clinical acceptance.",
+  "open_findings": [],
+  "evidence": {
+    "prior_review": "/tmp/waldo-health-independent-formula-review.md",
+    "prior_vector_pin_verified": "533cc28d0fa636e5fdd058369ad5cdd94c1de66f4a6ec245031cdb57d2cea918",
+    "schema_only_delta_wrappers": 7,
+    "python_oracle_cases_passed": 140,
+    "invalid_sleep_end_probes_rejected": 3,
+    "focused_test_files_passed": 6,
+    "focused_tests_passed": 82,
+    "git_diff_check": "PASS"
+  },
+  "files": {
+    "packages/runtime/src/health/calculations.ts": "7f8cf1c71bed27321a954249daa6ff868cd1c8c3b0854773a6095de17b521a25",
+    "packages/runtime/src/health/producer.ts": "d2e82b22fb3b8e9bb3424040d822b3ac2f61e703d2226cdb24737afc2db98d90",
+    "packages/runtime/test/health-calculations.test.ts": "04ecdbae2f6e2927f148affdc8ff2ac30853c711644f0427d94cbbbea3b710c5",
+    "packages/runtime/test/health-producer-integration.test.ts": "2b8a4a36745f9271bd876f33433e099ccbcd39b3bbe6a3f872d7db875016a6c5",
+    "packages/runtime/src/health/calculation-review.ts": "74a3ad2e0fdeaf3ac97c45feab7bfc2148431c20abbcc29093b680a587230dee",
+    "packages/runtime/src/health/owner-production.ts": "ddabf7dcfae1125457b8bfc49621b78978665d51e5d7eca9113eb0a845cf81d7",
+    "packages/runtime/test/health-owner-production.test.ts": "d8ab223bf73eebed37c560105969927ac334e4463be79132767dc9d29407aea9"
+  },
+  "conditions": [
+    "Separate independent privacy acceptance and final frozen-head recheck are required for a complete activation receipt.",
+    "Trusted host configuration only, exact source/vector pins and all four candidate versions; no app or model activation claims.",
+    "Keep candidate_unaccepted and clinical_validation=not_established. Clinical validation, real native provenance/provider data, wearable parity and deployment are not established.",
+    "Historical Weight may remain unavailable without exact-cutoff stored supplier history; no current-provider backdating or fabricated zero."
+  ]
+}

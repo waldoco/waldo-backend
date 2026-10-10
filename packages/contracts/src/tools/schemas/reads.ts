@@ -3,6 +3,7 @@ import { docProviderSchema, docReadResultSchema } from '../../adapters/doc';
 import { iso8601Schema } from '../../core/error';
 import { hallTypeSchema } from '../../memory/hall';
 import { sourceTaintSchema } from '../../memory/sanitise';
+import { healthSourceSchema } from '../../adapters/health';
 
 // Model-supplied argument shapes for the read-cluster tools (ADR-0008/0021 surface). The
 // dispatcher validates args at the PreToolUse Zod gate (ADR-0032) before any handler runs,
@@ -25,8 +26,7 @@ export const getCrsArgsSchema = z.strictObject({
 });
 export type GetCrsArgs = z.infer<typeof getCrsArgsSchema>;
 
-// Metric selectors are names only — results come back as zones/bands/trends, never raw
-// values (ADR-0024 destination rules); the closed set is what the health seam serves.
+// Owner-consented model reads remain bounded and volatile under the health-plane amendment.
 export const healthMetricSelectorSchema = z.enum([
   'hrv',
   'hr',
@@ -34,12 +34,18 @@ export const healthMetricSelectorSchema = z.enum([
   'spo2',
   'strain',
   'recovery',
+  'form',
+  'weight',
+  'sleep_debt',
 ]);
 export type HealthMetricSelector = z.infer<typeof healthMetricSelectorSchema>;
 
 export const getHealthArgsSchema = z.strictObject({
-  metrics: z.array(healthMetricSelectorSchema).optional(),
+  metrics: z.array(healthMetricSelectorSchema).max(9).optional(),
   date: iso8601Schema.optional(),
+  source: healthSourceSchema.optional(),
+  range_days: z.int().min(1).max(31).default(1),
+  max_samples: z.int().min(1).max(256).default(128),
 });
 export type GetHealthArgs = z.infer<typeof getHealthArgsSchema>;
 
@@ -106,8 +112,10 @@ export const readThreadArgsSchema = z.strictObject({
   account: z.email().optional(),
   cursor: z.string().min(1).max(4096).optional(),
   thread_id: z.string().min(1),
+  message_id:z.string().min(1).max(1024).optional(),
+  body_cursor:z.string().min(1).max(4096).optional(),
   limit: z.int().min(1).max(20).default(10),
-});
+}).refine(value=>!value.body_cursor||!!value.message_id,'body_cursor requires message_id').refine(value=>!value.message_id||!value.cursor,'message body continuation cannot mix a thread cursor');
 export type ReadThreadArgs = z.infer<typeof readThreadArgsSchema>;
 
 // 'all' is a read-filter sentinel, not a task state — write-side status vocabulary lives

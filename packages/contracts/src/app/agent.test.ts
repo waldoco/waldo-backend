@@ -6,7 +6,10 @@ describe('served app contracts', () => {
   it('rejects client routing fields and binds stable session/account refs', () => {
     expect(appSendRequestV1Schema.safeParse({ client_message_id: 'client-0001', text: 'hello', owner: 'other' }).success).toBe(false);
     expect(appSessionV1Schema.safeParse({ state: 'active', session_ref: null, surface: 'app' }).success).toBe(false);
-    expect(appCoreRoutesV1).toHaveLength(6);
+    expect(appCoreRoutesV1).toHaveLength(8);
+    expect(buildAppOpenApiV1().paths['/app/v1/chat/main/messages/{client_message_id}']).toHaveProperty('get');
+    expect(buildAppOpenApiV1().paths['/app/v1/chat/protected-responses/{response_ref}']).toHaveProperty('get');
+    for(const path of ['/app/v1/work','/app/v1/personal/day','/app/v1/memory/corrections','/app/v1/channels'])expect(buildAppOpenApiV1().paths[path]).toBeDefined();
     expect(buildAppOpenApiV1().paths['/app/v1/files']).toHaveProperty('get');
     expect(buildAppOpenApiV1().paths['/app/v1/files']).toHaveProperty('post');
     const files = buildAppOpenApiV1().paths['/app/v1/files']! as { get: { parameters: { name: string; required: boolean }[] }; post: { requestBody: { content: { 'multipart/form-data': { schema: { required: string[] } } } } } };

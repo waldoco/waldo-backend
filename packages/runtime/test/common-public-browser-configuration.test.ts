@@ -46,7 +46,7 @@ it('malformed retained time counters and widened task grant cannot authorize I/O
 
 it('verified directory owner principal passes the real supplier and distinct root ID does not',async()=>{
  const f=fixture();const {commonOwnerAuthority}=await import('../src/identity/common-owner-authority');
- const directory=commonOwnerAuthority(f.env),root=await directory.resolve('telegram',f.policy.subject,f.policy.doName);
+ const directory=commonOwnerAuthority(f.env),root=await directory.resolve('telegram',f.policy.subject!,f.policy.doName);
  expect(root).not.toBeNull();
  const principal=`prn_${root!.directoryOwnerId.replaceAll('-','')}`;
  const grant=await f.config().grant(f.task,principal);expect(grant.ownerId).toBe(principal);await f.config().reserveAllocation(grant);await directory.assertCurrent(root!);expect(await f.config().grant(f.task,principal)).toEqual(grant);

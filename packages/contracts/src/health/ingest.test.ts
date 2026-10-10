@@ -25,6 +25,14 @@ describe('additive health ingest contract', () => {
     expect(healthSampleSchema.safeParse({ ...sample, metric: 'overnight_hrv', unit: 'milliseconds', value: 50, method: 'sdnn' }).success).toBe(true);
   });
 
+  it('preserves native producer origin and actual resting method without treating the read API as a vendor', () => {
+    const origin = { read_api: 'healthkit', source_bundle_id: 'com.synthetic.other-health-source', source_package_name: null, source_version: '2', source_revision: 'source-rev-2', device_ref: 'sha256:' + '2'.repeat(64), recording_method: 'automatic' };
+    const original = { ...sample, origin, metric: 'resting_heart_rate', method: 'provider_resting_daily', unit: 'beats_per_minute', value: 60 };
+    expect(healthSampleSchema.parse(original)).toEqual(original);
+    expect(healthSampleSchema.safeParse({ ...original, origin: { ...origin, recording_method: 'inferred_from_api' } }).success).toBe(false);
+    expect(healthSampleSchema.safeParse({ ...original, origin: { ...origin, owner_id: 'forged' } }).success).toBe(false);
+    expect(healthSampleSchema.parse(sample)).not.toHaveProperty('method');
+  });
   it('allows zero-change acknowledged anchor advancement and caps combined changes', () => {
     expect(healthIngestSchema.safeParse({ ...batch, samples: [] }).success).toBe(true);
     expect(healthIngestSchema.safeParse({ ...batch, samples: Array.from({ length: 128 }, () => sample) }).success).toBe(true);

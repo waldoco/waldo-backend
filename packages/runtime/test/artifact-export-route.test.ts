@@ -1,3 +1,4 @@
+import { ownerByteCustody } from '../src/rights/write-custody';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
@@ -15,10 +16,10 @@ const owner = (name: string) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO
 it('real DO: export download needs the owner session, serves the PDF, and another owner cannot read it by id', async () => {
   const a = owner('export-a'), b = owner('export-b');
   const seeded = await runInDurableObject(a, async (_i, s) => {
-    const scope = s.id.toString(), bodies = r2ArtifactBodies(bucket, scope);
+    const scope = s.id.toString(), bodies = r2ArtifactBodies(bucket, scope, ownerByteCustody(s.storage, async () => {}));
     const book = artifactBook(s.storage.sql, bodies, clock, () => crypto.randomUUID());
     const meta = await book.create({ name: 'Brief', kind: 'document', body_markdown: '# Brief\n\nowner A only' }, 'test');
-    const done = await artifactExports(s.storage.sql, book, bodies, r2ArtifactBinaries(bucket, scope), clock, () => crypto.randomUUID()).exportPdf({ artifact_id: meta.id, expected_revision: 1, format: 'pdf' });
+    const done = await artifactExports(s.storage.sql, book, bodies, r2ArtifactBinaries(bucket, scope, ownerByteCustody(s.storage, async () => {})), clock, () => crypto.randomUUID()).exportPdf({ artifact_id: meta.id, expected_revision: 1, format: 'pdf' });
     if (!done.ok) throw new Error(`export failed ${done.code}`);
     return { id: done.id, token: await consoleAccess(s.storage).grant() };
   });

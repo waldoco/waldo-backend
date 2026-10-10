@@ -33,7 +33,12 @@ export const appApprovalReviewV1Schema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('email_send'), account: text.optional(), to: z.array(text), cc: z.array(text), bcc: z.array(text), subject: text, body: text, ...approvalMetadata }),
   z.strictObject({ kind: z.literal('message_send'), channel: text, content: text, ...approvalMetadata }),
   z.strictObject({ kind: z.literal('calendar_change'), account: text.optional(), action: z.enum(['create', 'move', 'cancel']), title: text.nullable(), event_id: text.nullable(), start: text.nullable(), end: text.nullable(), reason: text,
-    calendar_id: text.optional(), attendees: z.array(text).optional(), send_updates: z.enum(['all', 'externalOnly', 'none']).optional(), ...approvalMetadata }),
+    review_timezone: text.optional(), calendar_id: text.optional(), connection_ref: text.optional(), attendees: z.array(text).optional(), send_updates: z.enum(['all', 'externalOnly', 'none']).optional(), description: z.string().max(2000).optional(), location: z.string().max(1000).optional(), seen_etag: text.optional(), ...approvalMetadata }),
+  z.strictObject({ kind: z.literal('browser_submit'), url: z.url(),
+    action: z.strictObject({ selector: text, description: text, method: text.optional(), arguments: z.array(text).optional() }),
+    binding: z.record(z.string(), text), steps: z.array(text),
+    request: z.strictObject({ url: z.url(), method: z.literal('POST'), fields: z.array(text) }).optional(), expires_at: count, ...approvalMetadata }),
+  z.strictObject({ kind: z.literal('mcp_call'), server: text, tool: text, args: z.record(z.string(), z.json()), expires_at: count, ...approvalMetadata }),
   z.strictObject({ kind: z.literal('google_task_change'), account: text, proposal: googleTaskProposalSchema, proposal_digest: revision }),
 ]);
 export const appControlWaitingDataV1Schema = z.strictObject({

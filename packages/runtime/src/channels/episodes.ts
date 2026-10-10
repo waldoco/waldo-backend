@@ -1,4 +1,5 @@
 import type { ConversationStore } from './conversation-store';
+import { retainOwnerConversationEntries } from './owner-turn-response';
 import type { ConversationEntry } from '@waldo/contracts';
 import { localIso, localToEpoch, nextAfter } from './reminders';
 import type { Scheduler } from '../scheduler/multiplexer';
@@ -76,10 +77,11 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
 export const indexedConversationStore = (store: ConversationStore, index: EpisodeIndex, now: () => number): ConversationStore => ({
   ...store,
   load: () => store.load(),
-  async save(entries, leafId, scope) {
-    await store.save(entries, leafId, scope);
+  async save(entries, leafId, scope, retention) {
+    const retained = retainOwnerConversationEntries(entries, retention);
+    await store.save(retained, leafId, scope, retention);
     const at = now();
-    const commit = () => { for (const entry of entries) index.add(entry.id, episodeSpeaker(entry), entry.appPayload, at); };
+    const commit = () => { for (const entry of retained) index.add(entry.id, episodeSpeaker(entry), entry.appPayload, at); };
     if (scope) scope.commit(commit); else commit();
   },
 });

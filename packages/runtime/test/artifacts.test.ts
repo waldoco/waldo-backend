@@ -1,23 +1,28 @@
+import { testByteCustody } from './helpers/byte-custody';
 import { describe, expect, it } from 'vitest';
 import { EXTERNAL_ORIGIN_TOOLS, TOOL_PERMISSIONS } from '@waldo/contracts';
-import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies, type ArtifactMeta } from '../src/channels/artifacts';
+import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies, unavailableArtifactBodies, type ArtifactMeta } from '../src/channels/artifacts';
 
 type Row = ArtifactMeta;
 const fakeSql = () => {
   const rows = new Map<string, Row>();
+  const history = new Map<string, string>();
   return {
     rows,
     exec(query: string, ...args: unknown[]) {
+      if (query.startsWith('PRAGMA')) return { toArray: () => [{ name: 'sha256' }] };
       if (query.startsWith('CREATE TABLE')) return { toArray: () => [] as Row[] };
+      if (query.startsWith('INSERT OR IGNORE INTO artifact_revisions')) { history.set(`${args[0]}:${args[1]}`, args[2] as string); return { toArray: () => [] }; }
+      if (query.startsWith('SELECT metadata_json FROM artifact_revisions')) return { toArray: () => [...history.entries()].filter(([key]) => args.length === 2 ? key === `${args[0]}:${args[1]}` : key.startsWith(`${args[0]}:`)).map(([, metadata_json]) => ({ metadata_json })) };
       if (query.startsWith('INSERT INTO artifacts')) {
-        const [id, name, kind, revision, byte_size, r2_key, provenance, taint, created_at, updated_at] = args as [string, string, Row['kind'], number, number, string, string, string, number, number];
-        rows.set(id, { id, name, kind, revision, byte_size, r2_key, provenance, taint, created_at, updated_at });
+        const [id, name, kind, revision, byte_size, r2_key, provenance, taint, created_at, updated_at, sha256] = args as [string, string, Row['kind'], number, number, string, string, string, number, number, string];
+        rows.set(id, { id, name, kind, revision, byte_size, r2_key, provenance, taint, created_at, updated_at, sha256 });
         return { toArray: () => [] as Row[] };
       }
       if (query.startsWith('UPDATE artifacts SET')) {
-        const [revision, byte_size, r2_key, provenance, updated_at, id] = args as [number, number, string, string, number, string];
+        const [revision, byte_size, r2_key, provenance, updated_at, sha256, id, expected] = args as [number, number, string, string, number, string, string, number];
         const row = rows.get(id)!;
-        rows.set(id, { ...row, revision, byte_size, r2_key, provenance, updated_at });
+        if (row?.revision === expected) rows.set(id, { ...row, revision, byte_size, r2_key, provenance, updated_at, sha256 });
         return { toArray: () => [] as Row[] };
       }
       if (query.startsWith('SELECT * FROM artifacts WHERE id')) {
@@ -172,7 +177,7 @@ describe('R2 owner artifact bodies', () => {
     return {
       objects, calls,
       binding: {
-        async put(key: string, body: string) { calls.push(key); objects.set(key, body); },
+        async put(key: string, body: string) { calls.push(key); objects.set(key, typeof body === 'string' ? body : new TextDecoder().decode(body)); },
         async get(key: string) { calls.push(key); const body = objects.get(key); return body === undefined ? null : { async text() { return body; } }; },
       } as unknown as R2Bucket,
     };
@@ -182,7 +187,7 @@ describe('R2 owner artifact bodies', () => {
     const shared = bucket();
     const sqlA = fakeSql();
     const sqlB = fakeSql();
-    const make = (sql: ReturnType<typeof fakeSql>, owner: string) => artifactBook(sql as never, r2ArtifactBodies(shared.binding, owner), clock, () => 'same-id');
+    const make = (sql: ReturnType<typeof fakeSql>, owner: string) => artifactBook(sql as never, r2ArtifactBodies(shared.binding, owner, testByteCustody()), clock, () => 'same-id');
     const a = make(sqlA, 'owner-a');
     const b = make(sqlB, 'owner-b');
     const metaA = await a.create({ ...createArgs, body_markdown: 'owner A private' }, 'test');
@@ -201,15 +206,15 @@ describe('R2 owner artifact bodies', () => {
   it('does not read legacy unscoped bodies, even when metadata references them', async () => {
     const shared = bucket();
     shared.objects.set('artifacts/art:legacy', 'legacy cannot be attributed by a shared key');
-    const store = r2ArtifactBodies(shared.binding, 'owner-a');
+    const store = r2ArtifactBodies(shared.binding, 'owner-a', testByteCustody());
     expect(await store.get('artifacts/art:legacy')).toBeNull();
     expect(shared.calls).not.toContain('artifacts/art:legacy');
   });
 
   it('encodes namespaces and logical keys injectively instead of joining path segments', async () => {
     const shared = bucket();
-    const a = r2ArtifactBodies(shared.binding, 'a/b');
-    const b = r2ArtifactBodies(shared.binding, 'a%2Fb');
+    const a = r2ArtifactBodies(shared.binding, 'a/b', testByteCustody());
+    const b = r2ArtifactBodies(shared.binding, 'a%2Fb', testByteCustody());
     await a.put('artifacts/art:x/r2', 'slash owner');
     await b.put('artifacts/art:x/r2', 'percent owner');
     expect(await a.get('artifacts/art:x/r2')).toBe('slash owner');
@@ -239,4 +244,11 @@ describe('R2 owner artifact bodies', () => {
     expect(unknown).toMatchObject({ ok: false, code: 'not_found' });
     expect((unknown as { error: string }).error).not.toMatch(/^body_unavailable/);
   });
+});
+
+it('missing durable artifact storage returns a typed unavailable tool outcome without creating fake saved metadata', async () => {
+  const sql = fakeSql(), book = artifactBook(sql as never, unavailableArtifactBodies(), clock, () => 'missing');
+  const handlers = artifactHandlers(book);
+  expect(await handlers.find(handler => handler.name === 'create_artifact')!.handle(createArgs as never)).toMatchObject({ ok: false, code: 'transient', error: expect.stringContaining('No artifact was saved') });
+  expect(book.list()).toEqual([]);
 });

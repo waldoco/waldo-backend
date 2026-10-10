@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { APP_SEND_MAX_WIRE_BYTES, appHistoryResultV1Schema, appSendResultV1Schema } from './core';
 import { appReplayQueryV1Schema, appReplayResultV1Schema } from './replay';
+import { appMediaFileRefV1Schema, appVoiceReviewV1Schema } from './media';
 
 export const appThreadIdV1Schema = z.string().regex(/^thr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 const revision = z.int().positive();
@@ -32,11 +33,12 @@ export const appThreadContextRefV1Schema = z.union([
   z.strictObject({ kind: z.literal('thread'), thread_id: appThreadIdV1Schema, revision }),
   z.strictObject({ kind: z.literal('source'), source_ref: z.string().regex(/^[A-Za-z0-9:_-]{1,256}$/), revision: revision.optional() }),
 ]);
-export const appThreadAttachmentRefV1Schema = z.strictObject({ file_id: z.uuid(), revision });
+export const appThreadAttachmentRefV1Schema = appMediaFileRefV1Schema;
 export const appThreadSendV1Schema = z.strictObject({
   client_message_id: appThreadMessageIdV1Schema, expected_revision: revision,
   text: z.string().trim().min(1).max(4000), context_refs: z.array(appThreadContextRefV1Schema).max(16).default([]),
-  attachment_refs: z.array(appThreadAttachmentRefV1Schema).max(16).default([]),
+  attachment_refs: z.array(appThreadAttachmentRefV1Schema).max(4).default([]),
+  voice: appVoiceReviewV1Schema.optional(),
 });
 export const appThreadRoutesV1 = [
   { method: 'GET', path: '/app/v1/threads', query: appThreadListQueryV1Schema, response: appThreadListV1Schema, authenticated: true },

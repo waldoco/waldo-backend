@@ -101,7 +101,7 @@ export async function loadStagedInputs(
     if (total > MAX_INPUT_TOTAL_CHARS) throw new FailClosed('input_integrity');
     provenance.add(
       actual.source,
-      { source_kind: 'invocation_input', scope: 'invocation', source_taint: null },
+      { source_kind: invocation.admission_source === 'trusted_scheduler' && actual.source.source_kind === 'runtime_metadata' ? 'runtime_metadata' : 'invocation_input', scope: 'invocation', source_taint: null },
       stableJson({ input_ref: actual.input_ref, content_digest: actual.content_digest }),
       snapshot.revision_ref,
     );
@@ -190,17 +190,20 @@ export async function loadRuntimeContextMaterials(
     throw new FailClosed('materials_unavailable');
   }
   const workspace = workspaceValues.map((fragment) => {
+    const raw = recordWithKeys(fragment, ['text', 'source'], 'mandatory_context_missing');
+    const source = snapshotContextSource(raw.source, 'provenance_invalid');
+    const health = source.source_kind === 'derived_health_view';
     const prepared = prepareMandatoryFragment(
       fragment,
       inputs,
       provenance,
       snapshot.revision_ref,
-      { source_taint: 'external' },
-      true,
+      health ? { source_kind: 'derived_health_view', scope: 'principal', source_taint: null } : { source_taint: 'external' },
+      !health,
     );
     if (
       prepared.source.source_kind !== 'connector_snapshot' &&
-      prepared.source.source_kind !== 'workspace_snapshot'
+      prepared.source.source_kind !== 'workspace_snapshot' && !health
     ) {
       throw new FailClosed('provenance_invalid');
     }

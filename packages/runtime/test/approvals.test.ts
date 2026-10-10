@@ -52,7 +52,7 @@ describe('approval desk', () => {
         const id = await desk.proposeBrowserSubmit(payload);
         expect((await desk.decide(id, 'a', 'test')).toast).toBe('Outcome unknown');
         expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe('uncertain');
-        expect(desk.pending(1000).some((item) => item.id === id)).toBe(false);
+        expect(desk.pending(1000).find((item) => item.id === id)).toMatchObject({ state: 'unconfirmed', undoable: false });
         expect(desk.ledger([])).toContain('uncertain:');
       }
       const throwing = approvalDesk(state.storage.sql, { ...base, browserSubmit: async () => { throw new Error('response lost'); } });
@@ -97,7 +97,8 @@ describe('approval desk', () => {
         browserSubmit: async (p) => { executed.push(p.action.description); return { status: 'acknowledged_unverified' as const, message: 'Action acknowledged, result not verified.' }; },
       });
       const id = await desk.proposeBrowserSubmit(payload);
-      expect(sent[0]!.body.text).toBe('Approve this browser action? Place the order on https://shop.example/checkout (total: Rs 499, items: 1x bottle)');
+      expect(sent[0]!.body.text).toContain('Approve this browser action? Place the order on https://shop.example/checkout (total: Rs 499, items: 1x bottle)');
+      expect(sent[0]!.body.text).toContain('\"selector\": \"#pay\"'); expect(sent[0]!.body.text).toContain('\"method\": \"click\"');
       const keyboard = JSON.stringify(sent[0]!.body.reply_markup);
       expect(keyboard).toContain(`a:${id}`);
       expect(keyboard).toContain(`s:${id}`);
@@ -237,7 +238,7 @@ describe('approval desk', () => {
       let now = 1_000_000;
       let n = 0;
       const client = {
-        event: async (id: string) => ({ id, title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false, etag: 'v1' }),
+        event: async (id: string) => ({ id, title: ({ e1: 'Gym', e2: 'Sync', e3: 'Standup' } as Record<string, string>)[id] ?? 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false, etag: 'v1' }),
         moveEvent: async (id: string, start: string) => { google.push(`move ${id} ${start}`); return { id, title: 'Gym', start, end: start, all_day: false, etag: 'v1' }; },
         createEvent: async () => { google.push('create'); return { id: 'new1', title: 'x', start: '', end: '', all_day: false, etag: 'v1' }; },
         cancelEvent: async (id: string) => { google.push(`cancel ${id}`); },
@@ -247,7 +248,9 @@ describe('approval desk', () => {
         owner: 42, google: async () => client, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
       });
       const id = await desk.propose({ action: 'move', event_id: 'e1', title: 'Gym', start: iso('2026-09-23T19:00:00+05:30'), end: iso('2026-09-23T20:00:00+05:30'), reason: 'you have a call at 6' });
-      expect(sent[0]!.body.text).toBe('Proposed: Move "Gym" to Wed 23 Sept, 19:00 to Wed 23 Sept, 20:00. you have a call at 6');
+      expect(sent[0]!.body.text).toContain('Proposed: Move "Gym" to Wed 23 Sept, 19:00 to Wed 23 Sept, 20:00. you have a call at 6');
+      expect(sent[0]!.body.text).toContain('Calendar: primary');
+      expect(sent[0]!.body.text).toContain('Reviewed version: v1');
       expect(JSON.stringify(sent[0]!.body.reply_markup)).toContain(`a:${id}`);
       expect(google).toEqual([]);
 
@@ -345,7 +348,7 @@ describe('approval desk', () => {
       let now = 1_000_000;
       let n = 0;
       const client = {
-        event: async (id: string) => ({ id, title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false, etag: 'v1' }),
+        event: async (id: string) => ({ id, title: ({ e1: 'Gym', e2: 'Sync', e3: 'Standup' } as Record<string, string>)[id] ?? 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false, etag: 'v1' }),
         moveEvent: async (id: string, start: string) => { google.push(`move ${id} ${start}`); return { id, title: 'Gym', start, end: start, all_day: false, etag: 'v1' }; },
         createEvent: async () => { google.push('create'); return { id: 'new1', title: 'x', start: '', end: '', all_day: false, etag: 'v1' }; },
         cancelEvent: async (id: string) => { google.push(`cancel ${id}`); },
@@ -810,7 +813,7 @@ describe('task source card ledger write', () => {
       expect(rows).toHaveLength(4);
       expect(rows.every(row => row.status === (blocked ? 'card_unconfirmed' : 'open'))).toBe(true);
       if (blocked) {
-        expect(desk.pending(1000)).toEqual([]);
+        expect(desk.pending(1000).map(item=>({id:item.id,state:item.state,undoable:item.undoable}))).toEqual(rows.map(row=>({id:row.id,state:'unconfirmed',undoable:false})));
         for (const row of rows) expect((await desk.decide(row.id, 'a', 'test')).toast).toBe('Already handled.');
         expect(ran).toBe(0);
         expect(desk.ledger([]).match(/review card delivery unconfirmed; cannot approve/g)).toHaveLength(4);

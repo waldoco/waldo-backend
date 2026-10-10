@@ -123,3 +123,26 @@ it('legacy signup cannot send an unverified phone to the atomic owner creation p
   const payload = JSON.parse(String(fetcher.mock.calls[1]?.[1].body));
   expect(payload.p_phone).toBe('');
 });
+
+
+it('rejects malformed signed session inventory and signout counts instead of confirming empty authority', async () => {
+  const row = { session: 'a'.repeat(64), created_at: '2026-10-10T12:00:00+00:00', last_seen_at: '2026-10-10T12:05:00+00:00' };
+  for (const value of [null, false, {}, [null], [{ ...row, session: 'not-a-session' }], [{ ...row, created_at: 'not-a-time' }], [{ ...row, last_seen_at: null }], [{ ...row, token: 'unexpected-field' }], [row, row]]) {
+    const fetcher = vi.fn(async () => json(value));
+    await expect(consoleAuth(env, fetcher as typeof fetch, now)!.listSessions('actual-owner')).rejects.toThrow('session inventory unavailable');
+  }
+  for (const value of [null, 0, 'false', {}]) {
+    const fetcher = vi.fn(async () => json(value));
+    await expect(consoleAuth(env, fetcher as typeof fetch, now)!.revokeSession('actual-owner', 'a'.repeat(64))).rejects.toThrow('session revocation unavailable');
+  }
+  for (const value of [null, false, '0', -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const fetcher = vi.fn(async () => json(value));
+    await expect(consoleAuth(env, fetcher as typeof fetch, now)!.signOutAll('actual-owner')).rejects.toThrow('session signout unavailable');
+  }
+  const fetcher = vi.fn().mockResolvedValueOnce(json([row])).mockResolvedValueOnce(json([])).mockResolvedValueOnce(json(0)).mockResolvedValueOnce(json(2));
+  const auth = consoleAuth(env, fetcher as typeof fetch, now)!;
+  expect(await auth.listSessions('actual-owner')).toEqual([row]);
+  expect(await auth.listSessions('actual-owner')).toEqual([]);
+  expect(await auth.signOutAll('actual-owner')).toBe(0);
+  expect(await auth.signOutAll('actual-owner')).toBe(2);
+});

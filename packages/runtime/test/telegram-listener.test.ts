@@ -240,3 +240,48 @@ it('WhatsApp actual listener propagates uncertain final send without retry wordi
  await expect(listener.handle({updateId:9000000000020,messageId:null,senderId:OWNER,chatId:OWNER,sentAt:null,text:'save result'})).rejects.toThrow('uncertain post-issue');
  expect(effects).toBe(1);expect(sent).toEqual(['Saved result.']);
 });
+
+
+describe('protected owner response delivery', () => {
+  it('delivers health text to its owner without durable queue, reaction model or body observer', async () => {
+    const { calls, api } = recorder(), logs: unknown[] = [];
+    const queueFinal = vi.fn(async () => {}), chooseReaction = vi.fn(async () => '👌');
+    let checks = 0;
+    const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, queueFinal, chooseReaction,
+      respond: async () => { throw new Error('legacy path'); },
+      respondReceipt: async () => ({ text: 'Synthetic owner sleep: 420 minutes; keep a recovery break.', custody: { kind: 'volatile_owner_health', assertHealthCurrent: async () => {}, assertCurrent: async () => { checks++; } } }),
+      saveOffset: async () => {}, log: entry => { logs.push(entry); } });
+    await expect(listener.pollOnce(new TelegramPollingAdapter({ getUpdates: async () => [update(901)] }), 0)).resolves.toEqual(['answered']);
+    expect(calls.filter(([kind]) => kind === 'send').map(([, payload]) => payload)).toEqual([{ chat_id: OWNER, text: 'Synthetic owner sleep: 420 minutes; keep a recovery break.' }]);
+    expect(queueFinal).not.toHaveBeenCalled(); expect(chooseReaction).not.toHaveBeenCalled();
+    expect(JSON.stringify(logs)).not.toContain('420 minutes'); expect(checks).toBeGreaterThanOrEqual(4);
+  });
+  it('requires actual protected app delivery evidence and never uses the journaling send API', async () => {
+    const { calls, api } = recorder(), journal = vi.fn(async () => {});
+    const receipt = { text: 'Synthetic owner sleep: 421 minutes.', custody: { kind: 'volatile_owner_health' as const, assertHealthCurrent: async () => {}, assertCurrent: async () => {} } };
+    const options = { ownerTelegramId: OWNER, surface: 'app' as const, api, queueFinal: journal,
+      respond: async () => 'legacy', respondReceipt: async () => receipt, saveOffset: async () => {} };
+    const turn = (await new TelegramPollingAdapter({ getUpdates: async () => [update(902)] }).poll(0)).accepted[0]!;
+    await expect(new TelegramOwnerListener(options).handle(turn)).rejects.toThrow('Protected app delivery unavailable');
+    expect(calls.filter(([kind]) => kind === 'send')).toEqual([]); expect(journal).not.toHaveBeenCalled();
+    await expect(new TelegramOwnerListener({ ...options, deliverResponse: async () => undefined }).handle(turn)).rejects.toThrow('send blocked');
+    await expect(new TelegramOwnerListener({ ...options, deliverResponse: async (response) => { expect(response.text).toContain('421 minutes'); return { authorized_readback: true }; } }).handle(turn)).resolves.toBe('answered');
+  });
+  it('withdrawal blocks dispatch and provider failure text stays out of ordinary observers', async () => {
+    const { calls, api } = recorder(), logs: unknown[] = [];
+    const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, api,
+      respond: async () => 'legacy', respondReceipt: async () => ({ text: 'Synthetic health 422 minutes.', custody: { kind: 'volatile_owner_health', assertHealthCurrent: async () => {}, assertCurrent: async () => { throw new Error('Synthetic private error 422 minutes.'); } } }),
+      saveOffset: async () => {}, log: entry => { logs.push(entry); } });
+    const turn = (await new TelegramPollingAdapter({ getUpdates: async () => [update(903)] }).poll(0)).accepted[0]!;
+    await expect(listener.handle(turn)).rejects.toThrow('422 minutes');
+    expect(calls.filter(([kind]) => kind === 'send')).toEqual([]); expect(JSON.stringify(logs)).not.toContain('422 minutes');
+  });
+});
+
+it('typed response failure before receipt admission cannot expose a private exception to logs', async () => {
+  const logs: unknown[] = [];
+  const api = { sendMessage: vi.fn(async () => ({})), sendChatAction: vi.fn(async () => ({})), setMessageReaction: vi.fn(async () => ({})) };
+  const listener = new TelegramOwnerListener({ ownerTelegramId: 7, api: api as never, respond: async () => 'legacy', respondReceipt: async () => { throw new Error('Private health exception 420 minutes'); }, saveOffset: async () => {}, log: row => logs.push(row), surface: 'whatsapp' });
+  await expect(listener.handle({ senderId: 7, chatId: 7, messageId: null, updateId: 9, text: 'Read current health', sentAt: null } as never)).rejects.toThrow('Private health exception');
+  expect(JSON.stringify(logs)).not.toContain('420'); expect(api.sendMessage).not.toHaveBeenCalled();
+});

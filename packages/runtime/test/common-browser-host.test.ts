@@ -100,6 +100,30 @@ it('read result exposes the real retained session handle across fresh host reads
  const second=await f.host().handler.handle({url:'https://public-pages.fixture.invalid/b',instruction:'Read.'},f.ctx) as any;
  expect(second.data.session_handle).toBe(first.data.session_handle);expect(commonBrowserFixture.allocations).toBe(1);
 });
+
+it('an initial empty observation keeps model-visible exact-session custody for inspect, recovery and cancel',async()=>{
+ const f=fixture(),host=f.host();commonBrowserFixture.text='';
+ const failed=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx) as any;
+ expect(failed).toMatchObject({ok:false,browser:{code:'empty_content',stage:'observation',diagnostic:{status:200},retained:{state:'unobserved',observation_revision:null},recovery:{can_cancel:true,can_inspect:true,can_navigate:true,requires_same_session:true}}});
+ const handle=failed.browser.retained.session_handle;
+ expect(handle).toBe((f.rows.get('common-browser:fixture-task') as any).session.id);expect(host.attachments()).toEqual([]);
+ const command={url:'https://public-pages.fixture.invalid/a',task:'Inspect current retained custody',session_handle:handle,max_actions:1,command:{operation:'inspect' as const}};
+ expect(await host.actionHandler.handle(command,f.ctx)).toMatchObject({ok:true,data:{kind:'retained_session_status',page_observed:false,retained:{session_handle:handle}}});
+ expect(commonBrowserFixture.navigations).toBe(1);commonBrowserFixture.text='Actually rendered option B.';
+ expect(await host.actionHandler.handle({...command,command:{operation:'goto',url:'https://public-pages.fixture.invalid/b'}},f.ctx)).toMatchObject({ok:true,data:{text:'Actually rendered option B.',session_handle:handle,document_state:'recreated'}});
+ expect(commonBrowserFixture.allocations).toBe(1);
+ expect(await host.actionHandler.handle({...command,command:{operation:'cancel'}},f.ctx)).toMatchObject({ok:true,data:{ended:true}});
+ expect((f.rows.get('common-browser:fixture-task') as any).cleanup).toBe('closed');expect(commonBrowserFixture.ends).toBe(1);
+});
+
+it('initial failed observation can close before inspect and rejects owner/handle/provider substitution',async()=>{
+ const f=fixture(),host=f.host();commonBrowserFixture.text='';const failed=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx) as any;
+ const args={url:'https://public-pages.fixture.invalid/a',task:'Cancel exact failed session',session_handle:failed.browser.retained.session_handle,max_actions:1,command:{operation:'cancel' as const}};
+ expect(await host.actionHandler.handle(args,{...f.ctx as object,authenticatedUserId:'other-owner'} as never)).toMatchObject({ok:false});
+ expect(await host.actionHandler.handle({...args,session_handle:crypto.randomUUID()},f.ctx)).toMatchObject({ok:false});
+ expect(await host.actionHandler.handle({...args,provider:'browserbase_stagehand_http_v3'},f.ctx)).toMatchObject({ok:false});expect(commonBrowserFixture.ends).toBe(0);
+ expect(await host.actionHandler.handle(args,f.ctx)).toMatchObject({ok:true,data:{ended:true}});expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.ends).toBe(1);
+});
 it('normal browser host reads, types into an observed public input, reobserves and terminates one allocation',async()=>{
  const f=fixture(),host=f.host();
  const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.',provider:'cloudflare_playwright'},f.ctx) as any;
@@ -234,4 +258,44 @@ it('separates an admitted long task from the provider inactivity timeout',async(
  let idle:number|undefined;const load=f.config.loadSdk;f.config.loadSdk=async()=>{const sdk=await load();return {...sdk,acquire:async(binding:any,options:any)=>{idle=options.keep_alive;return sdk.acquire(binding,options);}} as never;};
  const host=f.host();expect(await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx)).toMatchObject({ok:true});expect(idle).toBe(600_000);
  expect((f.rows.get('common-browser:fixture-task') as any).session.expiresAt).toBeGreaterThan(Date.now()+3_500_000);await host.cancel();
+});
+
+
+it('confirmed emergency provider termination closes exact host custody and settles one allocation',async()=>{
+ const f=fixture(),host=f.host();let settlements=0;
+ (f.config as any).allocationClosed=async()=>{settlements++;};
+ commonBrowserFixture.text='';
+ commonBrowserFixture.onGoto=()=>{const page=commonBrowserFixture.pages[0];page.close=async()=>{throw Error('page shutdown failed');};};
+ const failed=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read page.'},f.ctx) as any;
+ expect(failed).toMatchObject({ok:false,browser:{retained:{state:'closed'},recovery:{can_navigate:false,can_cancel:false}}});
+ expect(f.rows.get('common-browser:fixture-task')).toMatchObject({cleanup:'closed',session:{state:'ended'}});
+ expect(settlements).toBe(1);expect(commonBrowserFixture.ends).toBe(1);
+ expect(await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read again.'},f.ctx)).toMatchObject({ok:false});
+ expect(commonBrowserFixture.allocations).toBe(1);expect(settlements).toBe(1);
+});
+
+
+it('confirmed absence survives settlement failure with frozen duration and bounded bookkeeping retry',async()=>{
+ const f=fixture(),host=f.host(),times:number[]=[];
+ (f.config as any).allocationClosed=async(_grant:unknown,_session:unknown,terminatedAt:number)=>{times.push(terminatedAt);if(times.length===1)throw Error('spend ledger temporarily unavailable');};
+ commonBrowserFixture.text='';commonBrowserFixture.onGoto=()=>{commonBrowserFixture.pages[0].close=async()=>{throw Error('page shutdown failed');};};
+ expect(await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx)).toMatchObject({ok:false,browser:{code:'cleanup_unconfirmed',retained:{state:'closed'},recovery:{can_navigate:false}}});
+ const closed=f.rows.get('common-browser:fixture-task') as any;
+ expect(closed).toMatchObject({cleanup:'closed',session:{state:'ended'},settlement:{state:'pending',attempts:1,failed:true}});
+ expect(commonBrowserFixture.ends).toBe(1);
+ await maintainCommonBrowsers(f.storage,f.config,closed.settlement.retryAt);
+ expect(f.rows.get('common-browser:fixture-task')).toMatchObject({cleanup:'closed',settlement:{state:'settled',attempts:2}});
+ expect(times).toEqual([closed.settlement.terminatedAt,closed.settlement.terminatedAt]);
+ expect(commonBrowserFixture.ends).toBe(1);expect(commonBrowserFixture.allocations).toBe(1);
+});
+
+it('failed settlement retries stop after three attempts while physical custody stays closed',async()=>{
+ const f=fixture(),host=f.host();let attempts=0;
+ (f.config as any).allocationClosed=async()=>{attempts++;throw Error('spend repair required');};
+ await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx);
+ await expect(host.cancel()).rejects.toThrow('spend repair required');
+ for(let i=0;i<4;i++){const row=f.rows.get('common-browser:fixture-task') as any;await maintainCommonBrowsers(f.storage,f.config,row.settlement.retryAt);}
+ expect(attempts).toBe(3);expect(commonBrowserFixture.ends).toBe(1);
+ expect(f.rows.get('common-browser:fixture-task')).toMatchObject({cleanup:'closed',settlement:{state:'pending',attempts:3,failed:true}});
+ expect(f.rows.get('common_browser_due_v1')).toBeNull();
 });

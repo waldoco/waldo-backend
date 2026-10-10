@@ -2,7 +2,7 @@ import { ownerEffectOperationRef, type OwnerEffectLedger } from '../../channels/
 import { taskSourceClient } from '../task-source-io';
 import { availabilityWindows } from './availability';
 import type { ProxyIntent } from '../../connectors/proxy-intent';
-import { artifactMarker, extractArtifacts, quarantineArtifacts, type ArtifactKind, type ExtractedArtifact } from '../../security/artifact-hygiene';
+import { artifactMarker, extractArtifactFields, quarantineArtifacts, type ArtifactKind, type ExtractedArtifact } from '../../security/artifact-hygiene';
 import {
   calendarPageSchema, queryAvailabilityArgsSchema, type QueryAvailabilityArgs,
   googleTaskListPageSchema, googleCalendarListPageSchema, googleTasksPageSchema, type GoogleTasksPage,
@@ -16,11 +16,11 @@ import type { OwnerClock } from './get-context';
 
 export type GoogleAccess = Readonly<{
   client(feature?: GoogleFeature, intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>, account?: string): Promise<GoogleClient | null>;
-  state?():Promise<readonly Readonly<{id:string;email:string;error:string|null;calendar:boolean;mail:boolean;tasks:boolean}>[]>;
+  state?():Promise<readonly Readonly<{id:string;email:string;error:string|null;calendar:boolean;calendar_list?:boolean;mail:boolean;tasks:boolean}>[]>;
 }>;
 
 export type EffectDesk = Readonly<{
-  propose(proposal: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string): Promise<string>;
+  propose(proposal: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string, assertCurrent?: () => Promise<void>): Promise<string>;
   proposeSendEmail(proposal: EmailSendProposal): Promise<string>;
   record(kind: string, summary: string, payload: unknown): void;
 }>;
@@ -44,17 +44,23 @@ const authFailed = (reason: ConnectIntent['reason'], feature: GoogleFeature): To
 
 async function withGoogle<T extends object>(google: GoogleAccess, feature: GoogleFeature, ctx: ToolDispatcherContext | undefined, work: (client: GoogleClient) => Promise<T>, account?: string): Promise<ToolResult<T>> {
   try {
+  if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
   const client = await google.client(feature, undefined, ctx?.assertTaskSourceCurrent, account);
+  if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
   if (client === null) {
     // No serving client while a connected account is failing (invalid_grant recorded, circuit
     // open) asks for a reconnect, not a fresh connect. Accounts without the feature stay a
     // connection gap.
     const accounts = google.state ? await google.state() : undefined;
-    const dead = (feature === 'calendar' || feature === 'mail' || feature === 'tasks') && (accounts?.some((known) => (!account || known.email.toLowerCase() === account.toLowerCase()) && known.error !== null && known[feature]) ?? false);
-    return authFailed(dead ? 'reauth_needed' : 'not_connected', feature);
+    if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
+    const eligible = accounts?.filter(known => !account || known.email.toLowerCase() === account.toLowerCase());
+    const dead = (feature === 'calendar' || feature === 'calendar_list' || feature === 'mail' || feature === 'tasks') && (eligible?.some(known => known.error !== null && known[feature] === true) ?? false);
+    const missingDiscoveryGrant = feature === 'calendar_list' && eligible?.some(known => known.calendar_list === false);
+    return authFailed(dead ? 'reauth_needed' : missingDiscoveryGrant ? 'scope_missing' : 'not_connected', feature);
   }
     if (account && client.account?.email?.toLowerCase() !== account.toLowerCase()) throw new Error('Selected Google account is unavailable; no other account was used');
     const data = await work(taskSourceClient(client, ctx));
+    if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
     return { ok: true, data: { ...data, account: client.account ?? {connection_id:null,email:null} }, source_taint: 'external' };
   } catch (error) {
     // 401 = the stored grant is dead. A 403 prompts for consent only on structured evidence that the scope is
@@ -117,16 +123,14 @@ export type ArtifactRelay = (from: string, artifacts: readonly ExtractedArtifact
 // without the code ever entering model context, episodes, or traces. The tool result carries only
 // the marker; a failed or absent relay falls back to the source-app copy, never a false claim.
 const relayThreadMessage = async <T extends { subject: string; body: string; from: string }>(item: T, relay: ArtifactRelay | undefined): Promise<T & { quarantined?: readonly ArtifactKind[] }> => {
-  const subject = extractArtifacts(item.subject);
-  const body = extractArtifacts(item.body);
-  const artifacts = [...subject.artifacts, ...body.artifacts.filter((b) => !subject.artifacts.some((s) => s.value === b.value))];
+  const { texts, artifacts } = extractArtifactFields([item.subject, item.body]);
   if (artifacts.length === 0) return item;
   const kinds = [...new Set(artifacts.map((artifact) => artifact.kind))].sort();
-  const relayed = relay !== undefined && await relay(item.from, artifacts).then(() => true, () => false);
+  const relayed = relay !== undefined && await relay(item.from, artifacts).then(sent => sent === true, () => false);
   // Only the matched spans are replaced; the rest of subject and body stays readable. A failed or
   // absent relay keeps the source-app marker, never a false sent claim.
   const relayedMarker = (text: string): string => kinds.reduce((t, kind) => t.replaceAll(artifactMarker(kind), `[${kind} artifact - sent to the owner in a separate message]`), text);
-  return { ...item, subject: relayed ? relayedMarker(subject.text) : subject.text, body: relayed ? relayedMarker(body.text) : body.text, quarantined: kinds };
+  return { ...item, subject: relayed ? relayedMarker(texts[0]!) : texts[0]!, body: relayed ? relayedMarker(texts[1]!) : texts[1]!, quarantined: kinds };
 };
 
 export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger) => [
@@ -235,15 +239,16 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<SearchCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'read_thread',
-    description: "Read one Gmail thread by thread_id - the messages with sender, subject, time and body. Use after get_communication or search_communication surfaces a thread the owner asks about, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting.",
+    description: "Read one Gmail thread by thread_id - the messages with sender, subject, time and body. Use after get_communication or search_communication surfaces a thread the owner asks about, before drafting a reply. Continue thread messages with cursor and the same thread/account. Each body is a bounded page: inspect body_complete/body_cursor, then read the same thread/account/message_id with body_cursor to consume later text. Exhausted continuation covers its current page only; snippets or omitted attachments cannot establish full source completeness. Changed sources require restarting.",
     schema: readThreadArgsSchema,
     trigger_allowlist: allowlist('read_thread'),
     autonomy_gated: false,
     requires_connector: true,
-    handle: ({ thread_id, limit, cursor, account }: ReadThreadArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
+    handle: ({ thread_id, limit, cursor, account, message_id, body_cursor }: ReadThreadArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
+      if(message_id){if(!client.messageBodyPage)throw new Error('Gmail message body pagination adapter unavailable');const page=await client.messageBodyPage(thread_id,message_id,body_cursor);return {thread_id,message_id,account:client.account??{connection_id:null,email:null},body_offset:page.body_offset,body_total_chars:page.total_chars,body_cursor:page.next_cursor,messages:[await relayThreadMessage(page.message,relayArtifact)],coverage:{scope:'inline_message_text',result_scope:'current_page',page_exhausted:page.next_cursor===null,complete:!body_cursor&&page.next_cursor===null&&page.source_complete,source_complete:page.source_complete,attachments_omitted:page.attachments_omitted}};}
       if (!client.threadPage) throw new Error('Gmail thread pagination adapter unavailable');
       const page = await client.threadPage(thread_id, limit, cursor);
-      return {thread_id, account: client.account ?? {connection_id:null,email:null}, cursor: page.cursor, messages: await Promise.all(page.messages.map(message => relayThreadMessage(message, relayArtifact)))};
+      return {thread_id, account: client.account ?? {connection_id:null,email:null}, cursor: page.cursor, messages: await Promise.all(page.messages.map(message => relayThreadMessage(message, relayArtifact))),coverage:{scope:'thread_inline_message_text',result_scope:'current_page',page_exhausted:page.cursor===null,body_complete:page.messages.every(message=>message.body_complete===true),complete:!cursor&&page.cursor===null&&page.messages.every(message=>message.body_complete===true),attachments_omitted:page.messages.some(message=>message.attachments_omitted===true)}};
     }, account),
   } satisfies ToolHandler<ReadThreadArgs, unknown, ToolDispatcherContext>,
   {
@@ -291,7 +296,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     mutates_state: true,
     async handle(args: ProposeCalendarChangeArgs, ctx?: ToolDispatcherContext) {
       const result = await withGoogle(google, 'calendar', ctx, async client => ({
-        proposal_id: await desk.propose({...args, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx)),
+        proposal_id: await desk.propose({...args, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx), ctx?.assertTaskSourceCurrent),
         status: 'sent to the owner with Do it / Modify / Not now buttons', applied: false,
       }), args.account);
       return result.ok ? {...result, source_taint:null} : result;
@@ -327,6 +332,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           if (observed.draft_id !== result.draft_id || result.message_id && observed.message_id !== result.message_id || !verifiedDraft(observed, input)) throw new Error('Draft readback differs from the frozen payload or is unavailable; check Gmail before retrying.');
           return { draft_id: observed.draft_id, message_id: observed.message_id, thread_id: observed.thread_id, readback_verified: true, verification: 'exact_provider_readback' as const };
         };
+        if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
         let draft = effects ? (await effects.execute({ operationId: intent.id, owner_ref: ctx.authenticatedUserId, tool: 'draft_email', payload: legacy ? prior!.payload : { account: client.account ?? { connection_id: null, email: null }, draft: input } }, {
           dispatch: async () => { const result = await readback(await client.draft(input)); return { provider_id: result.draft_id, result }; },
           reconcile: async () => {
@@ -341,6 +347,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
         // Old done receipts had only the mutation/search IDs. Reopen them too; their
         // ledger status alone does not prove the frozen draft content is still present.
         if (legacy) draft = await readback(draft);
+        if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
         desk.record('email_draft', `Drafted "${args.subject}" to ${args.to.join(', ')}`, draft);
         return { ...draft, sent: false };
       }, args.account);

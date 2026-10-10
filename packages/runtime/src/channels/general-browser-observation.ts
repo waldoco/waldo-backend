@@ -6,6 +6,32 @@ export type GeneralObservation = Readonly<{ revision: string; tab_ref: string; u
 export type GeneralSnapshot = Readonly<{ ownerId: string; sessionId: string; generation: number; targetId: string; digest: string; state: GeneralPageState; observation: GeneralObservation; image: Readonly<{ mime_type: 'image/png'; bytes: Uint8Array }> }>;
 export type GeneralActionSnapshot = Omit<GeneralSnapshot, 'image'>;
 
+// Rendering readiness only. The model still decides what the observed content
+// establishes; a successful navigation response is never useful-content proof.
+export function generalPageContentReady():boolean {
+  const root:any=globalThis;
+  const document=root.document;
+  if(document?.body?.innerText?.trim())return true;
+  if(!document)return false;
+  const roots=[document];
+  for(let index=0;index<roots.length;index++)for(const node of roots[index].querySelectorAll('*')){
+    if(node.shadowRoot)roots.push(node.shadowRoot);
+    const box=node.getBoundingClientRect(),style=root.getComputedStyle(node);
+    if(!box.width||!box.height||style.visibility==='hidden'||style.display==='none')continue;
+    if(index>0&&String(node.innerText??'').trim())return true;
+    // Accessible labels and current control values are real page evidence even
+    // on textless or shadow-root UIs. The model judges their task usefulness.
+    if(node.matches('a,button,input,textarea,select,[role],[contenteditable="true"]')
+      && (node.getAttribute('aria-label')||node.getAttribute('aria-labelledby')||node.innerText
+        ||node.getAttribute('placeholder')||node.getAttribute('title')||node.labels?.length||node.value))return true;
+  }
+  return false;
+}
+
+export function generalPageHasContent(state:GeneralPageState):boolean {
+  return !!state.text.trim()||state.elements.some(element=>!!element.name.trim()||!!element.value.trim());
+}
+
 // Host-authored page evaluation. No script/code is accepted from a model argument.
 export function generalPageState(): GeneralPageState {
   const root: any = globalThis;
@@ -13,10 +39,16 @@ export function generalPageState(): GeneralPageState {
   const elements: GeneralElement[] = [];
   // Open shadow roots participate in the same trusted observation; closed roots
   // remain opaque. CSS paths follow shadow hosts for Playwright's native locator.
-  const roots = [document], nodes: any[] = [];
-  for (let index=0;index<roots.length;index++) for (const node of roots[index].querySelectorAll('*')) {
-    if(node.shadowRoot) roots.push(node.shadowRoot);
-    if(node.matches('a,button,input,textarea,select,[role],[contenteditable="true"]')) nodes.push(node);
+  const roots = [document], nodes: any[] = [], shadowTexts:string[]=[];
+  for (let index=0;index<roots.length;index++) {
+    if(index>0)for(const child of roots[index].children){
+      const box=child.getBoundingClientRect(),style=root.getComputedStyle(child);
+      if(box.width&&box.height&&style.visibility!=='hidden'&&style.display!=='none'&&child.innerText?.trim())shadowTexts.push(child.innerText);
+    }
+    for (const node of roots[index].querySelectorAll('*')) {
+      if(node.shadowRoot) roots.push(node.shadowRoot);
+      if(node.matches('a,button,input,textarea,select,[role],[contenteditable="true"]')) nodes.push(node);
+    }
   }
   for (const node of nodes) {
     const box = node.getBoundingClientRect(), style = root.getComputedStyle(node);
@@ -48,7 +80,7 @@ export function generalPageState(): GeneralPageState {
     const options = tag === 'select' ? Array.from(node.options).map((option: any) => ({ value: String(option.value), label: String(option.label), disabled: Boolean(option.disabled || option.parentElement?.disabled), selected: Boolean(option.selected) })) : undefined;
     elements.push({ selector: parts.join(' > '), tag, role, name, href: tag === 'a' ? node.href : '', value: secret || type === 'file' ? '' : String(node.value ?? ''), type, ...(secret?{secret:true}:{}), disabled: Boolean(node.disabled || node.matches(':disabled') || node.getAttribute('aria-disabled')==='true'), selected: Boolean(node.selected), checked: Boolean(node.checked), inForm: Boolean(node.form), editable:Boolean(node.isContentEditable), readOnly:Boolean(node.readOnly || node.getAttribute('aria-readonly')==='true'), ...(options ? { options } : {}) });
   }
-  return { url: root.location.href, title: document.title, text: document.body?.innerText ?? '', width: root.innerWidth, height: root.innerHeight, scrollX: root.scrollX, scrollY: root.scrollY, elements };
+  return { url: root.location.href, title: document.title, text: [document.body?.innerText??'',...shadowTexts].filter(Boolean).join('\n'), width: root.innerWidth, height: root.innerHeight, scrollX: root.scrollX, scrollY: root.scrollY, elements };
 }
 
 export async function generalDigest(value: string | Uint8Array): Promise<string> {

@@ -1,3 +1,7 @@
+import { appWorkRoutesV1 } from './work';
+import { appPersonalRoutesV1 } from './personal';
+import { appMemoryCorrectionRoutesV1 } from './memory';
+import { appChannelsRoutesV1 } from './channels';
 import { z } from 'zod';
 import { appControlRoutesV1 } from './controls';
 import { appArtifactRoutesV1 } from './artifacts';
@@ -10,7 +14,7 @@ import { appHealthRoutesV1 } from './health';
 import { appCoreRoutesV1, APP_AGENT_VERSION } from './core';
 export * from './core';
 
-export const appRoutesV1 = [...appCoreRoutesV1, ...appControlRoutesV1, ...appArtifactRoutesV1, ...appThreadRoutesV1,...appReplayRoutesV1,...appRightsRoutesV1,...appAccessRoutesV1,...appHealthRoutesV1] as const;
+export const appRoutesV1 = [...appCoreRoutesV1, ...appControlRoutesV1, ...appArtifactRoutesV1, ...appThreadRoutesV1,...appReplayRoutesV1,...appRightsRoutesV1,...appAccessRoutesV1,...appHealthRoutesV1,...appWorkRoutesV1,...appPersonalRoutesV1,...appMemoryCorrectionRoutesV1,...appChannelsRoutesV1] as const;
 export const buildAppOpenApiV1 = () => {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const route of appRoutesV1) {

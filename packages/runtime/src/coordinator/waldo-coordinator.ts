@@ -1,3 +1,4 @@
+import { ownerWorkUnitRowSchema, type OwnerWorkUnitRow } from '../identity/owner-work-projection-request';
 import { currentExecutionBinding } from '../execution-environment/binding';
 import { readTaskSourceSnapshot, createTaskSourceScope, type OwnerTaskInstruction, type TaskSourceFamily } from '../channels/task-source-scope';
 import type { RunEffectScope } from '../channels/run-effect-scope';
@@ -1782,6 +1783,21 @@ export class WaldoCoordinator {
         expectedCancellationGeneration: request.expectedCancellationGeneration,
         at: this.#deps.now(),
       });
+    });
+  }
+
+  // Read-only materialization for an already verified canonical owner host.
+  // This never registers a Presence, binds an empty root or admits execution.
+  readOwnerWorkUnits(ownerId: string, authenticatedSubjectRef: string): readonly OwnerWorkUnitRow[] {
+    if (!/^owner_[a-f0-9]{64}$/.test(ownerId) || authenticatedSubjectRef !== ownerId.replace(/^owner_/, 'supabase_subject_')) throw new Error('owner Work authority rejected');
+    return this.#storage.transactionSync(() => {
+      const root = this.#storage.sql.exec<{owner_id:string;authenticated_subject_ref:string|null;state:string|null}>(
+        'SELECT owner_id,authenticated_subject_ref,state FROM owner_roots WHERE root_key = 1').toArray()[0];
+      if (root && (root.owner_id !== ownerId || root.state !== 'active' || root.authenticated_subject_ref !== authenticatedSubjectRef)) throw new Error('owner Work root mismatch');
+      const units = this.#storage.sql.exec<OwnerWorkUnitRow>(
+        'SELECT id,owner_id AS ownerId,outcome_id AS outcomeId,revision,responsibility,state,created_at AS createdAt,updated_at AS updatedAt FROM work_units WHERE owner_id = ? ORDER BY id', ownerId).toArray();
+      if (!root && units.length) throw new Error('owner Work materialization has no owner root');
+      return units.map(row => ownerWorkUnitRowSchema.parse(row));
     });
   }
 

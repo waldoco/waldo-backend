@@ -1,4 +1,6 @@
 import { createOwnerResponder, ownerToolApproval, type OwnerSkillHost, type OwnerContextIntegration } from './owner-turn';
+import type { OwnerTurnResponse } from './owner-turn-response';
+import { ownerResponseText } from './owner-turn-response';
 import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
 import type { TelegramInboundTurn } from './telegram-polling';
 import { loadTelegramMedia, type MediaReaders } from './telegram-media';
@@ -28,15 +30,18 @@ export const createTelegramResponder = (...args: [...AdapterArgs, surface?: stri
   coreArgs[21] = args[21] || args[22] ? { ...(args[21] ? { skillHost: args[21] } : {}), ...(args[22] ?? {}) } : undefined;
   const core = createOwnerResponder(...coreArgs);
   const envelope = (turn: TelegramInboundTurn) => telegramTurnEnvelope(turn, surface);
-  const respond: TelegramOwnerListenerOptions['respond'] = async (turn, time) => {
+  const respondReceipt = async (turn: TelegramInboundTurn, time: TurnTimer): Promise<OwnerTurnResponse> => {
     turn.runScope?.admit();
     const media = turn.media ? await time('media', () => loadTelegramMedia(turn.media!, readers ?? {})) : undefined;
     turn.runScope?.admit();
-    return core.respond({ ...envelope(turn), ...(media?.note ? { mediaNote: media.note } : {}), ...(media?.attachment ? { attachment: media.attachment } : {}) }, time);
+    if (media && turn.admittedMedia) throw new Error('ambiguous admitted media');
+    return core.respondReceipt({ ...envelope(turn), ...(media?.note ? { mediaNote: media.note } : {}), ...(media?.attachment ? { attachment: media.attachment } : {}), ...turn.admittedMedia }, time);
   };
   return {
-    ...core, respond,
+    ...core, respondReceipt, respond: (turn: TelegramInboundTurn, time: TurnTimer) => respondReceipt(turn, time).then(ownerResponseText),
     chooseReaction: (turn: TelegramInboundTurn) => core.chooseReaction(envelope(turn)),
+    remindReceipt: (id: string, chatId: number, note: string, time: TurnTimer) => core.remindReceipt(id, `${surface}-${chatId}`, note, time, surface),
+    promptReceipt: (id: string, chatId: number, said: string, time: TurnTimer, toolNames?: Parameters<typeof core.prompt>[5], current?: Parameters<typeof core.prompt>[6], decision?: Parameters<typeof core.prompt>[7]) => core.promptReceipt(id, `${surface}-${chatId}`, said, time, surface, toolNames, current, decision),
     remind: (id: string, chatId: number, note: string, time: TurnTimer) => core.remind(id, `${surface}-${chatId}`, note, time, surface),
     prompt: (id: string, chatId: number, said: string, time: TurnTimer, toolNames?: Parameters<typeof core.prompt>[5], current?: Parameters<typeof core.prompt>[6], decision?: Parameters<typeof core.prompt>[7]) => core.prompt(id, `${surface}-${chatId}`, said, time, surface, toolNames, current, decision),
   };

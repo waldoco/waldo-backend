@@ -51,7 +51,7 @@ describe('narrow controls read projection', () => {
     const proposals: ApprovalItem[] = [calendar, email, { ...email, id: 'review-only', state: 'review_only' }, { ...email, id: 'unconfirmed', state: 'unconfirmed' }, { ...calendar, id: 'no-review', review: null }, { ...calendar, id: 'undo', state: 'done', undoable: true }, { ...calendar, id: 'mismatch', review: email.review }];
     const result = projectControls({ ...SAMPLE_CONSOLE_VIEW, approvals: proposals }, 'waiting');
     expect(result.data.proposals.map((p) => ({ id: p.id, actions: p.actions }))).toEqual([
-      { id: calendar.id, actions: ['approval.approve', 'approval.skip'] },
+      { id: calendar.id, actions: ['approval.approve', 'approval.skip', 'approval.edit'] },
       { id: 'email', actions: ['approval.skip'] }, { id: 'review-only', actions: ['approval.skip'] },
       { id: 'unconfirmed', actions: [] }, { id: 'no-review', actions: [] },
       { id: 'undo', actions: ['approval.undo'] }, { id: 'mismatch', actions: [] },

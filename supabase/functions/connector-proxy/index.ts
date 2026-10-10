@@ -1,5 +1,6 @@
 // Typed connector proxy. The only place a Google token is read, refreshed or used: the runtime
 // sends a connection id and a typed operation, signed with the router secret, and gets data back.
+import { readGoogleCalendarPushToken, validGooglePushAddress } from '../../../packages/runtime/src/connectors/google-push.ts';
 import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, googleHas, GoogleError, type GoogleErrorReason, type GoogleClient, type GoogleMethod } from '../../../packages/runtime/src/connectors/google.ts';
 import { driveRestClient, DRIVE_REST_METHODS, DriveRestError, type DriveRestMethod } from '../../../packages/runtime/src/connectors/drive-rest.ts';
 import { googleAccessToken, GoogleTokenError } from '../../../packages/runtime/src/connectors/google.ts';
@@ -128,7 +129,7 @@ const handle = async (body: Body): Promise<Response> => {
     if (driveRead(body)) {
       const scopes = Array.isArray(grant.scopes) ? grant.scopes : [];
       const allowedScopes = body.method === 'driveReadFileContent' ? ['drive.readonly'] : ['drive.readonly','drive.metadata.readonly'];
-      if (!allowedScopes.some(scope => scopes.includes(`https://www.googleapis.com/auth/${scope}`))) return fail(403, 'drive_scope_missing');
+      if (!allowedScopes.some(scope => scopes.includes(`https://www.googleapis.com/auth/${scope}`))) return fail(403, 'drive_scope_missing',undefined,'ACCESS_TOKEN_SCOPE_INSUFFICIENT');
       if (!Array.isArray(body.args) || body.args.length !== 1) return fail(400, 'drive_invalid_request');
       // Drive wraps bearer errors; retain the typed refresh failure before that boundary.
       let refreshFailure: GoogleTokenError | undefined;
@@ -145,15 +146,40 @@ const handle = async (body: Body): Promise<Response> => {
         return fail(refreshFailure ? refreshFailure.status : error instanceof DriveRestError ? error.status : 502, refreshFailure ? refreshFailure.kind === 'auth' ? 'drive_auth_failed' : 'google_refresh_failed' : error instanceof DriveRestError ? error.code : 'drive_read_failed');
       }
     }
-    if(body.method==='calendarPage'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar'))return fail(403,'insufficient scopes');
-    if(body.method==='freeBusy'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'availability'))return fail(403,'insufficient scopes');
-    const required = body.method==='sendRaw' ? 'gmail.send' : body.method==='draft' ? 'gmail.compose' : ['createEvent','moveEvent','cancelEvent'].includes(body.method!) ? 'calendar.events' : null;
+    const scopes=Array.isArray(grant.scopes)?grant.scopes:undefined;
+    const readFeature=['calendarPage','events','event','eventInCalendar','changedEvents','changedEventsPage','watchCalendarEvents'].includes(body.method!)?'calendar':body.method==='calendarListsPage'?'calendar_list':['taskListsPage','tasksPage','allTasksPage','taskList','task','tasks'].includes(body.method!)?'tasks':body.method==='freeBusy'?'availability':['mailPage','findDraftByMessageId','readDraft','findSentByMessageId','newMail','searchMail','readThread','threadPage','messageBodyPage','watchMail'].includes(body.method!)?'mail':null;
+    if(readFeature&&!googleHas(scopes,readFeature))return fail(403,'insufficient scopes',undefined,'ACCESS_TOKEN_SCOPE_INSUFFICIENT');
+    const required = body.method==='sendRaw' ? 'gmail.send' : body.method==='draft' ? 'gmail.compose' : ['createTask','patchTask'].includes(body.method!) ? 'tasks' : ['createEvent','moveEvent','cancelEvent'].includes(body.method!) ? 'calendar.events' : null;
     if(required && (!Array.isArray(grant.scopes)||!grant.scopes.includes(`https://www.googleapis.com/auth/${required}`)))return fail(body.intent_id?503:403,body.intent_id?'intent_unavailable':'insufficient scopes');
+    // Subscription destinations are owned by server configuration. A signed runtime caller
+    // cannot nominate a topic/URL or manufacture another owner's channel token.
+    if (body.method === 'watchMail') {
+      const topic = env('WALDO_GOOGLE_GMAIL_PUBSUB_TOPIC');
+      if (!topic || !Array.isArray(body.args) || body.args.length !== 1 || body.args[0] !== topic) return fail(503, 'source_push_unavailable');
+    }
+    if (body.method === 'watchCalendarEvents') {
+      const address = env('WALDO_GOOGLE_CALENDAR_PUSH_URL');
+      const [calendarId, channel] = body.args ?? [];
+      if (!address || !validGooglePushAddress(address) || body.args?.length !== 2 || typeof calendarId !== 'string' || !channel || typeof channel !== 'object' || Array.isArray(channel)) return fail(503, 'source_push_unavailable');
+      const row = channel as Record<string, unknown>;
+      const witness = typeof row.token === 'string' ? await readGoogleCalendarPushToken(router, row.token) : null;
+      if (row.address !== address || !witness || witness.ownerKey !== body.do_name || witness.connectionId !== body.connection || witness.calendarId !== calendarId || witness.channelId !== row.id) return fail(403, 'source_push_rejected');
+    }
     const token=grant.secret;
-    const client = googleClient(app, { refresh_token: token }, fetch, undefined, {connection_id:body.connection,email:null});
+    const pushRegistration=body.method==='watchMail'||body.method==='watchCalendarEvents';
+    const assertPushGrant=async()=>{
+      const fresh=await db('proxy_access',{p_do_name:body.do_name,p_connection:body.connection}) as {secret:string;scopes:unknown}[];
+      const latest=Array.isArray(fresh)?fresh[0]:undefined;
+      if(!latest||latest.secret!==grant.secret||JSON.stringify(Array.isArray(latest.scopes)?[...latest.scopes].sort():null)!==JSON.stringify(Array.isArray(grant.scopes)?[...grant.scopes].sort():null))throw new GoogleError(403,'source_push_admission_changed');
+    };
+    // Refresh can await a network hop. Read current owner/connection grants again immediately
+    // before the provider registration and after its receipt; an old bearer never bypasses
+    // revocation. A post-dispatch rejection leaves the host's attempt unknown until expiry.
+    const providerFetch:typeof fetch=pushRegistration?async(input,init)=>{const address=String(input),register=init?.method==='POST'&&(address.endsWith('/watch'));if(register)await assertPushGrant();const response=await fetch(input,init);if(register)await assertPushGrant();return response;}:fetch;
+    const client = googleClient(app, { refresh_token: token }, providerFetch, undefined, {connection_id:body.connection,email:null});
     try {
       const dispatch=async()=> (await (client[body.method as Method] as (...args: unknown[]) => Promise<unknown>)(...(body.args ?? [])))??null;
-      const data = ['draft','sendRaw','createEvent','moveEvent','cancelEvent'].includes(body.method!) ? await intentDispatch(body,dispatch) : await dispatch();
+      const data = ['draft','sendRaw','createEvent','moveEvent','cancelEvent','createTask','patchTask'].includes(body.method!) ? await intentDispatch(body,dispatch) : await dispatch();
       await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' }).catch(()=>{console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'}));});
       return reply({ data: data ?? null });
     } catch (error) {

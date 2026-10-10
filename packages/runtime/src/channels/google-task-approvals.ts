@@ -1,6 +1,6 @@
 import { googleTaskProposalSchema, googleTaskResourceSchema, proposeGoogleTaskChangeArgsSchema, type GoogleTaskProposal, type GoogleTaskResource, type ProposeGoogleTaskChangeArgs } from '@waldo/contracts';
 import { GoogleError, sha256Hex, type GoogleClient, type GoogleTaskPatch } from '../connectors/google';
-import { EffectUnknownError, type EffectReceipt, type OwnerEffectLedger } from './owner-effect-ledger';
+import { EffectUnknownError, type EffectReceipt, type EffectReadback, type OwnerEffectLedger } from './owner-effect-ledger';
 import { taskSourceClient } from '../tools/task-source-io';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { GoogleAccess } from '../tools/live/google';
@@ -46,7 +46,9 @@ export const googleTaskApprovals = (deps: Readonly<{ sql: SqlStorage; google: Go
     async prepare(approvalId: string, input: ProposeGoogleTaskChangeArgs, ctx?: GoogleTaskSourceGuard): Promise<GoogleTaskProposal> {
       if (!approvalId) throw new Error('Google task approval identity required');
       const args = proposeGoogleTaskChangeArgsSchema.parse(input);
+      if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
       const selected = await deps.google.client('tasks', { id: `approval:${approvalId}:apply` }, ctx?.assertTaskSourceCurrent, args.account);
+      if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
       if (!selected) throw new GoogleTaskConnectorUnavailableError();
       if (!selected?.account?.connection_id || !selected.account.email || args.account && selected.account.email.toLowerCase() !== args.account.toLowerCase()) throw new Error('The selected Google task account is unavailable');
       const client = taskSourceClient(selected, ctx);
@@ -55,17 +57,43 @@ export const googleTaskApprovals = (deps: Readonly<{ sql: SqlStorage; google: Go
       const before = args.action === 'create' ? null : googleTaskResourceSchema.parse(await client.task(args.task_list_id, args.task_id!));
       if (before?.deleted) throw new Error('The Google task was deleted; no proposal was prepared');
       if (before?.assigned) throw new Error('Assigned Google tasks require review on their originating Docs or Chat surface');
+      if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
       return googleTaskProposalSchema.parse({ args, account: selected.account, list, before });
+    },
+    // Shared Work recovery reads exact ACK/version evidence; it never repeats a
+    // Tasks mutation or guesses an accepted create from a matching title.
+    async reconcile(approvalId: string, input: GoogleTaskProposal, operationRef = input.operation_ref ?? `approval:${approvalId}`, ctx?: GoogleTaskSourceGuard): Promise<EffectReadback> {
+      const p = googleTaskProposalSchema.parse(input);
+      if (!approvalId || !operationRef) throw new Error('Google task approval identity required');
+      if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
+      const selected = await deps.google.client('tasks', { id: `approval:${approvalId}:apply`, requireRoute: true }, ctx?.assertTaskSourceCurrent, p.account.email);
+      if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
+      if (!selected || !sameAccount(selected, p.account)) throw new Error('The approved Google task account or connection changed; nothing was retargeted');
+      const client = taskSourceClient(selected, ctx);
+      if (!client.task) throw new Error('Google task effect readback is unavailable');
+      const identity = await sha256Hex(JSON.stringify(p));
+      if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
+      const ack = acknowledgement(`${operationRef}:apply`);
+      if (!ack || ack.identity !== identity) return { status: 'unknown' };
+      const acknowledged = googleTaskResourceSchema.parse(JSON.parse(ack.task_json));
+      const current = googleTaskResourceSchema.parse(await client.task(p.args.task_list_id, acknowledged.id));
+      if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
+      if (current.etag !== acknowledged.etag || JSON.stringify(current) !== JSON.stringify(acknowledged) || !matchesFinal(p, current)) return { status: 'unknown' };
+      return { status: 'done', receipt: { provider_id: current.id, result: { status: 'applied', readback_verified: true, account: p.account, task: current } satisfies TaskResult } };
     },
     async apply(approvalId: string, input: GoogleTaskProposal, operationRef = input.operation_ref ?? `approval:${approvalId}`, ctx?: GoogleTaskSourceGuard): Promise<GoogleTaskApplyOutcome> {
       const p = googleTaskProposalSchema.parse(input);
       if (!approvalId || !operationRef) throw new Error('Google task approval identity required');
       const operationId = `${operationRef}:apply`;
+      if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
       const selected = await deps.google.client('tasks', { id: `approval:${approvalId}:apply`, requireRoute: true }, ctx?.assertTaskSourceCurrent, p.account.email);
+      if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
       if (!selected || !sameAccount(selected, p.account)) throw new Error('The approved Google task account or connection changed; nothing was retargeted');
       const client = taskSourceClient(selected, ctx);
       if (!client.task || !client.createTask || !client.patchTask) throw new Error('Google task effect recovery is unavailable on this connector');
       const identity = await sha256Hex(JSON.stringify(p));
+      // The digest is asynchronous; a revoked decision cannot reserve fresh custody.
+      if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
       const receiptFor = (task: GoogleTaskResource): EffectReceipt => ({ provider_id: task.id, result: { status: 'applied', readback_verified: true, account: p.account, task } satisfies TaskResult });
       const verify = async (): Promise<EffectReceipt | null> => {
         const ack = acknowledgement(operationId);
@@ -75,9 +103,11 @@ export const googleTaskApprovals = (deps: Readonly<{ sql: SqlStorage; google: Go
         if (current.etag !== acknowledged.etag || JSON.stringify(current) !== JSON.stringify(acknowledged) || !matchesFinal(p, current)) return null;
         return receiptFor(current);
       };
+      const origin = deps.sql.exec<{origin_run_ref:string|null}>('SELECT origin_run_ref FROM ledger WHERE id = ?', approvalId).toArray()[0]?.origin_run_ref ?? undefined;
       try {
         const receipt = await deps.effects.execute({ operationId, owner_ref: deps.ownerRef, tool: 'google_task_change', payload: p }, {
           dispatch: async () => {
+            if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
             if (p.before) {
               const current = googleTaskResourceSchema.parse(await client.task!(p.args.task_list_id, p.args.task_id!));
               if (current.etag !== p.before.etag || JSON.stringify(current) !== JSON.stringify(p.before)) return { provider_id: p.before.id, result: { status: 'stale', readback_verified: false, account: p.account, task: current } satisfies TaskResult };
@@ -94,10 +124,12 @@ export const googleTaskApprovals = (deps: Readonly<{ sql: SqlStorage; google: Go
             saveAck(operationId, identity, ack);
             const verified = await verify();
             if (!verified) throw new EffectUnknownError();
+            if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
             return verified;
           },
-          reconcile: async () => { const receipt = await verify(); return receipt ? { status: 'done', receipt } : { status: 'unknown' }; },
-        });
+          reconcile: async () => { if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent(); const receipt = await verify(); if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent(); return receipt ? { status: 'done', receipt } : { status: 'unknown' }; },
+        }, origin);
+        if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
         const result = receipt.result as TaskResult;
         return { status: result.status === 'stale' ? 'stale' : 'done', receipt };
       } catch (error) {

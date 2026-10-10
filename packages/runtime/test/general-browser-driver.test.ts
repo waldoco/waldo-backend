@@ -356,8 +356,86 @@ it('bounds native semantic reads by current run authority and never publishes an
  expect(f.calls).not.toContain('acquire');
 });
 
+it('waits once for rendering in the exact navigated document without another navigation or allocation',async()=>{
+ const f=harness(),page=f.pages[0],evaluate=page.evaluate;let rendered=false,waits=0;
+ page.evaluate=async(...args:any[])=>({...await evaluate(...args),text:rendered?'Client-rendered current content':'',elements:rendered?(await evaluate(...args)).elements:[]});
+ page.waitForFunction=async(fn:Function,_:unknown,options:any)=>{expect(fn.name).toBe('generalPageContentReady');expect(options).toEqual({timeout:3000,polling:100});waits++;rendered=true;return {dispose:async()=>{f.calls.push('ready-dispose');}};};
+ const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>60000,admit:async()=>{},authorizeRequest:async()=>true,maxScreenshotBytes:1024});
+ expect(await driver.navigate(session,'https://docs.example/index')).toMatchObject({observation:{text:'Client-rendered current content'}});
+ expect(waits).toBe(1);expect(f.calls.filter(call=>call==='navigate')).toHaveLength(1);expect(f.calls).not.toContain('acquire');expect(f.calls).toContain('ready-dispose');
+});
+
+it('empty rendering remains a typed failed observation with actual navigation status and no image',async()=>{
+ const f=harness(),page=f.pages[0],evaluate=page.evaluate;let screenshots=0;
+ page.evaluate=async(...args:any[])=>({...await evaluate(...args),text:'',elements:[]});page.waitForFunction=async()=>{throw Object.assign(Error('render timeout'),{name:'TimeoutError'});};page.screenshot=async()=>{screenshots++;return new Uint8Array([137,80,78,71]);};
+ const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>60000,admit:async()=>{},authorizeRequest:async()=>true,maxScreenshotBytes:1024});
+ await expect(driver.navigate(session,'https://docs.example/index')).rejects.toMatchObject({code:'empty_content',diagnostic:{status:200}});
+ expect(screenshots).toBe(0);expect(f.calls.filter(call=>call==='navigate')).toHaveLength(1);expect(f.calls).not.toContain('acquire');
+});
+
+it('withdrawal while rendering waits denies content before screenshot or later browser I/O',async()=>{
+ const f=harness(),page=f.pages[0],evaluate=page.evaluate;let revoked=false;
+ page.evaluate=async(...args:any[])=>({...await evaluate(...args),text:'',elements:[]});page.waitForFunction=async()=>{revoked=true;return {dispose:async()=>{}};};
+ const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>60000,admit:async()=>{if(revoked)throw Error('revoked');},authorizeRequest:async()=>true,maxScreenshotBytes:1024,publicRead:true});
+ await expect(driver.navigate(session,'https://docs.example/index')).rejects.toMatchObject({code:'rejected'});expect(f.pages).toEqual([]);expect(f.calls).not.toContain('acquire');
+});
+
+it('a stalled rendering wait is bounded by the remaining run, without a retry',async()=>{
+ const f=harness(),page=f.pages[0],evaluate=page.evaluate;
+ page.evaluate=async(...args:any[])=>({...await evaluate(...args),text:'',elements:[]});page.waitForFunction=async()=>new Promise(()=>{});
+ const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>21,admit:async()=>{},authorizeRequest:async()=>true,maxScreenshotBytes:1024});
+ await expect(driver.navigate(session,'https://docs.example/index')).rejects.toMatchObject({code:'empty_content'});expect(f.calls.filter(call=>call==='navigate')).toHaveLength(1);expect(f.calls).not.toContain('acquire');
+});
+
 it.each([{evidence:[{}]}, {evidence:[{sessionId:'bad id'}]}, {evidence:[{sessionId:'duplicate'},{sessionId:'duplicate'}]}])('malformed provider session evidence cannot certify exact cleanup: %j',async ({evidence})=>{
  const f=harness();f.sdk.sessions=async()=>evidence as never;
  const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>60000,admit:async()=>{},authorizeRequest:async()=>true,maxScreenshotBytes:1024});
  await expect(driver.terminate(session)).rejects.toMatchObject({code:'cleanup_unconfirmed'});
+});
+
+
+it('preserves a provider failure during content readiness instead of claiming an empty page', async () => {
+ const f=harness(),page=f.pages[0],evaluate=page.evaluate;
+ page.evaluate=async(...args:any[])=>({...await evaluate(...args),text:'',elements:[]});
+ const {GeneralBrowserError}=await import('../src/channels/cloudflare-general-browser');
+ page.waitForFunction=async()=>{throw new GeneralBrowserError('provider_unavailable',{status:403,code:'provider_denied'});};
+ const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>60000,admit:async()=>{},authorizeRequest:async()=>true,maxScreenshotBytes:1024});
+ await expect(driver.navigate(session,'https://docs.example/index')).rejects.toMatchObject({code:'provider_unavailable',diagnostic:{status:403,code:'provider_denied'}});
+ expect(f.calls.filter(call=>call==='navigate')).toHaveLength(1);expect(f.calls).not.toContain('acquire');
+});
+
+it('publishes observed labelled controls even when a page has no ordinary body text', async () => {
+ const f=harness('input'),page=f.pages[0],evaluate=page.evaluate;
+ page.evaluate=async(...args:any[])=>({...await evaluate(...args),text:''});
+ page.waitForFunction=async()=>{throw Error('a populated semantic page should not wait');};
+ const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>60000,admit:async()=>{},authorizeRequest:async()=>true,maxScreenshotBytes:1024});
+ expect(await driver.navigate(session,'https://docs.example/form')).toMatchObject({observation:{text:'',elements:[{role:'textbox',name:'Session reuse'}]}});
+ expect(f.calls.filter(call=>call==='navigate')).toHaveLength(1);expect(f.calls).not.toContain('acquire');
+});
+
+
+it('a stalled screenshot respects the remaining run and leaves only same-session cleanup custody',async()=>{
+ const f=harness();f.pages[0].screenshot=async()=>new Promise(()=>{});
+ const driver=cloudflareGeneralBrowser({ownerId:'owner-a',binding:{} as never,loadSdk:async()=>f.sdk as never,now:()=>1,deadline:()=>21,admit:async()=>{},authorizeRequest:async()=>true,maxScreenshotBytes:1024,publicRead:true});
+ await expect(driver.navigate(session,'https://docs.example/index')).rejects.toMatchObject({code:'provider_unavailable'});
+ expect(f.pages).toEqual([]);expect(f.calls).not.toContain('acquire');await driver.terminate(session);expect(await f.sdk.sessions()).toEqual([]);
+});
+
+
+it('trusted observation includes visible open-shadow-root text without inventing body content',async()=>{
+ const {generalPageContentReady,generalPageState,generalPageHasContent}=await import('../src/channels/general-browser-observation');
+ const keys=['document','location','getComputedStyle','innerWidth','innerHeight','scrollX','scrollY'];
+ const original=new Map(keys.map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+ const child={innerText:'Actual shadow source text',getBoundingClientRect:()=>({width:100,height:20}),matches:()=>false};
+ const shadow={children:[child],querySelectorAll:()=>[child]};
+ const host={shadowRoot:shadow,getBoundingClientRect:()=>({width:100,height:20}),matches:()=>false};
+ try{
+  Object.defineProperty(globalThis,'document',{configurable:true,value:{title:'Shadow page',body:{innerText:''},querySelectorAll:()=>[host]}});
+  Object.defineProperty(globalThis,'location',{configurable:true,value:{href:'https://docs.example/shadow'}});
+  Object.defineProperty(globalThis,'getComputedStyle',{configurable:true,value:()=>({visibility:'visible',display:'block'})});
+  for(const [key,value] of [['innerWidth',800],['innerHeight',600],['scrollX',0],['scrollY',0]] as const)Object.defineProperty(globalThis,key,{configurable:true,value});
+  expect(generalPageContentReady()).toBe(true);const observed=generalPageState();
+  expect(observed.text).toBe('Actual shadow source text');expect(generalPageHasContent(observed)).toBe(true);
+  child.innerText='';expect(generalPageContentReady()).toBe(false);expect(generalPageHasContent(generalPageState())).toBe(false);
+ }finally{for(const key of keys){const descriptor=original.get(key);if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}}
 });

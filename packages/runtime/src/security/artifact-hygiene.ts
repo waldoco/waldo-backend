@@ -83,6 +83,30 @@ export const extractArtifacts = (text: string): { text: string; artifacts: reado
   return artifacts.length === 0 ? { text, artifacts: [] } : { text: redacted, artifacts };
 };
 
+// Communication fields form one security boundary: a live value recognized in a subject
+// stays a credential when the body echoes it without a recognized label. Remove those
+// exact known echoes before any field reaches model context; direct owner relay uses the
+// separate extracted values and never claims a stored marker is delivery.
+export const extractArtifactFields = (fields: readonly string[]): { texts: readonly string[]; artifacts: readonly ExtractedArtifact[] } => {
+  const extracted = fields.map(extractArtifacts);
+  const artifacts = [...new Map(extracted.flatMap(value => value.artifacts).map(value => [value.value, value])).values()];
+  const texts = extracted.map(value => artifacts.reduce((text, artifact) => text.replaceAll(artifact.value, artifactMarker(artifact.kind)), value.text));
+  return { texts, artifacts };
+};
+
 // True when nothing meaningful survives the redaction - the whole message was the artifact.
 export const onlyArtifacts = (q: Quarantine): boolean =>
   q.kinds.length > 0 && q.text.replace(/\[(?:quarantined): [^\]]+\]/g, '').trim() === '';
+
+// Metadata-only page boundary from the existing quarantine detector. A continuation cannot
+// split a recognized credential phrase/value into two otherwise unrecognized fields. null
+// reports an artifact that cannot fit the bounded page, rather than exposing a fragment.
+export const artifactSafePageEnd = (text:string,start:number,maxChars:number):number|null => {
+ if(!Number.isSafeInteger(start)||start<0||start>text.length||!Number.isSafeInteger(maxChars)||maxChars<1)return null;
+ const spans:{from:number;to:number}[]=[];
+ for(const {re} of PATTERNS)for(const match of text.matchAll(new RegExp(re.source,re.flags)))spans.push({from:match.index,to:match.index+match[0].length});
+ const merged:{from:number;to:number}[]=[];for(const span of spans.sort((a,b)=>a.from-b.from)){const previous=merged.at(-1);if(previous&&span.from<=previous.to)previous.to=Math.max(previous.to,span.to);else merged.push({...span});}
+ let end=Math.min(text.length,start+maxChars);
+ for(const span of merged){if(span.from<start&&start<span.to)return null;if(span.from<end&&end<span.to)end=Math.min(end,span.from);}
+ return end===start&&start<text.length?null:end;
+};

@@ -6,6 +6,8 @@ import type { RunEffectScope } from '../src/channels/run-effect-scope';
 import { WALDO_CHAT_MODEL } from '@waldo/contracts';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { commonSpendReservation } from '../src/channels/common-spend-reservation';
+import {canonicalOwnerBrowserIdentity} from '../src/channels/owner-browser-identity';
+import type {OwnerBrowserIdentity} from '../src/channels/owner-browser-runtime';
 
 const directory = vi.hoisted(() => ({ owner: '10000000-0000-0000-0000-000000000001', custody: 'a'.repeat(64), present: true, wait: undefined as Promise<void> | undefined, entered: undefined as (() => void) | undefined }));
 const provider = vi.hoisted(() => ({ calls: [] as unknown[] }));
@@ -24,9 +26,51 @@ const setup = () => {
   const env = { WALDO_ENVIRONMENT: 'staging', COMMON_BROWSER_REGISTRATION: JSON.stringify(operator), OPENAI_API_KEY: 'synthetic-model-key', BROWSER: binding, TELEGRAM_OWNER_DO: { idFromName: (name: string) => ({ toString: () => name === 'automatic-owner' ? 'physical-owner' : 'foreign' }) } };
   const scope: RunEffectScope = { runId: crypto.randomUUID(), attempt: crypto.randomUUID(), deadline: now + 60000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() };
   let activeScope=scope;
-  const runtime = () => ownerBrowserRuntime({ env: env as never, storage, actualDoId: 'physical-owner', activeScope: () => activeScope });
+  const runtime = (identity?:OwnerBrowserIdentity) => ownerBrowserRuntime({ env: env as never, storage, actualDoId: 'physical-owner', activeScope: () => activeScope,identity });
   return { rows, storage, operator, binding, env, scope, runtime,activate:(next:RunEffectScope)=>{activeScope=next;} };
 };
+
+const appIdentity=()=>{
+ let binding:string|null='app-owner-authority:1',present=true;
+ const identity:OwnerBrowserIdentity={snapshot:()=>binding,assertCurrent:async(expected)=>{if(!present||expected!==binding)throw Error('app owner revoked');},resolve:async()=>({directoryOwnerId:directory.owner,custodyDigest:directory.custody})};
+ return {identity,revoke:()=>{present=false;},changeBinding:()=>{binding='app-owner-authority:2';}};
+};
+
+it('the actual app owner can use the same funded browser path without any Telegram link',async()=>{
+ const f=setup(),owner=appIdentity();f.rows.delete('telegram_subject');f.rows.set('telegram_unlinked',true);directory.present=false;
+ const runtime=f.runtime(owner.identity),ctx={authenticatedUserId:'server-app-owner',runScope:f.scope,turnId:'app-turn',toolCallId:'app-read',egressAllowlist:['*']} as never;
+ const result=await runtime.read({name:'browse_page'} as never).handle({provider:'cloudflare_playwright',retain_session:true,url:'https://example.com/a',instruction:'Read for my app'},ctx) as any;
+ expect(result).toMatchObject({ok:true,data:{session_handle:expect.any(String)}});
+ expect(f.rows.get('common_owner_browser_registration_v1').registration.policy).toMatchObject({authority:'verified_owner',directoryOwnerId:directory.owner});
+ expect(f.rows.get('common_owner_browser_registration_v1').registration.policy.subject).toBeUndefined();
+ const handle=result.data.session_handle;await runtime.finish(f.scope);
+ const next={...f.scope,runId:crypto.randomUUID(),attempt:crypto.randomUUID()};f.activate(next);
+ expect(await runtime.act({name:'browse_act'} as never).handle({provider:'cloudflare_playwright',url:'https://example.com/a',task:'Inspect exact retained app session',session_handle:handle,max_actions:1,command:{operation:'inspect'}},{...ctx as object,runScope:next,turnId:'app-next',toolCallId:'inspect'} as never)).toMatchObject({ok:true});
+ expect(commonBrowserFixture.allocations).toBe(1);owner.revoke();
+ expect(await runtime.act({name:'browse_act'} as never).handle({provider:'cloudflare_playwright',url:'https://example.com/a',task:'Read after revoke',session_handle:handle,max_actions:1,command:{operation:'read'}},{...ctx as object,runScope:next} as never)).toMatchObject({ok:false});
+ runtime.stop();await f.runtime(owner.identity).maintain();expect(commonBrowserFixture.ends).toBe(1);expect(commonBrowserFixture.allocations).toBe(1);
+});
+
+it('authenticated surface changes cannot manufacture a new allowance or replace the retained owner',async()=>{
+ const f=setup(),runtime=f.runtime();await allocate(f,runtime);await runtime.finish(f.scope);
+ const pinned=structuredClone(f.rows.get('common_owner_browser_registration_v1')),owner=appIdentity();f.rows.delete('telegram_subject');f.rows.set('telegram_unlinked',true);directory.present=false;
+ const pointer=f.rows.get('common-browser-current:v1'),next={...f.scope,runId:crypto.randomUUID(),attempt:crypto.randomUUID()};f.activate(next);
+ const app=f.runtime(owner.identity),args={provider:'cloudflare_playwright' as const,url:'https://example.com/a',instruction:'Read same retained session',session_handle:pointer.sessionHandle};
+ const ctx={authenticatedUserId:'app-owner',runScope:next,turnId:'app-turn',toolCallId:'read',egressAllowlist:['*']} as never;
+ expect(await app.read({name:'browse_page'} as never).handle(args,ctx)).toMatchObject({ok:true});
+ expect(f.rows.get('common_owner_browser_registration_v1')).toEqual(pinned);expect(commonBrowserFixture.allocations).toBe(1);
+ directory.owner='20000000-0000-0000-0000-000000000001';
+ expect(await app.read({name:'browse_page'} as never).handle(args,ctx)).toMatchObject({ok:false});expect(commonBrowserFixture.allocations).toBe(1);
+ app.stop();await app.maintain();expect(commonBrowserFixture.ends).toBe(1);
+});
+
+it('an app binding change while directory resolution waits prevents allocation',async()=>{
+ const f=setup(),owner=appIdentity();f.rows.delete('telegram_subject');let entered!:()=>void,release!:()=>void;
+ const reached=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>release=r);
+ const original=owner.identity.resolve;const identity={...owner.identity,resolve:async(binding:string)=>{entered();await gate;return original(binding);}};
+ const pending=f.runtime(identity).read({name:'browse_page'} as never).handle({provider:'cloudflare_playwright',retain_session:true,url:'https://example.com/a',instruction:'Read'}, {authenticatedUserId:'owner',runScope:f.scope,turnId:'turn',toolCallId:'read',egressAllowlist:['*']} as never);
+ await reached;owner.changeBinding();release();expect(await pending).toMatchObject({ok:false});expect(commonBrowserFixture.allocations).toBe(0);
+});
 
 it('automatically derives the registered browser owner from current directory authority, without a selected subject in operator policy', async () => {
   commonBrowserFixture.reset();
@@ -241,4 +285,25 @@ it.each([['automatic','pin'],['automatic','owner'],['automatic','custody'],['man
  if(kind==='owner')directory.owner='10000000-0000-0000-0000-000000000002';
  if(kind==='custody')directory.custody='b'.repeat(64);
  const before=structuredClone([...f.rows]);expect(await read()).toMatchObject({ok:false});expect([...f.rows]).toEqual(before);expect(commonBrowserFixture.allocations).toBe(1);
+});
+
+
+it('the canonical physical factory preserves one app-originated paid session across linking and unlinking surfaces',async()=>{
+ const f=setup();f.rows.delete('telegram_subject');directory.present=false;
+ let admittedOwner=directory.owner,live=true;
+ const identity=canonicalOwnerBrowserIdentity({env:f.env as never,storage:f.storage,actualDoId:'physical-owner',snapshot:()=>({directoryOwnerId:admittedOwner,doName:'automatic-owner'}),assertCurrent:async(expected)=>{if(!live||expected.directoryOwnerId!==admittedOwner)throw Error('canonical owner revoked');}});
+ const runtime=f.runtime(identity),ctx={authenticatedUserId:'server-owner',runScope:f.scope,turnId:'app-first',toolCallId:'read',egressAllowlist:['*']} as never;
+ const first=await runtime.read({name:'browse_page'} as never).handle({provider:'cloudflare_playwright',retain_session:true,url:'https://example.com/a',instruction:'Use my app browser'},ctx) as any;
+ expect(first).toMatchObject({ok:true,data:{session_handle:expect.any(String)}});
+ const handle=first.data.session_handle,pinned=structuredClone(f.rows.get('common_owner_browser_registration_v1'));
+ await runtime.finish(f.scope);f.rows.set('telegram_subject','81101');f.rows.set('whatsapp_subject','919000000001');
+ const second={...f.scope,runId:crypto.randomUUID(),attempt:crypto.randomUUID()};f.activate(second);
+ expect(await runtime.read({name:'browse_page'} as never).handle({provider:'cloudflare_playwright',session_handle:handle,url:'https://example.com/a',instruction:'Continue from my linked surface'},{...ctx as object,runScope:second,turnId:'linked-second',toolCallId:'read'} as never)).toMatchObject({ok:true,data:{session_handle:handle}});
+ await runtime.finish(second);f.rows.delete('telegram_subject');f.rows.set('telegram_unlinked',true);f.rows.delete('whatsapp_subject');
+ const third={...f.scope,runId:crypto.randomUUID(),attempt:crypto.randomUUID()};f.activate(third);
+ expect(await runtime.act({name:'browse_act'} as never).handle({provider:'cloudflare_playwright',session_handle:handle,url:'https://example.com/a',task:'Inspect after unlink',max_actions:1,command:{operation:'inspect'}},{...ctx as object,runScope:third,turnId:'app-third',toolCallId:'inspect'} as never)).toMatchObject({ok:true});
+ expect(f.rows.get('common_owner_browser_registration_v1')).toEqual(pinned);expect(commonBrowserFixture.allocations).toBe(1);
+ admittedOwner='20000000-0000-0000-0000-000000000001';
+ expect(await runtime.read({name:'browse_page'} as never).handle({provider:'cloudflare_playwright',session_handle:handle,url:'https://example.com/a',instruction:'Foreign owner access'},{...ctx as object,runScope:third} as never)).toMatchObject({ok:false});
+ expect(commonBrowserFixture.allocations).toBe(1);live=false;runtime.stop();await runtime.maintain();expect(commonBrowserFixture.ends).toBe(1);
 });

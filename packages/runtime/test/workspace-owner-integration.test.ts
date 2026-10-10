@@ -6,11 +6,17 @@ const binding = { owner_id: owner, environment: 'test', namespace: 'namespace-fi
 const config = { SUPABASE_PROJECT_URL: 'https://db.invalid', SUPABASE_PUBLISHABLE_KEY: 'fixture', WALDO_ROUTER_HMAC_SECRET: 'fictional-router', WALDO_ENVIRONMENT: 'test', WALDO_OWNER_DO_NAMESPACE: 'namespace-fixture', TELEGRAM_OWNER_DO: { idFromName: () => ({ toString: () => 'opaque-id' }) } as unknown as DurableObjectNamespace, ARTIFACTS: { put: vi.fn(), get: vi.fn(), delete: vi.fn() } as unknown as R2Bucket };
 const storageFixture = () => {
   let json: string | undefined;
-  const sql = { exec: vi.fn((query: string, value?: string) => {
+  const writes = new Map<string, object>();
+  const sql = { exec: vi.fn((query: string, value?: string, ...args: unknown[]) => {
+    if (query.includes('owner_byte_writes')) {
+      if(query.startsWith('INSERT'))writes.set(value!,{object_key:value,byte_size:args[0],sha256:args[1],state:args[2],created_at:args[3]});
+      if(query.startsWith('UPDATE')){const row=writes.get(value!) as {state:string}|undefined;if(row)row.state=query.includes("'settled'")?'settled':'uncertain';}
+      return {toArray:()=>query.startsWith('SELECT')?[...writes.values()].filter((row:any)=>value?row.object_key===value:row.state!=='settled'):[]};
+    }
     if (query.startsWith('INSERT')) json = value;
     return { toArray: () => query.startsWith('SELECT') && json ? [{ state_json: json }] : [] };
   }) } as unknown as SqlStorage;
-  return { sql, transactionSync<T>(work: () => T) { const prior = json; try { return work(); } catch (e) { json = prior; throw e; } } };
+  return { sql, kv: {get:()=>undefined}, transactionSync<T>(work: () => T) { const prior = json; try { return work(); } catch (e) { json = prior; throw e; } } };
 };
 describe('workspace canonical host admission', () => {
   it('rejects missing configuration or wrong actual DO before directory/metadata/bodies', async () => {
@@ -190,5 +196,29 @@ it('recent receipt projection survives real owner SQLite eviction and rejects re
   current={...mapped,owner_id:'10000000-0000-0000-0000-000000000099'};
   await expect(store.recentWrites()).rejects.toThrow('workspace_rejected');
   current={...mapped,state_version:1};await expect(store.recentWrites()).rejects.toThrow('workspace_rejected');
+ });
+});
+
+it('retains cancellation after an uncertain workspace put across eviction and only purges exact recovered bytes',async()=>{
+ const name=`workspace-cancel-${crypto.randomUUID()}`,id=ownerNamespace.idFromName(name),stub=ownerNamespace.get(id);
+ const objects=new Map<string,Uint8Array>();let objectKey='';const original=new Uint8Array([1,2,3]);
+ const bucket={put:vi.fn(async(key:string,bytes:Uint8Array)=>{objectKey=key;objects.set(key,bytes.slice());throw Error('acknowledgement lost');}),get:vi.fn(async(key:string)=>{const bytes=objects.get(key);return bytes?{arrayBuffer:async()=>bytes.slice().buffer}:null;}),delete:vi.fn(async(key:string)=>{objects.delete(key);})};
+ const mapping={...binding,do_name:name,do_id:id.toString()},cfg={...config,TELEGRAM_OWNER_DO:ownerNamespace,ARTIFACTS:bucket as unknown as R2Bucket};
+ const fetcher=vi.fn(async()=>Response.json(mapping)),operation=crypto.randomUUID();let fingerprint='';
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const store=await workspaceOwnerHost(cfg,state.storage,id.toString(),name,fetcher);
+  await expect(store.write({path:'uncertain.bin',bytes:original,mime:'application/octet-stream',expected_revision:0,provenance:'owner_upload',operation_id:operation})).rejects.toThrow('workspace_unavailable');
+  fingerprint=(await store.operation(operation)).fingerprint;expect((await store.list()).count).toBe(0);
+  objects.delete(objectKey);expect((await store.cancel(operation,fingerprint)).state).toBe('cancel_requested');
+  expect(bucket.delete).not.toHaveBeenCalled();
+ });
+ await evictDurableObject(stub);
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const store=await workspaceOwnerHost(cfg,state.storage,id.toString(),name,fetcher);
+  expect((await store.operation(operation)).state).toBe('cancel_requested');
+  objects.set(objectKey,new Uint8Array([9,9,9]));expect((await store.cancel(operation,fingerprint)).state).toBe('cancel_requested');expect(bucket.delete).not.toHaveBeenCalled();
+  objects.set(objectKey,original);expect((await store.cancel(operation,fingerprint)).state).toBe('cancelled');expect(objects.has(objectKey)).toBe(false);expect(bucket.delete).toHaveBeenCalledOnce();expect(bucket.put).toHaveBeenCalledOnce();
+  expect((await store.list()).count).toBe(0);expect(state.storage.sql.exec<{state:string}>('SELECT state FROM owner_byte_writes').one().state).toBe('settled');
+  await expect(store.reconcile(operation)).rejects.toThrow('workspace_pending');
  });
 });

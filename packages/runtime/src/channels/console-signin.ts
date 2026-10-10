@@ -7,6 +7,8 @@ import { MEMORY_GRAPH_PATH } from './memory-graph';
 import { consoleLog, consoleTrace, withConsoleTrace } from '../observability/console-correlation';
 import { consoleAuth, OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
+import { appPushDirectory } from '../rights/push-directory';
+import { appSessionRevocation } from '../rights/session-revocation';
 import { CONSOLE_COOKIE, CONSOLE_PATH } from './console';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
 
@@ -304,7 +306,12 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     const clear = `Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
     headers.append('set-cookie', `${CONSOLE_COOKIE}=; ${clear}`);
     headers.append('set-cookie', `${OWNER_COOKIE}=; ${clear}`);
-    if (doName) await auth.signOutAll(doName);
+    if (doName) {
+      let confirmed = false;
+      try { confirmed = await appSessionRevocation(doName, auth, appPushDirectory(env, doName, '')).revokeAll(); }
+      catch { event('console_route', false, 'signout_unconfirmed'); }
+      if (!confirmed) return finish(page('<h1>Sign-out unconfirmed</h1><p>We could not confirm sign-out everywhere. Some sessions may have ended. Check your signed-in sessions before trying again.</p>', 503));
+    }
     event('console_route', true, 'signed_out_all');
     return finish(new Response(null, { status: 303, headers }));
   }

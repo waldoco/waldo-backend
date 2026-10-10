@@ -46,8 +46,38 @@ export const healthConsentStateSchema = z.strictObject({
 });
 export type HealthConsentState = z.infer<typeof healthConsentStateSchema>;
 
+// The permission/read API is not the physiological producer. Preserve actual
+// native source revision and recording origin without inferring a vendor.
+export const healthSampleOriginSchema = z.strictObject({
+  read_api: z.enum(['healthkit', 'health_connect', 'samsung_health', 'provider_api', 'manual']),
+  source_bundle_id: z.string().min(1).max(200).nullable(),
+  source_package_name: z.string().min(1).max(200).nullable(),
+  source_version: z.string().min(1).max(128).nullable(),
+  source_revision: z.string().min(1).max(128).nullable(),
+  device_ref: z.string().regex(/^(?:sha256:|hmac-sha256:)?[0-9a-f]{64}$/).nullable(),
+  recording_method: z.union([z.enum(['automatic', 'active', 'manual', 'unknown']), z.int().min(0).max(3), z.boolean()]),
+  manufacturer: z.string().min(1).max(128).nullable().optional(),
+  product_type: z.string().min(1).max(128).nullable().optional(),
+  client_record_version: z.int().nonnegative().nullable().optional(),
+  sync_version: z.int().nonnegative().nullable().optional(),
+});
+export type HealthSampleOrigin = z.infer<typeof healthSampleOriginSchema>;
+export const healthSleepContextSchema = z.strictObject({
+  source_ref: z.string().min(1).max(200), session_ref: sampleIdSchema,
+  waking_day: healthDaySchema, reducer_version: z.literal('asleep-interval-union.v1'),
+  contributor_ids: z.array(sampleIdSchema).max(128),
+  intervals: z.array(z.strictObject({
+    contributor_id: sampleIdSchema, start_at: iso8601Schema, end_at: iso8601Schema,
+    kind: z.enum(['asleep', 'in_bed']),
+  }).refine(interval => Date.parse(interval.start_at) < Date.parse(interval.end_at), 'invalid sleep interval')).max(128),
+}).superRefine((sleep, context) => {
+  if (new Set(sleep.contributor_ids).size !== sleep.contributor_ids.length || sleep.intervals.some(interval => !sleep.contributor_ids.includes(interval.contributor_id))) context.addIssue({ code: 'custom', message: 'invalid sleep contributors' });
+});
+export type HealthSleepContext = z.infer<typeof healthSleepContextSchema>;
 const sampleCommon = {
   sample_id: sampleIdSchema,
+  origin: healthSampleOriginSchema.optional(),
+  sleep_context: healthSleepContextSchema.optional(),
   revision: z.int().nonnegative(),
   start_at: iso8601Schema,
   end_at: iso8601Schema,
@@ -56,10 +86,10 @@ const sampleCommon = {
 export const healthMetricSchema = z.enum(['sleep_duration', 'sleep_efficiency', 'overnight_hrv', 'resting_heart_rate', 'sleep_midpoint', 'daylight_duration', 'movement_duration', 'perceived_stress', 'physical_load']);
 const signalContextSchema = z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/);
 export const healthSampleSchema = z.discriminatedUnion('metric', [
-  z.strictObject({ ...sampleCommon, metric: z.literal('sleep_duration'), unit: z.literal('minutes'), value: z.number().finite().min(0).max(1440) }),
+  z.strictObject({ ...sampleCommon, metric: z.literal('sleep_duration'), unit: z.literal('minutes'), method: z.enum(['asleep_duration', 'time_in_bed', 'unknown']).optional(), value: z.number().finite().min(0).max(1440) }),
   z.strictObject({ ...sampleCommon, metric: z.literal('sleep_efficiency'), unit: z.literal('ratio'), value: z.number().finite().min(0).max(1) }),
   z.strictObject({ ...sampleCommon, metric: z.literal('overnight_hrv'), unit: z.literal('milliseconds'), method: z.enum(['rmssd', 'sdnn']), value: z.number().finite().positive().max(1000) }),
-  z.strictObject({ ...sampleCommon, metric: z.literal('resting_heart_rate'), unit: z.literal('beats_per_minute'), value: z.number().finite().positive().max(300) }),
+  z.strictObject({ ...sampleCommon, metric: z.literal('resting_heart_rate'), unit: z.literal('beats_per_minute'), method: z.enum(['overnight_resting', 'provider_resting_daily', 'resting_measurement', 'unknown']).optional(), value: z.number().finite().positive().max(300) }),
   z.strictObject({ ...sampleCommon, metric: z.literal('sleep_midpoint'), unit: z.literal('local_minute'), method: z.literal('sleep_midpoint'), value: z.number().finite().min(0).max(1439.999) }),
   z.strictObject({ ...sampleCommon, metric: z.literal('daylight_duration'), unit: z.literal('minutes'), method: z.literal('daylight_duration'), context_ref: signalContextSchema, value: z.number().finite().min(0).max(1440) }),
   z.strictObject({ ...sampleCommon, metric: z.literal('movement_duration'), unit: z.literal('minutes'), method: z.literal('active_minutes'), context_ref: signalContextSchema, value: z.number().finite().min(0).max(1440) }),
@@ -161,12 +191,20 @@ export const healthHistoryQuerySchema = z.strictObject({
   consent_epoch: epochSchema,
 }).refine(query => query.from <= query.to && Date.parse(query.to) - Date.parse(query.from) <= 89 * 86400000, 'history range exceeds 90 days');
 export type HealthHistoryQuery = z.infer<typeof healthHistoryQuerySchema>;
+// Opaque value-free continuation. The signed health plane binds its source,
+// epoch, query range and data revision; a changed dataset requires restart.
+export const healthReadingsCursorSchema = z.string().regex(/^[A-Za-z0-9_-]{1,2048}$/);
+export const healthReadingsQuerySchema = healthHistoryQuerySchema.safeExtend({ cursor: healthReadingsCursorSchema.optional() });
+export type HealthReadingsQuery = z.infer<typeof healthReadingsQuerySchema>;
 export const healthReadingsSchema = z.strictObject({
   source: healthSourceSchema,
   consent_epoch: epochSchema,
   samples: z.array(healthSampleSchema).max(4096),
   count: z.int().nonnegative(),
   has_more: z.boolean(),
+  next_cursor: healthReadingsCursorSchema.nullable().optional(),
+}).superRefine((page, context) => {
+  if (page.count !== page.samples.length || (page.next_cursor !== undefined && page.has_more !== (page.next_cursor !== null))) context.addIssue({ code: 'custom', message: 'invalid readings continuation' });
 });
 export type HealthReadings = z.infer<typeof healthReadingsSchema>;
 export const healthConsentListSchema = z.strictObject({ consents: z.array(healthConsentStateSchema).max(12) });
@@ -186,7 +224,7 @@ export const healthProducerDaySchema = z.strictObject({
     observed_at: iso8601Schema.optional(),
     values: z.partialRecord(healthMetricSchema, z.number().finite()).optional(),
     observations: z.partialRecord(healthMetricSchema, z.strictObject({
-      method: z.string().min(1).max(80), context_ref: signalContextSchema,
+      method: z.string().min(1).max(80), context_ref: signalContextSchema, origin: healthSampleOriginSchema.optional(), sleep_ended_at: iso8601Schema.optional(), eligibility: z.enum(['admitted_sleep_context', 'admitted_resting_method', 'unknown']).optional(),
       observed_at: iso8601Schema, revision: z.int().nonnegative(),
     })).optional(),
   })).max(44),

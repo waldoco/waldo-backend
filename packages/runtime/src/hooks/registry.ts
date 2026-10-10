@@ -1,3 +1,4 @@
+import { browserFailureV1Schema } from '../../../contracts/src/runtime/browser-result';
 import type {
   CanaryTokens,
   ErrorCode,
@@ -82,6 +83,7 @@ import {
   logWorkoutArgsSchema,
   openLoopArgsSchema,
   proposeCalendarChangeArgsSchema,
+  proposeGoogleTaskChangeArgsSchema,
   setProactivityArgsSchema,
   setSchedulePreferenceArgsSchema,
   setReminderArgsSchema,
@@ -222,6 +224,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   list_standing_orders: listStandingOrdersArgsSchema,
   cancel_standing_order: cancelStandingOrderArgsSchema,
   propose_calendar_change: proposeCalendarChangeArgsSchema,
+  propose_google_task_change: proposeGoogleTaskChangeArgsSchema,
   open_loop: openLoopArgsSchema,
   close_loop: closeLoopArgsSchema,
   track_responsibility: trackResponsibilityArgsSchema,
@@ -767,7 +770,33 @@ async function sanitiseHookPayload(
   if (payload.event === 'PostToolUse') {
     const sourceTaint = successfulResultTaint(payload.result);
     if (!sourceTaint.parsed) return sourceTaint.result;
-    const sanitized = await sanitiseCandidate(payload.result, ctx, destination, sourceTaint.data);
+    const result=payload.result;
+    if((payload.tool==='browse_page'||payload.tool==='browse_act')&&result!==null&&typeof result==='object'&&!Array.isArray(result)
+      &&(result as Record<string,unknown>).ok===false&&Object.hasOwn(result,'browser')){
+      const {browser,...prose}=result as Record<string,unknown>;
+      const parsed=browserFailureV1Schema.safeParse(browser);
+      if(!parsed.success)return halt('browser failure metadata invalid','invalid_args');
+      // This closed host protocol contains enums, booleans, bounded integers,
+      // UUID handles and hashes. Its recovery flag is not a health score. Keep
+      // arbitrary provider identifiers and failure prose under Scribe below.
+      const sanitized=await sanitiseCandidate(prose,ctx,destination,sourceTaint.data);
+      if(!sanitized.ok)return sanitized.result;
+      if(sanitized.payload===null||typeof sanitized.payload!=='object'||Array.isArray(sanitized.payload))return halt('browser failure result invalid','transient');
+      const metadata=parsed.data;
+      if(metadata.diagnostic){
+        const diagnostic:{status:number;code?:string;request_id?:string}={status:metadata.diagnostic.status};
+        for(const key of ['code','request_id'] as const){
+          const token=metadata.diagnostic[key];if(token===undefined)continue;
+          const checked=await sanitiseCandidate(token,ctx,destination,sourceTaint.data);
+          // A rejected/redacted optional protocol ID is omitted, never relayed
+          // or substituted into an exact provider reference.
+          if(checked.ok&&checked.redactions.length===0&&checked.payload===token)diagnostic[key]=token;
+        }
+        metadata.diagnostic=diagnostic;
+      }
+      return {ok:true,payload:{...payload,result:{...sanitized.payload,browser:metadata}}};
+    }
+    const sanitized = await sanitiseCandidate(result, ctx, destination, sourceTaint.data);
     return sanitized.ok
       ? { ok: true, payload: { ...payload, result: sanitized.payload } }
       : sanitized.result;

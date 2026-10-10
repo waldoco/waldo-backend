@@ -1,3 +1,4 @@
+import type { OwnerTurnResponse } from './owner-turn-response';
 import {telegramRichReply} from './rich-format';
 import { sendTelegramFinal, type TelegramFinalPayload } from './telegram-api';
 import { redactSecretUrls } from './egress-guard';
@@ -30,6 +31,10 @@ export type TelegramOwnerListenerOptions = Readonly<{
   surface?: 'telegram' | 'whatsapp' | 'app';
   api: TelegramOwnerApi;
   respond(turn: TelegramInboundTurn, time: TurnTimer): Promise<string>;
+  respondReceipt?(turn: TelegramInboundTurn, time: TurnTimer): Promise<OwnerTurnResponse>;
+  // Returns actual transport/readback evidence. Undefined is never delivered.
+  // A protected app response requires this adapter; the ordinary API may journal.
+  deliverResponse?(response: OwnerTurnResponse, payload: TelegramFinalPayload, turn: TelegramInboundTurn): Promise<unknown>;
   queueFinal?(turn: TelegramInboundTurn, payload: TelegramFinalPayload, reaction: string): Promise<void>;
   clearTurnReceipts?(trace: string): void;
   turnTimeoutMs?: number;
@@ -88,8 +93,11 @@ export class TelegramOwnerListener {
     } : originalApi;
     const now = this.options.now ?? Date.now;
     const trace = ownerTurnTrace(this.options.surface ?? 'telegram', turn.updateId);
+    let protectedResponse = false;
     const log = (hop: string, ms: number, ok: boolean, error?: string, code?: string) =>
-      this.options.log?.(error === undefined ? { trace, hop, ms, ok } : { trace, hop, ms, ok, error, ...(code === undefined ? {} : { code }) });
+      this.options.log?.(protectedResponse || Boolean(this.options.respondReceipt)
+        ? { trace, hop, ms, ok, ...(code === undefined ? {} : { code }) }
+        : error === undefined ? { trace, hop, ms, ok } : { trace, hop, ms, ok, error, ...(code === undefined ? {} : { code }) });
     const time: TurnTimer = async (hop, work) => {
       const start = now();
       try {
@@ -130,7 +138,7 @@ export class TelegramOwnerListener {
     };
     await react('receipt', ack);
     let readyChoice: string | null = null;
-    const choice = message_id === null || !this.options.chooseReaction
+    const choice = message_id === null || !this.options.chooseReaction || this.options.respondReceipt
       ? Promise.resolve(null)
       : time('choose_reaction', () => this.options.chooseReaction!(turn)).catch(() => null).then(value => { readyChoice = value; return value; });
     const typing = async () => { try { await api.sendChatAction({ chat_id, action: 'typing' }); } catch { /* bounded UX only */ } };
@@ -142,13 +150,19 @@ export class TelegramOwnerListener {
       const limit = turn.runScope ? Math.max(0, turn.runScope.deadline - now()) : this.options.turnTimeoutMs ?? TURN_TIMEOUT_MS;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new TurnTimeout(limit)), limit); });
-      const text = (await time('respond', () => Promise.race([this.options.respond(turn, time), timeout]).finally(() => clearTimeout(timer)))).trim();
+      const response: OwnerTurnResponse = await time('respond', () => Promise.race([
+        this.options.respondReceipt ? this.options.respondReceipt(turn, time)
+          : this.options.respond(turn, time).then(text => ({ text, custody: { kind: 'durable' as const } })),
+        timeout,
+      ]).finally(() => clearTimeout(timer)));
+      protectedResponse = response.custody.kind === 'volatile_owner_health';
+      const text = response.text.trim();
       if (text.length === 0) throw new Error('empty reply');
       // The responder has already applied current-turn artifact receipt admission.
       // Rich formatting is confined to this final reply, never progress/events/errors.
       const guardedText = redactSecretUrls(text).text;
       const rich = this.options.surface === 'whatsapp' ? {text: guardedText} : telegramRichReply(guardedText);
-      if (this.options.queueFinal) {
+      if (this.options.queueFinal && !protectedResponse) {
         const chosen = telegramReaction(readyChoice);
         const finalReaction = chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌';
         await time('outbox_enqueue', () => this.options.queueFinal!(turn, { chat_id, ...(rich.text === guardedText ? { text: guardedText } : rich) }, finalReaction));
@@ -156,11 +170,32 @@ export class TelegramOwnerListener {
         return 'queued';
       }
       // A blocked send (unlinked or rebound owner) returns no message: the turn did not reach the owner.
-      const delivered = await time('send', () => sendTelegramFinal(payload => api.sendMessage(payload), { chat_id, ...(rich.text===guardedText ? {text: guardedText} : rich) }));
+      const payload = { chat_id, ...(rich.text === guardedText ? { text: guardedText } : rich) };
+      const delivered = await time('send', async () => {
+        if (response.custody.kind === 'volatile_owner_health') {
+          await response.custody.assertCurrent();
+          turn.runScope?.admit();
+          if (this.options.surface === 'app' && !this.options.deliverResponse) throw new Error('Protected app delivery unavailable.');
+          const receipt = this.options.deliverResponse
+            ? await this.options.deliverResponse(response, payload, turn)
+            : await sendTelegramFinal(async part => {
+              if (response.custody.kind !== 'volatile_owner_health') throw new Error('Protected response custody changed.');
+              await response.custody.assertCurrent();
+              turn.runScope?.admit();
+              const sent = await api.sendMessage(part);
+              await response.custody.assertCurrent();
+              return sent;
+            }, payload);
+          await response.custody.assertCurrent();
+          turn.runScope?.admit();
+          return receipt;
+        }
+        return sendTelegramFinal(part => api.sendMessage(part), payload);
+      });
       if (delivered === undefined) throw new Error('telegram send blocked');
-      const chosen = telegramReaction(await choice);
+      const chosen = protectedResponse ? null : telegramReaction(await choice);
       await react('resolved', chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌');
-      this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, text: { input: turn.text, output: text } });
+      this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, ...(protectedResponse ? { detail: 'protected_owner_response' } : { text: { input: turn.text, output: text } }) });
       return 'answered';
     } catch (error) {
       const failure = error instanceof TurnTimeout
@@ -168,7 +203,7 @@ export class TelegramOwnerListener {
         : this.options.failureText ?? 'Sorry - I hit a problem answering that. Please try again in a moment.';
       // WhatsApp's outer admission owns the fixed check-first notice. Do not
       // turn an uncertain post-effect send into retry wording or a second send.
-      if (turn.runScope || this.options.surface === 'whatsapp') {
+      if (protectedResponse || turn.runScope || this.options.surface === 'whatsapp') {
         log('turn',now()-started,false,error instanceof Error?error.message:String(error),turnFailureCode(error));
         throw error;
       }

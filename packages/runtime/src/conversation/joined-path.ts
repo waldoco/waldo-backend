@@ -1,3 +1,4 @@
+import { PROTECTED_HEALTH_HISTORY_NOTICE } from '../channels/owner-turn-response';
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import {
   ConversationTree,
@@ -26,6 +27,7 @@ export type JoinedConversationRequest = Readonly<{
   userEntry: ConversationEntry;
   assistantEntryId: string;
   historyStartRef?: string;
+  responseRetention?(): 'durable' | 'volatile_owner_health';
 }>;
 
 export type JoinedConversationPublication = Readonly<{
@@ -35,6 +37,7 @@ export type JoinedConversationPublication = Readonly<{
   text: string;
   contextRef: string;
   promptDigest: string;
+  responseRetention?: 'durable' | 'volatile_owner_health';
 }>;
 
 export class JoinedConversationPath {
@@ -61,6 +64,7 @@ export class JoinedConversationPath {
     if (existing) {
       if (existing.ownerId !== request.authenticatedOwnerId || existing.chatId !== original.chatId
         || this.tree.get(existing.leafId)?.parentId !== original.id) throw new Error('conversation publication identity conflict');
+      if (existing.responseRetention === 'volatile_owner_health') throw new Error('Protected response is unavailable for replay; request current context again.');
       return existing;
     }
     if (!retained) this.tree.append(original);
@@ -80,6 +84,8 @@ export class JoinedConversationPath {
       composition,
     });
     if (text.trim().length === 0) throw new Error('conversation model returned empty output');
+    const responseRetention = request.responseRetention?.() ?? 'durable';
+    const retainedText = responseRetention === 'volatile_owner_health' ? PROTECTED_HEALTH_HISTORY_NOTICE : text;
     const assistantEntry: ConversationEntry = {
       id: request.assistantEntryId,
       ownerId: request.userEntry.ownerId,
@@ -87,9 +93,9 @@ export class JoinedConversationPath {
       parentId: request.userEntry.id,
       threadAnchorId: request.userEntry.threadAnchorId,
       surface: request.userEntry.surface,
-      modelPayload: text,
-      appPayload: text,
-      modelProjection: { mode: 'include' },
+      modelPayload: retainedText,
+      appPayload: retainedText,
+      modelProjection: responseRetention === 'volatile_owner_health' ? { mode: 'omit' } : { mode: 'include' },
       role: 'assistant',
     };
     request.runScope?.admit();
@@ -101,8 +107,9 @@ export class JoinedConversationPath {
       text,
       contextRef: composition.checkpoint.context_ref,
       promptDigest: composition.evidence.prompt_digest,
+      responseRetention,
     });
-    this.publications.set(assistantEntry.id, publication);
+    this.publications.set(assistantEntry.id, responseRetention === 'volatile_owner_health' ? Object.freeze({ ...publication, text: retainedText }) : publication);
     return publication;
   }
 

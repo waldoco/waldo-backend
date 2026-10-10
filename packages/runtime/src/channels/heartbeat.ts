@@ -99,6 +99,7 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
         `SELECT l.* FROM loops l
          WHERE l.status = 'open' AND l.due IS NOT NULL AND l.due <= ?
            AND NOT EXISTS (SELECT 1 FROM loop_mail_sources s WHERE s.loop_id = l.id)
+           AND NOT EXISTS (SELECT 1 FROM loop_sources s WHERE s.loop_id = l.id)
            AND NOT EXISTS (
              SELECT 1 FROM heartbeat_notified n
              WHERE n.loop_id = l.id AND n.due = l.due AND n.notified_at >= ?)
@@ -133,6 +134,8 @@ export const heartbeatEligible = (record: FinalRecord, sql: Sql, loops: LoopBook
   const localNow = localIso(now, timezone).slice(0, 16);
   return record.heartbeat.loops.length > 0 && record.heartbeat.loops.every(loop => sql.exec(
     `SELECT 1 FROM loops l WHERE l.id = ? AND l.status = 'open' AND l.due = ? AND l.due <= ?
+      AND NOT EXISTS (SELECT 1 FROM loop_mail_sources s WHERE s.loop_id = l.id)
+      AND NOT EXISTS (SELECT 1 FROM loop_sources s WHERE s.loop_id = l.id)
       AND NOT EXISTS (SELECT 1 FROM heartbeat_notified n WHERE n.loop_id = l.id AND n.due = l.due AND n.notified_at >= ?)`,
     loop.id, loop.due, localNow, now - RENOTIFY_COOLDOWN_MS,
   ).toArray().length > 0);

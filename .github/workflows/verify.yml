@@ -53,6 +53,16 @@ jobs:
         working-directory: packages/runtime
         run: pnpm exec vitest run --config vitest.common-bootstrap.config.ts
 
+      - name: Google task effects and readback
+        working-directory: packages/runtime
+        run: pnpm exec vitest run --config vitest.google-tasks.config.ts
+      - name: Canonical owner proactivity
+        working-directory: packages/runtime
+        run: pnpm test:proactivity
+      - name: Calendar effect and readback custody
+        working-directory: packages/runtime
+        run: pnpm test:calendar-effects
+
       # Required scenario gate: the main vitest config excludes the scenario harness, so the
       # shards above never run it. This step is the only CI coverage for the scenario suite.
       - name: Runtime scenarios

@@ -61,14 +61,17 @@ const form = (path: string, fields: Record<string, string>) => new Request(`http
 
 describe('handleConsole', () => {
   it('sign-out-everywhere drops server-side sessions and clears both cookies', async () => {
+    const push = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(Response.json(1));
     const signOutAll = vi.fn(async () => 3);
     const response = await handleConsole(
       new Request('https://w.test/console/signout-all', { method: 'POST' }),
-      { TELEGRAM_OWNER_DO: owners().ns },
+      { TELEGRAM_OWNER_DO: owners().ns, SUPABASE_PROJECT_URL: 'https://db.test', SUPABASE_PUBLISHABLE_KEY: 'pub', WALDO_ROUTER_HMAC_SECRET: 'router' },
       auth({ readOwnerCookie: vi.fn(async () => 'do-a'), signOutAll }),
     );
     expect(response?.status).toBe(303);
     expect(signOutAll).toHaveBeenCalledWith('do-a');
+    expect(push.mock.calls[0]?.[0]).toBe('https://db.test/rest/v1/rpc/app_push_revoke_all');
+    push.mockRestore();
     const cleared = response?.headers.get('set-cookie') ?? '';
     expect(cleared).toContain('waldo_owner=');
     expect(cleared).toContain('Max-Age=0');
@@ -456,4 +459,23 @@ it('keeps dashboard control JSON authentication failures private without downloa
   const ns=owners();const response=(await handleConsole(new Request('https://w.test'+path,{headers:{accept:'application/json'}}),{TELEGRAM_OWNER_DO:ns.ns},auth()))!;
   expect(response.status).toBe(401);expect(response.headers.get('cache-control')).toBe('private, no-store');expect(response.headers.get('location')).toBeNull();expect(ns.fetch).not.toHaveBeenCalled();
  }
+});
+
+
+it('keeps signout unconfirmed when push or fresh session absence is unavailable', async () => {
+  const ns = owners(), configured = { TELEGRAM_OWNER_DO: ns.ns, SUPABASE_PROJECT_URL: 'https://db.test', SUPABASE_PUBLISHABLE_KEY: 'pub', WALDO_ROUTER_HMAC_SECRET: 'router' };
+  for (const inventory of [async () => [{ session: 'a'.repeat(64), created_at: '2026-10-10T12:00:00Z', last_seen_at: '2026-10-10T12:00:00Z' }], async () => { throw Error('session inventory unavailable'); }]) {
+    const push = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(Response.json(1));
+    try {
+      const response = (await handleConsole(new Request('https://w.test/console/signout-all', { method: 'POST' }), configured, auth({ readOwnerCookie: async () => 'do-a', listSessions: inventory })))!;
+      expect(response.status).toBe(503);
+      expect(response.headers.get('set-cookie')).toBeNull();
+      expect(response.headers.get('location')).toBeNull();
+      expect(await response.text()).toContain('could not confirm');
+    } finally { push.mockRestore(); }
+  }
+  const signOutAll = vi.fn(async () => 1);
+  const response = (await handleConsole(new Request('https://w.test/console/signout-all', { method: 'POST' }), { TELEGRAM_OWNER_DO: ns.ns }, auth({ readOwnerCookie: async () => 'do-a', signOutAll })))!;
+  expect(response.status).toBe(503);
+  expect(signOutAll).not.toHaveBeenCalled();
 });

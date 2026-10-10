@@ -1,4 +1,4 @@
-import type { ApprovalReview } from './approvals';
+import type { ApprovalReview, ApprovalItem } from './approvals';
 import { consoleMayApprove, type ConsoleView } from './console';
 import { E2E_STEPS } from './harness';
 
@@ -24,9 +24,19 @@ export function readControlsQuery(params: URLSearchParams): ControlsQuery | null
 
 const safeReview = (review: ApprovalReview | null): ApprovalReview | null => {
   if (!review) return null;
-  if (review.kind === 'email_send') return { kind: review.kind, to: [...review.to], cc: [...review.cc], bcc: [...review.bcc], subject: review.subject, body: review.body };
+  if (review.kind === 'email_send') return { kind: review.kind, ...(review.account ? {account:review.account}:{}), to: [...review.to], cc: [...review.cc], bcc: [...review.bcc], subject: review.subject, body: review.body };
   if (review.kind === 'message_send') return { kind: review.kind, channel: review.channel, content: review.content };
-  return { kind: review.kind, action: review.action, title: review.title, event_id: review.event_id, start: review.start, end: review.end, reason: review.reason };
+  if (review.kind === 'google_task_change') return { kind: review.kind, account: review.account, proposal: structuredClone(review.proposal), proposal_digest: review.proposal_digest };
+  if (review.kind === 'browser_submit') return { kind: review.kind, url: review.url, action: { selector: review.action.selector, description: review.action.description,
+    ...(review.action.method ? { method: review.action.method } : {}), ...(review.action.arguments ? { arguments: [...review.action.arguments] } : {}) }, binding: { ...review.binding }, steps: [...review.steps],
+    ...(review.request ? { request: { url: review.request.url, method: review.request.method, fields: [...review.request.fields] } } : {}), expires_at: review.expires_at };
+  if (review.kind === 'mcp_call') return { kind: review.kind, server: review.server, tool: review.tool, args: structuredClone(review.args), expires_at: review.expires_at };
+  return { kind: review.kind, ...(review.account ? { account: review.account } : {}), action: review.action, title: review.title, event_id: review.event_id, start: review.start, end: review.end, reason: review.reason,
+    ...(review.review_timezone !== undefined ? { review_timezone: review.review_timezone } : {}), ...(review.calendar_id !== undefined ? { calendar_id: review.calendar_id } : {}),
+    ...(review.connection_ref !== undefined ? { connection_ref: review.connection_ref } : {}), ...(review.attendees !== undefined ? { attendees: [...review.attendees] } : {}),
+    ...(review.send_updates !== undefined ? { send_updates: review.send_updates } : {}), ...(review.description !== undefined ? { description: review.description } : {}),
+    ...(review.location !== undefined ? { location: review.location } : {}), ...(review.seen_etag !== undefined ? { seen_etag: review.seen_etag } : {}),
+    ...(review.proposal_digest !== undefined ? { proposal_digest: review.proposal_digest } : {}) };
 };
 
 const projections = {
@@ -45,14 +55,14 @@ const projections = {
     telegram: { linked: view.telegram.linked, unlinkAvailable: view.telegram.unlinkAvailable },
     sessions: { until: view.sessionUntil, count: view.sessionCount, items: view.sessions.map((row) => ({ signed_in: row.signed_in, until: row.until, current: row.current })) },
   }),
-  waiting: (view: ConsoleView) => ({
+  waiting: (view: ConsoleView, mayApprove = consoleMayApprove) => ({
     // Proposal times are instants; the console draws them in this owner zone when it can read it.
     timezone: view.timezone,
     proposals: view.approvals.map((item) => {
       const review = item.review?.kind === item.kind ? safeReview(item.review) : null;
-      const canApprove = consoleMayApprove(item) && review !== null;
+      const canApprove = mayApprove(item) && review !== null;
       const dismissible = (item.state === 'open' || item.state === 'review_only') && !canApprove && (item.kind === 'email_send' || item.kind === 'message_send');
-      const actions = canApprove ? ['approval.approve', 'approval.skip']
+      const actions = canApprove ? ['approval.approve', 'approval.skip', 'approval.edit']
         : item.state === 'open' || item.state === 'review_only' ? dismissible ? ['approval.skip'] : []
           : item.undoable ? ['approval.undo'] : [];
       return { id: item.id, kind: item.kind, summary: item.summary, state: item.state, review, actions };
@@ -88,6 +98,6 @@ const projections = {
 
 // Called after the existing owner-session check. The CSRF value is scoped to that
 // session for existing supported actions; no session credential is projected.
-export function projectControls<T extends ControlsView>(view: ConsoleView, selected: T) {
-  return { version: 1 as const, view: selected, state: 'available' as const, csrf: view.csrf, data: projections[selected](view) as ReturnType<(typeof projections)[T]> };
+export function projectControls<T extends ControlsView>(view: ConsoleView, selected: T, mayApprove?: (item:ApprovalItem|undefined)=>boolean) {
+  return { version: 1 as const, view: selected, state: 'available' as const, csrf: view.csrf, data: projections[selected](view,mayApprove) as ReturnType<(typeof projections)[T]> };
 }

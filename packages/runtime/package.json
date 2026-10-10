@@ -15,7 +15,9 @@
     "test:mutation:delivery-gate": "stryker run stryker.delivery-gate.config.mjs",
     "test:mutation:context-composer": "stryker run stryker.context-composer.config.mjs",
     "test:scenarios": "vitest run --config vitest.scenarios.config.ts",
-    "test:owner-ingress": "vitest run --config vitest.owner-ingress.config.ts && vitest run --config vitest.link-routing.config.ts && vitest run --config vitest.devices.config.ts"
+    "test:owner-ingress": "vitest run --config vitest.owner-ingress.config.ts && vitest run --config vitest.link-routing.config.ts && vitest run --config vitest.devices.config.ts",
+    "test:proactivity": "vitest run --config vitest.proactivity.config.ts",
+    "test:calendar-effects": "vitest run --config vitest.google-calendar-effects.config.ts"
   },
   "dependencies": {
     "@cloudflare/playwright": "1.3.6",
@@ -24,7 +26,8 @@
     "docx": "9.8.1",
     "htmlparser2": "10.0.0",
     "openai": "5.12.2",
-    "pdf-lib": "1.17.1"
+    "pdf-lib": "1.17.1",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.16.20",

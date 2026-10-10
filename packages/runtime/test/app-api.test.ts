@@ -1,21 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
 import { appTranscriptPage, handleApp } from '../src/channels/app-api';
 import type { ConsoleAuth } from '../src/identity/console-auth';
-import { linkCodeHash } from '../src/identity/owner-directory';
+import { routerSignature, linkCodeHash } from '../src/identity/owner-directory';
 
 const SESSION = 'a'.repeat(32);
 const CREDENTIAL = `owner-1.${SESSION}.sig`;
 
 const fakeAuth = (over: Partial<ConsoleAuth> = {}) => {
-  const calls: string[] = [];
+  const calls: string[] = [];let live=true;
   const auth = {
     throttle: async () => true,
     sendCode: async (email: string) => { calls.push(`send:${email}`); return email === 'member@example.test'; },
     verify: async (email: string, code: string) => (email === 'member@example.test' && code === '123456' ? 'owner-1' : null),
     ownerCookie: async () => CREDENTIAL,
-    listSessions: async () => [{ session: await linkCodeHash(SESSION), created_at: new Date().toISOString(), last_seen_at: new Date().toISOString() }],
+    listSessions: async () => live?[{ session: await linkCodeHash(SESSION), created_at: new Date().toISOString(), last_seen_at: new Date().toISOString() }]:[],
     readOwnerCookie: async (request: Request) => ((request.headers.get('cookie') ?? '').includes(CREDENTIAL) ? 'owner-1' : null),
-    revokeSession: async () => { calls.push('revoke'); return true; },
+    revokeSession: async () => { calls.push('revoke');live=false; return true; },
     ...over,
   } as unknown as ConsoleAuth;
   return { auth, calls };
@@ -63,9 +63,14 @@ describe('app sign-in and main chat routes', () => {
   });
   it('signs out by revoking exactly its own session', async () => {
     const { auth, calls } = fakeAuth();
-    const response = await handleApp(post('/app/v1/auth/signout', {}, { authorization: `Bearer ${CREDENTIAL}` }), env(), auth);
-    expect(await response!.json()).toEqual({ result: 'revoked' });
-    expect(calls).toContain('revoke');
+    const configured={...(env() as object),SUPABASE_PROJECT_URL:'https://push.fixture.invalid',SUPABASE_PUBLISHABLE_KEY:'fictional-key',WALDO_ROUTER_HMAC_SECRET:'fictional-router-secret'} as never;
+    const fetcher=vi.spyOn(globalThis,'fetch').mockImplementation(async(input,init)=>{expect(String(input)).toBe('https://push.fixture.invalid/rest/v1/rpc/app_push_revoke_session');const args=JSON.parse(String(init?.body));expect(args.p_session_hash).toBe(await linkCodeHash(SESSION));expect(args.p_sig).toBe(await routerSignature('fictional-router-secret',args.p_at,`app.push.revoke-session.owner-1.${args.p_session_hash}`));return Response.json(0);});
+    try{const response = await handleApp(post('/app/v1/auth/signout', {}, { authorization: `Bearer ${CREDENTIAL}` }), configured, auth);
+    expect(await response!.json()).toEqual({ result: 'revoked' });expect(calls).toContain('revoke');}finally{fetcher.mockRestore();}
+  });
+  it('keeps signout unconfirmed without push custody and does not revoke authentication first',async()=>{
+    const {auth,calls}=fakeAuth();const response=await handleApp(post('/app/v1/auth/signout',{}, {authorization:`Bearer ${CREDENTIAL}`}),env(),auth);
+    expect(response!.status).toBe(503);expect(await response!.json()).toEqual({error:'unavailable'});expect(calls).not.toContain('revoke');
   });
   it('forwards chat calls to the credential owner DO and never takes an owner id from the client', async () => {
     forwards.length = 0;
@@ -96,7 +101,7 @@ describe('main chat transcript page', () => {
     const page = appTranscriptPage(all, null, 2);
     expect(page.messages.map(m => m.text)).toEqual(['text 4', 'text 3']);
     expect(page.messages[0]).toMatchObject({ id: 'e4', role: 'user', channel: 'app', parent_id: null, parts: [{ type: 'text', text: 'text 4' }] });
-    expect(page.next_cursor).toBe('2');
+    expect(page.next_cursor).toBe(`before:${all[3]!.id}`);
     const older = appTranscriptPage(all, page.next_cursor, 10);
     expect(older.messages.map(m => m.text)).toEqual(['text 2', 'text 1', 'text 0']);
     expect(older.messages[2]!.channel).toBe('telegram');

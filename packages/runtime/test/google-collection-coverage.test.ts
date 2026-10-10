@@ -116,13 +116,19 @@ describe('Google Tasks collection coverage', () => {
     expect(stale).toMatchObject({ ok: false });
     expect(checks).toBe(1);
     expect(reads).toBe(0);
-    expect(selected).toEqual([account.email]);
+    // Revoked sources are rejected before account/token/provider acquisition.
+    expect(selected).toEqual([]);
     expect(await handler.handle(getTasksArgsSchema.parse({ task_list_id: 'home', account: 'work@example.test' }))).toMatchObject({ ok: false });
     expect(reads).toBe(0);
   });
 });
 
 describe('Google Calendar discovery', () => {
+  it('uses authoritative known Calendar-list grant state to request the narrow missing scope', async () => {
+    const known = { id: account.connection_id, email: account.email, error: null, calendar: true, mail: true, tasks: true, calendar_list: false };
+    const handler = googleHandlers({ client: async () => null, state: async () => [known] }, desk, clock).find(h => h.name === 'query_calendar')!;
+    expect(await handler.handle(handler.schema.parse({ operation: 'list_calendars' }) as never)).toMatchObject({ ok: false, connect: { feature: 'calendar_list', reason: 'scope_missing' } });
+  });
   it('reads the authoritative exact event in an explicit calendar without a primary fallback', async () => {
     const urls: URL[] = [];
     const client = googleClient(app, { refresh_token: 'grant' }, provider(() => ({ id: 'event/id', summary: 'Shared event', start: { dateTime: '2026-10-11T10:00:00Z' }, end: { dateTime: '2026-10-11T11:00:00Z' }, etag: 'v1' }), urls), undefined, account);
@@ -269,5 +275,17 @@ describe('Gmail draft readback', () => {
     selected = { connection_id: 'work-connection', email: 'work@example.test' };
     expect(await invoke()).toMatchObject({ ok: false, error: 'effect identity conflict' });
     expect(writes).toBe(1);
+  });
+});
+
+describe('Gmail recognized artifact echoes', () => {
+  it('removes a recognized subject credential echoed in the body while preserving task context', async () => {
+    const relayed: unknown[] = [];
+    const handler = googleHandlers({ client: async () => ({ account, threadPage: async () => ({ messages: [{ id: 'message', from: 'source@example.test', at: '2026-10-10T00:00:00Z', subject: 'verification code: 123456', body: 'one-time password is 123456. Form due Nov 2' }], cursor: null }) } as never) }, desk, clock, async (_from, artifacts) => { relayed.push(artifacts); return false; }).find(h => h.name === 'read_thread')!;
+    const result = await handler.handle(handler.schema.parse({ thread_id: 'thread' }) as never);
+    expect(JSON.stringify(result)).not.toContain('123456');
+    expect(JSON.stringify(result)).toContain('Form due Nov 2');
+    expect(JSON.stringify(result)).not.toContain('sent to the owner');
+    expect(relayed).toEqual([[{ kind: 'otp', value: '123456' }]]);
   });
 });

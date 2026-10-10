@@ -7,16 +7,18 @@ import type { APIResponse,Browser, BrowserContext, BrowserWorker, Page, Route } 
 import { browserSessionSchema, type BrowserSession } from '@waldo/contracts';
 import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
 import { cloudflareBrowserGuardOptions } from './cloudflare-browser-adapter';
-import { generalDigest, generalPageState, type GeneralSnapshot, type GeneralActionSnapshot,type GeneralPageState } from './general-browser-observation';
+import { generalDigest, generalPageState, generalPageContentReady, generalPageHasContent, type GeneralSnapshot, type GeneralActionSnapshot,type GeneralPageState } from './general-browser-observation';
 import { parseGeneralBrowserAction, type GeneralBrowserAction } from './general-browser-actions';
 export type { GeneralBrowserAction } from './general-browser-actions';
 import { generalBrowserDiagnostic, type GeneralBrowserDiagnostic } from './general-browser-diagnostic';
 import { GENERAL_BROWSER_REDIRECT_LIMIT, GeneralRedirectError, guardGeneralBrowserRoute } from './general-browser-redirects';
+import type { BrowserFailureCodeV1 } from '../../../contracts/src/runtime/browser-result';
 
 export class GeneralBrowserError extends Error {
   release_failed?: true;
   cleanup_failed?: true;
-  constructor(readonly code: 'rejected' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'observation_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
+  session_terminated?: true;
+  constructor(readonly code: BrowserFailureCodeV1, readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
 }
 type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; cleanupBinding?(providerSessionId:string):BrowserWorker; publicRead?:boolean; retainConnection?:boolean; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number; authorizeHumanRequest?(url:string,method:string):Promise<boolean> }>;
 type Navigation = Readonly<{ goto(page: Page, url: string): Promise<void>; finish(page: Page): Promise<void>; pending(page: Page): boolean; dispatched(): void }>;
@@ -32,6 +34,7 @@ export function cloudflareGeneralBrowser(options: Options) {
   let guardedContext: BrowserContext | undefined;
   const humanRequests=new Set<Promise<void>>();
   const humanRedirects=new WeakMap<Page,Set<string>>();
+  const navigationStatuses=new WeakMap<Page,number>();
   let takeover: ReturnType<typeof nativeBrowserHandoff> | undefined;
   let attachmentCapture:{page:Page;url:string;complete:boolean;consume(response:APIResponse):Promise<void>}|undefined;
   let currentRouteGuard: ((route: Route) => Promise<void>) | undefined;
@@ -81,15 +84,16 @@ export function cloudflareGeneralBrowser(options: Options) {
     await admit(session);
   };
   const tabRef = (session: BrowserSession, target: string) => generalDigest(JSON.stringify([session.ownerId, session.id, session.generation, target])).then(value => `tab:${value.slice(0, 24)}`);
-  const targetId = async (context: BrowserContext, page: Page) => {
-    const cdp = await context.newCDPSession(page);
-    try { return (await cdp.send('Target.getTargetInfo')).targetInfo.targetId; }
-    finally { await cdp.detach(); }
+  const targetId = async (session:BrowserSession,context: BrowserContext, page: Page,assertCurrent=()=>admit(session)) => {
+    await assertCurrent();const cdp = await boundedSemanticRead(session,()=>context.newCDPSession(page));await assertCurrent();
+    try { const info=await boundedSemanticRead(session,()=>cdp.send('Target.getTargetInfo'));await assertCurrent();return info.targetInfo.targetId; }
+    finally { await cleanup(step=>step(()=>cdp.detach())); }
   };
   const attached = async <T>(session: BrowserSession, work: (browser: Browser, context: BrowserContext, navigation: Navigation) => Promise<T>): Promise<T> => {
     if(takeover)throw new GeneralBrowserError('rejected');
     let browser: Browser | undefined, context: BrowserContext | undefined, primary: GeneralBrowserError | undefined;
-    let mutationDispatched = false, pageCleanupFailed = false;
+    let mutationDispatched = false, pageCleanupFailed = false, sessionTerminated = false;
+    const terminateCurrent = async () => { await terminateId(session.providerSessionId); sessionTerminated = true; };
     const redirects = new Map<Page, string>();
     const navigation: Navigation = {
       async goto(page, initialUrl) {
@@ -105,9 +109,10 @@ export function cloudflareGeneralBrowser(options: Options) {
           const next = redirects.get(page); redirects.delete(page);
           if (next) { url = next; continue; }
           if (!response || response.status() >= 400) {
-            try { await cleanup(step => step(() => page.close())); } catch { await terminateId(session.providerSessionId); }
+            try { await cleanup(step => step(() => page.close())); } catch { await terminateCurrent(); }
             throw new GeneralBrowserError('page_unavailable', response ? { status: response.status() } : undefined);
           }
+          navigationStatuses.set(page,response.status());
           return;
         }
       },
@@ -151,7 +156,7 @@ export function cloudflareGeneralBrowser(options: Options) {
         }
       }
       if(options.publicRead&&guardedContext!==context){
-        if(!await prepareGeneralPublicRead(context)){await terminateId(session.providerSessionId);throw new GeneralBrowserError('session_lost');}
+        if(!await prepareGeneralPublicRead(context)){await terminateCurrent();throw new GeneralBrowserError('session_lost');}
         await admit(session);
       }
       // Switch operation bookkeeping without removing interception from live
@@ -214,7 +219,7 @@ export function cloudflareGeneralBrowser(options: Options) {
       // Aborted main navigations can retain a Chromium error document. Discard
       // independently of expired/revoked action authority before releasing custody.
       for (const page of invalidDocuments) try { await cleanup(step => step(() => page.close())); } catch {
-        try { await terminateId(session.providerSessionId); } catch {
+        try { await terminateCurrent(); } catch {
           if (primary) primary.cleanup_failed = true;
           else throw new GeneralBrowserError('cleanup_unconfirmed');
         }
@@ -224,7 +229,7 @@ export function cloudflareGeneralBrowser(options: Options) {
       if(options.publicRead&&context&&(!options.retainConnection||primary))try{
         await cleanup(async step=>{await step(()=>Promise.all(context!.pages().map(page=>page.close())));if(context!.pages().length||context!.serviceWorkers().length)throw new GeneralBrowserError('cleanup_unconfirmed');});
       }catch{
-        try{await terminateId(session.providerSessionId);}catch{if(primary)primary.cleanup_failed=true;}
+        try{await terminateCurrent();}catch{if(primary)primary.cleanup_failed=true;}
         if(!primary)primary=new GeneralBrowserError('cleanup_unconfirmed');
         pageCleanupFailed=true;
       }
@@ -236,22 +241,26 @@ export function cloudflareGeneralBrowser(options: Options) {
           failure.release_failed = true; throw failure;
         }
       }
+      if(sessionTerminated){
+        primary ??= new GeneralBrowserError('cleanup_unconfirmed');
+        primary.session_terminated=true;
+      }
       if(pageCleanupFailed)throw primary!;
     }
   };
-  const select = async (session: BrowserSession, context: BrowserContext, reference?: string) => {
+  const select = async (session: BrowserSession, context: BrowserContext, reference?: string,assertCurrent=()=>admit(session)) => {
     const pages = context.pages();
     if (!reference) return pages[0] ?? await context.newPage();
-    for (const page of pages) if (await tabRef(session, await targetId(context, page)) === reference) return page;
+    for (const page of pages) if (await tabRef(session, await targetId(session,context, page,assertCurrent)) === reference) return page;
     throw new GeneralBrowserError('stale_observation');
   };
   // Chromium's native accessibility tree masks password values. Playwright's
   // body ariaSnapshot currently serializes them; never publish that raw snapshot.
-  const boundedSemanticRead = async <T>(session:BrowserSession, read:()=>Promise<T>):Promise<T> => {
-    const timeout=actionTimeout(session);
+  const boundedSemanticRead = async <T>(session:BrowserSession, read:()=>Promise<T>,maxTimeout?:number,timeoutCode:BrowserFailureCodeV1='provider_unavailable'):Promise<T> => {
+    const timeout=Math.min(actionTimeout(session),maxTimeout??Infinity);
     let timer:ReturnType<typeof setTimeout>;
     try {
-      return await Promise.race([read(),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new GeneralBrowserError('provider_unavailable')),timeout);})]);
+      return await Promise.race([read(),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new GeneralBrowserError(timeoutCode)),timeout);})]);
     } finally {clearTimeout(timer!);}
   };
   const semanticSnapshot = async (session: BrowserSession, context: BrowserContext, page: Page,state:GeneralPageState) => {
@@ -290,19 +299,35 @@ export function cloudflareGeneralBrowser(options: Options) {
   };
   const observe = async (session: BrowserSession, context: BrowserContext, page: Page): Promise<GeneralSnapshot> => {
     await allowed(session, page.url());
-    const state = await page.evaluate(generalPageState); await admit(session);
+    let state = await boundedSemanticRead(session,()=>page.evaluate(generalPageState)); await admit(session);
+    if(!generalPageHasContent(state)){
+      // DOMContentLoaded can precede client rendering. Wait in this exact
+      // document once; no second navigation, provider switch or allocation.
+      const waitMs=Math.min(3000,actionTimeout(session));
+      try{
+        const handle=await boundedSemanticRead(session,()=>page.waitForFunction(generalPageContentReady,undefined,{timeout:waitMs,polling:100}),waitMs,'empty_content');
+        await cleanup(step=>step(()=>handle.dispose()));
+      }catch(error){
+        await admit(session);
+        if(error instanceof GeneralBrowserError&&error.code!=='empty_content')throw error;
+        if(!(error instanceof GeneralBrowserError)&&!(error instanceof Error&&error.name==='TimeoutError'))throw error;
+        throw new GeneralBrowserError('empty_content',navigationStatuses.has(page)?{status:navigationStatuses.get(page)!}:undefined);
+      }
+      await allowed(session,page.url());
+      state=await boundedSemanticRead(session,()=>page.evaluate(generalPageState));await admit(session);
+    }
     const semantic = await semanticSnapshot(session,context,page,state); await admit(session);
-    if (!state.text.trim()) throw new GeneralBrowserError('empty_content');
-    const bytes = new Uint8Array(await page.screenshot({ type: 'png', animations: 'disabled', caret: 'hide', scale: 'css',mask:[page.locator('input[type="password"],input[autocomplete~="one-time-code" i],textarea[autocomplete~="one-time-code" i]')] })); await admit(session);
+    if (!generalPageHasContent(state)) throw new GeneralBrowserError('empty_content',navigationStatuses.has(page)?{status:navigationStatuses.get(page)!}:undefined);
+    const bytes = new Uint8Array(await boundedSemanticRead(session,()=>page.screenshot({ type: 'png', animations: 'disabled', caret: 'hide', scale: 'css',timeout:actionTimeout(session),mask:[page.locator('input[type="password"],input[autocomplete~="one-time-code" i],textarea[autocomplete~="one-time-code" i]')] }))); await admit(session);
     if (bytes.byteLength > options.maxScreenshotBytes) throw new GeneralBrowserError('image_oversize');
-    const current = await page.evaluate(generalPageState); await admit(session);
+    const current = await boundedSemanticRead(session,()=>page.evaluate(generalPageState)); await admit(session);
     const currentSemantic = await semanticSnapshot(session,context,page,current); await admit(session);
     if (currentSemantic !== semantic || JSON.stringify(current) !== JSON.stringify(state)) throw new GeneralBrowserError('stale_observation');
-    const target = await targetId(context, page);
+    const target = await targetId(session,context, page);
     const digest = await generalDigest(JSON.stringify({ state, semantic, image: await generalDigest(bytes) }));
     const revision = await generalDigest(JSON.stringify([session.ownerId, session.id, session.generation, target, digest]));
     const tabs = [];
-    for (const tab of context.pages()) tabs.push({ ref: await tabRef(session, await targetId(context, tab)), url: tab.url(), title: await tab.title() });
+    for (const tab of context.pages()) tabs.push({ ref: await tabRef(session, await targetId(session,context, tab)), url: tab.url(), title: await boundedSemanticRead(session,()=>tab.title()) });
     await admit(session);
     return { ownerId: session.ownerId, sessionId: session.id, generation: session.generation, targetId: target, digest, state,
       observation: { revision, tab_ref: await tabRef(session, target), url: state.url, title: state.title, text: state.text, accessibility_snapshot:semantic, viewport: { width: state.width, height: state.height },
@@ -357,8 +382,8 @@ export function cloudflareGeneralBrowser(options: Options) {
     },
     async beginOwnerHandoff(session:BrowserSession,snapshot:GeneralActionSnapshot,reason:string,assertCustody:()=>Promise<void>){
       await assertCustody();identity(session);if(takeover||!connected||connected.sessionKey!==connectionKey(session))throw new GeneralBrowserError('session_lost');
-      const page=await select(session,connected.context,snapshot.observation.tab_ref);
-      if(await targetId(connected.context,page)!==snapshot.targetId)throw new GeneralBrowserError('stale_observation');
+      const page=await select(session,connected.context,snapshot.observation.tab_ref,assertCustody);
+      if(await targetId(session,connected.context,page,assertCustody)!==snapshot.targetId)throw new GeneralBrowserError('stale_observation');
       const cdp=await connected.context.newCDPSession(page);
       takeover=nativeBrowserHandoff({cdp,providerSessionId:session.providerSessionId,targetId:snapshot.targetId,expiresAt:session.expiresAt,now:options.now,assertCustody});
       return {controller:takeover,handoffId:await takeover.start(reason),origin:new URL(page.url()).origin};

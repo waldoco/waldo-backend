@@ -3,6 +3,7 @@ import type { TelegramWebhookEnv } from './telegram-webhook';
 import { commonPublicBrowserConfiguration } from './common-public-browser-configuration';
 import { commonStagingRegistration } from './common-staging-registration';
 import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
+import type {OwnerBrowserIdentity} from './owner-browser-identity';
 
 const KEY = 'common_owner_browser_registration_v1';
 type Pinned = Readonly<{ operator: string; custodyDigest: string; registration: Record<string, any> }>;
@@ -12,6 +13,7 @@ export class CommonBrowserRegistrationUnavailable extends Error {}
 // No policy means no automatic browser admission; existing ledgers are never reset.
 export function commonOwnerBrowserRegistration(options: Readonly<{
   env: TelegramWebhookEnv; storage: DurableObjectStorage; actualDoId: string;
+  identity?: OwnerBrowserIdentity;
   loadSdk?: CloudflareBrowserSdkLoader;
 }>) {
   const { env, storage, actualDoId } = options;
@@ -26,9 +28,10 @@ export function commonOwnerBrowserRegistration(options: Readonly<{
   const directory = commonOwnerAuthority(env);
   const physical = () => {
     const doName = storage.kv.get<string>('do_name'), subject = storage.kv.get<string>('telegram_subject');
-    if (!doName || !subject || storage.kv.get('telegram_unlinked') === true
+    const binding=options.identity?.snapshot();
+    if (!doName || (options.identity?!binding:!subject || storage.kv.get('telegram_unlinked') === true)
       || env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== actualDoId) throw Error('automatic browser owner unavailable');
-    return { doName, subject };
+    return { doName, subject:options.identity?undefined:subject, binding };
   };
   const configuration = (registration: Record<string, any>, cleanupOnly: boolean) => {
     const registered = commonStagingRegistration({ WALDO_ENVIRONMENT: env.WALDO_ENVIRONMENT, COMMON_BROWSER_REGISTRATION: JSON.stringify(registration) }, cleanupOnly ? 'retained_read' : 'admission');
@@ -46,15 +49,24 @@ export function commonOwnerBrowserRegistration(options: Readonly<{
       if (invalid) throw Error('automatic browser operator policy invalid');
       if (!selected) return undefined;
       const before = physical();
-      const owner = await directory.resolve('telegram', before.subject, before.doName);
+      let owner:Readonly<{directoryOwnerId:string;custodyDigest:string}>|null;
+      if(options.identity){await options.identity.assertCurrent(before.binding!);owner=await options.identity.resolve(before.binding!);await options.identity.assertCurrent(before.binding!);}
+      else {const resolved=await directory.resolve('telegram', before.subject!, before.doName);if(resolved&&(resolved.doName!==before.doName||resolved.subject!==before.subject))throw Error('automatic browser authority unavailable');owner=resolved;}
       const after = physical();
-      if (!owner || owner.doName !== after.doName || owner.subject !== after.subject
+      if (!owner || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(owner.directoryOwnerId)||!/^[a-f0-9]{64}$/.test(owner.custodyDigest)
         || JSON.stringify(before) !== JSON.stringify(after)) throw Error('automatic browser authority unavailable');
-      const registration = { policy: { ...raw.policy, doName: after.doName, subject: after.subject,
+      // An existing verified-owner allowance keeps its exact policy and ledger
+      // across authenticated surfaces. A fresh app owner needs no Telegram row.
+      const authority=options.identity
+        ? retained&&retained.operator===operator&&retained.custodyDigest===owner.custodyDigest&&retained.registration.policy?.doName===after.doName&&retained.registration.policy?.directoryOwnerId===owner.directoryOwnerId&&retained.registration.policy?.subject
+          ? {subject:retained.registration.policy.subject}
+          : {authority:'verified_owner' as const}
+        : {subject:after.subject};
+      const registration = { policy: { ...raw.policy, doName: after.doName, ...authority,
         directoryOwnerId: owner.directoryOwnerId, ref: `${raw.policy?.ref}:owner:${owner.directoryOwnerId}` },
         spend: raw.spend, billing: raw.billing };
       if (!raw.policy?.ref || raw.policy.doName !== undefined || raw.policy.subject !== undefined
-        || raw.policy.directoryOwnerId !== undefined) throw Error('automatic browser operator policy invalid');
+        || raw.policy.directoryOwnerId !== undefined||raw.policy.authority!==undefined) throw Error('automatic browser operator policy invalid');
       // Expiry/provider availability cannot hide a changed retained policy.
       // This check is read-only; the transaction repeats it before any pin write.
       const pinned: Pinned = { operator: operator!, custodyDigest: owner.custodyDigest, registration };

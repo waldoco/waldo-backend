@@ -60,6 +60,7 @@ export const responsibilityBook = (sql: Sql, deps: Readonly<{ newId(): string; n
         ? sql.exec<Responsibility>('SELECT * FROM responsibilities ORDER BY created_at DESC LIMIT 50').toArray()
         : sql.exec<Responsibility>('SELECT * FROM responsibilities WHERE status = ? ORDER BY next_check_at IS NULL, next_check_at, created_at', status).toArray();
     },
+    all: (): readonly Responsibility[] => sql.exec<Responsibility>('SELECT * FROM responsibilities ORDER BY created_at DESC, id').toArray(),
     // A worker starts from a revision it read; a write from an older revision never lands.
     start(itemId: string, owner: string): Readonly<{ item: TodoItem; revision: number }> | null {
       const current = item(itemId);
@@ -96,13 +97,21 @@ export const responsibilityBook = (sql: Sql, deps: Readonly<{ newId(): string; n
       return sql.exec("UPDATE responsibilities SET status = ?, closed_by_evidence = ?, closed_at = ?, revision = revision + 1 WHERE id = ? AND status IN ('open', 'waiting', 'uncertain') RETURNING id", args.outcome, evidence, deps.now(), args.id).toArray().length > 0;
     },
     // Carries open loops across under their own ids; a loop already carried is left as it is.
-    adoptLoops(): number {
+    adoptLoops(intentForLoop?: (id: string) => string | null): number {
       const exists = sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'loops'").toArray().length > 0;
       if (!exists) return 0;
       const count = () => sql.exec<{ n: number }>('SELECT count(*) AS n FROM responsibilities').one().n;
       const before = count();
+      const previousRow = intentForLoop ? sql.exec<{ n: number }>('SELECT COALESCE(max(rowid), 0) AS n FROM responsibilities').one().n : 0;
       sql.exec(`INSERT OR IGNORE INTO responsibilities (id, title, intent, status, created_from, next_check_at, closed_by_evidence, created_at, closed_at)
         SELECT id, title, title, CASE status WHEN 'open' THEN 'open' WHEN 'done' THEN 'done' ELSE 'dropped' END, 'loop', due, NULL, created_at, closed_at FROM loops`);
+      // Only newly adopted rows receive their source-backed hypothesis. A later discovery
+      // cannot overwrite owner corrections or change an existing responsibility revision.
+      if (intentForLoop) for (const row of sql.exec<{ id: string }>("SELECT id FROM responsibilities WHERE rowid > ? AND created_from = 'loop'", previousRow).toArray()) {
+        const intent = intentForLoop(row.id);
+        if (intent !== null && (typeof intent !== 'string' || !intent.trim() || intent.length > 1000)) throw new Error('responsibility intent unavailable');
+        if (intent) sql.exec('UPDATE responsibilities SET intent = ? WHERE id = ? AND intent = title AND revision = 1', intent, row.id);
+      }
       return count() - before;
     },
   };
