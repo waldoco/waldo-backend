@@ -756,11 +756,12 @@ it('executes high then lower admitted update without swallowing either, and dedu
 });
 
 it('three ready classes each progress within three alarms', async () => {
-  const { Scheduler } = await import('../src/scheduler/multiplexer'); const { productionDeps } = await import('../src/seams/deps');
+  const { ensureSchema } = await import('../src/tracer/schema'); const { Scheduler } = await import('../src/scheduler/multiplexer'); const { productionDeps } = await import('../src/seams/deps');
   const subject=81101;const stub=doStub(subject); const headers={'x-waldo-inbox-secret':'hermetic-test-webhook-secret','x-waldo-telegram-subject':String(subject),'x-waldo-do-name':route(subject).doName};
   await stub.fetch('https://telegram-owner/enqueue',{method:'POST',headers,body:JSON.stringify({update_id:998877,message:{message_id:998877,from:{id:subject,is_bot:false},chat:{id:subject,type:'private'},text:'FAIR_INBOX_FIXTURE'}})});
   await runInDurableObject(stub,async(instance,state)=>{
-    const scheduler=new Scheduler(state.storage.sql,state.storage,productionDeps());await scheduler.schedule({id:'three-fair-reminder',kind:'reminder',dueAt:Date.now()-100,occurrenceAt:Date.now()-100,payloadRefs:{reminder_id:'three-fair-reminder'}});
+    // One captured instant: the test runtime's clock ticks between reads, so two Date.now calls can put occurrence after due.
+    ensureSchema(state.storage);const scheduler=new Scheduler(state.storage.sql,state.storage,productionDeps());const dueAt=Date.now()-100;await scheduler.schedule({id:'three-fair-reminder',kind:'reminder',dueAt,occurrenceAt:dueAt,payloadRefs:{reminder_id:'three-fair-reminder'}});
     state.storage.kv.put('telegram_final_outbox_v1',[{id:'three-fair-transport',trace:'three-fair-transport',payload:{chat_id:subject,text:'fixture'},digest:'fixture',ownerSubject:String(subject),doName:route(subject).doName,status:'pending',dueAt:0,createdAt:Date.now(),attempts:0}]);state.storage.kv.put('telegram_final_outbox_due_v1',0);state.storage.kv.put('owner_alarm_last_v1',2);
     await instance.alarm();await instance.alarm();await instance.alarm();
     expect(scheduler.read('three-fair-reminder')).toBeNull();
