@@ -7,7 +7,7 @@ import {
   calendarPageSchema, queryAvailabilityArgsSchema, type QueryAvailabilityArgs,
   googleCalendarListPageSchema, googleTaskListPageSchema, googleTasksPageSchema, type GoogleTasksPage,
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
-  type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
+  type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import { b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature } from '../../connectors/google';
 import { EmailProposalError, type EmailSendProposal } from '../../channels/approvals';
@@ -66,6 +66,17 @@ async function withGoogle<T extends object>(google: GoogleAccess, feature: Googl
   }
 }
 
+// Eligibility reads granted scopes, never the recorded error: a failing grant keeps its tools so the call asks for a
+// reconnect. One in-flight state read serves every handler's check in a turn and is dropped when it settles.
+const pendingState = new WeakMap<GoogleAccess, ReturnType<NonNullable<GoogleAccess['state']>>>();
+const granted = (google: GoogleAccess, feature: 'calendar' | 'mail' | 'tasks') => async (): Promise<ToolEligibility> => {
+  if (!google.state) return { ok: true };
+  let read = pendingState.get(google);
+  if (!read) { read = google.state().finally(() => pendingState.delete(google)); pendingState.set(google, read); }
+  const accounts = await read;
+  return accounts.some((account) => account[feature]) ? { ok: true }
+    : { ok: false, reason: 'not_connected', connect: { status: 'auth_required', service: 'google', reason: accounts.length ? 'scope_missing' : 'not_connected', feature } };
+};
 
 // Reply intent is resolved from the selected account, never from model-supplied RFC headers.
 const replyHeaders = async (client: GoogleClient, args: DraftEmailArgs) => {
@@ -135,6 +146,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('query_calendar'),
     autonomy_gated: false,
     requires_connector: true,
+    eligible: granted(google, 'calendar'),
     handle: ({ date_range, include_declined, limit, calendar_id = 'primary', page_token, account, operation, include_hidden = false }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => withGoogle(google, operation === 'list_calendars' ? 'calendar_list' : 'calendar', ctx, async (client) => {
       if (operation === 'list_calendars') {
         if (!client.calendarListsPage) throw new Error('Calendar discovery adapter unavailable');
@@ -176,6 +188,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('get_communication'),
     autonomy_gated: false,
     requires_connector: true,
+    eligible: granted(google, 'mail'),
     handle: ({ date_range,limit=10,page_token, account }: GetCommunicationArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
       const since = date_range?.from ? Date.parse(date_range.from) : clock.now().getTime() - DAY_MS;
       const to = date_range?.to ?? clock.now().toISOString();
@@ -215,6 +228,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('search_communication'),
     autonomy_gated: false,
     requires_connector: true,
+    eligible: granted(google, 'mail'),
     handle: ({ query, date_range, limit, cursor, account }: SearchCommunicationArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
       const clauses = [query];
       if (date_range?.from) clauses.push(`after:${Math.floor(Date.parse(date_range.from) / 1000)}`);
@@ -237,6 +251,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('read_thread'),
     autonomy_gated: false,
     requires_connector: true,
+    eligible: granted(google, 'mail'),
     handle: ({ thread_id, limit, cursor, account }: ReadThreadArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
       if (!client.threadPage) throw new Error('Gmail thread pagination adapter unavailable');
       const page = await client.threadPage(thread_id, limit, cursor);
@@ -250,6 +265,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('get_tasks'),
     autonomy_gated: false,
     requires_connector: true,
+    eligible: granted(google, 'tasks'),
     handle: ({ status, limit, account, operation, task_list_id, page_token }: GetTasksArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'tasks', ctx, async (client) => {
       if (operation === 'list_task_lists') {
         if (!client.taskListsPage) throw new Error('Task-list discovery adapter unavailable');
@@ -285,6 +301,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('propose_calendar_change'),
     autonomy_gated: false,
     requires_connector: true,
+    eligible: granted(google, 'calendar'),
     mutates_state: true,
     async handle(args: ProposeCalendarChangeArgs, ctx?: ToolDispatcherContext) {
       const result = await withGoogle(google, 'calendar', ctx, async client => ({
@@ -301,6 +318,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('draft_email'),
     autonomy_gated: false,
     requires_connector: true,
+    eligible: granted(google, 'mail'),
     mutates_state: true,
     handle: async (args: DraftEmailArgs, ctx?: ToolDispatcherContext) => {
       if (!ctx?.turnId || !ctx.toolCallId) return { ok: false as const, code: 'rejected' as const, error: 'Draft invocation identity is unavailable.' };
@@ -330,6 +348,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     trigger_allowlist: allowlist('send_email'),
     autonomy_gated: false,
     requires_connector: true,
+    eligible: granted(google, 'mail'),
     mutates_state: true,
     // The tool only proposes: it canonicalizes the MIME bytes, binds them with a sha256 digest
     // and hands both to the approval desk. The desk replays the stored bytes on approval
@@ -378,6 +397,8 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   {
     name:'query_availability',description:'Find duration-fitting free windows across explicit connected calendar IDs and supplied work windows. Reports unknown coverage instead of assuming inaccessible calendars are free. Read-only, no booking.',
     schema:queryAvailabilityArgsSchema,trigger_allowlist:allowlist('query_availability'),autonomy_gated:false,requires_connector:true,
+    // state() does not report the freebusy scope; calendar is its superset here, and a missing scope still returns a connect intent.
+    eligible:granted(google,'calendar'),
     handle:(args:QueryAvailabilityArgs, ctx?: ToolDispatcherContext)=>withGoogle(google,'availability',ctx,async client=>{
       const {date_range:range,calendar_ids:ids,work_windows:windows,duration_minutes:duration}=args;
       const observed=await client.freeBusy(range.from,range.to,ids,clock.timezone);
@@ -394,20 +415,21 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
 // affordance (Telegram: a URL button minted at click time). No link ever enters model text.
 export const connectServiceHandler = (google: GoogleAccess): ToolHandler<ConnectServiceArgs, Readonly<{service:string;connected:boolean;message:string;accounts?:readonly Readonly<{id:string;email:string;calendar:boolean;mail:boolean;tasks:boolean;health:string;provenance:string}>[]}>, ToolDispatcherContext> => ({
   name: 'connect_service',
-  description: 'Read connected Google account addresses and granted feature/health metadata, or connect Google. Host account metadata is not evidence that a message sender is the owner. Use whenever the owner asks to connect, link or set up a service, asks why you cannot see their calendar or email, or mentions a connector. The link arrives as a button in chat; never quote or transcribe it.',
+  description: 'Read connected Google account addresses and granted feature/health metadata, or connect Google. Pass feature to offer one that is not granted yet. Host account metadata is not evidence that a message sender is the owner. Use whenever the owner asks to connect, link or set up a service, asks why you cannot see their calendar or email, or mentions a connector. The link arrives as a button in chat; never quote or transcribe it.',
   schema: connectServiceArgsSchema,
   trigger_allowlist: allowlist('connect_service'),
   autonomy_gated: false,
-  async handle({ service }: ConnectServiceArgs) {
+  async handle({ service, feature }: ConnectServiceArgs) {
     if(google.state){
       const state=await google.state();
       if(!Array.isArray(state)||state.some(account=>!account||typeof account.id!=='string'||!account.id||typeof account.email!=='string'||!account.email||account.email.includes('\n')||account.email.includes('\r')||[account.calendar,account.mail,account.tasks].some(v=>typeof v!=='boolean')||(account.error!==null&&typeof account.error!=='string')))return {ok:false,code:'transient',error:'Connected account metadata unavailable.',source_taint:null};
       const accounts=state.map(account=>({id:account.id,email:account.email,calendar:account.calendar,mail:account.mail,tasks:account.tasks,health:account.error?'unhealthy':'no_recorded_error',provenance:'host_connected_account_metadata_not_email_authorship'}));
+      if((feature==='calendar'||feature==='mail'||feature==='tasks')&&!state.some(account=>account[feature]))return {ok:false,code:'auth_failed',error:CONNECT_SENT_TEXT,connect:{status:'auth_required',service:'google',reason:accounts.length?'scope_missing':'not_connected',feature}};
       if(accounts.length)return {ok:true,data:{service,connected:true,accounts,message:'Connected account metadata only. Granted features and last recorded health do not prove a fresh provider read; message sender identity needs separate verification.'},source_taint:null};
     }
-    if (await google.client('calendar')) {
+    if (await google.client(feature ?? 'calendar')) {
       return { ok: true, data: { service, connected: true, message: 'Google is already connected.' }, source_taint: null };
     }
-    return { ok: false, code: 'auth_failed', error: CONNECT_SENT_TEXT, connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: 'calendar' } };
+    return { ok: false, code: 'auth_failed', error: CONNECT_SENT_TEXT, connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: feature ?? 'calendar' } };
   },
 });
