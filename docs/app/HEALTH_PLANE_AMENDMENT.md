@@ -24,7 +24,7 @@ Status: owner-ruled scope, not yet implemented. Applies to ADR-0081, ADR-0024 an
 - Provider requests set `store: false`.
 
 ## Retention and access (recommendation the owner approved in scope, "90 d raw / 24 mo aggregate")
-- Raw readings: 90 days in owner-only tables. Daily aggregates and scores: while the account is active, at most 24 months. All deleted on withdrawal or account delete.
+- Raw readings: 90 days in owner-only tables. Daily aggregates and scores: while the account is active, at most 24 months. All deleted when storage consent is withdrawn or the account is deleted. Withdrawing model use alone stops Waldo using health in conversation and deletes nothing (owner ruling, 10 October).
 - Encrypted at rest and in transit; row-level security per owner; writes only from the ingest route with service credentials; agent reads through the signed owner-scoped RPC; raw reads leave count-only receipts.
 - No health values in analytics, traces or error text.
 
