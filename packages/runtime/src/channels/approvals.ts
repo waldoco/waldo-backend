@@ -158,11 +158,13 @@ const exactFor = (entry: LedgerRow): AppApprovalV1['exact'] => {
   return { changes: { action: p.action, title: p.title ?? null, start: p.start ?? null, end: p.end ?? null } };
 };
 // The app's card, rendered from the ledger row and its presentation, so the payload has one stored form.
-const appPartOf = (entry: LedgerRow, shown: Readonly<{ approvable: boolean; payload_digest: string }>): AppApprovalPart => {
+const appPartOf = (entry: LedgerRow, shown: Readonly<{ actions: AppApprovalPart['actions']; payload_digest: string }>): AppApprovalPart => {
   const review = appReview(entry);
   return { type: 'approval', approval_id: entry.id, kind: entry.kind as AppApprovalPart['kind'], review: review.text, payload_digest: shown.payload_digest,
-    actions: shown.approvable ? approveActions(entry) : ['skip'], expires_at: expiresAt(entry), fallback_text: review.full ? entry.summary.slice(0, 4000) : review.text };
+    actions: shown.actions, expires_at: expiresAt(entry), fallback_text: review.full ? entry.summary.slice(0, 4000) : review.text };
 };
+// An app card approves only while today's app review still shows the full content; a stored flag alone never does.
+const appShowsInFull = (entry: LedgerRow) => { try { return appReview(entry).full; } catch { return false; } };
 
 // The owner's "door" for effects: proposals become Telegram cards with Do it / Modify / Not now,
 // nothing reaches the calendar before Do it, and every effect lands in one ledger with a
@@ -265,7 +267,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (surface === 'app' || deps.appIdentity?.()) {
       try {
         const approvable = appReview(entry).full;
-        const part = appApprovalPart(appPartOf(entry, { approvable, payload_digest: digest }));
+        const part = appApprovalPart(appPartOf(entry, { actions: approvable ? approveActions(entry) : ['skip'], payload_digest: digest }));
         // The app may show only a card it can also decide: the approvals-list item must parse first.
         appApprovalV1Schema.parse({ approval_id: id, kind: part.kind, state: approvable ? 'open' : 'review_only', review: part.review, exact: exactFor(entry), payload_digest: digest, expires_at: part.expires_at, actions: part.actions });
         inApp = { approvable };
@@ -294,15 +296,17 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
   // Approving or modifying needs a card that showed the full review on the deciding surface. The
   // console renders the stored review itself, so any full-review presentation serves it.
-  const presentedTo = (id: string, via: ApprovalVia) => {
-    const live = sql.exec<{ surface: string; message_ref: string; approvable: number }>('SELECT surface, message_ref, approvable FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', id).toArray();
-    if (via.surface === 'console') return live.some(p => p.approvable === 1);
+  const presentedTo = (entry: LedgerRow, via: ApprovalVia) => {
+    const live = sql.exec<{ surface: string; message_ref: string; approvable: number }>('SELECT surface, message_ref, approvable FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', entry.id).toArray();
+    const approves = (p: { surface: string; approvable: number }) => p.approvable === 1 && (p.surface !== 'app' || appShowsInFull(entry));
+    if (via.surface === 'console') return live.some(approves);
     const mine = live.filter(p => p.surface === via.surface || (p.surface === 'legacy' && via.surface !== 'app'));
     const tapped = mine.filter(p => p.message_ref === via.messageRef);
-    return (tapped.length ? tapped : mine).some(p => p.approvable === 1);
+    return (tapped.length ? tapped : mine).some(approves);
   };
-  const notPresented = (id: string): ApprovalDecision => {
-    const inApp = deps.appLink && sql.exec("SELECT 1 FROM approval_presentations WHERE approval_id = ? AND surface = 'app' AND approvable = 1 AND retired_at IS NULL", id).toArray().length > 0;
+  const notPresented = (entry: LedgerRow): ApprovalDecision => {
+    const id = entry.id;
+    const inApp = deps.appLink && appShowsInFull(entry) && sql.exec("SELECT 1 FROM approval_presentations WHERE approval_id = ? AND surface = 'app' AND approvable = 1 AND retired_at IS NULL", id).toArray().length > 0;
     return inApp
       ? { toast: 'Review it in the app', message: `That approval wasn't shown in full here, so it can't be approved here. Nothing was done. Review and approve it in the Waldo app: ${deps.appLink!(id)}` }
       : { toast: 'Not available here', message: "That approval wasn't shown in full here, so it can't be approved here. Nothing was done." };
@@ -312,7 +316,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const shown = sql.exec<{ surface: string; approvable: number; retired_at: number | null }>('SELECT surface, approvable, retired_at FROM approval_presentations WHERE approval_id = ? ORDER BY presented_at, surface', entry.id).toArray();
     const inApp = shown.find(p => p.surface === 'app');
     const state = APP_APPROVAL_STATE[entry.status as DeskStatus];
-    const actions = state === 'open' ? (inApp?.approvable === 1 && inApp.retired_at === null ? approveActions(entry) : ['skip'] as const)
+    const actions = state === 'open' ? (inApp?.approvable === 1 && inApp.retired_at === null && appShowsInFull(entry) ? approveActions(entry) : ['skip'] as const)
       : state === 'review_only' ? ['skip'] as const
         : state === 'done' && entry.undo_json && entry.decided_at !== null && now - entry.decided_at <= UNDO_WINDOW_MS ? ['undo'] as const : [];
     const surfaces = [...new Set(shown.map(p => p.surface).filter(surface => surface !== 'legacy'))];
@@ -375,16 +379,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const entry = row(id);
     const operationRef = entry ? (JSON.parse(entry.payload_json) as { operation_ref?: string }).operation_ref ?? `approval:${id}` : `approval:${id}`;
     const expected = action === 'u' ? 'done' : 'open';
-    if (entry?.status === 'review_only' && action === 's') {
-      setStatus(id, 'skipped');
-      return { toast: 'Not now', message: 'Left it. Nothing changed.' };
-    }
     if (deps.effects?.isActive(`${operationRef}:${action === 'u' ? 'undo' : 'apply'}`)) return { toast: 'Already handled.', message: 'Already handled.' };
     // An uncertain row with no effect record never reached dispatch (the record is written before the provider call), so it is safe to run again; a record sends it through reconcile instead.
     const recovering = entry?.status === 'uncertain' && deps.effects !== undefined && (action === 'a' || action === 'u' && entry.kind === 'calendar_change' && !!entry.undo_json && !!deps.effects.get(`${operationRef}:undo`));
     if (entry?.status === 'uncertain' && entry.kind !== 'browser_submit' && action === 'a' && !recovering) return { toast: 'Outcome unknown', message: 'The outcome of that approval is unknown. Check the result before retrying; nothing was sent again.' };
-    if (!entry || (entry.status !== expected && !recovering)) return { toast: 'Already handled.', message: 'Already handled.' };
-    if ((action === 'a' || action === 'e') && entry.status === 'open' && !presentedTo(id, via)) return notPresented(id);
+    if (!entry || (entry.status !== expected && !(action === 's' && entry.status === 'review_only') && !recovering)) return { toast: 'Already handled.', message: 'Already handled.' };
+    if ((action === 'a' || action === 'e') && entry.status === 'open' && !presentedTo(entry, via)) return notPresented(entry);
     const proposal = JSON.parse(entry.payload_json) as Stored;
     try {
       let out: ApprovalDecision;
@@ -838,7 +838,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     },
     placement(id) {
       const shown = sql.exec<{ surface: string; approvable: number }>('SELECT surface, approvable FROM approval_presentations WHERE approval_id = ?', id).toArray();
-      const on = (where: string, approvable = false) => shown.some(p => p.surface === where && (!approvable || p.approvable === 1));
+      const entry = row(id), appFull = !!entry && appShowsInFull(entry);
+      const on = (where: string, approvable = false) => shown.some(p => p.surface === where && (!approvable || p.approvable === 1 && (where !== 'app' || appFull)));
       return { here: on(surface), hereApprovable: on(surface, true), app: on('app'), appApprovable: on('app', true) };
     },
     async approvals(now, filter = {}) {
@@ -890,9 +891,22 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
 };
 
 // The app cards presented for one run, rendered from their ledger rows: the history view of the
-// assistant reply to that run. The current state of each approval comes from the approvals list.
+// assistant reply to that run. A card offers decisions only while its approval is still undecided
+// and its app card is live; one row that cannot render drops only its own card.
 export const appApprovalParts = (sql: SqlStorage) => (parentId: string): AppApprovalPart[] => {
   if (!sql.exec('PRAGMA table_info(approval_presentations)').toArray().length) return [];
-  return sql.exec<LedgerRow & { approvable: number; payload_digest: string }>("SELECT l.*, p.approvable, p.payload_digest FROM approval_presentations p JOIN ledger l ON l.id = p.approval_id WHERE p.surface = 'app' AND p.message_ref = ? ORDER BY p.presented_at, l.id", `run:${parentId}`).toArray()
-    .flatMap(entry => { const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { approvable: entry.approvable === 1, payload_digest: entry.payload_digest })); return part.success ? [part.data] : []; });
+  let dropped = 0;
+  const parts = sql.exec<LedgerRow & { approvable: number; payload_digest: string; retired_at: number | null }>("SELECT l.*, p.approvable, p.payload_digest, p.retired_at FROM approval_presentations p JOIN ledger l ON l.id = p.approval_id WHERE p.surface = 'app' AND p.message_ref = ? ORDER BY p.presented_at, l.id", `run:${parentId}`).toArray()
+    .flatMap(entry => {
+      try {
+        const live = entry.retired_at === null && (entry.status === 'open' || entry.status === 'review_only');
+        const actions: AppApprovalPart['actions'] = !live ? [] : entry.status === 'open' && entry.approvable === 1 && appShowsInFull(entry) ? approveActions(entry) : ['skip'];
+        const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions, payload_digest: entry.payload_digest }));
+        if (part.success) return [part.data];
+      } catch { /* counted below */ }
+      dropped++;
+      return [];
+    });
+  if (dropped) console.error(JSON.stringify({ hop: 'app_approval_parts', ok: false, dropped }));
+  return parts;
 };

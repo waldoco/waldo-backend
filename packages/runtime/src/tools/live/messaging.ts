@@ -18,7 +18,7 @@ const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger)
 // ADR-0054's idempotency key collapses a second approval onto the first send.
 export const sendMessageHandler = (desk: MessageDesk): ToolHandler<SendMessageArgs, unknown, ToolDispatcherContext> => ({
   name: 'send_message',
-  description: "Send a message on one of the owner's channels. Goes to the owner first as an approval card; nothing sends until they tap Send it.",
+  description: "Send a message on one of the owner's channels. Goes to the owner first as a review card; nothing sends until they approve it.",
   schema: sendMessageArgsSchema,
   trigger_allowlist: allowlist('send_message'),
   autonomy_gated: false,

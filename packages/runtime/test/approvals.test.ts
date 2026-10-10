@@ -1233,3 +1233,85 @@ describe('decisions from any surface', () => {
     });
   });
 });
+
+describe('approval desk round two', () => {
+  const NOW = Date.UTC(2026, 9, 10, 9, 0, 0);
+  it('a stored approvable flag never outruns what the app can show today', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-two-flag-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let ran = 0;
+      const desk = approvalDesk(state.storage.sql, { owner: 42, google: async () => null, newId: () => 'flag1', now: () => NOW, timezone: 'UTC', log: () => {}, appIdentity: () => true, appLink: id => `waldo://approvals/${id}`,
+        call: async (method: string) => method === 'sendMessage' ? { message_id: 9, chat: { id: 42 } } : true, mcpCall: async () => { ran++; return 'ran'; } });
+      const id = await desk.proposeMcpCall({ server: 'crm', tool: 'lookup', args: { q: 'x' } });
+      state.storage.sql.exec("UPDATE approval_presentations SET approvable = 1 WHERE approval_id = ? AND surface = 'app'", id);
+      expect((await desk.approvals(NOW, { id }))[0]).toMatchObject({ state: 'open', actions: ['skip'] });
+      expect(desk.placement(id)).toMatchObject({ appApprovable: false });
+      for (const action of ['a', 'e'] as const) expect((await desk.decide(id, action, 'trace', { surface: 'app' })).toast).toBe('Not available here');
+      expect(ran).toBe(0);
+      expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe('open');
+    });
+  });
+
+  it('skipping a browser proposal that could only be reviewed releases its browser task', async () => {
+    const { appCaller } = await import('../src/channels/surfaces/app');
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-two-deny-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const denied: string[] = [];
+      const desk = approvalDesk(state.storage.sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), google: async () => null, newId: () => 'deny1', now: () => NOW, timezone: 'UTC', log: () => {},
+        browserDeny: async proposal => { denied.push(proposal.url); } });
+      const id = await desk.proposeBrowserSubmit({ url: 'https://shop.example/checkout', action: { selector: '#pay', description: 'Pay' }, binding: { total: '9' }, steps: [] });
+      expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe('review_only');
+      expect((await desk.decide(id, 's', 'trace', { surface: 'app' })).toast).toBe('Not now');
+      expect(denied).toEqual(['https://shop.example/checkout']);
+      expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe('skipped');
+    });
+  });
+
+  it('the task and browser tools say where an approvable card landed', async () => {
+    const { googleTaskHandlers } = await import('../src/tools/live/tasks');
+    const { browserTaskHandler } = await import('../src/tools/live/browser-task');
+    const { browseActHandler } = await import('../src/tools/live/browser');
+    const { ownerEffectLedger } = await import('../src/channels/owner-effect-ledger');
+    const { appCaller } = await import('../src/channels/surfaces/app');
+    const { browseActArgsSchema } = await import('@waldo/contracts');
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-two-tools-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let n = 0, telegramUp = true;
+      const args = { source: 'google_tasks' as const, action: 'create' as const, task_list_id: 'l1', changes: { title: 'Call Sam' }, reason: 'Owner asked' };
+      const googleTasks = () => ({ prepare: async () => ({ args, account: { connection_id: 'conn-1', email: 'me@example.com' }, list: { id: 'l1', title: 'Errands', etag: '"le"' }, before: null }) }) as never;
+      const desk = approvalDesk(state.storage.sql, { owner: 42, google: async () => null, newId: () => `tools${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, appIdentity: () => true, effects: ownerEffectLedger(state.storage, () => NOW), googleTasks,
+        call: async (method: string) => method === 'sendMessage' ? (telegramUp ? { message_id: n, chat: { id: 42 } } : undefined) : true });
+      const [task] = googleTaskHandlers(desk);
+      const status = (result: unknown) => (result as { data: { status: string } }).data.status;
+      expect(status(await task!.handle(args, {} as never))).toBe('awaiting_owner_approval');
+      telegramUp = false;
+      expect(status(await task!.handle(args, {} as never))).toBe('The review card is in the Waldo app; it could not be shown here. Nothing has changed.');
+
+      const inApp = approvalDesk(state.storage.sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), google: async () => null, newId: () => `tools${++n}`, now: () => NOW, timezone: 'UTC', log: () => {} });
+      const host = { taskRef: 'task-one', pageUrl: 'https://fixture.example/form', propose: async () => ({ id: 'prepared-one', url: 'https://fixture.example/form', actionRef: '#submit', scopeDigest: `sha256:${'a'.repeat(64)}`, binding: { value: 'synthetic' } }) };
+      const browser = browserTaskHandler({ legacy: browseActHandler(undefined, undefined, undefined), host: async () => host as never, propose: payload => inApp.proposeBrowserSubmit(payload), placement: id => inApp.placement(id) });
+      const prepared = await browser.handle(browseActArgsSchema.parse({ url: host.pageUrl, task: 'prepare', command: { operation: 'prepare_submit' } }), { authenticatedUserId: 'owner-a', assertTaskSourceCurrent: async () => {} } as never);
+      expect(prepared).toMatchObject({ ok: true, data: { stopped: 'approval_pending', status: 'Only a summary card could be shown, so it cannot be approved yet. Nothing was submitted.' } });
+    });
+  });
+
+  it('history cards offer decisions only while the approval is still open on the app, and one bad row drops only its card', async () => {
+    const { appApprovalParts } = await import('../src/channels/approvals');
+    const { appCaller } = await import('../src/channels/surfaces/app');
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-two-history-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let n = 0;
+      const desk = approvalDesk(state.storage.sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), google: async () => null, newId: () => `hist${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, currentRunRef: () => 'run-history-1',
+        sendMessage: async () => ({ provider_id: 'tg-1' }), canSendMessage: () => true });
+      const first = await desk.proposeSendMessage({ channel: 'telegram', content: 'One', idempotency_key: 'h-1' });
+      const second = await desk.proposeSendMessage({ channel: 'telegram', content: 'Two', idempotency_key: 'h-2' });
+      const third = await desk.proposeSendMessage({ channel: 'telegram', content: 'Three', idempotency_key: 'h-3' });
+      const actionsOf = () => Object.fromEntries(appApprovalParts(state.storage.sql)('run-history-1').map(part => [part.approval_id, part.actions]));
+      expect(actionsOf()).toEqual({ [first]: ['approve', 'edit', 'skip'], [second]: ['approve', 'edit', 'skip'], [third]: ['approve', 'edit', 'skip'] });
+      expect((await desk.decide(first, 'a', 'trace')).toast).toBe('Sent');
+      state.storage.sql.exec('UPDATE approval_presentations SET retired_at = ? WHERE approval_id = ?', NOW, second);
+      state.storage.sql.exec("UPDATE ledger SET payload_json = 'not json' WHERE id = ?", third);
+      expect(actionsOf()).toEqual({ [first]: [], [second]: [] });
+    });
+  });
+});
