@@ -127,6 +127,18 @@ export async function runDeviceBridgeTrace({ origin, cookie, report }) {
     assert.equal(page.status, 200, `console session must be accepted, got HTTP ${page.status}`);
     return page.text();
   };
+  // Status is read from this device's own row: another online device of the owner must not satisfy it.
+  const deviceRow = (html, id) => html.split('<tr>').find(row => row.includes(`name="id" value="${id}"`)) ?? '';
+  const waitStatus = async (status, what) => {
+    for (let i = 0; i < 40; i++) { const row = deviceRow(await consoleDevices(), deviceId); if (row.includes(`<td>${status}</td>`)) return row; await delay(250); }
+    throw new Error(`${what}: console must show the trace device ${status}`);
+  };
+  const closedNormally = socket => new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('disconnect: socket close deadline exceeded')), 5000);
+    socket.once('close', code => { clearTimeout(timeout); if (code !== 1000) reject(new Error(`disconnect: expected the close handshake to echo 1000, got ${code}`)); else resolve(); });
+    socket.close(1000);
+  });
+  const quiet = async (socket, what) => { await delay(750); assert.equal(socket.traceInbox.length, 0, `${what}: no frame may be delivered`); };
   try {
     step('healthz');
     const health = await request('/healthz'); noRedirect(health, '/healthz');
@@ -148,21 +160,33 @@ export async function runDeviceBridgeTrace({ origin, cookie, report }) {
     const body = canonical({ code, device_pubkey: publicKey, label: LABEL, declared_capabilities: capabilities, contract_version: CONTRACT });
     const redeem = (payload = body, key) => request('/devices/redeem', { method: 'POST', headers: { ...httpHeaders('POST', '/devices/redeem', payload, undefined, key), 'content-type': 'application/json' }, body: payload });
 
+    step('malformed_redeem');
+    // Correctly signed, but outside the closed redeem shape (extra key).
+    await rejected(await redeem(canonical({ code, device_pubkey: publicKey, label: LABEL, declared_capabilities: capabilities, contract_version: CONTRACT, extra: true })), 'malformed redeem');
+    report('signed malformed redeem rejected with the exact generic 401');
+
+    step('foreign_signed_redeem');
+    // Valid body and live code, signed by a key that is not device_pubkey; the code must survive for the real redeem.
+    await rejected(await redeem(body, generateKeyPairSync('ed25519').privateKey), 'foreign-signed redeem');
+    report('foreign-signed redeem rejected with the exact generic 401');
+
     step('redeem');
     const redemption = await redeem(); assert.equal(redemption.status, 200, `signed redeem must answer 200, got ${redemption.status}`);
     const device = await redemption.json(); deviceId = device.device_id;
     assert.deepEqual(Object.keys(device).sort(), ['accepted_contract_version', 'device_id', 'owner_id'], 'redeem response keys');
     assert.equal(device.accepted_contract_version, CONTRACT, 'redeem must accept contract 0.2.3');
-    report(`signed redeem 200 for device ${deviceId}`);
+    report(`signed redeem 200 for device ${deviceId} (code survived the foreign-signed attempt)`);
+
+    step('redeem_replay');
+    await rejected(await redeem(), 'used-code replay'); report('used-code replay rejected with the exact generic 401');
 
     step('connect');
     const socket = await openSocket(device); sockets.push(socket); report('signed socket 101');
 
     step('heartbeat_online');
     socket.send(canonical(heartbeat(device)));
-    let online = false;
-    for (let i = 0; i < 40 && !online; i++) { const text = await consoleDevices(); online = text.includes(LABEL) && /\bonline\b/i.test(text); if (!online) await delay(250); }
-    assert.ok(online, 'console must show the device online'); report('heartbeat accepted; console shows online');
+    assert.ok((await waitStatus('Online', 'heartbeat')).includes(`<td>${LABEL}</td>`), 'online row must be the trace device');
+    report('heartbeat accepted; console shows the trace device online');
 
     step('query');
     const queried = await action('device.query', deviceId, { request_id: randomUUID(), query_kind: 'session_status' });
@@ -174,8 +198,59 @@ export async function runDeviceBridgeTrace({ origin, cookie, report }) {
     checkReceipt(await nextFrame(socket, 'query receipt'), answered);
     report('query -> command -> ack -> answered -> receipt');
 
+    step('replace_socket');
+    const replaced = closedWithoutFrame(socket, 'replaced socket');
+    const replacement = await openSocket(device); sockets.push(replacement);
+    await replaced;
+    replacement.send(canonical(heartbeat(device)));
+    await waitStatus('Online', 'replacement heartbeat');
+    report('second connect 101; first socket closed 1008 with no frame; replacement heartbeat shows online');
+
+    step('disconnect');
+    await closedNormally(replacement);
+    await waitStatus('Offline', 'disconnect');
+    report('device closed normally (1000); console shows offline');
+
+    step('notify_offline');
+    const notifyPayload = { notification_id: randomUUID(), title: 'Waldo status', body: 'Your Mac is connected.', severity: 'info' };
+    const notified = await action('device.notify', deviceId, { request_id: randomUUID(), ...notifyPayload });
+    assert.equal(notified.status, 303, `device.notify must answer 303, got ${notified.status}`);
+    report('owner device.notify (neutral preset) accepted while offline');
+
+    step('reconnect');
+    const reconnected = await openSocket(device); sockets.push(reconnected);
+    await quiet(reconnected, 'reconnect before heartbeat');
+    report('reconnect 101; nothing delivered before a heartbeat');
+
+    step('notify_round_trip');
+    reconnected.send(canonical(heartbeat(device)));
+    const notification = await nextFrame(reconnected, 'notify command'); checkCommand(notification, device, 'notify_local');
+    assert.notEqual(notification.command_id, query.command_id, 'receipted query must not be re-delivered');
+    assert.deepEqual(notification.payload, notifyPayload, 'notify payload must be exactly the owner-selected preset');
+    reconnected.send(canonical(signedFrame(commandReply(device, notification, 'ack', { state: 'accepted' }))));
+    const delivered = commandReply(device, notification, 'result', { status: 'delivered' });
+    reconnected.send(canonical(signedFrame(delivered)));
+    checkReceipt(await nextFrame(reconnected, 'notify receipt'), delivered);
+    const settled = messageId();
+    reconnected.send(canonical(heartbeat(device, 0, settled)));
+    await quiet(reconnected, 'reconciled heartbeat');
+    report('heartbeat -> only the queued notify_local -> ack -> delivered -> receipt; reconciled heartbeat re-delivers nothing');
+
+    step('idempotency_conflict');
+    const conflicted = closedWithoutFrame(reconnected, 'idempotency conflict');
+    // Same message_id as the admitted heartbeat, altered body (outbox_depth), fresh nonce and valid signature.
+    reconnected.send(canonical(heartbeat(device, 1, settled)));
+    await conflicted; report('reused message_id with an altered body closed 1008 with no frame');
+
+    step('connect_for_revoke');
+    const last = await openSocket(device); sockets.push(last);
+    last.send(canonical(heartbeat(device)));
+    const row = await waitStatus('Online', 'connect for revoke');
+    assert.ok(row.includes('machine_state_query: answered (unknown)') && row.includes('notify_local: delivered'), 'console history must show the answered query and delivered notification');
+    report('connect 101 + heartbeat online; console history shows query answered (unknown) and notify delivered');
+
     step('revoke');
-    const revokeClose = closedWithoutFrame(socket, 'revoke');
+    const revokeClose = closedWithoutFrame(last, 'revoke');
     const revoked = await action('device.revoke', deviceId);
     assert.equal(revoked.status, 303, `device.revoke must answer 303, got ${revoked.status}`); report('owner revoke accepted');
     deviceId = '';

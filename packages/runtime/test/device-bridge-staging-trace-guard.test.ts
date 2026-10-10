@@ -76,8 +76,10 @@ it('refuses before any network call when the guard or arguments reject the run',
   expect(lines.every(line => line.startsWith('STAGING: REFUSED '))).toBe(true);
   expect(lines.join('\n')).not.toContain('waldo_console=y');
 });
-it('plans the trace effects with stable unique keys', () => {
+it('plans every pairing, reconnect and revoke effect with stable unique keys', () => {
   const keys = TRACE_PLAN.map((step: { key: string }) => step.key);
   expect(new Set(keys).size).toBe(keys.length);
-  expect(keys).toEqual(['healthz', 'unsigned_redeem', 'console_devices', 'pair', 'redeem', 'connect', 'heartbeat_online', 'query', 'revoke', 'revoked_reconnect']);
+  expect(keys).toEqual(['healthz', 'unsigned_redeem', 'console_devices', 'pair', 'malformed_redeem', 'foreign_signed_redeem', 'redeem', 'redeem_replay',
+    'connect', 'heartbeat_online', 'query', 'replace_socket', 'disconnect', 'notify_offline', 'reconnect', 'notify_round_trip', 'idempotency_conflict',
+    'connect_for_revoke', 'revoke', 'revoked_reconnect']);
 });
