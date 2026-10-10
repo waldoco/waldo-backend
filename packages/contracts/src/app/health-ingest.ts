@@ -13,6 +13,10 @@ export const HEALTH_RAW_RETENTION_DAYS_V1 = 90;
 export const HEALTH_AGGREGATE_RETENTION_MONTHS_V1 = 24;
 
 export const healthSourceV1Schema = z.enum(['apple', 'samsung', 'health_connect']);
+// Purposes are separate grants, requested together on one consent screen: storage_compute (store and compute the
+// owner's health data) and model_processing (let Waldo use it when it talks to the owner). The backend enforces each
+// independently, so an owner who grants only storage gets an explicit consent_required for model use. Withdrawing
+// either purpose withdraws both for the source.
 export const healthPurposeV1Schema = z.enum(['storage_compute', 'model_processing']);
 export const healthRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,96}$/);
 export const healthDayV1Schema = z.iso.date();
@@ -136,6 +140,10 @@ export const healthSignalV1Schema = z.enum([
   'heart_rate_window', 'hrv_window', 'spo2', 'respiratory_rate', 'steps_window', 'active_energy_window', 'workout',
 ]);
 export const healthSampleDeletionV1Schema = z.strictObject({ sample_id: sampleIdV1, signal: healthSignalV1Schema, revision: epochV1 });
+// anchor_before and anchor_after form an opaque compare-and-set cursor of at most 2048 characters; the app keeps its
+// real per-type anchors on the phone. The server stores the last acknowledged anchor_after per owner and source.
+// A null anchor_before is always accepted as a resync (readings are idempotent); a non-null anchor_before that
+// differs from the stored one is anchor_conflict, and the client restarts from null.
 export const healthIngestV1Schema = z.strictObject({
   request_id: healthRequestIdV1Schema,
   source: healthSourceV1Schema,
