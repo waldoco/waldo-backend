@@ -4,11 +4,9 @@ Rule: one writer per path. A PR that must touch the other side's path stops and 
 
 ## Agent-capability backend (Instinct)
 
-Memory, tools, Google connectors, health, proactivity, prompt and loop quality.
+Memory, tools, Google connectors, proactivity, prompt and loop quality.
 - `packages/runtime/src/memory`, `recall`, `context-composer`, `prompt`, `scribe`, `skills`, `goals`, `responsibility`, `scheduler`, `triage`, `loop-governor`, `run-loop`, `run-journal`, `delivery-gate`, `hooks`, `llm`
 - `packages/runtime/src/tools/**` and `connectors/google.ts` (Tasks all lists, calendar-list, Gmail readback, `sendUpdates` trace)
-- Health: `channels/health-context.ts`, `contracts/src/health` and the `recovery.v1` / Form view contracts, Recovery producer, wearable read tool, retention rules
-- Ingest/consent: the design note, health and consent tables (migration PR, pgTAP), `POST /app/v1/health/ingest` handler body. The route registration stays app-enabling (below).
 - Tests under `packages/runtime/test` for the above.
 
 ## App and app-enabling backend (Codex)
@@ -20,9 +18,12 @@ App shell, sign-in, sessions and transport; anything that couples a non-Telegram
 - `packages/contracts/src/{auth,channels,ui,public,protocol}` for wire shapes the app consumes; `packages/dashboard-app`
 - The app repo (Pin4sf/waldo-app) entirely.
 
+## Health (Codex, end to end)
+
+Health contracts (`contracts/src/health`, `recovery.v1` and Form views), Recovery producer, ingest route and handler, health and consent tables, wearable read tool, retention, and app integration. Already-merged health work stays and Codex builds on it. Standing owner rules bind: the agent sees readings end to end, but the egress, memory and external-taint denies stay (keep the pinned denial tests meaningful), and the hard gate before any outside user stays. Instinct reviews and merges these PRs; the ingest/consent design note and any migration follow the owner approval rule (staging only).
+
 ## Shared contracts (change only by a PR both sides can read)
 
-- `contracts/src/health` and `core`: Instinct edits; Codex may add consumers but not alter fields without asking.
 - Any change to the owner-turn input shape, the approval ledger, or the egress/taint rules: Instinct reviews, and the change must keep the existing denial tests meaningful.
 - Reading the other side's files is always fine.
 
