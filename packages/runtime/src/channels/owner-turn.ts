@@ -25,7 +25,8 @@ import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
-import { messagingSystemPrompt, ownerClockLine, withOwnerSkillProcedures } from '../prompt/messaging-behavior';
+import { messagingSystemPrompt, ownerClockLine, unconnectedLine, withOwnerSkillProcedures } from '../prompt/messaging-behavior';
+import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
@@ -301,7 +302,12 @@ export const createOwnerResponder = (
       // Capture-mode probe turns run on the stripped handler set; delegation wraps that
       // same set so probe confinement applies to children too (children are read-only by
       // construction, and the strip list is not widened here).
-      const admittedHandlers = handlers.filter(handler => (backgroundToolNames === undefined || backgroundToolNames.includes(handler.name)) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn && activeOwnerTurn.memoryWrites !== false && !probeGuard?.suppressMemory)));
+      // Eligibility is read once here, so every round of this turn offers the same tool array.
+      const eligibilityStarted = Date.now();
+      const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (backgroundToolNames === undefined || backgroundToolNames.includes(handler.name)) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn && activeOwnerTurn.memoryWrites !== false && !probeGuard?.suppressMemory))));
+      await assertCurrent();
+      if (eligibility.not_connected + eligibility.not_configured + eligibility.check_failed > 0) log({ trace, hop: 'tool_eligibility', ms: Date.now() - eligibilityStarted, ok: true, detail: `not_connected=${eligibility.not_connected} not_configured=${eligibility.not_configured} check_failed=${eligibility.check_failed}` });
+      const connections = unconnectedLine(eligibility.unconnected);
       const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => {
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertCurrent();
@@ -460,21 +466,24 @@ export const createOwnerResponder = (
             const healthPrompt = reasons === undefined ? request.composition.healthPrompt : undefined;
             const healthSection = healthPrompt ? `Shared health today (derived by the app from the owner's own wearable data):\n${healthPrompt}` : undefined;
             const clockLine = ownerClockLine(clock);
-            const before = [...(reasons !== undefined ? [reasons] : []), behavior, ...(healthSection ? [healthSection] : []), clockLine];
-            const afterBase = [...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
+            // Stable head (behavior, catalog, orders, loops), then the procedure, then the per-turn tail; REASONS opens with the owner's text.
+            const headWith = (loops = '') => [behavior, skillMetadata, ordersSection, loops].filter(Boolean).join('\n\n');
+            const tailWith = (memoryPart: readonly string[]) => [...memoryPart, reasons, healthSection, clockLine, taskContext, connections].filter(Boolean).join('\n\n');
             // Owner memory takes its room first; open loops get what the same reserve leaves, and the section names what it left out.
-            const room = systemRoom(withOwnerSkillProcedures([...before, ...afterBase].join('\n\n'), wrapped, surfacePresentation));
+            const room = systemRoom(withOwnerSkillProcedures(headWith(), wrapped, tailWith([])));
             const memoryPart = memory ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText, room)] : [];
-            const loopsSection = loopsSectionFor(Math.max(0, systemRoom(withOwnerSkillProcedures([...before, ...memoryPart, ...afterBase].join('\n\n'), wrapped, surfacePresentation))));
-            const after = [...(ordersSection ? [ordersSection] : []), ...(loopsSection ? [loopsSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
-            const joined = [...before, ...memoryPart, ...after].join('\n\n');
-            const text = withOwnerSkillProcedures(joined, wrapped, surfacePresentation);
+            const loopsSection = loopsSectionFor(Math.max(0, systemRoom(withOwnerSkillProcedures(headWith(), wrapped, tailWith(memoryPart)))));
+            const head = headWith(loopsSection);
+            const tail = tailWith(memoryPart);
+            const joined = `${head}\n\n${tail}`;
+            const text = withOwnerSkillProcedures(head, wrapped, tail);
             const sections: Partial<Record<SystemSection, number>> = {
-              ...(reasons !== undefined ? { reasons: utf8Bytes(reasons) } : {}), behavior: utf8Bytes(behavior),
+              ...(reasons ? { reasons: utf8Bytes(reasons) } : {}), behavior: utf8Bytes(behavior),
               ...(healthSection ? { health: utf8Bytes(healthSection) } : {}), clock: utf8Bytes(clockLine),
               ...(memoryPart.length ? { memory: utf8Bytes(memoryPart[0]!) } : {}), ...(ordersSection ? { orders: utf8Bytes(ordersSection) } : {}),
               ...(loopsSection ? { loops: utf8Bytes(loopsSection) } : {}), ...(skillMetadata ? { skill_catalog: utf8Bytes(skillMetadata) } : {}),
-              ...(taskContext ? { task_context: utf8Bytes(taskContext) } : {}), skill_procedures: utf8Bytes(text) - utf8Bytes(joined),
+              ...(taskContext ? { task_context: utf8Bytes(taskContext) } : {}), ...(connections ? { connections: utf8Bytes(connections) } : {}),
+              skill_procedures: utf8Bytes(text) - utf8Bytes(joined),
             };
             return { text, sections };
           };

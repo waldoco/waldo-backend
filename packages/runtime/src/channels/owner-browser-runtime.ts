@@ -1,5 +1,5 @@
 import {browserHandoffConsole} from './browser-handoff-console';
-import { browsePageArgsSchema, browseActArgsSchema, WALDO_CHAT_MODEL, type BrowseActArgs, type BrowsePageArgs, type LLMAttachment, type ToolHandler } from '@waldo/contracts';
+import { browsePageArgsSchema, browseActArgsSchema, WALDO_CHAT_MODEL, type BrowseActArgs, type BrowsePageArgs, type LLMAttachment, type ToolEligibility, type ToolHandler } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
@@ -43,6 +43,9 @@ export function ownerBrowserRuntime(options: Readonly<{
     } : {}) });
   };
   const selectedConfiguration = async (cleanupOnly = false, normalRead = false) => automatic.selected || automatic.hasRetained() ? automatic.configuration(cleanupOnly) : configuration(cleanupOnly, normalRead);
+  // Staging, a registered common browser or a retained one serve browsing natively, without the fallback's provider keys.
+  const eligibleWith = (fallback: Readonly<{ eligible?(): ToolEligibility | Promise<ToolEligibility> }>) => (): ToolEligibility | Promise<ToolEligibility> =>
+    options.env.WALDO_ENVIRONMENT === 'staging' || options.env.COMMON_BROWSER_REGISTRATION || automatic.selected || automatic.hasRetained() || active ? { ok: true } : fallback.eligible?.() ?? { ok: true };
   const assertOwner = async () => {
       const doName = options.storage.kv.get<string>('do_name'), subject = options.storage.kv.get<string>('telegram_subject');
       const physical = () => { if (!doName || !subject || options.storage.kv.get('do_name') !== doName || options.storage.kv.get('telegram_subject') !== subject
@@ -127,7 +130,7 @@ export function ownerBrowserRuntime(options: Readonly<{
       } };
     },
     read(fallback: ToolHandler<BrowsePageArgs, unknown, ToolDispatcherContext>): ToolHandler<BrowsePageArgs, unknown, ToolDispatcherContext> {
-      return { ...fallback, schema: browsePageArgsSchema, description: fallback.description+' For interactive tasks use retain_session:true to receive DOM/accessibility, a PNG and session_handle, then call browse_act with that handle and current refs. Omit for a one-shot read.', async handle(args, ctx) {
+      return { ...fallback, eligible: eligibleWith(fallback), schema: browsePageArgsSchema, description: fallback.description+' For interactive tasks use retain_session:true to receive DOM/accessibility, a PNG and session_handle, then call browse_act with that handle and current refs. Omit for a one-shot read.', async handle(args, ctx) {
         try {
           const assertCurrent = current(ctx); await assertCurrent();
           // Browserbase remains an explicit choice. Cloudflare failure never switches providers.
@@ -170,7 +173,7 @@ export function ownerBrowserRuntime(options: Readonly<{
       } };
     },
     act(fallback:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>):ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>{
-      return {...fallback,schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page retain_session:true first, then use its session_handle. Native actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download uses an observed link for an authenticated GET attachment, stores and verifies bytes in your private workspace, and returns an exact-revision owner download link. Blob/data and POST exports are unsupported. owner_login pauses this turn for human sign-in in the authenticated console; end the turn and ask the owner to reply after Done. Resume only on that later owner reply, then verify the intended signed-in account from fresh evidence. session_handle explicitly continues an existing owner session. File selection and page sends are unsupported; uncertain effects cannot repeat. Browserbase remains an explicit alternative.',async handle(args,ctx){
+      return {...fallback,eligible:eligibleWith(fallback),schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page retain_session:true first, then use its session_handle. Native actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download uses an observed link for an authenticated GET attachment, stores and verifies bytes in your private workspace, and returns an exact-revision owner download link. Blob/data and POST exports are unsupported. owner_login pauses this turn for human sign-in in the authenticated console; end the turn and ask the owner to reply after Done. Resume only on that later owner reply, then verify the intended signed-in account from fresh evidence. session_handle explicitly continues an existing owner session. File selection and page sends are unsupported; uncertain effects cannot repeat. Browserbase remains an explicit alternative.',async handle(args,ctx){
         try{
           const assertCurrent=current(ctx);await assertCurrent();
           if(args.provider==='browserbase_stagehand_http_v3'&&(args.command||args.session_handle))throw new ClosedRunError();

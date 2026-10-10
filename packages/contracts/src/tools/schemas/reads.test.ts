@@ -4,6 +4,7 @@ import { connectIntentSchema } from '../connect-intent';
 import {
   callMcpToolArgsSchema,
   callMcpToolResultSchema,
+  connectServiceArgsSchema,
   executeActionArgsSchema,
   getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema,
   queryAvailabilityArgsSchema, readOwnerContextArgsSchema,
@@ -34,6 +35,14 @@ import {
 // external-origin results unrepresentable untainted. Failure modes caught: enum drift,
 // loosened bounds, a taint field gone nullable, and provider vocabulary re-declared away
 // from its single owner.
+
+describe('connectServiceArgs', () => {
+  it('accepts a connect intent feature and rejects a free-text one', () => {
+    expect(connectServiceArgsSchema.safeParse({ service: 'google', feature: 'mail' }).success).toBe(true);
+    expect(connectServiceArgsSchema.safeParse({ service: 'google' }).success).toBe(true);
+    expect(connectServiceArgsSchema.safeParse({ service: 'google', feature: 'gmail' }).success).toBe(false);
+  });
+});
 
 describe('get_communication page size', () => {
   it('accepts a page the model can read inline and rejects one that would be offloaded', () => {
