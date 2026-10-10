@@ -142,7 +142,7 @@ type OwnerRuntime = Readonly<{
   probeCapture: ProbeCaptureSlot;
   probeGuard: { suppressMemory: boolean; stripLiveTools: boolean };
   desk: ApprovalDesk;
-  ledger(): Promise<string>;
+  ledger(trace?: string): Promise<string>;
   updates: UpdateBook;
   reminders: ReturnType<typeof reminderBook>;
   runs: ReturnType<typeof runBook>;
@@ -1839,10 +1839,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const runs = runBook(storage.sql, clock, () => deps.newRunId().slice(0, 8));
     // A9: recent meal/workout logs join the proactive context; the read degrades to empty
     // when the store is unlinked so beats and the /ledger command never break on it.
-    const ledger = async () =>
-      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), proactivityLine(loops.proactivity()), schedulePreferencesLine(schedPrefs.all()), healthSection(await healthLogs.recent(10), clock.timezone)]
+    const ledger = async (trace?: string) => {
+      const healthEntries = await healthLogs.recent(10);
+      // A prompt that carries the owner's meal and workout logs marks its trace, so the exporter withholds that trace's text.
+      if (trace !== undefined && healthEntries.length > 0) log({ trace, hop: 'health_logs', ms: 0, ok: true, code: 'present' });
+      return [loopsSection(loops, clock.timezone), desk.ledger(book.list()), proactivityLine(loops.proactivity()), schedulePreferencesLine(schedPrefs.all()), healthSection(healthEntries, clock.timezone)]
         .filter((section) => section !== '')
         .join('\n\n');
+    };
     const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
     // Media reads are per-channel: Telegram file ids go through getFile; WhatsApp media ids go
     // through the Graph two-step (W4). Both feed the same transcriber/attachment pipeline.
@@ -2363,7 +2367,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const analysisChanges = sourceFollowups ? [...changes.filter(change => change.source !== 'mail'), ...pendingMail] : changes;
         let text: string | null = null;
         if (canSend && analysisChanges.length) {
-          const said = updateCardPrompt(localIso(now, clock.timezone), { changes: changeLines(analysisChanges), ledger: await ledger(), feedback: updates.feedback(), volume: volume === 'high' ? 'high' : 'normal', sourceFollowups });
+          const said = updateCardPrompt(localIso(now, clock.timezone), { changes: changeLines(analysisChanges), ledger: await ledger(trace), feedback: updates.feedback(), volume: volume === 'high' ? 'high' : 'normal', sourceFollowups });
           const reply = (await responder.prompt(trace, owner, said, async (hop, work) => work(), sourceFollowups ? ['get_context', 'read_owner_context', 'search_episodes', 'open_loop'] : undefined)).trim();
           if (reply && reply !== SKIP_UPDATE) text = reply;
           updates.judgedMail(pendingMail);
@@ -2374,7 +2378,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           updates.pushed(id, text);
         }
         await reviewMailFollowup({ loops, now, timezone: clock.timezone, allowed: sourceFollowups && canSend && analysisChanges.length === 0,
-          ledger, prompt: said => { followupPrompted = true; return responder.prompt(`${trace}:mail-followup`, owner, said, async (_hop, work) => work(), ['get_context', 'read_owner_context', 'search_episodes']); },
+          ledger: () => ledger(`${trace}:mail-followup`), prompt: said => { followupPrompted = true; return responder.prompt(`${trace}:mail-followup`, owner, said, async (_hop, work) => work(), ['get_context', 'read_owner_context', 'search_episodes']); },
           enqueue: async (text, mailFollowup) => {
             const id = `mail-followup:${mailFollowup.loopId}:${mailFollowup.due}:${mailFollowup.timezone}:${mailFollowup.messageId}`;
             const known = finalOutbox.records().find(record => record.id === id);
@@ -2415,7 +2419,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const midnight = localToEpoch(`${localIso(now, clock.timezone).slice(0, 10)}T00:00`, clock.timezone);
       const said = await composeDayCard(card, now, clock.timezone, {
         google: client, connectable: !client && google.configured(),
-        ledger: await ledger(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
+        ledger: await ledger(trace), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
       });
       try {
         const text = (await responder.prompt(trace, owner, said, async (hop, work) => work())).trim();

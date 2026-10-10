@@ -299,6 +299,17 @@ describe('otlpTurnExporter', () => {
       }
     });
 
+    it('withholds text when a prompt carried the owner\'s health logs', async () => {
+      const { send, spans } = capture();
+      const log = on(send);
+      await log({ trace: 'card:brief:9', hop: 'health_logs', ms: 0, ok: true, code: 'present' });
+      await log({ trace: 'card:brief:9', hop: 'llm_reply', ms: 5, ok: true, text });
+      await log({ trace: 'card:brief:9', hop: 'day_card', ms: 6, ok: true, text });
+      await log({ trace: 'card:brief:9', hop: 'machine_turn', ms: 7, ok: true, detail: 'day_card' });
+      for (const span of spans(0)) for (const key of textAttrs) expect(attrs(span)[key]).toBeUndefined();
+      expect(attrs(spans(0)[0]!)['langfuse.trace.metadata.text_withheld']).toBe('health');
+    });
+
     it('drops free-form error text on a health turn but keeps the typed code', async () => {
       const { send, spans } = capture();
       const log = on(send);

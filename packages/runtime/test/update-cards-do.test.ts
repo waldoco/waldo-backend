@@ -74,6 +74,11 @@ describe('update cards', () => {
 
 
 const updateFixture = vi.hoisted(() => ({ changed: false, sent: [] as string[], prompts: [] as string[] }));
+vi.mock('../src/channels/health-log', async load => {
+  const original = await load<typeof import('../src/channels/health-log')>();
+  return { ...original, healthLogBook: (...args: Parameters<typeof original.healthLogBook>) => ({ ...original.healthLogBook(...args),
+    recent: async () => [{ id: 1, kind: 'meal' as const, logged_at: '2026-10-08T08:00:00Z', source: 'telegram', payload: { description: 'oats' } }] }) };
+});
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (...args: Parameters<typeof original.googleClient>) => args[0].clientId !== 'update-fixture' ? original.googleClient(...args) : ({
@@ -113,6 +118,8 @@ it.each(['normal', 'low', 'quiet', 'off', 'closed'] as const)('updates without a
       expect(updatePlans(state.storage.sql).read('2026-10-08').some(row => row.card === 'card:brief' && row.sent)).toBe(false);
       expect(updateFixture.sent.filter(text => text === 'Calendar update: Lunch added.')).toHaveLength(mode === 'normal' ? 1 : 0);
       expect(closedTraces(state, 'changed')).toBe(1);
+      // The update prompt carries the ledger's meal log only when the model is asked; the trace is marked exactly then.
+      expect(state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM trace_log WHERE trace = 'changed' AND hop = 'health_logs'").one().n).toBe(mode === 'normal' ? 1 : 0);
     } finally { Date.now = savedNow; await state.storage.deleteAlarm(); }
   });
 });

@@ -23,19 +23,20 @@ export const HOPS: Readonly<Record<string, Hop>> = {
   typing: { feature: 'channel', type: 'tool' }, progress: { feature: 'channel', type: 'tool' }, send: { feature: 'channel', type: 'tool' },
   receipt: { feature: 'reactions', type: 'tool' }, resolved: { feature: 'reactions', type: 'tool' }, choose_reaction: { feature: 'reactions', type: 'chain' },
   respond: { feature: 'reply', type: 'chain' }, joined_path: { feature: 'reply', type: 'chain' },
-  memory: { feature: 'memory', type: 'chain' }, constellation_evidence: { feature: 'memory', type: 'span' }, health_context: { feature: 'health', type: 'span' },
+  memory: { feature: 'memory', type: 'chain' }, constellation_evidence: { feature: 'memory', type: 'span' }, health_context: { feature: 'health', type: 'span' }, health_logs: { feature: 'health', type: 'span' },
   llm_reply: { feature: 'reply', type: 'span' }, llm_reaction: { feature: 'reactions', type: 'span' }, llm_memory: { feature: 'memory', type: 'span' },
 };
 export const hopFeature = (hop: string) => HOPS[hop]?.feature ?? 'other';
 
 // The owner's health readings may reach the model and the owner's reply, but never a trace.
 // Text capture is a staging debugging switch, so instead of trusting free text we withhold
-// every text field of a turn that read health context or ran a health tool, here or in a
-// delegated child. Detection is structural (hop names), never a scan of the text itself.
+// every text field of a turn that read health context, carried health logs in its prompt, or ran
+// a health tool, here or in a delegated child. Detection is structural (hop names), never a scan
+// of the text itself.
 const HEALTH_TOOLS = ['get_crs', 'get_health', 'get_master_metrics', 'log_meal', 'log_workout', 'list_health_logs'] as const satisfies readonly ToolName[];
 const HEALTH_TOOL_HOPS: ReadonlySet<string> = new Set(HEALTH_TOOLS.flatMap((name) => [`tool_${name}`, `subagent_tool_${name}`]));
 const touchesHealth = (entry: TurnLogEntry) =>
-  HEALTH_TOOL_HOPS.has(entry.hop) || (entry.hop === 'health_context' && entry.code === 'present');
+  HEALTH_TOOL_HOPS.has(entry.hop) || ((entry.hop === 'health_context' || entry.hop === 'health_logs') && entry.code === 'present');
 
 // Machine turns (reminder fires, heartbeat ticks, nightly, standing orders) close their trace
 // with a machine_turn root instead of turn; without a root the spans never leave `pending`.
