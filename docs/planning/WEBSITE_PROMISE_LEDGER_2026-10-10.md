@@ -251,13 +251,26 @@ Day cards and update cards used to log no root hop, so their traces were never e
 
 Booking, payments, logged-in browser errands, parallel workers, rich file outputs and person-to-person agent coordination came from the Instinct comparison. They set the quality bar for Waves 1–2 (claim verification, receipts, recovery, parallel workers) and stay separate from the website commitment.
 
-## 12. First slices
+## 12. Status and next slices (10 October, evening)
 
-1. **Card traces reach Langfuse** (§8, #1007). The health-turn withholding gate was dropped by owner ruling.
-2. **#999 post-merge fixes that gate the staging deploy.** An independent review found no CRITICAL or HIGH issues and two blockers:
-   - M1, alarm hot loop during a directory outage for Telegram-linked owners: `AppInbox.deferWake` moves the app wake out 30 s when authority is unavailable (`channels/app-inbox.ts`, `telegram-owner-do.ts` `drainApp`). Unit and DO tests pin it.
-   - M3, the push functions in `20261010040000` had no tests before their first hosted apply: `supabase/tests/waldo_app_push_custody.sql` (32 assertions: register, list, revoke, revoke-all, replay receipts, cross-owner refusal, forged signatures, signout trigger). The Vault foreign key on a hosted apply stays unverified until staging.
-   - Before production: M2 (one app message per alarm inside the round-robin; read-only controls not serialized), M4 (directory call amplification on history reads), M5 (approval prompts dropped on app turns; keep approval-gated tools off app turns until Wave 1), a per-session send quota, and a separate signout rate-limit bucket.
-3. **`957a2cbb` + the fixes to staging, app re-pinned.** Staging deploy and the `20261010040000` apply (owner's Cloudflare and Supabase access, per-action confirmation), app line `a7a560d1` re-pinned to the merged #999 contract, physical-iPhone run. Falsifier: the app rejects the session envelope, or history shows scheduled prompts as owner messages. Rollback: redeploy the previous staging release; the app keeps its pin.
-4. **#998 steps 2 and 3** (route registry, Google paging): small, low risk.
-5. **Docs in parallel:** Brain ADR amendment PR (§7) and the surface-neutral reply-parts contract against #915 slice C.
+Lanes: the app-backend handoff session takes #998 steps 1–4 (zod dependency, app route registry, Google paging, health-leak guard) and then the proposed identity, files, memory correction, onboarding, channels, Tasks/Calendar effects, rights, personal day, health and proactivity slices. This session owns the ledger, traces, the omnipresence slices (contracts, app delivery and approvals, routing, desk, transcript, threads) and context engineering. The app session owns waldo-app and re-pins to merged contract SHAs.
+
+| PR | What | State |
+|---|---|---|
+| #1004 | App inbox outage wake; push custody pgTAP | merged (`9eef2ad9`), not deployed |
+| #1003 | Health-turn trace withholding | closed by ruling (§8) |
+| #1007 | Day and update card traces close and reach Langfuse | open |
+| #1010 | Per-section context accounting on every model call (trace schema 6) | open |
+| #1011 | Slice 0 contracts: reply parts, surface capabilities, app approvals, channel status, error codes | open; revising for the app lane's review (self-contained app pin, kind-dependent `exact`, drop `channel.link_start`, approvals state filter, `request_id`) |
+| #1012 | Owner turns no longer fail when shared health context is present | open |
+| #1005 | This ledger, the omnipresence design, the trace ruling | open |
+
+Health finding (verified by test): derived health reaches the reply model on no surface. Telegram and WhatsApp compose it and discard it, and the app composer passes `health: null`. Before #1012, real health material made the turn fail outright. Every health promise (Recovery, Form, Weight, health-aware Briefs) depends on the next slice.
+
+Next, one at a time:
+1. Health into the reply prompt as its own measured section, after #1010 merges (both edit `unboundSystem()`).
+2. Slice 1: app renderer and approvals from the app, on the revised #1011.
+3. Context: stable-prefix ordering on the app (the per-turn REASONS block currently sits first, so the behavior block never caches), measured with #1010.
+4. Slice 2: proactive routing to the app and scheduled work for app-only owners.
+
+Deploy bundle waiting on the owner: #1004, #1007 and #1010 together. #1010's value needs about a day of staging traces after deploy.

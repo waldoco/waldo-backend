@@ -17,9 +17,10 @@ Status: owner-ruled scope, not yet implemented. Applies to ADR-0081, ADR-0024 an
 ## What stays blocked
 - Third-party egress (send_message, draft_email, draft_document): health values blocked unless the owner explicitly asks to share a specific item.
 - Externally tainted content (mail, web, files): redaction stays.
-- Traces, Langfuse, logs, audit records, R2 summaries, browser jobs: no health values.
+- Logs, audit records, R2 summaries, browser jobs: no health values.
+- Traces: during alpha and beta, by owner ruling (10 October 2026), the staging Langfuse project captures model text for opted-in testers, health included. Production never captures text (enforced in code); revisit before production.
 - Secrets, canaries, forget and withdrawal guarantees.
-- Long-term memory: no bulk readings; qualitative patterns only, with the existing distinct-day evidence rule.
+- Long-term memory: no bulk readings; qualitative patterns only, with the existing distinct-day evidence rule. Numeric pattern evidence (owner ruling, 10 October 2026) lives in the Supabase health plane, with memory holding the qualitative pattern and a pointer.
 - Provider requests set `store: false`.
 
 ## Retention and access (recommendation the owner approved in scope, "90 d raw / 24 mo aggregate")
