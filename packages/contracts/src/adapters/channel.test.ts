@@ -56,7 +56,7 @@ import {
 const key = 'a'.repeat(64);
 
 describe('channelName', () => {
-  it('is exactly the six channel literals, in order', () => {
+  it('is exactly the seven channel literals, in order', () => {
     expect(channelNameSchema.options).toEqual([
       'telegram',
       'apns',
@@ -64,6 +64,7 @@ describe('channelName', () => {
       'discord',
       'slack',
       'in_app',
+      'imessage',
     ]);
   });
 
