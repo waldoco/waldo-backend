@@ -57,9 +57,10 @@ it('generation replacement resets the cursor, drops capabilities, withdraws only
     const store = new BridgeStore(state.storage, PROPOSED_LOCAL_TEST_POLICY);
     const body = JSON.stringify(event('g1'));
     store.admitEvent(h(), body, await sha256Hex(body), event('g1'));
-    store.heartbeat(h(), 'fixture-generation', 'online');
+    const t = Date.now();
+    store.heartbeat(h(t), 'fixture-generation', 'online');
     store.enqueue(await enqueueInput('c1'));
-    store.heartbeat(h(), 'generation-2', 'online');
+    store.heartbeat(h(t + 1), 'generation-2', 'online'); // heartbeat atMs must strictly increase
     expect(store.meta('cursor')).toBeNull();
     expect(store.capabilities('fixture-bridge', 'fixture-account')).toBeNull();
     expect(store.delivery({ commandId: 'c1' })).toMatchObject({ state: 'withdrawn', result: { state: 'rejected', disposition: 'not_started', reason: 'generation_replaced' } });
