@@ -147,6 +147,8 @@ const worldNote = (state: { storage: { sql: { exec(q: string): { toArray(): unkn
   const runs = state.storage.sql.exec("SELECT schedule_id, fired_at, outcome FROM schedule_runs WHERE schedule_id LIKE 'card:%' OR schedule_id = 'heartbeat-tick' ORDER BY fired_at DESC LIMIT 8").toArray();
   return `runs=${JSON.stringify(runs)} finals=${JSON.stringify(finals.map(r => [r.trace, r.status, r.attempts, r.settled, r.createdAt, r.dueAt]))} inbox=${JSON.stringify(inbox.map(r => [r.updateId, r.state, r.reason]))} now=${Date.now()} schedule=${JSON.stringify(armed)} outbox=${JSON.stringify(outbox.map(item => [item.method, item.body.chat_id]))}`;
 };
+// A failure names what called the model (a day plan, a reply, a memory pass) instead of only a count.
+const describeCall = (body: unknown) => { const b = body as { text?: { format?: { name?: string } }; instructions?: string; input?: unknown }; return `${b.text?.format?.name ?? 'unnamed'}: instr=${(typeof b.instructions === 'string' ? b.instructions : '').slice(0, 80)} | input=${JSON.stringify(b.input ?? '').slice(-260)}`; };
 // A turn is done when the owner inbox holds nothing admitted or claimed. One alarm() call can find a platform alarm already running and return before this
 // update's turn has run (the scheduler fires on the wall clock), so drive it again until the inbox drains instead of reading effects right after a single pass.
 const drained = (subject: number) => vi.waitFor(async () => {
@@ -264,8 +266,6 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:00.000Z', '2026-10-04T18:
     await instance.alarm(); await instance.alarm();
     expect(outbox.filter(item => item.method === 'sendMessage' && String(item.body.text).includes('outcome is uncertain'))).toHaveLength(1);
     expect(state.storage.kv.get<number>('interruption-fixture-effect-count')).toBe(1);
-    // Same strict bound, but a failure names what called the model (a day plan, a reply, a memory pass) instead of only a count.
-    const describeCall = (body: unknown) => { const b = body as { text?: { format?: { name?: string } }; instructions?: string; input?: unknown }; return `${b.text?.format?.name ?? 'unnamed'}: instr=${(typeof b.instructions === 'string' ? b.instructions : '').slice(0, 80)} | input=${JSON.stringify(b.input ?? '').slice(-260)}`; };
     // A replay would put the interrupted request back in a model call. Scheduler work (a card or heartbeat the pinned clock makes due) is not a replay (CI run 37446492439, clock 18:29:00Z).
     expect(modelInputs.slice(callsBefore).filter(body => JSON.stringify(body).includes('PRIVATE_INTERRUPTED_REQUEST')).map(describeCall), worldNote(state)).toEqual([]);
     expect(await new TelegramOwnerInbox(state.storage, persistInboxWake).claim(`hermetic-test-bot-token:telegram:${updateId}`, 'retry', 'retry-run', Date.now() + 150_000)).toBeNull();
@@ -392,8 +392,17 @@ for (const fault of ['attempt', 'run', 'date', 'subject'] as const) it(`malforme
 
 it('actual eviction with a committed final reconciles delivery without a competing interruption notice', async () => {
   const stub = doStub(81101); const updateId = 995003;
+  const { schedulePreferences } = await import('../src/channels/schedule-preferences');
+  const { loopBook } = await import('../src/channels/loops');
+  const preferences = (sql: SqlStorage) => schedulePreferences(sql, loopBook(sql, { newId: () => crypto.randomUUID(), now: Date.now }));
   outbox.length = 0;
+  try {
   await runInDurableObject(stub, async (instance, state) => {
+    // The pinned-clock cases above can leave this owner's nightly job overdue on the real clock and no day plan for the real date,
+    // so setup and alarm() start scheduled model work beside delivery. With the owner's scheduled behaviors off, any model call
+    // after eviction is a replay.
+    const owned = preferences(state.storage.sql);
+    for (const kind of ['nightly', 'heartbeat', 'event_briefs', 'daily_brief'] as const) owned.set(kind, false);
     const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
     const { persistInboxWake, armAlarm } = await import('../src/scheduler/alarm-slot');
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
@@ -412,10 +421,11 @@ it('actual eviction with a committed final reconciles delivery without a competi
     const matching = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!.filter(row => row.trace === `tg-${updateId}`);
     expect(matching).toHaveLength(1); expect(matching[0]!.status).toBe('delivered');
     expect(matching[0]!.payload.text).not.toContain('outcome is uncertain');
-    expect(modelInputs).toHaveLength(callsBefore);
+    expect(modelInputs.slice(callsBefore).map(describeCall), worldNote(state)).toEqual([]);
     expect(outbox.filter(item => item.method === 'sendMessage')).toHaveLength(1);
     await state.storage.deleteAlarm();
   });
+  } finally { await runInDurableObject(stub, async (_instance, state) => { preferences(state.storage.sql).reset(); }); }
 });
 
 for (const fault of ['unlink', 'subject', 'name', 'bot', 'physical-owner'] as const) it(`actual interrupted-request notification rejects ${fault} binding without publication`, async () => {
@@ -756,11 +766,12 @@ it('executes high then lower admitted update without swallowing either, and dedu
 });
 
 it('three ready classes each progress within three alarms', async () => {
-  const { Scheduler } = await import('../src/scheduler/multiplexer'); const { productionDeps } = await import('../src/seams/deps');
+  const { ensureSchema } = await import('../src/tracer/schema'); const { Scheduler } = await import('../src/scheduler/multiplexer'); const { productionDeps } = await import('../src/seams/deps');
   const subject=81101;const stub=doStub(subject); const headers={'x-waldo-inbox-secret':'hermetic-test-webhook-secret','x-waldo-telegram-subject':String(subject),'x-waldo-do-name':route(subject).doName};
   await stub.fetch('https://telegram-owner/enqueue',{method:'POST',headers,body:JSON.stringify({update_id:998877,message:{message_id:998877,from:{id:subject,is_bot:false},chat:{id:subject,type:'private'},text:'FAIR_INBOX_FIXTURE'}})});
   await runInDurableObject(stub,async(instance,state)=>{
-    const scheduler=new Scheduler(state.storage.sql,state.storage,productionDeps());await scheduler.schedule({id:'three-fair-reminder',kind:'reminder',dueAt:Date.now()-100,occurrenceAt:Date.now()-100,payloadRefs:{reminder_id:'three-fair-reminder'}});
+    // One captured instant: the test runtime's clock ticks between reads, so two Date.now calls can put occurrence after due.
+    ensureSchema(state.storage);const scheduler=new Scheduler(state.storage.sql,state.storage,productionDeps());const dueAt=Date.now()-100;await scheduler.schedule({id:'three-fair-reminder',kind:'reminder',dueAt,occurrenceAt:dueAt,payloadRefs:{reminder_id:'three-fair-reminder'}});
     state.storage.kv.put('telegram_final_outbox_v1',[{id:'three-fair-transport',trace:'three-fair-transport',payload:{chat_id:subject,text:'fixture'},digest:'fixture',ownerSubject:String(subject),doName:route(subject).doName,status:'pending',dueAt:0,createdAt:Date.now(),attempts:0}]);state.storage.kv.put('telegram_final_outbox_due_v1',0);state.storage.kv.put('owner_alarm_last_v1',2);
     await instance.alarm();await instance.alarm();await instance.alarm();
     expect(scheduler.read('three-fair-reminder')).toBeNull();
