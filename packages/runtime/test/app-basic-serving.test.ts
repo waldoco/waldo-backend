@@ -6,6 +6,7 @@ import { expect, it, vi } from 'vitest';
 import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { handleApp } from '../src/channels/app-api';
 import { routerSignature, linkCodeHash } from '../src/identity/owner-directory';
+import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../src/identity/app-session-fence';
 
 const proof=vi.hoisted(()=>({inputs:[] as any[],outputs:[] as any[][],telegram:0,hold:null as null|(()=>Promise<void>)}));
 vi.mock('openai',()=>({default:class {responses={create:async(input:any)=>{
@@ -136,6 +137,23 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       await instance.alarm();expect(inbox.receipt(name,'revoked-pending-client')?.state).toBe('revoked');expect(proof.inputs.length).toBe(total);expect(proof.telegram).toBe(0);expect(hash).toBe(await linkCodeHash(credential.split('.').at(-2)!));
       // Signing out while a turn is running must stop it before its next tool round, not leave it running.
       const again=await (await app('/auth/verify',{email:EMAIL,code:'123456'})).json() as any;const secondCredential=again.credential as string;
+      // The privileged fence route answers only the Worker's own signature for this owner, and no client path reaches it.
+      state.storage.kv.put('app:inbox-record:app-fence-probe',{id:'app-fence-probe',updateId:1,clientId:'fence-probe-client',digest:'d',text:'probe',owner:name,sessionHash:hash!,conversationRef:'owner:prn_probe',admittedAt:Date.now(),state:'admitted'});
+      const probe=()=>state.storage.kv.get<any>('app:inbox-record:app-fence-probe');
+      const fencePost=async(over:{method?:string;doName?:string;hash?:string;sig?:string|null}={},host:TelegramOwnerDO=instance)=>{
+        const n=over.doName??name,h=over.hash??hash!,sig=over.sig===undefined?await appSessionFenceSignature(SECRET,n,h):over.sig;
+        return host.fetch(new Request(`https://telegram-owner${APP_SESSION_FENCE_PATH}`,{method:over.method??'POST',headers:{'x-waldo-do-name':n,'x-waldo-app-session-hash':h,...(sig===null?{}:{'x-waldo-fence-sig':sig})}}));
+      };
+      const unsigned=new TelegramOwnerDO(state,{...settings,WALDO_ROUTER_HMAC_SECRET:undefined} as never);
+      for(const [label,response] of Object.entries({
+        forged:await fencePost({sig:'0'.repeat(64)}),unsigned:await fencePost({sig:null}),otherOwner:await fencePost({doName:'someone-else'}),
+        otherSession:await fencePost({sig:await appSessionFenceSignature(SECRET,name,'c'.repeat(64))}),malformedHash:await fencePost({hash:'not-a-session-hash'}),
+        wrongMethod:await fencePost({method:'GET'}),noSecret:await fencePost({},unsigned),
+      }))expect([label,response.status]).toEqual([label,403]);
+      expect(probe()).toMatchObject({state:'admitted',text:'probe'});
+      const forwardsBefore=forwards.length;expect((await app('/internal/session-fence',{},secondCredential)).status).toBe(404);expect(forwards.length).toBe(forwardsBefore);
+      const probeFenced=await fencePost();expect(probeFenced.status).toBe(200);expect(await probeFenced.json()).toEqual({fenced:1});
+      expect(probe()).toMatchObject({state:'revoked',closedReason:'session_revoked',effectsUnconfirmed:false,text:''});
       proof.outputs.push([{type:'function_call',call_id:'fenced-write',name:'workspace_write',arguments:JSON.stringify({path:'must-not-exist.txt',text:'Synthetic evidence',mime:'text/plain',expected_revision:0})}],[]);
       const modelCallsBefore=proof.inputs.filter(i=>!i.text?.format).length;
       let releaseFenced!:()=>void;const heldFenced=new Promise<void>(resolve=>{releaseFenced=resolve;});proof.hold=()=>heldFenced;
@@ -147,6 +165,7 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       await vi.waitFor(()=>expect(state.storage.kv.get<any>(`app:inbox-record:${fenced.message_id}`)).toMatchObject({state:'revoked',closedReason:'session_revoked',effectsUnconfirmed:true}));
       await new Promise(resolve=>setTimeout(resolve,100));
       expect(proof.inputs.filter(i=>!i.text?.format)).toHaveLength(modelCallsBefore+1);
+      expect(state.storage.sql.exec<{state_json:string}>('SELECT state_json FROM workspace_manifest').toArray().map(row=>row.state_json).join('')).not.toContain('must-not-exist.txt');
     }finally{(instance as any).ownerBrowser.stop();await (instance as any).ownerBrowser.maintain();await state.storage.deleteAlarm();fetcher.mockRestore();}
   });
 },30000);

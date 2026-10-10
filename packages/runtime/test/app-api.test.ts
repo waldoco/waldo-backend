@@ -131,6 +131,17 @@ it('requires valid fresh inventory for session DTO and push-first verified signo
   try{expect((await handleApp(post('/app/v1/auth/signout',{},headers),env(),auth))!.status).toBe(503);expect(calls).not.toContain('revoke');}finally{failedPush.mockRestore();}
 });
 
+it('fences again once the session is revoked, and a failed second fence does not fail the signout',async()=>{
+  const {auth,calls}=fakeAuth();
+  const owners={idFromName:(n:string)=>n,get:()=>({fetch:async()=>{calls.push('fence');return new Response('{}',{status:calls.filter(call=>call==='fence').length===1?200:503});}})};
+  const fetcher=vi.spyOn(globalThis,'fetch').mockImplementation(async()=>{calls.push('push');return Response.json(0);});
+  try{
+    const response=await handleApp(post('/app/v1/auth/signout',{},{authorization:`Bearer ${CREDENTIAL}`}),{...env() as object,TELEGRAM_OWNER_DO:owners} as never,auth);
+    expect([response!.status,await response!.json()]).toEqual([200,{result:'revoked'}]);
+    expect(calls).toEqual(['fence','push','revoke','fence']);
+  }finally{fetcher.mockRestore();}
+});
+
 it('fences the session\'s in-flight work before revoking it, and revokes nothing when the fence cannot be placed',async()=>{
   const fences:Request[]=[];
   const owners=(status:number)=>({idFromName:(n:string)=>n,get:()=>({fetch:async(r:Request)=>{fences.push(r);return new Response('{}',{status});}})});

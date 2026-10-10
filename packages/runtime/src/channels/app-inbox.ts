@@ -6,10 +6,15 @@ import { redactSecretUrls } from './egress-guard';
 
 const PREFIX = 'app:inbox-record:';
 // A finished row keeps its receipt, and so the idempotency of its client_message_id, for this long. After that a late
-// retry of the same id is a new message. Bounded per admit so one send never does unbounded storage work.
+// retry of the same id is a new message. When the table is full the oldest finished rows go earlier, but never younger
+// than the floor, so a flood cannot lock an owner out for the whole retention window and a recent retry still matches.
+// Bounded per admit so one send never does unbounded storage work.
 export const APP_INBOX_RETENTION_MS = 30 * 24 * 60 * 60_000;
+export const APP_INBOX_FLOOR_MS = 12 * 60 * 60_000;
+const MAX_ROWS = 4096;
 const PRUNE_PER_ADMIT = 512;
 const finished = (row: AppInboxRecord) => row.state === 'completed' || row.state === 'interrupted' || row.state === 'revoked';
+const closedAt = (row: AppInboxRecord) => row.closedAt ?? row.admittedAt;
 export type AppInboxRecord = {
   id: string; updateId: number; clientId: string; digest: string; text: string;
   owner: string; sessionHash: string; conversationRef: string; admittedAt: number;
@@ -32,15 +37,18 @@ export class AppInbox {
     const digest=await sha256Hex(stableJson({text,conversationRef}));
     return this.storage.transaction(async txn=>{
       assertCurrent?.();
-      const all=[...(await txn.list<AppInboxRecord>({prefix:PREFIX})).values()];
-      const cutoff=this.now()-APP_INBOX_RETENTION_MS;
-      const stale=all.filter(row=>finished(row)&&(row.closedAt??row.admittedAt)<cutoff).sort((a,b)=>(a.closedAt??a.admittedAt)-(b.closedAt??b.admittedAt)).slice(0,PRUNE_PER_ADMIT);
-      for(const row of stale)await txn.delete(PREFIX+row.id);
-      const gone=new Set(stale.map(row=>row.id));
-      const rows=all.filter(row=>!gone.has(row.id));
+      const now=this.now();
+      const evict=async(rows:AppInboxRecord[],olderThan:number)=>{
+        const gone=rows.filter(row=>finished(row)&&closedAt(row)<olderThan).sort((a,b)=>closedAt(a)-closedAt(b)).slice(0,PRUNE_PER_ADMIT);
+        for(const row of gone)await txn.delete(PREFIX+row.id);
+        const ids=new Set(gone.map(row=>row.id));
+        return rows.filter(row=>!ids.has(row.id));
+      };
+      let rows=await evict([...(await txn.list<AppInboxRecord>({prefix:PREFIX})).values()],now-APP_INBOX_RETENTION_MS);
       const previous=rows.find(row=>row.clientId===clientId);
       if(previous)return previous.owner===owner&&previous.digest===digest?{kind:'duplicate' as const,record:previous}:{kind:'conflict' as const};
-      if(rows.length>=4096||rows.filter(row=>row.state==='admitted'||row.state==='running').length>=256)return {kind:'capacity' as const};
+      if(rows.length>=MAX_ROWS)rows=await evict(rows,now-APP_INBOX_FLOOR_MS);
+      if(rows.length>=MAX_ROWS||rows.filter(row=>row.state==='admitted'||row.state==='running').length>=256)return {kind:'capacity' as const};
       const sequence=(await txn.get<number>('app_seq')??0)+1;
       const record:AppInboxRecord={id:`app-${APP_UPDATE_BASE+sequence}`,updateId:APP_UPDATE_BASE+sequence,clientId,digest,text:redactSecretUrls(text).text,owner,sessionHash,conversationRef,admittedAt:this.now(),state:'admitted'};
       assertCurrent?.();

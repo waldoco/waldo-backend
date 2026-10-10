@@ -1,6 +1,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
-import { AppInbox, APP_INBOX_RETENTION_MS, type AppInboxRecord } from '../src/channels/app-inbox';
+import { AppInbox, APP_INBOX_FLOOR_MS, APP_INBOX_RETENTION_MS, type AppInboxRecord } from '../src/channels/app-inbox';
 import { APP_INBOX_DUE_KEY, rearmSharedAlarm } from '../src/scheduler/alarm-slot';
 
 it('app payload and wake rollback together; successful admission preserves an earlier sibling wake',async()=>{
@@ -55,6 +55,34 @@ it('never prunes a message that is still admitted or running, and still refuses 
     expect((await inbox.admit(name,'b'.repeat(64),'cap-client-0001','x','owner:prn_fixture')).kind).toBe('capacity');
     const states=inbox.records().filter(row=>row.id.startsWith('app-live')).map(row=>row.state).sort();
     expect(states).toEqual(['admitted','running']);
+  });
+});
+
+it('a full inbox takes a new send by evicting its oldest finished messages past the floor, never live ones',async()=>{
+  const name=`app-inbox-evict-${crypto.randomUUID()}`,stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+  await runInDurableObject(stub,async(_instance,state)=>{
+    const now=Date.now(),aged=now-APP_INBOX_FLOOR_MS-60_000;
+    seed(state.storage,'app-live-admitted','admitted',aged);seed(state.storage,'app-live-running','running',aged);
+    for(let i=0;i<4094;i++)seed(state.storage,`app-aged-${i}`,'completed',aged-i);
+    const inbox=new AppInbox(state.storage,()=>now);
+    expect((await inbox.admit(name,'b'.repeat(64),'evict-client-0001','x','owner:prn_fixture')).kind).toBe('admitted');
+    const ids=new Set(inbox.records().map(row=>row.id));
+    expect(ids.has('app-live-admitted')&&ids.has('app-live-running')).toBe(true);
+    expect(ids.has('app-aged-4093')).toBe(false);
+    expect(ids.has('app-aged-0')).toBe(true);
+    expect(inbox.records().length).toBeLessThanOrEqual(4096);
+  });
+});
+
+it('a retry of a recent send at capacity is still a duplicate and evicts nothing',async()=>{
+  const name=`app-inbox-dup-cap-${crypto.randomUUID()}`,stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+  await runInDurableObject(stub,async(_instance,state)=>{
+    const now=Date.now(),inbox=new AppInbox(state.storage,()=>now),b='b'.repeat(64);
+    expect((await inbox.admit(name,b,'dup-client-0001','same text','owner:prn_fixture')).kind).toBe('admitted');
+    inbox.settle(inbox.claim(inbox.records()[0]!.id,true)!,true);
+    for(let i=0;i<4095;i++)seed(state.storage,`app-aged-${i}`,'completed',now-APP_INBOX_FLOOR_MS-60_000-i);
+    expect((await inbox.admit(name,b,'dup-client-0001','same text','owner:prn_fixture')).kind).toBe('duplicate');
+    expect(inbox.records()).toHaveLength(4096);
   });
 });
 

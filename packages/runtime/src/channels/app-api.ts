@@ -77,7 +77,8 @@ const sessionView = async (auth: ConsoleAuth, doName: string, credential: string
   return appSessionV1Schema.parse({ state: 'active', session_ref: `sess_${hash}`, account_ref: `acct_${await linkCodeHash(doName)}`, surface: 'app', absolute_expires_at: created + 12 * 60 * 60_000 });
 };
 
-// Stops the session's in-flight work in its owner Durable Object before the session is revoked; false when it cannot be confirmed.
+// Closes the session's queued work and stops its running turn in the owner Durable Object; false when it cannot be confirmed.
+// Signout calls it before the revoke, which makes a retry safe, and again after it for work admitted in between.
 const fenceSession = async (env: AppEnv, owners: NonNullable<AppEnv['TELEGRAM_OWNER_DO']>, doName: string, sessionHash: string): Promise<boolean> => {
   const secret = env.WALDO_ROUTER_HMAC_SECRET;
   if (!secret) return false;
@@ -86,8 +87,10 @@ const fenceSession = async (env: AppEnv, owners: NonNullable<AppEnv['TELEGRAM_OW
       method: 'POST',
       headers: { 'x-waldo-do-name': doName, 'x-waldo-app-session-hash': sessionHash, 'x-waldo-fence-sig': await appSessionFenceSignature(secret, doName, sessionHash) },
     }));
-    return response.ok;
-  } catch { return false; }
+    if (response.ok) return true;
+  } catch { /* reported below */ }
+  console.error('app session fence unavailable');
+  return false;
 };
 
 // App sign-in and the shared main chat. Returns null for paths outside /app/v1 so the caller keeps routing.
@@ -144,7 +147,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const sessionId = sessionIdOf(who.credential);
     if (!sessionId) return fail(401);
     let revoked: boolean;
-    try { const hash=await linkCodeHash(sessionId); const call=signedRpc(env); if(!call) return fail(503); if(!(await fenceSession(env,owners,who.doName,hash))) return fail(503); const push=await call('app_push_revoke_session', `app.push.revoke-session.${who.doName}.${hash}`, {p_do_name:who.doName,p_session_hash:hash}); if(typeof push!=='number'||!Number.isSafeInteger(push)||push<0)return fail(503); revoked=await auth.revokeSession(who.doName,hash); if((await auth.listSessions(who.doName)).some(row=>row.session===hash))return fail(503); } catch { return fail(503); }
+    try { const hash=await linkCodeHash(sessionId); const call=signedRpc(env); if(!call) return fail(503); if(!(await fenceSession(env,owners,who.doName,hash))) return fail(503); const push=await call('app_push_revoke_session', `app.push.revoke-session.${who.doName}.${hash}`, {p_do_name:who.doName,p_session_hash:hash}); if(typeof push!=='number'||!Number.isSafeInteger(push)||push<0)return fail(503); revoked=await auth.revokeSession(who.doName,hash); if((await auth.listSessions(who.doName)).some(row=>row.session===hash))return fail(503); await fenceSession(env,owners,who.doName,hash); } catch { return fail(503); }
     return ok({ result: revoked ? 'revoked' : 'already_gone' });
   }
 

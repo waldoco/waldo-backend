@@ -527,8 +527,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     return createOwnerTurnContext(await surfaceOwnerAdmission({scope,lookup,expectedPhysicalDoId:this.ctx.id.toString(),surface:'app',subject:hash,occurrenceKey:occurrence,occurredAt,text}));
   }
-  // Worker-to-DO only: signed by the router secret, never reachable through a forwarded client path. It runs before the
-  // session is revoked at the authority, so a retry after a failed revoke is safe, and it stops the session's running turn.
+  // Worker-to-DO only: signed by the router secret, never reachable through a forwarded client path. Signout calls it before
+  // the session is revoked, so a retry after a failed revoke is safe, and again after, for work admitted in between. It
+  // closes the session's queued work and stops its running turn; the authority every turn re-reads is what ends the session.
   private async appSessionFence(request: Request): Promise<Response> {
     const fail=(status:number)=>Response.json({error:'unavailable'},{status,headers:{'cache-control':'no-store'}});
     const name=request.headers.get('x-waldo-do-name')??'',hash=request.headers.get('x-waldo-app-session-hash')??'',given=request.headers.get('x-waldo-fence-sig')??'';

@@ -11,7 +11,7 @@ Direct source modules: `packages/contracts/src/app/core.ts` and `controls.ts`. N
 | POST | `/app/v1/auth/code` | `{email}` → `{ok:true}`; same response for invited/unknown address |
 | POST | `/app/v1/auth/verify` | `{email,code}` → active session plus credential, or needs_invite |
 | GET | `/app/v1/session` | active session with full sess_/acct_ hashes, surface app, integer absolute_expires_at |
-| POST | `/app/v1/auth/signout` | push custody revoke first, console-session revoke, fresh validated absence |
+| POST | `/app/v1/auth/signout` | fence the session's queued and running work, push custody revoke, console-session revoke, fresh validated absence, fence again; 503 with nothing revoked if the first fence cannot be placed |
 | GET | `/app/v1/chat/main` | witnessed canonical-owner history; newest first, opaque before-row cursor |
 | POST | `/app/v1/chat/main/messages` | `{client_message_id,text}`; text 1–4000 chars, wire ≤32768 bytes; 202 durable receipt |
 | GET | `/app/v1/chat/main/messages/{client_message_id}` | admitted/running/completed/interrupted/revoked receipt |
@@ -19,9 +19,9 @@ Direct source modules: `packages/contracts/src/app/core.ts` and `controls.ts`. N
 | POST | `/app/v1/actions` | day timezone.set/proactivity.set only; reviewed revision and stable request_id required |
 | GET | `/app/v1/actions/{request_id}` | same session's durable action receipt; no re-execution |
 
-Bearer is the exact returned credential. account_ref is display/custody metadata, never routing authority. Server identity comes from signed active owner/session UUID authority and the physical owner DO. Main conversation is `owner:prn_<canonical owner UUID without hyphens>`. Text-only requests omit media/thread/protected fields. GETs/POSTs outside these route groups remain unavailable. No advanced native feature availability follows from older broad schemas.
+Bearer is the exact returned credential, signed under its own context: console routes reject it and this API rejects a console cookie with 401. account_ref is display/custody metadata, never routing authority. Server identity comes from signed active owner/session UUID authority and the physical owner DO. Main conversation is `owner:prn_<canonical owner UUID without hyphens>`. Text-only requests omit media/thread/protected fields. GETs/POSTs outside these route groups remain unavailable. No advanced native feature availability follows from older broad schemas.
 
-Same owner + same client ID + same payload returns the original receipt across sessions/restart. Different payload returns 409. Durable payload, sequence and wake publish together before ACK. Queued rows execute after reconstruction/alarm. Recovered running rows become interrupted with effects_unconfirmed and never auto-replay. Directory transport failure retains queued custody. Terminal receipts remain bounded (4096 per owner); exhaustion refuses new sends rather than evicting dedup identity. Existing legacy conv rows remain intact and are not promoted to canonical owner input.
+Same owner + same client ID + same payload returns the original receipt across sessions/restart. Different payload returns 409. Durable payload, sequence and wake publish together before ACK. Queued rows execute after reconstruction/alarm. Recovered running rows become interrupted with effects_unconfirmed and never auto-replay. Directory transport failure retains queued custody. Signout closes the session's queued rows as `revoked` and its running row as `revoked` with `effects_unconfirmed: true`. A finished row keeps its receipt, and so the idempotency of its client ID, for 30 days after it closes; a retry after that is a new message. Receipts are bounded at 4096 per owner. When the table is full the oldest finished receipts older than 12 hours are evicted to admit a new send; if every finished receipt is younger than that, or the owner has 256 live messages, new sends are refused with 503. Existing legacy conv rows remain intact and are not promoted to canonical owner input.
 
 ## Configuration and staging gate
 
