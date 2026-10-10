@@ -20,6 +20,19 @@ const session = (name: string, work: (store: ReturnType<typeof claimStore>, turn
     await work(store, text => responder.respond({ traceId: `tg-${++id}`, conversationRef: 'owner', surface: 'telegram', text }, (_n, fn) => fn()));
   });
 
+it('reads health context under the turn\'s own trace, so the trace exporter can withhold that turn', async () => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('owner-turn-health-trace')), async () => {
+    const traces: (string | undefined)[] = [];
+    const health = async (trace?: string) => { traces.push(trace); return null; };
+    const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, health);
+    await responder.respond({ traceId: 'tg-health-trace', conversationRef: 'owner', surface: 'telegram', text: 'how did I sleep?' }, (_n, fn) => fn());
+    await responder.prompt('card:brief:1', 'owner', 'Write the morning brief.', async (_hop, work) => work());
+    expect(traces).toContain('tg-health-trace');
+    expect(traces).toContain('card:brief:1');
+    expect(traces.every(trace => trace === 'tg-health-trace' || trace === 'card:brief:1')).toBe(true);
+  });
+});
+
 it('the main model remembers a grounded lab value, returns a receipt and explicitly recalls it on the next turn', async () => {
   await session('owner-turn-health-lab', async (store, turn) => {
     seen.outputs.push(tool('remember', { kind: 'health', text: 'HbA1c was 9.1 last week', evidence_quote: SAID }), []);

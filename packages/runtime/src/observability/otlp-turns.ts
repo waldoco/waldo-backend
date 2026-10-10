@@ -1,3 +1,4 @@
+import type { ToolName } from '@waldo/contracts';
 import type { TurnLogEntry } from '../channels/telegram-listener';
 import { modelCost } from '../llm/pricing';
 import { gateTraceEntry, resolveCaptureText } from './trace-privacy';
@@ -26,6 +27,15 @@ export const HOPS: Readonly<Record<string, Hop>> = {
   llm_reply: { feature: 'reply', type: 'span' }, llm_reaction: { feature: 'reactions', type: 'span' }, llm_memory: { feature: 'memory', type: 'span' },
 };
 export const hopFeature = (hop: string) => HOPS[hop]?.feature ?? 'other';
+
+// The owner's health readings may reach the model and the owner's reply, but never a trace.
+// Text capture is a staging debugging switch, so instead of trusting free text we withhold
+// every text field of a turn that read health context or ran a health tool, here or in a
+// delegated child. Detection is structural (hop names), never a scan of the text itself.
+const HEALTH_TOOLS = ['get_crs', 'get_health', 'get_master_metrics', 'log_meal', 'log_workout', 'list_health_logs'] as const satisfies readonly ToolName[];
+const HEALTH_TOOL_HOPS: ReadonlySet<string> = new Set(HEALTH_TOOLS.flatMap((name) => [`tool_${name}`, `subagent_tool_${name}`]));
+const touchesHealth = (entry: TurnLogEntry) =>
+  HEALTH_TOOL_HOPS.has(entry.hop) || (entry.hop === 'health_context' && entry.code === 'present');
 
 // Machine turns (reminder fires, heartbeat ticks, nightly, standing orders) close their trace
 // with a machine_turn root instead of turn; without a root the spans never leave `pending`.
@@ -63,7 +73,9 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
   let nextArrival = 0;
   let bufferedHops = 0;
   let evictedHops = 0;
-  const exported = new Map<string, Readonly<{ traceId: string; rootId: string; rootHop: string; delivery: Promise<void> }>>();
+  const exported = new Map<string, Readonly<{ traceId: string; rootId: string; rootHop: string; delivery: Promise<void>; withhold: boolean }>>();
+  // Re-gates a span as if capture were off: no text, no free-form error or detail.
+  const withheld = (item: Span): Span => ({ ...item, entry: { ...gateTraceEntry(item.entry, false), text: undefined } });
 
   const rootName = (hop: string) => `${context.channel}.${ROOT_NAMES[hop] ?? 'turn'}`;
 
@@ -202,7 +214,10 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
     const gated = gateTraceEntry(entry, context.captureText);
     const item = { entry: { ...gated, text: context.captureText && gated.text ? { ...gated.text } : undefined, usage: gated.usage ? { ...gated.usage } : undefined }, endMs: now(), arrival: nextArrival++ };
     const done = exported.get(entry.trace);
-    if (done) return post([span(done.traceId, hex(8), done.rootId, item, [list('langfuse.trace.tags', tagsFor(context, [item]))], done.rootHop)], done.delivery);
+    if (done) {
+      const late = done.withhold || (context.captureText && touchesHealth(item.entry)) ? withheld(item) : item;
+      return post([span(done.traceId, hex(8), done.rootId, late, [list('langfuse.trace.tags', tagsFor(context, [late]))], done.rootHop)], done.delivery);
+    }
     if (entry.hop !== 'turn' && entry.hop !== 'machine_turn') {
       const overflow = bufferedHops >= MAX_BUFFERED_HOPS;
       if (overflow) {
@@ -222,20 +237,24 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
       return overflow ? Promise.reject(new Error('otlp_buffer_evicted')) : Promise.resolve();
     }
     const ids = { traceId: hex(16), rootId: hex(8), rootHop: entry.hop };
-    const hops = pending.get(entry.trace) ?? [];
+    const buffered = pending.get(entry.trace) ?? [];
     pending.delete(entry.trace);
-    bufferedHops -= hops.length;
-    const root = span(ids.traceId, ids.rootId, undefined, item, [
+    bufferedHops -= buffered.length;
+    const withhold = context.captureText && [item, ...buffered].some((span) => touchesHealth(span.entry));
+    const hops = withhold ? buffered.map(withheld) : buffered;
+    const rootItem = withhold ? withheld(item) : item;
+    const root = span(ids.traceId, ids.rootId, undefined, rootItem, [
       list('langfuse.trace.tags', tagsFor(context, hops)),
       attr('langfuse.trace.metadata.schema_version', TRACE_SCHEMA_VERSION),
       attr('langfuse.trace.metadata.buffer_evicted_hops', String(evictedHops)),
       attr('langfuse.trace.metadata.outcome', entry.ok ? (entry.hop === 'turn' ? 'answered' : 'completed') : 'failed'),
+      ...(withhold ? [attr('langfuse.trace.metadata.text_withheld', 'health')] : []),
       ...totals(hops),
-      ...traceIo(item.entry),
+      ...traceIo(rootItem.entry),
     ], entry.hop);
     evictedHops = 0;
     const delivery = post([root, ...hops.map((hop) => span(ids.traceId, hex(8), ids.rootId, hop, [list('langfuse.trace.tags', tagsFor(context, hops))], entry.hop))]);
-    const record = { ...ids, delivery };
+    const record = { ...ids, delivery, withhold };
     exported.set(entry.trace, record);
     if (exported.size > MAX_RETAINED) exported.delete(exported.keys().next().value!);
     // Keep rejected delivery promises in the same bounded retention window: late children

@@ -273,6 +273,63 @@ describe('otlpTurnExporter', () => {
     expect(attrs(off.spans(0)[0]!)['langfuse.trace.input']).toBeUndefined();
   });
 
+  describe('with text capture on, a turn that touched the owner health plane exports no text', () => {
+    const text = { input: '[{"role":"user","content":"how did I sleep?"}]', output: 'reply' };
+    const on = (send: (url: string, init: RequestInit) => Promise<Response>) =>
+      otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, captureText: true }, send, () => 5_000);
+    const textAttrs = ['langfuse.trace.input', 'langfuse.trace.output', 'langfuse.observation.input', 'langfuse.observation.output'];
+
+    it('withholds text on the root and every hop when health context was present, and says why', async () => {
+      const { send, spans } = capture();
+      const log = on(send);
+      await log({ trace: 'tg-h1', hop: 'health_context', ms: 0, ok: true, code: 'present' });
+      await log({ trace: 'tg-h1', hop: 'llm_reply', ms: 5, ok: true, text });
+      await log({ trace: 'tg-h1', hop: 'turn', ms: 10, ok: true, text });
+      for (const span of spans(0)) for (const key of textAttrs) expect(attrs(span)[key]).toBeUndefined();
+      expect(attrs(spans(0)[0]!)['langfuse.trace.metadata.text_withheld']).toBe('health');
+    });
+
+    it('withholds text when a health tool ran in the turn or in a delegated child', async () => {
+      for (const hop of ['tool_log_workout', 'subagent_tool_list_health_logs']) {
+        const { send, spans } = capture();
+        const log = on(send);
+        await log({ trace: `tg-${hop}`, hop, ms: 2, ok: true, text: { input: '{}', output: 'logged' } });
+        await log({ trace: `tg-${hop}`, hop: 'turn', ms: 10, ok: true, text });
+        for (const span of spans(0)) for (const key of textAttrs) expect(attrs(span)[key]).toBeUndefined();
+      }
+    });
+
+    it('drops free-form error text on a health turn but keeps the typed code', async () => {
+      const { send, spans } = capture();
+      const log = on(send);
+      await log({ trace: 'tg-h2', hop: 'health_context', ms: 0, ok: true, code: 'present' });
+      await log({ trace: 'tg-h2', hop: 'tool_log_meal', ms: 2, ok: false, error: 'provider said: meal 900 kcal rejected', code: 'transient:provider' });
+      await log({ trace: 'tg-h2', hop: 'turn', ms: 10, ok: true, text });
+      const meal = spans(0).find((span) => span.name === 'tool_log_meal')!;
+      expect(meal.status.message).not.toContain('kcal');
+      expect(attrs(meal)['langfuse.observation.metadata.code']).toBe('transient:provider');
+    });
+
+    it('keeps withholding text on hops that arrive after a withheld root', async () => {
+      const { send, spans } = capture();
+      const log = on(send);
+      await log({ trace: 'tg-h3', hop: 'health_context', ms: 0, ok: true, code: 'present' });
+      await log({ trace: 'tg-h3', hop: 'turn', ms: 10, ok: true, text });
+      await log({ trace: 'tg-h3', hop: 'memory', ms: 3, ok: true, text });
+      for (const key of textAttrs) expect(attrs(spans(1)[0]!)[key]).toBeUndefined();
+    });
+
+    it('still exports text for turns that read no health, so staging debugging keeps working', async () => {
+      const { send, spans } = capture();
+      const log = on(send);
+      await log({ trace: 'tg-h4', hop: 'health_context', ms: 0, ok: true, code: 'absent' });
+      await log({ trace: 'tg-h4', hop: 'tool_query_calendar', ms: 2, ok: true, text: { input: '{}', output: 'events' } });
+      await log({ trace: 'tg-h4', hop: 'turn', ms: 10, ok: true, text });
+      expect(attrs(spans(0)[0]!)).toMatchObject({ 'langfuse.trace.input': text.input, 'langfuse.trace.output': text.output });
+      expect(attrs(spans(0)[0]!)['langfuse.trace.metadata.text_withheld']).toBeUndefined();
+    });
+  });
+
   it('keeps every hop of one long turn that exceeds the outstanding-export budget', async () => {
     const { calls, send, spans } = capture();
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);

@@ -63,6 +63,8 @@ Feature areas and observation types live in `HOPS`. The root span is type `agent
 
 The owner turned this on for staging on 2026-09-23 to read model inputs, thinking and outputs. Unset or any other value exports no text, which is the default for every other environment and user. Flip it off with `--var LANGFUSE_CAPTURE_TEXT:false` on deploy.
 
+Health turns are the exception. A turn whose trace shows health context present (`health_context` with code `present`) or a health tool call (`get_crs`, `get_health`, `get_master_metrics`, `log_meal`, `log_workout`, `list_health_logs`, directly or as `subagent_tool_*`) exports no text and no free-form error on the root or any hop, even with capture on. Its root carries `text_withheld: health`. Hops that arrive after such a root stay withheld. Health text typed by the owner into an ordinary turn is not detected by this structural rule.
+
 Adding a feature: name its hops `snake_case`, add them to `HOPS` with the most specific type, add a row here. Model calls are hops named `llm_<purpose>`.
 
 ### Model calls, tokens and cost
