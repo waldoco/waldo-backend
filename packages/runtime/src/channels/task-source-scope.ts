@@ -1,4 +1,3 @@
-import type { ToolName } from '@waldo/contracts';
 import type { RunEffectScope } from './run-effect-scope';
 
 export const TASK_SOURCE_FAMILIES = ['local', 'workspace', 'mail', 'calendar', 'contacts', 'tasks', 'drive', 'web', 'browser', 'mcp'] as const;
@@ -180,41 +179,6 @@ export const approveTaskSourceProposal = (sql: SqlStorage, ownerKey: string, sup
   return sql.exec<{ changed: number }>('SELECT changes() AS changed').one().changed === 1;
 };
 
-const TOOL_SOURCE: Partial<Record<ToolName, TaskSourceFamily>> = {
-  read_owner_context: 'local', read_memory: 'local', search_episodes: 'local', read_tool_output: 'local',
-  workspace_list: 'workspace', workspace_read: 'workspace', workspace_search: 'workspace', workspace_render: 'workspace', export_artifact: 'workspace', read_artifact: 'workspace', list_artifacts: 'workspace', get_communication: 'mail', search_communication: 'mail', read_thread: 'mail',
-  // Proposal-only writes: the owner approval card is the gate, so the tool needs only its own family (previously unmapped, which demanded all ten).
-  send_email: 'mail', draft_email: 'mail', propose_calendar_change: 'calendar',
-  query_calendar: 'calendar', query_availability: 'calendar', get_tasks: 'tasks', read_drive: 'drive', web_search: 'web', browse_page: 'web', browse_act: 'web', read_mcp_tool: 'mcp', call_mcp_tool: 'mcp',
-};
-const taskSourceFamily = (handler: Readonly<{ name: ToolName }>, args?: unknown): TaskSourceFamily | undefined => {
-  if (handler.name === 'workspace_write' && args && typeof args === 'object' && ('edits' in args || 'expected_revision' in args && typeof args.expected_revision === 'number' && args.expected_revision > 0)) return 'workspace';
-  return TOOL_SOURCE[handler.name];
-};
-// The owner's own reminder and standing-order lists read what the owner set, not retained memory or a connected source. The pasted-only
-// scope (tools/source-scope.ts) already classes them 'allow'; a task scope that needed 'local' refused them whenever the per-turn classifier
-// left local out (F14b: listing reminders refused while create and cancel worked).
-// get_context is the clock/date read (tools/source-scope.ts classes it 'allow': it reads no owner or outside content), so it needs no source family either.
-const OWNER_OWN_LISTS = ['list_reminders', 'list_standing_orders', 'get_context'];
-export const taskSourceRequired = (handler: Readonly<{ name: ToolName; requires_connector?: true; mutates_state?: true; autonomy_gated?: boolean }>, args?: unknown): boolean => !!taskSourceFamily(handler, args) || !!handler.requires_connector || !(handler.mutates_state || handler.autonomy_gated || ['delegate_task', 'skills_list', 'skills_load', 'skills_install', 'skills_disable', ...OWNER_OWN_LISTS].includes(handler.name));
-export const taskSourceAllowed = (snapshot: TaskSourceSnapshot, handler: Readonly<{ name: ToolName; requires_connector?: true; mutates_state?: true; autonomy_gated?: boolean }>, args?: unknown): boolean => {
-  const family = taskSourceFamily(handler, args);
-  // Unknown connector routes cannot escape through an omitted family declaration.
-  // Host default read families stay usable when the classifier could not settle the task (unready), for non-mutating tools only; they never widen past an explicit owner narrowing.
-  const unreadyDefault = (name: TaskSourceFamily) => !handler.mutates_state && !handler.autonomy_gated && snapshot.defaults?.includes(name) === true;
-  if (family) return (snapshot.ready && snapshot.sources.includes(family)) || unreadyDefault(family);
-  if (handler.requires_connector) return snapshot.ready && snapshot.sources.length === TASK_SOURCE_FAMILIES.length;
-  if (handler.mutates_state || handler.autonomy_gated || ['delegate_task', 'skills_list', 'skills_load', 'skills_install', 'skills_disable', ...OWNER_OWN_LISTS].includes(handler.name)) return true;
-  return (snapshot.ready && snapshot.sources.includes('local')) || unreadyDefault('local');
-};
-// Admission owns default-read and no-source exceptions; diagnostics must not contradict them.
-export const taskSourceMissing = (snapshot: TaskSourceSnapshot, handler: Parameters<typeof taskSourceAllowed>[1], args?: unknown): readonly TaskSourceFamily[] => {
-  if (taskSourceAllowed(snapshot, handler, args)) return [];
-  const family = taskSourceFamily(handler, args);
-  if (family) return [family];
-  if (handler.requires_connector) return TASK_SOURCE_FAMILIES.filter(name => !snapshot.ready || !snapshot.sources.includes(name));
-  return ['local'];
-};
 export const taskSourcePrompt = (snapshot: TaskSourceSnapshot): string => !snapshot.ready
   ? `Current owner task source scope is unresolved.${snapshot.defaults?.length ? ` Read-only sources stay available (edits to existing files and source-dependent actions wait until the task is settled): ${snapshot.defaults.join(', ')}.` : ''} Do not read other connected or retained sources. Only ask the owner to clarify the task if you cannot proceed with what is available; current supplied request data remains usable. If a source confirmation card is pending, wait for its owner decision; ordinary clarification text does not approve it.`
   : snapshot.sources.length === 0
