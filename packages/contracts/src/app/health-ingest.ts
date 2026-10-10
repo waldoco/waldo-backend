@@ -180,7 +180,8 @@ const scoreUnavailable = z.strictObject({ state: z.literal('unavailable'), reaso
 const scoreAvailable = <Zone extends z.ZodType>(zone: Zone) => z.strictObject({
   state: z.literal('available'),
   score: z.number().finite().min(0).max(100),
-  zone,
+  // Null while this algorithm version has no ratified zone bands; the app shows the score without a zone word.
+  zone: zone.nullable(),
   algorithm_version: z.string().regex(/^[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)*\.v[0-9]+$/).max(64),
   activation: z.enum(['candidate_unaccepted', 'accepted']),
   confidence: z.number().finite().min(0).max(1).nullable(),
@@ -198,6 +199,13 @@ export const healthScoresV1Schema = z.strictObject({
   form: pillar(healthFormZoneV1Schema),
   weight: pillar(healthWeightZoneV1Schema),
 });
+// No row to show for the day: a 200 with the reason, never a zero score.
+export const healthScoresUnavailableV1Schema = z.strictObject({
+  state: z.literal('unavailable'),
+  day: healthDayV1Schema.nullable(),
+  reason: healthScoreUnavailableReasonV1Schema.extract(['not_linked', 'consent_required', 'consent_withdrawn', 'no_readings']),
+});
+export const healthScoresResponseV1Schema = z.union([healthScoresV1Schema, healthScoresUnavailableV1Schema]);
 
 // The runtime may attach a short message; a client acts on `error` only.
 export const healthApiErrorV1Schema = z.strictObject({
@@ -210,9 +218,10 @@ export const appHealthRoutesV1 = [
   { method: 'POST', path: '/app/v1/health/consents', request: healthConsentGrantV1Schema, response: healthConsentChangeV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: HEALTH_INGEST_MAX_REQUEST_BYTES_V1 },
   { method: 'POST', path: '/app/v1/health/consents/withdraw', request: healthConsentWithdrawV1Schema, response: healthConsentChangeV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: HEALTH_INGEST_MAX_REQUEST_BYTES_V1 },
   { method: 'POST', path: '/app/v1/health/ingest', request: healthIngestV1Schema, response: healthIngestReceiptV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: HEALTH_INGEST_MAX_REQUEST_BYTES_V1 },
-  { method: 'GET', path: '/app/v1/health/scores', query: healthScoresQueryV1Schema, response: healthScoresV1Schema, authenticated: true, success_status: 200 },
+  { method: 'GET', path: '/app/v1/health/scores', query: healthScoresQueryV1Schema, response: healthScoresResponseV1Schema, authenticated: true, success_status: 200 },
 ] as const;
 
 export type HealthIngestV1 = z.infer<typeof healthIngestV1Schema>;
 export type HealthSampleV1 = z.infer<typeof healthSampleV1Schema>;
 export type HealthScoresV1 = z.infer<typeof healthScoresV1Schema>;
+export type HealthScoresResponseV1 = z.infer<typeof healthScoresResponseV1Schema>;
