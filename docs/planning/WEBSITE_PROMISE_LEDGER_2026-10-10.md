@@ -14,6 +14,7 @@ Planning document, 10 October 2026. It maps promises to source and records the o
 8. **WhatsApp** is not on this push's critical path. Ashish owns the adapter; the backend keeps the seam.
 9. **Android:** the Samsung Health path is enough for now. A dedicated Health Connect client is built if a promise needs it.
 10. **Website copy stays as published** (second ruling, 10 October). §6 is kept as a reference list, not planned work. Labels change only when the owner decides.
+11. **Health consent** (10 October, 18:20Z). One screen with two separate agreements, `storage_compute` and `model_processing`, withdrawn separately. Withdrawing model processing stops Waldo using health in conversation and deletes nothing; storage and scores continue. Withdrawing storage withdraws both and purges the source's data. Model use needs both grants. Contract comment: #1028; the matching database change goes into #1022.
 
 **Pins.** Integration branch `beta-mvp` @ `957a2cbb` (#999 merged 10 Oct 10:20Z; CI `verify` green). Rows were audited at `a13c1fb5`; #999 changed only the app sign-in, chat, inbox and controls paths. Open PR heads read: #998 @ `fc4c2b9d` (native + health checkpoint, base `1206d7a8`), #919 @ `032c78a0` (Gmail/Calendar journeys), #932 @ `5506de85` (standing grant contract), #915 @ `2bc64346` (core loop spec, slices S0, A–L). Website copy from `Pin4sf/waldo-landing` `origin/main` @ `830bfc2`. App refs `1980a9d1` (the #16 native-line draft, now superseded and being ported in slices) and `a7a560d1` (#999-pinned line). Rows that cite `1980a9d1` describe that draft, not shipped app state: app main (`waldoco/waldo-app` @ `8d5b4357`, 10 October night) has chat, sign-in and session, sign-out and the native health read module, and its other screens show a placeholder. Re-pin before relying on any row.
 
@@ -291,19 +292,20 @@ Booking, payments, logged-in browser errands, parallel workers, rich file output
 | #1018, #1020 | Health ingest design; H1 health ingest and scores contract | merged; app pinned (waldo-app #30) |
 | #1019 | The agent lists the owner's calendars | merged |
 | #1021 | Dispatcher no longer rejects the Google Tasks proposal result | merged, deployed |
-| #1022 | H2 health plane tables and signed functions | draft; independent review found one block (the current hour is rejected) and consent gaps; fix round under way |
+| #1022 | H2 health plane tables and signed functions | draft; the first review's block and consent gaps are fixed at `c97b0ecd` and the re-review says it is safe to apply once merged; a second fix round (rollback privacy, the never-granted withdraw response, scores-shape gate, ruling 11) is next; not applied |
 | #1023 | The reader accepts a Recovery-first health row | merged, deployed |
-| #1024 | Stable prompt prefix first; offer only tools the owner can use (C1, C2) | open |
+| #1024 | Stable prompt prefix first; offer only tools the owner can use (C1, C2) | merged (`a7b80436`), not deployed |
+| #1028 | Health contract: withdrawing model use alone keeps the owner's data (owner ruling 11) | open |
 | #1017 | iMessage connector (Ashish), default-off | draft |
 
 ### Findings that set the order
 - Health: no row exists in `health_context_daily` on staging, so health replies say no health was shared until ingest and a producer exist. The upload shape is the merged H1 contract: hourly local buckets, waking-day sleep, a time zone on every batch and an offset on every sample, RMSSD canonical with SDNN as a labelled fallback. The older daily-aggregate upload is superseded. Weight in the app is still physical strain only until the backend computes the day's demand.
-- Consent: storage and model use are separate grants. The intended design, being built in the #1022 fix round and H3, gates the prompt read on model use and the app's scores read on storage only. An owner who grants only storage would then see scores in the app, but Waldo's replies would not use health.
+- Consent: storage and model use are separate grants (owner ruling 11). #1022 at `c97b0ecd` gates the prompt read on model use and the app's scores read on storage only. An owner who grants only storage sees scores in the app, but Waldo's replies do not use health. Whether the app's first screen asks for model processing is still with the owner in the app session.
 - Streaming: the runtime has no model streaming, and replies pass post-model guards whole. Step lines for the work log are feasible through a new read route. Text deltas need a chunked-guard design first.
 
 ### Next, one at a time (this lane)
 1. Piece A (S1+S3): approvals from any surface. Implemented; an independent review found six fixes (nullable due date, generic receipts, no MCP arguments or browser bindings in the app projection, the stored-card forget gap, where the card actually landed, text fallback). Then a PR, and the final contract diff to the app lane.
-2. #1024 (C1, C2), then C3 (store hardening) and C4 (skills on every surface).
+2. C3 (store hardening) and C4 (skills on every surface). #1024 (C1, C2) is merged; its staging deploy and the cache-hit check from traces are owed.
 3. Piece B: S2 proactive routing to the app and scheduled work for app-only owners (needs `20261010060000` applied), and S4 per-surface renderers.
 4. Piece D: S7 push, S8 media, and the work-log steps route if the owner ranks it.
 5. Health: numeric Form, Recovery and Weight in context, and health in background decisions, once a producer writes rows.
