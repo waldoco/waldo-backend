@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import {
+  replyApprovalPartV1Schema, replyCardPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema,
+  replyQuickRepliesPartV1Schema, replyVisibilityV1Schema, replyVoicePartV1Schema,
+} from '../runtime/reply-parts';
 
 export const APP_AGENT_VERSION = 'app.v1' as const;
 export const APP_SEND_MAX_WIRE_BYTES = 32768;
@@ -35,13 +39,18 @@ export const appMessagePartV1Schema = z.union([
   z.strictObject({ type: z.literal('text'), text: z.string() }),
   z.strictObject({ type: z.literal('operation'), operation_id: z.string(), state: z.enum(['admitted', 'running', 'completed', 'interrupted', 'revoked']), message: z.string() }),
   z.strictObject({ type: z.literal('artifact'), artifact_id: z.string(), revision: z.int().positive(), title: z.string(), download_path: z.string() }),
+  replyCardPartV1Schema, replyApprovalPartV1Schema, replyQuickRepliesPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyVoicePartV1Schema,
 ]);
 export const appMessageV1Schema = z.strictObject({
   id: z.string(), role: z.enum(['user', 'assistant']), text: z.string(), parts: z.array(appMessagePartV1Schema),
-  channel: z.string(), parent_id: z.string().nullable(),
+  channel: z.string(), parent_id: z.string().nullable(), visibility: replyVisibilityV1Schema.optional(),
 });
 export const appHistoryResultV1Schema = z.strictObject({ messages: z.array(appMessageV1Schema), next_cursor: z.string().nullable() });
-export const appProblemV1Schema = z.strictObject({ error: z.string() });
+// Codes name the non-generic failures a client can act on. The generic error stays code-free, so a
+// pre-authentication answer cannot say whether an address is invited.
+export const appErrorCodeV1Schema = z.enum(['client_message_id_reused', 'inbox_full', 'request_reused', 'stale_read', 'no_longer_eligible', 'receipt_capacity']);
+export const appProblemV1Schema = z.strictObject({ error: z.string(), code: appErrorCodeV1Schema.optional(), message: z.string().max(1000).optional() })
+  .refine(problem => problem.error !== 'unavailable' || problem.code === undefined, { error: 'the generic error carries no code', path: ['code'] });
 export const appCoreRoutesV1 = [
   { method: 'POST', path: '/app/v1/auth/code', request: appCodeRequestSchema, response: appCodeResultSchema, authenticated: false, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/verify', request: appVerifyRequestV1Schema, response: appVerifyResultV1Schema, authenticated: false, success_status: 200 },

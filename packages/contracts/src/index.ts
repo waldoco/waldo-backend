@@ -63,6 +63,8 @@ export * from './runtime/conversation-core';
 export * from './runtime/conversation-entry';
 export * from './runtime/conversation-export';
 export * from './runtime/management-workspace';
+export * from './runtime/reply-parts';
+export * from './runtime/surface-capabilities';
 export {
   actorRefSchema,
   agentSessionActivityObservationPayloadSchema,
