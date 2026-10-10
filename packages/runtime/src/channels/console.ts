@@ -266,11 +266,16 @@ export const consoleMayApprove = (item: ApprovalItem | undefined): boolean => Bo
 
 const APPROVAL_LABELS: Readonly<Record<string, string>> = {
   calendar_change: 'Calendar adjustment', email_send: 'Email send', message_send: 'Message send',
-  browser_submit: 'Browser action', mcp_call: 'MCP tool call',
+  browser_submit: 'Browser action', mcp_call: 'MCP tool call', google_task_change: 'Google task change',
 };
 const reviewDetails = (review: ApprovalReview): string => {
   if (review.kind === 'email_send') return `<div class="approval-review"><div>To: ${esc(review.to.join(', '))}</div>${review.cc.length ? `<div>CC: ${esc(review.cc.join(', '))}</div>` : ''}${review.bcc.length ? `<div>BCC: ${esc(review.bcc.join(', '))}</div>` : ''}<div>Subject: ${esc(review.subject)}</div><pre>${esc(review.body)}</pre></div>`;
   if (review.kind === 'message_send') return `<div class="approval-review"><div>Channel: ${esc(review.channel)}</div><pre>${esc(review.content)}</pre></div>`;
+  if (review.kind === 'google_task_change') {
+    const { args, list, before } = review.proposal;
+    const task = args.changes?.title ?? before?.title;
+    return `<div class="approval-review"><div>Account: ${esc(review.account)}</div><div>List: ${esc(list.title)}</div><div>Action: ${esc(args.action)}</div>${task ? `<div>Task: ${esc(task)}</div>` : ''}${args.changes?.notes ? `<pre>${esc(args.changes.notes)}</pre>` : ''}${args.changes?.due_date ? `<div>Due: ${esc(args.changes.due_date)}</div>` : ''}<div>Reason: ${esc(args.reason)}</div></div>`;
+  }
   return `<div class="approval-review"><div>Action: ${esc(review.action)}</div>${review.title ? `<div>Event: ${esc(review.title)}</div>` : ''}${review.event_id ? `<div>Event ID: ${esc(review.event_id)}</div>` : ''}${review.start ? `<div>Start: ${esc(review.start)}</div>` : ''}${review.end ? `<div>End: ${esc(review.end)}</div>` : ''}<div>Reason: ${esc(review.reason)}</div></div>`;
 };
 const approvals = (view: ConsoleView) => {
