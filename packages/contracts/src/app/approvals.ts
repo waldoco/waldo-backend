@@ -17,6 +17,17 @@ const DECISIONS_BY_STATE: Readonly<Partial<Record<AppApprovalStateV1, readonly A
 };
 
 const addresses = z.array(z.string().min(1).max(320)).max(100);
+const taskText = z.string().max(2000);
+const change = <T extends z.ZodType>(value: T) => z.strictObject({ before: value.nullable(), after: value });
+// Only the fields the change touches, as the desk review shows them; no task, list or connection ids.
+export const appApprovalTaskExactV1Schema = z.strictObject({
+  action: z.enum(['create', 'update', 'complete', 'reopen']), account: z.email(), list: taskText, task: taskText.nullable(),
+  changes: z.strictObject({
+    title: change(taskText).optional(),
+    notes: z.strictObject({ before: z.string().max(100_000).nullable(), after: z.string().max(8192).nullable() }).optional(),
+    due_date: change(z.iso.date()).optional(), status: change(z.enum(['todo', 'done'])).optional(),
+  }),
+});
 // Derived from the frozen desk payload, exposing no more than the desk review does: never raw MIME,
 // tokens, browser bindings or MCP arguments.
 export const appApprovalExactV1Schema = z.strictObject({
@@ -26,11 +37,12 @@ export const appApprovalExactV1Schema = z.strictObject({
     start: z.iso.datetime({ offset: true }).nullable(), end: z.iso.datetime({ offset: true }).nullable(),
   }).optional(),
   scope: z.string().min(1).max(2048).optional(),
+  task: appApprovalTaskExactV1Schema.optional(),
 });
 // What each kind must show before it can be decided: who receives a send, what a calendar change
-// does, and where a browser or MCP action lands.
+// does, where a browser or MCP action lands, and which task fields change.
 const EXACT_BY_KIND = {
-  email_send: 'recipients', message_send: 'recipients', calendar_change: 'changes', browser_submit: 'scope', mcp_call: 'scope',
+  email_send: 'recipients', message_send: 'recipients', calendar_change: 'changes', browser_submit: 'scope', mcp_call: 'scope', google_task_change: 'task',
 } as const satisfies Readonly<Record<ApprovalKindV1, keyof z.infer<typeof appApprovalExactV1Schema>>>;
 
 export const appApprovalV1Schema = z.strictObject({

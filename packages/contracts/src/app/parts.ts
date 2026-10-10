@@ -15,7 +15,7 @@ export const opaqueRefV1Schema = z.string().regex(/^[A-Za-z0-9:_-]{1,256}$/);
 export const epochMsV1Schema = z.int().min(1_000_000_000_000);
 
 export const approvalIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{1,80}$/);
-export const approvalKindV1Schema = z.enum(['calendar_change', 'email_send', 'message_send', 'browser_submit', 'mcp_call']);
+export const approvalKindV1Schema = z.enum(['calendar_change', 'email_send', 'message_send', 'browser_submit', 'mcp_call', 'google_task_change']);
 // The approval desk's decisions: Do it, Not now, Modify, and Undo after an effect.
 export const approvalActionV1Schema = z.enum(['approve', 'skip', 'edit', 'undo']);
 export const approvalReviewV1Schema = visibleText(REPLY_TEXT_MAX_CHARS);

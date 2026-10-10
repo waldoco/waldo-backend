@@ -9,7 +9,7 @@ import {
   appApprovalV1Schema,
 } from './approvals';
 import { appControlReceiptV1Schema, appControlRequestIdV1Schema } from './controls';
-import { payloadDigestV1Schema } from './parts';
+import { payloadDigestV1Schema, replyApprovalPartV1Schema } from './parts';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const expiresAtMs = Date.UTC(2026, 9, 11, 4, 0, 0);
@@ -26,12 +26,16 @@ const calendar = {
 const message = { ...email, approval_id: 'p0003', kind: 'message_send', review: 'Send this on whatsapp: "Running late."', exact: { recipients: { to: ['whatsapp'], cc: [], bcc: [] } } } as const;
 const browser = { ...email, approval_id: 'p0004', kind: 'browser_submit', review: 'Book the 18:30 table on the reservation page.', exact: { scope: 'https://reservations.example/book' }, actions: ['approve', 'skip'] } as const;
 const mcp = { ...email, approval_id: 'p0005', kind: 'mcp_call', review: 'Run lookup on the crm server.', exact: { scope: 'lookup on the crm server' }, actions: ['approve', 'skip'] } as const;
+const task = {
+  ...email, approval_id: 'p0006', kind: 'google_task_change', review: 'Google task change to review\nAction: Edit',
+  exact: { task: { action: 'update', account: 'me@example.com', list: 'Errands', task: 'Buy milk', changes: { title: { before: 'Buy milk', after: 'Buy oat milk' }, due_date: { before: null, after: '2026-10-12' } } } },
+} as const;
 const decision = { approval_id: 'p0001', action: 'approve', expected_digest: digest, request_id: 'decision-0001' } as const;
 const result = { request_id: 'decision-0001', receipt: { state: 'rejected', message: 'That proposal changed. Review the new version.' }, duplicate: false, approval_state: 'superseded' } as const;
 
 describe('appApprovalV1', () => {
   it('accepts one open approval of every kind with the exact block that kind needs', () => {
-    for (const approval of [email, calendar, message, browser, mcp]) expect(appApprovalV1Schema.safeParse(approval).success).toBe(true);
+    for (const approval of [email, calendar, message, browser, mcp, task]) expect(appApprovalV1Schema.safeParse(approval).success).toBe(true);
   });
 
   it('requires recipients for sends, changes for calendar and scope for browser and MCP actions', () => {
@@ -72,6 +76,23 @@ describe('appApprovalV1', () => {
     expect(appApprovalV1Schema.safeParse({ ...email, exact: { ...email.exact, args: { query: 'x' } } }).success).toBe(false);
     expect(appApprovalV1Schema.safeParse({ ...calendar, exact: { changes: { ...calendar.exact.changes, start: 'Friday 4pm' } } }).success).toBe(false);
     expect(appApprovalV1Schema.safeParse({ ...email, raw: 'MIME' }).success).toBe(false);
+  });
+
+  it('a Google task change shows the task block with only changed fields, and never provider ids', () => {
+    expect(appApprovalV1Schema.safeParse(task).success).toBe(true);
+    const created = { action: 'create', account: 'me@example.com', list: 'Errands', task: null, changes: { title: { before: null, after: 'Call Sam' }, notes: { before: null, after: 'About Friday' } } };
+    expect(appApprovalV1Schema.safeParse({ ...task, exact: { task: created } }).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse({ ...task, exact: { task: { ...task.exact.task, changes: { status: { before: 'todo', after: 'done' } }, action: 'complete' } } }).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse({ ...task, exact: { scope: 'Errands' } }).success).toBe(false);
+    for (const leak of [{ task_id: 't1' }, { etag: '"e1"' }, { connection_id: 'c1' }, { task_list_id: 'l1' }])
+      expect(appApprovalV1Schema.safeParse({ ...task, exact: { task: { ...task.exact.task, ...leak } } }).success).toBe(false);
+    expect(appApprovalV1Schema.safeParse({ ...task, exact: { task: { ...task.exact.task, changes: { title: { before: 'a', after: 'b', id: 't1' } } } } }).success).toBe(false);
+    expect(appApprovalV1Schema.safeParse({ ...task, exact: { task: { ...task.exact.task, action: 'delete' } } }).success).toBe(false);
+    expect(appApprovalV1Schema.safeParse({ ...task, exact: { task: { ...task.exact.task, account: 'not-an-address' } } }).success).toBe(false);
+    expect(appApprovalV1Schema.safeParse({ ...task, exact: { task: { ...task.exact.task, changes: { due_date: { before: null, after: 'Friday' } } } } }).success).toBe(false);
+    expect(appApprovalV1Schema.safeParse({ ...task, exact: { task: { ...task.exact.task, changes: { notes: { before: null, after: 'x'.repeat(8193) } } } } }).success).toBe(false);
+    const { approval_id, kind, review, payload_digest, expires_at } = task;
+    expect(replyApprovalPartV1Schema.safeParse({ type: 'approval', approval_id, kind, review, payload_digest, expires_at, actions: ['approve', 'edit', 'skip'], fallback_text: review }).success).toBe(true);
   });
 
   it('rejects unknown kinds and surfaces, bare digests and blank reviews', () => {

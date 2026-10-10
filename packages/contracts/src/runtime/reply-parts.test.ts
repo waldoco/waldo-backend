@@ -79,7 +79,7 @@ describe('replyPartV1', () => {
   });
 
   it('approval parts name a desk kind, an exact digest, and only the desk decisions offered before an effect', () => {
-    expect(approvalKindV1Schema.options).toEqual(['calendar_change', 'email_send', 'message_send', 'browser_submit', 'mcp_call']);
+    expect(approvalKindV1Schema.options).toEqual(['calendar_change', 'email_send', 'message_send', 'browser_submit', 'mcp_call', 'google_task_change']);
     expect(approvalActionV1Schema.options).toEqual(['approve', 'skip', 'edit', 'undo']);
     expect(replyPartV1Schema.safeParse({ ...parts.approval, actions: ['skip'] }).success).toBe(true);
     expect(replyPartV1Schema.safeParse({ ...parts.approval, actions: ['undo'] }).success).toBe(false);
