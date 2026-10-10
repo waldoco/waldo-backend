@@ -173,7 +173,6 @@ export type MailItem = Readonly<{ id: string; thread_id: string; from: string; s
 // snippet-only so 'what is new' scans never pull bodies into a turn.
 export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string; message_id?: string; references?: readonly string[] }>;
 export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string; messageId?: string; inReplyTo?: string; references?: readonly string[] }>;
-export type DraftEvidence = Readonly<{ draft_id: string; message_id: string; thread_id: string; raw: string }>;
 
 // Conservative wire Message-ID validation: never interpolate model/provider header text.
 export const validMessageId = (value: unknown): value is string => typeof value === 'string' && value.length <= 900 && /^<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+>$/.test(value);
@@ -204,31 +203,6 @@ export const buildMime = (input: DraftInput & { messageId?: string }): string =>
   return `${headers.join('\r\n')}\r\n\r\n${input.body}`;
 };
 
-// Compare the reopened resource against the exact frozen draft. A Message-ID search hit
-// alone is not proof of its recipients/content, particularly after the owner edits Gmail.
-export const verifiedDraft = (evidence: unknown, input: DraftInput): evidence is DraftEvidence => {
-  if (!isObject(evidence) || !validGoogleId(evidence.draft_id) || !validGoogleId(evidence.message_id) || !validGoogleId(evidence.thread_id) || typeof evidence.raw !== 'string' || !/^[A-Za-z0-9_-]+={0,2}$/.test(evidence.raw) || evidence.raw.length > 400_000 || input.threadId && evidence.thread_id !== input.threadId) return false;
-  const parse = (text: string) => {
-    const canonical = text.replace(/\r?\n/g, '\r\n');
-    const split = canonical.indexOf('\r\n\r\n');
-    if (split < 0) throw new Error('invalid MIME');
-    const values = new Map<string, string>();
-    for (const line of canonical.slice(0, split).replace(/\r\n[ \t]+/g, ' ').split('\r\n')) {
-      const colon = line.indexOf(':');
-      if (colon < 1) throw new Error('invalid MIME header');
-      const name = line.slice(0, colon).toLowerCase();
-      if (values.has(name)) throw new Error('duplicate MIME header');
-      values.set(name, line.slice(colon + 1).trim());
-    }
-    return { values, body: canonical.slice(split + 4) };
-  };
-  try {
-    const expected = parse(buildMime(input));
-    const observed = parse(b64urlDecode(evidence.raw));
-    return expected.body === observed.body && ['to', 'cc', 'bcc', 'subject', 'message-id', 'in-reply-to', 'references', 'content-type', 'content-transfer-encoding'].every(name => expected.values.get(name) === observed.values.get(name));
-  } catch { return false; }
-};
-
 export const sha256Hex = async (text: string): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -238,7 +212,6 @@ export type TaskStatusFilter = 'todo' | 'in_progress' | 'done' | 'all';
 export type TaskItem = Readonly<{ id: string; title: string; status: 'todo' | 'done'; due?: string; updated?: string; notes?: string; parent?: string; position?: string; completed?: string; web_view_link?: string; task_list_id?: string }>;
 type GoogleTask = Readonly<{ id: string; title?: string; status: string; due?: string; updated?: string; notes?: string; parent?: string; position?: string; completed?: string; webViewLink?: string }>;
 export type TaskListItem = Readonly<{ id: string; title: string; updated?: string; etag?: string }>;
-export type CalendarListItem = Readonly<{ id: string; title: string; timezone?: string; access_role: string; primary: boolean; selected: boolean; hidden: boolean; etag?: string }>;
 export type GoogleCollectionPage<T> = Readonly<{ items: readonly T[]; next_page_token: string | null; fetched_count: number; account: CalendarPage['account']; observed_at: string }>;
 export type TasksPage = Readonly<{ tasks: readonly TaskItem[]; next_page_token: string | null; fetched_count: number; task_list_ids: readonly string[]; account: CalendarPage['account']; observed_at: string }>;
 
@@ -285,14 +258,12 @@ export type GoogleClient = Readonly<{
   driveGetFileMetadata?(input: Readonly<{ fileId: string }>): Promise<DriveFileMeta>;
   driveReadFileContent?(input: import('./drive-rest').DriveContentArgs): Promise<import('./drive-rest').DriveFileContent>;
   calendarPage?(calendarId: string, from: string, to: string, limit: number, includeDeclined: boolean, pageToken?: string): Promise<CalendarPage>;
-  calendarListsPage?(limit: number, includeHidden: boolean, pageToken?: string): Promise<GoogleCollectionPage<CalendarListItem>>;
   taskListsPage?(limit: number, pageToken?: string): Promise<GoogleCollectionPage<TaskListItem>>;
   tasksPage?(taskListId: string, status: TaskStatusFilter, limit: number, pageToken?: string): Promise<TasksPage>;
   allTasksPage?(status: TaskStatusFilter, limit: number, pageToken?: string): Promise<TasksPage>;
   freeBusy(from:string,to:string,calendarIds:readonly string[],timezone:string):Promise<FreeBusyResult>;
   events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<readonly CalendarItem[]>;
   findDraftByMessageId?(messageId: string): Promise<Readonly<{ draft_id: string; message_id?: string }> | null>;
-  readDraft?(draftId: string): Promise<DraftEvidence>;
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
   sendRaw(raw: string, threadId?: string): Promise<Readonly<{ message_id: string; thread_id?: string }>>;
   findSentByMessageId(messageId: string, threadId?: string): Promise<boolean | SentEvidence | Readonly<{ message_id: string }>>;
@@ -313,7 +284,7 @@ export type GoogleClient = Readonly<{
 // Single source for the connector-proxy allowlist: the runtime's vault client and the Supabase
 // connector-proxy Edge Function both build from this list, so a method added to GoogleClient but
 // missed here fails `satisfies` / the parity test instead of breaking live calls on Vault installs.
-export const GOOGLE_METHODS = ['calendarPage','calendarListsPage','taskListsPage','tasksPage','allTasksPage','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId','readDraft', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent'] as const satisfies readonly (keyof GoogleClient)[];
+export const GOOGLE_METHODS = ['calendarPage','taskListsPage','tasksPage','allTasksPage','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent'] as const satisfies readonly (keyof GoogleClient)[];
 export type GoogleMethod = (typeof GOOGLE_METHODS)[number];
 
 const b64urlDecode = (data: string): string => {
@@ -360,7 +331,7 @@ export async function googleAccessToken(app: GoogleApp, tokens: GoogleTokens, fe
 }
 
 // Only an invalid grant marks connection health; provider outages and client configuration do not require owner reconnect.
-export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void, account: CalendarPage['account'] = {connection_id: null, email: tokens.email ?? null}): GoogleClient & Required<Pick<GoogleClient, 'calendarPage' | 'calendarListsPage' | 'taskListsPage' | 'tasksPage' | 'allTasksPage' | 'changedEventsPage'>> {
+export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void, account: CalendarPage['account'] = {connection_id: null, email: tokens.email ?? null}): GoogleClient & Required<Pick<GoogleClient, 'calendarPage' | 'taskListsPage' | 'tasksPage' | 'allTasksPage' | 'changedEventsPage'>> {
   let access: { token: string; until: number } | null = null;
   const bearer = async () => {
     if (access && access.until > Date.now()) return access.token;
@@ -488,23 +459,8 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
   };
   const EVENTS = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
   const match = (etag?: string): Record<string, string> => (etag ? { 'if-match': etag } : {});
-  const readEvent = async (id: string) => {
-    if (!validGoogleId(id)) throw new Error('invalid Calendar event identifier');
-    const value = await call(`${EVENTS}/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(30_000) });
-    if (!validCalendarEvent(value) || value.id !== id) throw new Error('invalid Calendar event response');
-    return value;
-  };
-  const send = async (url: string, method: string, body: Record<string, unknown>, etag?: string) => {
-    const targetId = method === 'POST' ? body.id : decodeURIComponent(url.slice(EVENTS.length + 1));
-    if (targetId !== undefined && !validGoogleId(targetId)) throw new Error('invalid Calendar mutation identifier');
-    const mutation = await call(url, { method, headers: { 'content-type': 'application/json', ...match(etag) }, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) });
-    if (!validCalendarEvent(mutation) || targetId !== undefined && mutation.id !== targetId) throw new Error('invalid Calendar mutation response; provider outcome needs readback');
-    const current = await readEvent(mutation.id);
-    const desiredMarker = (body.extendedProperties as GoogleEvent['extendedProperties'])?.private?.waldoOperation;
-    const endpointMatches = (wanted: unknown, observed: unknown) => !wanted || isObject(wanted) && isObject(observed) && ['date', 'dateTime'].every(field => wanted[field] == null || wanted[field] === observed[field]);
-    if ((body.summary !== undefined && body.summary !== current.summary) || (body.status === 'cancelled' ? current.status !== 'cancelled' : current.status === 'cancelled') || !endpointMatches(body.start, current.start) || !endpointMatches(body.end, current.end) || (desiredMarker && current.extendedProperties?.private?.waldoOperation !== desiredMarker) || (mutation.etag && current.etag !== mutation.etag)) throw new Error('Calendar final-state readback differs or changed; reconcile the provider before retrying');
-    return toItem(current);
-  };
+  const send = async (url: string, method: string, body: unknown, etag?: string) =>
+    toItem(await call(url, { method, headers: { 'content-type': 'application/json', ...match(etag) }, body: JSON.stringify(body) }) as unknown as GoogleEvent);
   const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages';
   const listIds = async (q: string, limit: number): Promise<readonly string[]> => {
     const list = new URL(GMAIL);
@@ -544,16 +500,6 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
   return {
     account,
     taskListsPage, tasksPage, allTasksPage, changedEventsPage,
-    async calendarListsPage(limit, includeHidden, pageToken) {
-      if (!validPageLimit(limit, 250) || typeof includeHidden !== 'boolean') throw new Error('invalid Calendar-list page request');
-      const cursor = await providerCursor('Calendar-list', [limit, includeHidden], pageToken);
-      const url = new URL('https://www.googleapis.com/calendar/v3/users/me/calendarList');
-      url.search = new URLSearchParams({ maxResults: String(limit), showHidden: String(includeHidden), showDeleted: 'false', ...(cursor.token ? { pageToken: cursor.token } : {}) }).toString();
-      const data = await call(url.toString(), { signal: AbortSignal.timeout(30_000) });
-      const items = collectionItems(data, 'calendar#calendarList', limit, 'Calendar-list');
-      if (!items.every(item => validGoogleId(item.id) && typeof item.summary === 'string' && item.summary.length <= 2000 && ['freeBusyReader', 'reader', 'writer', 'owner', 'writerWithoutPrivateAccess'].includes(String(item.accessRole)) && optionalText(item.timeZone, 128) && optionalText(item.etag, 1024) && [item.primary, item.selected, item.hidden].every(value => value === undefined || typeof value === 'boolean'))) throw new Error('invalid Calendar-list page response');
-      return { items: items.map(item => ({ id: item.id as string, title: item.summary as string, access_role: item.accessRole as string, primary: item.primary === true, selected: item.selected === true, hidden: item.hidden === true, ...(item.timeZone ? { timezone: item.timeZone as string } : {}), ...(item.etag ? { etag: item.etag as string } : {}) })), next_page_token: await cursor.next(data.nextPageToken as string | undefined), fetched_count: items.length, account, observed_at: new Date().toISOString() };
-    },
     freeBusy:async(from,to,calendarIds,timezone)=>{
       if(![from,to].every(s=>typeof s==='string'&&/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/.test(s)&&Number.isFinite(Date.parse(s)))||Date.parse(from)>=Date.parse(to)||!Array.isArray(calendarIds)||!calendarIds.length||calendarIds.length>50||calendarIds.some(id=>typeof id!=='string'||!id.trim()||id.length>256)||new Set(calendarIds).size!==calendarIds.length)throw new Error('invalid freebusy request');
       const data=await call('https://www.googleapis.com/calendar/v3/freeBusy',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({timeMin:from,timeMax:to,timeZone:timezone,calendarExpansionMax:50,items:calendarIds.map(id=>({id}))})});
@@ -561,7 +507,11 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       if(!result||typeof result!=='object'||!result.calendars||typeof result.calendars!=='object'||Array.isArray(result.calendars)||!Object.values(result.calendars).every(validFreeBusyCalendar)||Date.parse(result.timeMin??'')!==Date.parse(from)||Date.parse(result.timeMax??'')!==Date.parse(to))throw new Error('freebusy coverage differs');
       return {from:result.timeMin!,to:result.timeMax!,calendars:result.calendars};
     },
-    event: async (id) => toItem(await readEvent(id)),
+    event: async (id) => {
+      const value = await call(`${EVENTS}/${encodeURIComponent(id)}`);
+      if (!validCalendarEvent(value) || value.id !== id) throw new Error('invalid Calendar event response');
+      return toItem(value);
+    },
     // Preserve the provider's notification defaults; recovery markers do not authorize silent guest updates.
     createEvent: ({ title, start, end, id, operationMarker }) => send(EVENTS, 'POST', { ...(id ? { id } : {}), summary: title, ...calendarTimes(start, end), ...calendarMarker(operationMarker) }),
     moveEvent: (id, start, end, etag, operationMarker) => send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { ...calendarTimes(start, end), ...calendarMarker(operationMarker) }, etag),
@@ -569,11 +519,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       // Put cancellation and its marker in one version-fenced mutation. A missing tombstone
       // marker later is ambiguous, even if a provider returns 404 or a bare cancelled event.
       if (operationMarker) await send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { status: 'cancelled', ...calendarMarker(operationMarker) }, etag);
-      else {
-        await call(`${EVENTS}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: match(etag), signal: AbortSignal.timeout(30_000) });
-        try { if ((await readEvent(id)).status !== 'cancelled') throw new Error('Calendar cancellation readback differs; check the provider before retrying'); }
-        catch (error) { if (!(error instanceof GoogleError && (error.status === 404 || error.status === 410))) throw error; }
-      }
+      else await call(`${EVENTS}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: match(etag) });
     },
     async calendarPage(calendarId, from, to, limit, includeDeclined, pageToken) {
       if (typeof calendarId !== 'string' || !calendarId.trim() || calendarId.length > 254 || ![from,to].every(v => validCalendarInstant(v)) || Date.parse(from) >= Date.parse(to) || !Number.isSafeInteger(limit) || limit < 1 || limit > 50 || typeof includeDeclined !== 'boolean' || (pageToken !== undefined && (typeof pageToken !== 'string' || !pageToken || pageToken.length > 4096))) throw new Error('invalid Calendar page request');
@@ -682,13 +628,6 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       const { drafts = [] } = await call(list.toString()) as { drafts?: { id: string; message?: { id: string } }[] };
       return drafts[0] ? { draft_id: drafts[0].id, ...(drafts[0].message ? { message_id: drafts[0].message.id } : {}) } : null;
     },
-    async readDraft(draftId) {
-      if (!validGoogleId(draftId)) throw new Error('invalid Gmail draft identifier');
-      const data = await call(`https://gmail.googleapis.com/gmail/v1/users/me/drafts/${encodeURIComponent(draftId)}?format=raw`, { signal: AbortSignal.timeout(30_000) });
-      const message = data.message;
-      if (data.id !== draftId || !isObject(message) || !validGoogleId(message.id) || !validGoogleId(message.threadId) || typeof message.raw !== 'string' || message.raw.length > 400_000 || !/^[A-Za-z0-9_-]+={0,2}$/.test(message.raw)) throw new Error('invalid Gmail draft readback');
-      return { draft_id: draftId, message_id: message.id, thread_id: message.threadId, raw: message.raw };
-    },
     async sendRaw(raw, threadId) {
       const json = await call('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -722,6 +661,7 @@ const validCalendarInstant = (value: unknown): value is string => {
   return Number.isFinite(Date.parse(day)) && new Date(day).toISOString().slice(0,10) === day;
 };
 
+// A timed event may have start equal to end (for example endTimeUnspecified); that is provider data, not a malformed page.
 const validCalendarEvent = (value: unknown): value is GoogleEvent => {
   const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
   if (!object(value) || typeof value.id !== 'string' || !value.id || value.id.length > 1024) return false;
@@ -733,7 +673,7 @@ const validCalendarEvent = (value: unknown): value is GoogleEvent => {
     return null;
   };
   const start=endpoint(value.start),end=endpoint(value.end);
-  return !!start && !!end && start.allDay===end.allDay && start.at<end.at && ['summary','location','description','etag'].every(k => value[k] === undefined || typeof value[k] === 'string') && (value.attendees === undefined || (Array.isArray(value.attendees) && value.attendees.every(a => object(a) && (a.self === undefined || typeof a.self === 'boolean') && (a.responseStatus === undefined || typeof a.responseStatus === 'string'))));
+  return !!start && !!end && start.allDay===end.allDay && start.at<=end.at && ['summary','location','description','etag'].every(k => value[k] === undefined || typeof value[k] === 'string') && (value.attendees === undefined || (Array.isArray(value.attendees) && value.attendees.every(a => object(a) && (a.self === undefined || typeof a.self === 'boolean') && (a.responseStatus === undefined || typeof a.responseStatus === 'string'))));
 };
 
 const calendarSourceUrl = (value: string | undefined): string | undefined => {

@@ -46,17 +46,12 @@ export type GetHealthArgs = z.infer<typeof getHealthArgsSchema>;
 // 'query_calendar' is the ADR-0040 rename of the legacy schedule read.
 export const queryCalendarArgsSchema = z.strictObject({
   account: z.email().optional(),
-  operation: z.enum(['list_events', 'list_calendars']).optional(),
-  include_hidden: z.boolean().optional(),
   date_range: dateRangeSchema.optional(),
   calendar_id: z.string().min(1).max(254).default('primary'),
   page_token: z.string().min(1).max(4096).optional(),
   include_declined: z.boolean().default(false),
   limit: z.int().min(1).max(50).default(20),
-}).refine(args => args.operation === 'list_calendars' || !args.page_token || Boolean(args.date_range), {error:'page_token requires the same explicit date_range',path:['date_range']})
-  .refine(args => !args.date_range || Date.parse(args.date_range.from) < Date.parse(args.date_range.to), {error:'Calendar range must advance',path:['date_range']})
-  .refine(args => args.operation !== 'list_calendars' || (!args.date_range && args.calendar_id === 'primary' && !args.include_declined), {error:'Calendar discovery does not accept an event query'})
-  .refine(args => args.operation === 'list_calendars' || args.include_hidden === undefined, {error:'include_hidden applies only to Calendar discovery'});
+}).refine(args => !args.page_token || Boolean(args.date_range), {error:'page_token requires the same explicit date_range',path:['date_range']}).refine(args => !args.date_range || Date.parse(args.date_range.from) < Date.parse(args.date_range.to), {error:'Calendar range must advance',path:['date_range']});
 export type QueryCalendarArgs = z.infer<typeof queryCalendarArgsSchema>;
 
 // Provider receipt validation is also used after the proxy boundary, before claiming coverage.
@@ -131,7 +126,6 @@ const googleCollectionReceipt = {
   account: googleCollectionAccountSchema, observed_at: iso8601Schema,
 };
 export const googleTaskListPageSchema = z.strictObject({ ...googleCollectionReceipt, items: z.array(z.strictObject({ id: z.string().min(1).max(1024), title: z.string().max(2000), updated: iso8601Schema.optional(), etag: z.string().max(1024).optional() })).max(100) }).refine(page => page.fetched_count === page.items.length);
-export const googleCalendarListPageSchema = z.strictObject({ ...googleCollectionReceipt, items: z.array(z.strictObject({ id: z.string().min(1).max(1024), title: z.string().max(2000), timezone: z.string().max(128).optional(), access_role: z.enum(['freeBusyReader', 'reader', 'writer', 'owner', 'writerWithoutPrivateAccess']), primary: z.boolean(), selected: z.boolean(), hidden: z.boolean(), etag: z.string().max(1024).optional() })).max(50) }).refine(page => page.fetched_count === page.items.length);
 export const googleTasksPageSchema = z.strictObject({ ...googleCollectionReceipt,
   task_list_ids: z.array(z.string().min(1).max(1024)).max(10),
   tasks: z.array(z.strictObject({ id: z.string().min(1).max(1024), title: z.string().max(2000), status: z.enum(['todo', 'done']), task_list_id: z.string().min(1).max(1024), due: iso8601Schema.optional(), updated: iso8601Schema.optional(), completed: iso8601Schema.optional(), notes: z.string().max(100_000).optional(), parent: z.string().max(1024).optional(), position: z.string().max(1024).optional(), web_view_link: z.string().max(2048).optional() })).max(100),

@@ -13,7 +13,7 @@ const request=async(body:unknown,at=Math.floor(Date.now()/1000))=>{
  return new Request('https://edge.invalid',{method:'POST',body:raw,headers:{'x-waldo-at':String(at),'x-waldo-sig':await routerSignature(cfg.WALDO_ROUTER_HMAC_SECRET!,at,`proxy.${digest}`)}});
 };
 const fixture=()=>{
- const rows=new Map<string,{digest:string;result?:unknown;done?:boolean}>();const hops:string[]=[];let effects=0;let lost=false;let deleted=false;let scopes:unknown=['https://www.googleapis.com/auth/gmail.send','https://www.googleapis.com/auth/gmail.compose','https://www.googleapis.com/auth/calendar.events'];let healthFail=false;let revoked=false;let active=true;let providerError='';
+ const rows=new Map<string,{digest:string;result?:unknown;done?:boolean}>();const hops:string[]=[];let effects=0;let lost=false;let scopes:unknown=['https://www.googleapis.com/auth/gmail.send','https://www.googleapis.com/auth/gmail.compose','https://www.googleapis.com/auth/calendar.events'];let healthFail=false;let revoked=false;let active=true;let providerError='';
  vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
   const url=String(input);const args=url.startsWith('https://db.invalid/')?JSON.parse(String(init?.body??'{}')):{};const fn=url.split('/').at(-1)!;hops.push(fn);
   if(fn==='proxy_access')return Response.json(args.p_connection==='conn'&&args.p_do_name==='owner'&&!revoked&&active?[{secret:'fictional-refresh',scopes}]:[]);
@@ -31,7 +31,7 @@ const fixture=()=>{
    effects++;if(lost)throw new Error('synthetic response loss');if(providerError)return Response.json({result:{isError:true,content:[{type:'text',text:providerError}]}});return Response.json({result:{content:[{type:'text',text:'synthetic result'}]}});
   }
   if(url==='https://www.googleapis.com/calendar/v3/freeBusy'){const payload=JSON.parse(String(init?.body));return Response.json({timeMin:payload.timeMin,timeMax:payload.timeMax,calendars:Object.fromEntries(payload.items.map((item:{id:string})=>[item.id,{busy:[]}]))});}
-  if(url.includes('www.googleapis.com/calendar/')){if(init?.method!==undefined&&init.method!=='GET')effects++;if(lost)throw new Error('synthetic response loss');if(init?.method==='DELETE'){deleted=true;return new Response(null,{status:204});}return Response.json({id:'event-one',summary:'fixture',start:{dateTime:'2026-10-01T00:00:00Z'},end:{dateTime:'2026-10-01T01:00:00Z'},...(deleted?{status:'cancelled'}:{})});}
+  if(url.includes('www.googleapis.com/calendar/')){effects++;if(lost)throw new Error('synthetic response loss');return init?.method==='DELETE'?new Response(null,{status:204}):Response.json({id:'event-one',summary:'fixture',start:{dateTime:'2026-10-01T00:00:00Z'},end:{dateTime:'2026-10-01T01:00:00Z'}});}
   if(url.includes('gmail.googleapis.com')){effects++;if(lost)throw new Error('synthetic response loss');return Response.json({id:'provider-one'});}
   throw new Error('unexpected fictional transport');
  }));return{hops,rows,effects:()=>effects,lose:()=>{lost=true;},scope:(value:unknown)=>{scopes=value;},healthFail:()=>{healthFail=true;},revoke:()=>{revoked=true;},suspend:()=>{active=false;},providerError:(text:string)=>{providerError=text;}};

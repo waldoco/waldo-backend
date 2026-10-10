@@ -1,7 +1,5 @@
 import { expect, it } from 'vitest';
-import { b64url, buildMime, googleClient, sha256Hex } from '../src/connectors/google';
-import { pinProxyIntentRoute } from '../src/connectors/proxy-intent-route';
-import { draftEmailArgsSchema } from '@waldo/contracts';
+import { googleClient } from '../src/connectors/google';
 
 const app = { clientId: 'synthetic', clientSecret: 'synthetic', redirectUri: 'https://example.invalid' };
 it('provider double: requires exact SENT metadata and intended thread rather than the first search hit', async () => {
@@ -183,48 +181,4 @@ it('frozen Gmail digest mismatch blocks the irreversible edge',async()=>{
  const j=journey();try{const f=j.open();const id=(await f.invoke('send_email',reply)).data.proposal_id;const row=j.sql.exec<{payload_json:string}>('SELECT payload_json FROM ledger WHERE id = ?',id).one();const payload=JSON.parse(row.payload_json);payload.raw='substitution';j.sql.exec('UPDATE ledger SET payload_json = ? WHERE id = ?',JSON.stringify(payload),id);
  expect((await f.desk.decide(id,'a','test')).toast).toBe('Email changed');expect(j.provider.writes).toHaveLength(0);
  }finally{j.close();}
-});
-
-it.each(['same route', 'missing route', 'selected account changed', 'payload changed', 'provider body changed'] as const)('legacy draft recovery uses actual immutable route custody: %s', async fault => {
-  const db = new DatabaseSync(':memory:');
-  try {
-    const sql = { exec(query: string, ...args: unknown[]) {
-      const rows = db.prepare(query).all(...args as never[]);
-      return { toArray: () => rows, one: () => rows[0], [Symbol.iterator]: () => rows[Symbol.iterator]() };
-    } } as unknown as SqlStorage;
-    const values = new Map<string, unknown>();
-    const storage = { kv: { get: (key: string) => structuredClone(values.get(key)), put: (key: string, value: unknown) => values.set(key, structuredClone(value)), list: ({ prefix }: { prefix: string }) => new Map([...values].filter(([key]) => key.startsWith(prefix))) }, transactionSync: <T>(work: () => T) => work() } as unknown as DurableObjectStorage;
-    const ctx = { authenticatedUserId: 'legacy-owner', turnId: 'legacy-turn', toolCallId: 'legacy-call' } as ToolDispatcherContext;
-    const operationId = `draft:${await sha256Hex(JSON.stringify([ctx.authenticatedUserId, ctx.turnId, ctx.toolCallId]))}`;
-    const input = { to: ['recipient@example.invalid'], subject: 'Legacy draft', body: 'Frozen body', messageId: `<${operationId.slice(6)}@waldo-draft>` };
-    const effects = ownerEffectLedger(storage, () => 1000);
-    const record = effects.reserve({ operationId, owner_ref: ctx.authenticatedUserId, tool: 'draft_email', payload: input });
-    storage.kv.put(`owner:effect:${operationId}`, { ...record, state: 'unknown' });
-    const original = { id: 'original', email: 'original@example.invalid', rail: 'proxy' as const };
-    const newer = { id: 'newer', email: 'newer@example.invalid', rail: 'proxy' as const };
-    if (fault !== 'missing route') pinProxyIntentRoute(sql, { id: operationId }, 'google:mail', [original, newer], original);
-    let writes = 0;
-    const intents: unknown[] = [];
-    const fetcher = (async (request: RequestInfo | URL, init?: RequestInit) => {
-      const url = new URL(String(request));
-      if (url.hostname === 'oauth2.googleapis.com') return Response.json({ access_token: 'synthetic' });
-      if (init?.method === 'POST') { writes++; throw new Error('legacy recovery must remain read-only'); }
-      return Response.json(url.pathname.endsWith('/drafts')
-        ? { drafts: [{ id: 'draft', message: { id: 'message' } }] }
-        : { id: 'draft', message: { id: 'message', threadId: 'thread', raw: b64url(new TextEncoder().encode(buildMime({ ...input, ...(fault === 'provider body changed' ? { body: 'Owner edited body' } : {}) }))) } });
-    }) as typeof fetch;
-    const google = { client: async (_feature: unknown, intent: Parameters<typeof pinProxyIntentRoute>[1], _guard: unknown, selected?: string) => {
-      intents.push(intent);
-      const candidates = [original, newer].filter(candidate => !selected || candidate.email === selected);
-      const pinned = pinProxyIntentRoute(sql, intent, 'google:mail', candidates, newer);
-      return pinned ? googleClient(app, { refresh_token: 'synthetic' }, fetcher, undefined, { connection_id: pinned.id, email: pinned.email }) : null;
-    } };
-    const handler = googleHandlers(google, { propose: async () => '', proposeSendEmail: async () => '', record: () => {} }, { timezone: 'UTC', now: () => new Date(1000) }, undefined, effects).find(candidate => candidate.name === 'draft_email')!;
-    const result = await handler.handle(draftEmailArgsSchema.parse({ account: fault === 'selected account changed' ? newer.email : original.email, to: input.to, subject: input.subject, body_markdown: fault === 'payload changed' ? 'New body' : input.body }), ctx) as any;
-    expect(intents[0]).toEqual({ id: operationId, requireRoute: true });
-    expect(writes).toBe(0);
-    expect(result.ok).toBe(fault === 'same route');
-    if (result.ok) expect(result.data).toMatchObject({ account: { connection_id: original.id, email: original.email }, readback_verified: true });
-    if (fault === 'missing route') expect(sql.exec('SELECT * FROM proxy_intent_routes').toArray()).toEqual([]);
-  } finally { db.close(); }
 });
