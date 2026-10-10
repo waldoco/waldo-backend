@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(216);
+select plan(218);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -166,6 +166,8 @@ select is((select count(*)::int from waldo.health_anchors a join waldo.owners o 
 select is((select count(*)::int from waldo.health_consents c join waldo.owners o on o.id=c.owner_id where o.do_name='health-owner-a' and c.source='apple' and c.withdrawn_at is null),0,'withdrawing storage withdraws both purposes for the source');
 select is((select count(*)::int from waldo.health_consents c join waldo.owners o on o.id=c.owner_id where o.do_name='health-owner-a' and c.source='health_connect' and c.withdrawn_at is null),1,'another source is untouched');
 select is(pg_temp.h('consent_withdraw','health-owner-a',jsonb_build_object('request_id','withdraw-a-0001','source','apple','purpose','storage_compute','expected_epoch',1))->>'replayed','true','replaying a withdrawal is stable');
+select is(pg_temp.h('consent_list','health-owner-a')->'consents' @> '[{"source":"apple","purpose":"storage_compute","status":"withdrawn","deletion_state":"completed"}]'::jsonb,true,'a withdrawn storage consent reports its deletion as completed');
+select is(pg_temp.h('consent_list','health-owner-a')->'consents' @> '[{"source":"apple","purpose":"model_processing","status":"withdrawn","deletion_state":"completed"}]'::jsonb,true,'and so does the model consent withdrawn with it');
 select is((select count(*)::int from waldo.health_requests r join waldo.owners o on o.id=r.owner_id where o.do_name='health-owner-a' and r.operation='ingest' and r.response->>'source'='apple'),0,'withdrawal removes the source upload receipts');
 select ok((select count(*)>0 from waldo.health_requests r join waldo.owners o on o.id=r.owner_id where o.do_name='health-owner-a' and r.operation like 'consent_%'),'consent receipts stay so a replayed request still answers');
 select is(pg_temp.h('ingest','health-owner-a',(select body from hb))->>'error','consent_withdrawn','a replay of an old upload cannot bypass the withdrawal');
@@ -286,7 +288,7 @@ select is(pg_temp.rd('health-owner-e')->'context'->>'day',to_char(now() at time 
 select is(pg_temp.h('context_write','health-owner-e',pg_temp.ctx(to_char((now() at time zone 'Pacific/Kiritimati')::date+1,'YYYY-MM-DD'),'health_connect',1,'Pacific/Kiritimati'))->>'written','true','tomorrow in the earliest zone is the latest accepted day');
 select is(pg_temp.h('context_write','health-owner-e',pg_temp.ctx(to_char((now() at time zone 'Pacific/Kiritimati')::date+2,'YYYY-MM-DD'),'health_connect',1,'Pacific/Kiritimati'))->>'error','invalid_request','a day beyond tomorrow is refused');
 select is(pg_temp.h('context_write','health-owner-e',pg_temp.ctx('2020-01-01','health_connect',1))->>'error','invalid_request','a day beyond the aggregate retention is refused');
--- Withdrawing a purpose that was never granted still withdraws the source.
+-- A purpose never granted has nothing to withdraw; withdrawing storage withdraws the source.
 select is(pg_temp.h('consent_grant','health-owner-e',pg_temp.grant_body('grant-e-sams-st1','samsung','storage_compute'))->'consent'->>'status','granted','owner E grants only storage for Samsung');
 select is(pg_temp.h('consent_withdraw','health-owner-e',jsonb_build_object('request_id','withdraw-e-0004','source','samsung','purpose','model_processing','expected_epoch',0))->>'error','consent_required','a purpose never granted has nothing to withdraw');
 select is(pg_temp.h('consent_withdraw','health-owner-e',jsonb_build_object('request_id','withdraw-e-0003','source','samsung','purpose','storage_compute','expected_epoch',4))->>'error','epoch_conflict','a storage withdrawal checks the epoch');
