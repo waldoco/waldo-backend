@@ -132,13 +132,28 @@ describe('toContextHealthMaterial', () => {
     expect(material!.source.produced_at).toBeLessThanOrEqual(fixture.snapshot_at);
   });
 
-  it('degrades to absence: no context, no Form score, or an unmapped pillar', () => {
+  it('reads a Recovery-first row: no Form score yet, Load not computed', () => {
+    const material = toContextHealthMaterial(row({ context: { ...row().context!, form: null, weight: null } }), clock);
+    expect(material?.view).toMatchObject({ algorithm_version: 'recovery.v1', recovery_zone: 'solid', trend: 'insufficient', freshness: 'fresh' });
+    expect(material?.narrative.zone).toBeUndefined();
+    expect(material?.narrative.load_descriptor).toBeUndefined();
+    expect(material?.narrative.day_summary).toBe('Recovery solid; load unavailable. Drivers: sleep below baseline. Tags: travel.');
+  });
+
+  it('keeps Form and Recovery when only Load is missing or unreadable', () => {
+    for (const weight of [null, { zone: 'unknown' }, { zone: 'energized' }]) {
+      const material = toContextHealthMaterial(row({ context: { ...row().context!, weight } }), clock);
+      expect(material?.view).toMatchObject({ algorithm_version: 'form.safte-fast.v1', form_zone: 'steady' });
+      expect(material?.narrative.load_descriptor).toBeUndefined();
+    }
+  });
+
+  it('degrades to absence: no context, no Recovery, or an unmapped Recovery word', () => {
     expect(toContextHealthMaterial(row({ context: null }), clock)).toBeNull();
-    expect(toContextHealthMaterial(row({ context: { ...row().context!, form: null } }), clock)).toBeNull();
-    expect(toContextHealthMaterial(row({ context: { ...row().context!, form: { zone: 'good' } } }), clock)).toBeNull();
+    expect(toContextHealthMaterial(row({ context: { ...row().context!, recovery: null } }), clock)).toBeNull();
     expect(toContextHealthMaterial(row({ context: { ...row().context!, recovery: { zone: 'unknown' } } }), clock)).toBeNull();
-    expect(toContextHealthMaterial(row({ context: { ...row().context!, weight: null } }), clock)).toBeNull();
-    expect(toContextHealthMaterial(row({ context: { ...row().context!, form: { score: 101 } } }), clock)).toBeNull();
+    // An unreadable Form score drops only Form, like an unreadable Load.
+    expect(toContextHealthMaterial(row({ context: { ...row().context!, form: { score: 101 } } }), clock)?.view.algorithm_version).toBe('recovery.v1');
     const errors: unknown[] = [];
     expect(
       toContextHealthMaterial(row({ context: { ...row().context!, compiled_at: 'not-a-date' } }), clock, (error) => errors.push(error)),
