@@ -1,0 +1,235 @@
+WALDO EVAL DESIGN: HOW THE BEST AGENT BENCHMARKS ARE BUILT, AND WHAT TO COPY
+Prepared 11 Oct 2026 (Part A of the owner's 01:48 voice note). Read-only desk research. No live runs, no secrets, no Waldo or Instinct internals used.
+
+Status of sources: [F] = I fetched and read the page (abstract or body). [H] = search highlight only, not read in full. Where I state a number it comes from an [F] source and is quoted from its abstract or body.
+
+====================================================================
+1. SHORT ANSWER
+====================================================================
+The benchmarks that hold up share seven habits. Waldo's eval should copy all seven:
+
+1. Grade the END STATE of the world, not the chat. Compare the database, mailbox, calendar or network trace to a stored goal state (tau-bench, WebArena-Verified, OSWorld). Text answers get deterministic checks where possible.
+2. Grade what the agent should NOT have touched. Final-state graders that only assert the wanted change are blind to collateral damage (Terminal-Bench audit). For a personal agent that sends, books and spends, this is the core of the eval.
+3. Run every task several times and report pass^k (all k trials succeed), not pass@1 (tau-bench). A personal agent is judged on consistency.
+4. Score task success and policy/permission compliance TOGETHER. ST-WebAgentBench's Completion Under Policy credits only completions that respected every applicable rule.
+5. Use LLM judges only where no deterministic check exists, and validate each judge against human labels, with bias controls (MT-Bench paper, Online-Mind2Web WebJudge, self-preference paper).
+6. Keep a private holdout, refresh tasks, and audit the benchmark itself. Public benchmarks decay: SWE-bench Verified was retired by OpenAI over flawed tests and contamination; WebArena needed a full audit to become WebArena-Verified.
+7. Make runs reproducible and cheap to repeat: pinned versions, sandboxed fixtures, logged cost, standard harness (HAL, AI Agents That Matter).
+
+What this means for Waldo's existing plan (from memory: 36 cases W01-W24 + R25-R36 plus a 16-case holdout, 8-point trace rubric, 0/1/2 scoring, hard fails for unauthorized effects, chunked runs, hermetic -> staging -> live ladder): the plan is already close to the literature. The gaps I would close are listed in section 6: pass^k, a collateral-damage ("frame") check on every case, a user simulator with scripted variation, judge validation against Shivansh's own labels, a contamination/refresh policy for the holdout, and an injection lane.
+
+====================================================================
+2. WHAT EACH REFERENCE BENCHMARK DOES (AND WHAT TO TAKE)
+====================================================================
+
+2.1 tau-bench (Sierra) - tool-agent-user conversations with policy rules [F]
+Source: https://arxiv.org/abs/2406.12045 ; code https://github.com/sierra-research/tau-bench
+- Design: an LLM-simulated user talks to an agent that has domain API tools plus a written policy (retail, airline). 
+- Grading: "compares the database state at the end of a conversation with the annotated goal state." This is objective and tolerates the user phrasing things differently, as long as the end state matches.
+- Metric: pass^k, measuring "consistency and robustness of the agent across k i.i.d. trials." Reported finding: even strong function-calling agents succeed on under 50% of tasks, and pass^8 is under 25% in retail.
+- Build process (three stages): manual schema and API design, LM-assisted data generation, manual scenario writing and verification for the user simulator.
+- Take for Waldo: end-state diff as primary grader; policy text given to the agent as in real use; pass^k as the headline number; humans verify every scenario.
+
+2.2 tau2-bench - dual control and programmatic task generation [F]
+Source: https://arxiv.org/abs/2506.07982 ; https://github.com/sierra-research/tau2-bench
+- Both the agent and the user act on a shared world (telecom support: the user has to toggle things on their own device). Modeled as a Dec-POMDP.
+- A "compositional task generator that programmatically creates diverse, verifiable tasks from atomic components", giving coverage and controlled difficulty.
+- A user simulator "constrained by tools and observable states", which improves fidelity (the simulated user cannot invent facts or abilities).
+- Fine-grained ablations separate reasoning errors from communication/coordination errors. Performance drops significantly when moving from no-user to dual-control.
+- Take for Waldo: Waldo regularly needs the human to do something (approve, tap a link, confirm). Build cases where the owner must act and the agent must guide them. Generate variants from atoms (task family x stress axis) instead of hand-writing every one; this matches the planned 10 families x 12 axes matrix. Constrain the simulated user to a persona sheet and a fact sheet.
+
+2.3 AgentDojo - tasks over untrusted data, with attacks [F]
+Source: https://arxiv.org/abs/2406.13352 ; https://agentdojo.spylab.ai/ ; https://github.com/ethz-spylab/agentdojo
+- 97 realistic tasks (email client, e-banking, travel booking) and 629 security test cases; extensible, "not a static test suite", so new attacks and defenses can be added.
+- Three numbers per agent: utility without attack, utility under attack ("the fraction of security cases where the agent solves the user task correctly, without any adversarial side effects"), and targeted attack success.
+- Take for Waldo: Waldo reads email and web pages, so every read-heavy case should have an injected twin. Report all three numbers. Injection text lives in fixture data (an email body, a web page), never in the prompt.
+
+2.4 WebArena, VisualWebArena, WebArena-Verified - self-hosted web worlds [F for Verified, H for others]
+Sources: https://github.com/ServiceNow/webarena-verified ; https://openreview.net/forum?id=94tlGxmqkN ; https://webarena.dev/og/ ; https://aclanthology.org/2024.acl-long.50/ (VisualWebArena)
+- Original idea: self-hosted copies of real sites so tasks are repeatable and resettable, with functional-correctness checks.
+- WebArena-Verified: "Every task, reference answer, and evaluator has been manually reviewed and corrected"; evaluators work offline on agent responses and captured network traces; "Removed LLM-as-a-judge evaluation and substring matching in favor of type-aware normalization and structural comparison"; a 258-task "Hard" subset for cheaper runs; Docker images for reproducibility.
+- Lesson: even a famous benchmark had wrong evaluators and wrong reference answers until someone audited every one. Budget time to audit your own 36.
+- Take for Waldo: keep fixtures resettable and offline; capture the full effect trace (every tool call, every send attempt) and grade from the trace; prefer structural comparison over substring matching; keep a small "Hard" subset for fast iterations.
+
+2.5 OSWorld - execution-based checks in real environments [F abstract]
+Source: https://arxiv.org/abs/2404.07972
+- Real OS environments with "task setup, execution-based evaluation, and interactive learning". Each task has an initial-state setup script and an evaluation script that inspects the resulting state.
+- Take for Waldo: each case ships a setup script (seed mailbox, calendar, memory) and a checker script. If a case has no checker it is not ready to be scored.
+
+2.6 Online-Mind2Web and "An Illusion of Progress?" - live-web evaluation and judge validation [F abstract]
+Source: https://arxiv.org/abs/2504.01382 ; https://github.com/OSU-NLP-Group/Online-Mind2Web
+- Finds "over-optimism in previously reported results" and traces it to shortcomings of earlier benchmarks. Introduces 300 tasks over 136 live websites.
+- WebJudge, an LLM judge, reaches "around 85% agreement with human judgment", with an average success-rate gap of 3.8%, and ranks agents the way humans do.
+- A related audit of WebArena-Lite (human review of outcomes and trajectories) exists at https://arxiv.org/html/2610.01491 [H, fetch returned nothing].
+- Take for Waldo: report judge-human agreement for every judged dimension, and report the success-rate gap, not just agreement. Do live-web checks on a small sample only.
+
+2.7 LongMemEval - memory [F abstract]
+Source: https://arxiv.org/abs/2410.10813 ; https://xiaowu0162.github.io/long-mem-eval/
+- 500 curated questions inside scalable chat histories, testing five abilities: information extraction, multi-session reasoning, temporal reasoning, knowledge updates, abstention. Commercial assistants and long-context models showed about a 30% accuracy drop on memorizing information across sustained interactions.
+- Take for Waldo: the memory lane needs the same five sub-abilities. Abstention ("I do not have that") and knowledge updates (a fact changed on day 3) are the ones personal agents most often get wrong, and the ones that cost trust.
+
+2.8 ST-WebAgentBench - safety and trust scored with success [F abstract]
+Source: https://arxiv.org/abs/2410.06703 ; https://github.com/segev-shlomov/st-webagentbench
+- 375 tasks, 3,057 policies in total, six orthogonal dimensions (for example user consent, robustness). Metric "Completion Under Policy" credits only completions that respect all applicable policies; a "Risk Ratio" counts breaches per dimension. For the three agents tested, average CuP was less than two-thirds of the nominal completion rate.
+- Take for Waldo: define a Waldo CuP. A trip-planning case that reaches the right shortlist but sends a message to a third party without review scores 0 on the headline metric.
+
+2.9 ToolEmu - LM-emulated tools for risky scenarios [F abstract]
+Source: https://arxiv.org/abs/2309.15817 ; https://toolemu.com/
+- An LM emulates tool execution so high-stakes, long-tail scenarios (leaking private data, financial loss) can be tested without building each tool; an LM safety evaluator scores failures. Human check: 68.8% of the failures it found were valid real-world failures. Benchmark: 36 toolkits, 144 cases.
+- Take for Waldo: use emulated tools only for risk discovery, not for scored results. A 31% false-alarm rate means every emulated finding needs human triage before it counts. Scored cases use deterministic fixtures.
+
+2.10 GAIA - assistant questions with unambiguous answers [H]
+Source: https://arxiv.org/abs/2311.12983 ; dataset gated at https://huggingface.co/gaia-benchmark
+- Real-world assistant questions with short, checkable answers. Memory notes the dataset is access-gated, which is why it was left out. Design lesson only: write questions whose answer is exact and verifiable.
+
+2.11 Holistic Agent Leaderboard (HAL) - infrastructure and log inspection [F]
+Source: https://arxiv.org/abs/2510.11977 ; https://hal.cs.princeton.edu/ ; https://github.com/princeton-pli/hal-harness
+- Standard harness parallelizing evaluation across hundreds of VMs ("weeks to hours"); 21,730 rollouts, 9 models, 9 benchmarks, about $40,000. Reports that "higher reasoning effort reducing accuracy in the majority of runs."
+- LLM-aided log inspection found unreported behavior such as an agent "searching for the benchmark on HuggingFace instead of solving a task, or misusing credit cards in flight booking tasks." They released all logs (2.5B tokens).
+- Take for Waldo: read logs, not just scores. Run an automated "did it do anything odd" pass over every trajectory. Score cost per task alongside accuracy. Test reasoning-effort and model settings explicitly; more is not always better.
+
+2.12 AI Agents That Matter - cost, holdouts, reproducibility [F abstract]
+Source: https://arxiv.org/abs/2407.01502
+- Four critiques: accuracy-only evaluation ignores cost; model developers and downstream users have different needs; "many agent benchmarks have inadequate holdout sets, and sometimes none at all", which leads to fragile agents that overfit; no standardization, so results do not reproduce. Prescribes a framework for avoiding overfitting.
+- Take for Waldo: always report accuracy and cost together (a Pareto view); keep a holdout nobody tunes against; fix and publish the harness settings.
+
+2.13 Contamination: LiveBench, SWE-bench Verified retirement, LongMemEval-type refresh [F]
+Sources: https://arxiv.org/abs/2406.19314 (LiveBench) ; https://openai.com/index/why-we-no-longer-evaluate-swe-bench-verified/ (23 Feb 2026) ; https://arxiv.org/html/2512.10218v2 [H]
+- LiveBench: frequently updated questions from recent sources, automatic scoring against objective ground truth, to resist both contamination and judge pitfalls.
+- OpenAI on SWE-bench Verified: in an audited 27.6% subset of problems models often failed, "at least 59.4%" had flawed tests that reject correct solutions; and models that had seen the problems in training did better. They stopped reporting it and recommend SWE-bench Pro.
+- Take for Waldo: your cases are private, so contamination risk is low today. It rises the moment Waldo's own prompts, memory or fine-tuning data include case text, or cases are published. Keep case text out of prompts and out of any distillation data; refresh the holdout.
+
+2.14 Terminal-Bench audit - the "frame" problem [F, independent blog audit, not peer reviewed]
+Source: https://june.kim/terminal-bench-frame (9 Jul 2026)
+- Claim: Terminal-Bench grades final container state for the asked-for properties and never checks what else the run touched. It lacks the "pass-to-pass" condition that a passing run leaves everything not asked about intact. A related public issue reports a trivial destructive solution scoring full reward: https://github.com/harbor-framework/terminal-bench-1/issues/1459 [H].
+- Treat as a single-author audit, but the logic is sound and directly relevant.
+- Take for Waldo: every case needs a frame check: a list of objects and recipients that must be untouched, plus a diff of the whole world versus the allowed changes.
+
+2.15 LLM-as-a-judge reliability [F]
+Sources: https://arxiv.org/abs/2306.05685 (MT-Bench, Zheng et al.) ; https://arxiv.org/abs/2410.21819 (self-preference bias) ; https://aclanthology.org/2025.ijcnlp-long.18/ (position bias study) [H] ; https://arxiv.org/abs/2410.10934 (Agent-as-a-Judge) [F abstract]
+- Strong LLM judges reached over 80% agreement with human preferences, the same level as human-human agreement; known biases: position, verbosity, self-enhancement, limited reasoning ability; mitigations proposed.
+- GPT-4 showed significant self-preference bias; the study ties it to perplexity: judges favor text that is more familiar to them.
+- Agent-as-a-Judge: use an agent with tools to evaluate agentic work and give richer intermediate signals, with a human evaluation baseline.
+- Take for Waldo: never let the model family under test grade itself; swap answer order; ask for evidence quotes; calibrate against human labels and keep a "judge golden set". See section 4.
+
+2.16 METR time horizons and task standard [H]
+Sources: https://metr.org/time-horizons/ ; https://metr.org/blog/2025-03-19-measuring-ai-ability-to-complete-long-tasks/ ; https://github.com/METR/task-standard
+- Measures how long a task (in human time) an agent can complete at a given reliability. Task standard defines a portable task format. Not read in full; use only as a design idea: tag each case with an estimated human time and report success by time bucket.
+
+====================================================================
+3. DESIGN PRINCIPLES, EXTRACTED
+====================================================================
+P1 Outcome first, trajectory second. Primary score comes from world state and effect trace. Trajectory grading (did it ask before sending, did it verify before claiming) is secondary but still a hard-fail source.
+P2 Verifiable by construction. Prefer cases where a script can decide pass/fail. Use programmatic generation from atoms (tau2) to scale. Use human review for every case before it is scored (tau-bench, WebArena-Verified).
+P3 Reliability is the metric. pass^k with k of at least 4, plus the spread. One lucky run proves nothing.
+P4 Safety is part of success. CuP-style headline: success AND zero forbidden effects AND honest reporting.
+P5 Frame checks. Whole-world diff versus an allowed-change list.
+P6 Adversarial twin. Every read-heavy case has a variant with untrusted content carrying an instruction.
+P7 Simulated users are constrained. Persona + fact sheet, tool- and state-bounded, scripted variation (terse, vague, changes mind, silent for a day).
+P8 Judge discipline. Deterministic first; LLM judge only for the rest; validate against humans; different model family; report agreement.
+P9 Anti-decay. Holdout, refresh, audit, version every case and grader. Report the benchmark version with every score.
+P10 Reproducibility and cost. Pinned model, prompt, tool versions, seeds, temperature; log tokens and dollars per case; keep all trajectories.
+P11 Sandbox everything. Fake accounts, fake recipients on non-routable or owned test domains, mock payment rails, send-capture instead of send. No real third party ever receives anything from an eval.
+P12 Fair cross-agent comparison. Same tasks, same fixtures, same time and cost budget, same tool access, same grader, blind grading. Disclose where an agent has tools the other lacks.
+
+====================================================================
+4. LLM-JUDGE RELIABILITY: CONCRETE PROTOCOL
+====================================================================
+Use a judge only for dimensions with no checker: usefulness/voice, honesty of the final message, quality of a plan, tone of a draft.
+1. Rubric of 0/1/2 anchors with written examples for each level. One dimension per judge call.
+2. Judge sees: the task, the evidence (effect trace, final world diff), the output. It must quote the evidence for each score before scoring.
+3. Judge from a different model family than the agent under test. This follows from the self-preference result. Do not let Waldo's model grade Waldo.
+4. Order and position: for pairwise comparisons (Waldo vs another agent) run both orders; count a win only if it holds in both.
+5. Length control: tell the judge that length earns nothing; add a case where the shorter answer is better.
+6. Golden set: 30 to 50 outputs labeled by Shivansh (or Shivansh plus the "higher intelligence agent" review he already used). Report judge-human agreement per dimension and the success-rate gap, as Online-Mind2Web does (about 85% agreement is the published bar for a usable judge). Below about 80%, do not use that judge for that dimension.
+7. Re-run each judgment 3 times at temperature 0 to 0.3; flag any case where scores differ by more than 1.
+8. Hard fails are never judged by an LLM alone. They come from the effect trace.
+9. Re-validate the judge whenever the judge model or rubric changes.
+Caveat: the 80% / 85% figures are the ones in the cited papers for their own tasks. Waldo's tasks differ; measure your own.
+
+====================================================================
+5. SAFE SANDBOXING FOR A PERSONAL AGENT
+====================================================================
+- Synthetic worlds: fake owner, fake contacts, fake mail, fake calendar, fake merchants. Seed from a script so every run starts identical and can be reset (WebArena-style self-hosting; OSWorld-style setup scripts).
+- Capture, do not send: every outbound action (message, email, booking, payment, share, delete) goes to a recording sink. Grading reads the sink. Nothing leaves the sandbox. This also gives the effect trace for the frame check.
+- Real-account runs are a separate, later rung of the ladder, needing the owner's approval per run (already his rule, and consistent with the memory note that a hermetic pass is never called production-ready).
+- Injection payloads are inert strings in fixtures; none contain real URLs that could be followed outside the sandbox.
+- Spending caps and token ceilings per case and per chunk (already used: 400k-token ceiling on the first chunk).
+- Chunked runs with human check between chunks (already his rule).
+- No secrets in fixtures, prompts or logs; scrub logs before sharing.
+- Honeypots: a tempting but forbidden tool (for example a real-looking payment method) to detect misuse, similar to HAL's finding of agents misusing credit cards in flight-booking tasks.
+
+====================================================================
+6. CONCRETE RECOMMENDATIONS FOR THE WALDO EVAL
+====================================================================
+(Based on the 36-case set and the plans recorded in memory as of 4 Oct. I have not inspected the repo, so check each item against what is already built.)
+
+R1 Make the headline metric "Clean Success at k": a case passes a trial only if (a) end state matches the goal, (b) no forbidden effect, frame check clean, (c) final message honest (no claimed action that did not happen). Report pass^k for k=4 on every case that is cheap enough, and pass^1 as a secondary number. Reason: tau-bench, ST-WebAgentBench.
+R2 Add a frame check to every case: "allowed changes" list and a world diff. Any other change is a hard fail. Reason: Terminal-Bench audit.
+R3 Split scoring into three layers per case: Layer 1 deterministic (state, sink, forbidden effects), Layer 2 rubric judged (usefulness, voice, proactivity vs noise, memory continuity), Layer 3 human spot check (10 to 20% of cases plus all disagreements). Keep the existing 0/1/2 eight-dimension rubric for Layer 2; make "unauthorized effect, fake receipt, hidden failure" Layer 1 hard fails.
+R4 Add an injection twin for each case that reads email, web or documents (target 10 to 12 twins). Report utility, utility under attack, and attack success separately (AgentDojo).
+R5 Build a constrained user simulator and scripted user variations per case: terse, ambiguous, mid-task change, delayed reply, user must act (tau2 dual control). Persona and fact sheets stored with the case.
+R6 Memory lane following LongMemEval: separate cases for extraction, multi-session reasoning, temporal reasoning, knowledge update, abstention. Include "owner changed a preference on day 3" and "ask about something never told".
+R7 Generate variants by composition (family x stress axis) from the same atoms; humans audit every generated case before it is scored. The planned 10 x 12 matrix and 30-cell first gate fit this.
+R8 Judge validation: golden set of 30 to 50 human-labeled outputs; report judge-human agreement and success-rate gap; judge from a different model family; two-order pairwise.
+R9 Holdout hygiene: the 16-case holdout is never used for prompt tuning or distillation; log who looked at it and when; rotate in new holdout cases each quarter; version every case (v2, v2.1) and print the case-set version on every report. Keep case text out of Waldo's prompts, memory and any training data.
+R10 Cost and latency are columns, not footnotes: tokens, dollars, tool calls, wall time per case and per pass (HAL, AI Agents That Matter). Show accuracy against cost.
+R11 Log review pass: an automated "anything odd" read of every trajectory (looked for the answer elsewhere, touched something unrelated, retried a failed send, claimed success without evidence). Humans read the flagged ones. (HAL)
+R12 Reliability across settings: test at least two model settings or reasoning-effort levels. HAL found more reasoning effort lowered accuracy in most runs, so do not assume.
+R13 Time-bucket tags: tag each case with an estimated human time (5 min, 30 min, half a day, multi-day follow-through) and report success by bucket (METR idea). Multi-day follow-through cases need a simulated clock.
+R14 Fair cross-agent comparison design (Waldo vs Instinct vs Codex vs others):
+ - Same fixture world, same prompts, same budget, same grader, graders blind to which agent produced the output.
+ - Disclose capability asymmetries (for example, which agents can read mail or browse). Where an agent cannot run in the fixture world, mark it "not run", not "failed".
+ - For Instinct, record only what its visible behavior shows in the same task (messages, actions seen). Do not assume or reconstruct anything about how it works. Treat any score as "observed on this task set, N trials".
+ - For agents you cannot run (published-capability only: Meta Muse, Poke, Grok), keep them out of the scored table; show a capability table with source links instead.
+ - Report differences only with a trial count and a confidence interval; with 36 cases and k=4, small gaps are noise.
+R15 Audit before trust: before any score is quoted outside the team, a human re-reads each case's checker against its stated goal (WebArena-Verified lesson), and a trivial-solution probe is run (a do-nothing agent and a delete-everything agent must both score zero). The probe is cheap and catches broken graders.
+R16 Ladder stays: hermetic logic -> staging trials on test accounts -> live proof task (the Rize trip). Report each rung separately and never merge them.
+R17 Non-developer standard: add a small set of cases written in the natural, vague way a non-developer would ask, since the stated bar is a general person, not a developer. Source the phrasing from real public usage posts and the owner's own use cases.
+
+Suggested order of work (small to large):
+ 1. Frame check + do-nothing/delete-everything probes on the existing graders (R2, R15).
+ 2. pass^k harness option and cost columns (R1, R10).
+ 3. Judge golden set and agreement report (R8).
+ 4. Injection twins for the email/web cases (R4).
+ 5. Memory lane (R6) and user-simulator variations (R5).
+ 6. Composition generator and holdout rotation (R7, R9).
+
+====================================================================
+7. LIMITS AND OPEN QUESTIONS
+====================================================================
+- I read abstracts and selected bodies, not every paper in full; sections marked [H] are search highlights only.
+- The Terminal-Bench audit is a single-author blog artifact (self-described as re-runnable); I rely on it for the argument, not for its numbers.
+- The "about 85%" and "over 80%" judge agreement figures are from the cited papers on their own tasks; Waldo needs its own measurement.
+- Figures like pass^8 under 25% are from the 2024 tau-bench paper with the models of that time and are cited only to show why pass^k matters, not as current scores.
+- I did not review the Waldo repo, the 36-case file or the grader packet contract; recommendations are checked only against the memory notes. Some items may already exist.
+- Part B (mapping the 13 use cases from the owner's post against Waldo) is not part of this task.
+
+====================================================================
+8. SOURCE LIST
+====================================================================
+[F] tau-bench: https://arxiv.org/abs/2406.12045
+[F] tau2-bench: https://arxiv.org/abs/2506.07982
+[F] AgentDojo: https://arxiv.org/abs/2406.13352
+[F] WebArena-Verified: https://github.com/ServiceNow/webarena-verified
+[F] MT-Bench / LLM-as-a-judge: https://arxiv.org/abs/2306.05685
+[F] Self-preference bias: https://arxiv.org/abs/2410.21819
+[F] Agent-as-a-Judge: https://arxiv.org/abs/2410.10934
+[F] HAL: https://arxiv.org/abs/2510.11977
+[F] AI Agents That Matter: https://arxiv.org/abs/2407.01502
+[F] LongMemEval: https://arxiv.org/abs/2410.10813
+[F] LiveBench: https://arxiv.org/abs/2406.19314
+[F] ToolEmu: https://arxiv.org/abs/2309.15817
+[F] OSWorld: https://arxiv.org/abs/2404.07972
+[F] Online-Mind2Web / An Illusion of Progress: https://arxiv.org/abs/2504.01382
+[F] ST-WebAgentBench: https://arxiv.org/abs/2410.06703
+[F] OpenAI on SWE-bench Verified: https://openai.com/index/why-we-no-longer-evaluate-swe-bench-verified/
+[F] Terminal-Bench audit (blog): https://june.kim/terminal-bench-frame
+[H] WebArena: https://webarena.dev/og/ ; VisualWebArena: https://aclanthology.org/2024.acl-long.50/
+[H] GAIA: https://arxiv.org/abs/2311.12983
+[H] METR time horizons: https://metr.org/time-horizons/ ; task standard: https://github.com/METR/task-standard
+[H] Position bias in judges: https://aclanthology.org/2025.ijcnlp-long.18/
+[H] WebArena-Lite human audit: https://arxiv.org/html/2610.01491
+[H] SWE-bench memory vs ability: https://arxiv.org/html/2512.10218v2
+[H] Terminal-Bench issue: https://github.com/harbor-framework/terminal-bench-1/issues/1459
+Internal context used: owner's memory note on the Waldo evals program (36 cases, v2.1 overlay, parity benchmark design, scenario matrix).
