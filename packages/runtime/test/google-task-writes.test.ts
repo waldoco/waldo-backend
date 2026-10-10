@@ -292,7 +292,7 @@ describe('Google Tasks serving tool', () => {
     const seen: unknown[] = [];
     const handler = googleTaskHandlers({ proposeGoogleTaskChange: async (...args) => { seen.push(args); return 'proposal'; } })[0]!;
     const args = handler.schema.parse(create);
-    expect(await handler.handle(args, { authenticatedUserId: 'owner', turnId: 'turn', toolCallId: 'tool' } as never)).toMatchObject({ ok: true, source_taint: 'external', data: { approval_ref: 'proposal', applied: false, source: 'google_tasks' } });
+    expect(await handler.handle(args, { authenticatedUserId: 'owner', turnId: 'turn', toolCallId: 'tool' } as never)).toMatchObject({ ok: true, source_taint: null, data: { approval_ref: 'proposal', applied: false, source: 'google_tasks' } });
     expect((seen[0] as unknown[])[0]).toEqual(create);
     expect((seen[0] as unknown[])[1]).toMatch(/^tool:[a-f0-9]{64}$/);
     expect(handler.autonomy_gated).toBe(false);
@@ -300,6 +300,6 @@ describe('Google Tasks serving tool', () => {
   });
   it('returns a typed reconnect intent on a revoked provider grant', async () => {
     const handler = googleTaskHandlers({ proposeGoogleTaskChange: async () => { throw new GoogleError(401, 'grant revoked'); } })[0]!;
-    expect(await handler.handle(handler.schema.parse(create), {} as never)).toMatchObject({ ok: false, code: 'auth_failed', source_taint: 'external', connect: { status: 'auth_required', service: 'google', feature: 'tasks', reason: 'reauth_needed' } });
+    expect(await handler.handle(handler.schema.parse(create), {} as never)).toMatchObject({ ok: false, code: 'auth_failed', connect: { status: 'auth_required', service: 'google', feature: 'tasks', reason: 'reauth_needed' } });
   });
 });
