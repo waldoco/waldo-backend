@@ -187,8 +187,12 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
   const end = cursor?.startsWith('before:') ? Math.max(before, 0) : Math.max(shown.length - taken, 0);
   const start = Math.max(end - size, 0);
   const newestReply = new Map(shown.filter(entry => entry.role === 'assistant' && entry.parentId).map(entry => [entry.parentId!, entry.id]));
-  const messages = shown.slice(start, end).reverse().map(entry => ({ id: entry.id, role: entry.role, text: entry.appPayload,
-    parts: [{ type: 'text' as const, text: entry.appPayload }, ...(entry.parentId && newestReply.get(entry.parentId) === entry.id ? parts(entry.parentId) : [])], channel: entry.surface, parent_id: entry.parentId }));
+  const messages = shown.slice(start, end).reverse().map(entry => {
+    const attached = entry.parentId && newestReply.get(entry.parentId) === entry.id ? parts(entry.parentId) : [];
+    // A reader that cannot parse a part shows only `text`, so a reply carrying a card is never textless.
+    const text = entry.appPayload.trim() || !attached.length ? entry.appPayload : attached.map(part => part.fallback_text).join('\n\n');
+    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...attached], channel: entry.surface, parent_id: entry.parentId };
+  });
   return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };
 };
 
