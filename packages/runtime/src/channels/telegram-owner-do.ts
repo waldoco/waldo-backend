@@ -3,7 +3,7 @@ import { AppInbox, type AppInboxRecord } from './app-inbox';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { surfaceOwnerAdmission } from '../identity/surface-owner-admission';
-import { createOwnerTurnContext } from '../context-composer/owner-turn';
+import { createOwnerTurnContext, type OwnerContextSources } from '../context-composer/owner-turn';
 import { canonicalOwnerConversationStore } from '../conversation/canonical-owner-store';
 import { ownerEffectLedger } from './owner-effect-ledger';
 import {commonRuntimeReadiness} from './common-runtime-readiness';
@@ -522,12 +522,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       || this.ctx.storage.kv.get<string>('do_name') !== name) throw new ClosedRunError();
     return appSessionAuthority(this.env)(name, hash);
   }
-  private async appContext(name: string, hash: string, text: string, occurrence: string, occurredAt: number, scope: RunEffectScope) {
+  private async appContext(name: string, hash: string, text: string, occurrence: string, occurredAt: number, scope: RunEffectScope, sources?: OwnerContextSources) {
     const lookup=async()=>{
       scope.admit(); const session=await this.appAuthority(name,hash); scope.admit();
       return {ownerId:session.ownerId,bindingRef:session.sessionHash,revision:session.revision,physicalDoId:this.ctx.id.toString()};
     };
-    return createOwnerTurnContext(await surfaceOwnerAdmission({scope,lookup,expectedPhysicalDoId:this.ctx.id.toString(),surface:'app',subject:hash,occurrenceKey:occurrence,occurredAt,text}));
+    return createOwnerTurnContext(await surfaceOwnerAdmission({scope,lookup,expectedPhysicalDoId:this.ctx.id.toString(),surface:'app',subject:hash,occurrenceKey:occurrence,occurredAt,text}),sources);
   }
   // Worker-to-DO only: signed by the router secret, never reachable through a forwarded client path. Signout calls it before
   // the session is revoked, so a retry after a failed revoke is safe, and again after, for work admitted in between. It
@@ -1994,7 +1994,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       channel === 'app' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeApp;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
-        const context=await this.appContext(record.owner,record.sessionHash,record.text,record.id,record.admittedAt,scope);
+        // The composer runs on every tool round; one health read serves the whole turn.
+        let health:ReturnType<typeof healthContext.latest>|undefined;
+        const context=await this.appContext(record.owner,record.sessionHash,record.text,record.id,record.admittedAt,scope,{health:()=>health??=healthContext.latest(turn.traceId)});
         if(context.conversationRef!==record.conversationRef)throw new ClosedRunError();
         return context;
       }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context)} : undefined,

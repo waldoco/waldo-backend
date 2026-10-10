@@ -21,7 +21,7 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
   const name=`basic-app-owner-${crypto.randomUUID()}`,stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
   await runInDurableObject(stub,async(_unused,state)=>{
     const SECRET='fictional-basic-app-router-secret-000000000000',DIRECTORY='https://basic-app.fixture.invalid',OWNER='10000000-0000-0000-0000-000000000001',AUTH='20000000-0000-0000-0000-000000000001',EMAIL='owner@example.test';
-    const calls:string[]=[];let hash:string|undefined,live=false,directoryUnavailable=false,settingsWrites=0;let savedZone='UTC';const created=new Date().toISOString(),expires=Date.now()+3600000;
+    const calls:string[]=[];let hash:string|undefined,live=false,directoryUnavailable=false,settingsWrites=0;let savedZone='UTC',healthReads=0;const created=new Date().toISOString(),expires=Date.now()+3600000;
     const fetcher=vi.spyOn(globalThis,'fetch').mockImplementation(async(input,init)=>{
       const url=new URL(String(input));expect(url.origin).toBe(DIRECTORY);const a=JSON.parse(String(init?.body));
       if(url.pathname==='/auth/v1/otp'){expect(a.email).toBe(EMAIL);calls.push('otp');return Response.json({});}
@@ -49,7 +49,8 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       if(fn==='workspace_owner_binding')return Response.json({owner_id:OWNER,environment:'staging',namespace:'basic-app-owner',do_name:name,do_id:state.id.toString(),state_version:0,mapping_version:1});
       if(fn==='app_push_revoke_session'){expect(live).toBe(true);expect(a.p_do_name).toBe(name);expect(a.p_session_hash).toBe(hash);return Response.json(0);}
       if(fn==='console_session_revoke'){expect(calls.at(-2)).toBe('app_push_revoke_session');live=false;return Response.json(true);}
-      if(fn==='health_context_read'||fn==='health_plane')return Response.json(null);
+      if(fn==='health_context_read'){healthReads++;return Response.json({context:{id:'basic-health',day:new Date().toISOString().slice(0,10),form:{score:72,zone:'good'},recovery:{score:70,zone:'good'},weight:{score:45,zone:'moderate'},drivers:[],confidence:0.8,freshness:'fresh',tags:[],compiled_at:new Date(Date.now()-3600000).toISOString()},previous:null});}
+      if(fn==='health_plane')return Response.json(null);
       throw Error(`Unlisted fixture RPC ${fn}`);
     });
     const settings={...env,TELEGRAM_BOT_TOKEN:undefined,TELEGRAM_WEBHOOK_SECRET:undefined,WALDO_OWNER_TELEGRAM_ID:undefined,OPENAI_API_KEY:'synthetic-model-key',COMMON_OWNER_TASKS:'0',COMMON_BROWSER_REGISTRATION:undefined,WALDO_ENVIRONMENT:'staging',WALDO_OWNER_DO_NAMESPACE:'basic-app-owner',WALDO_OWNER_TIMEZONE:'UTC',WALDO_EGRESS_ALLOWLIST:'*',WALDO_TOOL_OFFLOAD:'0',SUPABASE_PROJECT_URL:DIRECTORY,SUPABASE_PUBLISHABLE_KEY:'fictional-public-key',WALDO_ROUTER_HMAC_SECRET:SECRET,RESPONSIBILITY_RATE_LIMITER:{limit:async()=>({success:true})},BROWSER:undefined};
@@ -69,6 +70,7 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       expect(page.messages.find((m:any)=>m.role==='user')).toMatchObject({id:receipt.message_id,text:body.text,channel:'app'});
       expect(page.messages.find((m:any)=>m.role==='assistant')).toMatchObject({text:'Hello from the signed app owner.',parent_id:receipt.message_id,channel:'app'});
       expect(forwards[0]!.headers.get('x-waldo-app-session-hash')).toBe(hash);expect(proof.inputs.filter(i=>!i.text?.format)).toHaveLength(1);
+      const told=proof.inputs.find(i=>!i.text?.format).instructions as string;expect(told.split('Form zone: steady.')).toHaveLength(2);expect(told).not.toContain('No derived health context');expect(healthReads).toBe(1);
       const count=proof.inputs.length;instance=new TelegramOwnerDO(state,settings as never);
       const recovered=await app(`/chat/main/messages/${clientId}`,undefined,credential);expect(recovered.status).toBe(200);expect(await recovered.json()).toMatchObject({message_id:receipt.message_id,state:'completed'});
       const retried=await app('/chat/main/messages',body,credential);expect(retried.status).toBe(202);expect(await retried.json()).toMatchObject({message_id:receipt.message_id,state:'completed'});
