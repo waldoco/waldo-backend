@@ -10,7 +10,7 @@ type Send = (url: string, init: RequestInit) => Promise<Response>;
 type Span = Readonly<{ entry: TurnLogEntry; endMs: number; arrival: number }>;
 
 // Bump when a name, tag or metadata key below changes meaning, so dashboards can filter by it.
-export const TRACE_SCHEMA_VERSION = '5';
+export const TRACE_SCHEMA_VERSION = '6';
 
 // Every hop has one feature area and a Langfuse observation type. New hops land in `other`
 // as plain spans until they are added here; model calls (`llm_*`) are always generations.
@@ -88,6 +88,18 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
     ];
   };
 
+  // What filled a model call, as numbers only, so section sizes can be compared across turns and surfaces.
+  const contextMetadata = ({ shape }: TurnLogEntry) => {
+    if (!shape?.context) return [];
+    const { system_sections: sections = {}, ...counts } = shape.context;
+    return [
+      attr('langfuse.observation.metadata.context_system_bytes', String(shape.system_bytes)),
+      attr('langfuse.observation.metadata.context_request_bytes', String(shape.request_bytes)),
+      ...Object.entries(counts).map(([key, value]) => attr(`langfuse.observation.metadata.context_${key}`, String(value))),
+      ...Object.entries(sections).map(([key, value]) => attr(`langfuse.observation.metadata.context_system_${key}_bytes`, String(value))),
+    ];
+  };
+
   const io = ({ text }: TurnLogEntry) => {
     if (!context.captureText || !text) return [];
     return [
@@ -157,6 +169,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
       ...(entry.guard ? [attr('langfuse.observation.metadata.guard', entry.guard)] : []),
       ...(entry.owner ? [attr('langfuse.observation.metadata.owner', entry.owner)] : []),
       ...generation(entry),
+      ...contextMetadata(entry),
       ...io(entry),
       ...extra,
     ],
