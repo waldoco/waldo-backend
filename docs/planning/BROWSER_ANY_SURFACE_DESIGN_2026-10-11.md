@@ -36,10 +36,11 @@ Read from source at `c081254d`. File and line references are in audit doc §2.
 2. **The native browser cannot submit, book or RSVP.** Only file upload is coming (#987).
 3. **Staging has no native browser** until S0 passes. The S0 in #908 does not test the retained path.
 4. **Card fields are not masked.** The legacy review prints page bindings raw.
-5. **No mid-errand progress reaches any surface except the final reply.** The outbox is keyed by Telegram `chat_id`.
-6. **The app has no step log, live view, takeover or browser presence.**
-7. **No saved sign-ins.**
-8. **Latency.** Each step is a full owner-loop model call: about 6 s at about 64k input tokens (latency memo, 10 October). The model also picks the provider, so a failed native call can be followed by a Browserbase retry.
+5. **Health values the model types or puts in a URL are not refused.** Browser arguments are sanitized as model context (audit finding 6).
+6. **No mid-errand progress reaches any surface except the final reply.** The outbox is keyed by Telegram `chat_id`.
+7. **The app has no step log, live view, takeover or browser presence.**
+8. **No saved sign-ins.**
+9. **Latency.** Each step is a full owner-loop model call: about 6 s at about 64k input tokens (latency memo, 10 October). The model also picks the provider, so a failed native call can be followed by a Browserbase retry.
 
 ## 3. Shape
 
@@ -216,14 +217,19 @@ Targets come after the first baseline.
 |---|---|---|
 | S0 before a staging browser binding | Guard rule 4; the binding arrives only in the PR that records a real S0 run | Re-cut S0 to cover the retained path (audit §1.1). The rule is not loosened. |
 | No purchases until limits | The desk refuses payment pages (§4.4); the spend reservation stays on browser milliseconds only | E21 is a refusal test until limits exist |
-| Credentials out of prompts, logs, fixtures | Sign-in only through takeover; secret fields refused for fill and masked in observations; saved-sign-in state never exported | Canary scan after every logged-in errand |
+| Credentials out of prompts, logs, fixtures | Sign-in only through takeover; secret fields refused for fill and masked in observations; saved-sign-in state never exported; card numbers in tool arguments redacted by the sanitizer | Canary scan after every logged-in errand |
 | Secret-type fields masked in every review | Today: password and OTP | Add `autocomplete` `cc-number`, `cc-csc`, `cc-exp*`, `new-password` and `current-password` to observation, screenshot mask, fill refusal, step log and approval review on every surface. `describeBrowser` masks the same keys (piece A round 4 item 2) |
-| Health never in browser jobs | The browser context excludes the health plane; steps and screenshots carry no health input | Page content the owner directs the browser to, such as a lab portal, is external tainted content classified at ingress like any other. Owner call: should such pages be refused? |
+| Health never in browser jobs | **Today: not enforced** for typed values or navigated URLs. Browser tool arguments are sanitized as `internal_context`, where owner health is allowed by the beta ruling (audit finding 6) | Proposed: a browser-outbound sanitize destination that refuses health values in `type` values and URLs, with tests, as part of B1. The structural version comes with lever 2 (§4.8). Pages the owner directs the browser to, such as a lab portal, are external tainted content classified at ingress. Owner call: should such pages be refused? |
 | Cost ceiling | Browser milliseconds and model calls per errand recorded per run | Counted toward the relayed $25 per user per month when #915 L exists |
 
 ## 5. app.v1 proposals (for the gap-analysis lane, sole editor of `packages/contracts/src/app/*`)
 
-All additive. Every row that carries a new part keeps readable `text`. No new value goes into an existing row-level or page-level enum.
+All additive. Every row that carries a new part keeps readable `text`. No new value goes into an existing row-level or page-level enum. Every new route meets the new-endpoint checklist:
+- an authenticated app session, with the errand scoped to that owner;
+- a screenshot `ref` that resolves only within that owner's errand, never to an arbitrary workspace file;
+- rate limits on the read routes as well as the actions;
+- generic errors;
+- `private, no-store`.
 
 1. **Presence now, no contract change:** reuse the existing `operation` message part (`operation_id`, `state`, `message`) for "Waldo is browsing <site>".
 2. **A new message part, `browser_errand`:**
@@ -253,8 +259,8 @@ One slice in flight at a time. Each has failing tests first, one full `verify`, 
 | # | Slice | Depends on | Exit evidence |
 |---|---|---|---|
 | B0 | Close #881, #894, #895, #906, #911, #941 and #966; land #987 after its rebase; re-cut #973 with the `TOOL_SOURCE` fix | Owner go per action; piece A for #987 | PRs closed with links to the superseding PRs; #987 green at its rebased head |
-| B1 | Card and credential field masking everywhere (§4.9) | Coordination with piece A for `describeBrowser` | Canary card number and OTP absent from observation, screenshot, steps and review |
-| B2 | S0 re-cut covering the retained path; one live run | Owner go to deploy the throwaway Worker | Raw S0 output; then a separate binding PR |
+| B1 | Card and credential field masking everywhere, and a browser-outbound sanitize destination that refuses health values (§4.9) | Coordination with piece A for `describeBrowser` | Canary card number and OTP absent from observation, screenshot, steps and review; a synthetic health value in a `type` or `goto` is refused |
+| B2 | S0 re-cut covering the one-shot, retained and handoff paths; one live run | Owner go to deploy the throwaway Worker | Raw S0 output; then a separate binding PR |
 | B3 | Authority on every surface (§4.1) | `20261010060000` applied on staging | An app-only owner browses on staging |
 | B4 | Errand record, step log and app read routes (§4.2, §5 items 1–3) | Contract parts from the gap-analysis lane | The app shows live steps for E01 |
 | B5 | Errand harness and fixture site; first baseline | Owner go to host the fixture site; an owner session for the runner | First scorecard per §3.3 of the audit doc |
