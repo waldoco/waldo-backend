@@ -1,8 +1,10 @@
 import { EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
 import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
-import type { BrowserTaskContinuation, ProposeCalendarChangeArgs } from '@waldo/contracts';
+import { googleTaskProposalSchema, proposeGoogleTaskChangeArgsSchema, type BrowserTaskContinuation, type ProposeCalendarChangeArgs, type ProposeGoogleTaskChangeArgs } from '@waldo/contracts';
 import { GoogleError, sha256Hex, verifiedSent, type GoogleClient } from '../connectors/google';
+import { describeGoogleTaskChange, reviewGoogleTaskChange, type GoogleTaskApprovalAdapter, type GoogleTaskProposal } from './google-task-approvals';
+import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { BrowserSubmitOutcome } from '../tools/live/browser';
 import type { TurnLogEntry } from './telegram-listener';
 
@@ -10,7 +12,7 @@ export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
 
 type Undo = ({ op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string }) & { applied_etag?: string };
-type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null };
+type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; proposal_digest?: string | null };
 export class EmailProposalError extends Error {
   constructor(readonly reason: 'identifier_reused' | 'card_unconfirmed' | 'already_handled') { super(reason); }
 }
@@ -56,10 +58,12 @@ export type ApprovalDecision = Readonly<{ toast: string; message: string }>;
 export type ApprovalReview =
   | Readonly<{ kind: 'email_send'; account?: string; to: readonly string[]; cc: readonly string[]; bcc: readonly string[]; subject: string; body: string }>
   | Readonly<{ kind: 'message_send'; channel: string; content: string }>
+  | Readonly<{ kind: 'google_task_change'; account: string; proposal: GoogleTaskProposal; proposal_digest: string }>
   | Readonly<{ kind: 'calendar_change'; account?: string; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string }>;
 export type ApprovalItem = Readonly<{ id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; undoable: boolean; review: ApprovalReview | null }>;
 export type ApprovalDesk = Readonly<{
   propose(args: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string): Promise<string>;
+  proposeGoogleTaskChange(args: ProposeGoogleTaskChangeArgs, operationRef?: string, ctx?: ToolDispatcherContext): Promise<string>;
   proposeBrowserSubmit(payload: BrowserSubmitProposal): Promise<string>;
   proposeSendEmail(payload: EmailSendProposal): Promise<string>;
   proposeSendMessage(payload: MessageSendProposal): Promise<string>;
@@ -91,10 +95,21 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   sendMessage?: (proposal: MessageSendProposal) => Promise<void | Readonly<{ provider_id: string }>>;
   // Returns a bounded owner-facing outcome line (the result is external content).
   mcpCall?: (proposal: McpCallProposal, intent: ProxyIntent) => Promise<string | EffectReceipt>;
+  googleTasks?: () => GoogleTaskApprovalAdapter;
+  // Host-derived correlation of a proposal with the run that raised it; it never grants execution authority.
+  currentRunRef?: () => string | undefined;
 }>): ApprovalDesk => {
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
     undo_json TEXT, created_at INTEGER NOT NULL, decided_at INTEGER)`);
+  for (const column of ['proposal_digest', 'origin_run_ref']) {
+    if (!sql.exec<{ name: string }>('PRAGMA table_info(ledger)').toArray().some(existing => existing.name === column)) sql.exec(`ALTER TABLE ledger ADD COLUMN ${column} TEXT`);
+  }
+  const bindOrigin = (id: string, origin: string | undefined) => {
+    if (origin === undefined) return;
+    if (!origin || origin.length > 256 || /[\u0000-\u001f]/.test(origin)) throw new Error('invalid approval origin');
+    sql.exec('UPDATE ledger SET origin_run_ref = ? WHERE id = ? AND origin_run_ref IS NULL', origin, id);
+  };
   const effect = async (operationId: string, tool: string, payload: unknown, dispatch: () => Promise<EffectReceipt>, reconcile: () => Promise<EffectReadback>) => {
     if (!deps.effects) return dispatch();
     return deps.effects.execute({ operationId, owner_ref: String(deps.owner), tool, payload }, { dispatch, reconcile });
@@ -148,6 +163,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (entry.kind === 'email_send') return describeEmail(JSON.parse(entry.payload_json) as EmailSendProposal);
     if (entry.kind === 'message_send') return describeMessage(JSON.parse(entry.payload_json) as MessageSendProposal);
     if (entry.kind === 'mcp_call') return describeMcp(JSON.parse(entry.payload_json) as McpCallProposal);
+    if (entry.kind === 'google_task_change') return describeGoogleTaskChange(googleTaskProposalSchema.parse(JSON.parse(entry.payload_json)));
     return describe(JSON.parse(entry.payload_json) as Stored);
   };
   // ADR-0054 exactly-once: a second approval of the same idempotency key collapses onto the
@@ -221,6 +237,24 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       } else if (entry.kind === 'task_sources') {
         setStatus(id, 'skipped');
         out = { toast: 'Expired', message: 'That request has expired; just ask again.' };
+      } else if (entry.kind === 'google_task_change') {
+        if (action === 'u') {
+          out = { toast: "Can't be undone", message: 'A Google Tasks change cannot be undone from here. Nothing was reversed.' };
+        } else if (action !== 'a' || !deps.googleTasks || !deps.effects) {
+          out = { toast: 'Not available', message: 'This Google task approval cannot be applied here. Nothing was changed.' };
+        } else {
+          const taskProposal = googleTaskProposalSchema.parse(JSON.parse(entry.payload_json));
+          if (!entry.proposal_digest || await sha256Hex(JSON.stringify(taskProposal)) !== entry.proposal_digest) { setStatus(id, 'failed'); throw new Error('Google task proposal identity changed'); }
+          if (!recovering) {
+            sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
+            if (sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed !== 1) return { toast: 'Already handled.', message: 'Already handled.' };
+          }
+          const result = await deps.googleTasks().apply(id, taskProposal, operationRef);
+          if (result.status === 'done') { setStatus(id, 'done'); out = { toast: 'Done', message: `The Google task change was applied and independently read back: ${describeGoogleTaskChange(taskProposal)}` }; }
+          else if (result.status === 'stale') { setStatus(id, 'rejected'); out = { toast: 'The task changed', message: 'The Google task changed after your review. Nothing was changed; ask for a fresh proposal.' }; }
+          else if (result.status === 'not_applied') { setStatus(id, 'rejected'); out = { toast: 'Nothing was changed', message: 'I could not reach that Google task before changing it, so nothing was changed. Ask me again to retry.' }; }
+          else { setStatus(id, 'uncertain'); out = { toast: 'Outcome unknown', message: 'The Google task outcome is unknown. No request was repeated; check the selected account and task before retrying.' }; }
+        }
       } else if (entry.kind === 'browser_submit') {
         const bp = JSON.parse(entry.payload_json) as BrowserSubmitProposal;
         if (action === 'a') {
@@ -446,6 +480,30 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
   return {
     decide,
+    async proposeGoogleTaskChange(args, operationRef, ctx) {
+      const originRunRef = deps.currentRunRef?.();
+      if (!deps.googleTasks || !deps.effects) throw new Error('Google task approval custody is unavailable');
+      args = proposeGoogleTaskChangeArgsSchema.parse(args);
+      if (operationRef) {
+        const prior = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'google_task_change' AND json_extract(payload_json, '$.operation_ref') = ?", operationRef).toArray()[0];
+        if (prior) {
+          const stored = googleTaskProposalSchema.parse(JSON.parse(prior.payload_json));
+          if (JSON.stringify(stored.args) !== JSON.stringify(args)) throw new Error('Google task operation identity reused');
+          if (prior.status === 'open') return prior.id;
+          throw new Error('Google task proposal already handled or delivery unconfirmed');
+        }
+      }
+      const id = `p${deps.newId()}`;
+      const proposal = googleTaskProposalSchema.parse({ ...await deps.googleTasks().prepare(id, args, ctx), ...(operationRef ? { operation_ref: operationRef } : {}) });
+      const digest = await sha256Hex(JSON.stringify(proposal));
+      if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
+      const summary = describeGoogleTaskChange(proposal);
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, proposal_digest) VALUES (?, 'google_task_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL, ?)", id, summary, JSON.stringify(proposal), deps.now(), digest);
+      bindOrigin(id, originRunRef);
+      const review = reviewGoogleTaskChange(proposal);
+      await sayCard(id, review.length <= REVIEW_BUDGET ? review : unreviewable('Google task change?', summary), review.length <= REVIEW_BUDGET ? [['Do it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]], review.length <= REVIEW_BUDGET);
+      return id;
+    },
     async proposeBrowserSubmit(payload) {
       const id = `p${deps.newId()}`;
       const summary = describeBrowser(payload);
@@ -555,7 +613,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     // offering an approval action. Never expose raw MIME, tokens or arbitrary MCP args here.
     pending(now) {
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'open' ORDER BY created_at").toArray();
-      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
+      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'google_task_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
       const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'review_only' ORDER BY created_at").toArray();
       const undoable = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'done' AND undo_json IS NOT NULL AND decided_at IS NOT NULL ORDER BY decided_at DESC LIMIT 5").toArray();
       const review = (r: LedgerRow): ApprovalReview | null => {
@@ -568,6 +626,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           if (r.kind === 'message_send') {
             const p = JSON.parse(r.payload_json) as MessageSendProposal;
             return typeof p.channel === 'string' && typeof p.content === 'string' ? { kind: 'message_send', channel: p.channel, content: p.content } : null;
+          }
+          if (r.kind === 'google_task_change') {
+            const proposal = googleTaskProposalSchema.parse(JSON.parse(r.payload_json));
+            return r.proposal_digest ? { kind: 'google_task_change', account: proposal.account.email, proposal, proposal_digest: r.proposal_digest } : null;
           }
           if (r.kind === 'calendar_change') {
             const p = JSON.parse(r.payload_json) as Stored;

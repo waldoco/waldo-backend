@@ -13,7 +13,7 @@ const request=async(body:unknown,at=Math.floor(Date.now()/1000))=>{
  return new Request('https://edge.invalid',{method:'POST',body:raw,headers:{'x-waldo-at':String(at),'x-waldo-sig':await routerSignature(cfg.WALDO_ROUTER_HMAC_SECRET!,at,`proxy.${digest}`)}});
 };
 const fixture=()=>{
- const rows=new Map<string,{digest:string;result?:unknown;done?:boolean}>();const hops:string[]=[];let effects=0;let lost=false;let scopes:unknown=['https://www.googleapis.com/auth/gmail.send','https://www.googleapis.com/auth/gmail.compose','https://www.googleapis.com/auth/calendar.events'];let healthFail=false;let revoked=false;let active=true;let providerError='';
+ const rows=new Map<string,{digest:string;result?:unknown;done?:boolean}>();const hops:string[]=[];let effects=0;let lost=false;let scopes:unknown=['https://www.googleapis.com/auth/gmail.send','https://www.googleapis.com/auth/gmail.compose','https://www.googleapis.com/auth/calendar.events','https://www.googleapis.com/auth/tasks'];let healthFail=false;let revoked=false;let active=true;let providerError='';
  vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
   const url=String(input);const args=url.startsWith('https://db.invalid/')?JSON.parse(String(init?.body??'{}')):{};const fn=url.split('/').at(-1)!;hops.push(fn);
   if(fn==='proxy_access')return Response.json(args.p_connection==='conn'&&args.p_do_name==='owner'&&!revoked&&active?[{secret:'fictional-refresh',scopes}]:[]);
@@ -32,6 +32,7 @@ const fixture=()=>{
   }
   if(url==='https://www.googleapis.com/calendar/v3/freeBusy'){const payload=JSON.parse(String(init?.body));return Response.json({timeMin:payload.timeMin,timeMax:payload.timeMax,calendars:Object.fromEntries(payload.items.map((item:{id:string})=>[item.id,{busy:[]}]))});}
   if(url.includes('www.googleapis.com/calendar/')){effects++;if(lost)throw new Error('synthetic response loss');return init?.method==='DELETE'?new Response(null,{status:204}):Response.json({id:'event-one',summary:'fixture',start:{dateTime:'2026-10-01T00:00:00Z'},end:{dateTime:'2026-10-01T01:00:00Z'}});}
+  if(url.includes('tasks.googleapis.com')){effects++;if(lost)throw new Error('synthetic response loss');return Response.json({kind:'tasks#task',id:'task-one',title:'fixture',status:'needsAction',etag:'"v1"'});}
   if(url.includes('gmail.googleapis.com')){effects++;if(lost)throw new Error('synthetic response loss');return Response.json({id:'provider-one'});}
   throw new Error('unexpected fictional transport');
  }));return{hops,rows,effects:()=>effects,lose:()=>{lost=true;},scope:(value:unknown)=>{scopes=value;},healthFail:()=>{healthFail=true;},revoke:()=>{revoked=true;},suspend:()=>{active=false;},providerError:(text:string)=>{providerError=text;}};
@@ -67,6 +68,8 @@ it('draft and every calendar mutation claim before dispatch and settled replay n
   ['createEvent',[{title:'fixture',start:'2026-10-01T00:00:00Z',end:'2026-10-01T01:00:00Z'}]],
   ['moveEvent',['event-one','2026-10-01T00:00:00Z','2026-10-01T01:00:00Z']],
   ['cancelEvent',['event-one']],
+  ['createTask',['list-a',{title:'fixture'}]],
+  ['patchTask',['list-a','task-one',{title:'renamed'},'"v1"']],
  ] as const){
   const f=fixture();const input={...body,method,args,intent_id:`approval:${method}`};
   const first=await(await serve(await request(input))).json();expect(first).toHaveProperty('data');

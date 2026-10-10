@@ -107,6 +107,8 @@ import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition } from '../connectors/google-reconnect';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
+import { googleTaskApprovals } from './google-task-approvals';
+import { googleTaskHandlers } from '../tools/live/tasks';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
@@ -1787,9 +1789,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const source = browserSources.guard(payload); await source();
       return this.browserTasks.resolve(this.browserTasks.principal, source);
     } });
-    const effects = ownerEffectLedger(storage, () => deps.now());
+    const currentRunRef = () => this.activeApp?.id ?? this.activeScope?.runId;
+    const effects = ownerEffectLedger(storage, () => deps.now(), currentRunRef);
+    const googleTasks = googleTaskApprovals({ sql: storage.sql, google, effects, ownerRef: String(owner) });
     const desk = approvalDesk(storage.sql, {
-      effects,
+      effects, googleTasks: () => googleTasks, currentRunRef,
       call: routedCall, owner, google: (intent,feature,account) => google.client(feature??'calendar',intent,undefined,account), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
       timezone: clock.timezone, log,
       reviewUrl: async () => {
@@ -1898,7 +1902,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }, { origin: async () => await storage.get<string>('origin') ?? null, durable: Boolean(this.env.ARTIFACTS) }, effects);
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
         // with the artifact text (kinds + sender only; the code itself touches no store).
