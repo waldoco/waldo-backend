@@ -6,7 +6,7 @@ const revision = z.string().regex(/^[a-f0-9]{64}$/);
 export const appControlRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
 export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity']);
 const activityCursor = z.string().regex(/^[0-9]+$/).refine(value => Number.isSafeInteger(Number(value)) && Number(value) > 0);
-export const appControlQueryV1Schema = z.strictObject({ view: appControlViewV1Schema, id: text.max(256).optional(), trace_before: activityCursor.optional(), runs_before: activityCursor.optional() }).superRefine((query, ctx) => {
+export const appControlQueryV1Schema = z.strictObject({ view: appControlViewV1Schema, trace_before: activityCursor.optional(), runs_before: activityCursor.optional() }).superRefine((query, ctx) => {
   if (query.view !== 'activity' && (query.trace_before !== undefined || query.runs_before !== undefined)) ctx.addIssue({ code: 'custom', message: 'Activity cursors require the activity view' });
 });
 export const appControlActionV1Schema = z.strictObject({

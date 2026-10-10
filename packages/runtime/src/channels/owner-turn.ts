@@ -548,17 +548,17 @@ export const createOwnerResponder = (
       })).finally(() => { ownerTurnActive = false; backgroundToolNames = undefined; control.end(); });
       privateRunScope?.admit();
       await assertCurrent();
+      const reply = tree.get(publication.leafId)!.appPayload;
+      // Native delivery reads durable history, so the visible effect receipt belongs in that row.
+      const receipts = fromOwner ? receiptLine(turnToolEvents) : null;
+      const out = receipts ? `${reply}\n\n${receipts}` : reply;
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
-      const savedEntries = [tree.get(id)!, tree.get(publication.leafId)!].map(entry => redactConversationEntry(entry, redact));
+      const savedEntries = [tree.get(id)!, { ...tree.get(publication.leafId)!, ...(context ? { appPayload: out } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }
       privateRunScope?.admit();
       await assertCurrent();
       conversationLeaves.set(conversationRef,publication.leafId);
-      const reply = tree.get(publication.leafId)!.appPayload;
-      // S2b: effect tools this turn get a receipt line from typed tool results; read-only turns get none.
-      const receipts = fromOwner ? receiptLine(turnToolEvents) : null;
-      const out = receipts ? `${reply}\n\n${receipts}` : reply;
       lastReply = out;
       return out;
     } finally { activeOwnerTurn = undefined; }

@@ -7,15 +7,15 @@ import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { handleApp } from '../src/channels/app-api';
 import { routerSignature, linkCodeHash } from '../src/identity/owner-directory';
 
-const proof=vi.hoisted(()=>({inputs:[] as any[],telegram:0,hold:null as null|(()=>Promise<void>)}));
+const proof=vi.hoisted(()=>({inputs:[] as any[],outputs:[] as any[][],telegram:0,hold:null as null|(()=>Promise<void>)}));
 vi.mock('openai',()=>({default:class {responses={create:async(input:any)=>{
   proof.inputs.push(structuredClone(input));const format=input.text?.format?.name;if(!format&&proof.hold){const hold=proof.hold;proof.hold=null;await hold();}
-  return {id:'basic-fixture-model-reply',output:[],output_text:format==='claim_ops'?'{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}':format?'{}':'Hello from the signed app owner.',usage:{input_tokens:1,output_tokens:1}};
+  return {id:'basic-fixture-model-reply',output:format?[]:proof.outputs.shift()??[],output_text:format==='claim_ops'?'{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}':format?'{}':'Hello from the signed app owner.',usage:{input_tokens:1,output_tokens:1}};
 }};}}));
 vi.mock('../src/channels/telegram-api',async load=>({...await load<typeof import('../src/channels/telegram-api')>(),createTelegramCaller:()=>async()=>{proof.telegram++;throw Error('No Telegram binding exists');}}));
 
 it('signed no-Telegram app signin, chat history, lost ACK restart readback, isolation and push-first signout',async()=>{
-  proof.inputs=[];proof.telegram=0;
+  proof.inputs=[];proof.outputs=[];proof.telegram=0;
   const name=`basic-app-owner-${crypto.randomUUID()}`,stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
   await runInDurableObject(stub,async(_unused,state)=>{
     const SECRET='fictional-basic-app-router-secret-000000000000',DIRECTORY='https://basic-app.fixture.invalid',OWNER='10000000-0000-0000-0000-000000000001',AUTH='20000000-0000-0000-0000-000000000001',EMAIL='owner@example.test';
@@ -79,6 +79,31 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       const duplicate=await app('/actions',action,credential);expect(duplicate.status).toBe(200);expect((await duplicate.json() as any).duplicate).toBe(true);expect(settingsWrites).toBe(1);
       const actionReceipt=await app('/actions/timezone-request-0001',undefined,credential);expect(actionReceipt.status).toBe(200);expect(appControlResultV1Schema.parse(await actionReceipt.json()).duplicate).toBe(true);
       expect((await app('/actions',{...action,request_id:'timezone-request-0002'},credential)).status).toBe(409);expect(settingsWrites).toBe(1);
+      for (const [i,text] of ['/stop','/ledger','/console','/trace','/fire'].entries()) {
+        const before=proof.inputs.filter(input=>!input.text?.format).length;
+        const sent=await app('/chat/main/messages',{client_message_id:`command-shaped-client-${i}`,text},credential);expect(sent.status).toBe(202);
+        const receipt=await sent.json() as any;
+        await vi.waitFor(()=>expect(state.storage.kv.get<any>(`app:inbox-record:${receipt.message_id}`)?.state).toBe('completed'));
+        const history=await (await app('/chat/main',undefined,credential)).json() as any;
+        expect(history.messages.find((message:any)=>message.id===receipt.message_id)).toMatchObject({role:'user',text,channel:'app'});
+        expect(history.messages.filter((message:any)=>message.role==='assistant'&&message.parent_id===receipt.message_id)).toHaveLength(1);
+        expect(proof.inputs.filter(input=>!input.text?.format)).toHaveLength(before+1);
+      }
+      proof.outputs.push([{type:'function_call',call_id:'native-failed-write',name:'workspace_write',arguments:JSON.stringify({path:'proof-missing.txt',text:'Synthetic evidence',mime:'text/plain',expected_revision:99})}],[]);
+      const effected=await (await app('/chat/main/messages',{client_message_id:'tool-receipt-client-0001',text:'Revise my saved synthetic proof file.'},credential)).json() as any;
+      await vi.waitFor(()=>expect(state.storage.kv.get<any>(`app:inbox-record:${effected.message_id}`)?.state).toBe('completed'));
+      instance=new TelegramOwnerDO(state,settings as never);
+      const withReceipt=await (await app('/chat/main',undefined,credential)).json() as any;
+      expect(withReceipt.messages.find((message:any)=>message.role==='assistant'&&message.parent_id===effected.message_id)?.text).toContain('Receipts: workspace file written proof-missing.txt (failed)');
+      instance=new TelegramOwnerDO(state,settings as never);
+      let finishReady!:()=>void;(instance as any).browserReady=new Promise<void>(resolve=>{finishReady=resolve;});
+      const beforeRevokedReady=proof.inputs.length;
+      const duringReady=await (await app('/chat/main/messages',{client_message_id:'revoked-during-ready-0001',text:'A revoked initialization turn'},credential)).json() as any;
+      await vi.waitFor(()=>expect(state.storage.kv.get<any>(`app:inbox-record:${duringReady.message_id}`)?.state).toBe('running'));
+      live=false;finishReady();
+      await vi.waitFor(()=>expect(state.storage.kv.get<any>(`app:inbox-record:${duringReady.message_id}`)?.state).toBe('interrupted'));
+      expect(proof.inputs.length).toBe(beforeRevokedReady);live=true;
+      expect(((await (await app('/chat/main',undefined,credential)).json()) as any).messages.some((message:any)=>message.id===duringReady.message_id)).toBe(false);
       const longClient='max-text-client-0001',long=await (await app('/chat/main/messages',{client_message_id:longClient,text:'x'.repeat(4000)},credential)).json() as any;
       await vi.waitFor(()=>expect(state.storage.kv.get<any>(`app:inbox-record:${long.message_id}`)?.state).toBe('completed'));
       expect((await app('/chat/main/messages',{client_message_id:'too-long-client-0001',text:'x'.repeat(4001)},credential)).status).toBe(403);

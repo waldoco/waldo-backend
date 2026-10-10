@@ -1298,6 +1298,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async turn(update: unknown, channel: ChannelKind = 'telegram', durable = false, scope?: RunEffectScope): Promise<void> {
     const { listener, owner, call, desk, ledger, updates, control, log, ready } = this.setup(channel);
     await ready;
+    if (channel === 'app') {
+      const record = this.activeApp;
+      if (!scope || !record || record.id !== scope.runId || record.attempt !== scope.attempt) throw new ClosedRunError();
+      scope.admit();
+      await this.appAuthority(record.owner, record.sessionHash);
+      scope.admit();
+    }
     if (!listener) {
       log({ trace: `${channel}-unlinked`, hop: 'turn', ms: 0, ok: false, detail: `dropped: ${channel} not linked for this owner` });
       return;
@@ -1311,13 +1318,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!durable) await this.ctx.storage.put(offsetKey, raw.update_id + 1);
       return log({ trace: ownerTurnTrace(channel, raw.update_id), hop: 'steer', ms: 0, ok: true, detail: 'answered inside the running turn' });
     }
-    if (fromOwner && raw.message?.text?.trim() === '/stop') {
+    if (channel !== 'app' && fromOwner && raw.message?.text?.trim() === '/stop') {
       if (raw.update_id === undefined || raw.update_id < offset) return;
       if (!durable) await this.ctx.storage.put(offsetKey, raw.update_id + 1);
       return void (await call('sendMessage', { chat_id: owner, text: 'Nothing is running right now.' }));
     }
-    const harness = fromOwner ? parseHarnessCommand(raw.message?.text) : null;
-    const handledDirectly = raw.callback_query !== undefined || harness !== null || (fromOwner && raw.message?.text?.trim() === '/ledger');
+    const harness = channel !== 'app' && fromOwner ? parseHarnessCommand(raw.message?.text) : null;
+    const handledDirectly = channel !== 'app' && (raw.callback_query !== undefined || harness !== null || (fromOwner && raw.message?.text?.trim() === '/ledger'));
     if (handledDirectly) {
       if (raw.update_id === undefined || raw.update_id < offset) return;
       // Commands run outside the listener turn pipeline, so without this receipt they left no
@@ -1857,7 +1864,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
     };
     const updates = updateBook(storage.sql);
-    const ready = Promise.all([backfillEpisodes(kv, episodes), (schedPrefs.enabled('nightly') ? armNightly(scheduler, clock.timezone, Date.now()) : Promise.resolve()), (schedPrefs.enabled('event_briefs') ? armBriefSweep(scheduler, Date.now()) : Promise.resolve()), (schedPrefs.enabled('daily_brief') ? armDayCards(scheduler, plans, clock.timezone, Date.now()) : Promise.resolve(false)), (schedPrefs.enabled('heartbeat') ? armHeartbeat(scheduler, Date.now()) : Promise.resolve()), this.browserReady])
+    // Native chat initialization cannot launch unrequested background model work.
+    const ready = channel === 'app' ? this.browserReady : Promise.all([backfillEpisodes(kv, episodes), (schedPrefs.enabled('nightly') ? armNightly(scheduler, clock.timezone, Date.now()) : Promise.resolve()), (schedPrefs.enabled('event_briefs') ? armBriefSweep(scheduler, Date.now()) : Promise.resolve()), (schedPrefs.enabled('daily_brief') ? armDayCards(scheduler, plans, clock.timezone, Date.now()) : Promise.resolve(false)), (schedPrefs.enabled('heartbeat') ? armHeartbeat(scheduler, Date.now()) : Promise.resolve()), this.browserReady])
       .then(async ([, , , seeded]) => {
         await reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now() });
         const scrubbed = await scrubConversationHistory(storage);

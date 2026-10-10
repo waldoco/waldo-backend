@@ -13,7 +13,7 @@ const MAX_BODY_BYTES = 8192;
 type AppEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
 
 // Errors before authentication share one shape so the app cannot learn who is invited.
-const fail = (status: 401 | 403 | 404 | 405 | 413 | 429 | 503) => Response.json({ error: 'unavailable' }, { status, headers: { 'cache-control': 'no-store' } });
+const fail = (status: 401 | 403 | 404 | 405 | 413 | 429 | 503) => Response.json({ error: 'unavailable' }, { status, headers: { 'cache-control': 'no-store', ...(status === 429 ? { 'retry-after': '60' } : {}) } });
 const ok = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
 
 const readJson = async (request: Request): Promise<Record<string, unknown> | null> => {
@@ -119,6 +119,8 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   const who = await authenticate(request, auth);
   if (who === 'unavailable') return fail(503);
   if (who === 'unauthenticated') return fail(401);
+  if (!env.RESPONSIBILITY_RATE_LIMITER) return fail(503);
+  try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${request.method === 'POST' ? 'app-chat-send' : 'app-read'}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
 
   if (url.pathname === `${APP_PATH}/session`) {
     if (request.method !== 'GET') return fail(405);
@@ -138,10 +140,6 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const sending = url.pathname === APP_CHAT_SEND_PATH;
     if (!['GET', 'POST'].includes(request.method) || (url.pathname === APP_CHAT_PATH && request.method !== 'GET') || (sending && request.method !== 'POST')) return fail(405);
     const mutating = request.method === 'POST';
-    if (mutating) {
-      if (!env.RESPONSIBILITY_RATE_LIMITER) return fail(503);
-      try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-chat-send:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
-    }
     const maxBytes = APP_SEND_MAX_WIRE_BYTES;
     const length = request.headers.get('content-length');
     if (length && (!/^\d+$/.test(length) || Number(length) > (sending ? APP_SEND_MAX_WIRE_BYTES : maxBytes))) return fail(413);

@@ -1,6 +1,6 @@
 # Basic native serving candidate
 
-Base: `aa3d0eae26ebe8be4f278020575adf13e84828f4`. This additive serving slice retains the existing Supabase invited email OTP and HMAC console-session bearer rail. It does not use mint-agent-jwt. Core remains sole beta-mvp merger. Broad PR998 and its local archives are preserved separately and must not be deployed as this candidate.
+Base: `aa3d0eae26ebe8be4f278020575adf13e84828f4`. This additive serving slice retains the existing Supabase invited email OTP and HMAC console-session bearer rail. It does not use mint-agent-jwt. Native OTP signs in already-bound invited members; a first-time invite recipient redeems through the existing signup flow before native sign-in. This slice does not provision a fresh owner from a bare email. Core remains sole beta-mvp merger. Broad PR998 and its local archives are preserved separately and must not be deployed as this candidate.
 
 ## Consumer contract
 
@@ -25,9 +25,9 @@ Same owner + same client ID + same payload returns the original receipt across s
 
 ## Configuration and staging gate
 
-Native uses `EXPO_PUBLIC_WALDO_APP_API_ORIGIN`, an exact parent-reviewed HTTPS origin; the staging origin supplied by the owner is `https://waldo-runtime-staging.piyushfulper3210.workers.dev`. Existing deployment1206 is not candidate compatibility proof. No candidate deployment or native/provider acceptance has happened during source implementation.
+Native uses `EXPO_PUBLIC_WALDO_APP_API_ORIGIN`, an exact parent-reviewed HTTPS origin; the staging origin supplied by the owner is `https://waldo-runtime-staging.piyushfulper3210.workers.dev`. Existing deployment1206 is not candidate compatibility proof. The inherited staging config has broader Google/calendar flags and text capture enabled; parent must review those actual flags and egress settings against the basic journey before promotion. No candidate deployment or native/provider acceptance has happened during source implementation.
 
-Reuse existing staging Worker entry `src/staging-browser.ts`, owner DO namespace/bindings, SUPABASE_PROJECT_URL, SUPABASE_PUBLISHABLE_KEY, WALDO_ROUTER_HMAC_SECRET, RESPONSIBILITY_RATE_LIMITER, OPENAI_API_KEY and release annotation. No new credentials or permission expansion is needed. Telegram bot/presence is not required for app chat. Browser/new background planning/provider effects are not activated by this slice. Parent reviews exact flags, invited-owner configuration and model allowance before staging or real provider calls.
+Reuse existing staging Worker entry `src/staging-browser.ts`, owner DO namespace/bindings, SUPABASE_PROJECT_URL, SUPABASE_PUBLISHABLE_KEY, WALDO_ROUTER_HMAC_SECRET, RESPONSIBILITY_RATE_LIMITER, OPENAI_API_KEY and release annotation. No new credentials or permission expansion is needed. Telegram bot/presence is not required for app chat. Native initialization does not launch background migration or planning model work. Command-shaped native text follows canonical chat; Telegram harness shortcuts are not app controls. Browser/new background planning/provider effects are not activated by this slice. Parent reviews exact flags, invited-owner configuration and model allowance before staging or real provider calls.
 
 Only additive migrations100 (app_session_authority) and400 (push custody with both FORCE RLS corrections) are required. Existing owners/auth/console sessions/Vault/signature rail are reused. Migration600 is not needed by this session-bound slice. No shared Supabase reset/migration or production change is authorized here. Push sending is not enabled; signout still must revoke existing custody before its bearer session.
 

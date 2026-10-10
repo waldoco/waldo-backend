@@ -86,6 +86,12 @@ describe('app sign-in and main chat routes', () => {
     const absent = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: undefined } as never;
     expect((await handleApp(send(), absent, auth))!.status).toBe(503);
   });
+  it('rate limits protected reads before forwarding or exposing inventory', async () => {
+    const auth=fakeAuth().auth,limited={...(env() as object),RESPONSIBILITY_RATE_LIMITER:{limit:async()=>({success:false})}} as never;
+    for(const path of ['/session','/chat/main','/chat/main/messages/client-msg-0001','/controls?view=day','/actions/action-id-0001']) {
+      expect((await handleApp(new Request(`https://w.test/app/v1${path}`,{headers:{authorization:`Bearer ${CREDENTIAL}`}}),limited,auth))!.status).toBe(429);
+    }
+  });
   it('rate limits sign-in attempts', async () => {
     const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
     const response = await handleApp(post('/app/v1/auth/code', { email: 'member@example.test' }), limited, fakeAuth().auth);
