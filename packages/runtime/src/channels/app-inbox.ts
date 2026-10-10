@@ -56,6 +56,21 @@ export class AppInbox {
       this.storage.kv.put(APP_INBOX_DUE_KEY,due(rows,this.now()));
     });
   }
+  // Signing out closes the session's admitted and running messages through the one durable writer. A running turn's
+  // scope.admit() re-reads its row before every effect, so it stops at its next check; its effects are unconfirmed.
+  revokeSession(sessionHash:string):number {
+    return this.storage.transactionSync(()=>{
+      let fenced=0;
+      for(const row of this.records()){
+        if(row.sessionHash!==sessionHash||(row.state!=='admitted'&&row.state!=='running'))continue;
+        const ran=row.state==='running';
+        row.state='revoked';row.closedReason='session_revoked';row.effectsUnconfirmed=ran;row.closedAt=this.now();clear(row);
+        this.storage.kv.put(PREFIX+row.id,row);fenced+=1;
+      }
+      this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
+      return fenced;
+    });
+  }
   claim(id:string,sessionCurrent:boolean):AppInboxRecord|null {
     return this.storage.transactionSync(()=>{
       const row=this.storage.kv.get<AppInboxRecord>(PREFIX+id);if(!row||row.state!=='admitted')return null;

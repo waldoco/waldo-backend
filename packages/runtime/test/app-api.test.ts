@@ -130,3 +130,22 @@ it('requires valid fresh inventory for session DTO and push-first verified signo
   const failedPush=vi.spyOn(globalThis,'fetch').mockResolvedValue(Response.json({revoked:true}));
   try{expect((await handleApp(post('/app/v1/auth/signout',{},headers),env(),auth))!.status).toBe(503);expect(calls).not.toContain('revoke');}finally{failedPush.mockRestore();}
 });
+
+it('fences the session\'s in-flight work before revoking it, and revokes nothing when the fence cannot be placed',async()=>{
+  const fences:Request[]=[];
+  const owners=(status:number)=>({idFromName:(n:string)=>n,get:()=>({fetch:async(r:Request)=>{fences.push(r);return new Response('{}',{status});}})});
+  const headers={authorization:`Bearer ${CREDENTIAL}`};
+  const withOwners=(status:number)=>({...env() as object,TELEGRAM_OWNER_DO:owners(status)}) as never;
+  const fetcher=vi.spyOn(globalThis,'fetch').mockImplementation(async()=>Response.json(0));
+  try{
+    const failing=fakeAuth();
+    expect((await handleApp(post('/app/v1/auth/signout',{},headers),withOwners(503),failing.auth))!.status).toBe(503);
+    expect(failing.calls).not.toContain('revoke');
+    expect(fences).toHaveLength(1);
+    const url=new URL(fences[0]!.url);expect(url.pathname).toBe('/app/v1/internal/session-fence');
+    expect(fences[0]!.method).toBe('POST');
+    expect(fences[0]!.headers.get('x-waldo-do-name')).toBe('owner-1');
+    expect(fences[0]!.headers.get('x-waldo-app-session-hash')).toMatch(/^[a-f0-9]{64}$/);
+    expect(fences[0]!.headers.get('x-waldo-fence-sig')).toMatch(/^[a-f0-9]{16,}$/);
+  }finally{fetcher.mockRestore();}
+});

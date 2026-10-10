@@ -1,6 +1,7 @@
 import type { ConversationEntry } from '@waldo/contracts';
 import { APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
+import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { signedRpc } from '../identity/owner-directory';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
@@ -76,6 +77,19 @@ const sessionView = async (auth: ConsoleAuth, doName: string, credential: string
   return appSessionV1Schema.parse({ state: 'active', session_ref: `sess_${hash}`, account_ref: `acct_${await linkCodeHash(doName)}`, surface: 'app', absolute_expires_at: created + 12 * 60 * 60_000 });
 };
 
+// Stops the session's in-flight work in its owner Durable Object before the session is revoked; false when it cannot be confirmed.
+const fenceSession = async (env: AppEnv, owners: NonNullable<AppEnv['TELEGRAM_OWNER_DO']>, doName: string, sessionHash: string): Promise<boolean> => {
+  const secret = env.WALDO_ROUTER_HMAC_SECRET;
+  if (!secret) return false;
+  try {
+    const response = await owners.get(owners.idFromName(doName)).fetch(new Request(`https://telegram-owner${APP_SESSION_FENCE_PATH}`, {
+      method: 'POST',
+      headers: { 'x-waldo-do-name': doName, 'x-waldo-app-session-hash': sessionHash, 'x-waldo-fence-sig': await appSessionFenceSignature(secret, doName, sessionHash) },
+    }));
+    return response.ok;
+  } catch { return false; }
+};
+
 // App sign-in and the shared main chat. Returns null for paths outside /app/v1 so the caller keeps routing.
 export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth | null = consoleAuth(env)): Promise<Response | null> => {
   const url = new URL(request.url);
@@ -130,7 +144,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const sessionId = sessionIdOf(who.credential);
     if (!sessionId) return fail(401);
     let revoked: boolean;
-    try { const hash=await linkCodeHash(sessionId); const call=signedRpc(env); if(!call) return fail(503); const push=await call('app_push_revoke_session', `app.push.revoke-session.${who.doName}.${hash}`, {p_do_name:who.doName,p_session_hash:hash}); if(typeof push!=='number'||!Number.isSafeInteger(push)||push<0)return fail(503); revoked=await auth.revokeSession(who.doName,hash); if((await auth.listSessions(who.doName)).some(row=>row.session===hash))return fail(503); } catch { return fail(503); }
+    try { const hash=await linkCodeHash(sessionId); const call=signedRpc(env); if(!call) return fail(503); if(!(await fenceSession(env,owners,who.doName,hash))) return fail(503); const push=await call('app_push_revoke_session', `app.push.revoke-session.${who.doName}.${hash}`, {p_do_name:who.doName,p_session_hash:hash}); if(typeof push!=='number'||!Number.isSafeInteger(push)||push<0)return fail(503); revoked=await auth.revokeSession(who.doName,hash); if((await auth.listSessions(who.doName)).some(row=>row.session===hash))return fail(503); } catch { return fail(503); }
     return ok({ result: revoked ? 'revoked' : 'already_gone' });
   }
 

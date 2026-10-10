@@ -57,3 +57,24 @@ it('never prunes a message that is still admitted or running, and still refuses 
     expect(states).toEqual(['admitted','running']);
   });
 });
+
+it('revoking a session closes its admitted and running messages and nobody else\'s',async()=>{
+  const name=`app-inbox-fence-${crypto.randomUUID()}`,stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+  await runInDurableObject(stub,async(_instance,state)=>{
+    const now=Date.now(),inbox=new AppInbox(state.storage,()=>now),mine='a'.repeat(64),other='b'.repeat(64);
+    await inbox.admit(name,mine,'mine-running-0001','running text','owner:prn_fixture');
+    await inbox.admit(name,mine,'mine-waiting-0001','waiting text','owner:prn_fixture');
+    await inbox.admit(name,other,'other-waiting-0001','other text','owner:prn_fixture');
+    const [first]=inbox.records();const running=inbox.claim(first!.id,true)!;
+    const scope=inbox.scope(running,new AbortController().signal);expect(()=>scope.admit()).not.toThrow();
+    expect(inbox.revokeSession(mine)).toBe(2);
+    expect(()=>scope.admit()).toThrow();
+    expect(inbox.receipt(name,'mine-running-0001')).toMatchObject({state:'revoked',closed_reason:'session_revoked',effects_unconfirmed:true});
+    expect(inbox.receipt(name,'mine-waiting-0001')).toMatchObject({state:'revoked',closed_reason:'session_revoked',effects_unconfirmed:false});
+    expect(inbox.receipt(name,'other-waiting-0001')).toMatchObject({state:'admitted'});
+    inbox.settle(running,true);
+    expect(inbox.receipt(name,'mine-running-0001')).toMatchObject({state:'revoked',effects_unconfirmed:true});
+    expect(inbox.records().every(row=>row.sessionHash!==mine||row.text==='')).toBe(true);
+    expect(inbox.revokeSession(mine)).toBe(0);
+  });
+});

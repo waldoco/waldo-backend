@@ -1,6 +1,7 @@
 import { appControlsRequest } from './app-controls';
 import { AppInbox, type AppInboxRecord } from './app-inbox';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
+import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { surfaceOwnerAdmission } from '../identity/surface-owner-admission';
 import { createOwnerTurnContext } from '../context-composer/owner-turn';
 import { canonicalOwnerConversationStore } from '../conversation/canonical-owner-store';
@@ -526,6 +527,20 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     return createOwnerTurnContext(await surfaceOwnerAdmission({scope,lookup,expectedPhysicalDoId:this.ctx.id.toString(),surface:'app',subject:hash,occurrenceKey:occurrence,occurredAt,text}));
   }
+  // Worker-to-DO only: signed by the router secret, never reachable through a forwarded client path. It runs before the
+  // session is revoked at the authority, so a retry after a failed revoke is safe, and it stops the session's running turn.
+  private async appSessionFence(request: Request): Promise<Response> {
+    const fail=(status:number)=>Response.json({error:'unavailable'},{status,headers:{'cache-control':'no-store'}});
+    const name=request.headers.get('x-waldo-do-name')??'',hash=request.headers.get('x-waldo-app-session-hash')??'',given=request.headers.get('x-waldo-fence-sig')??'';
+    const secret=this.env.WALDO_ROUTER_HMAC_SECRET;
+    if(request.method!=='POST'||!secret||!name||!/^[a-f0-9]{64}$/.test(hash)||this.env.TELEGRAM_OWNER_DO?.idFromName(name).toString()!==this.ctx.id.toString())return fail(403);
+    const expected=new TextEncoder().encode(await appSessionFenceSignature(secret,name,hash)),supplied=new TextEncoder().encode(given);
+    let diff=expected.length^supplied.length;for(let i=0;i<expected.length;i+=1)diff|=expected[i]!^(supplied[i]??0);
+    if(diff!==0)return fail(403);
+    const fenced=this.appInbox.revokeSession(hash);
+    if(this.activeApp?.sessionHash===hash)this.activeAbort?.abort();
+    return Response.json({fenced},{headers:{'cache-control':'no-store'}});
+  }
   private async appRoute(request: Request): Promise<Response> {
     const path=new URL(request.url).pathname,name=request.headers.get('x-waldo-do-name')??'',hash=request.headers.get('x-waldo-app-session-hash')??'';
     const fail=(status=403)=>Response.json({error:'unavailable'},{status,headers:{'cache-control':'no-store'}});
@@ -574,6 +589,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   override async fetch(request: Request): Promise<Response> {
     const path=new URL(request.url).pathname;
+    if(path===APP_SESSION_FENCE_PATH)return this.appSessionFence(request);
     if(path.startsWith('/app/v1/'))return this.appRoute(request);
     if(path==='/enqueue-link')return this.enqueueLink(request);
     if(this.ctx.storage.kv.get(LINK_MODE))return new Response('not found',{status:404});

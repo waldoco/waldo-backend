@@ -127,13 +127,26 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       expect(proof.inputs.some(input=>input.text?.format?.name==='reaction')).toBe(false);
       const total=proof.inputs.length;
       expect((await app('/chat/main',undefined,credential.slice(0,-1)+'!')).status).toBe(401);
-      const foreign='foreign-basic-owner',sid='b'.repeat(32),foreignCredential=`${foreign}.${sid}.${await routerSignature(SECRET,0,`cookie.${foreign}.${sid}`)}`;
+      const foreign='foreign-basic-owner',sid='b'.repeat(32),foreignCredential=`${foreign}.${sid}.${await routerSignature(SECRET,0,`appbearer.${foreign}.${sid}`)}`;
       expect((await app('/chat/main',undefined,foreignCredential)).status).toBe(401);
       const foreignPhysical=await instance.fetch(new Request('https://telegram-owner/app/v1/chat/main',{headers:{'x-waldo-do-name':foreign,'x-waldo-app-session-hash':hash!}}));expect(foreignPhysical.status).toBeGreaterThanOrEqual(400);expect(state.storage.kv.get('do_name')).toBe(name);
       const signout=await app('/auth/signout',{},credential);expect(signout.status).toBe(200);expect(await signout.json()).toEqual({result:'revoked'});expect(calls.slice(-3)).toEqual(['app_push_revoke_session','console_session_revoke','console_session_list']);
       expect((await app('/session',undefined,credential)).status).toBe(401);expect((await app('/chat/main/messages',{...body,client_message_id:'revoked-client'},credential)).status).toBe(401);
       const revokedDirect=await instance.fetch(new Request('https://telegram-owner/app/v1/chat/main',{headers:{'x-waldo-do-name':name,'x-waldo-app-session-hash':hash!}}));expect(revokedDirect.status).toBeGreaterThanOrEqual(400);
       await instance.alarm();expect(inbox.receipt(name,'revoked-pending-client')?.state).toBe('revoked');expect(proof.inputs.length).toBe(total);expect(proof.telegram).toBe(0);expect(hash).toBe(await linkCodeHash(credential.split('.').at(-2)!));
+      // Signing out while a turn is running must stop it before its next tool round, not leave it running.
+      const again=await (await app('/auth/verify',{email:EMAIL,code:'123456'})).json() as any;const secondCredential=again.credential as string;
+      proof.outputs.push([{type:'function_call',call_id:'fenced-write',name:'workspace_write',arguments:JSON.stringify({path:'must-not-exist.txt',text:'Synthetic evidence',mime:'text/plain',expected_revision:0})}],[]);
+      const modelCallsBefore=proof.inputs.filter(i=>!i.text?.format).length;
+      let releaseFenced!:()=>void;const heldFenced=new Promise<void>(resolve=>{releaseFenced=resolve;});proof.hold=()=>heldFenced;
+      const fencedClient='fenced-running-client',fenced=await (await app('/chat/main/messages',{client_message_id:fencedClient,text:'Write a file, then answer.'},secondCredential)).json() as any;
+      await vi.waitFor(()=>expect(state.storage.kv.get<any>(`app:inbox-record:${fenced.message_id}`)?.state).toBe('running'));
+      await vi.waitFor(()=>expect(proof.hold).toBeNull());
+      expect((await app('/auth/signout',{},secondCredential)).status).toBe(200);
+      releaseFenced();
+      await vi.waitFor(()=>expect(state.storage.kv.get<any>(`app:inbox-record:${fenced.message_id}`)).toMatchObject({state:'revoked',closedReason:'session_revoked',effectsUnconfirmed:true}));
+      await new Promise(resolve=>setTimeout(resolve,100));
+      expect(proof.inputs.filter(i=>!i.text?.format)).toHaveLength(modelCallsBefore+1);
     }finally{(instance as any).ownerBrowser.stop();await (instance as any).ownerBrowser.maintain();await state.storage.deleteAlarm();fetcher.mockRestore();}
   });
 },30000);
