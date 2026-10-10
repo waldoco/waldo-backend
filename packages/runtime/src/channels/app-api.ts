@@ -202,9 +202,3 @@ export const parseAppSend = (raw: string): (import('../../../contracts/src/app/c
   const parsed = appSendRequestV1Schema.safeParse(value);
   return parsed.success ? { ...parsed.data, clientMessageId: parsed.data.client_message_id } : null;
 };
-
-// Replies reach the app through the transcript, so outbound sends on this channel are accepted and not delivered anywhere else.
-export const appSinkCaller = () => async (method: string, body: unknown): Promise<unknown> => {
-  if (method === 'sendMessage') return { message_id: 1, chat: { id: (body as { chat_id?: number }).chat_id ?? 0 } };
-  return undefined;
-};
