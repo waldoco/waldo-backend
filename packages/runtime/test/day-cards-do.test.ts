@@ -24,6 +24,29 @@ describe('scheduled day cards', () => {
     expect([isSkip(' SKIP\n'), isSkip('SKIP it')]).toEqual([true, false]);
   });
 
+  it('keeps the card prompt inside the provider budget when the ledger and update backlog are huge', async () => {
+    const google = { events: async () => [{ id: 'e1', title: 'Investor call', start: '2026-09-24T10:00:00+05:30', end: '2026-09-24T10:30:00+05:30', all_day: false, description: '' }] } as unknown as GoogleClient;
+    const lines = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => `${prefix}-${index} ${'x'.repeat(200)}`).join('\n');
+    const ledger = lines('ledger', 4000);
+    const updates = lines('update', 4000);
+    const prompt = await composeDayCard(cardFor('card:close')!, now, tz, { google, connectable: false, ledger, today: lines('today', 100), updates });
+    const limit = deriveContextBudgetChars(WALDO_CHAT_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
+    expect(JSON.stringify([{ role: 'user', content: prompt }]).length).toBeLessThanOrEqual(limit / 2);
+    expect(prompt).toContain('Investor call');
+    expect(prompt).toContain('The Close');
+    expect(prompt).toContain('ledger-0 ');
+    expect(prompt).toContain('update-3999 ');
+    expect(prompt).not.toContain('update-0 ');
+    expect(prompt).toMatch(/\d+ (older|later) lines omitted/);
+  });
+
+  it('leaves a card that already fits untouched', async () => {
+    const google = { events: async () => [] } as unknown as GoogleClient;
+    const prompt = await composeDayCard(cardFor('card:brief')!, now, tz, { google, connectable: false, ledger: 'Open\n- nothing', today: 'owner: hi', updates: '' });
+    expect(prompt).not.toMatch(/lines omitted/);
+    expect(prompt).toContain('<ledger>\nOpen\n- nothing\n</ledger>');
+  });
+
   it('reads the right calendar window for each card', () => {
     const midnight = Date.parse('2026-09-22T18:30:00Z');
     expect(cardWindow(cardFor('card:brief')!, now, tz)).toEqual({ from: midnight, to: midnight + 86_400_000 });
