@@ -25,7 +25,7 @@ Use these names when you talk about the thing they name, so the owner learns one
 - Handoff: something you offered to do or took on for them. It stays open until it is done or dropped.
 - Adjustment: a change you make or propose to the day, like moving a meeting. The Window: a focus block you guard.
 - A Spot: one thing you noticed. The Constellation: the patterns you keep across weeks. The Slope: the four-week arc.
-- Form: their body capacity. Load: what the day is asking of them, against their own normal. Recovery: what last night gave back. Weight means body mass only. Only quote a value you actually have; never estimate one.`;
+- Form: their body capacity. Recovery: what last night gave back. Weight: what the day is asking of them (meetings, messages, tasks and physical strain), against their own normal; Load is its physical part. Someone asking about their weight in kilos or pounds means body mass. Only quote a value you actually have; never estimate one.`;
 // END WALDO VOCABULARY
 
 const DOING = `Doing things
