@@ -871,3 +871,110 @@ describe('calendar proposal dedupe within a turn', () => {
     });
   });
 });
+
+describe('approval presentations', () => {
+  const NOW = Date.UTC(2026, 9, 10, 9, 0, 0);
+  type Shown = { surface: string; message_ref: string; approvable: number; part_json: string | null; retired_at: number | null };
+  const shown = (sql: SqlStorage, id: string) => sql.exec<Shown>('SELECT surface, message_ref, approvable, part_json, retired_at FROM approval_presentations WHERE approval_id = ? ORDER BY surface', id).toArray();
+  const status = (sql: SqlStorage, id: string) => sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status;
+  const unpresented = (sql: SqlStorage) => sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM ledger l WHERE l.status IN ('open', 'review_only') AND NOT EXISTS (SELECT 1 FROM approval_presentations p WHERE p.approval_id = l.id)").one().n;
+  const message = { channel: 'telegram', content: 'Running ten minutes late.', idempotency_key: 'late-1' };
+
+  it('opens a row only when a surface recorded the review; a failed journal, commit or send leaves it unconfirmed', async () => {
+    const { appApprovalPart, appCaller } = await import('../src/channels/surfaces/app');
+    const { sha256Hex } = await import('../src/connectors/google');
+    const { replyApprovalPartV1Schema } = await import('@waldo/contracts');
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-presentations-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const sql = state.storage.sql; let n = 0; const appCalls: string[] = [];
+      const base = { owner: 42, google: async () => null, newId: () => `pres${++n}`, now: () => NOW, timezone: 'UTC', log: () => {} };
+      const app = { ...base, owner: 7_000_000_000_001, surface: 'app' as const, call: async (method: string, body: object) => { appCalls.push(method); return appCaller()(method, body); } };
+
+      const journalDown = approvalDesk(sql, { ...app, appJournal: () => { throw Error('journal down'); } });
+      await expect(journalDown.proposeSendMessage(message)).rejects.toThrow();
+      expect(status(sql, 'ppres1')).toBe('card_unconfirmed'); expect(shown(sql, 'ppres1')).toEqual([]);
+
+      const commitDown = approvalDesk(sql, { ...app, appJournal: appApprovalPart, commit: () => { throw Error('storage down'); } });
+      await expect(commitDown.proposeSendMessage({ ...message, idempotency_key: 'late-2' })).rejects.toThrow('storage down');
+      expect(status(sql, 'ppres2')).toBe('card_unconfirmed'); expect(shown(sql, 'ppres2')).toEqual([]);
+
+      const blocked = approvalDesk(sql, { ...base, call: async () => undefined });
+      await expect(blocked.proposeSendMessage({ ...message, idempotency_key: 'late-3' })).rejects.toThrow('Approval card not confirmed');
+      expect(status(sql, 'ppres3')).toBe('card_unconfirmed'); expect(shown(sql, 'ppres3')).toEqual([]);
+
+      const mirrored = approvalDesk(sql, { ...base, call: async () => undefined, appJournal: appApprovalPart });
+      const opened = await mirrored.proposeSendMessage({ ...message, idempotency_key: 'late-4' });
+      expect(status(sql, opened)).toBe('open');
+      expect(shown(sql, opened)).toMatchObject([{ surface: 'app', message_ref: `approval:${opened}`, approvable: 1, retired_at: null }]);
+
+      const email = approvalDesk(sql, { ...base, call: async (method: string) => method === 'sendMessage' ? { message_id: 501, chat: { id: 42 } } : true });
+      const raw = 'To: a@x.test\r\nSubject: Hi\r\n\r\nHello';
+      const sent = await email.proposeSendEmail({ to: ['a@x.test'], subject: 'Hi', body: 'Hello', message_id: '<pres@waldo-send>', raw, digest: await sha256Hex(raw) });
+      expect(shown(sql, sent)).toEqual([{ surface: 'telegram', message_ref: '42:501', approvable: 1, part_json: null, retired_at: null }]);
+
+      const fromApp = approvalDesk(sql, { ...app, appJournal: appApprovalPart, currentRunRef: () => 'app-message-0001' });
+      const proposed = await fromApp.propose({ action: 'create', title: 'Walk', start: iso('2026-10-10T15:00:00Z'), end: iso('2026-10-10T15:30:00Z'), reason: 'afternoon slot' });
+      expect(status(sql, proposed)).toBe('open');
+      expect(appCalls).toEqual([]);
+      expect(sql.exec<{ origin_run_ref: string }>('SELECT origin_run_ref FROM ledger WHERE id = ?', proposed).one().origin_run_ref).toBe('app-message-0001');
+      const [presented] = shown(sql, proposed);
+      expect(presented).toMatchObject({ surface: 'app', message_ref: 'run:app-message-0001', approvable: 1 });
+      const part = replyApprovalPartV1Schema.parse(JSON.parse(presented!.part_json!));
+      const payload = sql.exec<{ payload_json: string }>('SELECT payload_json FROM ledger WHERE id = ?', proposed).one().payload_json;
+      expect(part).toMatchObject({ approval_id: proposed, kind: 'calendar_change', actions: ['approve', 'edit', 'skip'], payload_digest: `sha256:${await sha256Hex(payload)}`, expires_at: Date.parse('2026-10-10T15:00:00Z') });
+      expect(part.review).toContain('Add "Walk"');
+      expect(unpresented(sql)).toBe(0);
+    });
+  });
+
+  it('a review too long for Telegram opens through the app, and an approve from Telegram is refused with the app link', async () => {
+    const { appApprovalPart, appApprovalLink } = await import('../src/channels/surfaces/app');
+    const { sha256Hex } = await import('../src/connectors/google');
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-presentations-long-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const sql = state.storage.sql; let n = 0; let sends = 0;
+      const sent: { method: string; body: Record<string, unknown> }[] = [];
+      const client = { sendRaw: async () => { sends++; return { message_id: 'g1' }; }, findSentByMessageId: async (id: string) => ({ message_id: 'g1', thread_id: 't', rfc822_message_id: id, label_ids: ['SENT'] }) } as unknown as GoogleClient;
+      const desk = approvalDesk(sql, { owner: 42, google: async () => client, newId: () => `long${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, appJournal: appApprovalPart, appLink: appApprovalLink,
+        call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return method === 'sendMessage' ? { message_id: sent.length, chat: { id: 42 } } : true; } });
+      const raw = `To: a@x.test\r\nSubject: Long\r\n\r\n${'x'.repeat(5000)}`;
+      const id = await desk.proposeSendEmail({ to: ['a@x.test'], subject: 'Long', body: 'x'.repeat(5000), message_id: '<long@waldo-send>', raw, digest: await sha256Hex(raw) });
+      const card = sent[0]!;
+      expect(String(card.body.text)).toContain("can't be approved here");
+      expect(String(card.body.text)).toContain(`waldo://approvals/${id}`);
+      expect(JSON.stringify(card.body.reply_markup)).not.toContain(`a:${id}`);
+      expect(status(sql, id)).toBe('open');
+      expect(shown(sql, id).map(row => [row.surface, row.approvable])).toEqual([['app', 1], ['telegram', 0]]);
+
+      sent.length = 0;
+      await desk.callback({ id: 'forged', from: { id: 42 }, data: `a:${id}`, message: { message_id: 1, chat: { id: 42 } } }, 'trace');
+      expect(sent.find(call => call.method === 'answerCallbackQuery')?.body.text).toBe('Review it in the app');
+      expect(String(sent.find(call => call.method === 'sendMessage')?.body.text)).toContain(`waldo://approvals/${id}`);
+      expect((await desk.decide(id, 'a', 'trace')).toast).toBe('Review it in the app');
+      expect((await desk.decide(id, 'e', 'trace', { surface: 'telegram' })).toast).toBe('Review it in the app');
+      expect(sends).toBe(0); expect(status(sql, id)).toBe('open');
+      expect((await desk.decide(id, 'a', 'trace', { surface: 'app' })).toast).toBe('Sent');
+      expect(sends).toBe(1);
+
+      sent.length = 0;
+      const huge = `To: a@x.test\r\nSubject: Huge\r\n\r\n${'y'.repeat(33_000)}`;
+      const tooLong = await desk.proposeSendEmail({ to: ['a@x.test'], subject: 'Huge', body: 'y'.repeat(33_000), message_id: '<huge@waldo-send>', raw: huge, digest: await sha256Hex(huge) });
+      expect(String(sent[0]!.body.text)).not.toContain('waldo://');
+      expect(status(sql, tooLong)).toBe('review_only');
+      const appPart = JSON.parse(shown(sql, tooLong).find(row => row.surface === 'app')!.part_json!);
+      expect(appPart.actions).toEqual(['skip']);
+      expect(appPart.review.length).toBeLessThan(1000);
+      expect((await desk.decide(tooLong, 'a', 'trace', { surface: 'app' })).toast).toBe('Already handled.');
+      expect(sends).toBe(1);
+    });
+  });
+
+  it('the app text sink never acknowledges a callback keyboard as shown', async () => {
+    const { appCaller } = await import('../src/channels/surfaces/app');
+    const call = appCaller();
+    expect(await call('sendMessage', { chat_id: 7, text: 'Hello' })).toMatchObject({ message_id: 1 });
+    expect(await call('sendMessage', { chat_id: 7, text: 'Connect', reply_markup: { inline_keyboard: [[{ text: 'Connect Google', url: 'https://example.test/c' }]] } })).toMatchObject({ message_id: 1 });
+    expect(await call('sendMessage', { chat_id: 7, text: 'Proposed', reply_markup: { inline_keyboard: [[{ text: 'Do it', callback_data: 'a:p1' }]] } })).toBeUndefined();
+    expect(await call('editMessageReplyMarkup', { chat_id: 7, message_id: 1 })).toBeUndefined();
+  });
+});
