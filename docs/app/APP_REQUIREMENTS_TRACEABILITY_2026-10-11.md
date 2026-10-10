@@ -129,7 +129,7 @@ The three intro messages sent at about 18:30Z expired undelivered. The app sessi
 ## Sessions
 
 - **App session "Take over waldo-app PR #16 in slices":** reachable since about 19:05Z. It sent the state folded in above. C6 to C10 and an ask for its open-question list went back to it at about 19:08Z; that message was queued and is not confirmed read.
-- **Gap-analysis and handoff sessions:** ending their chats. Successors have not yet introduced themselves. C1 to C3 and C11 to C13 wait for the gap-analysis successor; the PR is their durable copy.
+- **Gap-analysis and handoff sessions:** their chats have ended. At 19:12Z no successor was in the session list. A "Waldo sessions alignment review" session was listed; its scope is unknown here. C1 to C3 and C11 to C13 wait for the gap-analysis successor; the PR is their durable copy.
 - **Ashish's lane** (Kennel, WhatsApp, iMessage, device bridge): untouched.
 
 [L]: https://github.com/waldoco/waldo-backend/blob/ce80802f/docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md
@@ -151,6 +151,6 @@ The three intro messages sent at about 18:30Z expired undelivered. The app sessi
 [C-approvals]: https://github.com/waldoco/waldo-backend/blob/ce80802f/packages/contracts/src/app/approvals.ts
 [C-parts]: https://github.com/waldoco/waldo-backend/blob/ce80802f/packages/contracts/src/app/parts.ts
 [C-health]: https://github.com/waldoco/waldo-backend/blob/ce80802f/packages/contracts/src/app/health-ingest.ts
-[PA]: https://github.com/waldoco/waldo-backend/compare/beta-mvp...feat/approvals-any-surface
+[PA]: https://github.com/waldoco/waldo-backend/compare/ce80802f...9c6056b0
 [D7]: https://github.com/waldoco/waldo-backend/issues/116#issuecomment-6101070400
 [AB]: https://github.com/waldoco/waldo-app/blob/23ed4dc8/Docs/planning/APP_BUILD_ORDER_2026-10-10.md
