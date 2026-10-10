@@ -18,11 +18,11 @@ export const googleTaskHandlers = (desk: TaskProposalDesk): readonly ToolHandler
     try {
       await ctx?.assertTaskSourceCurrent?.();
       const approvalRef = await desk.proposeGoogleTaskChange(args, await ownerEffectOperationRef(ctx), ctx);
-      return { ok: true, data: { approval_ref: approvalRef, status: 'awaiting_owner_approval', applied: false, source: 'google_tasks' }, source_taint: 'external' };
+      return { ok: true, data: { approval_ref: approvalRef, status: 'awaiting_owner_approval', applied: false, source: 'google_tasks' }, source_taint: null };
     } catch (error) {
-      if (error instanceof GoogleTaskConnectorUnavailableError || error instanceof GoogleError && (error.status === 401 || error.status === 403 && error.reason === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT')) return { ok: false, code: 'auth_failed', error: 'Google Tasks needs an authorized connection before a proposal can be prepared', source_taint: 'external', connect: { status: 'auth_required', service: 'google', feature: 'tasks', reason: error instanceof GoogleTaskConnectorUnavailableError ? 'not_connected' : error.status === 401 ? 'reauth_needed' : 'scope_missing' } };
-      if (error instanceof GoogleError && error.status === 403) return { ok: false, code: 'rejected', error: `Google Tasks refused the request: ${error.message}`, source_taint: 'external' };
-      return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error), source_taint: 'external' };
+      if (error instanceof GoogleTaskConnectorUnavailableError || error instanceof GoogleError && (error.status === 401 || error.status === 403 && error.reason === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT')) return { ok: false, code: 'auth_failed', error: 'Google Tasks needs an authorized connection before a proposal can be prepared', connect: { status: 'auth_required', service: 'google', feature: 'tasks', reason: error instanceof GoogleTaskConnectorUnavailableError ? 'not_connected' : error.status === 401 ? 'reauth_needed' : 'scope_missing' } };
+      if (error instanceof GoogleError && error.status === 403) return { ok: false, code: 'rejected', error: `Google Tasks refused the request: ${error.message}` };
+      return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error) };
     }
   },
 }];

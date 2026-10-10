@@ -181,7 +181,7 @@ export function renderHealth(health: ContextHealthMaterial | null): string {
       : `Recovery zone: ${health.view.recovery_zone}.`,
     `Trend: ${health.view.trend}. Freshness: ${health.view.freshness}.`,
     `Confidence: ${health.view.confidence_band}. Missing components: ${missing}.`,
-    `Recovery: ${health.narrative.recovery_descriptor}. Load: ${health.narrative.load_descriptor}.`,
+    `Recovery: ${health.narrative.recovery_descriptor}. Load: ${health.narrative.load_descriptor ?? 'unavailable'}.`,
     `Day summary: ${health.narrative.day_summary}`,
     ...highStakes,
   ].join('\n');
