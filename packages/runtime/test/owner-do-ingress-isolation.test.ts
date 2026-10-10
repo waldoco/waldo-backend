@@ -197,9 +197,10 @@ const doStub = (subject: number) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNE
 
 afterEach(() => { vi.useRealTimers(); });
 describe('actual owner interruption recovery', () => {
+  const pinnedClockOwner = 81107;
   afterEach(async () => {
     traceIdentities.clear();
-    for (const subject of [81101, 81102]) await runInDurableObject(doStub(subject), async (_instance, state) => {
+    for (const subject of [81101, 81102, pinnedClockOwner]) await runInDurableObject(doStub(subject), async (_instance, state) => {
       const rows = state.storage.kv.get<import('../src/channels/telegram-owner-inbox').InboxRecord[]>('telegram_owner_inbox_v1') ?? [];
       const finals = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
       await state.storage.put({ telegram_owner_inbox_v1: rows.filter(row => row.updateId < 995001 || row.updateId > 995009),
@@ -207,31 +208,30 @@ describe('actual owner interruption recovery', () => {
       await state.storage.deleteAlarm();
     });
   });
-// The DO runs in Asia/Kolkata here, and a day-card planner model call appeared once the real clock passed IST midnight.
-// Pin Date for the whole test (setup, both alarms) at several instants, including both sides of the IST day boundary.
+// Date is pinned for the whole test (setup, both alarms) at instants on both sides of the IST day boundary, so recovery is checked
+// without depending on the wall clock. workerd still fires alarms on the real clock, where anything armed relative to a pinned instant
+// is overdue. So the case runs on an owner no other test uses, with that owner's scheduled behaviors off.
 it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:00.000Z', '2026-10-04T18:30:00.001Z'])('actual owner eviction after a claimed write produces one durable uncertainty status without replay (clock %s)', async (pinned) => {
+  const subject = pinnedClockOwner; const updateId = 995001; const stub = doStub(subject);
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date(pinned));
   try {
-  const subject = 81101; const updateId = 995001; const stub = doStub(subject);
   const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
   const { persistInboxWake, armAlarm } = await import('../src/scheduler/alarm-slot');
+  const { schedulePreferences } = await import('../src/channels/schedule-preferences');
+  const { loopBook } = await import('../src/channels/loops');
   let callsBefore = modelInputs.length;
   outbox.length = 0;
   // Persist the crash cut after claim and one write, before a final is committed.
   // Evict the registered DO itself: recovery must not depend on its in-memory attempt set.
   await runInDurableObject(stub, async (instance, state) => {
     await state.storage.put({ telegram_subject: String(subject), do_name: route(subject).doName });
+    // Before setup, which would otherwise arm the nightly job, heartbeat, brief sweep and day cards and plan the pinned day.
+    const preferences = schedulePreferences(state.storage.sql, loopBook(state.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }));
+    for (const kind of ['nightly', 'heartbeat', 'event_briefs', 'daily_brief'] as const) preferences.set(kind, false);
     const runtime = instance as unknown as { setup(): { ready: Promise<void> }; serial(work: () => Promise<void>): Promise<void> };
     await runtime.setup().ready;
     await runtime.serial(async () => undefined);
-    // With the clock pinned, mark that day's cards as already sent so the alarm has no day plan to make.
-    // Without this the planner model call returns once the pinned instant is past IST midnight (observed at 18:30:00.001Z).
-    // The clock can tick past IST midnight while the test runs (the 18:29:00Z case sits one minute before it; a 1 ms margin flaked on CI), so mark both that day and the next.
-    const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' });
-    const days = [dayFmt.format(new Date()), dayFmt.format(new Date(Date.now() + 86_400_000))];
-    const { DAY_CARDS } = await import('../src/prompt/day-cards');
-    for (const day of days) for (const card of DAY_CARDS) state.storage.sql.exec('INSERT OR REPLACE INTO day_plan (day, card, time, reason, sent) VALUES (?, ?, ?, ?, 1)', day, card.id, '12:00', 'test fixture');
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
     await inbox.admit({ bot: 'hermetic-test-bot-token', subject: String(subject), doName: route(subject).doName }, updateId, 'PRIVATE_INTERRUPTED_REQUEST');
     await inbox.claim(`hermetic-test-bot-token:telegram:${updateId}`, 'interrupted-attempt', 'interrupted-run', Date.now() + 150_000);
@@ -240,7 +240,8 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:00.000Z', '2026-10-04T18:
     interrupted.admittedAt = Date.parse('2026-10-03T18:00:00Z');
     await state.storage.put({ telegram_owner_inbox_v1: records, timezone: 'Asia/Kolkata' });
     callsBefore = modelInputs.length;
-    await armAlarm(state.storage, Date.now() + 3600000);
+    // Armed on the real clock: an hour after the pinned instant is in the real past, so it would fire at once and race the explicit alarm.
+    await armAlarm(state.storage, vi.getRealSystemTime() + 3_600_000);
   });
   await evictDurableObject(stub);
   await runInDurableObject(stub, async (instance, state) => {
@@ -254,7 +255,7 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:00.000Z', '2026-10-04T18:
     expect(notices[0]!.expiresAt).toBeUndefined();
     expect((await new TelegramOwnerInbox(state.storage, persistInboxWake).records()).find(row => row.updateId === updateId))
       .toMatchObject({ state: 'quarantined', reason: 'recovered_uncertain', body: '', outcomeNoticeQueued: true });
-    await armAlarm(state.storage, Date.now() + 3600000);
+    await armAlarm(state.storage, vi.getRealSystemTime() + 3_600_000);
   });
   await evictDurableObject(stub);
   await runInDurableObject(stub, async (instance, state) => {
@@ -266,12 +267,16 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:00.000Z', '2026-10-04T18:
     expect(state.storage.kv.get<number>('interruption-fixture-effect-count')).toBe(1);
     // Same strict bound, but a failure names what called the model (a day plan, a reply, a memory pass) instead of only a count.
     const describeCall = (body: unknown) => { const b = body as { text?: { format?: { name?: string } }; instructions?: string; input?: unknown }; return `${b.text?.format?.name ?? 'unnamed'}: instr=${(typeof b.instructions === 'string' ? b.instructions : '').slice(0, 80)} | input=${JSON.stringify(b.input ?? '').slice(-260)}`; };
-    // A replay would put the interrupted request back in a model call. Scheduler work (a card or heartbeat the pinned clock makes due) is not a replay (CI run 37446492439, clock 18:29:00Z).
-    expect(modelInputs.slice(callsBefore).filter(body => JSON.stringify(body).includes('PRIVATE_INTERRUPTED_REQUEST')).map(describeCall), worldNote(state)).toEqual([]);
+    // With scheduled behaviors off nothing else calls the model, so any call after the crash cut is a replay.
+    expect(modelInputs.slice(callsBefore).map(describeCall), worldNote(state)).toEqual([]);
     expect(await new TelegramOwnerInbox(state.storage, persistInboxWake).claim(`hermetic-test-bot-token:telegram:${updateId}`, 'retry', 'retry-run', Date.now() + 150_000)).toBeNull();
     await state.storage.deleteAlarm();
   });
   } finally { vi.useRealTimers(); }
+  // Back on the real clock, nothing armed at the pinned instant may be due, or a stray alarm runs it during a later test.
+  await runInDurableObject(stub, async (_instance, state) => {
+    expect(state.storage.sql.exec('SELECT id, due_at FROM schedule WHERE due_at <= ?', Date.now()).toArray()).toEqual([]);
+  });
 });
 
 it('actual recovery retains its notice wake after outbox capacity failure and queues only once', async () => {
