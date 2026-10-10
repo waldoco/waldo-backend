@@ -9,10 +9,10 @@ export type { GoogleTaskProposal } from '@waldo/contracts';
 export class GoogleTaskConnectorUnavailableError extends Error {
   constructor() { super('The selected Google task account is not connected'); }
 }
-export type GoogleTaskApplyOutcome = Readonly<{ status: 'done' | 'stale' | 'unknown'; receipt?: EffectReceipt }>;
+export type GoogleTaskApplyOutcome = Readonly<{ status: 'done' | 'stale' | 'not_applied' | 'unknown'; receipt?: EffectReceipt }>;
 export type GoogleTaskSourceGuard = Pick<ToolDispatcherContext, 'assertTaskSourceCurrent'>;
 type Ack = { identity: string; task_json: string };
-type TaskResult = { status: 'applied' | 'stale'; readback_verified: boolean; account: GoogleTaskProposal['account']; task: GoogleTaskResource };
+type TaskResult = { status: 'applied' | 'stale' | 'not_applied'; readback_verified: boolean; account: GoogleTaskProposal['account']; task: GoogleTaskResource | null };
 
 const sameAccount = (client: GoogleClient, account: GoogleTaskProposal['account']) => client.account?.connection_id === account.connection_id && client.account?.email?.toLowerCase() === account.email.toLowerCase();
 const patchFor = (p: GoogleTaskProposal): GoogleTaskPatch => ({ ...p.args.changes, ...(p.args.action === 'complete' ? { status: 'done' as const } : p.args.action === 'reopen' || p.args.action === 'create' ? { status: 'todo' as const } : {}) });
@@ -131,11 +131,14 @@ export const googleTaskApprovals = (deps: Readonly<{ sql: SqlStorage; google: Go
       try {
         const receipt = await deps.effects.execute({ operationId, owner_ref: deps.ownerRef, tool: 'google_task_change', payload: p }, {
           dispatch: async () => {
-            if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
-            if (p.before) {
-              const current = googleTaskResourceSchema.parse(await client.task!(p.args.task_list_id, p.args.task_id!));
-              if (current.etag !== p.before.etag || JSON.stringify(current) !== JSON.stringify(p.before)) return { provider_id: p.before.id, result: { status: 'stale', readback_verified: false, account: p.account, task: current } satisfies TaskResult };
-            }
+            // Nothing has been sent yet, so a failure here is not an unknown outcome: it is
+            // closed as not applied and the owner asks again.
+            let current: GoogleTaskResource | null = null;
+            try {
+              if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
+              if (p.before) current = googleTaskResourceSchema.parse(await client.task!(p.args.task_list_id, p.args.task_id!));
+            } catch { return { provider_id: p.before?.id ?? operationId, result: { status: 'not_applied', readback_verified: false, account: p.account, task: p.before } satisfies TaskResult }; }
+            if (p.before && current && (current.etag !== p.before.etag || JSON.stringify(current) !== JSON.stringify(p.before))) return { provider_id: p.before.id, result: { status: 'stale', readback_verified: false, account: p.account, task: current } satisfies TaskResult };
             let ack: GoogleTaskResource;
             try { ack = googleTaskResourceSchema.parse(p.args.action === 'create' ? await client.createTask!(p.args.task_list_id, p.args.changes!) : await client.patchTask!(p.args.task_list_id, p.args.task_id!, patchFor(p), p.before!.etag)); }
             catch (error) {
@@ -155,7 +158,7 @@ export const googleTaskApprovals = (deps: Readonly<{ sql: SqlStorage; google: Go
         }, origin);
         if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
         const result = receipt.result as TaskResult;
-        return { status: result.status === 'stale' ? 'stale' : 'done', receipt };
+        return { status: result.status === 'applied' ? 'done' : result.status, receipt };
       } catch (error) {
         if (error instanceof EffectUnknownError || error instanceof GoogleError && error.message === 'intent_pending') return { status: 'unknown' };
         throw error;

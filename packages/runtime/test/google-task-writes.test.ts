@@ -19,7 +19,7 @@ const fixture = () => {
   } } as unknown as SqlStorage;
   const values = new Map<string, unknown>();
   const storage = { kv: { get: (key: string) => structuredClone(values.get(key)), put: (key: string, value: unknown) => values.set(key, structuredClone(value)), list: ({ prefix }: { prefix: string }) => new Map([...values].filter(([key]) => key.startsWith(prefix))) }, transactionSync: <T>(work: () => T) => work() } as unknown as DurableObjectStorage;
-  const state = { writes: 0, unavailable: false, responseLost: false, wrongReadback: false, preconditionRejected: false, wrongMutationId: false, revoked: false, wrongAccount: false, cardUnconfirmed: false, onMutation: null as (() => void) | null, cards: [] as string[], task: { kind: 'tasks#task', id: 'existing', title: 'Original', notes: 'Owner notes', due: '2026-10-10T00:00:00.000Z', status: 'needsAction', etag: 'v1' } as Record<string, unknown>, requests: [] as { method: string; url: URL; body: any; headers: Headers }[] };
+  const state = { writes: 0, unavailable: false, responseLost: false, wrongReadback: false, preconditionRejected: false, wrongMutationId: false, revoked: false, wrongAccount: false, unpinned: false, cardUnconfirmed: false, onMutation: null as (() => void) | null, cards: [] as string[], task: { kind: 'tasks#task', id: 'existing', title: 'Original', notes: 'Owner notes', due: '2026-10-10T00:00:00.000Z', status: 'needsAction', etag: 'v1' } as Record<string, unknown>, requests: [] as { method: string; url: URL; body: any; headers: Headers }[] };
   let sequence = 0;
   const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -45,7 +45,7 @@ const fixture = () => {
       await guard?.();
       if (state.revoked) return null;
       const candidate = { id: state.wrongAccount ? 'other-connection' : account.connection_id, email: state.wrongAccount ? 'other@example.test' : account.email, rail: 'local' as const };
-      pinProxyIntentRoute(sql, intent, 'google:tasks', [candidate], candidate);
+      if (!state.unpinned) pinProxyIntentRoute(sql, intent, 'google:tasks', [candidate], candidate);
       return googleClient(app, { refresh_token: 'fixture' }, fetcher, undefined, { connection_id: candidate.id, email: candidate.email });
     } };
     const adapter = googleTaskApprovals({ sql, google, effects, ownerRef: 'owner' });
@@ -193,6 +193,42 @@ describe('Google Tasks approval and readback journey', () => {
     f.state[field] = true;
     await expect(f.open().adapter.apply('proposal', p)).rejects.toThrow();
     expect(f.state.writes).toBe(0);
+    f.db.close();
+  });
+  it('refuses a different connection on its own account check even when the route pin is absent', async () => {
+    const f = fixture(); const first = f.open(); const p = await first.adapter.prepare('proposal', create);
+    f.state.unpinned = true; f.state.wrongAccount = true;
+    await expect(f.open().adapter.apply('proposal', p)).rejects.toThrow('nothing was retargeted');
+    await expect(f.open().adapter.reconcile('proposal', p)).rejects.toThrow('nothing was retargeted');
+    expect(f.state.writes).toBe(0);
+    f.db.close();
+  });
+  it('reports nothing was applied, and closes the operation, when the task cannot be read before the write', async () => {
+    const f = fixture(); const first = f.open();
+    const p = await first.adapter.prepare('proposal', { source: 'google_tasks', action: 'complete', task_list_id: create.task_list_id, task_id: 'existing', reason: 'Owner request' });
+    f.state.unavailable = true;
+    expect(await first.adapter.apply('proposal', p)).toMatchObject({ status: 'not_applied' });
+    expect(f.state.writes).toBe(0);
+    f.state.unavailable = false;
+    expect(await f.open().adapter.apply('proposal', p)).toMatchObject({ status: 'not_applied' });
+    expect(f.state.writes).toBe(0);
+    f.db.close();
+  });
+  it('tells the owner nothing changed when the task could not be read before the write', async () => {
+    const f = fixture(); const first = f.open();
+    const id = await first.desk.proposeGoogleTaskChange!({ source: 'google_tasks', action: 'complete', task_list_id: create.task_list_id, task_id: 'existing', reason: 'Owner request' });
+    f.state.unavailable = true;
+    expect(await first.desk.decide(id, 'a', 'trace')).toMatchObject({ toast: 'Nothing was changed' });
+    f.state.unavailable = false;
+    expect(await f.open().desk.decide(id, 'a', 'trace')).toMatchObject({ toast: 'Already handled.' });
+    expect(f.state.writes).toBe(0);
+    f.db.close();
+  });
+  it('applies once when the owner double-taps approve', async () => {
+    const f = fixture(); const first = f.open(); const id = await first.desk.proposeGoogleTaskChange!(create);
+    const outcomes = await Promise.all([first.desk.decide(id, 'a', 'trace'), first.desk.decide(id, 'a', 'trace')]);
+    expect(outcomes.map(outcome => outcome.toast).sort()).toEqual(['Already handled.', 'Done']);
+    expect(f.state.writes).toBe(1);
     f.db.close();
   });
   it('rejects changed frozen payload after an uncertain effect without provider I/O', async () => {

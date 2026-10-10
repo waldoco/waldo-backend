@@ -252,6 +252,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           const result = await deps.googleTasks().apply(id, taskProposal, operationRef);
           if (result.status === 'done') { setStatus(id, 'done'); out = { toast: 'Done', message: `The Google task change was applied and independently read back: ${describeGoogleTaskChange(taskProposal)}` }; }
           else if (result.status === 'stale') { setStatus(id, 'rejected'); out = { toast: 'The task changed', message: 'The Google task changed after your review. Nothing was changed; ask for a fresh proposal.' }; }
+          else if (result.status === 'not_applied') { setStatus(id, 'rejected'); out = { toast: 'Nothing was changed', message: 'I could not reach that Google task before changing it, so nothing was changed. Ask me again to retry.' }; }
           else { setStatus(id, 'uncertain'); out = { toast: 'Outcome unknown', message: 'The Google task outcome is unknown. No request was repeated; check the selected account and task before retrying.' }; }
         }
       } else if (entry.kind === 'browser_submit') {

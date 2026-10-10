@@ -62,6 +62,6 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
 export function approvalControlReceipt(out:ApprovalDecision):ControlReceipt {
  if(['Done','Undone','Not now'].includes(out.toast))return {state:'recorded',message:out.message};
  if(out.toast==='Outcome unknown')return {state:'unconfirmed',message:'The operation outcome is unknown. Check the result before retrying; nothing was run again.'};
- if(['Already handled.','This proposal expired','Google is not connected','The event changed','The task changed','Too late to undo','Not available'].includes(out.toast))return {state:'rejected',message:out.message};
+ if(['Already handled.','This proposal expired','Google is not connected','The event changed','The task changed','Nothing was changed','Too late to undo','Not available'].includes(out.toast))return {state:'rejected',message:out.message};
  return {state:'unconfirmed',message:'The proposal outcome could not be confirmed. Check the records and chat before retrying.'};
 }
