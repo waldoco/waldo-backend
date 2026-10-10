@@ -458,7 +458,7 @@ export const createOwnerResponder = (
             const behavior = messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation);
             // The composer admitted the owner's shared health for this turn. REASONS already carries it when present.
             const healthPrompt = reasons === undefined ? request.composition.healthPrompt : undefined;
-            const healthSection = healthPrompt ? `Shared health today (derived by the app from the owner's own wearable data; it does not cover their calendar):\n${healthPrompt}` : undefined;
+            const healthSection = healthPrompt ? `Shared health today (derived by the app from the owner's own wearable data):\n${healthPrompt}` : undefined;
             const clockLine = ownerClockLine(clock);
             const before = [...(reasons !== undefined ? [reasons] : []), behavior, ...(healthSection ? [healthSection] : []), clockLine];
             const afterBase = [...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];

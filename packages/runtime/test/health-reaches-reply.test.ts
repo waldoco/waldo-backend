@@ -41,6 +41,8 @@ const expectHealth = (instructions: string) => {
   expect(count(instructions, 'Form zone: steady.')).toBe(1);
   expect(count(instructions, 'Recovery: solid. Load: moderate.')).toBe(1);
   expect(instructions).not.toContain(ABSENT);
+  // The health source never reads the calendar, so it must not claim the day has no high-stakes events.
+  expect(instructions).not.toContain('Upcoming high-stakes');
 };
 const expectAbsent = (instructions: string) => {
   expect(count(instructions, ABSENT)).toBe(1);
@@ -59,8 +61,11 @@ it('a messaging owner turn tells the model the shared health context, in its own
     await responderWith(true, entry => logs.push(entry)).respond({ traceId: 'tg-health-1', conversationRef: 'owner', surface: 'telegram', text: 'how am I doing today?' }, (_name, work) => work());
   });
   expectHealth(lastInstructions());
-  const reply = logs.find(entry => entry.hop === 'llm_reply');
-  expect(reply?.shape?.context?.system_sections?.health).toBeGreaterThan(0);
+  const shape = logs.find(entry => entry.hop === 'llm_reply')!.shape!;
+  const { skill_procedures: procedures = 0, ...joined } = shape.context!.system_sections!;
+  expect(joined.health).toBeGreaterThan(0);
+  const pieces = Object.values(joined);
+  expect(pieces.reduce((sum, bytes) => sum + bytes, 0) + 2 * (pieces.length - 1) + procedures).toBe(shape.system_bytes);
 });
 
 it('a messaging owner turn without shared health says so once', async () => {

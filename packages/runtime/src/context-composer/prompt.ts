@@ -171,9 +171,10 @@ export function renderHealth(health: ContextHealthMaterial | null): string {
   const missing = health.view.missing_components.length === 0
     ? 'none'
     : health.view.missing_components.join(', ');
+  // An empty list means the health source did not look at the calendar, not that the day is clear.
   const highStakes = health.narrative.upcoming_high_stakes.length === 0
-    ? 'Upcoming high-stakes: none.'
-    : `Upcoming high-stakes: ${health.narrative.upcoming_high_stakes.join('; ')}`;
+    ? []
+    : [`Upcoming high-stakes: ${health.narrative.upcoming_high_stakes.join('; ')}`];
   return [
     health.view.algorithm_version === 'form.safte-fast.v1'
       ? `Form zone: ${health.view.form_zone}.`
@@ -182,7 +183,7 @@ export function renderHealth(health: ContextHealthMaterial | null): string {
     `Confidence: ${health.view.confidence_band}. Missing components: ${missing}.`,
     `Recovery: ${health.narrative.recovery_descriptor}. Load: ${health.narrative.load_descriptor}.`,
     `Day summary: ${health.narrative.day_summary}`,
-    highStakes,
+    ...highStakes,
   ].join('\n');
 }
 
