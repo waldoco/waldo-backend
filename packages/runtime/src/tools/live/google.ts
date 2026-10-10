@@ -5,7 +5,7 @@ import type { ProxyIntent } from '../../connectors/proxy-intent';
 import { artifactMarker, extractArtifacts, quarantineArtifacts, type ArtifactKind, type ExtractedArtifact } from '../../security/artifact-hygiene';
 import {
   calendarPageSchema, queryAvailabilityArgsSchema, type QueryAvailabilityArgs,
-  googleTaskListPageSchema, googleTasksPageSchema, type GoogleTasksPage,
+  googleCalendarListPageSchema, googleTaskListPageSchema, googleTasksPageSchema, type GoogleTasksPage,
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
@@ -130,12 +130,19 @@ const relayThreadMessage = async <T extends { subject: string; body: string; fro
 export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger) => [
   {
     name: 'query_calendar',
-    description: "Read a bounded page from one connected Google account and calendar (primary by default), now through the next 24 hours by default. Inspect coverage and next_page_token. Continue with the exact explicit date_range, calendar_id, limit and include_declined. Each result contains only its current page: an exhausted continuation does not make that result a complete window. Legacy adapters report unknown account and incomplete coverage. This is event enumeration, not availability.",
+    description: "Read a bounded page from one connected Google account and calendar (primary by default), now through the next 24 hours by default. Use operation list_calendars first to discover the account's other calendars (id, name, access role, time zone; visible ones unless include_hidden), then read one with its exact calendar_id. Inspect coverage and next_page_token. Continue with the exact explicit date_range, calendar_id, limit and include_declined. Each result contains only its current page: an exhausted continuation does not make that result a complete window. Legacy adapters report unknown account and incomplete coverage. This is event enumeration, not availability.",
     schema: queryCalendarArgsSchema,
     trigger_allowlist: allowlist('query_calendar'),
     autonomy_gated: false,
     requires_connector: true,
-    handle: ({ date_range, include_declined, limit, calendar_id = 'primary', page_token, account }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'calendar', ctx, async (client) => {
+    handle: ({ date_range, include_declined, limit, calendar_id = 'primary', page_token, account, operation, include_hidden = false }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => withGoogle(google, operation === 'list_calendars' ? 'calendar_list' : 'calendar', ctx, async (client) => {
+      if (operation === 'list_calendars') {
+        if (!client.calendarListsPage) throw new Error('Calendar discovery adapter unavailable');
+        const page = googleCalendarListPageSchema.parse(await client.calendarListsPage(limit, include_hidden, page_token));
+        if (page.fetched_count > limit) throw new Error('Calendar-list page exceeds requested limit');
+        assertCollectionAccount(page.account, client);
+        return { calendars: page.items, observed_at: page.observed_at, next_page_token: page.next_page_token, coverage: { scope: 'account_calendars', result_scope: 'current_page', include_hidden, page_limit: limit, fetched_count: page.fetched_count, returned_count: page.items.length, page_exhausted: page.next_page_token === null, complete: !page_token && page.next_page_token === null } };
+      }
       const now = clock.now().getTime();
       const from = date_range?.from ?? new Date(now).toISOString();
       const to = date_range?.to ?? new Date(now + DAY_MS).toISOString();

@@ -11,7 +11,7 @@ const specifiersOf = (text: string) =>
   [...text.matchAll(/\bfrom\s*['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]|\bimport\s+['"]([^'"]+)['"]/g)].map(match => match[1] ?? match[2] ?? match[3] ?? '');
 
 it('app contracts import only zod and sibling app files, so the app can pin this directory verbatim', () => {
-  expect(sources).toEqual(['approvals.ts', 'controls.ts', 'core.ts', 'parts.ts', 'surfaces.ts']);
+  expect(sources).toEqual(['approvals.ts', 'controls.ts', 'core.ts', 'health-ingest.ts', 'parts.ts', 'surfaces.ts']);
   for (const name of sources) {
     const specifiers = specifiersOf(readFileSync(new URL(name, here), 'utf8'));
     expect(specifiers).toContain('zod');
