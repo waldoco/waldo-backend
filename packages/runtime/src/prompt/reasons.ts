@@ -119,9 +119,9 @@ function renderHealthContext(canvas: RuntimePromptCanvas): string {
       ? ['Upcoming high-stakes: none.']
       : ['Upcoming high-stakes:', ...health.upcoming_high_stakes.map((value) => `- ${value}`)];
   return [
-    `Form zone: ${health.zone}.`,
+    `Form zone: ${health.zone ?? 'unavailable'}.`,
     `Recovery: ${health.recovery_descriptor}.`,
-    `Load: ${health.load_descriptor}.`,
+    `Load: ${health.load_descriptor ?? 'unavailable'}.`,
     `Day summary: ${health.day_summary}`,
     ...upcoming,
     'Active goals: unavailable in this phase.',
