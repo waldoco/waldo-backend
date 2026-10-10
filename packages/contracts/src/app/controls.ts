@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { messagingSurfaceV1Schema } from './surfaces';
 
 const text = z.string();
 const count = z.int().nonnegative();
@@ -10,10 +11,12 @@ export const appControlQueryV1Schema = z.strictObject({ view: appControlViewV1Sc
   if (query.view !== 'activity' && (query.trace_before !== undefined || query.runs_before !== undefined)) ctx.addIssue({ code: 'custom', message: 'Activity cursors require the activity view' });
 });
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   revision, request_id: appControlRequestIdV1Schema,
+}).superRefine((action, ctx) => {
+  if (action.action === 'channel.unlink' && !messagingSurfaceV1Schema.safeParse(action.id).success) ctx.addIssue({ code: 'custom', path: ['id'], message: 'channel.unlink names a messaging channel in id' });
 });
 
 export const appControlDayDataV1Schema = z.strictObject({
@@ -22,10 +25,17 @@ export const appControlDayDataV1Schema = z.strictObject({
   proactivity: z.strictObject({ quiet_start: text.nullable(), quiet_end: text.nullable(), volume: z.enum(['low', 'normal', 'high']) }),
   schedules: z.strictObject({ daily_brief: z.boolean(), followups: z.boolean(), event_briefs: z.boolean(), nightly: z.boolean(), heartbeat: z.boolean() }),
 });
+// Lists only the channels this Waldo can link. Addressing is masked and exists exactly while the
+// binding keeps it: an unlinked or pending channel holds no peer identifier.
+export const appChannelStatusV1Schema = z.strictObject({
+  channel: messagingSurfaceV1Schema, state: z.enum(['linked', 'blocked', 'pending', 'unlinked']), masked_label: text.min(1).max(64).nullable(),
+}).refine(status => (status.masked_label !== null) === (status.state === 'linked' || status.state === 'blocked'), { error: 'masked_label is present exactly while linked or blocked', path: ['masked_label'] });
 export const appControlConnectionsDataV1Schema = z.strictObject({
   google: z.strictObject({ connectAvailable: z.boolean(), accounts: z.array(z.strictObject({ id: text, email: text, calendar: z.boolean(), mail: z.boolean(), tasks: z.boolean(), health: z.enum(['needs_reconnect', 'access_granted']) })) }),
   telegram: z.strictObject({ linked: z.boolean(), unlinkAvailable: z.boolean() }),
   sessions: z.strictObject({ until: text, count, items: z.array(z.strictObject({ signed_in: text, until: text, current: z.boolean() })) }),
+  channels: z.array(appChannelStatusV1Schema).max(messagingSurfaceV1Schema.options.length)
+    .refine(channels => new Set(channels.map(status => status.channel)).size === channels.length, 'A channel is listed once').optional(),
 });
 const hop = z.strictObject({ hop: text, ok: z.boolean(), ms: z.number(), note: text });
 export const appControlActivityDataV1Schema = z.strictObject({
@@ -53,3 +63,4 @@ export const appControlRoutesV1 = [
 export type AppControlProjectionV1 = z.infer<typeof appControlProjectionV1Schema>;
 export type AppControlViewV1 = z.infer<typeof appControlViewV1Schema>;
 export type AppControlResultV1 = z.infer<typeof appControlResultV1Schema>;
+export type AppChannelStatusV1 = z.infer<typeof appChannelStatusV1Schema>;

@@ -5,6 +5,7 @@ import type { ProxyIntent } from '../../connectors/proxy-intent';
 import { artifactMarker, extractArtifacts, quarantineArtifacts, type ArtifactKind, type ExtractedArtifact } from '../../security/artifact-hygiene';
 import {
   calendarPageSchema, queryAvailabilityArgsSchema, type QueryAvailabilityArgs,
+  googleTaskListPageSchema, googleTasksPageSchema, type GoogleTasksPage,
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
@@ -26,6 +27,9 @@ export type EffectDesk = Readonly<{
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 const DAY_MS = 24 * 60 * 60_000;
+const assertCollectionAccount = (observed: { connection_id: string | null; email: string | null }, client: GoogleClient) => {
+  if ((observed.connection_id !== null && observed.connection_id !== client.account?.connection_id) || (observed.email !== null && observed.email.toLowerCase() !== client.account?.email?.toLowerCase())) throw new Error('Google collection account does not match the selected connection');
+};
 
 // S4 (CONNECT_FLOW_DESIGN 4.4): auth failures are a typed intent, never a URL in text. The
 // responder sees `connect` and calls the channel's offerConnect seam; the model only ever
@@ -39,6 +43,7 @@ const authFailed = (reason: ConnectIntent['reason'], feature: GoogleFeature): To
 });
 
 async function withGoogle<T extends object>(google: GoogleAccess, feature: GoogleFeature, ctx: ToolDispatcherContext | undefined, work: (client: GoogleClient) => Promise<T>, account?: string): Promise<ToolResult<T>> {
+  try {
   const client = await google.client(feature, undefined, ctx?.assertTaskSourceCurrent, account);
   if (client === null) {
     // No serving client while a connected account is failing (invalid_grant recorded, circuit
@@ -48,7 +53,6 @@ async function withGoogle<T extends object>(google: GoogleAccess, feature: Googl
     const dead = (feature === 'calendar' || feature === 'mail' || feature === 'tasks') && (accounts?.some((known) => (!account || known.email.toLowerCase() === account.toLowerCase()) && known.error !== null && known[feature]) ?? false);
     return authFailed(dead ? 'reauth_needed' : 'not_connected', feature);
   }
-  try {
     if (account && client.account?.email?.toLowerCase() !== account.toLowerCase()) throw new Error('Selected Google account is unavailable; no other account was used');
     const data = await work(taskSourceClient(client, ctx));
     return { ok: true, data: { ...data, account: client.account ?? {connection_id:null,email:null} }, source_taint: 'external' };
@@ -61,6 +65,7 @@ async function withGoogle<T extends object>(google: GoogleAccess, feature: Googl
     return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error), source_taint: 'external' };
   }
 }
+
 
 // Reply intent is resolved from the selected account, never from model-supplied RFC headers.
 const replyHeaders = async (client: GoogleClient, args: DraftEmailArgs) => {
@@ -233,16 +238,38 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<ReadThreadArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_tasks',
-    description: "Read the owner's Google Tasks (default list). Defaults to open tasks. Google Tasks has no in-progress state; asking for it returns the open tasks with a note.",
+    description: "Read a bounded page of the owner's Google Tasks across all authorized lists by default, preserving each task_list_id. Use operation list_task_lists to discover list names, or task_list_id to select one list. Continue next_page_token with the same account/status/limit/operation/list. Inspect coverage: a continuation contains only its current page. Defaults to open tasks; completed/all reads include hidden completed tasks and assigned tasks. Google Tasks has no in-progress state; that filter returns open tasks with a note. Legacy adapters provide only a sampled default list with incomplete coverage.",
     schema: getTasksArgsSchema,
     trigger_allowlist: allowlist('get_tasks'),
     autonomy_gated: false,
     requires_connector: true,
-    handle: ({ status, limit, account }: GetTasksArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'tasks', ctx, async (client) => ({
-      status,
-      tasks: await client.tasks(status, limit),
-      ...(status === 'in_progress' ? { note: 'Google Tasks has no in-progress state; showing open tasks.' } : {}),
-    }), account),
+    handle: ({ status, limit, account, operation, task_list_id, page_token }: GetTasksArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'tasks', ctx, async (client) => {
+      if (operation === 'list_task_lists') {
+        if (!client.taskListsPage) throw new Error('Task-list discovery adapter unavailable');
+        const page = googleTaskListPageSchema.parse(await client.taskListsPage(limit, page_token));
+        if (page.fetched_count > limit) throw new Error('Task-list page exceeds requested limit');
+        assertCollectionAccount(page.account, client);
+        return { task_lists: page.items, observed_at: page.observed_at, next_page_token: page.next_page_token, coverage: { scope: 'account_task_lists', result_scope: 'current_page', page_limit: limit, fetched_count: page.fetched_count, returned_count: page.items.length, page_exhausted: page.next_page_token === null, complete: !page_token && page.next_page_token === null } };
+      }
+      const method = task_list_id ? client.tasksPage : client.allTasksPage;
+      let page: GoogleTasksPage | null = null;
+      if (method) {
+        try { page = googleTasksPageSchema.parse(await (task_list_id ? client.tasksPage!(task_list_id, status, limit, page_token) : client.allTasksPage!(status, limit, page_token))); }
+        catch (error) {
+          if (!(error instanceof GoogleError && error.status === 404 && error.message === 'unknown operation') || page_token || task_list_id && task_list_id !== '@default') throw error;
+        }
+      }
+      if (!page && (page_token || task_list_id && task_list_id !== '@default')) throw new Error('Tasks pagination or selected-list adapter unavailable');
+      if (page) {
+        if (page.tasks.length > limit || task_list_id && page.task_list_ids.some(id => id !== task_list_id)) throw new Error('Tasks page does not match selected list or limit');
+        assertCollectionAccount(page.account, client);
+      }
+      const tasks = page?.tasks ?? await client.tasks(status, limit);
+      return { status, tasks, next_page_token: page?.next_page_token ?? null, observed_at: page?.observed_at ?? clock.now().toISOString(),
+        coverage: { scope: page ? task_list_id ? 'selected_task_list' : 'all_task_lists' : 'legacy_default_list_sample', task_list_ids: page?.task_list_ids ?? ['@default'], result_scope: 'current_page', page_limit: limit, fetched_count: page?.fetched_count ?? null, returned_count: tasks.length, page_exhausted: page ? page.next_page_token === null : null, complete: Boolean(page && !page_token && page.next_page_token === null), limitation: page ? 'One account. Each result contains its current page only; continue to cover further tasks/lists. Task due dates are provider date semantics, not scheduled times.' : 'Legacy default-list sample with unknown pagination; empty does not prove absence across lists.' },
+        ...(status === 'in_progress' ? { note: 'Google Tasks has no in-progress state; showing open tasks.' } : {}),
+      };
+    }, account),
   } satisfies ToolHandler<GetTasksArgs, unknown, ToolDispatcherContext>,
   {
     name: 'propose_calendar_change',
