@@ -21,7 +21,6 @@ export const healthInstantV1Schema = z.iso.datetime({ offset: true });
 export const healthTimezoneV1Schema = z.string().min(1).max(80).regex(/^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+){0,2}$/);
 const epochV1 = z.int().nonnegative();
 const sampleIdV1 = z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/);
-const contextRefV1 = z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/);
 const anchorV1 = z.string().min(1).max(2048);
 
 export const healthConsentGrantV1Schema = z.strictObject({
@@ -82,9 +81,16 @@ export const healthSleepContextV1Schema = z.strictObject({
   if (new Set(sleep.contributor_ids).size !== sleep.contributor_ids.length || sleep.intervals.some(interval => !sleep.contributor_ids.includes(interval.contributor_id))) context.addIssue({ code: 'custom', message: 'invalid sleep contributors' });
 });
 
-// A reading window is identified by sample_id. For a growing aggregate window (steps so far today)
-// revision is the observation time in epoch seconds, so it only grows and survives a reinstall; a point
-// record is immutable and uses revision 0 unless the OS edits it.
+// Identity. A point record (a sample the OS stored, a workout, one SpO2 reading) uses its OS record id
+// and revision 0 unless the OS edits it. A window signal is one fixed local-hour bucket: the same hour
+// always has the same bounds, so its sample_id (a hash of source, signal and bucket start) never depends
+// on when it was read. Only the current hour grows, and its revision is the observation time in epoch
+// seconds, which only increases and survives a reinstall. Daily totals are the backend's sum of buckets.
+// A sleep reading takes its id from source, signal and waking_day, so a late stage or a second source
+// replaces the session instead of adding a second one.
+// Sleep definitions: sleep_duration is the minutes of the union of asleep intervals; sleep_efficiency is
+// asleep minutes divided by in-bed minutes; sleep_midpoint is the local minute of day, in the reading's
+// zone, of the midpoint between the first asleep start and the last asleep end.
 const sampleCommon = {
   sample_id: sampleIdV1,
   origin: healthSampleOriginV1Schema.optional(),
@@ -96,6 +102,14 @@ const sampleCommon = {
   utc_offset_minutes: z.int().min(-840).max(840),
 };
 const hrvMethodV1 = z.enum(['rmssd', 'sdnn']);
+const WINDOW_SIGNALS: readonly string[] = ['heart_rate_window', 'hrv_window', 'steps_window', 'active_energy_window', 'daylight_duration', 'movement_duration'];
+const HOUR_MS = 3_600_000;
+// The bucket is exactly one hour and starts on the hour of the reading's own offset (so +05:30 and +05:45
+// zones align on their local clock, not the UTC clock).
+const isLocalHourBucket = (sample: { start_at: string; end_at: string; utc_offset_minutes: number }) => {
+  const start = Date.parse(sample.start_at);
+  return Date.parse(sample.end_at) - start === HOUR_MS && (start + sample.utc_offset_minutes * 60_000) % HOUR_MS === 0;
+};
 const bpm = z.number().finite().positive().max(300);
 // Bounds are plausibility limits that catch unit mistakes. They are not medical thresholds.
 export const healthSampleV1Schema = z.discriminatedUnion('signal', [
@@ -104,17 +118,18 @@ export const healthSampleV1Schema = z.discriminatedUnion('signal', [
   z.strictObject({ ...sampleCommon, signal: z.literal('sleep_midpoint'), unit: z.literal('local_minute'), method: z.literal('sleep_midpoint'), value: z.number().finite().min(0).max(1439.999) }),
   z.strictObject({ ...sampleCommon, signal: z.literal('overnight_hrv'), unit: z.literal('milliseconds'), method: hrvMethodV1, value: z.number().finite().positive().max(1000) }),
   z.strictObject({ ...sampleCommon, signal: z.literal('resting_heart_rate'), unit: z.literal('beats_per_minute'), method: z.enum(['overnight_resting', 'provider_resting_daily', 'resting_measurement', 'unknown']).optional(), value: bpm }),
-  z.strictObject({ ...sampleCommon, signal: z.literal('daylight_duration'), unit: z.literal('minutes'), method: z.literal('daylight_duration'), context_ref: contextRefV1, value: z.number().finite().min(0).max(1440) }),
-  z.strictObject({ ...sampleCommon, signal: z.literal('movement_duration'), unit: z.literal('minutes'), method: z.literal('active_minutes'), context_ref: contextRefV1, value: z.number().finite().min(0).max(1440) }),
+  z.strictObject({ ...sampleCommon, signal: z.literal('daylight_duration'), unit: z.literal('minutes'), value: z.number().finite().min(0).max(60) }),
+  z.strictObject({ ...sampleCommon, signal: z.literal('movement_duration'), unit: z.literal('minutes'), value: z.number().finite().min(0).max(60) }),
   z.strictObject({ ...sampleCommon, signal: z.literal('heart_rate_window'), unit: z.literal('beats_per_minute'), value: bpm, min: bpm, max: bpm, n_samples: z.int().min(1).max(100_000) }),
   // RMSSD is the canonical method. SDNN is a labelled fallback with its own baseline, never blended.
-  z.strictObject({ ...sampleCommon, signal: z.literal('hrv_window'), unit: z.literal('milliseconds'), method: hrvMethodV1, value: z.number().finite().positive().max(1000), n_beats: z.int().min(10).max(1_000_000) }),
+  z.strictObject({ ...sampleCommon, signal: z.literal('hrv_window'), unit: z.literal('milliseconds'), method: hrvMethodV1, value: z.number().finite().positive().max(1000), n_beats: z.int().min(10).max(1_000_000).optional() }),
   z.strictObject({ ...sampleCommon, signal: z.literal('spo2'), unit: z.literal('percent'), value: z.number().finite().min(50).max(100) }),
   z.strictObject({ ...sampleCommon, signal: z.literal('respiratory_rate'), unit: z.literal('breaths_per_minute'), value: z.number().finite().min(4).max(80) }),
   z.strictObject({ ...sampleCommon, signal: z.literal('steps_window'), unit: z.literal('count'), value: z.int().min(0).max(300_000) }),
   z.strictObject({ ...sampleCommon, signal: z.literal('active_energy_window'), unit: z.literal('kilocalories'), value: z.number().finite().min(0).max(30_000) }),
   z.strictObject({ ...sampleCommon, signal: z.literal('workout'), unit: z.literal('minutes'), activity: z.string().min(1).max(64), value: z.number().finite().min(0).max(1440), energy_kcal: z.number().finite().min(0).max(30_000).optional() }),
 ]).refine(sample => Date.parse(sample.start_at) <= Date.parse(sample.end_at), 'sample end precedes start')
+  .refine(sample => !WINDOW_SIGNALS.includes(sample.signal) || isLocalHourBucket(sample), 'window signals are fixed local-hour buckets')
   .refine(sample => sample.signal !== 'heart_rate_window' || (sample.min <= sample.value && sample.value <= sample.max), 'heart-rate window mean outside its range');
 export const healthSignalV1Schema = z.enum([
   'sleep_duration', 'sleep_efficiency', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'daylight_duration', 'movement_duration',

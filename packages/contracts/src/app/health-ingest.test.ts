@@ -7,6 +7,7 @@ import {
 
 const grant = { request_id: 'health-consent-001', source: 'apple', purpose: 'storage_compute', version: HEALTH_CONSENT_VERSION_V1, expected_epoch: 0, age_attested_18_plus: true };
 const common = { sample_id: 'HK:sample-1', revision: 1, day: '2026-10-10', start_at: '2026-10-10T06:00:00+05:30', end_at: '2026-10-10T06:05:00+05:30', utc_offset_minutes: 330 };
+const hour = { ...common, start_at: '2026-10-10T06:00:00+05:30', end_at: '2026-10-10T07:00:00+05:30' };
 const sleep = { ...common, signal: 'sleep_duration', unit: 'minutes', value: 420 };
 const batch = { request_id: 'health-upload-001', source: 'apple', consent_epoch: 1, timezone: 'Asia/Kolkata', anchor_before: null, anchor_after: 'opaque-anchor-1', samples: [sleep], deletions: [] };
 const rejected = (schema: { safeParse(input: unknown): { success: boolean } }, inputs: unknown[]) => inputs.forEach(input => expect(schema.safeParse(input).success, JSON.stringify(input)).toBe(false));
@@ -44,24 +45,44 @@ describe('health samples', () => {
     expect(healthSampleV1Schema.safeParse({ ...hrv, method: 'rmssd' }).success).toBe(true);
     expect(healthSampleV1Schema.safeParse({ ...hrv, method: 'sdnn' }).success).toBe(true);
     rejected(healthSampleV1Schema, [hrv, { ...hrv, method: 'pnn50' }, { ...hrv, method: 'rmssd', value: 0 }]);
-    const window = { ...common, signal: 'hrv_window', unit: 'milliseconds', value: 41, method: 'rmssd', n_beats: 300 };
+    const window = { ...hour, signal: 'hrv_window', unit: 'milliseconds', value: 41, method: 'rmssd', n_beats: 300 };
     expect(healthSampleV1Schema.safeParse(window).success).toBe(true);
+    const { n_beats: _beats, ...native } = window;
+    expect(healthSampleV1Schema.safeParse(native).success).toBe(true);
     rejected(healthSampleV1Schema, [{ ...window, method: undefined }, { ...window, n_beats: 2 }, { ...window, n_beats: 1.5 }, { ...window, beats: [800, 810] }]);
   });
   it('accepts intraday window summaries and nothing beat-to-beat', () => {
     const accepted = [
-      { ...common, signal: 'heart_rate_window', unit: 'beats_per_minute', value: 72, min: 60, max: 95, n_samples: 12 },
+      { ...hour, signal: 'heart_rate_window', unit: 'beats_per_minute', value: 72, min: 60, max: 95, n_samples: 12 },
       { ...common, signal: 'spo2', unit: 'percent', value: 97 },
       { ...common, signal: 'respiratory_rate', unit: 'breaths_per_minute', value: 14.5 },
-      { ...common, signal: 'steps_window', unit: 'count', value: 1200 },
-      { ...common, signal: 'active_energy_window', unit: 'kilocalories', value: 85.5 },
+      { ...hour, signal: 'steps_window', unit: 'count', value: 1200 },
+      { ...hour, signal: 'active_energy_window', unit: 'kilocalories', value: 85.5 },
+      { ...hour, signal: 'daylight_duration', unit: 'minutes', value: 35 },
+      { ...hour, signal: 'movement_duration', unit: 'minutes', value: 12 },
       { ...common, signal: 'workout', unit: 'minutes', value: 42, activity: 'running', energy_kcal: 410 },
     ];
     for (const sample of accepted) expect(healthSampleV1Schema.safeParse(sample).success, sample.signal).toBe(true);
     rejected(healthSampleV1Schema, [
       { ...accepted[0], min: 80 }, { ...accepted[0], max: 70 }, { ...accepted[0], ibi_ms: [800, 790] }, { ...accepted[0], series: [{ t: 1, bpm: 70 }] },
-      { ...accepted[1], value: 120 }, { ...accepted[2], value: 0 }, { ...accepted[3], value: 1.5 }, { ...accepted[3], value: -1 }, { ...accepted[4], unit: 'joules' }, { ...accepted[5], activity: '' },
+      { ...accepted[1], value: 120 }, { ...accepted[2], value: 0 }, { ...accepted[3], value: 1.5 }, { ...accepted[3], value: -1 }, { ...accepted[4], unit: 'joules' }, { ...accepted[5], value: 61 }, { ...accepted[6], value: 61 }, { ...accepted[7], activity: '' }, { ...accepted[5], context_ref: 'ctx' }, { ...accepted[6], method: 'daylight_duration' },
     ]);
+  });
+  it('keeps window signals to fixed local-hour buckets, so a window id never depends on when it was read', () => {
+    const steps = { ...hour, signal: 'steps_window', unit: 'count', value: 100 };
+    expect(healthSampleV1Schema.safeParse(steps).success).toBe(true);
+    expect(healthSampleV1Schema.safeParse({ ...steps, start_at: '2026-10-10T00:30:00Z', end_at: '2026-10-10T01:30:00Z', utc_offset_minutes: 0 }).success).toBe(false);
+    expect(healthSampleV1Schema.safeParse({ ...steps, start_at: '2026-10-10T01:00:00Z', end_at: '2026-10-10T02:00:00Z', utc_offset_minutes: 0 }).success).toBe(true);
+    rejected(healthSampleV1Schema, [
+      { ...steps, end_at: '2026-10-10T06:30:00+05:30' }, { ...steps, end_at: '2026-10-10T08:00:00+05:30' }, { ...steps, start_at: '2026-10-10T06:15:00+05:30', end_at: '2026-10-10T07:15:00+05:30' },
+      { ...steps, utc_offset_minutes: 0 }, { ...steps, start_at: '2026-10-10T07:00:00+05:30', end_at: '2026-10-10T06:00:00+05:30' },
+    ]);
+    for (const signal of ['heart_rate_window', 'hrv_window', 'active_energy_window']) {
+      const base = { ...hour, signal, ...(signal === 'heart_rate_window' ? { unit: 'beats_per_minute', value: 70, min: 60, max: 80, n_samples: 5 } : signal === 'hrv_window' ? { unit: 'milliseconds', value: 40, method: 'rmssd' } : { unit: 'kilocalories', value: 9 }) };
+      expect(healthSampleV1Schema.safeParse(base).success, signal).toBe(true);
+      expect(healthSampleV1Schema.safeParse({ ...base, end_at: '2026-10-10T06:20:00+05:30' }).success, signal).toBe(false);
+    }
+    expect(healthSampleV1Schema.safeParse({ ...common, signal: 'spo2', unit: 'percent', value: 96 }).success).toBe(true);
   });
   it('preserves native producer origin without treating the read API as a vendor', () => {
     const origin = { read_api: 'healthkit', source_bundle_id: 'com.example.other-source', source_package_name: null, source_version: '2', source_revision: 'rev-2', device_ref: `sha256:${'2'.repeat(64)}`, recording_method: 'automatic' };
@@ -84,8 +105,8 @@ describe('health ingest batch', () => {
     expect(healthIngestV1Schema.safeParse({ ...batch, timezone: 'UTC' }).success).toBe(true);
     expect(healthIngestV1Schema.safeParse({ ...batch, timezone: 'America/Argentina/Buenos_Aires' }).success).toBe(true);
   });
-  it('lets a window grow by revision and a deletion name its exact revision', () => {
-    const grown = { ...common, signal: 'steps_window', unit: 'count', value: 5000, revision: 1_790_000_000 };
+  it('lets the current hour grow by revision and a deletion name its exact revision', () => {
+    const grown = { ...hour, signal: 'steps_window', unit: 'count', value: 5000, revision: 1_790_000_000 };
     expect(healthIngestV1Schema.safeParse({ ...batch, samples: [grown], deletions: [{ sample_id: 'HK:gone', signal: 'steps_window', revision: 1_790_000_100 }] }).success).toBe(true);
   });
   it('matches the receipt to the request it answers', () => {
