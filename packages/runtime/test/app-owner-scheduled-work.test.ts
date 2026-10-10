@@ -10,12 +10,14 @@ import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 
 const REMINDER_TEXT = 'Time to call Sam.';
-const model = vi.hoisted(() => ({ calls: 0 }));
+const model = vi.hoisted(() => ({ calls: 0, requests: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete(request: import('../src/llm/provider').LLMGatewayRequest) {
     model.calls += 1;
-    return { ok: true as const, data: { model: request.request.model, text: 'Time to call Sam.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+    const sent = JSON.stringify(request);
+    model.requests.push(sent);
+    return { ok: true as const, data: { model: request.request.model, text: sent.includes('Reminder due now') ? 'Time to call Sam.' : 'Noted.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
@@ -28,7 +30,7 @@ const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', S
 type Authority = 'current' | 'revoked' | 'outage';
 const wire = { authority: 'current' as Authority, asked: [] as string[], other: [] as string[] };
 beforeEach(() => {
-  model.calls = 0; wire.authority = 'current'; wire.asked = []; wire.other = [];
+  model.calls = 0; model.requests = []; wire.authority = 'current'; wire.asked = []; wire.other = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -70,6 +72,7 @@ const driveAlarm = async (name: string, identity: Identity) => {
     try {
       await owner.alarm();
       const askedByAlarm = [...wire.asked];
+      const wake = await state.storage.getAlarm();
       const principal = `prn_${ownerHex}`, tenant = `ten_${ownerHex}`;
       const history = canonicalOwnerConversationStore(state.storage, { invocation: { verified_authority: { principal_ref: principal, tenant_ref: tenant } }, assertCurrent: async () => undefined } as never);
       // The app's own read, through its real chat route and session check.
@@ -77,6 +80,7 @@ const driveAlarm = async (name: string, identity: Identity) => {
       const read = chat.status === 200 ? (await chat.json() as { messages: { role: string; text: string; channel: string }[] }).messages.map(({ role, text, channel }) => ({ role, text, channel })) : chat.status;
       return {
         askedByAlarm,
+        retriesAt: wake === null ? null : wake - Date.now(),
         chat: read,
         transcript: (await history.load()).entries.map(entry => ({ role: entry.role, surface: entry.surface, text: entry.appPayload })),
         due: state.storage.sql.exec<{ status: string; attempts: number }>("SELECT status, attempts FROM schedule WHERE id = ?", reminder.id).toArray(),
@@ -104,12 +108,14 @@ describe('scheduled work for an owner with no Telegram link', () => {
     expect(outcome.outcomes).toEqual(['ok']);
   });
 
-  it.each([['revoked'], ['outage']] as const)('runs nothing when the directory says %s, and keeps the reminder', async authority => {
+  it.each([['revoked', false], ['outage', true]] as const)('runs nothing when the directory says %s, keeps the reminder, and only an outage asks again', async (authority, asksAgain) => {
     wire.authority = authority;
     const outcome = await driveAlarm(`app-authority-${authority}`, { app: 'own' });
     expect(outcome).toMatchObject({ transcript: [], queuedOnTelegram: [], due: [{ status: 'armed', attempts: 0 }], outcomes: [] });
     expect(model.calls).toBe(0);
     expect(wire.other).toEqual([]);
+    if (asksAgain) expect(outcome.retriesAt).toBeGreaterThan(30_000);
+    else expect(outcome.retriesAt).toBeNull();
   });
 
   it.each([['none'], ['foreign']] as const)('asks the directory nothing and runs nothing without this owner\'s app binding (%s)', async app => {
@@ -124,5 +130,40 @@ describe('scheduled work for an owner with no Telegram link', () => {
     expect(outcome.askedByAlarm).not.toContain('owner_runtime_authority');
     expect(outcome.transcript).toEqual([]);
     expect(outcome.queuedOnTelegram).toEqual([7]);
+  });
+});
+
+describe('the owner\'s next app turn after a scheduled message', () => {
+  it('sees the reminder in its history and continues the same transcript', async () => {
+    const name = 'app-turn-alarm-turn';
+    const headers = { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' };
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+      claimStore(state.storage.sql);
+      ensureSchema(state.storage);
+      const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+      const turn = async (clientId: string, text: string) => {
+        const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers, body: JSON.stringify({ client_message_id: clientId, text }) }));
+        expect(sent.status).toBe(202);
+        const { message_id: id } = await sent.json() as { message_id: string };
+        await vi.waitFor(() => expect(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
+        return id;
+      };
+      try {
+        const first = await turn('client-turn-0001', 'Hello there.');
+        const clockBack = (ms: number) => () => new Date(Date.now() - ms);
+        await reminderBook(state.storage.sql, new Scheduler(state.storage.sql, state.storage, productionDeps()), { timezone: 'UTC', now: clockBack(3_600_000) }, () => 'rem-turn')
+          .set({ note: 'call Sam', at: clockBack(30 * 60_000)().toISOString().slice(0, 16), repeat: 'none' });
+        await owner.alarm();
+        const second = await turn('client-turn-0002', 'What was that reminder?');
+        const page = await (await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main', { headers }))).json() as { messages: { id: string; role: string; text: string; parent_id: string | null }[] };
+        const oldestFirst = [...page.messages].reverse();
+        expect(oldestFirst.map(row => [row.role, row.text])).toEqual([['user', 'Hello there.'], ['assistant', 'Noted.'], ['assistant', REMINDER_TEXT], ['user', 'What was that reminder?'], ['assistant', 'Noted.']]);
+        expect(oldestFirst[2]!.parent_id).toBe(oldestFirst[1]!.id);
+        expect(oldestFirst[3]!.id).toBe(second);
+        expect(oldestFirst[3]!.parent_id).toBe(oldestFirst[2]!.id);
+        expect(oldestFirst[0]!.id).toBe(first);
+        expect(model.requests.at(-1)).toContain(REMINDER_TEXT);
+      } finally { await state.storage.deleteAlarm(); }
+    });
   });
 });

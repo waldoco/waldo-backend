@@ -177,6 +177,8 @@ type OwnerRuntime = Readonly<{
 }>;
 
 const LATE_FIRE_MS = 5 * 60_000;
+// A directory outage at the alarm leaves the app owner's scheduled work waiting; this is how soon the alarm asks again.
+const APP_ADMISSION_RETRY_MS = 60_000;
 
 const validZone = (zone: string): boolean => {
   try {
@@ -527,14 +529,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private scheduledAppDelivery: ((text: string) => Promise<void>) | null = null;
 
   // An owner who never linked Telegram still has scheduled work. The app binding written at their first app message names
-  // the owner locally; the directory then says whether the account is still admitted. Any error or revocation runs nothing.
-  private async appOwnerAuthority(): Promise<OwnerRuntimeAuthority | null> {
+  // the owner locally; the directory then says whether the account is still admitted. A revoked or rejected account runs
+  // nothing and stays dormant; a directory outage runs nothing now and asks the alarm to try again.
+  private async appOwnerLookup(): Promise<Readonly<{ kind: 'admitted'; authority: OwnerRuntimeAuthority } | { kind: 'dormant' } | { kind: 'retry' }>> {
     const kv = this.ctx.storage.kv, doName = kv.get<string>('do_name'), owners = this.env.TELEGRAM_OWNER_DO;
-    if (!doName || !owners || kv.get<boolean>('app_unlinked') === true || kv.get<string>('app_subject') !== String(appSubjectFor(doName))) return null;
+    if (!doName || !owners || kv.get<boolean>('app_unlinked') === true || kv.get<string>('app_subject') !== String(appSubjectFor(doName))) return { kind: 'dormant' };
     try {
-      return await ownerRuntimeAuthority(this.env).resolve({ doName, actualDoId: this.ctx.id.toString(), expectedDoId: name => owners.idFromName(name).toString(),
+      const authority = await ownerRuntimeAuthority(this.env).resolve({ doName, actualDoId: this.ctx.id.toString(), expectedDoId: name => owners.idFromName(name).toString(),
         assertCurrent: () => { if (kv.get<string>('do_name') !== doName || kv.get<boolean>('app_unlinked') === true) throw new ClosedRunError(); } });
-    } catch { return null; }
+      return { kind: 'admitted', authority };
+    } catch (error) {
+      return error instanceof ClosedRunError || (error instanceof Error && error.message.startsWith('owner runtime authority')) ? { kind: 'dormant' } : { kind: 'retry' };
+    }
   }
 
   // Writes a scheduled message as an assistant row in the owner's app transcript, after re-asking the directory.
@@ -545,9 +551,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         admit: () => { if (abort.signal.aborted || Date.now() >= now + 60_000) throw new ClosedRunError(); },
         commit: work => this.ctx.storage.transactionSync(work) };
       const lookup = async () => {
-        scope.admit(); const current = await this.appOwnerAuthority(); scope.admit();
-        if (!current) throw new ClosedRunError();
-        return { ownerId: current.ownerId, bindingRef: `runtime:${current.doName}`, revision: current.admissionRevision, physicalDoId: this.ctx.id.toString() };
+        scope.admit(); const current = await this.appOwnerLookup(); scope.admit();
+        if (current.kind !== 'admitted') throw new ClosedRunError();
+        const { ownerId, doName, admissionRevision } = current.authority;
+        return { ownerId, bindingRef: `runtime:${doName}`, revision: admissionRevision, physicalDoId: this.ctx.id.toString() };
       };
       try {
         const context = await surfaceOwnerAdmission({ scope, lookup, expectedPhysicalDoId: this.ctx.id.toString(), surface: 'app', subject: authority.doName,
@@ -1212,12 +1219,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const telegramBound = doName && subject && /^\d+$/.test(subject) && Number.isSafeInteger(Number(subject)) && Number(subject) > 0
           && this.ctx.storage.kv.get<boolean>('telegram_unlinked') !== true
           && this.env.TELEGRAM_OWNER_DO && this.env.TELEGRAM_OWNER_DO.idFromName(doName).toString() === this.ctx.id.toString();
-        const appOwner = telegramBound ? null : await this.appOwnerAuthority();
-        if (appOwner) { channel = 'app'; this.scheduledAppDelivery = this.appDeliveryFor(appOwner); }
-        if (!telegramBound && !appOwner) {
+        const appOwner = telegramBound ? null : await this.appOwnerLookup();
+        if (appOwner?.kind === 'admitted') { channel = 'app'; this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority); }
+        if (!telegramBound && appOwner?.kind !== 'admitted') {
           if (Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity,
             this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity) <= Date.now()) this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()]));
-          await rearmSharedAlarm(this.ctx.storage, null, Date.now(), 30_000);
+          await rearmSharedAlarm(this.ctx.storage, appOwner?.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
           return;
         }
       }
