@@ -825,6 +825,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (notify) {
         const url = typeof envelope.url === 'string' ? envelope.url.slice(0, 300) : '';
         const ack=await api.sendMessage({ chat_id: owner, text: `Event - ${summary}${url ? `\n${url}` : ''}` });
+        // The egress gate refused: nothing left the Worker, so this is a definite non-send, not an unknown one. The gate's own line names why.
+        if(ack===undefined){
+          inbox.undelivered(source,delivery);
+          runs.finish(run.id,'stopped',`${source}: notification not sent; refused at the ownership check`.slice(0,180));
+          log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: false, code:'notification_blocked' });
+          return new Response('ok');
+        }
         if(!ack||typeof ack!=='object'||!Number.isSafeInteger((ack as {message_id?:unknown}).message_id)||Number((ack as {message_id:number}).message_id)<=0)throw new Error('notification_unacknowledged');
       }
       inbox.finish(source,delivery);
@@ -1530,7 +1537,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const egressAuth = consoleAuth(this.env);
     const call = egressGuardedCaller(
       gatedCaller(baseCall, egressGate(
-        () => owner === 0 || identity.get<boolean>(`${channel}_unlinked`) === true,
+        () => owner === 0 ? 'owner_unbound' : identity.get<boolean>(`${channel}_unlinked`) === true ? 'unlinked' : false,
         channel === 'app' ? undefined : presenceRecheck(egressAuth, egressDoName, channel, egressSubject),
       )),
       (count, method) => log({ trace: 'egress', hop: 'egress_redacted', ms: 0, ok: true, detail: `${method}: ${count} link(s)` }),
