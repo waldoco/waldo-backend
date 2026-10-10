@@ -97,5 +97,28 @@ describe('owner effect ledger', () => {
       expect(first.reserve({ ...input('two'), quota }).state).toBe('reserved');
     });
   });
+  it('reconciles an in-flight effect recorded under an aliased owner ref instead of conflicting or dispatching', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('effects-owner-alias'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const legacy = ownerEffectLedger(state.storage, () => 1000);
+      const old = { ...input('approval:p1:apply'), owner_ref: '42' };
+      await expect(legacy.execute(old, { dispatch: async () => { throw Error('lost response'); }, reconcile: async () => ({ status: 'unknown' }) })).rejects.toBeInstanceOf(EffectUnknownError);
+      expect(legacy.get('approval:p1:apply')?.state).toBe('unknown');
+      const principal = { ...old, owner_ref: 'prn_10000000000000000000000000000001' };
+      const ledger = ownerEffectLedger(state.storage, () => 2000);
+      const never = { dispatch: async () => { throw Error('must not dispatch'); }, reconcile: async () => ({ status: 'unknown' as const }) };
+      await expect(ledger.execute(principal, never)).rejects.toThrow('effect identity conflict');
+      await expect(ledger.execute(principal, never, undefined, ['7000000000001'])).rejects.toThrow('effect identity conflict');
+      await expect(ledger.execute({ ...principal, payload: { to: 'someone else' } }, never, undefined, ['42'])).rejects.toThrow('effect identity conflict');
+      let dispatched = 0, reconciled = 0;
+      const receipt = await ledger.execute(principal, { dispatch: async () => { dispatched++; return { provider_id: 'twice', result: null }; },
+        reconcile: async () => { reconciled++; return { status: 'done', receipt: { provider_id: 'gmail-id', result: 'sent' } }; } }, undefined, ['42']);
+      expect(receipt).toEqual({ provider_id: 'gmail-id', result: 'sent' });
+      expect({ dispatched, reconciled }).toEqual({ dispatched: 0, reconciled: 1 });
+      expect(ledger.get('approval:p1:apply')).toMatchObject({ owner_ref: '42', state: 'done' });
+      ledger.reserve({ ...input('quota-one'), owner_ref: '42', quota: { ...quota, owner_ref: '42' } });
+      expect(() => ledger.reserve({ ...input('quota-one'), owner_ref: 'prn_x', quota: { ...quota, owner_ref: 'prn_x' } }, undefined, ['42'])).toThrow('effect identity conflict');
+    });
+  });
 
 });
