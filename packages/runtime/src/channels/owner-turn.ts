@@ -32,7 +32,7 @@ import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
 import type { ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
-import type { TurnLogEntry, TurnTimer } from './owner-turn-types';
+import type { SystemSection, TurnLogEntry, TurnTimer } from './owner-turn-types';
 import { ownerTurnAttachments, REPLY_QUOTE_LIMIT, type OwnerResponder, type ReplyContext } from './owner-turn-envelope';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import type { LLMAttachment } from '@waldo/contracts';
@@ -66,6 +66,10 @@ export type OwnerContextHost = Readonly<{ prepare(turn: OwnerTurnEnvelope, scope
 export type OwnerHistoryFactory = (context: OwnerContextCapability, scope: RunEffectScope) => ConversationStore;
 export type OwnerContextIntegration = Readonly<{ contextHost: OwnerContextHost; history?: OwnerHistoryFactory }>;
 type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory }>;
+
+const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
+// The reply's system prompt with the byte size of each joined section, so a trace shows what fills it.
+type SystemPrompt = Readonly<{ text: string; sections: Readonly<Partial<Record<SystemSection, number>>> }>;
 
 export const createOwnerResponder = (
   openaiApiKey: string,
@@ -160,8 +164,9 @@ export const createOwnerResponder = (
     recent: [...recentOwnerTurns.values()].filter(turn => !holdsHeldTopic(turn.text)).concat(control.heard().map((text, index) => ({ message_ref: `${traceId}-steer-${index}`, text }))),
   } } : {};
   let expectedProcedure: string | undefined;
-  const complete = async (trace: string, purpose: string, system: string, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName) => {
+  const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName) => {
     await assertCurrent();
+    const system = typeof systemPrompt === 'string' ? systemPrompt : systemPrompt.text;
     const started = Date.now();
     const mark = (detail: string) => log({ trace, hop: 'complete_phase', ms: Date.now() - started, ok: true, detail: `${purpose}:${detail}` });
     mark('enter');
@@ -205,13 +210,23 @@ export const createOwnerResponder = (
     await assertCurrent();
     privateRunScope?.admit();
     const input = JSON.stringify([{ role: 'system', content: system }, ...userMessages, ...(turns ?? [])]);
+    const shape = {
+      system_bytes: utf8Bytes(system), request_bytes: utf8Bytes(input),
+      context: {
+        tools_count: tools?.length ?? 0, tools_bytes: tools?.length ? utf8Bytes(JSON.stringify(tools)) : 0,
+        tool_turns_bytes: turns?.length ? utf8Bytes(JSON.stringify(turns)) : 0,
+        history_messages: Math.max(0, userMessages.length - 1), history_bytes: utf8Bytes(JSON.stringify(userMessages.slice(0, -1))),
+        current_bytes: utf8Bytes(userMessages.at(-1)?.content ?? ''), attachments: attachments?.length ?? 0,
+        ...(typeof systemPrompt === 'string' ? {} : { system_sections: systemPrompt.sections }),
+      },
+    };
     const response = result.ok ? result.response : undefined;
     const metadataOnly = transientDecision || purpose.startsWith('memory') || purpose.startsWith('task_source');
-    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.detail].filter(Boolean).join(':'), shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength }, ...(metadataOnly ? {} : { text: { input } }) });
+    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.detail].filter(Boolean).join(':'), shape, ...(metadataOnly ? {} : { text: { input } }) });
     else log({
       trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true,
       usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens },
-      shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength },
+      shape,
       ...(metadataOnly ? {} : { text: { input, output: response!.text || JSON.stringify(response!.tool_calls), ...(reasoning ? { reasoning } : {}) } }),
     });
     if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.destination, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);
@@ -437,16 +452,27 @@ export const createOwnerResponder = (
           const composed = context ? await composer.compose(invocation, contextInputs()) : undefined;
           if (composed && !composed.ok) throw new Error(`owner context failed: ${composed.failure.code}`);
           await assertCurrent();
-          const unboundSystem = (): string => {
+          const unboundSystem = (): SystemPrompt => {
             const wrapped = skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined);
-            const before = [...(composed?.ok ? [composed.prompt] : []), messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation), ownerClockLine(clock)];
+            const reasons = composed?.ok ? composed.prompt : undefined;
+            const behavior = messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation);
+            const clockLine = ownerClockLine(clock);
+            const before = [...(reasons !== undefined ? [reasons] : []), behavior, clockLine];
             const afterBase = [...(ordersSection ? [ordersSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
             // Owner memory takes its room first; open loops get what the same reserve leaves, and the section names what it left out.
             const room = systemRoom(withOwnerSkillProcedures([...before, ...afterBase].join('\n\n'), wrapped, surfacePresentation));
             const memoryPart = memory ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText, room)] : [];
             const loopsSection = loopsSectionFor(Math.max(0, systemRoom(withOwnerSkillProcedures([...before, ...memoryPart, ...afterBase].join('\n\n'), wrapped, surfacePresentation))));
             const after = [...(ordersSection ? [ordersSection] : []), ...(loopsSection ? [loopsSection] : []), ...(skillMetadata ? [skillMetadata] : []), ...(taskContext ? [taskContext] : [])];
-            return withOwnerSkillProcedures([...before, ...memoryPart, ...after].join('\n\n'), wrapped, surfacePresentation);
+            const joined = [...before, ...memoryPart, ...after].join('\n\n');
+            const text = withOwnerSkillProcedures(joined, wrapped, surfacePresentation);
+            const sections: Partial<Record<SystemSection, number>> = {
+              ...(reasons !== undefined ? { reasons: utf8Bytes(reasons) } : {}), behavior: utf8Bytes(behavior), clock: utf8Bytes(clockLine),
+              ...(memoryPart.length ? { memory: utf8Bytes(memoryPart[0]!) } : {}), ...(ordersSection ? { orders: utf8Bytes(ordersSection) } : {}),
+              ...(loopsSection ? { loops: utf8Bytes(loopsSection) } : {}), ...(skillMetadata ? { skill_catalog: utf8Bytes(skillMetadata) } : {}),
+              ...(taskContext ? { task_context: utf8Bytes(taskContext) } : {}), skill_procedures: utf8Bytes(text) - utf8Bytes(joined),
+            };
+            return { text, sections };
           };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
           const attachments = [...(pending ?? []), ...browserImages];

@@ -112,6 +112,24 @@ it.each(['normal', 'low', 'quiet', 'off', 'closed'] as const)('updates without a
       await runtime.updateCheck('changed');
       expect(updatePlans(state.storage.sql).read('2026-10-08').some(row => row.card === 'card:brief' && row.sent)).toBe(false);
       expect(updateFixture.sent.filter(text => text === 'Calendar update: Lunch added.')).toHaveLength(mode === 'normal' ? 1 : 0);
+      expect(closedTraces(state, 'changed')).toBe(1);
+    } finally { Date.now = savedNow; await state.storage.deleteAlarm(); }
+  });
+});
+const closedTraces = (state: DurableObjectState, trace: string) =>
+  state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM trace_log WHERE trace = ? AND hop = 'machine_turn'", trace).one().n;
+it('a day card held for quiet hours still closes its trace, so the exporter flushes it', async () => {
+  await runInDurableObject(env.TRACER_DO.get(env.TRACER_DO.idFromName('day-card-quiet-root')), async (_instance, state) => {
+    const now = Date.parse('2026-10-08T09:00:00Z');
+    const savedNow = Date.now; Date.now = () => now;
+    try {
+      state.storage.kv.put('telegram_subject', '7');
+      await state.storage.put('origin', 'https://fixture.invalid');
+      const owner = new UpdateOwner(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:fixture', OPENAI_API_KEY: 'fixture' } as never);
+      const runtime = (owner as unknown as { setup(): { cards(entry: { id: string; occurrence_at: number }): Promise<void> } }).setup();
+      updateLoops(state.storage.sql, { now: () => now, newId: () => 'fixture' }).setProactivity({ volume: 'normal', quiet_start: '08:00', quiet_end: '10:00', followups: true });
+      await runtime.cards({ id: 'card:brief', occurrence_at: now });
+      expect(closedTraces(state, `card:brief:${now}`)).toBe(1);
     } finally { Date.now = savedNow; await state.storage.deleteAlarm(); }
   });
 });

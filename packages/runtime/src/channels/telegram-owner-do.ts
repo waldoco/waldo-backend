@@ -2343,6 +2343,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const client = await google.client();
       if (client === null) return;
       const started = Date.now();
+      // Close each trace with a machine_turn root like every other machine run, so the trace exporter flushes it.
+      let followupPrompted = false;
+      const closeMachineTraces = (ok: boolean) => {
+        log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok, detail: 'update_card' });
+        if (followupPrompted) log({ trace: `${trace}:mail-followup`, hop: 'machine_turn', ms: Date.now() - started, ok, detail: 'mail_followup' });
+      };
       try {
         const now = Date.now();
         const sourceFollowups = proactiveEnabled(this.env.MAIL_SOURCE_FOLLOWUPS, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity());
@@ -2368,7 +2374,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           updates.pushed(id, text);
         }
         await reviewMailFollowup({ loops, now, timezone: clock.timezone, allowed: sourceFollowups && canSend && analysisChanges.length === 0,
-          ledger, prompt: said => responder.prompt(`${trace}:mail-followup`, owner, said, async (_hop, work) => work(), ['get_context', 'read_owner_context', 'search_episodes']),
+          ledger, prompt: said => { followupPrompted = true; return responder.prompt(`${trace}:mail-followup`, owner, said, async (_hop, work) => work(), ['get_context', 'read_owner_context', 'search_episodes']); },
           enqueue: async (text, mailFollowup) => {
             const id = `mail-followup:${mailFollowup.loopId}:${mailFollowup.due}:${mailFollowup.timezone}:${mailFollowup.messageId}`;
             const known = finalOutbox.records().find(record => record.id === id);
@@ -2386,8 +2392,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           },
         });
         log({ trace, hop: 'update_card', ms: Date.now() - started, ok: true, detail: `${changes.length} changes; ${text ? 'sent' : canSend ? 'skipped' : 'held for next card'}`, text: { input: changeLines(changes), output: text ?? '' } });
+        closeMachineTraces(true);
       } catch (error) {
         log({ trace, hop: 'update_card', ms: Date.now() - started, ok: false, error: String(error) });
+        closeMachineTraces(false);
       }
     };
     const cards = async (entry: ScheduleEntry) => {
@@ -2400,7 +2408,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         // H1b: record the hold truthfully (never as sent); the heartbeat's release path
         // re-arms held cards when quiet ends and the real send marks sent then.
         plans.held(localIso(entry.occurrence_at, clock.timezone).slice(0, 10), card.id);
-        return log({ trace, hop: 'day_card', ms: 0, ok: true, detail: `${card.id} held: quiet hours; releases when quiet ends` });
+        log({ trace, hop: 'day_card', ms: 0, ok: true, detail: `${card.id} held: quiet hours; releases when quiet ends` });
+        return log({ trace, hop: 'machine_turn', ms: 0, ok: true, detail: 'day_card' });
       }
       const client = await google.client();
       const midnight = localToEpoch(`${localIso(now, clock.timezone).slice(0, 10)}T00:00`, clock.timezone);
@@ -2415,8 +2424,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         plans.sent(localIso(entry.occurrence_at, clock.timezone).slice(0, 10), card.id);
         updates.fold(now);
         log({ trace, hop: 'day_card', ms: Date.now() - started, ok: true, detail: skipped ? `${card.id} skipped` : card.id, text: { input: said, output: text } });
+        log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'day_card' });
       } catch (error) {
         log({ trace, hop: 'day_card', ms: Date.now() - started, ok: false, error: String(error) });
+        log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: false, detail: 'day_card' });
         throw error;
       }
     };
