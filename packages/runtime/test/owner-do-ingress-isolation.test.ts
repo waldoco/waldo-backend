@@ -68,6 +68,15 @@ vi.mock('../src/seams/deps', async (load) => {
     return { ...deps, now: () => sourceWorld ? Date.parse(sourceWorld.now()) : deps.now() };
   } };
 });
+// workerd fires the DO's alarm on the real clock. Send due times and the 24 h text scrub are alarm wakes, so the
+// final outbox keeps the real clock: on the frozen world clock both are overdue at once and no pass can retire them.
+vi.mock('../src/channels/telegram-final-outbox', async (load) => {
+  const original = await load<typeof import('../src/channels/telegram-final-outbox')>();
+  type Args = ConstructorParameters<typeof original.TelegramFinalOutbox>;
+  return { ...original, TelegramFinalOutbox: class extends original.TelegramFinalOutbox {
+    constructor(kv: Args[0], _now?: Args[1], persist?: Args[2]) { super(kv, () => Date.now(), persist); }
+  } };
+});
 vi.mock('../src/connectors/google', async (load) => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (_app: unknown, tokens: { email?: string }) => {
@@ -174,8 +183,8 @@ const send = async (subject: number, text: string, updateId: number, replyTo?: R
     await runInDurableObject(doStub(subject), async (instance, state) => {
       const finals = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
       const queued = finals.find(row => row.trace === `tg-${updateId}`);
-      // The source fixture freezes its clock. Make only this committed
-      // transport due, preserving source timestamps and unrelated obligations.
+      // Make only this committed transport due now rather than 250 ms out,
+      // leaving unrelated obligations at their own times.
       if (queued?.status === 'pending') { queued.dueAt = 0; state.storage.kv.put('telegram_final_outbox_v1', finals); state.storage.kv.put('telegram_final_outbox_due_v1', 0); }
       await instance.alarm();
       const final = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')?.find(row => row.trace === `tg-${updateId}`);
@@ -472,9 +481,21 @@ describe('real owner-DO ingress in a sealed test world', () => {
       throw new Error('isolated trial attempted an unmocked outbound fetch');
     }) as typeof fetch);
   });
-  afterEach(() => {
-    sourceWorld = null; interceptCalendarEffects = false;
-    vi.unstubAllGlobals();
+  afterEach(async () => {
+    try {
+      // workerd fires alarms on the real clock. A wake already due on it fires at once, and a pass that
+      // re-arms the same overdue wake fires again with no pacing, during this test and after it.
+      // Read it before the world clock is released, so no real-clock pass can retire it first.
+      for (const subject of [81101, 81102]) await vi.waitFor(() => runInDurableObject(doStub(subject), async (_instance, state) => {
+        const wakes = [...state.storage.kv.list<number | null>()].filter(([key]) => key.endsWith('_due_v1'));
+        const schedule = state.storage.sql.exec<{ bound: number | null }>("SELECT MIN(CASE WHEN status = 'armed' THEN due_at ELSE quarantined_until END) AS bound FROM schedule").one().bound;
+        const overdue = [...wakes, ['schedule', schedule] as const].filter(([, at]) => typeof at === 'number' && at <= Date.now());
+        expect(overdue.map(([key, at]) => `${key} ${new Date(at!).toISOString()}`), `${subject} ${worldNote(state)}`).toEqual([]);
+      }), { timeout: 2000, interval: 50 });
+    } finally {
+      sourceWorld = null; interceptCalendarEffects = false;
+      vi.unstubAllGlobals();
+    }
     expect(unexpectedFetches).toEqual([]);
   });
   it('records and denies an unexpected outbound fetch rather than reaching a network', async () => {
