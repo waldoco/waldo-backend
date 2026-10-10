@@ -17,6 +17,32 @@ it('app payload and wake rollback together; successful admission preserves an ea
   });
 });
 
+it('a directory outage defers the app wake, so the shared alarm does not refire every 250 ms',async()=>{
+  const name=`app-inbox-outage-${crypto.randomUUID()}`,stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+  await runInDurableObject(stub,async(_instance,state)=>{
+    const now=Date.now(),inbox=new AppInbox(state.storage,()=>now);
+    expect((await inbox.admit(name,'c'.repeat(64),'outage-client-0001','hello','owner:prn_fixture')).kind).toBe('admitted');
+    inbox.recover(new Set());
+    inbox.deferWake(30_000);
+    expect(await state.storage.get(APP_INBOX_DUE_KEY)).toBe(now+30_000);
+    await rearmSharedAlarm(state.storage,null,now);
+    expect(await state.storage.getAlarm()).toBe(now+30_000);
+    inbox.recover(new Set());
+    expect(await state.storage.get(APP_INBOX_DUE_KEY)).toBe(now+250);
+    await state.storage.deleteAlarm();
+  });
+});
+
+it('deferring with nothing admitted leaves no app wake',async()=>{
+  const name=`app-inbox-defer-empty-${crypto.randomUUID()}`,stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+  await runInDurableObject(stub,async(_instance,state)=>{
+    const inbox=new AppInbox(state.storage);
+    inbox.recover(new Set());
+    inbox.deferWake(30_000);
+    expect(await state.storage.get(APP_INBOX_DUE_KEY)).toBeNull();
+  });
+});
+
 const seed=(storage:DurableObjectStorage,id:string,state:AppInboxRecord['state'],at:number,clientId=`seed-client-${id}`)=>storage.kv.put(`app:inbox-record:${id}`,{id,updateId:1,clientId,digest:'d',text:'',owner:'o',sessionHash:'a'.repeat(64),conversationRef:'owner:prn_fixture',admittedAt:at,state,...(state==='completed'||state==='interrupted'||state==='revoked'?{closedAt:at}:{})} satisfies AppInboxRecord);
 
 it('an owner whose inbox is full of old finished messages can still send',async()=>{
