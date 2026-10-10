@@ -15,7 +15,7 @@ Planning document, 10 October 2026. It maps promises to source and records the o
 9. **Android:** the Samsung Health path is enough for now. A dedicated Health Connect client is built if a promise needs it.
 10. **Website copy stays as published** (second ruling, 10 October). §6 is kept as a reference list, not planned work. Labels change only when the owner decides.
 
-**Pins.** Integration branch `beta-mvp` @ `957a2cbb` (#999 merged 10 Oct 10:20Z; CI `verify` green). Rows were audited at `a13c1fb5`; #999 changed only the app sign-in, chat, inbox and controls paths. Open PR heads read: #998 @ `fc4c2b9d` (native + health checkpoint, base `1206d7a8`), #919 @ `032c78a0` (Gmail/Calendar journeys), #932 @ `5506de85` (standing grant contract), #915 @ `2bc64346` (core loop spec, slices S0, A–L). Website copy from `Pin4sf/waldo-landing` `origin/main` @ `830bfc2`. App from `Pin4sf/waldo-app` refs `1980a9d1` (native line) and `a7a560d1` (#999-pinned line). Re-pin before relying on any row.
+**Pins.** Integration branch `beta-mvp` @ `957a2cbb` (#999 merged 10 Oct 10:20Z; CI `verify` green). Rows were audited at `a13c1fb5`; #999 changed only the app sign-in, chat, inbox and controls paths. Open PR heads read: #998 @ `fc4c2b9d` (native + health checkpoint, base `1206d7a8`), #919 @ `032c78a0` (Gmail/Calendar journeys), #932 @ `5506de85` (standing grant contract), #915 @ `2bc64346` (core loop spec, slices S0, A–L). Website copy from `Pin4sf/waldo-landing` `origin/main` @ `830bfc2`. App refs `1980a9d1` (the #16 native-line draft, now superseded and being ported in slices) and `a7a560d1` (#999-pinned line). Rows that cite `1980a9d1` describe that draft, not shipped app state: app main (`waldoco/waldo-app` @ `8d5b4357`, 10 October night) has chat, sign-in and session, sign-out and the native health read module, and its other screens show a placeholder. Re-pin before relying on any row.
 
 ## 1. The binding constraint is landing, not building
 
@@ -251,54 +251,59 @@ Day cards and update cards used to log no root hop, so their traces were never e
 
 Booking, payments, logged-in browser errands, parallel workers, rich file outputs and person-to-person agent coordination came from the Instinct comparison. They set the quality bar for Waves 1–2 (claim verification, receipts, recovery, parallel workers) and stay separate from the website commitment.
 
-## 12. Status, lanes and next slices (10 October, night)
+## 12. Status, lanes and next slices (10 October, late night)
 
 ### Lanes
 | Lane | Owns | Queue |
 |---|---|---|
-| Gap-analysis session (this ledger) | Ledger, traces, health in context, the omnipresence slices (§9 Wave 1, design doc §4), context engineering, `packages/contracts/src/app/*` | S1 app approvals, then the work-log steps route (owner to rank), S2 routing, S3–S8 |
-| App-backend handoff session | #998 landing order, Google connectors, health ingest backend half, staging deploys from the Mac | #1015 Google Tasks approvals, `calendar_list` scope, health ingest design note and red tests, A2 owner-turn seam |
-| App session | waldo-app; re-pins verbatim to merged contract SHAs | Simulator smoke after each staging deploy; the health payload description for ingest |
-| Ashish | Kennel, WhatsApp adapter, iMessage connector (#1017, draft, default-off) | Landing order of #1017 relative to S2 and S4 to be agreed |
+| Gap-analysis session (this ledger) | Ledger, traces, health in context and the health reader, the omnipresence pieces (A = S1+S3, B = S2+S4, C = S5+S6 plus context engineering, D = S7+S8 plus the work-log route), sole editor of `packages/contracts/src/app/*` | Piece A fix round, then its PR; #1024; C3 and C4; then B and D |
+| App-backend handoff session | Health ingest backend (H2 to H6), Google connectors, staging deploys from the Mac | #1022 fix round; H3 routes; H4 Recovery producer |
+| App session: "Start waldo-app session" | waldo-app pin of the six app contract files (`src/agent/contracts/`), reader policy, app build order | Controls screens (Settings schedule, Activity, Connections) on owner go |
+| App session: "Take over waldo-app PR #16 in slices" | The iOS health module and the port of #16 | Consent-gated background observers (slice 2); the trace-capture line in the app's rules |
+| Ashish | Kennel, WhatsApp adapter, iMessage connector (#1017, draft, default-off), device bridge (#1006) | Landing order of #1017 relative to S2 and S4 to be agreed |
 
 ### Rules between lanes
 - **Hot files.** Announce before touching these; whoever merges second rebases.
-  - `channels/approvals.ts`: #1015, then S1 (`sayCard` and the presentation record only), then S3 (one desk per DO).
+  - `channels/approvals.ts`: piece A (S1+S3).
   - `channels/telegram-owner-do.ts`: every lane. Keep diffs small and local.
-  - `channels/owner-turn.ts` and `context-composer/*`: A2 and the context track. The two lanes agree a split before A2 starts.
-- **App contracts.** Only this lane edits `packages/contracts/src/app/*`; the app pins those files byte for byte. New app DTOs, such as health ingest, go in a new app leaf file reviewed with the app session. Changes stay additive. The app session hears about a new enum value before it ships.
+  - `channels/owner-turn.ts` and `context-composer/*`: the context track (#1014, #1024).
+- **App contracts.** Only this lane edits `packages/contracts/src/app/*`. The app pins six files byte for byte (approvals, controls, core, health-ingest, parts, surfaces). Changes stay additive. The app hears about a new enum value before it ships. The app reader drops a part it cannot parse and keeps the row's `text`, so every row that carries a new part must have readable `text`. A new value in a row-level or page-level field fails the app closed, so those need a version bump.
 - **Migration timestamps.**
-  - Taken: `20261010060000` (#1013, merged, not applied on any hosted database) and `20261010120000` (#1017).
+  - Taken: `20261010060000` (#1013, merged, not applied on any hosted database), `20261010120000` (#1017, draft), `20261011000000` (#1022, draft, not applied).
   - Held by unlanded #998 work: `20261010050000` (rights) and `20261010070000` (channels).
-  - Proposed: health ingest uses `20261011xxxxxx`; S7 push token RPC uses `20261012xxxxxx`.
-- **Merges and staging.** Merges to beta-mvp, staging deploys and hosted migrations each need the owner's per-action go. Merged is not deployed.
+  - Proposed: S7 push token RPC uses `20261012xxxxxx`.
+  - The staging apply (`scripts/staging-migration-preflight.mjs`) requires the hosted history to be a prefix of the sorted local list and applies every pending file in order. Applying any later migration from `beta-mvp` therefore also applies `20261010060000`, which needs its own owner go, and strands any earlier timestamp that lands afterwards.
+- **Merges and staging.** Merges to beta-mvp, staging deploys and hosted migrations each need the owner's per-action go in the session that executes them. Merged is not deployed.
+
+### Staging
+- Worker release `fec37a43` (`/healthz`), runtime only. It includes #1021 and #1023.
+- `/app/v1` serves auth (code, verify, signout), session, `chat/main` (GET, `text` parts only), `chat/main/messages` (POST), controls and actions. Nothing under `/app/v1/health`, no approvals routes, no push, no threads.
+- The legacy `health-sync` Edge Function was deleted from the staging project `togdshayyxycitzckpqv` on 10 October with the owner's go. It ran on that same project and recorded consent implicitly. Restore by redeploying `waldo-app/supabase/functions/health-sync`.
 
 ### PRs
 | PR | What | State |
 |---|---|---|
-| #1004 | App inbox outage wake; push custody pgTAP | merged |
-| #1007 | Day and update card traces close and reach Langfuse | merged |
-| #1009 | zod as a direct runtime dependency | merged |
-| #1010 | Per-section context accounting on every model call (trace schema 6) | merged |
+| #1004, #1007, #1008, #1009, #1010, #1011, #1012, #1014 | Earlier wave 0 work (traces, paging, zod, context accounting, slice 0 contracts, health in the reply) | merged |
 | #1013 | Owner runtime authority without a messaging surface (`20261010060000`) | merged; migration not applied |
-| #1008 | Google collection paging, reads only | merged |
-| #1011 | Slice 0 contracts: reply parts, surface capabilities, app approvals, channel status, error codes | merged (`56dea6d2`); app pinned in waldo-app #24 |
-| #1012 | Health turns no longer fail: source key, and `produced_at` from the row's compile time | merged (`b448b009`) |
-| #1014 | Health reaches the reply model on every surface, as a measured section | merged (`e24d6974`) |
-| #1015 | Google Tasks approvals with a readable before → after card | open, under review |
-| #1016 | Weight is the day's demand; Load is its physical part (owner ruling, 10 October) | open, green |
+| #1005 | This ledger, the omnipresence design, the trace ruling | merged |
+| #1015 | Google Tasks approvals with a readable before → after card | merged, deployed |
+| #1016 | Weight is the day's demand; Load is its physical part | merged |
+| #1018, #1020 | Health ingest design; H1 health ingest and scores contract | merged; app pinned (waldo-app #30) |
+| #1019 | The agent lists the owner's calendars | merged |
+| #1021 | Dispatcher no longer rejects the Google Tasks proposal result | merged, deployed |
+| #1022 | H2 health plane tables and signed functions | draft; independent review found one block (the current hour is rejected) and consent gaps; fix round under way |
+| #1023 | The reader accepts a Recovery-first health row | merged, deployed |
+| #1024 | Stable prompt prefix first; offer only tools the owner can use (C1, C2) | open |
 | #1017 | iMessage connector (Ashish), default-off | draft |
-| #1005 | This ledger, the omnipresence design, the trace ruling | open |
-
-Staging deploy of beta-mvp `e24d6974` (runtime only) was approved by the owner on 10 October and handed to the handoff session to run.
 
 ### Findings that set the order
-- Health: nothing writes `health_context_daily` on the Waldo-MVP project. The app's legacy `health-sync` targets the older Supabase project. So health replies say "no health context" until the ingest route exists. The owner approved ingest on 10 October. The app uploads zones as low, moderate, good, high or unknown, mapped from its display words, which matches the backend bridge; the ingest contract still pins that vocabulary. Per the app session, the upload is daily aggregates only, one object per device-local day, with no timezone string. HRV is SDNN on iOS and RMSSD on Android, and body mass is never uploaded. The app's Weight score is currently physical strain only.
+- Health: no row exists in `health_context_daily` on staging, so health replies say no health was shared until ingest and a producer exist. The upload shape is the merged H1 contract: hourly local buckets, waking-day sleep, a time zone on every batch and an offset on every sample, RMSSD canonical with SDNN as a labelled fallback. The older daily-aggregate upload is superseded. Weight in the app is still physical strain only until the backend computes the day's demand.
+- Consent: storage and model use are separate grants. The intended design, being built in the #1022 fix round and H3, gates the prompt read on model use and the app's scores read on storage only. An owner who grants only storage would then see scores in the app, but Waldo's replies would not use health.
 - Streaming: the runtime has no model streaming, and replies pass post-model guards whole. Step lines for the work log are feasible through a new read route. Text deltas need a chunked-guard design first.
 
 ### Next, one at a time (this lane)
-1. S1: app renderer, `sayCard` opens only on a recorded presentation, app approvals routes, and the `google_task_change` kind in the app contract.
-2. Work-log steps route, if the owner ranks it here.
-3. S2: proactive routing to the app and scheduled work for app-only owners, on #1013.
-4. Context: stable-prefix ordering on the app and tool trimming, after a day of #1010 traces.
-5. Health: numeric Form, Recovery and Weight in context, and health in background decisions, once ingest produces rows.
+1. Piece A (S1+S3): approvals from any surface. Implemented; an independent review found six fixes (nullable due date, generic receipts, no MCP arguments or browser bindings in the app projection, the stored-card forget gap, where the card actually landed, text fallback). Then a PR, and the final contract diff to the app lane.
+2. #1024 (C1, C2), then C3 (store hardening) and C4 (skills on every surface).
+3. Piece B: S2 proactive routing to the app and scheduled work for app-only owners (needs `20261010060000` applied), and S4 per-surface renderers.
+4. Piece D: S7 push, S8 media, and the work-log steps route if the owner ranks it.
+5. Health: numeric Form, Recovery and Weight in context, and health in background decisions, once a producer writes rows.
