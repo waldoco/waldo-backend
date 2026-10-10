@@ -77,7 +77,7 @@ Nothing here adds a second agent brain or a browser-specific delivery path. The 
 
 Replace the Telegram-subject check in `assertOwner` and `current()` (`owner-browser-runtime.ts:49-60`), and in the nine other files that read `telegram_subject`, with `ownerRuntimeAuthority` (#1013). It maps the DO to its owner, and the run's own surface admission rechecks the surface. Every existing recheck point stays: the physical DO id, owner custody digest, run scope and lease.
 
-- **Depends on:** migration `20261010060000` applied on staging (owner go, through the handoff session). Ledger slice S2 has the same dependency and is unowned, so the two should be coordinated.
+- **Depends on:** migration `20261010060000`, applied on staging on 10 October (handoff session); production is not applied. Ledger slice S2 has the same dependency and is unowned, so the two should be coordinated.
 - **Red-first test:** an owner with no Telegram link calls `browse_page` from an app turn and gets an observation. A revoked owner binding mid-errand closes the session and allocates nothing new.
 - **Falsifier:** any browser call that still reads `telegram_subject` for admission.
 - **Rollback:** revert. Errand records keep the same keys.
@@ -248,8 +248,7 @@ All additive. Every row that carries a new part keeps readable `text`. No new va
    - `GET /app/v1/browser/sites` returns `{ site_origin, state, saved_at, expires_at, last_used_at }`.
    - `POST /app/v1/browser/sites/actions` takes `{ action: 'forget', site_origin, request_id }`.
 6. **Approvals:**
-   - The full `browser_submit` review text comes through piece A round 4.
-   - An optional structured `exact.browser` `{ site_origin, path, method, submit_label, fields: [{ label, value?, masked }] }` would be additive. It goes in only after the contract editor confirms how the app reads `GET /app/v1/approvals`. If the app parses that strictly, a new key fails old builds closed.
+   - No new approval field (contract editor, 11 Oct). Piece A's next round puts the full browser and MCP details into `review` and `fallback_text`, the same text Telegram shows, with secret-type fields masked. `exact.scope` stays origin plus path, with the query and fragment stripped.
 7. **Push (with S7):** an id-only nudge when an errand waits on the owner.
 
 ## 6. Slices
@@ -258,10 +257,10 @@ One slice in flight at a time. Each has failing tests first, one full `verify`, 
 
 | # | Slice | Depends on | Exit evidence |
 |---|---|---|---|
-| B0 | Close #881, #894, #895, #906, #911, #941 and #966; land #987 after its rebase; re-cut #973 with the `TOOL_SOURCE` fix | Owner go per action; piece A for #987 | PRs closed with links to the superseding PRs; #987 green at its rebased head |
+| B0 | Close #881, #894, #895, #906, #911, #941 and #966; land #987 after its rebase; re-cut #973 onto beta with a test pinning the live pasted-only gate (`tools/source-scope.ts`) | Owner go per action; piece A for #987 | PRs closed with links to the superseding PRs; #987 green at its rebased head |
 | B1 | Card and credential field masking everywhere, and a browser-outbound sanitize destination that refuses health values (§4.9) | Coordination with piece A for `describeBrowser` | Canary card number and OTP absent from observation, screenshot, steps and review; a synthetic health value in a `type` or `goto` is refused |
 | B2 | S0 re-cut covering the one-shot, retained and handoff paths; one live run | Owner go to deploy the throwaway Worker | Raw S0 output; then a separate binding PR |
-| B3 | Authority on every surface (§4.1) | `20261010060000` applied on staging | An app-only owner browses on staging |
+| B3 | Authority on every surface (§4.1) | `20261010060000` (applied on staging 10 Oct) | An app-only owner browses on staging |
 | B4 | Errand record, step log and app read routes (§4.2, §5 items 1–3) | Contract parts from the gap-analysis lane | The app shows live steps for E01 |
 | B5 | Errand harness and fixture site; first baseline | Owner go to host the fixture site; an owner session for the runner | First scorecard per §3.3 of the audit doc |
 | B6 | Approved native writes (§4.4) | Piece A merged | E12–E19 fixture tier pass; payment page refused |
