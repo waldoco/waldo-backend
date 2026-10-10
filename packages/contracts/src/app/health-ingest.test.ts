@@ -17,6 +17,10 @@ describe('health consent', () => {
     rejected(healthConsentGrantV1Schema, [{ ...grant, source: '*' }, { ...grant, source: 'oura' }, { ...grant, purpose: 'all' }, { ...grant, version: String(HEALTH_CONSENT_VERSION_V1) }, { ...grant, version: HEALTH_CONSENT_VERSION_V1 - 1 }, { ...grant, age_attested_18_plus: false }, { ...grant, owner_id: 'other-owner' }, { ...grant, expected_epoch: -1 }, { ...grant, request_id: 'short' }]);
     expect(healthConsentWithdrawV1Schema.safeParse({ request_id: 'withdraw-health-1', source: 'samsung', purpose: 'model_processing', expected_epoch: 1 }).success).toBe(true);
   });
+  it('takes every source the app can read, and no server-side vendor', () => {
+    for (const source of ['apple', 'samsung', 'health_connect']) expect(healthConsentGrantV1Schema.safeParse({ ...grant, source }).success, source).toBe(true);
+    rejected(healthConsentGrantV1Schema, [{ ...grant, source: 'garmin' }, { ...grant, source: 'whoop' }]);
+  });
   it('carries the copy version that names intraday window summaries', () => {
     expect(HEALTH_CONSENT_VERSION_V1).toBe(2);
   });
@@ -64,6 +68,8 @@ describe('health samples', () => {
     expect(healthSampleV1Schema.parse({ ...sleep, origin })).toEqual({ ...sleep, origin });
     rejected(healthSampleV1Schema, [{ ...sleep, origin: { ...origin, recording_method: 'inferred' } }, { ...sleep, origin: { ...origin, owner_id: 'forged' } }, { ...sleep, origin: { ...origin, device_ref: 'raw-device-name' } }]);
     expect(healthSampleV1Schema.parse(sleep)).not.toHaveProperty('origin');
+    for (const recording_method of ['automatic', 'active', 'manual', 'unknown']) expect(healthSampleV1Schema.safeParse({ ...sleep, origin: { ...origin, recording_method } }).success, recording_method).toBe(true);
+    rejected(healthSampleV1Schema, [2, true, false, 0].map(recording_method => ({ ...sleep, origin: { ...origin, recording_method } })));
   });
 });
 
@@ -129,8 +135,9 @@ describe('health routes', () => {
       if (route.method === 'POST') { expect(route.idempotency_field).toBe('request_id'); expect(route.max_request_bytes).toBe(98_304); }
     }
   });
-  it('names closed error codes and no free text', () => {
+  it('names closed error codes and tolerates a bounded message the runtime may send', () => {
     expect(healthApiErrorV1Schema.safeParse({ error: 'consent_required' }).success).toBe(true);
-    rejected(healthApiErrorV1Schema, [{ error: 'anything else' }, { error: 'unavailable', message: 'leak' }]);
+    expect(healthApiErrorV1Schema.safeParse({ error: 'unavailable', message: 'try again later' }).success).toBe(true);
+    rejected(healthApiErrorV1Schema, [{ error: 'anything else' }, { error: 'unavailable', message: 'x'.repeat(1001) }, { error: 'unavailable', detail: 'x' }, { error: 'unavailable', message: 7 }]);
   });
 });

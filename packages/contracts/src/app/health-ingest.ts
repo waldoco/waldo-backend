@@ -12,7 +12,7 @@ export const HEALTH_INGEST_MAX_CHANGES_V1 = 128;
 export const HEALTH_RAW_RETENTION_DAYS_V1 = 90;
 export const HEALTH_AGGREGATE_RETENTION_MONTHS_V1 = 24;
 
-export const healthSourceV1Schema = z.enum(['apple', 'samsung']);
+export const healthSourceV1Schema = z.enum(['apple', 'samsung', 'health_connect']);
 export const healthPurposeV1Schema = z.enum(['storage_compute', 'model_processing']);
 export const healthRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,96}$/);
 export const healthDayV1Schema = z.iso.date();
@@ -61,7 +61,8 @@ export const healthSampleOriginV1Schema = z.strictObject({
   source_version: z.string().min(1).max(128).nullable(),
   source_revision: z.string().min(1).max(128).nullable(),
   device_ref: z.string().regex(/^(?:sha256:|hmac-sha256:)?[0-9a-f]{64}$/).nullable(),
-  recording_method: z.union([z.enum(['automatic', 'active', 'manual', 'unknown']), z.int().min(0).max(3), z.boolean()]),
+  // One representation: the phone maps the platform's own encoding onto this enum.
+  recording_method: z.enum(['automatic', 'active', 'manual', 'unknown']),
   manufacturer: z.string().min(1).max(128).nullable().optional(),
   product_type: z.string().min(1).max(128).nullable().optional(),
   client_record_version: z.int().nonnegative().nullable().optional(),
@@ -173,8 +174,10 @@ export const healthScoresV1Schema = z.strictObject({
   weight: pillar(healthWeightZoneV1Schema),
 });
 
+// The runtime may attach a short message; a client acts on `error` only.
 export const healthApiErrorV1Schema = z.strictObject({
   error: z.enum(['invalid_request', 'not_linked', 'consent_required', 'consent_withdrawn', 'epoch_conflict', 'idempotency_conflict', 'anchor_conflict', 'sample_conflict', 'unavailable']),
+  message: z.string().max(1000).optional(),
 });
 
 export const appHealthRoutesV1 = [
