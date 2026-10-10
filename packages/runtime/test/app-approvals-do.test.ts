@@ -131,6 +131,10 @@ it('approves from the app with exactly one effect, refuses a stale digest, and r
       expect((await app('/approvals')).status).toBe(401);
       expect(effects().filter(record => record.state !== 'done')).toEqual([]);
       expect(effects().every(record => record.owner_ref === `prn_${OWNER.replaceAll('-', '')}`)).toBe(true);
+      state.storage.kv.put('owner_principal_ref', `prn_${'f'.repeat(32)}`);
+      const foreign = await app('/approvals', undefined, credential);
+      expect(foreign.status).toBe(403);
+      expect(state.storage.kv.get('owner_principal_ref')).toBe(`prn_${'f'.repeat(32)}`);
     } finally { (instance as any).ownerBrowser.stop(); await (instance as any).ownerBrowser.maintain(); await state.storage.deleteAlarm(); fetcher.mockRestore(); }
   });
 }, 30_000);

@@ -1111,4 +1111,25 @@ describe('decisions from any surface', () => {
       expect((await desk.decide(`send${n}`, 'a', 'trace', { surface: 'console' })).toast).toBe('Already handled.');
     });
   });
+
+  it('never journals an app card the app approvals list could not show, so no app card is approvable but undecidable', async () => {
+    const { appApprovalPart, appCaller } = await import('../src/channels/surfaces/app');
+    const { ownerEffectLedger } = await import('../src/channels/owner-effect-ledger');
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-any-surface-exact-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let n = 0;
+      const before = { id: 't1', task_list_id: 'l1', title: 'Buy milk', status: 'todo' as const, notes: null, due_date: '2026-10-12', etag: '"e1"', parent: null, deleted: false, assigned: false };
+      const clearDue = { source: 'google_tasks' as const, action: 'update' as const, task_list_id: 'l1', task_id: 't1', changes: { due_date: null }, reason: 'No deadline any more' };
+      const shared = { google: async () => null, newId: () => `exact${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, appJournal: appApprovalPart, effects: ownerEffectLedger(state.storage, () => NOW),
+        googleTasks: () => ({ prepare: async () => ({ args: clearDue, account: { connection_id: 'conn-1', email: 'me@example.com' }, list: { id: 'l1', title: 'Errands', etag: '"le"' }, before }) }) as never };
+      const inApp = approvalDesk(state.storage.sql, { ...shared, owner: 7_000_000_000_001, surface: 'app', call: appCaller() });
+      await expect(inApp.proposeGoogleTaskChange(clearDue)).rejects.toThrow();
+      expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM ledger WHERE id = 'pexact1'").one().status).toBe('card_unconfirmed');
+      expect(state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM approval_presentations WHERE approval_id = 'pexact1'").one().n).toBe(0);
+      const onTelegram = approvalDesk(state.storage.sql, { ...shared, owner: 42, call: async (method: string) => method === 'sendMessage' ? { message_id: 77, chat: { id: 42 } } : true });
+      const shown = await onTelegram.proposeGoogleTaskChange(clearDue);
+      expect(state.storage.sql.exec<{ surface: string }>('SELECT surface FROM approval_presentations WHERE approval_id = ?', shown).toArray()).toEqual([{ surface: 'telegram' }]);
+      expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', shown).one().status).toBe('open');
+    });
+  });
 });
