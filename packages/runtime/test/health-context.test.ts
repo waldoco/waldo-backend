@@ -53,7 +53,7 @@ describe('toContextHealthMaterial', () => {
       compiled_at: '2026-09-28T04:30:00.000Z',
     });
     expect(material!.source).toEqual({
-      source_key: 'health-context.2026-09-28',
+      source_key: 'health-context:2026-09-28',
       source_kind: 'derived_health_view',
       scope: 'principal',
       source_taint: null,

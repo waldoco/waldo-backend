@@ -187,7 +187,7 @@ export const toContextHealthMaterial = (
       view: viewParsed.data,
       narrative: narrativeParsed.data,
       source: {
-        source_key: `health-context.${context.day}`,
+        source_key: `health-context:${context.day}`,
         source_kind: 'derived_health_view',
         scope: 'principal',
         source_taint: null,
