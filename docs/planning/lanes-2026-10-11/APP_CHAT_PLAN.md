@@ -8,7 +8,7 @@
 
 **Pins:**
 - backend `beta-mvp` `15134581`: #1060 (sign out everywhere also revokes app and email sign-ins) merged at 15:32Z on 11 Oct, then #1059 (an optional latest delivery on day cards). Source rows below were read at `e5fd7200`; neither PR touches them;
-- staging `15134581` (Worker version `30b43ff7`), deployed by L1 on the owner's yes in L1's session, so #1060 and #1059 are live;
+- staging `15134581` (Worker version `30b43ff7`), per L1's report: deployed on the owner's yes in L1's session, so #1060 and #1059 should be live. I have not checked staging myself;
 - waldo-app `main` `18d5d0c3`: #62–#66 merged at about 15:00Z on 11 Oct, #67 (the C0 review fixes) at 15:44Z, then #68 (why the agent could not be reached) and #69 (the chat follows the design system). The checks below ran at `7bbf3135`. Its tree is identical to #67's head `ce590e4b`, where `tsc --noEmit` exits 0 and jest passes 551 tests in 82 suites (1 suite and 1 test skipped). Rows below that cite app line numbers were read at `9937d456`. Nothing has run on a device;
 - website `Pin4sf/waldo-landing` `main` `830bfc2` (9 Oct), the pin the promise ledger also uses. I have not checked that heywaldo.in serves this commit.
 
@@ -425,6 +425,6 @@ Still open:
 **Open:**
 4. **Go for the live checks and the device run** in L4's session.
 9. **Whether a reminder the owner set may push.** The design system's push table is silent. Recommendation: yes, at the time the owner chose, held by quiet hours, with no health values, and the row added to the design system's table.
-10. **The register's owner questions:** the token pipeline, the tabs, the three scores' colours, dark mode at launch, and deny against `skip`.
+10. **The register's owner questions:** the token pipeline, the dock labels and side menu, the three scores' colours, dark mode at launch, deny against `skip`, and renaming Patrol, Spots and Fetch.
 
 **Approval vocabulary:** the design system settles it for the app (buttons name the effect). Still open for L3 and L4: how the contract's `skip` maps to Not now and Don't do this.
