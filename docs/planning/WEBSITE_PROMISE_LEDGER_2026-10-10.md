@@ -298,8 +298,8 @@ This section replaces the 10 October night status. The lane plan is `docs/planni
     - `20261010120000` (#1017, draft);
     - `20261010050000` (rights) and `20261010070000` (channels), held by unlanded #998 work.
   - Reserved:
-    - `20261011200000`: L3, G1, allowing connect channel `app`;
-    - the H4 per-day read migration: L1 posts its number on #116;
+    - `20261011200000`: L3, G1, allowing connect channel `app` (merged in #1052; staging apply owed);
+    - H4 landed as #1044 with `20261011020000` and `20261011030000`;
     - S7 push token RPC: `20261012xxxxxx` (L2).
 - **Merges, deploys and migrations.** Each needs the owner's go, given in the session that runs it. A message relayed from another session is not a go. Merged is not deployed.
 - **Messages between sessions.** Peer messages can be dropped. Anything another lane must know goes on #116 or in a PR.
@@ -324,7 +324,7 @@ This section replaces the 10 October night status. The lane plan is `docs/planni
 | #1044 | H4a per-day health series read and stale-write fence (L1, `20261011020000`, `20261011030000`) | merged as `e24ab95f` |
 | #1040, #1047 | Daily score math; H4b scores after each committed ingest | merged as `b3a43013` and `c69188bb` |
 | #1048 | Piece A: approvals from any surface, round 4 (L3) | merged as `3839e9d4` (head `6b4784ad`, `beta-mvp` merged in rather than rebased; CI green including pgTAP); final contract hashes on #116 |
-| #1052 | G1: Google connect from the app (L3, `20261011200000`) | open at `76305c23`; owner's go to merge once CI is green |
+| #1052 | G1: Google connect from the app (L3, `20261011200000`) | merged as `f6a7d2a0` (CI green including pgTAP); staging apply (L1) and deploy owed; the app re-pins `controls.ts` |
 | #987 | Browser retained-session upload | open (browser lane) |
 | #1032 | Browser lane audit and any-surface design | draft; design until the owner approves |
 | #1033 | Owner-ingress test isolation | open; rebase and merge, or close |
@@ -341,6 +341,6 @@ This section replaces the 10 October night status. The lane plan is `docs/planni
 - **Streaming.** The runtime has no model streaming, and replies pass post-model guards whole.
 
 ### Next for L3, one at a time
-1. G1 (#1052): Google connect from the app (`/c/<ticket>` with surface `app`; migration `20261011200000`). The owner approved the merge and the migration once CI is green. L1 applies it on staging after the merge. It is visible on TestFlight; today's workaround is connecting Google in the console. Then G2 with L4, retiring the app's legacy `oauth-google` path. G4 is closed: the owner confirmed one OAuth client, the backend's `GOOGLE_CLIENT_ID`, which the app also uses. G2 then needs no reconnect, as long as the legacy secret `GOOGLE_OAUTH_CLIENT_ID` holds that same client ID. The digest check was UNAVAILABLE to L3. Packet C1 of 24 September deletes the legacy `oauth-google` function and secret on staging; whether it ran is unchecked. Redirect URIs to keep until the legacy path is retired are on #116.
+1. G1 (#1052) is merged as `f6a7d2a0`: Google connect from the app (`/c/<ticket>` with surface `app`; migration `20261011200000`, which L1 applies on staging). It is visible on TestFlight; today's workaround is connecting Google in the console. Then G2 with L4, retiring the app's legacy `oauth-google` path. G4 is closed: the owner confirmed one OAuth client, the backend's `GOOGLE_CLIENT_ID`, which the app also uses. G2 then needs no reconnect, as long as the legacy secret `GOOGLE_OAUTH_CLIENT_ID` holds that same client ID. The digest check was UNAVAILABLE to L3. Packet C1 of 24 September deletes the legacy `oauth-google` function and secret on staging; whether it ran is unchecked. Redirect URIs to keep until the legacy path is retired are on #116.
 2. The "deliver to" control (ruling 20). The shape is proposed on #116, and L2's router reads it. It comes after G1 because an app-only owner already gets proactive messages in the app.
 3. The threads contract, app and console only (ruling 21), re-cut from #998.
