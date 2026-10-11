@@ -650,7 +650,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
 
     if (new URL(request.url).pathname === '/enqueue') return this.enqueue(request);
     const doName = request.headers.get('x-waldo-do-name');
-    if (path !== MEMORY_GRAPH_PATH && doName && this.ctx.storage.kv.get<string>('do_name') !== doName) this.ctx.storage.kv.put('do_name', doName);
+    if (path !== MEMORY_GRAPH_PATH && doName && this.ctx.storage.kv.get<string>('do_name') !== doName) {
+      // Same rule as /enqueue and the app route: only a name that addresses this very object may bind it, and never a second name.
+      if (this.ctx.storage.kv.get<string>('do_name') !== undefined
+        || this.env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== this.ctx.id.toString()) return new Response('forbidden', { status: 403 });
+      this.ctx.storage.kv.put('do_name', doName);
+    }
     if (new URL(request.url).pathname === '/grant-console' && request.method === 'POST') return new Response(await consoleAccess(this.ctx.storage).grant());
     if (new URL(request.url).pathname.startsWith(CONSOLE_PATH)) return this.console(request);
     const body = await request.text();
