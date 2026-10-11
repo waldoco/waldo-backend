@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(44);
+select plan(46);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -97,6 +97,10 @@ insert into waldo.health_samples(owner_id,source,signal,sample_id,revision,epoch
   select 'd3000000-0000-0000-0000-0000000000d3','apple','spo2','bulk-'||g,1,1,pg_temp.today(),now()-interval '1 hour',now()-interval '1 hour',0,'UTC','{"value":97}'::jsonb from generate_series(1,8001) g;
 select is((pg_temp.series('series-owner-d',pg_temp.today(),pg_temp.today())->'sources'->0->>'truncated')::boolean,true,'a source with more than 8000 readings is flagged truncated');
 select is(jsonb_array_length(pg_temp.series('series-owner-d',pg_temp.today(),pg_temp.today())->'sources'->0->'samples'),8000,'and returns exactly the bound');
+insert into waldo.health_samples(owner_id,source,signal,sample_id,revision,epoch,day,start_at,end_at,utc_offset_minutes,timezone,payload)
+  values ('d3000000-0000-0000-0000-0000000000d3','apple','spo2','old-1',1,1,pg_temp.today()-5,now()-interval '5 days',now()-interval '5 days',0,'UTC','{"value":96}'::jsonb);
+select is((select bool_and((s->>'day')::date = pg_temp.today()) from jsonb_array_elements(pg_temp.series('series-owner-d',pg_temp.today()-5,pg_temp.today())->'sources'->0->'samples') s),true,'when the bound is hit the oldest days are shed, never the newest');
+select is(jsonb_array_length(pg_temp.series('series-owner-d',pg_temp.today()-5,pg_temp.today())->'sources'->0->'samples'),8000,'and the bound still holds across days');
 
 -- Privileges: only the signed router path may call it.
 select is((select has_function_privilege('anon',p.oid,'execute') from pg_proc p where p.pronamespace='waldo'::regnamespace and p.proname='health_series_read'),true,'the signed router path can call the series read');

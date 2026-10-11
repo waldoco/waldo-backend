@@ -154,8 +154,8 @@ begin
       select s.source, s.epoch from waldo.health_scopes s join waldo.health_consents c on c.id = s.consent_id
       where s.owner_id = v_owner and s.purpose = 'storage_compute' and c.withdrawn_at is null
     ), picked as (
-      select l.source, h.signal, h.day, h.start_at, h.end_at, h.utc_offset_minutes, h.timezone, h.payload,
-        row_number() over (partition by l.source order by h.day, h.start_at, h.signal, h.sample_id) as n
+      select l.source, h.signal, h.sample_id, h.day, h.start_at, h.end_at, h.utc_offset_minutes, h.timezone, h.payload,
+        row_number() over (partition by l.source order by h.day desc, h.start_at desc, h.signal, h.sample_id) as n
       from live l join waldo.health_samples h on h.owner_id = v_owner and h.source = l.source
       where h.payload is not null and h.day between v_from and v_to and h.signal = any (v_signals)
     )
@@ -173,7 +173,7 @@ begin
               'start_at', to_char(p.start_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
               'end_at', to_char(p.end_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
               'utc_offset_minutes', p.utc_offset_minutes, 'timezone', p.timezone,
-              'value', p.payload->'value', 'method', p.payload->'method', 'activity', p.payload->'activity')) order by p.n)
+              'value', p.payload->'value', 'method', p.payload->'method', 'activity', p.payload->'activity')) order by p.day, p.start_at, p.signal, p.sample_id)
             from picked p where p.source = l.source and p.n <= v_cap), '[]'::jsonb)) order by l.source) from live l), '[]'::jsonb))
   );
 exception
