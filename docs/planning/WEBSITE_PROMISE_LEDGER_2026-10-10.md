@@ -23,7 +23,7 @@ Planning document, 10 October 2026. It maps promises to source and records the o
 17. **Staging actions** (same ruling). Deploy #1024, and apply `20261010060000` with #1022 once it is merged. Each is still executed by the session that runs it, after that session confirms with the owner.
 18. **Alpha cohort and spend** (10 October, 19:05Z). The alpha cohort is 5 to 10 people, at most 50. The cost ceiling is $25 per user per month. #915 L builds the ceiling; it is not wired yet.
 19. **Browser tasks from any surface** (same ruling). The owner can request a browser task from any surface, and Waldo reports back on that surface.
-20. **Proactive delivery** (11 October). Proactive messages go to the owner's chosen surface, otherwise to the app. Until a "deliver to" setting exists, this includes Telegram-linked owners. One exception holds until L2's slice 1: a Telegram-linked owner who has never opened the app still gets proactive messages on Telegram.
+20. **Proactive delivery** (11 October). Proactive messages go to the owner's chosen surface, otherwise to the app. Until a "deliver to" setting exists, this includes Telegram-linked owners. One exception, relayed by L2 on #116 and not yet confirmed in L3's session, holds until L2's slice 1: a Telegram-linked owner who has never opened the app still gets proactive messages on Telegram.
 21. **One main conversation** (11 October). Each owner has one main conversation across all surfaces. Threads stay app and console only.
 22. **Who ties the app and backend together** (11 October). The owner's sessions own the work that ties the app and backend together. Instinct takes disjoint slices under `docs/app/codex-handover/OWNERSHIP_BOUNDARY.md`, and they are reviewed before merge.
 
