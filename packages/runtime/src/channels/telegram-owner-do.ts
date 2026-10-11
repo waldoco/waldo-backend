@@ -14,7 +14,7 @@ import { taskSourceFetch } from '../tools/task-source-io';
 import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerControlsRead,ownerControlsAction} from './dashboard-owner-controls';
 import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
 import {CONTROLS_PATH,readControlsQuery,projectControls} from './dashboard-controls';
-import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt} from './dashboard-control-actions';
+import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt} from './dashboard-control-actions';
 import { createScopedCuratedSkillCapability } from '../skills/curated-host';
 import { ownerMessageAdmission } from '../identity/owner-message-admission';
 import { MEMORY_GRAPH_PATH, readMemoryGraph } from './memory-graph';
@@ -132,6 +132,8 @@ const WEBHOOK_UPDATES = ['message', 'callback_query'];
 type RawUpdate = { update_id?: number; callback_query?: CallbackQuery; message?: { text?: string; from?: { id: number }; chat?: { id: number } } };
 
 // scopes null: granted before per-feature scopes, under the owner's 09-23 broad consent.
+// The surface that issued a connect ticket; it decides where the consent page sends the owner back.
+type ConnectChannel = 'telegram' | 'console' | 'app';
 type GoogleAccount = Readonly<{ id: string; email: string; scopes: readonly string[] | null; refresh_token?: string }>;
 const LEGACY_GRANT = null;
 type LinkGrant = Readonly<{ id: string; email: string; scopes: readonly string[] | null }>;
@@ -164,7 +166,7 @@ type OwnerRuntime = Readonly<{
   view(session: ConsoleSession, notice: string | null, page?: { traceBefore?: number; runsBefore?: number }): Promise<ConsoleView & { page: { trace_before: number | null; runs_before: number | null; trace_applied: number | null; runs_applied: number | null } }>;
   overview(): Promise<ReturnType<typeof dashboardOverview>>;
   act(action: ConsoleAction, assertCurrent?: () => Promise<void>): Promise<boolean | string>;
-  googleConnectUrl(feature: GoogleFeature, channel?: 'telegram' | 'console'): Promise<string | null>;
+  googleConnectUrl(feature: GoogleFeature, channel?: ConnectChannel): Promise<string | null>;
   google: Readonly<{
     finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>>;
     beginSession(ticketHash: string): Promise<Readonly<{ url: string; nonce: string }> | null>;
@@ -625,7 +627,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           return await appControlsRequest(request,{...session,storage:this.ctx.storage,assertCurrent:current,
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.created_at)+12*60*60_000})),
             view:async page=>{const view=await runtime.view(session,null,page);await current();const rows=await auth.listSessions(name);return {...view,sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.created_at,until:new Date(Date.parse(row.created_at)+12*60*60_000).toISOString(),current:row.session===hash}))};},
-            act:action=>runtime.act(action,current),
+            act:async action=>action.action==='google.connect'
+              ?googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'app'):null,this.ctx.storage.kv.get<string>('origin'))
+              :runtime.act(action,current),
           });
         }catch{return fail(503);}
       });
@@ -660,7 +664,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     if (new URL(request.url).pathname === BEGIN_SESSION_PATH) {
       const { ticket_hash } = JSON.parse(body) as { ticket_hash: string };
-      const begin = await this.serial(() => this.setup().google.beginSession(ticket_hash));
+      // A ticket the app issued is begun on the app runtime, so an owner without Telegram can connect.
+      const issuer = await this.ctx.storage.get<string>(`connect_channel:${ticket_hash}`);
+      const begin = await this.serial(() => this.setup(issuer === 'app' ? 'app' : 'telegram').google.beginSession(ticket_hash));
       console.log(JSON.stringify({ trace: `connect:${ticket_hash.slice(0, 8)}`, hop: 'connect_begin', ok: begin !== null }));
       return Response.json({ url: begin?.url ?? null });
     }
@@ -1052,12 +1058,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             projection:async(selected,id)=>{if(selected==='memory')return projectMemoryControl(await read(),this.ctx.id.toString(),id??'');const query=readControlsQuery(new URLSearchParams({view:selected}));return query?projectControls(await read(),query.view):null;},
             act:async(action)=>{
               if(['spot.confirm','spot.dismiss','spot.forget','node.forget'].includes(action.action)){const resolved=resolveMemoryAction(await read(),this.ctx.id.toString(),action);return resolved?runtime.act(resolved):false;}
-              if(action.action==='google.connect'){
-                const ticket=isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'console'):null;
-                if(!ticket)return {state:'rejected' as const,message:NOTICES['google.connect.failed']!};
-                const destination=new URL(ticket);if(destination.origin!==url.origin||!/^\/c\/[A-Za-z0-9_-]{22}$/.test(destination.pathname)||destination.search||destination.hash)return {state:'rejected' as const,message:'Google connect returned an unavailable destination. Try again later.'};
-                return {state:'recorded' as const,message:'Google connect is ready to begin. Access has not been granted or tested.',navigation:destination.pathname};
-              }
+              if(action.action==='google.connect')return googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'console'):null,url.origin);
               if(action.action==='telegram.link'){
                 const name=this.ctx.storage.kv.get<string>('do_name'),code=name?await consoleAuth(this.env)?.issueLinkCode(name):null;
                 return code?{state:'recorded' as const,message:`Send this to the Waldo bot on Telegram within 10 minutes: /link ${code}`}:{state:'rejected' as const,message:'Linking Telegram needs account sign-in, which is not configured on this server.'};
@@ -1789,7 +1790,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       // Chat links are short and first-party: /c/<ticket>. The consent URL is minted at click time
       // (beginSession) and never passes through model-visible text.
-      async connectUrl(_feature: GoogleFeature, channel: 'telegram' | 'console' = 'telegram') {
+      async connectUrl(_feature: GoogleFeature, channel: ConnectChannel = 'telegram') {
         if (!google.configured()) return null;
         const origin = await storage.get<string>('origin');
         const callRpc = signedRpc(env);
@@ -1809,7 +1810,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       async beginSession(ticketHash: string) {
         const app = await googleApp();
         const channel = await storage.get<string>(`connect_channel:${ticketHash}`);
-        const surface = channel === 'console' ? 'dashboard' : channel === 'telegram' ? 'telegram' : undefined;
+        const surface = channel === 'console' ? 'dashboard' : channel === 'telegram' || channel === 'app' ? channel : undefined;
         return app && stateSecret ? startConsent(consentDeps, app, stateSecret, stateOwner(), { session: ticketHash, ...(surface ? { surface } : {}) }) : null;
       },
       async finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>> {

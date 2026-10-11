@@ -1,5 +1,5 @@
 import { appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema } from '../../../contracts/src/app/controls';
-import { controlAction, controlRevision } from './dashboard-control-actions';
+import { controlAction, controlRevision, type ControlReceipt } from './dashboard-control-actions';
 import { projectControls, readControlsQuery } from './dashboard-controls';
 import type { ConsoleAction, ConsoleView } from './console';
 
@@ -7,7 +7,7 @@ export type AppControlsHost = Readonly<{
   csrf:string; expires:number; storage:DurableObjectStorage;
   assertCurrent():Promise<void>; sessions():Promise<readonly {csrf:string;expires:number}[]>;
   view(page?:{traceBefore?:number;runsBefore?:number}):Promise<ConsoleView>;
-  act(action:ConsoleAction):Promise<boolean|string>;
+  act(action:ConsoleAction):Promise<boolean|string|ControlReceipt>;
 }>;
 const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache-control':'private, no-store'}});
 export async function appControlsRequest(request:Request,host:AppControlsHost):Promise<Response> {
@@ -40,7 +40,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
   if(path!=='/app/v1/actions')return reply({error:'not_found'},404);
   if(request.method!=='POST')return reply({error:'method_not_allowed'},405);
   let raw:unknown;try{raw=await request.json();}catch{return reply({error:'invalid_action'},400);}
-  const action=appControlActionV1Schema.safeParse(raw);if(!action.success||action.data.view!=='day')return reply({error:'invalid_action'},400);
+  const action=appControlActionV1Schema.safeParse(raw);if(!action.success||!(action.data.view==='day'||(action.data.view==='connections'&&action.data.action==='google.connect')))return reply({error:'invalid_action'},400);
   const form=new FormData();for(const [key,value]of Object.entries(action.data))if(value!==undefined)form.set(key,value);form.set('csrf',host.csrf);
   const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,projection,
     act:async action=>{await host.assertCurrent();return host.act(action);}});

@@ -9,6 +9,13 @@ type Store=Readonly<{get<T>(key:string):Promise<T|undefined>;put(key:string,valu
 export type ControlActionDeps=Readonly<{csrf:string;expires:number;sessions():Promise<readonly {csrf:string;expires:number}[]>;projection(view:string,id?:string):Promise<Projection|null>;view():Promise<ConsoleView>;act(action:ConsoleAction):Promise<boolean|string|ControlReceipt>;store:Store}>;
 const allowed:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','node.forget'],day:['timezone.set','proactivity.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','session.signout','session.signout.all'],waiting:['approval.approve','approval.skip','approval.undo'],files:['file.remove']};
 const reply=(value:object,status=200)=>Response.json(value,{status,headers:DASHBOARD_OVERVIEW_HEADERS});
+// The only destination a Google connect receipt may carry is this deployment's own /c/<ticket> path.
+export const googleConnectReceipt=(link:string|null,origin:string|undefined):ControlReceipt=>{
+ if(!link)return {state:'rejected',message:NOTICES['google.connect.failed']!};
+ const destination=new URL(link);
+ if(!origin||destination.origin!==origin||!/^\/c\/[A-Za-z0-9_-]{22}$/.test(destination.pathname)||destination.search||destination.hash)return {state:'rejected',message:'Google connect returned an unavailable destination. Try again later.'};
+ return {state:'recorded',message:'Google connect is ready to begin. Access has not been granted or tested.',navigation:destination.pathname};
+};
 export async function controlRevision(value:unknown):Promise<string>{const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(value)));return Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,'0')).join('');}
 function eligible(action:ConsoleAction,view:ConsoleView):boolean {
  if(action.action.startsWith('card.')){const card=view.cards.find(c=>c.id===action.id);return !!card&&(action.action==='card.unpin'?!!card.pin:!card.sent);}
