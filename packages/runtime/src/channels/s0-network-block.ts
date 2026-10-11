@@ -1,7 +1,7 @@
 import type { BrowserWorker } from '@cloudflare/playwright';
 import { browserSessionSchema } from '@waldo/contracts';
 import { cloudflareBrowserGuardOptions } from './cloudflare-browser-adapter';
-import { cloudflareGeneralBrowser } from './cloudflare-general-browser';
+import { cloudflareGeneralBrowser, GeneralBrowserError } from './cloudflare-general-browser';
 import { publicBrowserRequestAuthorizer } from './public-browser-request-filter';
 import { PUBLIC_WEB_ORIGIN } from './public-web-policy';
 import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
@@ -79,7 +79,11 @@ export async function runS0(binding: BrowserWorker, loadSdk: CloudflareBrowserSd
 export const S0_PRIVATE_PROBES = ['https://127.0.0.1/', 'https://localhost/', 'https://169.254.169.254/latest/meta-data/', 'https://10.0.0.1/', 'https://[::1]/', 'https://metadata.google.internal/'] as const;
 export const S0_REDIRECT_TARGET = 'https://169.254.169.254/latest/api/token';
 export type S0Decision = Readonly<{ url: string; method: string; allowed: boolean }>;
-export type S0RetainedResult = Readonly<{ passed: boolean; pageLoaded: boolean; redirectRejected: boolean; terminated: boolean; decisions: readonly S0Decision[]; sessionMs: number }>;
+// Content-free: the stage and the driver's own error code and diagnostic, never page content.
+export type S0Failure = Readonly<{ stage: 'start' | 'probe-page' | 'settle'; code: string; diagnostic?: unknown }>;
+export type S0RetainedResult = Readonly<{ passed: boolean; pageLoaded: boolean; redirectRejected: boolean; terminated: boolean; decisions: readonly S0Decision[]; sessionMs: number; failure?: S0Failure }>;
+const failureOf = (stage: S0Failure['stage'], error: unknown): S0Failure =>
+  error instanceof GeneralBrowserError ? { stage, code: error.code, ...(error.diagnostic ? { diagnostic: error.diagnostic } : {}) } : { stage, code: error instanceof Error ? error.name : 'unknown' };
 
 // A probe that never reached the filter is not proof of a block, so each target must appear in the log, only as denied.
 export const evaluateS0Retained = (input: Readonly<{ origin: string; decisions: readonly S0Decision[]; pageLoaded: boolean; redirectRejected: boolean; terminated: boolean }>): Readonly<{ passed: boolean }> => {
@@ -104,29 +108,30 @@ export async function runS0Retained(binding: BrowserWorker, loadSdk: CloudflareB
     return allowed;
   };
   const driver = cloudflareGeneralBrowser({ ownerId: 's0', publicRead: true, retainConnection: true, binding, loadSdk, now: Date.now, deadline: () => started + S0_RETAINED_WORK_MS, cleanupTimeoutMs: 10_000, admit: async () => {}, authorizeRequest: filter, maxScreenshotBytes: 1_000_000 });
-  let providerId: string | undefined, session: ReturnType<typeof browserSessionSchema.parse> | undefined, pageLoaded = false, redirectRejected = false, terminated = false;
+  let failure: S0Failure | undefined, stage: S0Failure['stage'] = 'start', providerId: string | undefined, session: ReturnType<typeof browserSessionSchema.parse> | undefined, pageLoaded = false, redirectRejected = false, terminated = false;
   const starting = driver.start('public', S0_RETAINED_SESSION_MS, async () => {}, async id => { providerId = id; });
   try {
     try { await within(starting, left(budgets.acquire)); }
     catch (error) { void starting.then(late => closeLate(loadSdk, binding, late, budgets.cleanup), () => undefined); throw error; }
     session = browserSessionSchema.parse({ id: crypto.randomUUID(), ownerId: 's0', provider: 'cloudflare_playwright', providerSessionId: providerId, contextHandle: null, mode: 'public', state: 'active', generation: 1, expiresAt: Date.now() + S0_RETAINED_SESSION_MS, updatedAt: Date.now() });
     const live = session;
+    stage = 'probe-page';
     await within((async () => {
       await driver.navigate(live, `${origin}${S0_PROBE_PAGE_PATH}`);
-      pageLoaded = true;
+      pageLoaded = true; stage = 'settle';
       const expected = [`${origin}${S0_CONTROL_PATH}`, ...S0_PRIVATE_PROBES];
       for (const settleBy = Date.now() + S0_PROBE_SETTLE_MS; Date.now() < settleBy && !expected.every(url => decisions.some(d => d.url === url));) await sleep(250);
       // Last, because a refused main document drops the retained connection.
       try { await driver.navigate(live, `${origin}${S0_REDIRECT_PATH}`); } catch { redirectRejected = true; }
     })(), left(budgets.work));
-  } catch { /* an incomplete run fails the pass check below */ }
+  } catch (error) { failure = failureOf(stage, error); }
   finally {
     try { await driver.disconnect(); } catch { /* termination below is authoritative */ }
     if (session) try { await driver.terminate(session); } catch { /* the independent readback decides */ }
     if (providerId) try { terminated = !(await within((await loadSdk()).sessions(binding), budgets.cleanup / 2)).some(s => s.sessionId === providerId); } catch { /* unconfirmed stays false */ }
   }
   const evaluation = evaluateS0Retained({ origin, decisions, pageLoaded, redirectRejected, terminated });
-  return { passed: evaluation.passed, pageLoaded, redirectRejected, terminated, decisions, sessionMs: Date.now() - started };
+  return { passed: evaluation.passed, pageLoaded, redirectRejected, terminated, decisions, sessionMs: Date.now() - started, ...(failure ? { failure } : {}) };
 }
 
 const closeLate = async (loadSdk: CloudflareBrowserSdkLoader, binding: BrowserWorker, sessionId: string, cleanupMs: number) => {

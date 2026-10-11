@@ -39,7 +39,7 @@ it('retained: passes only when the filter saw and denied every private probe and
 
 // A fake Cloudflare browser whose pages fire the requests the S0 probe page makes, through the
 // route handler the real driver installs. The filter, redirect handling and cleanup are production code.
-function fakeCloudflare(options: { sessionsLeft?: boolean } = {}) {
+function fakeCloudflare(options: { sessionsLeft?: boolean; probePageStatus?: number } = {}) {
   let ended = false, handler: ((route: any) => Promise<void>) | undefined;
   const calls: string[] = [];
   const probeSubresources = (origin: string) => [`${origin}/s0/control`, ...S0_PRIVATE_PROBES];
@@ -54,7 +54,7 @@ function fakeCloudflare(options: { sessionsLeft?: boolean } = {}) {
     const page: any = { url: () => url, title: async () => 'S0 probe page', setDefaultTimeout() {}, close: async () => {}, screenshot: async () => new Uint8Array([137, 80, 78, 71]), locator: () => ({}),
       evaluate: async () => ({ url, title: 'S0 probe page', text: 'S0 probe page', width: 1280, height: 720, scrollX: 0, scrollY: 0, elements: [] }),
       goto: async (target: string) => {
-        const origin = new URL(target).origin, respond = (u: string) => (u.endsWith('/s0/redirect') ? { status: 302, location: S0_REDIRECT_TARGET } : { status: 200 });
+        const origin = new URL(target).origin, respond = (u: string) => (u.endsWith('/s0/redirect') ? { status: 302, location: S0_REDIRECT_TARGET } : { status: u.endsWith('/s0/probe-page') ? options.probePageStatus ?? 200 : 200 });
         const main = await fire(target, true, page, respond);
         if (main.aborted) throw Error('net::ERR_BLOCKED_BY_CLIENT');
         url = target;
@@ -161,4 +161,16 @@ it('one-shot: a late-resolving acquire is closed by its exact id and the run fai
   await expect(runS0({} as never, (async () => sdk) as never, { load: 50, acquire: 10, work: 40, cleanup: 40 })).rejects.toThrow();
   await new Promise(r => setTimeout(r, 150));
   expect(calls).toEqual(['connect:late-1', 'close', 'list']);
+});
+
+it('retained: a failed run names the stage and the content-free browser code', async () => {
+  const f = fakeCloudflare({ probePageStatus: 404 });
+  const result = await runS0Retained({} as never, (async () => f.sdk) as never, ORIGIN);
+  expect([result.passed, result.pageLoaded, result.terminated]).toEqual([false, false, true]);
+  expect(result.failure).toEqual({ stage: 'probe-page', code: 'page_unavailable', diagnostic: { status: 404 } });
+  expect(JSON.stringify(result)).not.toContain('s0-session-1');
+});
+it('retained: a passing run reports no failure', async () => {
+  const f = fakeCloudflare();
+  expect((await runS0Retained({} as never, (async () => f.sdk) as never, ORIGIN)).failure).toBeUndefined();
 });
