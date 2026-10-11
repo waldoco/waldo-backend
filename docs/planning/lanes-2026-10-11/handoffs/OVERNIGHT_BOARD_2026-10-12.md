@@ -38,6 +38,7 @@ I merge after: CI green on the current head (pgTAP included), an independent rev
   3. The `defer` desk branch (it unblocks "Not now", which #1070's guard answers with 409 today). Confirm it has no DO migration.
   4. The S7 keyless spike.
 - **Follow-up review checklist:** a skipped leaf (append lands under the nearest loadable ancestor and shows in the GET); a skipped parent with a loadable child; a witness that differs stays fatal; no storage writes from the loader; `appDeliveryFor` succeeds past a bad row; fixed codes and counts only; one shared skip rule with `readForDisplay`; each test mutation-checked.
+- **D5 (skip, don't accept the value as legacy data):** the `inputOrigin` rule arrived with the canonical store (`e35d0262`, 10 Oct). The only user-entry writer (`owner-turn.ts:580`) always sets it, and the forget redaction keeps it. So no merged build wrote the row; skipping is right, and accepting it would mean guessing provenance. State this in the PR body.
 - My grep at `4bb040f5` finds two strict `load()` callers of the canonical store: `owner-turn.ts:557` (`restored()`) and `telegram-owner-do.ts:590` (scheduled app delivery). `readForDisplay` is `:670`. `conversationForgetSources` reads raw rows and doesn't validate.
 
 ### L3 (approvals, app contracts, Google connect)

@@ -62,3 +62,16 @@ L2 report (21:40Z) **[unverified until reviewed]**:
   - Its work is push-class (priority 7), so the cost tonight is small. It goes in the morning batch.
 - **Replied to L3** (SendMessage `2316f6c5`): morning batch file, local work order, Google connect readiness check, the board.
 - **Message budget:** 4 `send_message` + 4 `SendMessage`.
+
+## 22:05Z: L1's full report; L4's reports (via the old alignment session); D5
+
+- **L1** (message, 21:5xZ) **[unverified: lane report, consistent with #116]**: the owner's gos in L1's session were (a) deploy `4bb040f5`, (b) a standing go for overnight staging deploys, (c) keep the Mac awake until 04:00Z.
+  - Conditions for (b): CI green at the exact tip incl. pgTAP; 0 pending hosted migrations (L1 never applies; a tip needing one waits for the owner); no wrangler or binding change (#1071 needs its own go); `--env staging` from a clean detached checkout; a `/healthz` check and a #116 record each time; on a failed smoke check, roll back and stop. It ends when the owner is next back in L1's session.
+  - CI at `4bb040f5`: 7/7 incl. pgTAP.
+- **L4** (forwarded by the old alignment session):
+  - #77 merged as `c2ccd5d0` with the owner's yes in L4's session.
+  - The Simulator Main-chat check matches L1's data: history 200 and empty; the send receipt `interrupted` with `effects_unconfirmed: true`; the message not stored.
+  - L4 builds the time-zone write (option a) next, and told L2 that #1066 needs no `controls.ts` re-pin.
+  - App-side risk L4 raised: a page with no rows but a cursor hides "Load earlier".
+  - Open gap L4 raised with L3: a deferred request drops out of the default approvals list, so the chat card would say "no longer available". It needs a contract answer before L2 offers `defer`.
+- **D5:** skip the `input_origin` row; don't accept it as legacy data. Git evidence in the decisions file. The old alignment session's inference (read-side drift) is half right: the row matches its witness, but no merged build wrote it.
