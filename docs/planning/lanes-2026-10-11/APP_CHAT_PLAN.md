@@ -459,6 +459,7 @@ Still open:
 9. **Reminders: decided.** A reminder the owner set may push (design-system decision 53).
 10. **The register's owner questions: answered** at about 17:50Z (the register's "Owner answers"). Still open:
     - the morning notification;
+    - Apple sign-in, where my recommendation conflicts with the owner's earlier ruling in L2's session;
     - Patrol, Spots and Fetch, which go to Suyash.
 11. **The sign-in time-zone write.** L2 withdrew its yes and offered three options. L4 holds its write until the owner picks, in L2's session.
 12. **#1062.** The owner merges it on GitHub.

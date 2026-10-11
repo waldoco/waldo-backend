@@ -85,7 +85,7 @@
 | G15 | Research answers list their sources: "No source, no claim" (`Message`, `SourceCard`) | No provenance comes from the backend | (b): the steps and sources route | Visible | L2, L3, L4 |
 | G16 | Memory shown as `MemoryClaim`, with correct and forget | The backend has no app.v1 memory routes and no `update_memory` handler. The app shows a memory placeholder `[inventory]`. | (b) | Visible | L3, L2, L4 |
 | G17 | Offline is shown as a `Banner`: "You're offline. Showing what Waldo knew at 07:14." | No network awareness | (a) | Visible | L4 |
-| G18 | Display type in Mottle; interface in SF Pro Rounded; DM Mono only for command lines (README) | SF Pro Rounded is bundled in 4 weights. No Mottle file. | (d): the Mottle file is in the artifact (`fonts/mottle-unified.ttf`); check its licence (`16-governance.md`).<br>Decided (11 Oct): on iOS, use the system rounded face instead of bundling SF Pro Rounded. | Polish | L4 |
+| G18 | Display type in Mottle; interface in SF Pro Rounded; DM Mono only for command lines (README) | SF Pro Rounded is bundled in 4 weights. No Mottle file. | (d): the Mottle file is in the artifact (`fonts/mottle-unified.ttf`); check its licence (`16-governance.md`).<br>Decided (11 Oct), as `15-platforms.md` already specifies: on iOS, take SF Pro Rounded from the system (`ui-rounded`), and bundle only Mottle and DM Mono. | Polish | L4 |
 | G19 | Display styles cap Dynamic Type at 1.3×; others are uncapped (`15-platforms.md`) | No `maxFontSizeMultiplier` anywhere | (a), once display styles exist | Polish | L4 |
 | G20 | Copy and states: no "Loading…" or other generic waits; a specific line instead (`11-states.md`). No spinner (`ProcessingCard`). No "Oops", "Thinking…", "Are you sure?", OK/Yes/Approve buttons or exclamation marks (`09`). | L4's audit found what my first grep missed: 15 files render `ActivityIndicator`. Home shows "Loading approvals", "Loading cards" and "Loading scores" (`TodaySummary.tsx:59,70,88`), and chat "Loading earlier…" (`ChatPane.tsx:219`). #69 replaced "Loading main chat…". No "Oops", OK/Yes/Approve or exclamation marks were found. | (a) | Visible | L4 |
 | G21 | Long messages: the composer's counter matches what send accepts | The counter allows 4,000 characters, but the app caps the body at 8,192 bytes (`appRoutesClient.ts:130`). The server allows 32,768. | (a) | Visible for non-Latin text | L4 |
@@ -122,14 +122,17 @@ The owner took my recommendations, apart from updating the design system for Pat
 5. **Reminders:** a reminder the owner set may push (G13, decision 53).
 6. **Approvals:** Not now and Don't do this are separate actions (G10).
 7. **Retired names:** "Patrol" and "Spots" stay in the app. The system is not updated until Suyash resolves the conflict (G2).
-8. **Sign-in:** Apple, Google and email. The 18+ item is a `Checkbox` at sign-up.
-9. **SF Pro Rounded:** on iOS, use the system rounded face instead of bundling the files (G18).
+8. **Sign-in:** Google and email stand. The 18+ item is a `Checkbox` at sign-up.
+9. **SF Pro Rounded:** on iOS, take it from the system instead of bundling the files, as `15-platforms.md` already says (G18).
 
 **Still open:**
 - **The morning notification.** My premise was wrong.
   - The website's 6:30 notification is "the one thing that needs your yes" (waldo-landing `830bfc2`, `see-fixture.ts:27`), not a Brief push.
   - The system pushes a Needs You only "with a near expiry". An overnight decision may need a rule that releases it as one push at wake time.
   - The opt-in Brief push I recommended is on hold until the owner confirms it.
+- **Apple sign-in.** My recommendation of Apple, Google and email (the system's `AuthButton`) conflicts with the owner's earlier ruling in L2's session, which dropped Sign in with Apple. I recorded it as decided by mistake.
+  - With no TestFlight, keeping that ruling for the beta is coherent.
+  - App Store guideline 4.8 probably requires an equivalent privacy-preserving login, such as Sign in with Apple, when Google sign-in is offered. That is my recollection, not checked against the current text. If so, Apple sign-in becomes a gate before App Store submission.
 - **The sign-in time-zone write.** L2 withdrew its yes. Once `timezone_confirmed` ships, owners who chose a zone before P3a would be overwritten.
   - L2's options:
     - (a) write only while the stored zone is the UTC default;
@@ -148,5 +151,7 @@ The owner took my recommendations, apart from updating the design system for Pat
 - **Session-delete copy.** `ThreadRow` says what goes. Decision 2 also keeps what Waldo learned, and the confirmation should say that.
 - **"Pinned by Waldo" chips** (plan row 16): there is no component for them.
 - **Not now and Don't do this** on the chat's approval cards, once L3's contract lands.
-- **Decision 53's budget exemption** for reminders: ratify or change.
+- **Decision 53:** ratify or change it.
+  - Reminders are outside the three-a-day budget.
+  - Quiet hours hold a reminder that isn't marked urgent, so one set for 23:00 would arrive at 07:00 without the person being told.
 - **Review waldo-brain #35.** Governance requires it for design changes.
