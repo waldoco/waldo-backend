@@ -23,9 +23,9 @@ insert into public.users (auth_id, name, email) values
 insert into auth.refresh_tokens (token, user_id) values
   ('identity-token-a', '30000000-0000-0000-0000-00000000000a'),
   ('identity-token-b', '30000000-0000-0000-0000-00000000000b');
-insert into auth.sessions (user_id) values
-  ('30000000-0000-0000-0000-00000000000a'),
-  ('30000000-0000-0000-0000-00000000000b');
+insert into auth.sessions (id, user_id) values
+  (gen_random_uuid(), '30000000-0000-0000-0000-00000000000a'),
+  (gen_random_uuid(), '30000000-0000-0000-0000-00000000000b');
 insert into waldo.invites (code_hash, email, used_by, used_at) values
   (repeat('a', 64), 'gone@test.invalid', '31000000-0000-0000-0000-00000000000a', now()),
   (repeat('b', 64), 'stays@test.invalid', '31000000-0000-0000-0000-00000000000b', now());
