@@ -147,3 +147,28 @@ L2 report (21:40Z) **[unverified until reviewed]**:
   - 120 promises in 16 areas; 94 match ledger rows; 26 aren't in the ledger.
   - Highest harm: Gmail "read only" vs bodies read and approved sends; export/delete "Working today" (export missing, delete untested from the app); "Undo it in one tap" (only calendar moves, 10 minutes); 6:30 push missing; wearables beyond Apple Watch; "Free while in beta" and Terms gating unledgered.
   - #18's current head `598e94b0` (16 files) is newer than the ledger's record (`4fcc6f20`) and creates two new contradictions.
+
+## 22:14Z: harness and context research in
+
+Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). Nothing executed.
+
+- **1. Composed context may not reach the reply model** [read, not executed; contradicts the brief; needs a falsifying test before work is assigned]:
+  - App turns build context with only a `health` source (`telegram-owner-do.ts:2137`), so the tool-result list is empty (`context-composer/owner-turn.ts:71`).
+  - On Telegram the composed REASONS prompt goes in as `request.system` (`joined-path.ts:73`), but the reply builds its own system prompt (`owner-turn.ts:461-489`).
+  - Proposed test: write one ledger row, run one app turn and one Telegram turn, and assert the reply instructions contain it.
+- **2. History is cut in three places, silently:** the token window (`window.ts:44-61`), the provider's 1,024-message / 400k-char trim plus bisection (`provider.ts:1428-1460`), and the forget-pending filter (`owner-turn.ts:417`). Only the first is logged.
+- **3. App chat is invisible** to `search_episodes` and nightly (only the legacy store is indexed: `:2042` vs `:2140`; nightly reads that index, `:2317`).
+- **4. Nothing carries "in flight" across turns,** and entries have no timestamp.
+- **5. Cache reuse is ruled out:** the system prompt ends with the current owner text and a minute clock (`owner-turn.ts:468-479`), and the adapter ignores cache-write tokens (`openai.ts:94`).
+- **6. All eligible tools are sent every round,** listed three ways; ADR-0034's `search_tools` has no handler (`hooks/registry.ts:213`).
+- **A fixed rule making a judgment call:** the memory profile picks claims by recency and ignores its `question` argument (`claims.ts:1014-1031`) → `post-mvp-cleanup`.
+- **Proposed C+A** **[proposed, for L2]**:
+  - a `conversation_state` block through the existing ContextComposer (no new writer, storage or enum);
+  - `window.ts` becomes the single owner of the cut, plus a note saying how many messages are out of view and how many are withheld for a forget;
+  - on the app, `search_episodes` reads the canonical transcript (same tool name and schema; the forget-hiding re-read is reused; no new storage);
+  - C: ids, statuses and times for pending approvals, receipts, open loops, reminders, runs and artifacts (≤3 KB).
+  - Order: measure, then A, then C, then the eval.
+- **Eval:**
+  - CI plumbing on an app-path harness (the L1 scenarios run Telegram, `run-l1.ts:118`).
+  - Nightly live runs on matched seeds above 150k tokens.
+  - Pre-set bars: +20 points recall; hallucination ≤ today and ≤2%; 0 leaks in ≥200 probes; ≤5% more tokens. A is falsified if the model searches on <50% of out-of-view probes.
