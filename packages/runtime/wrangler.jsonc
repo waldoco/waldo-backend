@@ -75,7 +75,8 @@
       // Daily health retention sweep (waldo.health_retention_sweep). Staging only: the top-level (production) config has no trigger.
       "triggers": { "crons": ["17 3 * * *"] },
       "compatibility_flags": ["nodejs_compat"],
-      // No "browser" binding here on purpose: staging browser reads stay OFF until the S0 network-block test passes (guard-wrangler-local-bindings.mjs enforces it).
+      // Dated owner exception (ruling of 11 Oct 2026): staging only, production never binds a browser. The guard fails after the expiry date and the line goes when S0 passes.
+      "browser": { "binding": "BROWSER" },
       "observability": {
         "enabled": true,
         "logs": { "enabled": true, "invocation_logs": false },

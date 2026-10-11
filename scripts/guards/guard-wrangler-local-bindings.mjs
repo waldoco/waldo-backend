@@ -68,10 +68,16 @@ for (const [envName, envCfg] of Object.entries(cfg?.env ?? {})) {
   if (!hasLimiter(envCfg)) bad.push(`env.${envName} missing RESPONSIBILITY_RATE_LIMITER (console signup fails closed without it)`);
 }
 
-// 4. The staging browser binding stays OFF in source until the network-side block is proven
-//    (owner decision 2026-10-06, S0 live test). An enabled binding here ships on the next
-//    Workers Builds promote. Turn it on only in the PR that records a passing S0 run.
-if (staging?.browser !== undefined) bad.push('env.staging must not bind a browser until the S0 network-block test passes');
+// 4. The browser binding. Production never binds one. Staging carries it only under the dated owner
+//    exception of 2026-10-11 (S0 network-block test not yet passed): exactly BROWSER, and only until
+//    the expiry below. When S0 passes, drop the binding or move the date in the PR that records it.
+const STAGING_BROWSER_EXCEPTION_EXPIRES = '2026-11-12';
+const today = process.env.GUARD_TODAY ?? new Date().toISOString().slice(0, 10);
+if (cfg?.browser !== undefined) bad.push('top level must not bind a browser (production browser stays off)');
+if (staging?.browser !== undefined) {
+  if (JSON.stringify(staging.browser) !== JSON.stringify({ binding: 'BROWSER' })) bad.push('env.staging browser must be exactly {"binding":"BROWSER"}');
+  if (today >= STAGING_BROWSER_EXCEPTION_EXPIRES) bad.push(`staging browser exception expired on ${STAGING_BROWSER_EXCEPTION_EXPIRES}: record a passing S0 run or ask the owner to renew`);
+}
 
 if (bad.length) {
   process.stderr.write(`guard-wrangler-local-bindings: ${bad.join('; ')}\n`);
