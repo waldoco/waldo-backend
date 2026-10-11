@@ -122,11 +122,15 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
         return user;
       });
       if (!user?.id || user.email?.toLowerCase() !== address) return null;
-      // Sign-in may only resolve an already-bound owner. Empty phone makes the canonical
-      // RPC refuse new provisioning before invite consumption. Signup awaits phone proof.
+      // An existing member resolves first, so an invite they also hold is never spent. Empty phone keeps
+      // owner_for_auth from provisioning; a new member joins only through signup_owner_for_auth, which
+      // rechecks the confirmed Auth email and spends the exact recipient-bound invite in one transaction.
       const phoneE164 = '';
       const codeHash = inviteCode ? await linkCodeHash(inviteCode) : '';
-      return (await rpc('owner_for_auth', `owner.${user.id}.${address}.${phoneE164}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164, p_code_hash: codeHash })) as string | null;
+      const owner = (await rpc('owner_for_auth', `owner.${user.id}.${address}.${phoneE164}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164, p_code_hash: codeHash })) as string | null;
+      if (owner || !codeHash) return owner;
+      const joined = await rpc('signup_owner_for_auth', `signup.owner.${user.id}.${address}.${phoneE164}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164, p_code_hash: codeHash });
+      return typeof joined === 'string' && joined.length > 0 ? joined : null;
     },
     async issueLinkCode(doName) {
       const code = newLinkCode();

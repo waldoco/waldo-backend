@@ -135,10 +135,10 @@ describe('consoleAuth', () => {
 });
 
 it('legacy signup cannot send an unverified phone to the atomic owner creation path', async () => {
-  const fetcher = vi.fn().mockResolvedValueOnce(json({ user: { id: 'new-auth', email: 'new@example.com' } })).mockResolvedValueOnce(json(null));
+  const fetcher = vi.fn().mockResolvedValueOnce(json({ user: { id: 'new-auth', email: 'new@example.com' } })).mockResolvedValueOnce(json(null)).mockResolvedValueOnce(json(null));
   expect(await consoleAuth(env, fetcher as typeof fetch, now)!.verify('new@example.com', '123456', '+14155550100', 'ABCDEFGHJKLMNPQRSTUV')).toBeNull();
-  const payload = JSON.parse(String(fetcher.mock.calls[1]?.[1].body));
-  expect(payload.p_phone).toBe('');
+  expect(fetcher.mock.calls.slice(1).map(([url, init]) => [String(url).split('/').at(-1), JSON.parse(String(init.body)).p_phone]))
+    .toEqual([['owner_for_auth', ''], ['signup_owner_for_auth', '']]);
 });
 
 

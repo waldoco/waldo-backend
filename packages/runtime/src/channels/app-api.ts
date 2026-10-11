@@ -113,8 +113,8 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const gate = await admit(env, auth, request, 'send', email);
     if (gate === 'limited') return fail(429);
     if (gate === 'unavailable') return fail(503);
-    // Unknown addresses get the same answer; sendCode itself only emails invited members.
-    try { await auth.sendCode(email, ''); } catch { return fail(503); }
+    // Unknown addresses get the same answer; sendCode itself only emails members and holders of a matching invite.
+    try { await auth.sendCode(email, typeof body?.invite === 'string' ? body.invite : ''); } catch { return fail(503); }
     return ok({ ok: true });
   }
 
@@ -128,7 +128,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (gate === 'limited') return fail(429);
     if (gate === 'unavailable') return fail(503);
     let doName: string | null;
-    try { doName = await auth.verify(email, code); } catch { return fail(503); }
+    try { doName = await auth.verify(email, code, '', typeof body?.invite === 'string' ? body.invite : ''); } catch { return fail(503); }
     if (!doName) return ok({ state: 'needs_invite' });
     let credential: string | null;
     try { credential = await auth.ownerAppCredential(doName); } catch { credential = null; }
