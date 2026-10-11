@@ -1,0 +1,25 @@
+--- a/packages/runtime/src/channels/telegram-owner-do.ts
++++ b/packages/runtime/src/channels/telegram-owner-do.ts
+@@ -1700,9 +1700,10 @@
+         const origin = await storage.get<string>('origin');
+         return origin && /^https:\/\/[^/?#]+$/.test(origin) ? `${origin}${CONSOLE_PATH}/waiting` : null;
+       },
+-      browserSubmit: (proposal, approval) => proposal.continuation ? browserApproval.submit(proposal, approval) : executeBrowserSubmit(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, proposal),
+-      browserReceiptVerified: browserApproval.receiptVerified,
+-      browserDeny: browserApproval.deny,
++      browserSubmit: (proposal, approval) => proposal.nativeUpload ? this.ownerBrowser.submitUpload(proposal, approval) : proposal.continuation ? browserApproval.submit(proposal, approval) : executeBrowserSubmit(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, proposal),
++      browserReconcile: (proposal, approval) => proposal.nativeUpload ? this.ownerBrowser.reconcileUpload(proposal, approval) : Promise.resolve({status:'uncertain' as const,message:'Check the existing browser result before retrying.'}),
++      browserReceiptVerified: (proposal, receipt) => proposal.nativeUpload ? this.ownerBrowser.uploadReceiptVerified(proposal, receipt) : browserApproval.receiptVerified(proposal, receipt),
++      browserDeny: proposal => proposal.nativeUpload ? this.ownerBrowser.denyUpload(proposal) : browserApproval.deny(proposal),
+       // Approved sends go out this Waldo's own channel chat, verbatim, through the same routed
+       // call the cards use. A proposal naming another channel fails honestly instead of
+       // rerouting silently.
+@@ -1834,7 +1835,7 @@
+         const ownerKey = await currentTaskOwnerKey(); await context.assertTaskSourceCurrent();
+         browserSources.capture(payload, ownerKey);
+         const id = await desk.proposeBrowserSubmit(payload); await context.assertTaskSourceCurrent(); return id;
+-      }, stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now() }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
++      }, stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal), desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now() }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
+       (opt) => opt ? openLoopsPrompt(loops, clock.timezone, opt.loopsRoom) : standingOrdersPrompt(orders), runs, undefined,
+       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
+       (trace) => healthContext.latest(trace),

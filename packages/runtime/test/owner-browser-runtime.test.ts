@@ -1,3 +1,4 @@
+import { llmToolSchema, toolParameters } from '@waldo/contracts';
 import { expect, it, vi } from 'vitest';
 import { browserTaskHandler } from '../src/tools/live/browser-task';
 import { ownerBrowserRuntime } from '../src/channels/owner-browser-runtime';
@@ -61,6 +62,8 @@ it('late old-run cleanup preserves the newer session; unlink reconstruction clea
  const runtime=ownerBrowserRuntime({env,storage,actualDoId:'fixture-physical',activeScope:()=>scope});
  const called=vi.fn(async()=>({ok:true as const,data:{fixture:true},source_taint:'external' as const}));
  const fallback={name:'browse_act',handle:called} as never;
+ const uploadHandler=runtime.act(fallback,async()=> 'fixture-approval');
+ expect(llmToolSchema.safeParse({name:uploadHandler.name,description:uploadHandler.description,parameters:toolParameters(uploadHandler.schema)}).success).toBe(true);
  const handler=runtime.act(fallback),ctx={authenticatedUserId:'fixture-owner',runScope:scope} as never;
  const args={url:'https://fixture.example/form',task:'Inspect',max_actions:1,command:{operation:'inspect' as const}};
  expect(await handler.handle(args,ctx)).toMatchObject({ok:true,data:{fixture:true}});expect(called).toHaveBeenCalledTimes(1);

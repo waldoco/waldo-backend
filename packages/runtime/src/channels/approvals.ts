@@ -1,4 +1,5 @@
 import { EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
+import type {BrowserUploadBinding} from './browser-upload-binding';
 import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
 import { googleTaskProposalSchema, proposeGoogleTaskChangeArgsSchema, type BrowserTaskContinuation, type ProposeCalendarChangeArgs, type ProposeGoogleTaskChangeArgs } from '@waldo/contracts';
@@ -31,6 +32,7 @@ export type BrowserSubmitProposal = Readonly<{
   action: Readonly<{ selector: string; description: string; method?: string; arguments?: string[] }>;
   binding: Readonly<Record<string, string>>;
   steps: readonly string[];
+  nativeUpload?:Readonly<{taskId:string;binding:BrowserUploadBinding}>;
   continuation?: BrowserTaskContinuation;
   request?: Readonly<{ url: string; method: 'POST'; fields: readonly string[] }>;
   approvalExpiresAt?: number;
