@@ -76,7 +76,7 @@ Ranking: what blocks the experience first, then the biggest visible lift for the
 | 14 | Artifacts library | Muse | `artifact` part exists, not drawn | Later | L4, L2 | |
 | 15 | Rate any message (thumbs up or down) | The website's "Thumbs" panel, labelled "Working today"; Claude, ChatGPT | Telegram update cards only (`fb:` callback, `telegram-owner-do.ts:1462-1465`; `update-cards.ts:54-59`) | An additive app action, and a store the rating feeds. A rating changes style and which messages arrive, never truth or authority (promise ledger). | contracts, L2, L4 | Additive |
 | 16 | Context Waldo pins at the top of a chat | The website's "Pinned by Waldo" chips: a draft, a call time, a renewal amount | Nothing | A read-side field on a chat's history that lists what Waldo pinned, each item from a real source (the ADR-0077 pins). The model picks what to pin. | contracts, L2, L4 | ADR-0077 subset review; real values only |
-| 17 | The first message of the day is not held behind background work | Claude and ChatGPT start answering at once | Draft PR #1061 traced slow console actions in tests to the owner DO's `serial` queue: the first request on a cold DO waits for `setup().ready`, which queues the boot `planToday`. #1061 fixes only the test pool. Its production follow-up [inference]: the first interactive request of an owner-local day waits one full model call (about 6 s per the latency baseline), and during an OpenAI 5xx incident the SDK's retries stack inside `serial`. `migrateCoreFiles` is queued the same way. | Stop boot work from holding the owner's first request without breaking the ordering `serial` protects: a forget or a pin must not land between a model call's memory check and its apply (two `dashboard-controls-owner` tests depend on it). | L2 | Measure on staging before and after |
+| 17 | The first message of the day is not held behind background work | Claude and ChatGPT start answering at once | #1061 (merged as `c3b17f6a`) traced slow console actions in tests to the owner DO's `serial` queue: the first request on a cold DO waits for `setup().ready`, which queues the boot `planToday`. #1061 fixes only the test pool. Its production follow-up [inference]: the first interactive request of an owner-local day waits one full model call (about 6 s per the latency baseline), and during an OpenAI 5xx incident the SDK's retries stack inside `serial`. `migrateCoreFiles` is queued the same way. | Stop boot work from holding the owner's first request without breaking the ordering `serial` protects: a forget or a pin must not land between a model call's memory check and its apply (two `dashboard-controls-owner` tests depend on it). | L2 | Measure on staging before and after |
 
 Rows 15 and 16 were added from the website scan, and row 17 from #1061; they are not ranked.
 
@@ -405,18 +405,22 @@ Still open:
   - Owner-DO waves: W1 P3a, started on the owner's go; W2 S7 and the device routes; W3 the threads port, after the C1 contract; W4 steps, ratings and the "Connect Google" fix.
   - Session refresh runs alongside the waves, outside the DO.
 - **Constellations** is built on L3's local branch `feat/app-constellation-view` (`e6761e42`), not pushed. Its PR and merge need the owner's go in L3's session.
-- **#1061** (draft, test pool only). CI shard 3/4 failed one test, `trusted-run-loop.test.ts:1438`, "settles a pending 'provider_plan' receipt before recomposition can issue the next tool": expected `context:materials_unavailable`, got `llm_observe:effect_receipt_unavailable`.
+- **#1061: merged into `beta-mvp` as `c3b17f6a`** on 11 Oct, with the owner's yes in cf002a's session. It changes the test harness only, so nothing was deployed. A last commit (`877174b6`) routed `console-signout-everywhere.test.ts` model calls to the pool stub; its mock had thrown on unknown hosts, and the SDK retried that for about 2.6 s per test. Earlier, CI shard 3/4 failed one test, `trusted-run-loop.test.ts:1438`, "settles a pending 'provider_plan' receipt before recomposition can issue the next tool": expected `context:materials_unavailable`, got `llm_observe:effect_receipt_unavailable`.
   - **Classified as flaky and pre-existing, not caused by #1061** (cf002a's session; I re-checked the first two points):
     - The test pool runs the run loop in fake mode, which builds `FakeRunLoopGateway` and no network adapter (`run-loop/adapters.ts:137-151`). #1061's egress stub is never on this path. My first guess, an unmapped host answered with a retried 502, was wrong.
     - `beta-mvp` run 38077476494 (`1757beb2`, 10 Oct) failed a sibling crash-and-recover case in the same file at 2,546 ms ("promise resolved false instead of rejecting"), without #1061.
     - cf002a also reports 0 outbound requests across 3 full runs of the file at #1061's head, and 6/6 and 5/5 local passes.
   - The pattern: different crash-and-recover cases fail at about 2.5 s, which matches the platform-alarm race the test's own comment and #879 describe [inference].
-  - Next, per the test-failure rule: quarantine and ticket the race with an owner and a removal date. Do not rerun until green. A one-off CI rerun of #1061, and its merge, are the owner's call in cf002a's session.
+  - **Resolved by a fix, not a quarantine.** The owner chose the fix after cf002a found a deterministic cause.
+    - **Cause:** workerd retries a crashed alarm, and that retry resumes the run before the test's own recovery. The "physicalCalls 2" failure was the second planned tool, not a duplicate effect.
+    - **Fix:** draft #1072 clears the pending alarm when an injected crash fires. cf002a watched the new check fail without the fix and pass with it, and the file passed 72/72 three times locally.
+    - **To merge:** CI, then the owner's yes.
+    - **Not covered:** the first-alarm race (`1757beb2`, "resolved false") is still open.
 - **#1062 (this docs PR), shard 3/4 at `a03ada3b`** (run 38160996469):
   - **The failure:** in `trusted-run-loop.test.ts`, "runs a trusted scheduled brief through V2 provenance, two governed tools, and the existing outbox" expected true and got false, at 1,209 ms.
   - **Classified as pre-existing and flaky.** A docs-only diff can't cause it. It is a third distinct case failing in the same file.
   - At 1,209 ms it doesn't fit the ~2.5 s pattern, so it may be a different race.
-  - **Next:** it joins the quarantine-ticket ask, which is the owner's call. A green run on a later push is not a fix.
+  - **Next:** nobody has yet shown whether #1072 covers this case. If it fails again after #1072 merges, trace it as its own race. A green run on a later push is not a fix.
 
 ## Owner decisions
 
