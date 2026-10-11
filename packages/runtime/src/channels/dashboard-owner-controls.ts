@@ -98,8 +98,8 @@ export async function ownerControlsAction(form: FormData, deps: OwnerControlsDep
   // Never recreate owner storage just to retain a success receipt after deleteAll.
   try {
     await deps.eraseOwnerStorage();
-    return reply({ receipt: { state: 'recorded', signed_out: true, message: 'Account removal was recorded and this console is signed out. The owner directory and local owner storage were removed; this receipt does not verify that every retained copy or file byte has been purged.' }, duplicate: false });
+    return reply({ receipt: { state: 'recorded', signed_out: true, message: 'Account removal was recorded and you are signed out. The owner directory and local owner storage were removed; this receipt does not verify that every retained copy or file byte has been purged.' }, duplicate: false });
   } catch {
-    return reply({ receipt: { state: 'incomplete', signed_out: true, message: 'Owner-directory removal was recorded, but local owner-storage removal could not be confirmed. This console is signed out. Retained copies or file bytes are not certified purged.' }, duplicate: false }, 503);
+    return reply({ receipt: { state: 'incomplete', signed_out: true, message: 'Owner-directory removal was recorded, but local owner-storage removal could not be confirmed. You are signed out. Retained copies or file bytes are not certified purged.' }, duplicate: false }, 503);
   }
 }
