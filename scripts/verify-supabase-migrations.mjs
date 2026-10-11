@@ -51,7 +51,10 @@ const expectedMigrations = [
   '20261010060000_owner_runtime_authority.sql',
   '20261011000000_health_plane.sql',
   '20261011010000_delete_owner_health_context.sql',
-  '20261011040000_health_retention_derived.sql',
+  '20261011020000_health_series.sql',
+  '20261011030000_health_context_write_fence.sql',
+  '20261011200000_waldo_connect_channel_app.sql',
+  '20261011210000_health_retention_derived.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);
