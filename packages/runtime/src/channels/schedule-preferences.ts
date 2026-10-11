@@ -5,6 +5,7 @@ import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { TOOL_PERMISSIONS, triggerTypeSchema } from '@waldo/contracts';
 import { DAY_CARDS } from '../prompt/day-cards';
 import { applyDayPlan, defaultPlan, type DayPlanBook } from './day-cards';
+import { localIso } from './reminders';
 import { armBriefSweep, BRIEF_SWEEP_ID } from './event-briefs';
 import { armNightly, NIGHTLY_ID } from './episodes';
 import { armHeartbeat, HEARTBEAT_ID } from './heartbeat';
@@ -49,12 +50,13 @@ export type SchedulePreferenceBook = ReturnType<typeof schedulePreferences>;
 export const schedulePreferencesLine = (prefs: SchedulePreferences): string =>
   `Scheduled behaviors (owner can change any with set_schedule_preference): ${SCHEDULE_KINDS.map((kind) => `${kind} (${SCHEDULE_LABELS[kind]}) ${prefs[kind] ? 'on' : 'off'}`).join('; ')}`;
 
-export type ScheduleApplyContext = Readonly<{ scheduler: Scheduler; plans: DayPlanBook; timezone: string; now: number }>;
+// `armable` says whether a kind may be armed on this surface right now; a kind that is on but not armable is left as is.
+export type ScheduleApplyContext = Readonly<{ scheduler: Scheduler; plans: DayPlanBook; timezone: string; now: number; armable?: (kind: ScheduleKind) => boolean }>;
 
 // Bring the scheduler in line with the preferences: off cancels the entries, on arms them again.
 export const applySchedulePreferences = async (prefs: SchedulePreferences, ctx: ScheduleApplyContext, only?: ScheduleKind): Promise<void> => {
   const { scheduler, plans, timezone, now } = ctx;
-  const want = (kind: ScheduleKind) => only === undefined || only === kind;
+  const want = (kind: ScheduleKind) => (only === undefined || only === kind) && (!prefs[kind] || (ctx.armable?.(kind) ?? true));
   if (want('nightly')) { if (prefs.nightly) await armNightly(scheduler, timezone, now); else if (scheduler.read(NIGHTLY_ID)) await scheduler.cancel(NIGHTLY_ID); }
   if (want('heartbeat')) { if (prefs.heartbeat) await armHeartbeat(scheduler, now); else if (scheduler.read(HEARTBEAT_ID)) await scheduler.cancel(HEARTBEAT_ID); }
   if (want('event_briefs')) { if (prefs.event_briefs) await armBriefSweep(scheduler, now); else if (scheduler.read(BRIEF_SWEEP_ID)) await scheduler.cancel(BRIEF_SWEEP_ID); }
@@ -62,6 +64,12 @@ export const applySchedulePreferences = async (prefs: SchedulePreferences, ctx: 
     if (prefs.daily_brief) await applyDayPlan(scheduler, plans, timezone, now, defaultPlan(DAY_CARDS), true, true);
     else for (const card of DAY_CARDS) if (scheduler.read(card.id)) await scheduler.cancel(card.id);
   }
+};
+
+// Re-plan today's unsent cards after the zone changes: keep the times already chosen for today, move them to the new zone, keep pins.
+export const replanDayCards = async (scheduler: Scheduler, plans: DayPlanBook, timezone: string, now: number): Promise<void> => {
+  const rows = plans.read(localIso(now, timezone).slice(0, 10));
+  await applyDayPlan(scheduler, plans, timezone, now, rows.length ? rows.map(({ card, time, reason }) => ({ card, time, reason })) : defaultPlan(DAY_CARDS));
 };
 
 // Cancel-only pass for kinds that are off. Run at startup: a stop between saving a preference and cancelling
@@ -86,10 +94,12 @@ const scheduleKindOf = (entry: ScheduleEntry): ScheduleKind | null => {
 
 // Fire-time recheck: read the preference at dispatch, not only when arming. A disabled entry is cleared and
 // does nothing, so no send, no card state and no model call happens for something the owner turned off.
-export const gateScheduleExecutors = (executors: ScheduleExecutors, prefs: SchedulePreferenceBook, scheduler: Scheduler): ScheduleExecutors =>
+// A held kind is skipped without cancelling: the occurrence passes and a recurring entry stays armed for its next one.
+export const gateScheduleExecutors = (executors: ScheduleExecutors, prefs: SchedulePreferenceBook, scheduler: Scheduler, held: (kind: ScheduleKind) => boolean = () => false): ScheduleExecutors =>
   Object.fromEntries(Object.entries(executors).map(([kind, executor]) => [kind, async (entry: ScheduleEntry) => {
     const owned = scheduleKindOf(entry);
     if (owned !== null && !prefs.enabled(owned)) { await scheduler.cancel(entry.id); return; }
+    if (owned !== null && held(owned)) return;
     return executor!(entry);
   }])) as ScheduleExecutors;
 
