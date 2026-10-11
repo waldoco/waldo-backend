@@ -152,7 +152,7 @@ L2 report (21:40Z) **[unverified until reviewed]**:
 
 Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). Nothing executed.
 
-- **1. Composed context may not reach the reply model** [read, not executed; contradicts the brief; needs a falsifying test before work is assigned]:
+- **1. Tool results from earlier turns reach the reply model on neither path** (the claim is about prior-turn tool results, not all composed context) [read, not executed; contradicts the brief; a falsifying experiment was launched at 22:15Z]:
   - App turns build context with only a `health` source (`telegram-owner-do.ts:2137`), so the tool-result list is empty (`context-composer/owner-turn.ts:71`).
   - On Telegram the composed REASONS prompt goes in as `request.system` (`joined-path.ts:73`), but the reply builds its own system prompt (`owner-turn.ts:461-489`).
   - Proposed test: write one ledger row, run one app turn and one Telegram turn, and assert the reply instructions contain it.
