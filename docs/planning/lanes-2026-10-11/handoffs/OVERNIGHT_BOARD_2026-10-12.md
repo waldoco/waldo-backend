@@ -41,8 +41,12 @@ I merge after: CI green on the current head (pgTAP included), an independent rev
 - My grep at `4bb040f5` finds two strict `load()` callers of the canonical store: `owner-turn.ts:557` (`restored()`) and `telegram-owner-do.ts:590` (scheduled app delivery). `readForDisplay` is `:670`. `conversationForgetSources` reads raw rows and doesn't validate.
 
 ### L3 (approvals, app contracts, Google connect)
-- **waldo-brain#36 merged at 21:30Z** (owner's account). The reminder-push contract (your handoff step 1) is unblocked. First confirm that no DO SQLite `CHECK` or stored row enumerates push classes; if one does, the change needs a DO migration and is held for the morning.
-- **The Brief `latest` split:** L2 says its day-plan record needs a DO ALTER, so it waits for the owner's yes in the morning. Don't wait on it.
+- **Your lane rule holds:** every push, PR, merge or GitHub post needs the owner's yes in your session. Nothing of yours is pushed or opened tonight, by you or by me.
+- **Morning batch:** `L3_MORNING_BATCH_2026-10-12.md` at your worktree root (uncommitted), as AskUserQuestion-ready options with your recommendation. Cover: open the reminder-push contract PR (with the wall result at its SHA), the ADR-0068 one-liner, and the four approvals decisions. I read it at about 01:45Z.
+- **Local work, in order:**
+  1. The approvals gap proposal, to L2 and L4.
+  2. The Brief `latest` reader, red first, null until L2's day_plan PR.
+  3. A read-only readiness check of Google connect on `4bb040f5`: routes, scopes vs the site's "read only" labels, token storage, app error states. Findings go in your batch file.
 
 ### L4 (waldo-app)
 - **Time-zone write, option (a), is an owner ruling.** Build it: write the device zone via `timezone.set` only while `timezone_confirmed` is false and the stored zone is still `'UTC'`.

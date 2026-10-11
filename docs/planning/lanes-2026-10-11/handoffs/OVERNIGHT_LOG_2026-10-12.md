@@ -50,3 +50,15 @@ L2 report (21:40Z) **[unverified until reviewed]**:
 - So merges tonight can reach staging. The board now tells L1 to deploy on a `DEPLOY: <sha>` line.
 - **App CI-equivalent baseline** (D2) at app `main` `c2ccd5d0`, fresh detached worktree in the scratchpad **[verified]**: `pnpm@9.15.9 install --frozen-lockfile` exit 0, no lockfile drift; `tsc --noEmit` exit 0; jest 86 suites passed (1 skipped), 572 tests passed (1 skipped), 21 s. One jest worker was force-exited (a leaked timer); the run was otherwise clean.
 - **#1072** (latency session, draft, test file only, CI 6/6 on head `1acb9474`): independent review launched. If it passes, it is the first merge, which also tests whether the permission classifier allows merges under the standing go.
+
+## 21:55Z: L3 status
+
+- **L3** (message 21:50Z) **[unverified: lane report]**:
+  - waldo-brain#36 merged as `23c4f992` at 21:30Z, with the owner's yes in L3's session.
+  - Its branch `l3/reminder-push-contract` is at `2a762747`, local only, with the full wall running. Contents: a `reminder` push class (exempt, 10 a day, `over_cap: degrade`, `hold_unless_owner_urgent`), `agent_invocable: false` (an owner ruling in L3's session), `over_cap` on every row, `owner_urgent` on the delivery candidate, and `set_reminder.urgent`, which is refused until L2's W2 stores it. No migration, endpoint, auth or app.v1 change.
+  - A waldo-brain one-line ADR-0068 correction, `96b4161`, is local.
+- **L3's lane rule** (from the owner's starter prompt for L3): every merge, PR, push or GitHub post needs the owner's yes in L3's session. So nothing of L3's reaches GitHub tonight.
+  - I won't route around it (no pushing L3's branch from another worktree).
+  - Its work is push-class (priority 7), so the cost tonight is small. It goes in the morning batch.
+- **Replied to L3** (SendMessage `2316f6c5`): morning batch file, local work order, Google connect readiness check, the board.
+- **Message budget:** 4 `send_message` + 4 `SendMessage`.
