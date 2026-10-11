@@ -7,9 +7,12 @@
 - Standing ruling (10 Oct): every promise on heywaldo.in ships, including the "Coming next" and "Planned" panels. The website is therefore the acceptance bar for the chat, alongside Claude and ChatGPT parity.
 
 **Pins:**
-- backend `beta-mvp` `15134581`: #1060 (sign out everywhere also revokes app and email sign-ins) merged at 15:32Z on 11 Oct, then #1059 (an optional latest delivery on day cards). Source rows below were read at `e5fd7200`; neither PR touches them;
-- staging `15134581` (Worker version `30b43ff7`), deployed by L1 on the owner's yes in L1's session. The audit lane (17:39Z) and L4 each read `/healthz` as `15134581`;
-- waldo-app `main` `18d5d0c3`: #62–#66 merged at about 15:00Z on 11 Oct, #67 (the C0 review fixes) at 15:44Z, then #68 (why the agent could not be reached) and #69 (the chat follows the design system). The checks below ran at `7bbf3135`. Its tree is identical to #67's head `ce590e4b`, where `tsc --noEmit` exits 0 and jest passes 551 tests in 82 suites (1 suite and 1 test skipped). Rows below that cite app line numbers were read at `9937d456`. Nothing has run on a device;
+- backend `beta-mvp` `718d3485` (about 18:15Z on 11 Oct):
+  - #1065 (`timezone_confirmed`, Constellations), #1064 (account deletion) and #1067 (the C1 contract) merged after `15134581`;
+  - `15134581` itself had #1060 (sign out everywhere also revokes app and email sign-ins), merged at 15:32Z, then #1059 (an optional latest delivery on day cards);
+  - source rows below were read at `e5fd7200`. #1067 has since changed `contracts/src/app/*`, so line numbers there may have moved;
+- staging `15134581` (Worker version `30b43ff7`), deployed by L1 on the owner's yes in L1's session. The audit lane (17:39Z) and L4 each read `/healthz` as `15134581`. L1 later applied #1064's migration to hosted staging without a Worker deploy;
+- waldo-app `main` `36194585`, after #70–#73: L4's audit, the `inset` fix, a theme generated from a pinned `tokens.json`, and the `controls.ts` re-pin. Before that, `18d5d0c3`: #62–#66 merged at about 15:00Z on 11 Oct, #67 (the C0 review fixes) at 15:44Z, then #68 (why the agent could not be reached) and #69 (the chat follows the design system). The checks below ran at `7bbf3135`. Its tree is identical to #67's head `ce590e4b`, where `tsc --noEmit` exits 0 and jest passes 551 tests in 82 suites (1 suite and 1 test skipped). Rows below that cite app line numbers were read at `9937d456`. Nothing has run on a device;
 - website `Pin4sf/waldo-landing` `main` `830bfc2` (9 Oct), the pin the promise ledger also uses. I have not checked that heywaldo.in serves this commit.
 
 Tags:
@@ -175,7 +178,7 @@ The owner's Waldo design system is a claude.ai artifact, visible to the people i
 - 67 React components (`window.Waldo`) and eight showcase screens;
 - 19 sections, from colour to voice.
 
-I read it at version `1791721337-e9e9`.
+I read it at version `1791721337-e9e9`. It is now at `1791742177-7dce`, which adds decision 52 (Telegram is a test surface) and decision 53 (a reminder the owner set may push).
 
 **How an agent reads it** (the Artifact tool's `read` action with a `path`):
 1. `project/README.md`: the principles, the rules agents break most, and the card index.
@@ -208,23 +211,23 @@ The React components are the reference for the web and Kennel. The iPhone app re
   - the Brief never pushes; it waits in the app;
   - no health values in a push, and no badges;
   - permission is asked after the first value, as provisional authorisation.
-  - Its table does not say whether a reminder the owner set may push. That is a question for the owner.
+  - A reminder the owner set may push, outside the three-a-day budget (decision 53, an assumption for ratification).
 - **Badges** (B14): never. A thread shows an ink unread dot and, when Waldo re-entered it, "Waldo added a note at 07:14".
 - **Dark mode** (B19): light ships. Settings shows Dark as "Coming soon" at launch, and a `contrast` theme serves Increase Contrast.
 - **Session delete copy** (decision 2): `ThreadRow`'s confirmation says "The conversation and its messages go." and "What Waldo did in it stays in Home." Decision 2 adds what Waldo learned, so the copy needs both.
 - **Words:** never "Loading…", "Thinking…", "Oops", "Something went wrong" or an exclamation mark. Receipts are in the past tense, text is in sentence case, and spelling is en-GB.
 
-**Where the app differs today** [verified at app `7bbf3135`]:
+**Where the app differed at `7bbf3135`** [verified then]. #69 has since fixed the dots and the bubble; [APP_DESIGN_SYSTEM_GAPS.md](APP_DESIGN_SYSTEM_GAPS.md) tracks the rest.
 - It uses `nativewind/preset`, with none of the system's semantic tokens (`bg-canvas`, `bg-inset`, `text-secondary`) and no copied `exports/`.
 - The working state shows animated `TypingDots` (`ChatPane.tsx:500`). The system allows one specific line and no dots.
 - The person's bubble is ink (`userBubble`); the system draws it on `bg-inset`.
 - The theme store offers a working dark override; the system ships light, with Dark "Coming soon".
 - Already matching: Waldo's turn is unboxed, with the mark beside it (`assistantTurn`).
 
-**To settle with the owner:**
-- `13-notifications-and-channels.md` calls Telegram "the V1 fallback and demonstration channel". The owner's 10 Oct ruling made Telegram test-only.
-- The website's "Pinned by Waldo" chips (#16) have no component. `ContextCard` is the pin the person brings, not one Waldo picks.
-- `15-platforms.md` describes a `tooling/build.mjs` export pipeline that the artifact does not hold. Where it lives is unverified.
+**Settled since, and still open:**
+- **Settled: Telegram.** The system calls it a test surface everywhere (decision 52).
+- **Settled: the export pipeline.** It is on waldo-brain branch `claude/dreamy-archimedes-1meouj`, now on PR #35 to `main`.
+- **Open: the website's "Pinned by Waldo" chips (#16).** They have no component. `ContextCard` is the pin the person brings, not one Waldo picks.
 
 ## Extensions, not replacements
 
@@ -375,10 +378,20 @@ Still open:
 - **Sessions:** create a session and send in it; Waldo replies. Kill the app and reopen it: the session and its messages come back from the server. Telegram does not show it. The console, which has no threads today, comes later.
 - **Approval card:** ask Waldo to email someone. The card in the chat shows the exact recipients and body. Not now: nothing is sent. Do it: one send, and the receipt shows in the chat.
 - **VoiceOver:** with VoiceOver on, the approval card's details and buttons in the chat can be reached, and so can "Share or copy".
-- **Proactive:** with the app closed, a Needs You with a near expiry arrives as a push: title "Waldo", the exact action, its expiry, and no health values. Tapping it opens that request. The Brief is waiting on Home and did not push. Whether the Brief also pushes waits on the owner: the website promises a 6:30 notification (register question 8).
+- **Proactive:** with the app closed, a Needs You with a near expiry arrives as a push: title "Waldo", the exact action, its expiry, and no health values. Tapping it opens that request. The Brief is waiting on Home and did not push. The website's 6:30 notification, "the one thing that needs your yes", waits on Suyash and the owner (the register's open items).
 - **Progress:** a calendar question shows a real "checking your calendar" step. When the turn closes, one line names the sources read. Both match the trace.
 
-## Coordination (11 Oct, updated about 16:40Z)
+## Coordination (11 Oct, updated about 18:15Z)
+
+- **Evening state:**
+  - **Merged on `beta-mvp`:**
+    - #1065 (`timezone_confirmed`, Constellations);
+    - #1064 (account deletion; its migration is applied to hosted staging);
+    - #1067 (the C1 contract).
+  - **Staging's Worker** is still `15134581`.
+  - **Open:** #1068 (L2's 503 diagnostic) and #1066 (P3a). L2 proposes the diagnostic first.
+  - **App:** #72 (the generated theme) and #73 (the `controls.ts` re-pin) are merged.
+  - **The design system's source** is on waldo-brain #35.
 
 - **One writer for `telegram-owner-do.ts` per wave.** Threads, the cancel routes, progress steps, arming and the row 17 fix all touch it. Merge order for each C1 item: L3's contract PR, then L4 pins the contract hash, then L2's runtime PR, then L4's UI PR. The fallback rule (in the baseline checklist) lands before any new part producer.
 - **#1060 and #1059** are merged and not deployed. L1 is the only staging deployer, and that deploy needs its own go.
@@ -399,6 +412,11 @@ Still open:
     - cf002a also reports 0 outbound requests across 3 full runs of the file at #1061's head, and 6/6 and 5/5 local passes.
   - The pattern: different crash-and-recover cases fail at about 2.5 s, which matches the platform-alarm race the test's own comment and #879 describe [inference].
   - Next, per the test-failure rule: quarantine and ticket the race with an owner and a removal date. Do not rerun until green. A one-off CI rerun of #1061, and its merge, are the owner's call in cf002a's session.
+- **#1062 (this docs PR), shard 3/4 at `a03ada3b`** (run 38160996469):
+  - **The failure:** in `trusted-run-loop.test.ts`, "runs a trusted scheduled brief through V2 provenance, two governed tools, and the existing outbox" expected true and got false, at 1,209 ms.
+  - **Classified as pre-existing and flaky.** A docs-only diff can't cause it. It is a third distinct case failing in the same file.
+  - At 1,209 ms it doesn't fit the ~2.5 s pattern, so it may be a different race.
+  - **Next:** it joins the quarantine-ticket ask, which is the owner's call. A green run on a later push is not a fix.
 
 ## Owner decisions
 
@@ -423,12 +441,12 @@ Still open:
 8. **L2's W2:** S7 and the device routes, plus storing `created_at`. Cancel lands in W3 with the C1 cancel route.
 
 **Owner answers given in L4's session (11 Oct evening, as L4 relayed them):**
-- Keep "Patrol" and "Spots".
-- L4 may generate the theme from a pinned `tokens.json`.
+- Keep "Patrol" and "Spots". The design system is not updated for now; the owner is taking the conflict to Suyash.
+- L4 may generate the theme from a pinned `tokens.json`. #72 does, and is merged.
 - L4's 24-item backend ask list and the main-chat 503 are posted on #116.
-- The app writes the device zone once at sign-in when `timezone_confirmed` is exactly false.
+- The app writes the device zone once at sign-in when `timezone_confirmed` is exactly false. L2 has since withdrawn its yes on this write; see Open.
 - #70 and #71 are merged.
-- **Before the UX handoff,** verify everything against this plan, the design system, the website promises and the health endpoints. The UX person is named "Yash" in L4's relay; earlier plans name Suyash.
+- **Before the UX handoff,** verify everything against this plan, the design system, the website promises and the health endpoints. The UX person is Suyash (owner, 11 Oct).
 
 **Handoff readiness, proposed:**
 - **L4:** the golden checks above, on a device or the Simulator, with the main-chat 503 fixed first. Close or waive each design-system register row.
@@ -438,7 +456,11 @@ Still open:
 
 **Open:**
 4. **Go for the live checks and the device run** in L4's session. The owner gave L4 the go; the run is Simulator-only and blocked by the main-chat 503.
-9. **Whether a reminder the owner set may push.** The design system's push table is silent. Recommendation: yes, at the time the owner chose, held by quiet hours, with no health values, and the row added to the design system's table.
-10. **The register's owner questions:** the token pipeline, the dock labels and side menu, the three scores' colours, dark mode at launch, deny against `skip`, and renaming Patrol, Spots and Fetch.
+9. **Reminders: decided.** A reminder the owner set may push (design-system decision 53).
+10. **The register's owner questions: answered** at about 17:50Z (the register's "Owner answers"). Still open:
+    - the morning notification;
+    - Patrol, Spots and Fetch, which go to Suyash.
+11. **The sign-in time-zone write.** L2 withdrew its yes and offered three options. L4 holds its write until the owner picks, in L2's session.
+12. **#1062.** The owner merges it on GitHub.
 
-**Approval vocabulary:** the design system settles it for the app (buttons name the effect). Still open for L3 and L4: how the contract's `skip` maps to Not now and Don't do this.
+**Approval vocabulary:** the design system settles it for the app (buttons name the effect). Decided (11 Oct): Not now and Don't do this are separate actions, and L3 maps them in the contract.
