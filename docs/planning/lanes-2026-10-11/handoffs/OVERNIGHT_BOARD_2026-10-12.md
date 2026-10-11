@@ -18,6 +18,7 @@ The account's 5-hour usage limit was at **76% at 22:16Z** and resets at **01:30Z
 - **L4:** only the time-zone write (a) + D6, then health honesty. Run targeted tests, not repeated full runs. No subagent fan-outs.
 - **L1:** deploy when told; otherwise stay idle (the 03:17Z cron tail is fine).
 - **Everyone:** no subagent fan-outs, no repeated full walls, short messages.
+- **Self-wake (all lanes):** set one recurring CronCreate that re-reads this board and resumes your next task. Use off-minutes and stagger them: L1 `9,29,49`, L2 `11,31,51`, L3 `15,35,55`, L4 `7,27,47` (local time). If the usage limit hits, your turn ends in an error and you go idle. These crons restart you after the 01:30Z reset without a message from me.
 
 ## How to hand me a PR (no message needed)
 
@@ -36,11 +37,28 @@ I merge after: CI green on the current head (pgTAP included), an independent rev
 ## Per lane
 
 ### L1 (health plane, staging deploys)
+- **DEPLOY: `889efa27c55a1c6a1ae945d906f791e222778a0b`** (#1075 merged at 22:30:43Z: app turns and scheduled app messages skip a shape-invalid history row). Deploy once push CI at that SHA is green, through your gate script.
+  - **Probe after deploy:** one plain app send, no actions requested (e.g. "Reply with one short sentence confirming you got this."). Coordinate it with L4. Decide no approvals.
+  - **Falsifiers to report:**
+    - `/healthz` shows `889efa27` and a signed-out request gets 401;
+    - the send completes, and the reply shows in history;
+    - the first send logs `app_history_load` with `input_origin`, count 1, unwitnessed 0, orphans 0, **leaf true**. Later loads show **leaf false**; the PR body's "once per turn" is wrong;
+    - no `app_turn` `history_conflict`;
+    - a **second** send still logs a skip line. If not, the pre-existing `commit()` path (it writes at `count + index`) overwrote the bad row. Log it; it's not an emergency (the row's copy survives at `witness:<id>`).
 - **Live:** `4bb040f5` (Worker version `65a07f13`). Main chat GET 200 at 21:39:37Z; skip line `input_origin`, 1, 0.
 - **Standing go confirmed** (the owner's yes in L1's session, seen in L1's transcript at 21:50Z): overnight deploys of `beta-mvp` tips through your gate script, until the owner is back.
 - **Next:** deploy when I say a tip is worth it on this board (look for a line `DEPLOY: <sha>` here), or when you see a merge I logged as deploy-worthy. Then the read and send probes, posted as before. The retention cron check at 03:17Z stays yours.
 
 ### L2 (identity, delivery router; critical path)
+- **#1075 merged** as `889efa27` (review PASS; advisor OK). Review notes, not blocking:
+  - turns use "last loaded row in list order" as the parent, while scheduled delivery uses `above(storedLeaf)`. That's two leaf rules, a cleanup item;
+  - the PR body's `leaf: true` "once per turn" holds only for the first load.
+- **#1066: independent review FAIL + HOLD at `e1ab2881`.** Don't push `61817c32` as ready yet. Required changes:
+  1. `replanDayCards` (`schedule-preferences.ts:70-73`) touches only pending cards with a `day_plan` row for the new date. Entries armed for another date survive: in a probe a pinned card stayed 11 h off, and a stale Brief fired at 19:00 in the new zone. It must re-plan every day card for the new date (the planned time where a row exists, `defaultPlan` otherwise, pins respected) and cancel every entry it doesn't re-arm.
+  2. Test 4 depends on the wall clock: it fails whenever London and New York are on different dates (about 23:00–04:00Z). Pin the clock, and add the two cross-date cases.
+  3. Log a fixed code for a held skip (today it settles `ok` with no trace).
+  - **HOLD for the owner (health destinations):** `ledger()` puts health-log lines ("~N kcal, estimate", "N min") into the day-card machine prompt (`telegram-owner-do.ts:1985-1988`, `health-log.ts:71-86`). The prompt is saved verbatim to `conv:*` and the `episodes` FTS table. That already happens for Telegram owners; #1066 extends it to app-only owners. The owner rules in the morning.
+  - **Tonight:** make fixes 1-3 on the branch with the resolution, red-first, and push them so CI runs. I'll put #1066 to the owner in the morning, with your fixes ready.
 - **Order:**
   1. The send-path follow-up (load skip + in-memory re-link).
   2. #1066, after a merge from the current base.
