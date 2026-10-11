@@ -151,4 +151,6 @@ it('malformed signed session inventory cannot prove absence or revocation', asyn
   }
   const auth=consoleAuth(env,vi.fn().mockResolvedValue(json('true')) as unknown as typeof fetch,now)!;
   await expect(auth.revokeSession('owner',row.session)).rejects.toThrow('session revocation unavailable');
+  const signout=consoleAuth(env,vi.fn(async()=>json('2')) as unknown as typeof fetch,now)!;
+  await expect(signout.signOutAll('owner')).rejects.toThrow('session revocation unavailable');
 });

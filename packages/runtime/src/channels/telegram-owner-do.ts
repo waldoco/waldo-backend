@@ -1,4 +1,5 @@
 import { appControlsRequest } from './app-controls';
+import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { AppInbox, type AppInboxRecord } from './app-inbox';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
@@ -913,6 +914,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     return new Response('ok');
   }
 
+  // App and email sign-ins live in the directory; Telegram-link sign-ins live only here. The directory
+  // goes first so a failed revocation leaves this browser signed in to retry, never signed out alone.
+  private async signOutEverywhere(): Promise<boolean> {
+    const name = this.ctx.storage.kv.get<string>('do_name'), auth = name ? consoleAuth(this.env) : null;
+    if (auth && name) { try { await auth.signOutAll(name); } catch { consoleLog(consoleTrace(), 'console_signout_all', false, 'directory_unconfirmed'); return false; } }
+    await consoleAccess(this.ctx.storage).signOutAll();
+    return true;
+  }
+
   private markUnlinked(): void {
     const { kv } = this.ctx.storage;
     kv.put('telegram_unlinked', true);
@@ -1079,7 +1089,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
                 if(done)this.markUnlinked();return !!done;
               }
               if(action.action==='session.signout'||action.action==='session.signout.all'){
-                if(action.action==='session.signout.all')await access.signOutAll();else await access.signOut(session.token);
+                if(action.action==='session.signout.all'){if(!await this.signOutEverywhere())return {state:'unconfirmed' as const,message:'Signing out everywhere did not finish. This browser is still signed in; try again.'};}
+                else await access.signOut(session.token);
                 return {state:'recorded' as const,message:'Signed out. Sign in again to open your console.',signed_out:true};
               }
               if(action.action.startsWith('approval.')){
@@ -1170,8 +1181,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return response;
       }
       if (action?.action === 'session.signout' || action?.action === 'session.signout.all') {
-        if (action.action === 'session.signout.all') await access.signOutAll();
-        else await access.signOut(session.token);
+        if (action.action === 'session.signout.all') {
+          if (!await this.signOutEverywhere()) return new Response('Signing out everywhere did not finish. This browser is still signed in; go back and try again.', { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
+        } else await access.signOut(session.token);
         return new Response('Signed out. Send /console to Waldo on Telegram to sign in again.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });
       }
       const done = action ? await this.serial(() => act(action)) : false;

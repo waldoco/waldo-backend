@@ -43,7 +43,7 @@ describe('modern account controls', () => {
     expect(html).toContain('Access granted · read unverified');
     expect(html).toContain('Disconnect &lt;script&gt;@test.invalid'); expect(html).not.toContain('<script>');
     expect(html).toContain('Link a Telegram account'); expect(html).not.toContain('Unlink Telegram');
-    expect(html).toContain('Sign out of this browser'); expect(html).not.toContain('Sign out everywhere');
+    expect(html).toContain('Sign out of this browser'); expect(html).toContain('Sign out everywhere');
     expect(html).not.toContain('/console/connections');
     const multiple = renderToStaticMarkup(<ConnectionsControls record={{ ...connections, data: { ...connections.data, telegram: { linked: true, unlinkAvailable: true }, sessions: { count: 2, until: connections.data.sessions.until, items: [{ signed_in: '2026-10-02 06:00', until: '2026-10-02 18:00', current: false }, { signed_in: '2026-10-01 19:30', until: '2026-10-02 07:30', current: true }] } } }} busy={false} onAction={noop}/>);
     expect(multiple).toContain('Unlink Telegram'); expect(multiple).toContain('Sign out everywhere');
