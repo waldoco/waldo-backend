@@ -215,7 +215,7 @@ const CANONICAL_HISTORY_FAULTS: Readonly<Record<string, string>> = {
   'canonical history witness mismatch': 'history_witness', 'canonical history leaf mismatch': 'history_leaf',
 };
 const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read', step: string, error: unknown): void => {
-  const code = error instanceof ClosedRunError ? `${step}_closed` : (error instanceof Error && CANONICAL_HISTORY_FAULTS[error.message]) || step;
+  const code = error instanceof ClosedRunError ? `${step}_closed` : (error instanceof Error && Object.hasOwn(CANONICAL_HISTORY_FAULTS, error.message) ? CANONICAL_HISTORY_FAULTS[error.message]! : step);
   console.error(JSON.stringify({ hop, ok: false, code }));
 };
 const offsetKeyOf = (channel: ChannelKind) => channel === 'whatsapp' ? 'wa_offset' : channel === 'app' ? 'app_offset' : 'offset';
