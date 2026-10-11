@@ -228,3 +228,19 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - After the deploy: the plain probe send with L4, falsifiers (a)–(e), a #116 post.
 - **The auto-mode classifier denied L1's recurring board cron**, whose prompt deploys gated tips from the board. L1 isn't working around it, and nor am I. Later deploys need a message to L1 or the owner in the morning. Tonight none is planned beyond `889efa27` (#1066 is held). Morning batch item: whether the owner wants a standing board-triggered deploy.
 - My sends still deliver: L1's reply arrived after my 10th send. The cap hasn't been hit yet.
+
+## 22:55Z: heartbeat. DEPLOYED `889efa27`; L2 paused
+
+- **DEPLOY** (L1, #116 comment 6114694380): `889efa27` is on staging as Worker version `3f059c04`, deployed at 22:39Z under the owner's standing go in L1's session.
+  - Gate: tip; CI 6/6 incl. pgTAP; diff from `4bb040f5` is 4 runtime files with no wrangler, deploy-script, migration or app-contract change; preflight 55 applied, 0 pending.
+  - Signed-out `/app/v1/session` and `/app/v1/chat/main` give 401. The cron is still registered. Rollback: version `65a07f13`.
+  - **[verified]** `/healthz` = `{"ok":true,"release":"889efa27"}` at 22:54:45Z; push CI on `889efa27` 6/6 SUCCESS + Workers Builds success.
+  - Falsifier (a) holds. Probe (b)–(e) is pending L4's send.
+- **L2** (message 22:58Z) **[unverified: lane report]**:
+  - #1066's resolution is pushed as `83edcc2f` (= `61817c32` + base `889efa27`), CI 6/6.
+  - L2 marked it ready at 22:53Z before reading the review FAIL, and set it back to draft about 22:55Z. Not merged.
+  - Fixes 1-3 come after the reset. The health HOLD stays with the owner.
+  - **#1076** is a new draft, the `defer` desk branch, held: a guarded `ALTER` adds `ledger.deferred_at`. Local wall PASS at `43a8c92d`; 8 of 9 mutations caught (the 9th equivalent). Owner questions are in its body: the ALTER, what "raises it again" means, and whether Telegram's "Not now" should change.
+  - L2's self-wake cron was accepted (minutes 11/31/51 local, from 01:41Z). L2 is paused until the reset.
+- **App #78** is unchanged at `cb0ad501`.
+- **Correction to the 22:37Z entry:** L1's reply arriving says nothing about my send cap. My 10 sends all delivered; an 11th is untested.
