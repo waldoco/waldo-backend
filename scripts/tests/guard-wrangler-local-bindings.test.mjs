@@ -61,3 +61,17 @@ test('env.s0 must not exist in the main config', () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /env\.s0 must not exist/);
 });
+
+test('an existing S0 config that does not parse fails the guard', () => {
+  for (const body of ['{ not json', '{ "name": "waldo-s0-staging", "vars": { "u": "https://x.example/a" } "browser": {} }']) {
+    const result = run({ 'wrangler.s0.jsonc': body });
+    assert.equal(result.status, 1, body);
+    assert.match(result.stderr, /wrangler\.s0\.jsonc must parse/);
+  }
+});
+
+test('a URL value in the S0 config is read whole, so its shape is still checked', () => {
+  const result = run({ 'wrangler.s0.jsonc': s0Config({ vars: { WALDO_ENVIRONMENT: 'staging', CALLBACK: 'https://x.example/a' }, d1_databases: [] }) });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /must not set d1_databases/);
+});

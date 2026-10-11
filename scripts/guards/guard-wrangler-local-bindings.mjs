@@ -75,7 +75,14 @@ if (staging?.browser !== undefined) bad.push('env.staging must not bind a browse
 
 // The throwaway S0 worker has its own config because named envs inherit the dashboard assets.
 // It may bind only a browser and carries no owner state. A recorded S0 result never relaxes rule 4.
-const s0Cfg = (() => { try { return JSON.parse(readFileSync(path.replace(/wrangler\.jsonc$/, 'wrangler.s0.jsonc'), 'utf8').replace(/\/\/[^\n]*/g, '').replace(/,(\s*[}\]])/g, '$1')); } catch { return undefined; } })();
+// Only a missing file skips the shape checks; a file that exists but does not parse is a failure.
+// Comments are stripped line-wise so a URL value is never mistaken for one.
+let s0Cfg;
+try {
+  const s0Raw = readFileSync(path.replace(/wrangler\.jsonc$/, 'wrangler.s0.jsonc'), 'utf8');
+  try { s0Cfg = JSON.parse(s0Raw.replace(/^\s*\/\/.*$/gm, '').replace(/,(\s*[}\]])/g, '$1')); }
+  catch { bad.push('wrangler.s0.jsonc must parse'); }
+} catch (error) { if (error?.code !== 'ENOENT') throw error; }
 if (cfg?.env?.s0) bad.push('env.s0 must not exist in wrangler.jsonc: use wrangler.s0.jsonc (named envs inherit assets)');
 if (s0Cfg) {
   if (s0Cfg.name !== 'waldo-s0-staging') bad.push('wrangler.s0.jsonc name must be waldo-s0-staging');
