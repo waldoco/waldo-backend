@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appCodeRequestSchema, appErrorCodeV1Schema, appHistoryResultV1Schema, appMessageV1Schema, appProblemV1Schema, appVerifyRequestV1Schema } from './core';
+import { appCodeRequestSchema, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema } from './core';
 
 const fallback_text = 'Open Waldo to see this.';
 const row = { id: 'entry-1', role: 'assistant', text: 'Done.', parts: [{ type: 'text', text: 'Done.' }], channel: 'app', parent_id: null } as const;
@@ -82,5 +82,31 @@ describe('app sign-in requests', () => {
     for (const [schema, body] of requests)
       for (const invite of ['abcdefghjkmnpqrstuvw', 'ABCDEFGHJKMNPQRSTUV', 'ABCDEFGHJKMNPQRSTUVWX', 'IBCDEFGHJKMNPQRSTUVW', 'OBCDEFGHJKMNPQRSTUVW', '0BCDEFGHJKMNPQRSTUVW', '1BCDEFGHJKMNPQRSTUVW', ' ABCDEFGHJKMNPQRSTUVW', '', null])
         expect({ invite, ok: schema.safeParse({ ...body, invite }).success }).toEqual({ invite, ok: false });
+  });
+});
+
+describe('message times, cancel and ratings', () => {
+  const message = { id: 'entry-1-reply', role: 'assistant', text: 'Done.', parts: [{ type: 'text', text: 'Done.' }], channel: 'app', parent_id: 'entry-1' };
+  it('carries an optional stored time on history rows', () => {
+    for (const valid of [message, { ...message, created_at: 1_791_700_000_000 }, { ...message, created_at: 0 }]) expect(appMessageV1Schema.safeParse(valid).success).toBe(true);
+    for (const invalid of [{ ...message, created_at: -1 }, { ...message, created_at: 1.5 }, { ...message, created_at: '2026-10-11T07:30:00Z' }, { ...message, created_at: null }])
+      expect(appMessageV1Schema.safeParse(invalid).success).toBe(false);
+  });
+
+  it('rates with up, down or null, by request id', () => {
+    for (const rating of ['up', 'down', null]) expect(appRatingRequestV1Schema.safeParse({ request_id: 'rating-0001', rating }).success).toBe(true);
+    expect(appRatingResultV1Schema.safeParse({ request_id: 'rating-0001', message_id: 'entry-1-reply', rating: 'up' }).success).toBe(true);
+    for (const invalid of [{ request_id: 'rating-0001', rating: 'meh' }, { request_id: 'short', rating: 'up' }, { request_id: 'rating-0001' }, { request_id: 'rating-0001', rating: 'up', note: 'x' }])
+      expect(appRatingRequestV1Schema.safeParse(invalid).success).toBe(false);
+    for (const invalid of [{ request_id: 'rating-0001', message_id: '', rating: 'up' }, { request_id: 'rating-0001', message_id: 'x'.repeat(257), rating: null }, { request_id: 'rating-0001', message_id: 'entry-1', rating: 'up', recorded: true }])
+      expect(appRatingResultV1Schema.safeParse(invalid).success).toBe(false);
+  });
+
+  it('adds the main cancel and rating routes and leaves the receipt and send result unchanged', () => {
+    const routes = appCoreRoutesV1.map(route => `${route.method} ${route.path}`);
+    expect(routes).toContain('POST /app/v1/chat/main/messages/{client_message_id}/cancel');
+    expect(routes).toContain('PUT /app/v1/chat/main/messages/{message_id}/rating');
+    expect(appMessageReceiptV1Schema.safeParse({ accepted: true, message_id: 'm', state: 'completed', closed_reason: 'cancelled', effects_unconfirmed: true }).success).toBe(true);
+    expect(appMessageReceiptV1Schema.safeParse({ accepted: true, message_id: 'm', state: 'completed', steps: [] }).success).toBe(false);
   });
 });
