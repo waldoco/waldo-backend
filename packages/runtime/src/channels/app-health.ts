@@ -5,6 +5,7 @@ import {
   healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresUnavailableV1Schema,
 } from '../../../contracts/src/app/health-ingest';
 import { md5Hex } from './md5';
+import { produceHealthScores, type ProducerDeps } from '../health/producer';
 
 // The app's health routes. The Worker validates request shape against the app contract and signs a call that binds the
 // operation, the owner and the digest of the exact payload it sends; the database owns consent, epochs, idempotency,
@@ -16,6 +17,9 @@ type ErrorCode = (typeof healthApiErrorV1Schema.shape.error.options)[number];
 export type AppHealthInput = Readonly<{
   request: Request; url: URL; doName: string; rpc: Rpc | null;
   readBody: (request: Request, max: number) => Promise<Uint8Array | null>;
+  // After a committed ingest the owner's derived rows are recomputed off the request path. Both must be present to run it.
+  defer?: (work: Promise<unknown>) => void;
+  compute?: ProducerDeps['compute'];
 }>;
 
 export const APP_HEALTH_PATH = '/app/v1/health';
@@ -115,6 +119,18 @@ const scores = async (input: AppHealthInput): Promise<Response> => {
   return refuse('unavailable');
 };
 
+// A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The producer cannot
+// fail the ingest: it starts after the database has answered and its outcome is not part of the response.
+const recompute = ({ rpc, doName, defer, compute }: AppHealthInput, result: unknown, timezone: string): void => {
+  const receipt = healthIngestReceiptV1Schema.safeParse(result);
+  if (!defer || !compute || !receipt.success || receipt.data.replayed || receipt.data.accepted + receipt.data.deleted === 0) return;
+  defer(produceHealthScores({
+    readSeries: range => invoke(rpc, doName, 'series_read', JSON.stringify(range)),
+    writeContext: payload => invoke(rpc, doName, 'context_write', payload),
+    compute,
+  }, { now: Date.now(), timezone }));
+};
+
 export const handleAppHealth = async (input: AppHealthInput): Promise<Response> => {
   const { request, url, doName, rpc, readBody } = input;
   const route = url.pathname.slice(APP_HEALTH_PATH.length);
@@ -132,5 +148,7 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
   const body = await readJson(request, requestSchema, readBody);
   if ('response' in body) return body.response;
   if (operation === 'ingest' && !knownZone((body.data as { timezone: string }).timezone)) return refuse('invalid_request');
-  return settle(await invoke(rpc, doName, operation, JSON.stringify(body.data)), responseSchema);
+  const result = await invoke(rpc, doName, operation, JSON.stringify(body.data));
+  if (operation === 'ingest') recompute(input, result, (body.data as { timezone: string }).timezone);
+  return settle(result, responseSchema);
 };
