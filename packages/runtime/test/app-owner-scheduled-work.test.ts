@@ -2,9 +2,12 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appSubjectFor } from '../src/channels/app-api';
+import { armHeartbeat, HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { reminderBook } from '../src/channels/reminders';
+import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
 import { canonicalOwnerConversationStore } from '../src/conversation/canonical-owner-store';
 import { claimStore } from '../src/memory/claims';
+import { persistTransportWake } from '../src/scheduler/alarm-slot';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
@@ -28,9 +31,9 @@ const ownerHex = OWNER_ID.replaceAll('-', '');
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 
 type Authority = 'current' | 'revoked' | 'outage';
-const wire = { authority: 'current' as Authority, asked: [] as string[], other: [] as string[] };
+const wire = { authority: 'current' as Authority, asked: [] as string[], other: [] as string[], telegramSent: [] as { chat_id: number; text: string }[] };
 beforeEach(() => {
-  model.calls = 0; model.requests = []; wire.authority = 'current'; wire.asked = []; wire.other = [];
+  model.calls = 0; model.requests = []; wire.authority = 'current'; wire.asked = []; wire.other = []; wire.telegramSent = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -48,13 +51,18 @@ beforeEach(() => {
       return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
     }
     if (fn === 'health_context_read') { wire.asked.push(fn); return Response.json(null); }
+    if (/^https:\/\/api\.telegram\.org\/bot[^/]+\/sendMessage$/.test(url)) {
+      const sent = JSON.parse(String(init?.body)) as { chat_id: number; text: string };
+      wire.telegramSent.push({ chat_id: sent.chat_id, text: sent.text });
+      return Response.json({ ok: true, result: { message_id: 40 + wire.telegramSent.length, chat: { id: sent.chat_id } } });
+    }
     wire.other.push(url);
     return new Response('unexpected', { status: 500 });
   });
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-type Identity = Readonly<{ telegram?: boolean; telegramUnlinked?: boolean; app?: 'own' | 'foreign' | 'none' }>;
+type Identity = Readonly<{ telegram?: boolean; telegramUnlinked?: boolean; app?: 'own' | 'foreign' | 'none'; telegramReply?: string; alarms?: number; heartbeatDue?: boolean }>;
 const driveAlarm = async (name: string, identity: Identity) => {
   const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
   return runInDurableObject(stub, async (_instance, state) => {
@@ -64,13 +72,17 @@ const driveAlarm = async (name: string, identity: Identity) => {
     const book = reminderBook(state.storage.sql, new Scheduler(state.storage.sql, state.storage, productionDeps()), { timezone: 'UTC', now: clockBack(3_600_000) }, () => 'rem-1');
     const reminder = await book.set({ note: 'call Sam', at: clockBack(30 * 60_000)().toISOString().slice(0, 16), repeat: 'none' });
     state.storage.kv.put('do_name', name);
+    if (identity.heartbeatDue) await armHeartbeat(new Scheduler(state.storage.sql, state.storage, productionDeps()), Date.now() - 60 * 60_000);
     if (identity.telegram) state.storage.kv.put('telegram_subject', '7');
     if (identity.telegramUnlinked) state.storage.kv.put('telegram_unlinked', true);
     if (identity.app === 'own') state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     if (identity.app === 'foreign') state.storage.kv.put('app_subject', String(appSubjectFor('another-owner')));
+    // A reply to an earlier Telegram turn, still waiting in the transport outbox.
+    if (identity.telegramReply) await new TelegramFinalOutbox(state.storage.kv, () => Date.now() - 60_000, (rows, due) => persistTransportWake(state.storage, rows, due))
+      .enqueue({ id: 'turn:telegram-1', trace: 'tg-1', payload: { chat_id: 7, text: identity.telegramReply }, ownerSubject: '7', doName: name, bot: '7' });
     const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     try {
-      await owner.alarm();
+      for (let pass = 0; pass < (identity.alarms ?? 1); pass++) await owner.alarm();
       const askedByAlarm = [...wire.asked];
       const wake = await state.storage.getAlarm();
       const principal = `prn_${ownerHex}`, tenant = `ten_${ownerHex}`;
@@ -85,6 +97,8 @@ const driveAlarm = async (name: string, identity: Identity) => {
         transcript: (await history.load()).entries.map(entry => ({ role: entry.role, surface: entry.surface, text: entry.appPayload })),
         due: state.storage.sql.exec<{ status: string; attempts: number }>("SELECT status, attempts FROM schedule WHERE id = ?", reminder.id).toArray(),
         queuedOnTelegram: ((await state.storage.get<{ payload: { chat_id: number } }[]>('telegram_final_outbox_v1')) ?? []).map(row => row.payload.chat_id),
+        heartbeat: state.storage.sql.exec<{ status: string; attempts: number }>("SELECT status, attempts FROM schedule WHERE id = ?", HEARTBEAT_ID).toArray(),
+        heartbeatRuns: state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM schedule_runs WHERE schedule_id = ?", HEARTBEAT_ID).one().n,
         outcomes: state.storage.sql.exec<{ outcome: string }>("SELECT outcome FROM schedule_runs WHERE schedule_id = ?", reminder.id).toArray().map(row => row.outcome),
       };
     } finally { await state.storage.deleteAlarm(); }
@@ -125,11 +139,42 @@ describe('scheduled work for an owner with no Telegram link', () => {
     expect(model.calls).toBe(0);
   });
 
-  it('leaves a Telegram-linked owner on Telegram: no authority lookup, nothing in the app transcript', async () => {
+});
+
+describe('scheduled reminders for a Telegram-linked owner', () => {
+  it('delivers a due reminder in the app once the owner has used the app, and queues nothing on Telegram', async () => {
     const outcome = await driveAlarm('telegram-linked-with-app', { telegram: true, app: 'own' });
+    expect(outcome.askedByAlarm).toContain('owner_runtime_authority');
+    expect(outcome.transcript).toEqual([{ role: 'assistant', surface: 'app', text: REMINDER_TEXT }]);
+    expect(outcome.queuedOnTelegram).toEqual([]);
+    expect(wire.telegramSent).toEqual([]);
+    expect(outcome.due).toEqual([]);
+    expect(outcome.outcomes).toEqual(['ok']);
+  });
+
+  it('still delivers a queued Telegram turn reply on Telegram while the reminder goes to the app', async () => {
+    const outcome = await driveAlarm('telegram-linked-reply-and-reminder', { telegram: true, app: 'own', telegramReply: 'Here is your answer.', alarms: 2 });
+    expect(wire.telegramSent).toEqual([{ chat_id: 7, text: 'Here is your answer.' }]);
+    expect(outcome.transcript).toEqual([{ role: 'assistant', surface: 'app', text: REMINDER_TEXT }]);
+    expect(outcome.outcomes).toEqual(['ok']);
+  });
+
+  it.each([['none'], ['foreign']] as const)('keeps the reminder on Telegram while the owner has no app binding of their own (%s)', async app => {
+    const outcome = await driveAlarm(`telegram-linked-app-${app}`, { telegram: true, app });
     expect(outcome.askedByAlarm).not.toContain('owner_runtime_authority');
     expect(outcome.transcript).toEqual([]);
     expect(outcome.queuedOnTelegram).toEqual([7]);
+  });
+
+  it.each([['revoked', false], ['outage', true]] as const)('holds the whole scheduled pass when the directory says %s: no reminder anywhere, no heartbeat, and only an outage asks again', async (authority, asksAgain) => {
+    wire.authority = authority;
+    const outcome = await driveAlarm(`telegram-linked-authority-${authority}`, { telegram: true, app: 'own', heartbeatDue: true });
+    expect(outcome).toMatchObject({ transcript: [], queuedOnTelegram: [], due: [{ status: 'armed', attempts: 0 }], outcomes: [], heartbeat: [{ status: 'armed', attempts: 0 }], heartbeatRuns: 0 });
+    expect(wire.telegramSent).toEqual([]);
+    // The Telegram runtime still plans the day's cards when it boots; no reminder is written.
+    expect(model.requests.filter(sent => sent.includes('Reminder due now'))).toEqual([]);
+    if (asksAgain) expect(outcome.retriesAt).toBeGreaterThan(30_000);
+    else expect(outcome.retriesAt).toBeNull();
   });
 });
 

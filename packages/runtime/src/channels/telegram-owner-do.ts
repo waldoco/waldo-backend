@@ -528,12 +528,17 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   // Set only inside the alarm's unit of work while an app-only owner's scheduled jobs run (see serial()).
   private scheduledAppDelivery: ((text: string) => Promise<void>) | null = null;
 
-  // An owner who never linked Telegram still has scheduled work. The app binding written at their first app message names
-  // the owner locally; the directory then says whether the account is still admitted. A revoked or rejected account runs
-  // nothing and stays dormant; a directory outage runs nothing now and asks the alarm to try again.
+  // The app binding written at the owner's first app message: the local sign that the app is one of their surfaces.
+  private appBound(): boolean {
+    const kv = this.ctx.storage.kv, doName = kv.get<string>('do_name');
+    return !!doName && kv.get<boolean>('app_unlinked') !== true && kv.get<string>('app_subject') === String(appSubjectFor(doName));
+  }
+
+  // Scheduled work for an owner with an app binding asks the directory whether the account is still admitted. A revoked or
+  // rejected account runs nothing and stays dormant; a directory outage runs nothing now and asks the alarm to try again.
   private async appOwnerLookup(): Promise<Readonly<{ kind: 'admitted'; authority: OwnerRuntimeAuthority } | { kind: 'dormant' } | { kind: 'retry' }>> {
     const kv = this.ctx.storage.kv, doName = kv.get<string>('do_name'), owners = this.env.TELEGRAM_OWNER_DO;
-    if (!doName || !owners || kv.get<boolean>('app_unlinked') === true || kv.get<string>('app_subject') !== String(appSubjectFor(doName))) return { kind: 'dormant' };
+    if (!doName || !owners || !this.appBound()) return { kind: 'dormant' };
     try {
       const authority = await ownerRuntimeAuthority(this.env).resolve({ doName, actualDoId: this.ctx.id.toString(), expectedDoId: name => owners.idFromName(name).toString(),
         assertCurrent: () => { if (kv.get<string>('do_name') !== doName || kv.get<boolean>('app_unlinked') === true) throw new ClosedRunError(); } });
@@ -1280,10 +1285,23 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         }); } finally { await scheduler.rearm(); }
         return;
       }
+      // Reminders go to the app, the default surface, once the owner has used it; Telegram keeps them only for an owner with
+      // no app binding. The other jobs stay on Telegram until they are routed too. A refusal holds the whole scheduled pass,
+      // never falling back to Telegram: a revoked account runs nothing, and an outage asks again without spending attempts.
+      let reminder = fire;
+      if (channel === 'telegram' && consoleAuth(this.env) && this.appBound()) {
+        const appOwner = await this.appOwnerLookup();
+        if (appOwner.kind !== 'admitted') {
+          await rearmSharedAlarm(this.ctx.storage, appOwner.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
+          return;
+        }
+        this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority);
+        reminder = this.setup('app').fire;
+      }
       const started = Date.now();
       let fired: readonly ScheduleEntry[];
       try {
-        fired = await scheduler.dispatchDue(gateScheduleExecutors({ reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder }, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler));
+        fired = await scheduler.dispatchDue(gateScheduleExecutors({ reminder, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder }, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler));
       } catch (error) {
         // A dispatch throw used to leave no trace at all - the wake was invisible in Langfuse.
         log({ trace: `alarm:${started}`, hop: 'machine_turn', ms: Date.now() - started, ok: false, error: String(error), detail: 'dispatch' });
