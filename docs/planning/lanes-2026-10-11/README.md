@@ -25,10 +25,11 @@ It is a planning document. Merges, deploys, migrations and PR closes each still 
 |---|---|---|
 | L1: health plane and staging deploys | New session | [lanes/L1-health-and-staging.md](lanes/L1-health-and-staging.md) |
 | L2: owner identity and delivery router | The existing event-route session (#1034) | [lanes/L2-identity-router.md](lanes/L2-identity-router.md) |
-| L3: approvals, app contracts, Google connect, ledger | New session | [lanes/L3-approvals-contracts-connect.md](lanes/L3-approvals-contracts-connect.md) |
+| L3: approvals, app contracts, Google connect | New session | [lanes/L3-approvals-contracts-connect.md](lanes/L3-approvals-contracts-connect.md) |
 | L4: app, TestFlight build for Suyash | The existing #16 app session | [lanes/L4-app-testflight.md](lanes/L4-app-testflight.md) |
 | Browser and computer (bounded) | The existing browser session (#1032) | [lanes/BROWSER-bounded.md](lanes/BROWSER-bounded.md) |
 | PR sweep | Short-lived session | [lanes/PR-SWEEP.md](lanes/PR-SWEEP.md) |
+| Audit: ledger owner and promise verifier | New session (Fable 5.1), from 11 October 11:30Z | [lanes/AUDIT-ledger-and-verification.md](lanes/AUDIT-ledger-and-verification.md) |
 
 **Instinct briefs and who reviews them:**
 - 01, health score calculations: L1.
