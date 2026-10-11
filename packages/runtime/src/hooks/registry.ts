@@ -41,6 +41,7 @@ import {
   workspaceSearchArgsSchema,
   workspaceWriteArgsSchema,
   workspaceRenderArgsSchema,
+  workspaceComputeArgsSchema,
   reviseArtifactArgsSchema, exportArtifactArgsSchema,
   getContextArgsSchema,
   queryAvailabilityArgsSchema,
@@ -178,6 +179,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   workspace_search: workspaceSearchArgsSchema,
   workspace_write: workspaceWriteArgsSchema,
   workspace_render: workspaceRenderArgsSchema,
+  workspace_compute: workspaceComputeArgsSchema,
   get_tasks: getTasksArgsSchema,
   get_master_metrics: getMasterMetricsArgsSchema,
   get_context: getContextArgsSchema,
@@ -887,7 +889,7 @@ function collectText(value: unknown): string[] {
 }
 
 function postToolUseDestination(tool: string): SanitiseDestination {
-  return tool === 'execute_code' ? 'sandbox_stdout' : 'internal_context';
+  return tool === 'execute_code' || tool === 'workspace_compute' ? 'sandbox_stdout' : 'internal_context';
 }
 
 function preToolUseDestination(tool: ToolName): SanitiseDestination {

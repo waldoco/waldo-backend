@@ -1,5 +1,6 @@
 import { toolNameSchema } from '@waldo/contracts';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { journaledCompute, type ComputeJournal, type ComputeRecord, type ComputeRequest } from '../src/execution-environment/compute-journal';
 import { TOOL_CLAIM_EFFECT } from '../src/hooks/claim-verify-effects';
 import { replayDecision, TOOL_REPLAY_CLASS } from '../src/hooks/tool-replay-class';
 
@@ -38,6 +39,29 @@ describe('tool replay-class table', () => {
 });
 
 describe('replayDecision', () => {
+  it.each(['known_failure', 'uncertain'] as const)('compute reconciliation preserves %s without command replay', async outcome => {
+    expect(replayDecision('workspace_compute', 'started_unsettled')).toBe('reconcile_first');
+    expect(replayDecision('workspace_compute', 'settled')).toBe('reuse_result');
+    let record: ComputeRecord | null = null;
+    const journal: ComputeJournal = { transaction(work) { const next = work(record); record = next.record; return next.value; } };
+    const request: ComputeRequest = { operationId: 'compute-replay-evidence', argv: ['node', '-e', 'process.exit(2)'], inputs: [], outputPath: 'report.md', timeoutMs: 1000, maxOutputBytes: 100, assertCurrent: async () => {} };
+    const failure = { bytes: new Uint8Array(), stdout: '', stderr: 'Missing column: amount', exitCode: 2 };
+    // Execution is a labelled fake; the journal and replay policy are real.
+    const run = vi.fn(async () => { if (outcome === 'uncertain') throw Error('response lost'); return failure; });
+    const first = journaledCompute(journal, run);
+    if (outcome === 'known_failure') expect(await first.execute(request)).toEqual(failure);
+    else await expect(first.execute(request)).rejects.toThrow('response lost');
+    const reopened = journaledCompute(journal, run);
+    if (outcome === 'known_failure') {
+      expect(await reopened.recover(request.operationId)).toEqual(failure);
+      expect(await reopened.execute(request)).toEqual(failure);
+    } else {
+      await expect(reopened.recover(request.operationId)).rejects.toThrow('workspace_pending');
+      await expect(reopened.execute(request)).rejects.toThrow('workspace_pending');
+    }
+    await expect(reopened.execute({ ...request, argv: ['node', '-e', 'corrected command'] })).rejects.toThrow('workspace_conflict');
+    expect(run).toHaveBeenCalledTimes(1);
+  });
   const byClass = (replay: string) => toolNameSchema.options.filter(tool => TOOL_REPLAY_CLASS[tool].replay === replay);
   it('an unseen call runs and a settled call reuses its stored result, for every tool', () => {
     for (const tool of toolNameSchema.options) {

@@ -274,6 +274,7 @@ describe('external-origin tool classification — ADR-0049', () => {
       'workspace_list',
       'workspace_read',
       'workspace_search',
+  'workspace_compute',
       'browse_page',
       'browse_act',
       'delegate_task',

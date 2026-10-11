@@ -114,6 +114,7 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'workspace_list',
   'workspace_read',
   'workspace_search',
+  'workspace_compute',
   'browse_page',
   'browse_act',
   // delegate_task: child handbacks carry whatever the child read (web, connector text), so the

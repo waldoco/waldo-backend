@@ -62,3 +62,18 @@ export const workspaceRenderArgsSchema = z.strictObject({
   format: z.enum(['pdf', 'docx']),
 });
 export type WorkspaceRenderArgs = z.infer<typeof workspaceRenderArgsSchema>;
+
+// Commands run in an isolated Linux container. Paths select files inside that
+// disposable container; owner identity and operation identity come from the host.
+export const workspaceComputeArgsSchema = z.strictObject({
+  argv: z.array(z.string().min(1).max(16_384)).min(1).max(32)
+    .refine(args => args.every(arg => !arg.includes('\0')) && args.reduce((n, arg) => n + utf8Bytes(arg), 0) <= 16_384),
+  inputs: z.array(z.strictObject({ file_id: z.string().min(1).max(100), revision: z.int().positive(), path: z.string().min(1).max(240) })).max(8),
+  output_path: z.string().min(1).max(240),
+  path: z.string().min(1).max(240),
+  mime: z.string().min(3).max(100).regex(/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i),
+  expected_revision: z.int().nonnegative(),
+  timeout_ms: z.int().min(1).max(30_000).default(30_000),
+  max_output_bytes: z.int().min(1).max(262_144).default(262_144),
+});
+export type WorkspaceComputeArgs = z.infer<typeof workspaceComputeArgsSchema>;

@@ -17,7 +17,7 @@ export type LoopEventLike = Readonly<{
 }>;
 
 // The ref a tool's receipt carries, taken from typed args only. A tool not listed has no ref.
-const REF_ARG: Partial<Record<ToolName, string>> = { workspace_write: 'path', workspace_render: 'path' };
+const REF_ARG: Partial<Record<ToolName, string>> = { workspace_write: 'path', workspace_render: 'path', workspace_compute: 'path' };
 
 const toolName = (name: unknown): ToolName | null => {
   const parsed = toolNameSchema.safeParse(name);
