@@ -177,7 +177,7 @@ The ledger's own count: none of the 19 "Working today" panels is accepted under 
 
 ## Baseline chat features and work left
 
-What every chat app and every agent chat app has, against Waldo at app `7bbf3135` and backend `497bdcb6`. Status is `[verified]` from source; sizes are `[inference]`. XS is hours, S one small PR, M one large PR or two, L several PRs or an ADR first. "Row" points at the gap map above.
+What every chat app and every agent chat app has, against Waldo at app `7bbf3135` and backend `497bdcb6`. Status is `[verified]` from source unless a cell says `[inventory]`, which means a reading agent reported it and I did not re-check it. Sizes are `[inference]`. XS is hours, S one small PR, M one large PR or two, L several PRs or an ADR first. "Row" points at the gap map above.
 
 **Every chat app:**
 
@@ -190,10 +190,10 @@ What every chat app and every agent chat app has, against Waldo at app `7bbf3135
 | B5 | Rename, archive, delete, pin | Local only | After B4. Rename needs its own revision (row notes). | L3, L2, L4 | S each |
 | B6 | Message times; day separators | Stored chat rows carry no time: `ConversationEntry` has no time field, and rows are keyed by sequence (`conversation-store.ts:19`). The app contract has none either. | A stored time (absent on older rows), an additive `created_at`, shown in the owner's zone | L3, L2, L4 | S + S + S |
 | B7 | Times in the owner's zone | Approval times use the device zone (`approvalsView.ts`, `toLocaleString()`). This breaks the 11 Oct ruling that the owner's zone wins. | Format with the zone from the day view | L4 | XS |
-| B8 | Offline and reconnect | No network awareness. A timeout shows "Not confirmed". | An offline state that keeps the unsent text | L4 | S |
+| B8 | Offline and reconnect | No network awareness: nothing imports NetInfo. | An offline state that keeps the unsent text | L4 | S |
 | B9 | Draft survives a restart | Kept in memory per chat, lost on restart | Keep the main draft in secure storage | L4 | XS |
 | B10 | Long messages | The counter allows 4,000 characters, but the app caps the body at 8,192 bytes (`appRoutesClient.ts`). The server allows 32,768 (`APP_SEND_MAX_WIRE_BYTES`). About 2,700 Hindi or CJK characters always fail, and Retry fails the same way. | Use the contract's wire cap | L4 | XS |
-| B11 | Scroll, load earlier, jump to latest | Built. No new-message marker. | The marker | L4 | XS |
+| B11 | Scroll, load earlier, jump to latest | Built. No new-message marker `[inventory]`. | The marker | L4 | XS |
 | B12 | Copy, share, select | Built (#63, #66, #67) | None | | Done |
 | B13 | Markdown, links, code | Built, without tables | None | | Done |
 | B14 | Unread count and badge | Missing | With B3 | L4 | S |
@@ -201,7 +201,7 @@ What every chat app and every agent chat app has, against Waldo at app `7bbf3135
 | B16 | Photos and files | Missing | Row 10 | | L, C3 |
 | B17 | Voice | Deferred | Row 9 | | Later |
 | B18 | Accessibility | Labels, live regions and reduced motion. #67 opened Waldo's bubble to VoiceOver (not device-tested). | The VoiceOver golden check | L4 | XS |
-| B19 | Dark mode | Built. The override is not kept, and the channel label on your bubbles is low contrast in dark mode. | Two fixes | L4 | XS |
+| B19 | Dark mode | Built. The light/dark override lives in a store that is not saved, so it resets on restart (`theme.store.ts`). The channel label is a fixed `#BDBDBD` in both themes (`ChatPane.tsx:453`), reported as low contrast on the dark-mode bubble `[inventory]`. | Two fixes | L4 | XS |
 | B20 | Rate limits | A 429 shows the generic error. The server always sends `Retry-After: 60`. | Say when to try again | L4 | XS |
 
 **Every agent chat app:**
@@ -209,44 +209,47 @@ What every chat app and every agent chat app has, against Waldo at app `7bbf3135
 | # | Feature | Waldo now | Work | Lane | Size |
 |---|---|---|---|---|---|
 | A1 | Working indicator | Built from the receipt phases | None | | Done |
-| A2 | Live steps and sources | Phase text only. The app's evidence line is never set. The reply ends with a plain "Done: / Receipts:" line. | Row 5 | L3, L2, L4 | S + M + M |
-| A3 | Stop | Missing. Signing out is the only way to stop an app turn. | Row 6, cancel first | L3, L2, L4 | S + M + S |
+| A2 | Live steps and sources | Phase text only. The app's evidence line is never set `[inventory]`. The reply ends with a plain-text receipt line listing effects (`owner-turn.ts:593`). | Row 5 | L3, L2, L4 | S + M + M |
+| A3 | Stop | Missing. There is no cancel route, and a turn closes early only as interrupted or session-revoked (`app-inbox.ts:23`). | Row 6, cancel first | L3, L2, L4 | S + M + S |
 | A4 | Streaming | Missing | Row 6, after its ADR | | L, C2 |
 | A5 | Regenerate | Missing | Send the question again as a new message | L4 | S |
 | A6 | Edit and resend | Fills the composer (#63), appending to a draft (#67) | None | | Done |
 | A7 | Approvals in the chat | Built (#64, #67) | The golden check | L4 | XS |
 | A8 | Receipts and undo | The decision notice, plus the server's Undo. Only calendar changes can be undone, within 10 minutes. | The website's undo conflict; the unused inline confirmation card | L4, Suyash | S |
 | A9 | Quick replies, charts, files, artifacts | Contract only; nothing produces them | The fallback rule below first, then producers | L2, L4 | M each, C2 |
-| A10 | See and correct memory | Console only. `update_memory` has no handler. | Row 13 | L3, L2, L4 | M + M + M |
+| A10 | See and correct memory | Console only. `update_memory` has no handler. | Row 13. Until the app has a Memory view, the session-delete confirmation points at the console's Memory. | L3, L2, L4 | M + M + M |
 | A11 | What Waldo did | The backend's `activity` view exists (`controls.ts:8`). The app never asks for it. | Draw it | L4 | S |
 | A12 | Waldo speaks first | Reminders only. Nothing is armed when the app starts. | Row 1, P3a | L2 | M |
-| A13 | Background work; told when done | Runs show only in the console's activity view | With B3 | L2, L4 | S |
+| A13 | Background work; told when done | Runs show only in the activity view, which the app does not draw yet (A11) | With B3 | L2, L4 | S |
 | A14 | Connect a service from the chat | During an app turn, the "Connect Google" message is accepted and dropped, and the producer records it as sent (`surfaces/app.ts`, `deliverConnectLink`). The app's Connections screen does connect Google. | Fail honestly now. Later, a link inside the reply. | L2 | S |
 | A15 | Ask about a card in its own session | Ask Waldo fills the main draft only | Rows 2 and 8 | | After B4 |
-| A16 | Usage and the cost ceiling | The $25 ceiling is not wired, and app turns pass no spend data | #915 | L2 | M |
+| A16 | Usage and the cost ceiling | The $25 per-user monthly ceiling is not wired | #915 (open) | L2 | M |
 | A17 | Custom instructions | Time zone and quiet hours only | Later | | |
 | A18 | Fast first reply | Row 17 | Row 17 | L2 | M |
 
 **The fallback rule, before any new part type ships.** Every reply must still read as text in the app. Either the runtime fills the message's `text` with the parts' fallback, or the app draws `fallback_text` for parts it does not draw. Today the app shows only `text` and text parts (`transcriptAdapter.ts`), so a reply made only of new parts would be an empty bubble. This step goes ahead of any producer in the merge order.
 
 **Work left for "the basics are covered"** (C0, C1, B2 and A14; not streaming, media, search or voice) `[inference]`:
-- **L4, app:** about 7 PRs, plus the device run:
+- **L4, app:** about 8 PRs, plus the device run:
   - one polish PR (B7, B9–B11, B19, B20, A5, the cleanup);
-  - one each for activity (A11), offline (B8), push and badges (B3, B14), server sessions (B4, B5), steps (A2), and stop and times (A3, B6).
+  - one each for activity (A11), offline (B8), push and badges (B3, B14), server sessions (B4, B5), steps (A2), stop and times (A3, B6), and Memory (A10).
 - **L3, contracts:** about 3 PRs after #1059:
   - one C1 contract PR: the threads subset with a rename revision and last activity, cancel, steps on the receipt, `created_at`, thumbs, the fallback rule and the push register route;
   - memory;
   - session refresh.
-- **L2, runtime:** about 10 PRs: P3a, S7, the threads port from #998, cancel, steps, times, A14, B2, row 17 and thumbs.
+- **L2, runtime:** about 11 PRs: P3a, S7, the threads port from #998, cancel, steps, times, A14, B2, row 17, thumbs and the `update_memory` handler.
   - Most of these touch `telegram-owner-do.ts`, so they run one after another. L2 is the critical path.
 - **L1:** one staging deploy per wave. **Audit:** re-checks the promises after each wave.
-- **About 20 PRs.** At one or two merged PRs per lane per working day, L2's queue sets the length: about 5 to 8 working days. L3 and L4 run ahead in parallel. Streaming (C2) and media and search (C3) are each a further wave with an ADR first.
+- **About 22 PRs.** At one or two merged PRs per lane per working day, L2's queue sets the length: about 5 to 8 working days. L3 and L4 run ahead in parallel. Streaming (C2) and media and search (C3) are each a further wave with an ADR first.
 
 **How it can land in one push:**
 - **One go dispatches every lane** with its slice of this plan.
 - **Work lands in waves.** Each merge and each deploy still needs the owner's go in the session that runs it. The owner gets one message per wave listing what is ready.
 - **One writer per wave on `telegram-owner-do.ts`.** Merge order per C1 item: L3's contract, then L4's hash pin, then the fallback rule, then L2's runtime, then L4's UI.
-- **To shorten the critical path,** files outside the owner DO can go to a second writer: the APNs sender and its register route, and session refresh. Their one call site in the owner DO lands in L2's wave. See decision 6.
+- **To shorten the critical path,** files outside the owner DO can go to a second writer: the APNs sender and its register route, session refresh, and the `update_memory` handler. Any call site in the owner DO lands in L2's wave. See decision 6.
+- **Two reviews can stretch the estimate:**
+  - Thread transcripts are conversation-body storage, which needs a bounded contract or ADR review (CLAUDE.md).
+  - Session refresh changes auth, which needs a security review before merge.
 
 ## Order of work
 
@@ -324,7 +327,7 @@ Still open:
 - **#1060** is merged and not deployed. L1 is the only staging deployer, and that deploy needs its own go.
 - **#1061** (draft, test pool only). CI shard 3/4 failed one test, `trusted-run-loop.test.ts:1438`, "settles a pending 'provider_plan' receipt before recomposition can issue the next tool": expected `context:materials_unavailable`, got `llm_observe:effect_receipt_unavailable`.
   - In both recent `beta-mvp` runs (`497bdcb6`, `e5fd7200`), this test finished under vitest's 300 ms slow threshold. On #1061 it took 2,526 ms, while its siblings took 51–84 ms.
-  - #1061 answers every host outside its two-host map with a 502. The run loop's AI Gateway client calls `api.cloudflare.com` (`llm/gateway.ts:19`), which is not in the map. A comment in the test and #879 record that the platform can fire the alarm before the test installs its fakes.
+  - #1061 answers every host outside its two-host map with a 502. The run loop's AI Gateway client defines its REST origin as `api.cloudflare.com` (`llm/gateway.ts:19`), which is not in the map; I did not trace whether this test path calls it. A comment in the test and #879 record that the platform can fire the alarm before the test installs its fakes.
   - So the failure is likely in-branch [inference]: if the alarm wins, the run may reach an unmapped host, and retried 5xx answers cost seconds. Not proven.
   - cf002a's session checks before merging. Do not rerun until green.
 
@@ -337,7 +340,7 @@ Still open:
    - its own transcript, sharing the owner's memory and approvals;
    - proactive messages go to main;
    - messaging surfaces see main only;
-   - deleting a session deletes its transcript and its recall-index rows (`episodes`, the full-text index in `channels/episodes.ts`, as #998 does). What Waldo learned in it stays: the delete confirmation says so and links to Memory (#13), where the owner can correct it. Account deletion remains the full erasure;
+   - deleting a session deletes its transcript and its recall-index rows (`episodes`, the full-text index in `channels/episodes.ts`, as #998 does). What Waldo learned in it stays: the delete confirmation says so and links to Memory (#13), where the owner can correct it; until the app has a Memory view, that is the console's. Account deletion remains the full erasure;
    - the list looks like the website's hi-fi chat: auto-titled chats behind a sidebar, as in Claude and ChatGPT, not the wireframe's topic tabs.
 3. **Streaming.** Real progress steps first (#5), token streaming second (#6, after its ADR note).
 - **Voice is deferred, not dropped** (row 9).
@@ -345,6 +348,6 @@ Still open:
 **Open:**
 4. **Go for the live checks and the device run** in L4's session.
 5. **C1 before Constellations?** L3's next item in the owner's order is the Constellations view. Recommendation: the threads review and the main-chat cancel come first. Sessions (#2) block the app chat the owner named the core, and L4 waits on that contract. Constellations follows.
-6. **A second runtime writer for the files outside the owner DO.** These are the APNs sender with its register route (S7), and session refresh (B2). Recommendation: a short-lived "push and session" lane, so L2's queue loses about three PRs. L1 stays on health and deploys. If the owner prefers fewer sessions, L1 takes these after H5.
+6. **A second runtime writer for the files outside the owner DO.** These are the APNs sender with its register route (S7), session refresh (B2) and the `update_memory` handler. Recommendation: a short-lived "push and session" lane, so L2's queue loses about three PRs. L1 stays on health and deploys. If the owner prefers fewer sessions, L1 takes these after H5.
 
 **A design call for Suyash, not an owner decision:** one approval vocabulary for the app (see the website conflicts).
