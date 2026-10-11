@@ -87,3 +87,20 @@ Audit lane, 11 October 2026. One probe per promise in `WEBSITE_PROMISE_LEDGER_20
 | Weather and Location | chat | consent; tool registered | as Weather above | — | — |
 | Kennel | chat | Kennel reachable | "fix the failing test in repo X" | today: fake environment (gap); later: a work unit handed to Kennel and reported back in the same conversation | work unit id |
 | WhatsApp, iMessage | later | Ashish's adapter | send "hi" | today: nothing | — |
+
+## Queue after the main-chat 503 fix (11 October, 19:30Z)
+
+Proposed in-app probes against staging once L2's fix for the main-chat 503 is deployed. Each needs the owner's go for that probe, runs on a dedicated test account with synthetic data, and is recorded with PASS, FAIL or NOT RUN at the `/healthz` SHA. Steps that enter an emailed sign-in code are the owner's; the audit lane reads results, never the owner's account. Order is by what each later probe depends on.
+
+| # | Probe | Who runs | Preconditions | Expected | Evidence to record |
+|---|---|---|---|---|---|
+| Q1 | Invite sign-up from the app (O1) | owner (code entry) | a dedicated invite for the test address; app main built from source | `needs_invite` on a bad code; `active` session with `absolute_expires_at` on a good one | session state, HTTP statuses; no code or token written |
+| Q2 | Main chat send and history read | owner or L4 | Q1 | reply recorded; `GET /app/v1/chat/main` 200 with the row | status codes; the fixed failure code if 503 recurs |
+| Q3 | Day view read | L4 | Q1 | cards, `schedules`, optional `latest` null, `timezone_confirmed` absent or false | the key set returned |
+| Q4 | `timezone.set` then day view | L4 | Q3 | `timezone_confirmed: true` once #1066's producer lands; before that, absent | the key set; whether cards re-armed |
+| Q5 | Connect Google from the app (G1) | owner (Google consent) | Q1; a test Google account | `/c/<ticket>` opens, return lands on `waldo://oauth/complete`, Connections shows the account | the receipt state; where the "connected" notice went |
+| Q6 | One approval decided from the app | owner or L4 | Q5; a proposed calendar change | decision receipt 200; the change in the test calendar; Undo within 10 min | receipt digest match; readback |
+| Q7 | Sign out everywhere from the console | L4 | Q1; a console session | the app's next request answers 401 | statuses |
+| Q8 | Scores read on the test account | L4 | Simulator health seed (app #29) or a device run | Recovery available or an honest reason; Form `stale_inputs` after 6 h | reason codes only, no values |
+| Q9 | Constellations view read | L4 | app controller for `view=constellation` | `state: 'unavailable'` with no memory tables, else a page | state and counts |
+| Q10 | Delete the account, then rejoin with the same email | owner (code entry) | Q1–Q7 done; L1 ready to check read-only | `account.delete` 200 `signed_out`, or 503 `rejected` on a failed purge; `auth.users`, refresh tokens and R2 gone; a new invite works | L1's read-only counts; no ids written |
