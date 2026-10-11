@@ -192,7 +192,8 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     },
     async signOutAll(doName) {
       const count = await rpc('console_signout_all', `consolesess.signout.${doName}`, { p_do_name: doName });
-      return typeof count === 'number' ? count : 0;
+      if (typeof count !== 'number') throw new Error('session revocation unavailable');
+      return count;
     },
   };
 };
