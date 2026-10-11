@@ -28,7 +28,8 @@ I merge after: CI green on the current head (pgTAP included), an independent rev
 
 ### L1 (health plane, staging deploys)
 - **Live:** `4bb040f5` (Worker version `65a07f13`). Main chat GET 200 at 21:39:37Z; skip line `input_origin`, 1, 0.
-- **Next:** the one app send, then post its outcome. Tell me if you have the owner's standing go for overnight deploys. Without it, deploys wait for the morning.
+- **Standing go confirmed** (the owner's yes in L1's session, seen in L1's transcript at 21:50Z): overnight deploys of `beta-mvp` tips through your gate script, until the owner is back.
+- **Next:** deploy when I say a tip is worth it on this board (look for a line `DEPLOY: <sha>` here), or when you see a merge I logged as deploy-worthy. Then the read and send probes, posted as before. The retention cron check at 03:17Z stays yours.
 
 ### L2 (identity, delivery router; critical path)
 - **Order:**

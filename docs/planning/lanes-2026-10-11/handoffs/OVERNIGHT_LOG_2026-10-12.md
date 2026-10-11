@@ -43,3 +43,10 @@ L2 report (21:40Z) **[unverified until reviewed]**:
 - **Sent to L2** (SendMessage `2f6108ca`): the send result, test "skipped leaf with no ancestor → append as root", order D3, and the board. Target: follow-up in review by 00:30Z.
 - **Board** `OVERNIGHT_BOARD_2026-10-12.md` pushed (D4). Review prompt template saved in the session scratchpad.
 - **Message budget:** 4 `send_message` + 3 `SendMessage`.
+
+## 21:52Z: L1 has the standing deploy go; app CI-equivalent baseline green
+
+- **L1** (transcript, idle at 21:49:56Z) **[verified: read L1's final message to the owner]**: the owner gave L1 two yeses in L1's session: the `4bb040f5` deploy, and overnight deploys of later `beta-mvp` tips. L1 deploys only through a gate script that stops on a failed check: the commit is the tip; all 6 CI checks are green, pgTAP included; no pending migrations; deploy config unchanged; app contract changes reviewed first. After each deploy it checks `/healthz` and a signed-out 401, and records a rollback target. "This go ends when you're back here." L1 keeps the Mac awake until 04:00Z and a tail for the 03:17Z retention cron. It stopped four leftover `wrangler tail` processes from the old L1 by pid. L1 says it sent its results to me; that message hasn't reached this session yet.
+- So merges tonight can reach staging. The board now tells L1 to deploy on a `DEPLOY: <sha>` line.
+- **App CI-equivalent baseline** (D2) at app `main` `c2ccd5d0`, fresh detached worktree in the scratchpad **[verified]**: `pnpm@9.15.9 install --frozen-lockfile` exit 0, no lockfile drift; `tsc --noEmit` exit 0; jest 86 suites passed (1 skipped), 572 tests passed (1 skipped), 21 s. One jest worker was force-exited (a leaked timer); the run was otherwise clean.
+- **#1072** (latency session, draft, test file only, CI 6/6 on head `1acb9474`): independent review launched. If it passes, it is the first merge, which also tests whether the permission classifier allows merges under the standing go.
