@@ -164,7 +164,7 @@ begin
         when exists (select 1 from live) then 'granted'
         when exists (select 1 from waldo.health_consents c where c.owner_id = v_owner and c.purpose = 'storage_compute') then 'consent_withdrawn'
         else 'consent_required' end,
-      'read_at', to_char(now() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+      'read_at', to_char(statement_timestamp() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
       'sources', coalesce((select jsonb_agg(jsonb_build_object(
           'source', l.source, 'consent_epoch', l.epoch,
           'truncated', exists (select 1 from picked p where p.source = l.source and p.n > v_cap),

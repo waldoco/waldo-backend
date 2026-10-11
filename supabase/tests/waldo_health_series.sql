@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(46);
+select plan(47);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -64,6 +64,7 @@ select is(pg_temp.h('consent_grant','series-owner-a',pg_temp.grant_body('grant-a
 select is(pg_temp.series('series-owner-a',pg_temp.today()-3,pg_temp.today())->>'access','granted','a live storage grant is granted access');
 select is(jsonb_array_length(pg_temp.series('series-owner-a',pg_temp.today()-3,pg_temp.today())->'sources'->0->'samples'),0,'a source with no readings returns an empty sample list');
 select is(pg_temp.series('series-owner-a',pg_temp.today()-3,pg_temp.today())->'sources'->0->>'consent_epoch','1','the source carries the epoch it holds now');
+select matches(pg_temp.series('series-owner-a',pg_temp.today()-3,pg_temp.today())->>'read_at','^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z$','the read carries its instant to the microsecond, which a derived row records as its read_at');
 
 -- Readings come back with the zone they were uploaded in; tombstones and other days do not.
 select is(pg_temp.h('ingest','series-owner-a',pg_temp.batch('series-a-0001',1,null,'sa1',jsonb_build_array(pg_temp.steps('step-1',2,100),pg_temp.steps('step-2',3,200),pg_temp.hrv('hrv-r','rmssd',48),pg_temp.hrv('hrv-s','sdnn',61)),'Asia/Kolkata'))->>'accepted','4','a batch uploaded in Asia/Kolkata is accepted');
