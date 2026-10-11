@@ -18,8 +18,10 @@ export const appThreadStateV1Schema = z.enum(['active', 'archived', 'deleted']);
 // changes only `title_revision`, so it never stops a reply. A null title is untitled; the model may name an
 // untitled thread once, which changes title_revision, so a rename racing it gets 409 and rereads. Titles are
 // model or owner text and render as plain text. Times are epoch ms; last_activity_at moves only forward.
+// preview is a prefix, up to 280 UTF-16 code units, of the text the chat shows for the thread's newest message,
+// cut at read time and never stored; null when no message has text. It renders as plain text.
 export const appThreadV1Schema = z.strictObject({
-  thread_id: appThreadIdV1Schema, title: z.string().min(1).max(200).nullable(), revision, title_revision: revision,
+  thread_id: appThreadIdV1Schema, title: z.string().min(1).max(200).nullable(), preview: z.string().min(1).max(280).nullable(), revision, title_revision: revision,
   state: appThreadStateV1Schema, created_at: at, last_activity_at: at,
 });
 export const appThreadCreateV1Schema = z.strictObject({ operation_id: operation, title: title.optional() });

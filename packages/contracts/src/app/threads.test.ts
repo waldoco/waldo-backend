@@ -5,16 +5,17 @@ import {
 } from './threads';
 
 const thread_id = 'thr_3f2c8a10-4b7d-4c1e-9a2b-1234567890ab', operation_id = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
-const thread = { thread_id, title: null, revision: 1, title_revision: 1, state: 'active', created_at: 1_791_700_000_000, last_activity_at: 1_791_700_000_000 };
+const thread = { thread_id, title: null, preview: null, revision: 1, title_revision: 1, state: 'active', created_at: 1_791_700_000_000, last_activity_at: 1_791_700_000_000 };
 
 describe('threads', () => {
   it('reads an untitled or titled thread with separate revisions and times', () => {
-    for (const valid of [thread, { ...thread, title: 'Lisbon trip', title_revision: 2 }, { ...thread, state: 'archived', revision: 3 }])
+    for (const valid of [thread, { ...thread, title: 'Lisbon trip', title_revision: 2, preview: 'Flights are cheaper on Tuesday.' }, { ...thread, state: 'archived', revision: 3, preview: 'x'.repeat(280) }])
       expect(appThreadV1Schema.safeParse(valid).success).toBe(true);
     for (const invalid of [
       { ...thread, title: '' }, { ...thread, title: 'x'.repeat(201) }, { ...thread, title_revision: 0 }, { ...thread, revision: 1.5 },
       { ...thread, updated_at: 1 }, { ...thread, conversation_ref: 'owner:prn_x:thread:y' }, { ...thread, state: 'paused' },
       { ...thread, thread_id: 'thr_not-a-uuid' }, { ...thread, last_activity_at: -1 }, (({ last_activity_at: _l, ...rest }) => rest)(thread),
+      { ...thread, preview: '' }, { ...thread, preview: 'x'.repeat(281) }, (({ preview: _p, ...rest }) => rest)(thread),
     ]) expect(appThreadV1Schema.safeParse(invalid).success).toBe(false);
   });
 
