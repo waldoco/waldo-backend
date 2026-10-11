@@ -7,6 +7,9 @@ import { CONTROLS_PATH } from '../src/channels/dashboard-controls';
 import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 import { routerSignature } from '../src/identity/owner-directory';
 
+// A console control action takes 1.5-3 s in this pool, as in dashboard-controls-owner.test.ts, so the 5 s default flakes under load.
+vi.setConfig({ testTimeout: 15_000 });
+
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async () => { throw Error('No Telegram binding exists'); } }));
 
 const SECRET = 'fictional-signout-router-secret-000000000000', DIRECTORY = 'https://signout-all.fixture.invalid', ORIGIN = 'https://app.fixture.invalid', ROOT = 'https://telegram-owner';
