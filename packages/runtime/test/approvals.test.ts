@@ -1041,16 +1041,14 @@ describe('app approval projection', () => {
       expect(byId[email]!.exact).toEqual({ recipients: { to: ['a@x.test'], cc: ['c@x.test'], bcc: [] }, scope: 'me@example.com' });
       expect(byId[email]!.review).toContain('Cc: c@x.test');
       expect(byId[message]!.exact).toEqual({ recipients: { to: ['whatsapp'], cc: [], bcc: [] } });
-      expect(byId[browser]).toMatchObject({ exact: { scope: 'https://reservations.example/book' }, actions: ['approve', 'skip'], review: 'Approve this browser action? Book the table on https://reservations.example/book (time: 18:30, card: ending 4242)', expires_at: NOW + 30 * 60_000 });
+      expect(byId[browser]).toMatchObject({ exact: { scope: 'https://reservations.example/book' }, actions: ['approve', 'skip'], review: 'Approve this browser action? Book the table on https://reservations.example/book?party=4&hold=secret-hold#slot (time: 18:30, card: ending 4242)', expires_at: NOW + 30 * 60_000 });
       expect(byId[mcp]).toMatchObject({ exact: { scope: 'lookup on the crm server' }, actions: ['approve', 'skip'], review: 'Run this MCP tool? Run lookup on the crm MCP server\n\nArgs:\n{\n  "q": "secret-ish"\n}' });
       for (const id of [browser, mcp]) expect(desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true });
-      expect(JSON.stringify(listed)).not.toMatch(/secret-hold|party=|#slot/);
       const fromApp = approvalDesk(sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), newId: () => `proj${++n}`, now: () => now, timezone: 'UTC', log: () => {}, google: async () => null, currentRunRef: () => 'app-run-0001' });
       const appBrowser = await fromApp.proposeBrowserSubmit(page), appMcp = await fromApp.proposeMcpCall({ server: 'crm', tool: 'lookup', args: { q: 'secret-ish' } });
       const parts = appApprovalParts(sql)('app-run-0001').live;
       expect(parts.map(part => [part.approval_id, part.actions])).toEqual([[appBrowser, ['approve', 'skip']], [appMcp, ['approve', 'skip']]]);
-      expect(JSON.stringify(parts)).not.toMatch(/secret-hold|party=|#slot/);
-      expect(parts.map(part => part.fallback_text)).toEqual(['Book the table on https://reservations.example/book (time: 18:30, card: ending 4242)', 'Run lookup on the crm MCP server']);
+      expect(parts.map(part => part.fallback_text)).toEqual(['Book the table on https://reservations.example/book?party=4&hold=secret-hold#slot (time: 18:30, card: ending 4242)', 'Run lookup on the crm MCP server']);
       expect((await desk.approvals(now, { id: appMcp }))[0]).toMatchObject({ state: 'open', actions: ['approve', 'skip'] });
       expect(byId[task]!.exact).toEqual({ task: { action: 'update', account: 'me@example.com', list: 'Errands', task: 'Buy milk', changes: { title: { before: 'Buy milk', after: 'Buy oat milk' }, due_date: { before: null, after: '2026-10-12' } } } });
       for (const item of listed) {
@@ -1326,9 +1324,9 @@ describe('approval desk round two', () => {
 
 describe('approval desk round four', () => {
   const NOW = Date.UTC(2026, 9, 11, 9, 0, 0);
-  const SECRETS = /-sec|token=|hold=|#pay/;
+  const SECRETS = /-sec/;
   const mcpArgs = { password: 'pw-sec', nested: { apiKey: 'key-sec', note: 'keep' }, items: [{ cardNumber: 'card-sec-2' }], q: 'ok' };
-  const browserPage = { url: 'https://shop.example/pay?hold=hold-sec#pay', action: { selector: '#pay', description: 'Pay' }, binding: { 'Card number': 'card-sec-1', cvv: 'cvv-sec', total: 'Rs 499' }, steps: [],
+  const browserPage = { url: 'https://shop.example/pay?to=sam&token=tok-sec-q#access_token=frag-sec', action: { selector: '#pay', description: 'Pay' }, binding: { 'Card number': 'card-sec-1', cvv: 'cvv-sec', total: 'Rs 499' }, steps: [],
     request: { url: 'https://shop.example/charge?token=tok-sec', method: 'POST' as const, fields: ['total'] } };
 
   it('MCP and browser approvals show the full review on every surface with credential values masked', async () => {
@@ -1344,7 +1342,7 @@ describe('approval desk round four', () => {
       const browser = await desk.proposeBrowserSubmit(browserPage);
       expect(cards).toEqual([
         'Run this MCP tool? Run lookup on the crm MCP server\n\nArgs:\n' + JSON.stringify({ password: '••••', nested: { apiKey: '••••', note: 'keep' }, items: [{ cardNumber: '••••' }], q: 'ok' }, null, 2),
-        'Approve this browser action? Pay on https://shop.example/pay via POST https://shop.example/charge (Card number: ••••, cvv: ••••, total: Rs 499)',
+        'Approve this browser action? Pay on https://shop.example/pay?to=sam&token=••••#access_token=•••• via POST https://shop.example/charge?token=•••• (Card number: ••••, cvv: ••••, total: Rs 499)',
       ]);
       const listed = await desk.approvals(NOW);
       expect(listed.map(item => [item.approval_id, item.actions, item.review])).toEqual([[browser, ['approve', 'skip'], cards[1]], [mcp, ['approve', 'skip'], cards[0]]]);
@@ -1376,7 +1374,7 @@ describe('approval desk round four', () => {
         call: async (method: string) => method === 'sendMessage' ? { message_id: n, chat: { id: 42 } } : true, mcpCall: async () => { ran++; return 'ran'; } });
       const browser = await desk.proposeBrowserSubmit(browserPage);
       const mcp = await desk.proposeMcpCall({ server: 'crm', tool: 'lookup', args: mcpArgs });
-      sql.exec('UPDATE ledger SET summary = ? WHERE id = ?', 'Pay on https://shop.example/pay?hold=hold-sec#pay via POST https://shop.example/charge?token=tok-sec (Card number: card-sec-1, cvv: cvv-sec)', browser);
+      sql.exec('UPDATE ledger SET summary = ? WHERE id = ?', 'Pay on https://shop.example/pay?to=sam&token=tok-sec-q#access_token=frag-sec via POST https://shop.example/charge?token=tok-sec (Card number: card-sec-1, cvv: cvv-sec)', browser);
       sql.exec("UPDATE approval_presentations SET approvable = 0 WHERE surface = 'app'");
       for (const id of [browser, mcp]) {
         expect((await desk.approvals(NOW, { id }))[0]).toMatchObject({ state: 'open', actions: ['skip'] });
@@ -1386,6 +1384,27 @@ describe('approval desk round four', () => {
       expect(ran).toBe(0);
       expect(appApprovalParts(sql)('run-old').live.map(part => part.actions)).toEqual([['skip'], ['skip']]);
       for (const shown of [await desk.approvals(NOW), appApprovalParts(sql)('run-old'), desk.pending(NOW), desk.ledger([])]) expect(JSON.stringify(shown)).not.toMatch(SECRETS);
+    });
+  });
+
+  it('approvals that differ only in a URL parameter show the difference and bind different digests', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-four-query-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let n = 0;
+      const desk = approvalDesk(state.storage.sql, { owner: 42, google: async () => null, newId: () => `q${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, appIdentity: () => true,
+        call: async (method: string) => method === 'sendMessage' ? { message_id: n, chat: { id: 42 } } : true });
+      const share = (to: string) => desk.proposeBrowserSubmit({ url: `https://docs.example/share?to=${to}`, action: { selector: '#share', description: 'Share the doc' }, binding: {}, steps: [] });
+      const alice = await share('alice'), bob = await share('bob');
+      const [a, b] = [(await desk.approvals(NOW, { id: alice }))[0]!, (await desk.approvals(NOW, { id: bob }))[0]!];
+      expect(a.exact).toEqual({ scope: 'https://docs.example/share' });
+      expect(b.exact).toEqual(a.exact);
+      expect(a.payload_digest).not.toBe(b.payload_digest);
+      expect(a.review).toBe('Approve this browser action? Share the doc on https://docs.example/share?to=alice');
+      expect(b.review).toBe('Approve this browser action? Share the doc on https://docs.example/share?to=bob');
+
+      const signed = await desk.proposeBrowserSubmit({ url: 'https://u:pw-sec@files.example/x?X-Amz-Signature=sig-sec&key=key-sec&code=SPRING&to=sam#id_token=id-sec&state=ok', action: { selector: '#go', description: 'Upload' }, binding: { signature: 'Best, Sam', key: 'PROJ-1' }, steps: [] });
+      const review = (await desk.approvals(NOW, { id: signed }))[0]!.review;
+      expect(review).toBe('Approve this browser action? Upload on https://••••@files.example/x?X-Amz-Signature=••••&key=••••&code=SPRING&to=sam#id_token=••••&state=ok (signature: Best, Sam, key: PROJ-1)');
     });
   });
 });

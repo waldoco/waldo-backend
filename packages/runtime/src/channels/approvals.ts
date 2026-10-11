@@ -134,19 +134,34 @@ const expiresAt = (entry: LedgerRow) => {
 const CREDENTIAL_KEYS = new Set([
   'password', 'passwd', 'passcode', 'current_password', 'new_password', 'one_time_code', 'otp',
   'cc_number', 'card_number', 'cc_csc', 'cvv', 'cvc', 'security_code', 'cc_exp', 'cc_exp_month', 'cc_exp_year',
-  'api_key', 'apikey', 'secret', 'client_secret', 'token', 'access_token', 'refresh_token', 'authorization',
+  'api_key', 'apikey', 'secret', 'client_secret', 'token', 'access_token', 'refresh_token', 'id_token', 'authorization',
+  'session_token', 'sessionid', 'x_amz_security_token', 'x_amz_signature', 'x_amz_credential', 'x_goog_signature', 'x_goog_credential',
 ]);
+// Names that carry secrets in a URL but are ordinary content in a form or tool argument (an email
+// signature, an issue key), where masking them would hide what is being approved.
+const URL_CREDENTIAL_KEYS = new Set([...CREDENTIAL_KEYS, 'key', 'sig', 'signature', 'session']);
 const MASK = '••••';
-const isCredentialKey = (key: string) => CREDENTIAL_KEYS.has(key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().replace(/[\s-]+/g, '_'));
+const keyName = (key: string) => key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().replace(/[\s-]+/g, '_');
+const isCredentialKey = (key: string) => CREDENTIAL_KEYS.has(keyName(key));
 const masked = (value: unknown): unknown =>
   Array.isArray(value) ? value.map(masked)
     : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, isCredentialKey(k) ? MASK : masked(v)]))
       : value;
-// A page without its query string or fragment, which can carry session or payment tokens.
+// The scope a browser approval names: the page without credentials, query string or fragment.
 const pageOf = (url: string) => { const page = new URL(url); return `${page.origin}${page.pathname}`; };
+// The URL as reviewed: every parameter stays visible, because parameters can change what the action
+// does; userinfo and credential-named values in the query or a parameter-style fragment are masked.
+const maskedParams = (params: string) =>
+  [...new URLSearchParams(params)].map(([k, v]) => `${k}=${URL_CREDENTIAL_KEYS.has(keyName(k)) ? MASK : v}`).join('&');
+const reviewUrl = (url: string) => {
+  const page = new URL(url);
+  const fragment = page.hash.slice(1);
+  return `${page.protocol}//${page.username || page.password ? `${MASK}@` : ''}${page.host}${page.pathname}${page.search ? `?${maskedParams(page.search)}` : ''}`
+    + (fragment ? `#${fragment.includes('=') ? maskedParams(fragment) : fragment}` : '');
+};
 const describeBrowser = (p: BrowserSubmitProposal) => {
   const binding = Object.entries(p.binding).map(([k, v]) => `${k}: ${isCredentialKey(k) ? MASK : v}`).join(', ');
-  return `${p.action.description} on ${pageOf(p.url)}${p.request ? ` via ${p.request.method} ${pageOf(p.request.url)}` : ''}${binding ? ` (${binding})` : ''}`;
+  return `${p.action.description} on ${reviewUrl(p.url)}${p.request ? ` via ${p.request.method} ${reviewUrl(p.request.url)}` : ''}${binding ? ` (${binding})` : ''}`;
 };
 const describeMcp = (p: McpCallProposal) => `Run ${p.tool} on the ${p.server} MCP server`;
 // Browser and MCP summaries are rebuilt from the payload, so a row stored before masking renders
