@@ -318,8 +318,12 @@ This section replaces the 10 October night status. The lane plan is `docs/planni
 | #1024 | Stable prompt prefix; tools the owner can use (C1, C2) | merged as `a7b80436`; deploy owed |
 | #1028 | Health contract: withdrawing model use alone keeps the data (ruling 11) | merged as `1757beb2`; the app pin is one revision behind on `health-ingest.ts` |
 | #1031 | H3 health routes | merged as `12bca625` (11 October, 07:12Z); deploy owed |
-| #1034 | App-only owners' reminders delivered in the app (L2) | open; merges before piece A |
-| #1048 | Piece A: approvals from any surface, round 4 (L3) | open at `c5db594c`; the owner's go is to merge after #1034, rebased, with the wall green at the new head |
+| #1034 | App-only owners' reminders delivered in the app (L2) | merged as `07689f0a` |
+| #1041 | Purge deletes an owner's derived health rows (L1, `20261011010000`) | merged as `e3c191a0` |
+| #1049 | Owner DO name bound only from a name that addresses it (L2) | merged as `98b3960d` |
+| #1044 | H4a per-day health series read and stale-write fence (L1, `20261011020000`, `20261011030000`) | merged as `e24ab95f` |
+| #1040, #1047 | Daily score math; H4b scores after each committed ingest | merged as `b3a43013` and `c69188bb` |
+| #1048 | Piece A: approvals from any surface, round 4 (L3) | merged as `3839e9d4` (head `6b4784ad`, `beta-mvp` merged in rather than rebased; CI green including pgTAP); final contract hashes on #116 |
 | #987 | Browser retained-session upload | open (browser lane) |
 | #1032 | Browser lane audit and any-surface design | draft; design until the owner approves |
 | #1033 | Owner-ingress test isolation | open; rebase and merge, or close |
@@ -331,12 +335,11 @@ This section replaces the 10 October night status. The lane plan is `docs/planni
 - **C13: `google_task_change` in the strict approvals page.**
   - Piece A adds `google_task_change` to `kind`. That field sits inside every item of the strict `GET /app/v1/approvals` page, so an app pinned before the value fails the whole list.
   - It is safe only by ordering. waldo-app main has no caller of the approvals routes, and the approval UI stays hidden until staging serves it.
-  - L4 re-pins `approvals.ts` and `parts.ts` from piece A's merged SHA before the app calls the route.
+  - L4 re-pins `approvals.ts` and `parts.ts` from piece A's merged SHA, `3839e9d4`, before the app calls the route. The hashes are on #116.
   - L4 decides whether the approvals page reader drops an item it cannot parse, so that the next new kind does not repeat C13.
 - **Streaming.** The runtime has no model streaming, and replies pass post-model guards whole.
 
 ### Next for L3, one at a time
-1. Piece A (#1048): rebase onto #1034 once it merges, re-run the wall, merge, then post the final contract hash set to L4.
-2. G1: Google connect from the app (`/c/<ticket>` with surface `app`; migration `20261011200000`). It is visible on TestFlight; today's workaround is connecting Google in the console. Then G2 with L4, retiring the app's legacy `oauth-google` path. G4 is open: the owner is not sure whether `GOOGLE_CLIENT_ID` (backend) and `GOOGLE_OAUTH_CLIENT_ID` (the app's legacy function) hold the same OAuth client. G1 does not depend on it; G2 does, because tokens from a different client cannot move and owners would reconnect once.
-3. The "deliver to" control (ruling 20). The shape is proposed on #116, and L2's router reads it. It comes after G1 because an app-only owner already gets proactive messages in the app.
-4. The threads contract, app and console only (ruling 21), re-cut from #998.
+1. G1: Google connect from the app (`/c/<ticket>` with surface `app`; migration `20261011200000`). It is visible on TestFlight; today's workaround is connecting Google in the console. Then G2 with L4, retiring the app's legacy `oauth-google` path. G4 is open: the owner is not sure whether `GOOGLE_CLIENT_ID` (backend) and `GOOGLE_OAUTH_CLIENT_ID` (the app's legacy function) hold the same OAuth client. G1 does not depend on it; G2 does, because tokens from a different client cannot move and owners would reconnect once.
+2. The "deliver to" control (ruling 20). The shape is proposed on #116, and L2's router reads it. It comes after G1 because an app-only owner already gets proactive messages in the app.
+3. The threads contract, app and console only (ruling 21), re-cut from #998.
