@@ -14,9 +14,12 @@ export const appJsonWireBytes = (value: unknown): number => {
   return bytes;
 };
 export const appSendWireFits = (value: unknown): boolean => appJsonWireBytes(value) <= APP_SEND_MAX_WIRE_BYTES;
-export const appCodeRequestSchema = z.strictObject({ email: z.email().max(254) });
+// The console invite code (runtime identity/invite-code.ts). Sign-in admits a new member only
+// by its hash, so both the code request and the verify carry it; the app upper-cases first.
+const invite = z.string().regex(/^[A-HJ-NP-Z2-9]{20}$/);
+export const appCodeRequestSchema = z.strictObject({ email: z.email().max(254), invite: invite.optional() });
 export const appCodeResultSchema = z.strictObject({ ok: z.literal(true) });
-export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(254), code: z.string().regex(/^\d{4,10}$/) });
+export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(254), code: z.string().regex(/^\d{4,10}$/), invite: invite.optional() });
 export const appSessionV1Schema = z.strictObject({
   state: z.literal('active'), session_ref: z.string().regex(/^sess_[a-f0-9]{64}$/),
   account_ref: z.string().regex(/^acct_[a-f0-9]{64}$/), surface: z.literal('app'),
