@@ -99,7 +99,12 @@ for (const outcome of ['throws', 'unavailable'] as const) {
     await fixture(outcome, async (app, console, seen) => {
       const credential = await signedIn(app);
       const token = await seen.grant();
+      const logged = vi.spyOn(globalThis.console, 'log').mockImplementation(() => undefined);
       const response = await console(CONTROL_ACTION_PATH, token, signOutAll(await connections(console, token)));
+      const events = logged.mock.calls.map(([line]) => String(line)).filter(line => line.includes('console_signout_all')); logged.mockRestore();
+      expect(events).toHaveLength(1);
+      expect(Object.keys(JSON.parse(events[0]!)).sort()).toEqual(['code', 'hop', 'ok', 'trace']);
+      expect(JSON.parse(events[0]!)).toMatchObject({ hop: 'console_signout_all', ok: false, code: 'directory_unconfirmed' });
       const { receipt } = await response.json() as { receipt: { state: string; signed_out?: boolean } };
       expect(response.status).toBe(503);
       expect(receipt.state).not.toBe('recorded');

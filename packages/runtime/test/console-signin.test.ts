@@ -77,6 +77,23 @@ describe('handleConsole', () => {
     expect(cleared).toContain('Max-Age=0');
   });
 
+  it('sign-out-everywhere that the directory does not confirm keeps this browser signed in and says so generically', async () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const response = await handleConsole(
+        new Request('https://w.test/console/signout-all', { method: 'POST' }),
+        { TELEGRAM_OWNER_DO: owners().ns },
+        auth({ readOwnerCookie: vi.fn(async () => 'do-a'), signOutAll: vi.fn(async () => { throw new Error('session revocation unavailable'); }) }),
+      );
+      expect(response?.status).toBe(503);
+      expect(response?.headers.get('set-cookie')).toBeNull();
+      const body = await response!.text();
+      expect(body).toContain('still signed in');
+      expect(body).not.toContain('revocation unavailable');
+      expect(JSON.stringify(spy.mock.calls)).not.toContain('do-a');
+    } finally { spy.mockRestore(); }
+  });
+
   it('correlates a failed auth request without logging email, phone, or code', async () => {
     const spy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     try {

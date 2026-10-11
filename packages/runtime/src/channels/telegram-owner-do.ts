@@ -1,4 +1,5 @@
 import { appControlsRequest } from './app-controls';
+import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { AppInbox, type AppInboxRecord } from './app-inbox';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
@@ -917,7 +918,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   // goes first so a failed revocation leaves this browser signed in to retry, never signed out alone.
   private async signOutEverywhere(): Promise<boolean> {
     const name = this.ctx.storage.kv.get<string>('do_name'), auth = name ? consoleAuth(this.env) : null;
-    if (auth && name) { try { await auth.signOutAll(name); } catch { return false; } }
+    if (auth && name) { try { await auth.signOutAll(name); } catch { consoleLog(consoleTrace(), 'console_signout_all', false, 'directory_unconfirmed'); return false; } }
     await consoleAccess(this.ctx.storage).signOutAll();
     return true;
   }

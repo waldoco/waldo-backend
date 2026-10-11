@@ -300,11 +300,17 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   // this one - die at their next validation, then clears the cookies on this browser too.
   if (url.pathname === `${CONSOLE_PATH}/signout-all` && request.method === 'POST') {
     const doName = await auth.readOwnerCookie(request);
+    if (doName) {
+      try { await auth.signOutAll(doName); }
+      catch {
+        event('console_route', false, 'signout_all_unconfirmed');
+        return finish(new Response('Signing out everywhere did not finish. This browser is still signed in; go back and try again.', { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } }));
+      }
+    }
     const headers = new Headers({ location: CONSOLE_SIGNIN_PATH });
     const clear = `Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
     headers.append('set-cookie', `${CONSOLE_COOKIE}=; ${clear}`);
     headers.append('set-cookie', `${OWNER_COOKIE}=; ${clear}`);
-    if (doName) await auth.signOutAll(doName);
     event('console_route', true, 'signed_out_all');
     return finish(new Response(null, { status: 303, headers }));
   }
