@@ -375,7 +375,7 @@ Still open:
 - **Sessions:** create a session and send in it; Waldo replies. Kill the app and reopen it: the session and its messages come back from the server. Telegram does not show it. The console, which has no threads today, comes later.
 - **Approval card:** ask Waldo to email someone. The card in the chat shows the exact recipients and body. Not now: nothing is sent. Do it: one send, and the receipt shows in the chat.
 - **VoiceOver:** with VoiceOver on, the approval card's details and buttons in the chat can be reached, and so can "Share or copy".
-- **Proactive:** with the app closed, a Needs You with a near expiry arrives as a push: title "Waldo", the exact action, its expiry, and no health values. Tapping it opens that request. The Brief is waiting on Home and did not push.
+- **Proactive:** with the app closed, a Needs You with a near expiry arrives as a push: title "Waldo", the exact action, its expiry, and no health values. Tapping it opens that request. The Brief is waiting on Home and did not push. Whether the Brief also pushes waits on the owner: the website promises a 6:30 notification (register question 8).
 - **Progress:** a calendar question shows a real "checking your calendar" step. When the turn closes, one line names the sources read. Both match the trace.
 
 ## Coordination (11 Oct, updated about 16:40Z)

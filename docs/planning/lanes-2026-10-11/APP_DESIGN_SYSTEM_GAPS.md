@@ -39,10 +39,15 @@
   | Faint text | `muted` `#8A8A8E` | `text-tertiary` | `#6b6b66` |
   | Orange | `accent` `#FB943F` | `spot` | `#f97316` |
   | Blue | `select` `#2F6FED` | `accent` | `#007aff` |
-- The export pipeline the system describes (`tooling/build.mjs` writing `exports/`) is not in the artifact. Where it lives is unknown. Class (c), then (d).
+- **The pipeline exists, outside the artifact.** waldo-brain branch `claude/dreamy-archimedes-1meouj`, 42 commits ahead of waldo-brain `main` and unmerged, holds `01-Waldo/design/design-system/` with:
+  - `tokens.json` and `tooling/build.mjs`;
+  - the generated `exports/`: `theme.ts` ("Generated from tokens.json by tooling/build.mjs. Do not edit."), `tailwind.preset.cjs`, `tokens.css`, `tokens.dtcg.json` and `contrast-report.json`;
+  - `fonts/`, with `Mottle.woff2`, DM Mono, SF Pro Rounded and `OFL.txt`.
+  - The artifact looks published from it: its version note and the branch's last commit both name the v0.3 founder review.
+- **Consequence:** an edit made only in the artifact, such as the 11 Oct Telegram line in section 13, is undone by the next publish from that branch unless it is mirrored there.
 
 **Proposed:**
-- If the pipeline does not exist, L4 adds a small script to the app repo that reads a pinned copy of `tokens.json` and writes `theme.ts` and a NativeWind preset, as `15-platforms.md` lays out. It needs no new dependency.
+- The owner names that waldo-brain branch, once merged, as the design system's source. L4 then copies its `exports/` from a pinned commit in a PR that names the commit, as `15-platforms.md` lays out. Nothing new needs building.
 - The palette then moves to semantic names, screen by screen.
 - Everything visual below gets cheaper once this lands. So it goes first, and the owner should say so explicitly.
 
@@ -50,7 +55,7 @@
 
 | # | Rule (design-system source) | App at `18d5d0c3` | Class | Severity | Lane |
 |---|---|---|---|---|---|
-| G1 | Tokens come from `tokens.json` (`15-platforms.md`) | A hand-kept palette (above) | (c) then (d), then (a) | Blocks every visual row | Owner, L4 |
+| G1 | Tokens come from `tokens.json` (`15-platforms.md`) | A hand-kept palette (above). The exports exist on an unmerged waldo-brain branch. | (c): merge and name the source; then (a): copy `exports/` | Blocks every visual row | Owner, L4 |
 | G2 | Retired names never appear: "Patrol, Fetch and Spot are retired names" (`09-voice-and-content.md`) | Home renders a "The Patrol" card with "Show all Patrol entries", which opens the `patrol` route (`TodaySummary.tsx:91-92`, rendered by `home.tsx`). Kind labels "Fetch" and "Patrol" come from `backendHome.ts:116-119`, used by `useHomeData.ts`. A `spots` route exists. `PatrolCompact`, `SpotsCompact` and `FloatingTabBar` hold the names too, but nothing renders them. | (c): renaming waits for the owner's explicit yes, which L4 asked for | Visible | Owner, L4 |
 | G3 | Three places: Home, Body, Waldo, on the native tab bar (`TabBar`, `15-platforms.md`) | The live dock is `GlassTabBar`, inside `GlassDock`, which the `NativeScaffold` screens render. It shows Open menu, Overview, Health Stats and Ask Waldo. The three places exist under other labels, plus a side menu the system doesn't have. It is a custom bar, not the native one. `FloatingTabBar` (Brief, Health, Patrol) is exported but never rendered. | (c): the labels and the side menu | Visible | Owner, L4 |
 | G4 | Selection is ink; blue (`accent`) is only a Switch's on track and a radio or checkbox mark (README, "The rules agents break most") | The dock already marks the active place in ink (`GlassTabBar.tsx:119`). The chat header's switcher uses `GlassButtonGroup` (`ChatPane.tsx:294`), which selects in blue `select` with a blue tint (`LiquidGlass.tsx:78-120`). | (a) | Polish | L4 |
@@ -69,18 +74,39 @@
 | G17 | Offline is shown as a `Banner`: "You're offline. Showing what Waldo knew at 07:14." | No network awareness | (a) | Visible | L4 |
 | G18 | Display type in Mottle; interface in SF Pro Rounded; DM Mono only for command lines (README) | SF Pro Rounded is bundled in 4 weights. No Mottle file. | (d): the Mottle file is in the artifact (`fonts/mottle-unified.ttf`); check its licence (`16-governance.md`) | Polish | L4 |
 | G19 | Display styles cap Dynamic Type at 1.3×; others are uncapped (`15-platforms.md`) | No `maxFontSizeMultiplier` anywhere | (a), once display styles exist | Polish | L4 |
-| G20 | Copy: no "Loading…", "Oops", "Thinking…", "Are you sure?", OK/Yes/Approve buttons or exclamation marks (`09`) | None found by grep | Follows | Done | n/a |
+| G20 | Copy and states: no "Loading…" or other generic waits; a specific line instead (`11-states.md`). No spinner (`ProcessingCard`). No "Oops", "Thinking…", "Are you sure?", OK/Yes/Approve buttons or exclamation marks (`09`). | L4's audit found what my first grep missed: 15 files render `ActivityIndicator`. Home shows "Loading approvals", "Loading cards" and "Loading scores" (`TodaySummary.tsx:59,70,88`), and chat "Loading earlier…" (`ChatPane.tsx:219`). #69 replaced "Loading main chat…". No "Oops", OK/Yes/Approve or exclamation marks were found. | (a) | Visible | L4 |
 | G21 | Long messages: the composer's counter matches what send accepts | The counter allows 4,000 characters, but the app caps the body at 8,192 bytes (`appRoutesClient.ts:130`). The server allows 32,768. | (a) | Visible for non-Latin text | L4 |
 | G22 | Text holds 4.5:1 contrast on its grounds in every theme (README; `craft.md`) | Light `muted` `#8A8A8E` reaches 3.12:1 on `paper` and 3.44:1 on `card`. `colors.muted` and `text-muted` appear 191 times; that raw count includes icon tints. `inkSoft` (ink at 55%) reaches 3.73:1. The system's `text-tertiary` reaches 4.90:1 on `bg-canvas`. Dark `muted` passes, at 6.37:1. | (a): an interim copy of `text-tertiary`'s value is a quick fix, which G1 then replaces | Accessibility, visible | L4 |
 
+## Reconciled with L4's audit
+
+L4's own audit is `Docs/audits/APP-design-system-gap-audit-2026-10-11.md` in waldo-app PR #70, not merged. L4 reports:
+- **Agreed:** G2 to G6, G8 to G16, and G18. Its colour section now uses this register's `tokens.json` values; its first draft used a stale card.
+- **Found only by this register:** G7, G19, G21 and G22. L4 will check them as it builds.
+- **Found only by L4** `[L4 audit, not re-checked here]`:
+  - 18 legacy components nothing renders;
+  - 15 onboarding stubs, plus `connect-watch`;
+  - `Alert.alert` where the system uses `ConfirmSheet`;
+  - account deletion as a one-step typed DELETE;
+  - the 18+ item as a `Switch` where the system uses a `Checkbox`;
+  - no session-ended screen;
+  - a website-promise matrix with a 24-item backend ask list. L4 waits for the owner's go before posting it on #116.
+- **In flight:** waldo-app #71 corrects #69's `inset` to `#ecece9` (dark `#1c1c1b`).
+- **Blocking the device run:** `GET /app/v1/chat/main` returned 503 on staging release `81c4f892` for the owner's account. L4 retries against `15134581`. The handler's bare `catch` hides the cause (`telegram-owner-do.ts:644-651`); a lead went to L2.
+
 ## Questions for the owner
 
-1. **Token pipeline.** Where does the system's `tooling/build.mjs` live? If it doesn't exist, may L4 generate `theme.ts` and the preset from a pinned `tokens.json` (G1)?
+1. **Design-system source.** Merge the waldo-brain design-system branch and name it the source, so L4 copies its `exports/` (G1)? The Telegram fix in the artifact needs mirroring there too.
 2. **Tabs.** Should the dock read Home, Body, Waldo instead of Overview, Health Stats, Ask Waldo? Does the side menu stay (G3)?
 3. **Three scores.** Do the Recovery and Weight gauges keep their own colours, or follow the system's rule that colour means a zone or a state (G5)?
 4. **Dark mode at launch.** Hide it as "Coming soon", as the system says, even though it works (G6)?
 5. **Reminders.** May a reminder the owner set send a push (G13)?
 6. **Approvals.** Is "Don't do this" (deny) its own action, or part of `skip` (G10)?
-7. **Retired names.** Rename "The Patrol", the "Fetch" and "Patrol" labels, and the `spots` route, as the system says (G2)? L4 is waiting for this answer.
+7. **Retired names.** Rename "The Patrol", the "Fetch" and "Patrol" labels, and the `spots` route, as the system says (G2)? L4 is waiting for this answer, and proposes names from the system's Home order.
+8. **The morning Brief.** The website promises a 6:30 notification; the system says the Brief never pushes. Flagged by the audit lane.
+9. **From L4:**
+   - Does an automatic time-zone write at sign-in count as the owner setting the zone?
+   - Does sign-in need both Apple and Google, and where does the 18+ check sit?
+   - The SF Pro Rounded licence, which `16-governance.md` lists as open.
 </content>
 </invoke>
