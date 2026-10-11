@@ -12,7 +12,7 @@ const fakeAuth = (over: Partial<ConsoleAuth> = {}) => {
   const auth = {
     throttle: async () => true,
     sendCode: async (email: string) => { calls.push(`send:${email}`); return email === 'member@example.test'; },
-    verify: async (email: string, code: string) => (email === 'member@example.test' && code === '123456' ? 'owner-1' : null),
+    verifyOrJoin: async (email: string, code: string) => (email === 'member@example.test' && code === '123456' ? 'owner-1' : null),
     ownerAppCredential: async () => CREDENTIAL,
     readAppCredential: async (credential: string) => (credential === CREDENTIAL ? 'owner-1' : null),
     listSessions: async () => revoked ? [] : [{session:await linkCodeHash(SESSION),created_at:new Date().toISOString(),last_seen_at:new Date().toISOString()}],

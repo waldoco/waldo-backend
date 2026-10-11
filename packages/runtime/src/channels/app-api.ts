@@ -128,7 +128,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (gate === 'limited') return fail(429);
     if (gate === 'unavailable') return fail(503);
     let doName: string | null;
-    try { doName = await auth.verify(email, code, '', typeof body?.invite === 'string' ? body.invite : ''); } catch { return fail(503); }
+    try { doName = await auth.verifyOrJoin(email, code, typeof body?.invite === 'string' ? body.invite : ''); } catch { return fail(503); }
     if (!doName) return ok({ state: 'needs_invite' });
     let credential: string | null;
     try { credential = await auth.ownerAppCredential(doName); } catch { credential = null; }
