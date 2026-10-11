@@ -9,8 +9,7 @@
 **Pins:**
 - backend `beta-mvp` `497bdcb6`: #1060 (sign out everywhere also revokes app and email sign-ins) merged at 15:32Z on 11 Oct. Source rows below were read at `e5fd7200`; #1060 touches none of them;
 - staging `81c4f892`, so #1060 is merged but not deployed;
-- waldo-app `main` `9937d456`, after #62–#66 merged at about 15:00Z on 11 Oct. At that commit `tsc --noEmit` exits 0, and jest passes 547 tests in 82 suites (1 suite and 1 test skipped). Nothing has run on a device;
-- waldo-app PR #67 at `ce590e4b` (the C0 review fixes): `tsc --noEmit` exits 0, and jest passes 551 tests in 82 suites (1 suite and 1 test skipped). It awaits the owner's merge yes in L4's session;
+- waldo-app `main` `7bbf3135`: #62–#66 merged at about 15:00Z on 11 Oct, and #67 (the C0 review fixes) at 15:44Z. Its tree is identical to #67's head `ce590e4b`, where `tsc --noEmit` exits 0 and jest passes 551 tests in 82 suites (1 suite and 1 test skipped). Rows below that cite app line numbers were read at `9937d456`. Nothing has run on a device;
 - website `Pin4sf/waldo-landing` `main` `830bfc2` (9 Oct), the pin the promise ledger also uses. I have not checked that heywaldo.in serves this commit.
 
 Tags:
@@ -64,7 +63,7 @@ Ranking: what blocks the experience first, then the biggest visible lift for the
 | 4 | Cards inside the chat: approvals (Do it / Not now / Modify), quick replies, charts, files, artifacts | Muse: structured accept or reject cards; Vellum: inline approval buttons; Claude: artifacts | Approval cards are drawn in the chat (#64; merged, not proven on a device). The other parts are not drawn. | Approval cards: each card's buttons look up the same `approval_id` on the approvals page and decide through the route the approvals screen already uses. A changed digest shows the card as changed, with no buttons. Never act on the history part, which is read tolerantly and for display only (`app-routes-v1.ts`). Next: operation steps, files and artifacts. Backend producers for quick replies and health charts: none exists today. | L4, then L2 and L1 | Additive only; charts carry a health gate (row notes) |
 | 5 | Live progress and sources ("Checking your calendar", then "Checked 3 things" with where each fact came from) | Claude's tool rows; Dots' Activity View; Muse's avatar work snippet; the website's hi-fi chat | Receipt phase only | Emit real trace hops as `operation` steps on the receipt, and draw them. When the turn closes, collapse them into one line that names the sources read. Nothing decorative. | L2, contracts, L4 | Real-data rule |
 | 6 | Streaming replies and a Stop button | Claude, ChatGPT | No stream route. The receipt contract reserves `cancelled`, `archived`, `deleted` and `thread_changed`, but the runtime emits only `interrupted` and `session_revoked` (`app-inbox.ts:23`). | A cancel route first. Then streaming, after a short ADR: the transport (streaming fetch vs a DO WebSocket) and which checks run before text leaves the DO. | L2, L4 | ADR note |
-| 7 | Readable replies: markdown, links, lists, code; copy and share; a long-press menu | Every chat app | Markdown, links behind a confirm, a long-press menu and a visible "Share or copy" row (#63, #66; merged, not proven on a device). Text inside a reply cannot be selected on main; #67 makes it selectable again. | Merge #67 (C0) | L4 | None |
+| 7 | Readable replies: markdown, links, lists, code; copy and share; a long-press menu | Every chat app | Markdown, links behind a confirm, a long-press menu and a visible "Share or copy" row (#63, #66; merged, not proven on a device). Text inside a reply is selectable again (#67, merged). | The device check | L4 | None |
 | 8 | "Ask Waldo" from any card | Muse, Claude | An approval or the Home health scores puts a first line in the main chat composer (#65; merged) | The main-chat half is done. After #2: open a server session carrying a context reference (ADR-0077 pins). | L4, contracts | Additive |
 | 9 | Voice | Claude and ChatGPT voice; Poke voice messages; Instinct calls; the website's composer mic and its "Planned" voice panel | Mic disabled. The iOS keyboard's dictation already works in the composer. | **Deferred by the owner (11 Oct), not dropped:** ruling 10 still owes the "Planned" voice panel. Until then the Mic stays visible and disabled. When it resumes: on-device recognition only (`requiresOnDeviceRecognition`), because server recognition would send the owner's speech to Apple, which is provider egress. Then voice notes (the `voice` part exists), read-aloud and the Brief read out. | L4, then L2 | The speech library is a dependency change, reviewed in the app lane; voice notes need contract review |
 | 10 | Photos and files into the chat | Every chat app | Attach disabled; text-only send | Upload route, storage, a taint class, image input to the model | L2, L4 | Contract and ADR review |
@@ -176,6 +175,79 @@ The ledger's own count: none of the 19 "Working today" panels is accepted under 
 - Messaging surfaces see the main chat only (ruling 2). Sessions stay in the app and the console.
 - Starting now, no new work serves only those surfaces.
 
+## Baseline chat features and work left
+
+What every chat app and every agent chat app has, against Waldo at app `7bbf3135` and backend `497bdcb6`. Status is `[verified]` from source; sizes are `[inference]`. XS is hours, S one small PR, M one large PR or two, L several PRs or an ADR first. "Row" points at the gap map above.
+
+**Every chat app:**
+
+| # | Feature | Waldo now | Work | Lane | Size |
+|---|---|---|---|---|---|
+| B1 | Send once; sending, sent, failed; retry | Built. One client id per send, and retry reuses it. The backend returns the same record for the same id and text. | None | | Done |
+| B2 | Stay signed in | The app session ends 12 h after sign-in, with no refresh (`app-api.ts:81`). The owner types an email code twice a day, and a push tapped after that lands on sign-in. `contracts/src/auth/app-session.ts` exists and nothing uses it. | Refresh or rotation, revocable. Security review. | L2 | M |
+| B3 | Push; a tap opens the message | Device-token tables and functions exist (`20261010040000_app_push_custody.sql`). No register route, no APNs sender, and the app never imports `expo-notifications`. | Row 1 | L2, L4 | M + M |
+| B4 | Conversation list; new chat | Main plus local drafts that cannot send | Row 2 | L3, L2, L4 | L |
+| B5 | Rename, archive, delete, pin | Local only | After B4. Rename needs its own revision (row notes). | L3, L2, L4 | S each |
+| B6 | Message times; day separators | Stored chat rows carry no time: `ConversationEntry` has no time field, and rows are keyed by sequence (`conversation-store.ts:19`). The app contract has none either. | A stored time (absent on older rows), an additive `created_at`, shown in the owner's zone | L3, L2, L4 | S + S + S |
+| B7 | Times in the owner's zone | Approval times use the device zone (`approvalsView.ts`, `toLocaleString()`). This breaks the 11 Oct ruling that the owner's zone wins. | Format with the zone from the day view | L4 | XS |
+| B8 | Offline and reconnect | No network awareness. A timeout shows "Not confirmed". | An offline state that keeps the unsent text | L4 | S |
+| B9 | Draft survives a restart | Kept in memory per chat, lost on restart | Keep the main draft in secure storage | L4 | XS |
+| B10 | Long messages | The counter allows 4,000 characters, but the app caps the body at 8,192 bytes (`appRoutesClient.ts`). The server allows 32,768 (`APP_SEND_MAX_WIRE_BYTES`). About 2,700 Hindi or CJK characters always fail, and Retry fails the same way. | Use the contract's wire cap | L4 | XS |
+| B11 | Scroll, load earlier, jump to latest | Built. No new-message marker. | The marker | L4 | XS |
+| B12 | Copy, share, select | Built (#63, #66, #67) | None | | Done |
+| B13 | Markdown, links, code | Built, without tables | None | | Done |
+| B14 | Unread count and badge | Missing | With B3 | L4 | S |
+| B15 | Search | Missing | Row 11 (ADR) | | L, C3 |
+| B16 | Photos and files | Missing | Row 10 | | L, C3 |
+| B17 | Voice | Deferred | Row 9 | | Later |
+| B18 | Accessibility | Labels, live regions and reduced motion. #67 opened Waldo's bubble to VoiceOver (not device-tested). | The VoiceOver golden check | L4 | XS |
+| B19 | Dark mode | Built. The override is not kept, and the channel label on your bubbles is low contrast in dark mode. | Two fixes | L4 | XS |
+| B20 | Rate limits | A 429 shows the generic error. The server always sends `Retry-After: 60`. | Say when to try again | L4 | XS |
+
+**Every agent chat app:**
+
+| # | Feature | Waldo now | Work | Lane | Size |
+|---|---|---|---|---|---|
+| A1 | Working indicator | Built from the receipt phases | None | | Done |
+| A2 | Live steps and sources | Phase text only. The app's evidence line is never set. The reply ends with a plain "Done: / Receipts:" line. | Row 5 | L3, L2, L4 | S + M + M |
+| A3 | Stop | Missing. Signing out is the only way to stop an app turn. | Row 6, cancel first | L3, L2, L4 | S + M + S |
+| A4 | Streaming | Missing | Row 6, after its ADR | | L, C2 |
+| A5 | Regenerate | Missing | Send the question again as a new message | L4 | S |
+| A6 | Edit and resend | Fills the composer (#63), appending to a draft (#67) | None | | Done |
+| A7 | Approvals in the chat | Built (#64, #67) | The golden check | L4 | XS |
+| A8 | Receipts and undo | The decision notice, plus the server's Undo. Only calendar changes can be undone, within 10 minutes. | The website's undo conflict; the unused inline confirmation card | L4, Suyash | S |
+| A9 | Quick replies, charts, files, artifacts | Contract only; nothing produces them | The fallback rule below first, then producers | L2, L4 | M each, C2 |
+| A10 | See and correct memory | Console only. `update_memory` has no handler. | Row 13 | L3, L2, L4 | M + M + M |
+| A11 | What Waldo did | The backend's `activity` view exists (`controls.ts:8`). The app never asks for it. | Draw it | L4 | S |
+| A12 | Waldo speaks first | Reminders only. Nothing is armed when the app starts. | Row 1, P3a | L2 | M |
+| A13 | Background work; told when done | Runs show only in the console's activity view | With B3 | L2, L4 | S |
+| A14 | Connect a service from the chat | During an app turn, the "Connect Google" message is accepted and dropped, and the producer records it as sent (`surfaces/app.ts`, `deliverConnectLink`). The app's Connections screen does connect Google. | Fail honestly now. Later, a link inside the reply. | L2 | S |
+| A15 | Ask about a card in its own session | Ask Waldo fills the main draft only | Rows 2 and 8 | | After B4 |
+| A16 | Usage and the cost ceiling | The $25 ceiling is not wired, and app turns pass no spend data | #915 | L2 | M |
+| A17 | Custom instructions | Time zone and quiet hours only | Later | | |
+| A18 | Fast first reply | Row 17 | Row 17 | L2 | M |
+
+**The fallback rule, before any new part type ships.** Every reply must still read as text in the app. Either the runtime fills the message's `text` with the parts' fallback, or the app draws `fallback_text` for parts it does not draw. Today the app shows only `text` and text parts (`transcriptAdapter.ts`), so a reply made only of new parts would be an empty bubble. This step goes ahead of any producer in the merge order.
+
+**Work left for "the basics are covered"** (C0, C1, B2 and A14; not streaming, media, search or voice) `[inference]`:
+- **L4, app:** about 7 PRs, plus the device run:
+  - one polish PR (B7, B9–B11, B19, B20, A5, the cleanup);
+  - one each for activity (A11), offline (B8), push and badges (B3, B14), server sessions (B4, B5), steps (A2), and stop and times (A3, B6).
+- **L3, contracts:** about 3 PRs after #1059:
+  - one C1 contract PR: the threads subset with a rename revision and last activity, cancel, steps on the receipt, `created_at`, thumbs, the fallback rule and the push register route;
+  - memory;
+  - session refresh.
+- **L2, runtime:** about 10 PRs: P3a, S7, the threads port from #998, cancel, steps, times, A14, B2, row 17 and thumbs.
+  - Most of these touch `telegram-owner-do.ts`, so they run one after another. L2 is the critical path.
+- **L1:** one staging deploy per wave. **Audit:** re-checks the promises after each wave.
+- **About 20 PRs.** At one or two merged PRs per lane per working day, L2's queue sets the length: about 5 to 8 working days. L3 and L4 run ahead in parallel. Streaming (C2) and media and search (C3) are each a further wave with an ADR first.
+
+**How it can land in one push:**
+- **One go dispatches every lane** with its slice of this plan.
+- **Work lands in waves.** Each merge and each deploy still needs the owner's go in the session that runs it. The owner gets one message per wave listing what is ready.
+- **One writer per wave on `telegram-owner-do.ts`.** Merge order per C1 item: L3's contract, then L4's hash pin, then the fallback rule, then L2's runtime, then L4's UI.
+- **To shorten the critical path,** files outside the owner DO can go to a second writer: the APNs sender and its register route, and session refresh. Their one call site in the owner DO lands in L2's wave. See decision 6.
+
 ## Order of work
 
 **C0, now, app only (L4).**
@@ -190,8 +262,11 @@ Merged on app main `9937d456` (#63–#66, about 15:00Z on 11 Oct), not proven on
 - Edit as a new message (#12).
 - The honest session copy holds: "Individual sessions are local drafts only" (`useChat.ts:54`). The Mic and Attach stay visible and disabled (#9).
 
-Still open:
-- Review follow-ups. App PR #67 (`ce590e4b`) fixes six of the seven below. It keeps the seventh, the tolerant page envelope, on purpose: unknown keys are ignored so an additive backend change does not blank the page, each item is still parsed strictly, and a comment now says so. I read its diff and ran tsc and jest at its head (pins above). It awaits the owner's merge yes in L4's session. Both MEDIUM fixes come before the device run's approval check:
+Review follow-ups, landed with #67 (merged 15:44Z, not proven on a device):
+- #67 fixes six of the seven below.
+- It keeps the seventh, the tolerant page envelope, on purpose. Unknown keys are ignored so an additive backend change does not blank the page, and each item is still parsed strictly. A comment now says so.
+- I read its diff and ran tsc and jest at its head (pins above).
+- The device run checks both MEDIUM fixes:
   - **MEDIUM: a decision sends the wrong digest.**
     - It sends the digest from the current list, not the one the owner saw (`approvalsController.ts:49`). This affects both the chat card and the Approvals screen.
     - The comment at line 15 promises the reviewed digest. Yet a refresh that lands between render and tap approves a version the owner never saw.
@@ -206,9 +281,11 @@ Still open:
     - Markdown is parsed again on every render (`MarkdownText.tsx:47`).
     - The page envelope is `z.object`, not `z.strictObject` (`appRoutesClient.ts:19`).
     - The menu uses `ActionSheetIOS` with no platform check, so it throws on Android. The app is iOS only today.
+Still open:
 - Retry from the reply row (#12).
 - The website's "looking" and checks styling, driven only by the real receipt phases until #5 lands.
 - Cleanup: the unused Ask Waldo paths listed above.
+- The app-only items in the baseline checklist below.
 - In parallel, the device run (#3), once the owner gives the go.
 
 **C1, the backend contract wave (contracts owner and L2).**
@@ -236,19 +313,20 @@ Still open:
 
 **Golden checks, each on a physical iPhone:**
 - **Sessions:** create a session and send in it; Waldo replies. Kill the app and reopen it: the session and its messages come back from the server. Telegram does not show it. The console, which has no threads today, comes later.
-- **Approval card** (after the digest fix): ask Waldo to email someone. The card in the chat shows the exact recipients and body. Not now: nothing is sent. Do it: one send, and the receipt shows in the chat.
+- **Approval card:** ask Waldo to email someone. The card in the chat shows the exact recipients and body. Not now: nothing is sent. Do it: one send, and the receipt shows in the chat.
 - **VoiceOver:** with VoiceOver on, the approval card's details and buttons in the chat can be reached, and so can "Share or copy".
 - **Proactive:** with the app closed, the morning brief arrives as a push. Tapping it opens the main chat at the brief.
 - **Progress:** a calendar question shows a real "checking your calendar" step. When the turn closes, one line names the sources read. Both match the trace.
 
 ## Coordination (11 Oct, about 15:50Z)
 
-- **One writer for `telegram-owner-do.ts` per wave.** Threads, the cancel routes, progress steps, arming and the row 17 fix all touch it. Merge order for each C1 item: L3's contract PR, then L4 pins the contract hash, then L2's runtime PR, then L4's UI PR.
+- **One writer for `telegram-owner-do.ts` per wave.** Threads, the cancel routes, progress steps, arming and the row 17 fix all touch it. Merge order for each C1 item: L3's contract PR, then L4 pins the contract hash, then L2's runtime PR, then L4's UI PR. The fallback rule (in the baseline checklist) lands before any new part producer.
 - **#1060** is merged and not deployed. L1 is the only staging deployer, and that deploy needs its own go.
 - **#1061** (draft, test pool only). CI shard 3/4 failed one test, `trusted-run-loop.test.ts:1438`, "settles a pending 'provider_plan' receipt before recomposition can issue the next tool": expected `context:materials_unavailable`, got `llm_observe:effect_receipt_unavailable`.
-  - That test drives a scripted gateway with no network. A comment in it and #879 record a race with the platform firing the alarm on its own.
-  - #1061 changes only how the pool answers outbound fetches, so a logic link is unlikely [inference]; it can shift timing.
-  - Classify before merging: rerun that shard once on #1061 and repeat the test on `beta-mvp`. Do not rerun until green.
+  - In both recent `beta-mvp` runs (`497bdcb6`, `e5fd7200`), this test finished under vitest's 300 ms slow threshold. On #1061 it took 2,526 ms, while its siblings took 51–84 ms.
+  - #1061 answers every host outside its two-host map with a 502. The run loop's AI Gateway client calls `api.cloudflare.com` (`llm/gateway.ts:19`), which is not in the map. A comment in the test and #879 record that the platform can fire the alarm before the test installs its fakes.
+  - So the failure is likely in-branch [inference]: if the alarm wins, the run may reach an unmapped host, and retried 5xx answers cost seconds. Not proven.
+  - cf002a's session checks before merging. Do not rerun until green.
 
 ## Owner decisions
 
@@ -267,5 +345,6 @@ Still open:
 **Open:**
 4. **Go for the live checks and the device run** in L4's session.
 5. **C1 before Constellations?** L3's next item in the owner's order is the Constellations view. Recommendation: the threads review and the main-chat cancel come first. Sessions (#2) block the app chat the owner named the core, and L4 waits on that contract. Constellations follows.
+6. **A second runtime writer for the files outside the owner DO.** These are the APNs sender with its register route (S7), and session refresh (B2). Recommendation: a short-lived "push and session" lane, so L2's queue loses about three PRs. L1 stays on health and deploys. If the owner prefers fewer sessions, L1 takes these after H5.
 
 **A design call for Suyash, not an owner decision:** one approval vocabulary for the app (see the website conflicts).
