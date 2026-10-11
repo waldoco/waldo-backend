@@ -164,7 +164,7 @@ export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const ticketResponse = await routedConsoleTicket(request, env);
     if (ticketResponse) return ticketResponse;
-    const appResponse = await handleApp(request, env);
+    const appResponse = await handleApp(request, env, undefined, (work) => ctx?.waitUntil(work));
     if (appResponse) return appResponse;
     const devicePath = new URL(request.url).pathname;
     if (devicePath === '/devices/redeem') return request.method === 'POST' ? handleDeviceRedeem(request, env) : genericReject();
