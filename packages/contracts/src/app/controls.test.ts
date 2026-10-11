@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlReceiptV1Schema } from './controls';
+import { appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -80,5 +80,32 @@ describe('channel status in the connections view', () => {
     expect(appChannelStatusV1Schema.safeParse({ channel: 'app', state: 'linked', masked_label: 'x' }).success).toBe(false);
     expect(appChannelStatusV1Schema.safeParse({ channel: 'telegram', state: 'bound', masked_label: 'x' }).success).toBe(false);
     expect(appChannelStatusV1Schema.safeParse({ channel: 'telegram', state: 'linked', masked_label: 'x', chat_id: '42' }).success).toBe(false);
+  });
+});
+
+describe('account deletion from the app', () => {
+  const remove = { view: 'account', action: 'account.delete', confirmation: 'DELETE', revision, request_id: 'delete-0001' };
+
+  it('reads the account view and deletes from it with the typed confirmation', () => {
+    expect(appControlQueryV1Schema.safeParse({ view: 'account' }).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'account', data: { deletion_available: true } }).success).toBe(true);
+    expect(appControlActionV1Schema.safeParse(remove).success).toBe(true);
+    expect(appControlResultV1Schema.safeParse({ request_id: 'delete-0001', receipt: { state: 'recorded', message: 'Removed.', signed_out: true }, duplicate: false }).success).toBe(true);
+  });
+
+  it('refuses a deletion without the exact confirmation, outside the account view, or carrying other fields', () => {
+    const { confirmation: _confirmation, ...bare } = remove;
+    for (const invalid of [bare, { ...remove, confirmation: 'delete' }, { ...remove, confirmation: 'DELETE ' }, { ...remove, view: 'connections' }, { ...remove, value: 'x' }, { ...remove, id: 'x' }])
+      expect(appControlActionV1Schema.safeParse(invalid).success).toBe(false);
+  });
+
+  it('keeps the confirmation and the account view to account.delete', () => {
+    expect(appControlActionV1Schema.safeParse({ view: 'day', action: 'timezone.set', value: 'Europe/London', confirmation: 'DELETE', revision, request_id: 'delete-0002' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ view: 'account', action: 'timezone.set', value: 'Europe/London', revision, request_id: 'delete-0003' }).success).toBe(false);
+  });
+
+  it('refuses extra keys in the account projection', () => {
+    expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'account', data: { deletion_available: true, email: 'a@example.test' } }).success).toBe(false);
+    expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'account', data: {} }).success).toBe(false);
   });
 });
