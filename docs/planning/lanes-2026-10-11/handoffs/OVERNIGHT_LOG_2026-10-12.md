@@ -44,14 +44,14 @@ L2 report (21:40Z) **[unverified until reviewed]**:
 - **Board** `OVERNIGHT_BOARD_2026-10-12.md` pushed (D4). Review prompt template saved in the session scratchpad.
 - **Message budget:** 4 `send_message` + 3 `SendMessage`.
 
-## 21:52Z: L1 has the standing deploy go; app CI-equivalent baseline green
+## 21:50Z: L1 has the standing deploy go; app CI-equivalent baseline green
 
 - **L1** (transcript, idle at 21:49:56Z) **[verified: read L1's final message to the owner]**: the owner gave L1 two yeses in L1's session: the `4bb040f5` deploy, and overnight deploys of later `beta-mvp` tips. L1 deploys only through a gate script that stops on a failed check: the commit is the tip; all 6 CI checks are green, pgTAP included; no pending migrations; deploy config unchanged; app contract changes reviewed first. After each deploy it checks `/healthz` and a signed-out 401, and records a rollback target. "This go ends when you're back here." L1 keeps the Mac awake until 04:00Z and a tail for the 03:17Z retention cron. It stopped four leftover `wrangler tail` processes from the old L1 by pid. L1 says it sent its results to me; that message hasn't reached this session yet.
 - So merges tonight can reach staging. The board now tells L1 to deploy on a `DEPLOY: <sha>` line.
 - **App CI-equivalent baseline** (D2) at app `main` `c2ccd5d0`, fresh detached worktree in the scratchpad **[verified]**: `pnpm@9.15.9 install --frozen-lockfile` exit 0, no lockfile drift; `tsc --noEmit` exit 0; jest 86 suites passed (1 skipped), 572 tests passed (1 skipped), 21 s. One jest worker was force-exited (a leaked timer); the run was otherwise clean.
 - **#1072** (latency session, draft, test file only, CI 6/6 on head `1acb9474`): independent review launched. If it passes, it is the first merge, which also tests whether the permission classifier allows merges under the standing go.
 
-## 21:55Z: L3 status
+## 21:51Z: L3 status
 
 - **L3** (message 21:50Z) **[unverified: lane report]**:
   - waldo-brain#36 merged as `23c4f992` at 21:30Z, with the owner's yes in L3's session.
@@ -63,9 +63,9 @@ L2 report (21:40Z) **[unverified until reviewed]**:
 - **Replied to L3** (SendMessage `2316f6c5`): morning batch file, local work order, Google connect readiness check, the board.
 - **Message budget:** 4 `send_message` + 4 `SendMessage`.
 
-## 22:05Z: L1's full report; L4's reports (via the old alignment session); D5
+## 21:53Z: L1's full report; L4's reports (via the old alignment session); D5
 
-- **L1** (message, 21:5xZ) **[unverified: lane report, consistent with #116]**: the owner's gos in L1's session were (a) deploy `4bb040f5`, (b) a standing go for overnight staging deploys, (c) keep the Mac awake until 04:00Z.
+- **L1** (message, about 21:52Z) **[unverified: lane report, consistent with #116]**: the owner's gos in L1's session were (a) deploy `4bb040f5`, (b) a standing go for overnight staging deploys, (c) keep the Mac awake until 04:00Z.
   - Conditions for (b): CI green at the exact tip incl. pgTAP; 0 pending hosted migrations (L1 never applies; a tip needing one waits for the owner); no wrangler or binding change (#1071 needs its own go); `--env staging` from a clean detached checkout; a `/healthz` check and a #116 record each time; on a failed smoke check, roll back and stop. It ends when the owner is next back in L1's session.
   - CI at `4bb040f5`: 7/7 incl. pgTAP.
 - **L4** (forwarded by the old alignment session):
