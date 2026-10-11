@@ -1407,4 +1407,49 @@ describe('approval desk round four', () => {
       expect(review).toBe('Approve this browser action? Upload on https://••••@files.example/x?X-Amz-Signature=••••&key=••••&code=SPRING&to=sam#id_token=••••&state=ok (signature: Best, Sam, key: PROJ-1)');
     });
   });
+
+  it('an approval decided in the app executes with the raw values the review masked', async () => {
+    const { appCaller } = await import('../src/channels/surfaces/app');
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-four-raw-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let n = 0;
+      const ran: unknown[] = [], submitted: unknown[] = [];
+      const desk = approvalDesk(state.storage.sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), newId: () => `raw${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, google: async () => null,
+        mcpCall: async (p) => { ran.push(p.args); return 'ran'; },
+        browserSubmit: async (p) => { submitted.push({ url: p.url, binding: p.binding, request: p.request }); return { status: 'verified_with_receipt', message: 'Verified fixture', receipt: {} } as never; },
+        browserReceiptVerified: async () => true });
+      const mcp = await desk.proposeMcpCall({ server: 'crm', tool: 'lookup', args: mcpArgs });
+      const browser = await desk.proposeBrowserSubmit(browserPage);
+      for (const id of [mcp, browser]) {
+        const [item] = await desk.approvals(NOW, { id });
+        expect(item!.actions).toEqual(['approve', 'skip']);
+        expect(item!.review).not.toMatch(SECRETS);
+      }
+      expect((await desk.decide(mcp, 'a', 'trace', { surface: 'app' })).toast).toBe('Done');
+      expect((await desk.decide(browser, 'a', 'trace', { surface: 'app' })).toast).toBe('Verified');
+      expect(ran).toEqual([mcpArgs]);
+      expect(submitted).toEqual([{ url: browserPage.url, binding: browserPage.binding, request: browserPage.request }]);
+    });
+  });
+
+  it('a reviewed URL keeps its encoding, masks hash-router parameters, and honours secret binding keys', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-four-url-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let n = 0;
+      const desk = approvalDesk(state.storage.sql, { owner: 42, google: async () => null, newId: () => `u${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, appIdentity: () => true,
+        call: async (method: string) => method === 'sendMessage' ? { message_id: n, chat: { id: 42 } } : true });
+      const review = async (url: string, binding: Record<string, string> = {}, secretKeys?: readonly string[]) => {
+        const id = await desk.proposeBrowserSubmit({ url, action: { selector: '#go', description: 'Go' }, binding, steps: [], ...(secretKeys ? { secretKeys } : {}) });
+        return (await desk.approvals(NOW, { id }))[0]!.review;
+      };
+      const encoded = await review('https://docs.example/share?to=bob%26to%3Dalice');
+      const two = await review('https://docs.example/share?to=bob&to=alice');
+      expect(encoded).toBe('Approve this browser action? Go on https://docs.example/share?to=bob%26to%3Dalice');
+      expect(two).toBe('Approve this browser action? Go on https://docs.example/share?to=bob&to=alice');
+      expect(await review('https://app.example/#/reset?token=tok-sec&email=a%40x.test')).toBe('Approve this browser action? Go on https://app.example/#/reset?token=••••&email=a%40x.test');
+      expect(await review('https://app.example/doc#section-2')).toBe('Approve this browser action? Go on https://app.example/doc#section-2');
+      expect(await review('https://shop.example/pay', { Card: 'card-sec', note: 'hi' }, ['Card'])).toBe('Approve this browser action? Go on https://shop.example/pay (Card: ••••, note: hi)');
+      expect(state.storage.sql.exec<{ summary: string }>("SELECT summary FROM ledger WHERE kind = 'browser_submit'").toArray().map(r => r.summary).join('\n')).not.toMatch(SECRETS);
+    });
+  });
 });
