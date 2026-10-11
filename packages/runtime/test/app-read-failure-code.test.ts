@@ -104,3 +104,12 @@ it('a row that passes the entry shape but has no witness still fails the main-ch
   expect(result.status).toBe(503);
   expect(result.failures).toEqual([{ hop: 'app_history_read', ok: false, code: 'history_witness' }]);
 });
+
+it('a shape-invalid row between two good rows is left out, and the later good row still shows with its stored parent', async () => {
+  witnessed.n = 0;
+  const first = { ...entry, id: 'stored-reply-first' }, middle = { ...entry, id: 'stored-reply-middle', parentId: first.id, role: undefined }, last = { ...entry, id: 'stored-reply-last', parentId: middle.id };
+  const result = await read('read-skip-middle', { ...witnessed(first), ...witnessed(middle), ...witnessed(last), [`${PREFIX}leaf`]: last.id });
+  expect(result.status).toBe(200);
+  expect((result.body as { messages: { id: string; parent_id: string | null }[] }).messages.map(({ id, parent_id }) => ({ id, parent_id }))).toEqual([{ id: last.id, parent_id: middle.id }, { id: first.id, parent_id: null }]);
+  expect(result.failures).toEqual([{ hop: 'app_history_read', ok: true, code: 'history_rows_skipped', check: 'role', count: 1, unwitnessed: 0 }]);
+});
