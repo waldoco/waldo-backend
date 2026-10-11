@@ -68,9 +68,9 @@ The sessions-alignment session hands off to its successor. Times are UTC unless 
   - the Durable Object's outcome was `ok`, with no exception and 7 ms and 5 ms of CPU. So the DO answered 503 itself.
 - **What it means:** a row in the owner's canonical history fails `validate()` in `canonical-owner-store.ts`.
   - L2's lead [inferred]: a staging build that never merged wrote the row, for example #998's thread code at `fc4c2b9d`.
-  - L2's fix direction: `load()` skips only rows that match their witness but fail the shape check, and logs a count and the failed clause. Owner mismatch, witness mismatch and duplicate ids stay fatal. Red tests first.
+  - L2's fix, on branch `l2/app-history-skip-invalid-rows` (`0692b4b2` at 20:25Z, no PR yet): a new `readForDisplay()`, used only by the Main-chat GET, skips shape-invalid rows that match their witness and logs `history_rows_skipped` with the failed check and a count. Owner mismatch, witness mismatch and duplicate ids stay fatal.
+  - The strict `load()` that turns use is unchanged, so whether app sends still fail is open. Ask L2.
   - Edge cases to check: the skipped row is a parent or the leaf.
-  - App sends probably fail the same way [inferred]; L2 is checking.
 - **Ruled out:** the resource-limit lead. L2 measured `load()` at 262 ms for 8,000 rows of 8 KB.
 - Only GET `/app/v1/chat/main` was seen failing. Controls, approvals and scores load for the same account (L4).
 

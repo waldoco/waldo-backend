@@ -42,8 +42,8 @@ All four lane handoffs are here. Each starts with collection notes: what changed
 **Staging state:**
 - Main chat loads history and answers, for the owner's account and for a fresh account.
   - Today GET `/app/v1/chat/main` answers 503 with `history_invalid` (L1's capture at 20:10Z): a stored row in the owner's canonical history fails its shape check.
-  - L2 is fixing it.
-  - App sends probably fail the same way [inferred]; L2 is checking.
+  - L2 is fixing it on branch `l2/app-history-skip-invalid-rows` (`0692b4b2` at 20:25Z). Its PR opens after the gates pass.
+  - The fix covers only the Main-chat read: a display read skips shape-invalid rows that match their witness. The strict `load()` that turns use is unchanged, so whether app sends still fail is open.
 - Proactive messages are armed at first app use (#1066) and arrive in the app at the times the owner set.
 
 **On a real iPhone,** built from source because there is no TestFlight:
