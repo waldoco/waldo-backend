@@ -54,6 +54,7 @@ const expectedMigrations = [
   '20261011020000_health_series.sql',
   '20261011030000_health_context_write_fence.sql',
   '20261011040000_health_retention_derived.sql',
+  '20261011050000_health_retention_sweep.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);
