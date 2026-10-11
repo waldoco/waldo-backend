@@ -185,3 +185,31 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - **New:** weight is always unavailable, sleep debt is computed but dropped, there's no health history route, and yesterday's Form is overwritten as stale.
 - **Usage limit (`get_usage`):** 5-hour window **76% used at 22:16Z, resets 01:30Z**. At the observed rate it could hit 100% around 22:45–23:00Z **[inference]**, stopping every session until 01:30Z. My context: 61%.
   - **Actions:** no new subagents from me (the falsifying experiment for harness finding 1 is not launched); the promise map is deferred until after the reset; the board carries a budget notice pausing L3, and L2 after #1066's resolution; L4 is narrowed to two items.
+
+## 22:30Z: MERGE #1075 → `889efa27`; deploy triggered; #1066 review FAIL + HOLD
+
+- **MERGED waldoco/waldo-backend#1075** at 22:30:43Z as **`889efa27c55a1c6a1ae945d906f791e222778a0b`**, with `--match-head-commit 01e20d1968b1afad473f39becee353e0bfe64a41` **[verified: `gh pr view`, `git rev-parse origin/beta-mvp`]**.
+  - **Gate 1, CI:** 6/6 SUCCESS incl. pgTAP at head `01e20d19` on base `4bb040f5`.
+  - **Gate 2, independent review: VERDICT PASS.**
+    - Ran 100/100 related tests and 48 owner-ingress tests (2 skipped). 12/13 new tests fail on base. 12 of 12 mutations caught. Custody, no-writes, fail-closed and concurrency hold.
+    - My `asStored` question can't cause a silent rewrite: `save()` throws `input conflict` on an existing id with a differing witness.
+    - Advisor: no blocker.
+  - **Gate 3:** `CLEAN` / `MERGEABLE` immediately before the merge.
+  - **Gate 4:** no app.v1 change.
+  - **Hold list:** no migration, auth, isolation or health change.
+  - **The permission classifier allowed the merge** under the standing go.
+  - **Review notes, not blocking:**
+    - Turns use "last loaded row in list order" as the parent, while scheduled delivery uses `above(storedLeaf)`: two leaf rules.
+    - The PR body's `leaf: true` "once per turn" is wrong; only the first load shows it.
+    - A pre-existing `commit()` path writes at `count + index` without checking the key. If staging's `count` were stale, the first send would overwrite the bad row. Falsifier: the second send logs no skip line.
+- **Deploy:** `DEPLOY: 889efa27…` is on the board. Message to L1 (SendMessage `fed99bbe`, delivered to its inbox) carries: deploy after push CI is green; a self-wake cron at :09/:29/:49 to read the board; one plain probe send coordinated with L4; falsifiers (a)–(e).
+  - At 22:31Z push CI was running, and Workers Builds was building `waldo-runtime-staging`. Workers Builds also succeeded on `4bb040f5` while `/healthz` kept `726ad0e7` until L1's 21:30Z deploy, so it builds but doesn't promote **[inference]**. L1 is to confirm `/healthz` before deploying.
+- **#1066 independent review at `e1ab2881`: VERDICT FAIL + HOLD** **[reviewer ran 4 related files 46/46, 12/12 mutations caught, and probes A/B/C; logs `review-1066-*.log` in the scratchpad]**.
+  - **FAIL:**
+    - `replanDayCards` misses entries armed for another date (a pinned card stayed 11 h off; a stale Brief fired at 19:00 in the new zone; `cards` never checks `sent`, so a duplicate card is possible);
+    - test 4 depends on the wall clock and fails about 23:00–04:00Z;
+    - held skips settle `ok` with no trace.
+  - **HOLD (health destinations):** `ledger()` puts health-log lines ("~612 kcal, estimate", "N min") into the day-card machine prompt, which is saved verbatim to `conv:*` and the `episodes` FTS table. That already happens for Telegram owners; #1066 extends it to app-only owners.
+  - **PASS on:** reminders never held; no Telegram-addressed delivery for app-only owners; no burst beyond the cross-date case; app.v1 shape; no migration; bounded strict-load failure (retries at 30 s and 60 s, then a 24 h quarantine).
+  - → **Held for the morning.** L2 fixes 1-3 tonight (board). The owner rules on the health-log question.
+- **Messages:** 10 used (5 `send_message` + 5 `SendMessage`). From here, lanes get instructions through the board and their own crons.
