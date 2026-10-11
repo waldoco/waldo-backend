@@ -215,6 +215,14 @@ export const webSearchArgsSchema = z.strictObject({
 });
 export type WebSearchArgs = z.infer<typeof webSearchArgsSchema>;
 
+// Weather and daylight. Read-only; location is a place the owner named or the stored coarse location.
+export const getWeatherArgsSchema = z.strictObject({
+  place: z.string().trim().min(1).max(120).optional(),
+  day: z.union([z.literal('today'), z.string().regex(/^\d{4}-\d{2}-\d{2}$/)]).default('today'),
+  hours: z.int().min(1).max(48).default(12),
+});
+export type GetWeatherArgs = z.infer<typeof getWeatherArgsSchema>;
+
 // B-tool-1: read-only browser. One shot: open the page in a real browser, extract, done.
 // No act/observe here - bounded actions are a later slice with the approval gate.
 export const browsePageArgsSchema = z.strictObject({

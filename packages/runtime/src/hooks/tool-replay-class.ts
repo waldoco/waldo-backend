@@ -23,7 +23,7 @@ export const TOOL_REPLAY_CLASS: Readonly<Record<ToolName, ToolReplayRow>> = {
   get_crs: read(), get_health: read(), query_calendar: read(), get_communication: read(), search_communication: read(),
   read_thread: read(), get_tasks: read(), get_master_metrics: read(), get_context: read('pure clock read (tools/live/get-context.ts)'), query_availability: read(),
   read_owner_context: read(), read_memory: read(), search_episodes: read(), propose_action: unknown('proposal handler not inspected'),
-  web_search: read(), read_document: read(), list_artifacts: read(), read_artifact: read(), read_mcp_tool: read('read-only MCP allowlist; every call goes through the proxy intent ledger (tools/live/mcp.ts); the remote server is trusted to be read-only'),
+  web_search: read(), get_weather: read(), read_document: read(), list_artifacts: read(), read_artifact: read(), read_mcp_tool: read('read-only MCP allowlist; every call goes through the proxy intent ledger (tools/live/mcp.ts); the remote server is trusted to be read-only'),
   read_drive: read(), search_connector: unknown(NO_HANDLER + ' (schema only)'), propose_schedule: unknown('proposal handler not inspected'), search_tools: read(),
   list_reminders: read(), read_tool_output: read(), connect_service: unknown('starts a connection flow; not inspected'),
   browse_page: read('starts and ends a vendor browser session and reads a public page; page-load side effects not verifiable'), list_health_logs: read(), list_standing_orders: read(), workspace_list: read(), workspace_read: read(), workspace_search: read(), skills_list: read(),
