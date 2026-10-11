@@ -6,8 +6,8 @@
 
 **Pins:**
 - Design system: https://claude.ai/artifact/7wKJuF255GspDEBR643qNS, version `1791721337-e9e9`. The plan's design-system section says how to read it.
-- App: `waldo-app` `main` `18d5d0c3`. It includes #69 (the chat follows the design system: a static working line, the inset user bubble, the composer placeholder) and #68.
-- Backend contracts: `beta-mvp` `15134581`. L1 reports staging serves the same commit; I have not checked it.
+- App: rows were read at `waldo-app` `main` `18d5d0c3`, which includes #69 (the chat follows the design system: a static working line, the inset user bubble, the composer placeholder) and #68. Main has since moved to `721f1dfe`, adding #70 (L4's audit doc) and #71 (`inset` set to `#ecece9`).
+- Backend contracts: `beta-mvp` `15134581`. Staging serves the same commit: L1 deployed it, and the audit lane (17:39Z) and L4 each read `/healthz` as `15134581`.
 
 **Method:**
 - I read each row at those pins, including mechanical greps over `src/` and `app/` that leave out tests and pinned contracts. The exception is a cell marked `[inventory]`: a reading agent reported it at app `9937d456`, and I did not re-check it at `18d5d0c3`.
@@ -55,8 +55,8 @@
 
 | # | Rule (design-system source) | App at `18d5d0c3` | Class | Severity | Lane |
 |---|---|---|---|---|---|
-| G1 | Tokens come from `tokens.json` (`15-platforms.md`) | A hand-kept palette (above). The exports exist on an unmerged waldo-brain branch. | (c): merge and name the source; then (a): copy `exports/` | Blocks every visual row | Owner, L4 |
-| G2 | Retired names never appear: "Patrol, Fetch and Spot are retired names" (`09-voice-and-content.md`) | Home renders a "The Patrol" card with "Show all Patrol entries", which opens the `patrol` route (`TodaySummary.tsx:91-92`, rendered by `home.tsx`). Kind labels "Fetch" and "Patrol" come from `backendHome.ts:116-119`, used by `useHomeData.ts`. A `spots` route exists. `PatrolCompact`, `SpotsCompact` and `FloatingTabBar` hold the names too, but nothing renders them. | (c): renaming waits for the owner's explicit yes, which L4 asked for | Visible | Owner, L4 |
+| G1 | Tokens come from `tokens.json` (`15-platforms.md`) | A hand-kept palette (above). The exports exist on an unmerged waldo-brain branch. | (a): the owner said yes in L4's session to generating the theme from a pinned `tokens.json`, and L4 has started. Copying the existing exports keeps one generator. | Blocks every visual row | L4 |
+| G2 | Retired names never appear: "Patrol, Fetch and Spot are retired names" (`09-voice-and-content.md`) | Home renders a "The Patrol" card with "Show all Patrol entries", which opens the `patrol` route (`TodaySummary.tsx:91-92`, rendered by `home.tsx`). Kind labels "Fetch" and "Patrol" come from `backendHome.ts:116-119`, used by `useHomeData.ts`. A `spots` route exists. `PatrolCompact`, `SpotsCompact` and `FloatingTabBar` hold the names too, but nothing renders them. | Owner decision (11 Oct, in L4's session, as L4 relayed it): keep "Patrol" and "Spots". This overrides the system's rule, so the system's `09` needs updating to match. | n/a | Owner |
 | G3 | Three places: Home, Body, Waldo, on the native tab bar (`TabBar`, `15-platforms.md`) | The live dock is `GlassTabBar`, inside `GlassDock`, which the `NativeScaffold` screens render. It shows Open menu, Overview, Health Stats and Ask Waldo. The three places exist under other labels, plus a side menu the system doesn't have. It is a custom bar, not the native one. `FloatingTabBar` (Brief, Health, Patrol) is exported but never rendered. | (c): the labels and the side menu | Visible | Owner, L4 |
 | G4 | Selection is ink; blue (`accent`) is only a Switch's on track and a radio or checkbox mark (README, "The rules agents break most") | The dock already marks the active place in ink (`GlassTabBar.tsx:119`). The chat header's switcher uses `GlassButtonGroup` (`ChatPane.tsx:294`), which selects in blue `select` with a blue tint (`LiquidGlass.tsx:78-120`). | (a) | Polish | L4 |
 | G5 | Colour only for Spot, state, Form zones and icon identity; data in ink (`viz-ink`) (README principle 2) | The Recovery gauge is green and the Weight gauge pink (`tokens.ts`: `recovery`, `weight`). The system specifies `FormGauge` by zone, and no Recovery or Weight gauge. | (c): the three-score product decision against the system's colour rule | Visible | Owner, Suyash |
@@ -92,20 +92,24 @@ L4's own audit is `Docs/audits/APP-design-system-gap-audit-2026-10-11.md` in wal
   - no session-ended screen;
   - a website-promise matrix with a 24-item backend ask list. L4 waits for the owner's go before posting it on #116.
 - **In flight:** waldo-app #71 corrects #69's `inset` to `#ecece9` (dark `#1c1c1b`).
-- **Blocking the device run:** `GET /app/v1/chat/main` returned 503 on staging release `81c4f892` for the owner's account. L4 retries against `15134581`. The handler's bare `catch` hides the cause (`telegram-owner-do.ts:644-651`); a lead went to L2.
+- **Blocking the device run:** `GET /app/v1/chat/main` returns 503 for the owner's account on staging `81c4f892` and again on `15134581`. Controls, approvals and health scores load in the same signed-in Simulator session.
+  - The handler's bare `catch` hides the cause (`telegram-owner-do.ts:644-651`).
+  - L2 is preparing a PR that logs a fixed failure code. It needs the owner's go, and L1 then deploys it.
+  - A second staging account, signed up by the owner, would show whether the fault is in this owner's stored data or general.
+- **Posted on #116 on the owner's go:** L4's 24-item backend ask list and the 503 (`issuecomment-6111832669`).
 
 ## Questions for the owner
 
-1. **Design-system source.** Merge the waldo-brain design-system branch and name it the source, so L4 copies its `exports/` (G1)? The Telegram fix in the artifact needs mirroring there too.
+1. **Design-system source.** Merge the waldo-brain design-system branch and name it the source? The Telegram fix in the artifact needs mirroring there too. Theme generation itself is approved (G1).
 2. **Tabs.** Should the dock read Home, Body, Waldo instead of Overview, Health Stats, Ask Waldo? Does the side menu stay (G3)?
 3. **Three scores.** Do the Recovery and Weight gauges keep their own colours, or follow the system's rule that colour means a zone or a state (G5)?
 4. **Dark mode at launch.** Hide it as "Coming soon", as the system says, even though it works (G6)?
 5. **Reminders.** May a reminder the owner set send a push (G13)?
 6. **Approvals.** Is "Don't do this" (deny) its own action, or part of `skip` (G10)?
-7. **Retired names.** Rename "The Patrol", the "Fetch" and "Patrol" labels, and the `spots` route, as the system says (G2)? L4 is waiting for this answer, and proposes names from the system's Home order.
+7. **Retired names.** Answered: keep "Patrol" and "Spots" (G2). Should the design system's `09-voice-and-content.md` be updated to match?
 8. **The morning Brief.** The website promises a 6:30 notification; the system says the Brief never pushes. Flagged by the audit lane.
 9. **From L4:**
-   - Does an automatic time-zone write at sign-in count as the owner setting the zone?
+   - The time-zone write at sign-in is answered: the app writes the device zone once when `timezone_confirmed` is exactly false.
    - Does sign-in need both Apple and Google, and where does the 18+ check sit?
    - The SF Pro Rounded licence, which `16-governance.md` lists as open.
 </content>

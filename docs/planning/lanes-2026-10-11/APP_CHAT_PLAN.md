@@ -8,7 +8,7 @@
 
 **Pins:**
 - backend `beta-mvp` `15134581`: #1060 (sign out everywhere also revokes app and email sign-ins) merged at 15:32Z on 11 Oct, then #1059 (an optional latest delivery on day cards). Source rows below were read at `e5fd7200`; neither PR touches them;
-- staging `15134581` (Worker version `30b43ff7`), per L1's report: deployed on the owner's yes in L1's session, so #1060 and #1059 should be live. I have not checked staging myself;
+- staging `15134581` (Worker version `30b43ff7`), deployed by L1 on the owner's yes in L1's session. The audit lane (17:39Z) and L4 each read `/healthz` as `15134581`;
 - waldo-app `main` `18d5d0c3`: #62–#66 merged at about 15:00Z on 11 Oct, #67 (the C0 review fixes) at 15:44Z, then #68 (why the agent could not be reached) and #69 (the chat follows the design system). The checks below ran at `7bbf3135`. Its tree is identical to #67's head `ce590e4b`, where `tsc --noEmit` exits 0 and jest passes 551 tests in 82 suites (1 suite and 1 test skipped). Rows below that cite app line numbers were read at `9937d456`. Nothing has run on a device;
 - website `Pin4sf/waldo-landing` `main` `830bfc2` (9 Oct), the pin the promise ledger also uses. I have not checked that heywaldo.in serves this commit.
 
@@ -422,8 +422,22 @@ Still open:
    - Where the app differs today, and what unblocks each gap: [APP_DESIGN_SYSTEM_GAPS.md](APP_DESIGN_SYSTEM_GAPS.md).
 8. **L2's W2:** S7 and the device routes, plus storing `created_at`. Cancel lands in W3 with the C1 cancel route.
 
+**Owner answers given in L4's session (11 Oct evening, as L4 relayed them):**
+- Keep "Patrol" and "Spots".
+- L4 may generate the theme from a pinned `tokens.json`.
+- L4's 24-item backend ask list and the main-chat 503 are posted on #116.
+- The app writes the device zone once at sign-in when `timezone_confirmed` is exactly false.
+- #70 and #71 are merged.
+- **Before the UX handoff,** verify everything against this plan, the design system, the website promises and the health endpoints. The UX person is named "Yash" in L4's relay; earlier plans name Suyash.
+
+**Handoff readiness, proposed:**
+- **L4:** the golden checks above, on a device or the Simulator, with the main-chat 503 fixed first. Close or waive each design-system register row.
+- **Audit lane:** the ledger's app-bar promises, each marked delivered, partial or waived, at a pinned app and backend SHA.
+- **L1:** the health endpoints (`/app/v1/health/consents`, `ingest`, `scores`) exercised on staging with a real signed-in account. Missing health stays absence, never zero.
+- Then a one-page handoff: what works, what is waived, and what waits on backend.
+
 **Open:**
-4. **Go for the live checks and the device run** in L4's session.
+4. **Go for the live checks and the device run** in L4's session. The owner gave L4 the go; the run is Simulator-only and blocked by the main-chat 503.
 9. **Whether a reminder the owner set may push.** The design system's push table is silent. Recommendation: yes, at the time the owner chose, held by quiet hours, with no health values, and the row added to the design system's table.
 10. **The register's owner questions:** the token pipeline, the dock labels and side menu, the three scores' colours, dark mode at launch, deny against `skip`, and renaming Patrol, Spots and Fetch.
 
