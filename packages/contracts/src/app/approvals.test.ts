@@ -149,3 +149,21 @@ describe('approval decisions', () => {
     expect(appApprovalRoutesV1[0].query).toBe(appApprovalListQueryV1Schema);
   });
 });
+
+describe('not now', () => {
+  const part = { type: 'approval', approval_id: 'p0001', kind: 'email_send', review: email.review, payload_digest: digest, expires_at: expiresAtMs, fallback_text: 'Open Waldo to review this email.' };
+  it('defers an open or review-only approval, separately from skip', () => {
+    expect(appApprovalDecisionV1Schema.safeParse({ ...decision, action: 'defer' }).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse({ ...email, actions: ['approve', 'edit', 'skip', 'defer'] }).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse({ ...email, state: 'review_only', actions: ['skip', 'defer'] }).success).toBe(true);
+    expect(replyApprovalPartV1Schema.safeParse({ ...part, actions: ['approve', 'edit', 'skip', 'defer'] }).success).toBe(true);
+  });
+  it('refuses a defer where the desk cannot defer, and repeated or extra actions', () => {
+    expect(appApprovalV1Schema.safeParse({ ...calendar, state: 'done', actions: ['undo', 'defer'] }).success).toBe(false);
+    expect(appApprovalV1Schema.safeParse({ ...email, state: 'skipped', actions: ['defer'] }).success).toBe(false);
+    expect(appApprovalV1Schema.safeParse({ ...email, actions: ['approve', 'edit', 'skip', 'defer', 'defer'] }).success).toBe(false);
+    expect(appApprovalV1Schema.safeParse({ ...email, actions: ['defer', 'defer'] }).success).toBe(false);
+    expect(replyApprovalPartV1Schema.safeParse({ ...part, actions: ['approve', 'edit', 'skip', 'defer', 'undo'] }).success).toBe(false);
+    expect(replyApprovalPartV1Schema.safeParse({ ...part, actions: ['defer', 'defer'] }).success).toBe(false);
+  });
+});

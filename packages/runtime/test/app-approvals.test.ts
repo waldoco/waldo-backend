@@ -97,3 +97,28 @@ it('app receipts carry fixed text, never provider errors or the desk message', a
     for (const body of [failed.text, sent.text]) expect(body).not.toMatch(/PROVIDER-SECRET|invalid_grant|owner@example\.test|PRIVATE-BODY-TEXT|a@x\.test/);
   });
 });
+
+it('refuses Not now until the desk can defer, without deciding or recording anything', async () => {
+  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`app-approvals-defer-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_instance, state) => {
+    let n = 0, sends = 0;
+    const client = { sendRaw: async () => { sends++; return { message_id: 'g1' }; }, findSentByMessageId: async (id: string) => ({ message_id: 'g1', thread_id: 't', rfc822_message_id: id, label_ids: ['SENT'] }) } as unknown as GoogleClient;
+    const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_002, call: appCaller(), appLink: appApprovalLink,
+      google: async () => client, newId: () => `defer${++n}`, now: () => Date.now(), timezone: 'UTC', log: () => {}, currentRunRef: () => 'app-message-0002' });
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+    const decide = (body: unknown) => appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), host);
+    const raw = 'To: b@x.test\r\nSubject: Later\r\n\r\nNot today.';
+    const id = await desk.proposeSendEmail({ to: ['b@x.test'], subject: 'Later', body: 'Not today.', message_id: '<defer@waldo-send>', raw, digest: await sha256Hex(raw) });
+    const [item] = appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals'), host)).json()).approvals;
+    expect(item).toMatchObject({ approval_id: id, state: 'open' });
+    expect(item!.actions).not.toContain('defer');
+
+    const deferred = await decide({ approval_id: id, action: 'defer', expected_digest: item!.payload_digest, request_id: 'defer-request-0001' });
+    expect([deferred.status, (await deferred.json() as { error: string }).error]).toEqual([409, 'no_longer_eligible']);
+    const [after] = appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals'), host)).json()).approvals;
+    expect(after).toMatchObject({ approval_id: id, state: 'open', payload_digest: item!.payload_digest });
+    const skipped = await decide({ approval_id: id, action: 'skip', expected_digest: item!.payload_digest, request_id: 'defer-request-0001' });
+    expect(appApprovalDecisionResultV1Schema.parse(await skipped.json())).toMatchObject({ duplicate: false, approval_state: 'skipped' });
+    expect(sends).toBe(0);
+  });
+});
