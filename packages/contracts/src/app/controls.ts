@@ -76,8 +76,10 @@ export const appControlActivityDataV1Schema = z.strictObject({
   ledger: text,
 });
 // The console's memory graph, without its table-local ids. Claim text and writer notes are the owner's own memory:
-// the app shows them and never logs or persists them. A pending forget empties claims and interpretations and marks
-// the graph partial; estimates are uncalibrated model output, not measurements.
+// the app shows them and never logs or persists them. Every string here (text, evidence.text, label, summary,
+// domain, relation) renders as plain text, never markdown or links: a claim can come from an untrusted source.
+// A pending forget empties claims and interpretations and marks the graph partial; estimates are uncalibrated
+// model output, not measurements.
 const memoryGraph = { version: z.literal(1), state: z.enum(['available', 'partial', 'unavailable']), complete: z.boolean(), unavailable_claim_count: count };
 const estimate = z.number().min(0).max(1).nullable();
 const memoryClaim = z.strictObject({
