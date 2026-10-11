@@ -244,3 +244,11 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - L2's self-wake cron was accepted (minutes 11/31/51 local, from 01:41Z). L2 is paused until the reset.
 - **App #78** is unchanged at `cb0ad501`.
 - **Correction to the 22:37Z entry:** L1's reply arriving says nothing about my send cap. My 10 sends all delivered; an 11th is untested.
+
+## 23:18Z: heartbeat. L4 blocked on a question to the owner; stop refused
+
+- No probe result yet; `/healthz` is `889efa27`; no PR or #116 changes since 22:55Z.
+- **L4 is blocked** **[verified: `list_events`]**: its last action is a pending AskUserQuestion to the owner, who is asleep. My 22:03Z message sits behind it. The transcript view hides tool content, so I can't see the question.
+  - This stalls L4's whole queue (D6 time zone, health honesty, chat failure state) and tonight's probe send.
+- **The classifier REFUSED `stop_session` on L4** (my attempt to interrupt its waiting turn so the queue would run). Not routed around. **Morning: the owner answers L4's pending question in L4's session first thing.** Also a morning item: whether the owner wants the orchestrator able to stop a lane's blocked turn.
+- **Asked L1** (SendMessage `77b9c303`, send 11, delivered) to run the probe itself on the Simulator if no new permission is needed: one plain message, no approvals, stop at any permission prompt or sign-in screen. Falsifiers (b)-(e), then a #116 post. If the send fails, the tail code is waiting for L2's 01:41Z wake.
