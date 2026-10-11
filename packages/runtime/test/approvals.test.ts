@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { approvalDesk, PROPOSAL_TTL_MS, UNDO_WINDOW_MS } from '../src/channels/approvals';
+import { APP_REVIEW_MAX_CHARS } from '../src/channels/surfaces/app';
 import { GoogleError, type GoogleClient } from '../src/connectors/google';
 import { ProxyIntentError } from '../src/connectors/proxy-intent';
 
@@ -1040,26 +1041,25 @@ describe('app approval projection', () => {
       expect(byId[email]!.exact).toEqual({ recipients: { to: ['a@x.test'], cc: ['c@x.test'], bcc: [] }, scope: 'me@example.com' });
       expect(byId[email]!.review).toContain('Cc: c@x.test');
       expect(byId[message]!.exact).toEqual({ recipients: { to: ['whatsapp'], cc: [], bcc: [] } });
-      expect(byId[browser]).toMatchObject({ exact: { scope: 'https://reservations.example/book' }, actions: ['skip'], review: 'Approve a browser action on https://reservations.example/book?', expires_at: NOW + 30 * 60_000 });
-      expect(byId[mcp]).toMatchObject({ exact: { scope: 'lookup on the crm server' }, actions: ['skip'], review: 'Run lookup on the crm server.' });
-      for (const id of [browser, mcp]) expect(desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: false });
-      expect(JSON.stringify(listed)).not.toMatch(/secret-ish|secret-hold|18:30|4242|party=/);
+      expect(byId[browser]).toMatchObject({ exact: { scope: 'https://reservations.example/book' }, actions: ['approve', 'skip'], review: 'Approve this browser action? Book the table on https://reservations.example/book (time: 18:30, card: ending 4242)', expires_at: NOW + 30 * 60_000 });
+      expect(byId[mcp]).toMatchObject({ exact: { scope: 'lookup on the crm server' }, actions: ['approve', 'skip'], review: 'Run this MCP tool? Run lookup on the crm MCP server\n\nArgs:\n{\n  "q": "secret-ish"\n}' });
+      for (const id of [browser, mcp]) expect(desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true });
+      expect(JSON.stringify(listed)).not.toMatch(/secret-hold|party=|#slot/);
       const fromApp = approvalDesk(sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), newId: () => `proj${++n}`, now: () => now, timezone: 'UTC', log: () => {}, google: async () => null, currentRunRef: () => 'app-run-0001' });
       const appBrowser = await fromApp.proposeBrowserSubmit(page), appMcp = await fromApp.proposeMcpCall({ server: 'crm', tool: 'lookup', args: { q: 'secret-ish' } });
       const parts = appApprovalParts(sql)('app-run-0001').live;
-      expect(parts.map(part => [part.approval_id, part.actions])).toEqual([[appBrowser, ['skip']], [appMcp, ['skip']]]);
-      expect(JSON.stringify(parts)).not.toMatch(/secret-ish|secret-hold|18:30|4242|party=/);
-      expect(parts.map(part => part.fallback_text)).toEqual(['Approve a browser action on https://reservations.example/book?', 'Run lookup on the crm server.']);
-      expect((await fromApp.decide(appMcp, 'a', 'trace')).toast).toBe('Already handled.');
-      expect((await desk.approvals(now, { id: appMcp }))[0]).toMatchObject({ state: 'review_only', actions: ['skip'] });
+      expect(parts.map(part => [part.approval_id, part.actions])).toEqual([[appBrowser, ['approve', 'skip']], [appMcp, ['approve', 'skip']]]);
+      expect(JSON.stringify(parts)).not.toMatch(/secret-hold|party=|#slot/);
+      expect(parts.map(part => part.fallback_text)).toEqual(['Book the table on https://reservations.example/book (time: 18:30, card: ending 4242)', 'Run lookup on the crm MCP server']);
+      expect((await desk.approvals(now, { id: appMcp }))[0]).toMatchObject({ state: 'open', actions: ['approve', 'skip'] });
       expect(byId[task]!.exact).toEqual({ task: { action: 'update', account: 'me@example.com', list: 'Errands', task: 'Buy milk', changes: { title: { before: 'Buy milk', after: 'Buy oat milk' }, due_date: { before: null, after: '2026-10-12' } } } });
       for (const item of listed) {
         const stored = sql.exec<{ payload_json: string; proposal_digest: string | null }>('SELECT payload_json, proposal_digest FROM ledger WHERE id = ?', item.approval_id).one();
         expect(item.payload_digest).toBe(`sha256:${await sha256Hex(stored.payload_json)}`);
         if (item.kind === 'google_task_change') expect(item.payload_digest).toBe(`sha256:${stored.proposal_digest}`);
       }
-      expect((await desk.approvals(now, { state: 'open' })).length).toBe(6);
-      expect((await desk.approvals(now, { state: 'review_only' })).map(item => item.approval_id).sort()).toEqual([appBrowser, appMcp].sort());
+      expect((await desk.approvals(now, { state: 'open' })).length).toBe(8);
+      expect(await desk.approvals(now, { state: 'review_only' })).toEqual([]);
       expect(await desk.approvals(now, { state: 'done' })).toEqual([]);
       expect((await desk.approvals(now, { id: email })).map(item => item.approval_id)).toEqual([email]);
 
@@ -1218,9 +1218,10 @@ describe('decisions from any surface', () => {
       expect(status(await send.handle({ channel: 'telegram', content: 'Hi', idempotency_key: 'status-1' }, {} as never))).toBe('sent to the owner with Send it / Modify / Not now buttons');
       telegramUp = false;
       expect(status(await send.handle({ channel: 'telegram', content: 'Hi again', idempotency_key: 'status-2' }, {} as never))).toBe('The review card is in the Waldo app; it could not be shown here. Nothing was sent.');
-      expect(status(await mcp.handle({ server: 'crm', tool: 'lookup', args: { q: 'x' } }, {} as never))).toBe('Only a summary card could be shown, so it cannot be approved yet. Nothing has run.');
+      expect(status(await mcp.handle({ server: 'crm', tool: 'lookup', args: { q: 'x' } }, {} as never))).toBe('The review card is in the Waldo app; it could not be shown here. Nothing has run.');
       const inApp = approvalDesk(state.storage.sql, { owner: 7_000_000_000_001, surface: 'app', call: async () => undefined, google: async () => null, newId: () => `tool${++n}`, now: () => NOW, timezone: 'UTC', log: () => {} });
-      const fromApp = status(await callMcpToolHandler(JSON.stringify([{ name: 'crm', url: 'https://mcp.test/rpc' }]), inApp).handle({ server: 'crm', tool: 'lookup', args: { q: 'x' } }, {} as never));
+      const tooLong = { q: 'x'.repeat(APP_REVIEW_MAX_CHARS) };
+      const fromApp = status(await callMcpToolHandler(JSON.stringify([{ name: 'crm', url: 'https://mcp.test/rpc' }]), inApp).handle({ server: 'crm', tool: 'lookup', args: tooLong }, {} as never));
       expect(fromApp).toBe('Only a summary card could be shown, so it cannot be approved yet. Nothing has run.');
       expect(fromApp).not.toMatch(/Do it/);
       telegramUp = true;
@@ -1242,8 +1243,10 @@ describe('approval desk round two', () => {
       let ran = 0;
       const desk = approvalDesk(state.storage.sql, { owner: 42, google: async () => null, newId: () => 'flag1', now: () => NOW, timezone: 'UTC', log: () => {}, appIdentity: () => true, appLink: id => `waldo://approvals/${id}`,
         call: async (method: string) => method === 'sendMessage' ? { message_id: 9, chat: { id: 42 } } : true, mcpCall: async () => { ran++; return 'ran'; } });
-      const id = await desk.proposeMcpCall({ server: 'crm', tool: 'lookup', args: { q: 'x' } });
+      const id = await desk.proposeMcpCall({ server: 'crm', tool: 'lookup', args: { q: 'x'.repeat(APP_REVIEW_MAX_CHARS) } });
+      expect(state.storage.sql.exec<{ approvable: number }>("SELECT approvable FROM approval_presentations WHERE approval_id = ? AND surface = 'app'", id).one().approvable).toBe(0);
       state.storage.sql.exec("UPDATE approval_presentations SET approvable = 1 WHERE approval_id = ? AND surface = 'app'", id);
+      state.storage.sql.exec("UPDATE ledger SET status = 'open' WHERE id = ?", id);
       expect((await desk.approvals(NOW, { id }))[0]).toMatchObject({ state: 'open', actions: ['skip'] });
       expect(desk.placement(id)).toMatchObject({ appApprovable: false });
       for (const action of ['a', 'e'] as const) expect((await desk.decide(id, action, 'trace', { surface: 'app' })).toast).toBe('Not available here');
@@ -1259,7 +1262,7 @@ describe('approval desk round two', () => {
       const denied: string[] = [];
       const desk = approvalDesk(state.storage.sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), google: async () => null, newId: () => 'deny1', now: () => NOW, timezone: 'UTC', log: () => {},
         browserDeny: async proposal => { denied.push(proposal.url); } });
-      const id = await desk.proposeBrowserSubmit({ url: 'https://shop.example/checkout', action: { selector: '#pay', description: 'Pay' }, binding: { total: '9' }, steps: [] });
+      const id = await desk.proposeBrowserSubmit({ url: 'https://shop.example/checkout', action: { selector: '#pay', description: 'Pay' }, binding: { note: 'x'.repeat(APP_REVIEW_MAX_CHARS) }, steps: [] });
       expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe('review_only');
       expect((await desk.decide(id, 's', 'trace', { surface: 'app' })).toast).toBe('Not now');
       expect(denied).toEqual(['https://shop.example/checkout']);
@@ -1291,7 +1294,7 @@ describe('approval desk round two', () => {
       const host = { taskRef: 'task-one', pageUrl: 'https://fixture.example/form', propose: async () => ({ id: 'prepared-one', url: 'https://fixture.example/form', actionRef: '#submit', scopeDigest: `sha256:${'a'.repeat(64)}`, binding: { value: 'synthetic' } }) };
       const browser = browserTaskHandler({ legacy: browseActHandler(undefined, undefined, undefined), host: async () => host as never, propose: payload => inApp.proposeBrowserSubmit(payload), placement: id => inApp.placement(id) });
       const prepared = await browser.handle(browseActArgsSchema.parse({ url: host.pageUrl, task: 'prepare', command: { operation: 'prepare_submit' } }), { authenticatedUserId: 'owner-a', assertTaskSourceCurrent: async () => {} } as never);
-      expect(prepared).toMatchObject({ ok: true, data: { stopped: 'approval_pending', status: 'Only a summary card could be shown, so it cannot be approved yet. Nothing was submitted.' } });
+      expect(prepared).toMatchObject({ ok: true, data: { stopped: 'approval_pending', status: 'awaiting owner approval' } });
     });
   });
 
@@ -1317,6 +1320,72 @@ describe('approval desk round two', () => {
       expect(history().fallbacks).toEqual(fallbacks);
       state.storage.sql.exec("UPDATE ledger SET payload_json = 'not json' WHERE id = ?", third);
       expect(history()).toEqual({ live: [], fallbacks: fallbacks.slice(0, 2) });
+    });
+  });
+});
+
+describe('approval desk round four', () => {
+  const NOW = Date.UTC(2026, 9, 11, 9, 0, 0);
+  const SECRETS = /-sec|token=|hold=|#pay/;
+  const mcpArgs = { password: 'pw-sec', nested: { apiKey: 'key-sec', note: 'keep' }, items: [{ cardNumber: 'card-sec-2' }], q: 'ok' };
+  const browserPage = { url: 'https://shop.example/pay?hold=hold-sec#pay', action: { selector: '#pay', description: 'Pay' }, binding: { 'Card number': 'card-sec-1', cvv: 'cvv-sec', total: 'Rs 499' }, steps: [],
+    request: { url: 'https://shop.example/charge?token=tok-sec', method: 'POST' as const, fields: ['total'] } };
+
+  it('MCP and browser approvals show the full review on every surface with credential values masked', async () => {
+    const { appApprovalParts } = await import('../src/channels/approvals');
+    const { appCaller } = await import('../src/channels/surfaces/app');
+    const { sha256Hex } = await import('../src/connectors/google');
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-four-mask-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const sql = state.storage.sql, cards: string[] = []; let n = 0;
+      const desk = approvalDesk(sql, { owner: 42, google: async () => null, newId: () => `mask${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, appIdentity: () => true,
+        call: async (method: string, body: object) => { if (method === 'sendMessage') cards.push(String((body as { text: string }).text)); return method === 'sendMessage' ? { message_id: n, chat: { id: 42 } } : true; } });
+      const mcp = await desk.proposeMcpCall({ server: 'crm', tool: 'lookup', args: mcpArgs });
+      const browser = await desk.proposeBrowserSubmit(browserPage);
+      expect(cards).toEqual([
+        'Run this MCP tool? Run lookup on the crm MCP server\n\nArgs:\n' + JSON.stringify({ password: '••••', nested: { apiKey: '••••', note: 'keep' }, items: [{ cardNumber: '••••' }], q: 'ok' }, null, 2),
+        'Approve this browser action? Pay on https://shop.example/pay via POST https://shop.example/charge (Card number: ••••, cvv: ••••, total: Rs 499)',
+      ]);
+      const listed = await desk.approvals(NOW);
+      expect(listed.map(item => [item.approval_id, item.actions, item.review])).toEqual([[browser, ['approve', 'skip'], cards[1]], [mcp, ['approve', 'skip'], cards[0]]]);
+      for (const id of [mcp, browser]) expect(desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true });
+
+      const fromApp = approvalDesk(sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), newId: () => `mask${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, google: async () => null, currentRunRef: () => 'app-run-mask' });
+      await fromApp.proposeMcpCall({ server: 'crm', tool: 'lookup', args: mcpArgs });
+      await fromApp.proposeBrowserSubmit(browserPage);
+      const parts = appApprovalParts(sql)('app-run-mask');
+      expect(parts.live.map(part => part.actions)).toEqual([['approve', 'skip'], ['approve', 'skip']]);
+
+      const rows = sql.exec<{ id: string; summary: string; payload_json: string }>("SELECT id, summary, payload_json FROM ledger WHERE kind IN ('mcp_call', 'browser_submit')").toArray();
+      expect(rows.length).toBe(4);
+      for (const stored of rows) {
+        expect(stored.summary).not.toMatch(SECRETS);
+        expect(stored.payload_json).toMatch(/pw-sec|card-sec-1/);
+      }
+      for (const item of await desk.approvals(NOW)) expect(item.payload_digest).toBe(`sha256:${await sha256Hex(rows.find(r => r.id === item.approval_id)!.payload_json)}`);
+      for (const shown of [cards, listed, await desk.approvals(NOW), parts, desk.pending(NOW), desk.ledger([])]) expect(JSON.stringify(shown)).not.toMatch(SECRETS);
+    });
+  });
+
+  it('rows stored before masking render from the payload, and an app card presented summary-only stays skip-only', async () => {
+    const { appApprovalParts } = await import('../src/channels/approvals');
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-four-legacy-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const sql = state.storage.sql; let n = 0, ran = 0;
+      const desk = approvalDesk(sql, { owner: 42, google: async () => null, newId: () => `old${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, appIdentity: () => true, currentRunRef: () => 'run-old',
+        call: async (method: string) => method === 'sendMessage' ? { message_id: n, chat: { id: 42 } } : true, mcpCall: async () => { ran++; return 'ran'; } });
+      const browser = await desk.proposeBrowserSubmit(browserPage);
+      const mcp = await desk.proposeMcpCall({ server: 'crm', tool: 'lookup', args: mcpArgs });
+      sql.exec('UPDATE ledger SET summary = ? WHERE id = ?', 'Pay on https://shop.example/pay?hold=hold-sec#pay via POST https://shop.example/charge?token=tok-sec (Card number: card-sec-1, cvv: cvv-sec)', browser);
+      sql.exec("UPDATE approval_presentations SET approvable = 0 WHERE surface = 'app'");
+      for (const id of [browser, mcp]) {
+        expect((await desk.approvals(NOW, { id }))[0]).toMatchObject({ state: 'open', actions: ['skip'] });
+        expect(desk.placement(id)).toMatchObject({ hereApprovable: true, appApprovable: false });
+      }
+      expect((await desk.decide(mcp, 'a', 'trace', { surface: 'app' })).toast).toBe('Not available here');
+      expect(ran).toBe(0);
+      expect(appApprovalParts(sql)('run-old').live.map(part => part.actions)).toEqual([['skip'], ['skip']]);
+      for (const shown of [await desk.approvals(NOW), appApprovalParts(sql)('run-old'), desk.pending(NOW), desk.ledger([])]) expect(JSON.stringify(shown)).not.toMatch(SECRETS);
     });
   });
 });

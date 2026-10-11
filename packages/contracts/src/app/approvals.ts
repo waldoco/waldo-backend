@@ -29,7 +29,8 @@ export const appApprovalTaskExactV1Schema = z.strictObject({
   }),
 });
 // Derived from the frozen desk payload, exposing no more than the desk review does: never raw MIME,
-// tokens, browser bindings or MCP arguments.
+// tokens, browser bindings or MCP arguments. Bindings and arguments appear only in `review`, with
+// credential values masked; a browser scope is the page without its query string or fragment.
 export const appApprovalExactV1Schema = z.strictObject({
   recipients: z.strictObject({ to: addresses.min(1), cc: addresses, bcc: addresses }).optional(),
   changes: z.strictObject({

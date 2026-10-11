@@ -120,32 +120,56 @@ const reviewEmail = (p: EmailSendProposal) =>
     ...(p.bcc?.length ? [`Bcc: ${p.bcc.join(', ')}`] : []),
     `Subject: ${p.subject}`, '', p.body].join('\n');
 const reviewMessage = (p: MessageSendProposal) => p.content;
+// The summary is bounded: a browser summary carries its bindings, which can be as long as the content that did not fit.
 const unreviewable = (kind: string, summary: string) =>
-  `${kind} ${summary}\n\nThe full content doesn't fit in this card, so it can't be approved here - approving would send text you haven't reviewed. Use the Not now instruction on the card and ask me to show you the full text first.`;
+  `${kind} ${summary.length > 1000 ? `${summary.slice(0, 999)}…` : summary}\n\nThe full content doesn't fit in this card, so it can't be approved here - approving would send text you haven't reviewed. Use the Not now instruction on the card and ask me to show you the full text first.`;
 const expiresAt = (entry: LedgerRow) => {
   const p = JSON.parse(entry.payload_json) as Partial<Stored> & Partial<BrowserSubmitProposal>;
   if (entry.kind === 'browser_submit') return Math.min(entry.created_at + BROWSER_SUBMIT_TTL_MS, p.approvalExpiresAt ?? Infinity);
   return entry.kind === 'calendar_change' && p.start ? Math.min(entry.created_at + PROPOSAL_TTL_MS, Date.parse(p.start)) : entry.created_at + PROPOSAL_TTL_MS;
 };
-// The full review a messaging card shows for each kind, rebuilt from the frozen payload.
+// Credential values never render on any surface. This is a secrets boundary, not a judgment:
+// exact field names, compared after folding camelCase, spaces and hyphens to snake_case. Only the
+// rendered text is masked; the frozen payload keeps the values the executor compares and submits.
+const CREDENTIAL_KEYS = new Set([
+  'password', 'passwd', 'passcode', 'current_password', 'new_password', 'one_time_code', 'otp',
+  'cc_number', 'card_number', 'cc_csc', 'cvv', 'cvc', 'security_code', 'cc_exp', 'cc_exp_month', 'cc_exp_year',
+  'api_key', 'apikey', 'secret', 'client_secret', 'token', 'access_token', 'refresh_token', 'authorization',
+]);
+const MASK = '••••';
+const isCredentialKey = (key: string) => CREDENTIAL_KEYS.has(key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().replace(/[\s-]+/g, '_'));
+const masked = (value: unknown): unknown =>
+  Array.isArray(value) ? value.map(masked)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, isCredentialKey(k) ? MASK : masked(v)]))
+      : value;
+// A page without its query string or fragment, which can carry session or payment tokens.
+const pageOf = (url: string) => { const page = new URL(url); return `${page.origin}${page.pathname}`; };
+const describeBrowser = (p: BrowserSubmitProposal) => {
+  const binding = Object.entries(p.binding).map(([k, v]) => `${k}: ${isCredentialKey(k) ? MASK : v}`).join(', ');
+  return `${p.action.description} on ${pageOf(p.url)}${p.request ? ` via ${p.request.method} ${pageOf(p.request.url)}` : ''}${binding ? ` (${binding})` : ''}`;
+};
+const describeMcp = (p: McpCallProposal) => `Run ${p.tool} on the ${p.server} MCP server`;
+// Browser and MCP summaries are rebuilt from the payload, so a row stored before masking renders
+// masked too. A payload that no longer parses shows the card title, never the stored summary.
+const summaryOf = (entry: LedgerRow) => {
+  if (entry.kind !== 'browser_submit' && entry.kind !== 'mcp_call') return entry.summary;
+  try { return entry.kind === 'browser_submit' ? describeBrowser(JSON.parse(entry.payload_json)) : describeMcp(JSON.parse(entry.payload_json)); }
+  catch { return CARDS[entry.kind]!.title; }
+};
+// The full review a card shows for each kind, rebuilt from the frozen payload.
 const reviewText = (entry: LedgerRow): string => {
   const p = JSON.parse(entry.payload_json);
   if (entry.kind === 'email_send') return `Send this email? ${reviewEmail(p)}`;
   if (entry.kind === 'message_send') return `Send this message on ${p.channel}?\n\n${reviewMessage(p)}`;
-  if (entry.kind === 'mcp_call') return `Run this MCP tool? ${entry.summary}\n\nArgs:\n${JSON.stringify(p.args, null, 2)}`;
-  if (entry.kind === 'browser_submit') return `Approve this browser action? ${entry.summary}`;
+  if (entry.kind === 'mcp_call') return `Run this MCP tool? ${describeMcp(p)}\n\nArgs:\n${JSON.stringify(masked(p.args), null, 2)}`;
+  if (entry.kind === 'browser_submit') return `Approve this browser action? ${describeBrowser(p)}`;
   if (entry.kind === 'google_task_change') return reviewGoogleTaskChange(googleTaskProposalSchema.parse(p));
   return `Proposed: ${entry.summary}`;
 };
-const pageOf = (url: string) => { const page = new URL(url); return `${page.origin}${page.pathname}`; };
-// The app's review. MCP arguments and browser bindings stay off the app, so those kinds show a
-// tool or page summary there that can be skipped but not approved, like a truncated card.
+// The app's review: the same full review as a card, approvable while it fits the app's reply budget.
 const appReview = (entry: LedgerRow): Readonly<{ text: string; full: boolean }> => {
-  const p = JSON.parse(entry.payload_json);
-  if (entry.kind === 'mcp_call') return { text: `Run ${p.tool} on the ${p.server} server.`, full: false };
-  if (entry.kind === 'browser_submit') return { text: `Approve a browser action on ${pageOf(p.url)}?`, full: false };
   const text = reviewText(entry);
-  return text.length <= APP_REVIEW_MAX_CHARS ? { text, full: true } : { text: unreviewable(CARDS[entry.kind]!.title, entry.summary), full: false };
+  return text.length <= APP_REVIEW_MAX_CHARS ? { text, full: true } : { text: unreviewable(CARDS[entry.kind]!.title, summaryOf(entry)), full: false };
 };
 // What each kind changes, from the frozen payload, exposing no more than the app review.
 const exactFor = (entry: LedgerRow): AppApprovalV1['exact'] => {
@@ -161,7 +185,7 @@ const exactFor = (entry: LedgerRow): AppApprovalV1['exact'] => {
 const appPartOf = (entry: LedgerRow, shown: Readonly<{ actions: AppApprovalPart['actions']; payload_digest: string }>): AppApprovalPart => {
   const review = appReview(entry);
   return { type: 'approval', approval_id: entry.id, kind: entry.kind as AppApprovalPart['kind'], review: review.text, payload_digest: shown.payload_digest,
-    actions: shown.actions, expires_at: expiresAt(entry), fallback_text: review.full ? entry.summary.slice(0, 4000) : review.text };
+    actions: shown.actions, expires_at: expiresAt(entry), fallback_text: review.full ? summaryOf(entry).slice(0, 4000) : review.text };
 };
 // An app card approves only while today's app review still shows the full content; a stored flag alone never does.
 const appShowsInFull = (entry: LedgerRow) => { try { return appReview(entry).full; } catch { return false; } };
@@ -242,13 +266,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const say = (text: string, buttons?: [string, string][]) =>
     deps.call('sendMessage', { chat_id: deps.owner, text, ...(buttons ? { reply_markup: { inline_keyboard: [buttons.map(([label, data]) => ({ text: label, callback_data: data }))] } } : {}) });
 
-  const describeBrowser = (p: BrowserSubmitProposal) => {
-    const binding = Object.entries(p.binding).map(([k, v]) => `${k}: ${v}`).join(', ');
-    return `${p.action.description} on ${p.url}${p.request ? ` via ${p.request.method} ${p.request.url}` : ''}${binding ? ` (${binding})` : ''}`;
-  };
   const describeEmail = (p: EmailSendProposal) => `Send email${p.account ? ` from ${p.account}` : ''} to ${p.to.join(', ')}: "${p.subject}"`;
   const describeMessage = (p: MessageSendProposal) => `Send this on ${p.channel}: "${p.content.length > 120 ? `${p.content.slice(0, 117)}...` : p.content}"`;
-  const describeMcp = (p: McpCallProposal) => `Run ${p.tool} on the ${p.server} MCP server`;
 
   const sentRef = (sent: unknown) => {
     const ack = sent as { message_id?: unknown; chat?: { id?: unknown }; messages?: readonly { id?: unknown }[] } | null;
@@ -280,7 +299,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const approvable = card.length <= REVIEW_BUDGET;
       const link = inApp?.approvable && deps.appLink ? ` You can review and approve it in the Waldo app: ${deps.appLink(id)}` : '';
       try {
-        const sent = await say(approvable ? card : `${unreviewable(title, entry.summary)}${link}`, approvable ? buttons : [['Not now', `s:${id}`]]);
+        const sent = await say(approvable ? card : `${unreviewable(title, summaryOf(entry))}${link}`, approvable ? buttons : [['Not now', `s:${id}`]]);
         if (sent == null) sendFailure = new Error('Approval card not confirmed');
         else shown.push({ surface, message_ref: sentRef(sent), approvable });
       } catch (error) { sendFailure = error; }
@@ -830,10 +849,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         } catch { return null; }
       };
       return [
-        ...open.map((r) => ({ id: r.id, kind: r.kind, summary: r.summary, state: 'open' as const, undoable: false, review: review(r) })),
-        ...unconfirmed.map((r) => ({ id: r.id, kind: r.kind, summary: r.summary, state: 'unconfirmed' as const, undoable: false, review: review(r) })),
-        ...reviewOnly.map((r) => ({ id: r.id, kind: r.kind, summary: r.summary, state: 'review_only' as const, undoable: false, review: review(r) })),
-        ...undoable.map((r) => ({ id: r.id, kind: r.kind, summary: r.summary, state: 'done' as const, undoable: r.decided_at !== null && now - r.decided_at <= UNDO_WINDOW_MS, review: review(r) })),
+        ...open.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'open' as const, undoable: false, review: review(r) })),
+        ...unconfirmed.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'unconfirmed' as const, undoable: false, review: review(r) })),
+        ...reviewOnly.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'review_only' as const, undoable: false, review: review(r) })),
+        ...undoable.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'done' as const, undoable: r.decided_at !== null && now - r.decided_at <= UNDO_WINDOW_MS, review: review(r) })),
       ];
     },
     placement(id) {
@@ -877,13 +896,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const done = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status NOT IN ('open', 'changing', 'card_unconfirmed', 'review_only') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
       const lines = [
         'Open',
-        ...(open.length || unconfirmed.length || reviewOnly.length ? open.map((r) => `- ${r.summary} (waiting on you)`) : ['- nothing waiting on you']),
-        ...unconfirmed.map((r) => `- ${r.summary} (review card delivery unconfirmed; cannot approve)`),
-        ...reviewOnly.map((r) => `- ${r.summary} (too long for approval card; cannot send)`),
+        ...(open.length || unconfirmed.length || reviewOnly.length ? open.map((r) => `- ${summaryOf(r)} (waiting on you)`) : ['- nothing waiting on you']),
+        ...unconfirmed.map((r) => `- ${summaryOf(r)} (review card delivery unconfirmed; cannot approve)`),
+        ...reviewOnly.map((r) => `- ${summaryOf(r)} (too long for approval card; cannot send)`),
         '', 'Reminders',
         ...(reminders.length ? reminders.map((r) => `- ${r.at.replace('T', ' ')} ${r.note}${r.repeat === 'daily' ? ' (daily)' : ''}`) : ['- none set']),
         '', 'Recent',
-        ...(done.length ? done.map((r) => `- ${r.status}: ${r.summary}`) : ['- nothing yet']),
+        ...(done.length ? done.map((r) => `- ${r.status}: ${summaryOf(r)}`) : ['- nothing yet']),
       ];
       return lines.join('\n');
     },
