@@ -4,6 +4,7 @@ import { toContextHealthMaterial, type HealthContextRow } from '../src/channels/
 import { produceHealthScores, type ProducerDeps } from '../src/health/producer';
 import { computeDailyScores } from '../src/health/scores';
 import type { DailyScoresInput } from '../src/health/scores/types';
+import realSeries from './fixtures/health-series-read.json';
 
 const NOW = Date.parse('2026-03-20T12:00:00Z');
 const TODAY = '2026-03-20';
@@ -57,14 +58,15 @@ describe('produceHealthScores', () => {
   it('reads thirty days back from the owner\'s local today and writes today and yesterday', async () => {
     const h = harness(seriesOf(history(25)));
     expect(await run(h)).toBe('written');
-    expect(h.reads).toEqual([{ from: addDays(TODAY, -30), to: TODAY }]);
+    expect(h.reads).toEqual([{ from: addDays(TODAY, -30), to: TODAY, signals: expect.arrayContaining(['sleep_duration', 'overnight_hrv', 'workout']) }]);
+    expect(h.reads[0]!.signals).not.toContain('steps_window');
     expect(h.writes.map(w => w.day).sort()).toEqual([addDays(TODAY, -1), TODAY]);
   });
 
   it('cuts the window by the owner\'s own clock, not UTC', async () => {
     const h = harness(seriesOf(history(25)));
     await produceHealthScores(h.deps, { now: Date.parse('2026-03-20T23:30:00Z'), timezone: 'Asia/Kolkata' });
-    expect(h.reads[0]).toEqual({ from: addDays('2026-03-21', -30), to: '2026-03-21' });
+    expect(h.reads[0]).toMatchObject({ from: addDays('2026-03-21', -30), to: '2026-03-21' });
   });
 
   it('writes a computed Recovery with its coverage, its zone word in the stored vocabulary and the read it came from', async () => {
@@ -122,6 +124,16 @@ describe('produceHealthScores', () => {
     await run(h);
     const days = h.inputs[0]!.days;
     expect(days.every(d => d.sleep === null)).toBe(true);
+  });
+
+  it('takes an unlabelled duration for time asleep, as the contract defines it, and an unknown one for nothing', async () => {
+    const unlabelled = history(25).map(r => (r.signal === 'sleep_duration' ? { ...r, method: null } : r));
+    const a = harness(seriesOf(unlabelled));
+    await run(a);
+    expect(a.inputs[0]!.days.every(d => d.sleep !== null)).toBe(true);
+    const b = harness(seriesOf(history(25, { sleepMethod: 'unknown' })));
+    await run(b);
+    expect(b.inputs[0]!.days.every(d => d.sleep === null)).toBe(true);
   });
 
   it('flags a day that holds readings from two zones, and keeps the zone each day was read in', async () => {
@@ -208,5 +220,16 @@ describe('produceHealthScores', () => {
     // No calendar demand is read yet, so Weight is stated as unavailable rather than guessed, and the reader says so too.
     expect(written.weight).toEqual({ reason: 'calendar_demand_unavailable' });
     expect(material!.narrative.load_descriptor).toBeUndefined();
+  });
+
+  it('produces rows from the series the database function itself returned', async () => {
+    const h = harness(realSeries);
+    expect(await produceHealthScores(h.deps, { now: Date.parse('2026-10-11T07:44:50Z'), timezone: 'UTC' })).toBe('written');
+    expect(h.writes.map(w => w.day)).toEqual(['2026-10-10', '2026-10-11']);
+    const today = h.writes[1]!;
+    expect(today.read_at).toBe(realSeries.read_at);
+    expect(today.basis).toEqual([{ source: 'apple', consent_epoch: 1 }]);
+    expect(today.recovery).toMatchObject({ zone: expect.stringMatching(/^(low|moderate|good|high)$/), algorithm_version: 'recovery.candidate.v1' });
+    expect(today.weight).toEqual({ reason: 'calendar_demand_unavailable' });
   });
 });

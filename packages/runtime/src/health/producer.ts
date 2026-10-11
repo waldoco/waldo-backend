@@ -7,12 +7,13 @@ import type { DailyScores, DailyScoresInput, DayRecord, HourlyBucket, HrvMethod,
 // through waldo.health_context_write, the only writer of that read model. It never throws: it runs after the response.
 export type ProducerOutcome = 'written' | 'stale' | 'refused' | 'no_consent' | 'no_readings' | 'failed';
 export type ProducerDeps = Readonly<{
-  readSeries: (range: { from: string; to: string }) => Promise<unknown>;
+  readSeries: (range: { from: string; to: string; signals: readonly string[] }) => Promise<unknown>;
   writeContext: (payload: string) => Promise<unknown>;
   compute: (input: DailyScoresInput) => DailyScores;
 }>;
 
 const WINDOW_DAYS = 30;
+const SIGNALS = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'workout'];
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
 
@@ -54,8 +55,8 @@ const newest = <T extends Reading>(readings: readonly T[]): T | undefined =>
 const hrvMethod = (method: string | null): HrvMethod | null => (method === 'rmssd' || method === 'sdnn' ? method : null);
 const span = (r: Reading): Span | null => (r.startAt && r.endAt ? { startAt: r.startAt, endAt: r.endAt } : null);
 
-// The phone sends time in bed and time asleep under one signal; only time asleep is sleep. An unlabelled or unknown
-// duration is not taken for it.
+// The phone sends time in bed and time asleep under one signal; only time asleep is sleep. An unlabelled duration is
+// time asleep by the contract; a duration labelled time in bed or unknown is not taken for it.
 const sleepOf = (readings: readonly Reading[]): DayRecord['sleep'] => {
   const asleep = newest(readings.filter(r => r.signal === 'sleep_duration' && (r.method === null || r.method === 'asleep_duration')));
   const midpoint = newest(readings.filter(r => r.signal === 'sleep_midpoint'));
@@ -126,7 +127,7 @@ const writeOutcome = (answer: unknown): 'written' | 'stale' | 'refused' | 'faile
 export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now: number; timezone: string }>): Promise<ProducerOutcome> => {
   try {
     const today = localDay(at.now, at.timezone);
-    const parsed = parseSeries(await deps.readSeries({ from: shiftDay(today, -WINDOW_DAYS), to: today }));
+    const parsed = parseSeries(await deps.readSeries({ from: shiftDay(today, -WINDOW_DAYS), to: today, signals: SIGNALS }));
     if (parsed.kind !== 'series') return parsed.kind;
     // One source's readings are computed on its own. Two phones' step counts or sleep for one night are not added up.
     const chosen = [...parsed.series.sources].filter(s => s.readings.length > 0).sort((a, b) => b.readings.length - a.readings.length || a.source.localeCompare(b.source))[0];

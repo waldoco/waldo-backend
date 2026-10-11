@@ -71,7 +71,9 @@ describe('health producer after an ingest commit', () => {
       const op = rpc.fn.replace('health_', '');
       expect(rpc.body.p_sig).toBe(await routerSignature(SECRET, rpc.body.p_at as number, `health.${op}.owner-1.${md5Hex(rpc.body.p_payload as string)}`));
     }
-    expect(JSON.parse(rpcs[1]!.body.p_payload as string)).toEqual({ from: day(30), to: today });
+    expect(JSON.parse(rpcs[1]!.body.p_payload as string)).toMatchObject({ from: day(30), to: today });
+    expect(JSON.parse(rpcs[1]!.body.p_payload as string).signals).toContain('sleep_duration');
+    expect(JSON.parse(rpcs[1]!.body.p_payload as string).signals).not.toContain('steps_window');
   });
 
   it('writes the read instant and the consent epoch it read, so the database can fence on both', async () => {
