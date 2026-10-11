@@ -5,20 +5,27 @@ const text = z.string();
 const count = z.int().nonnegative();
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 export const appControlRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
-export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity']);
+export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account']);
 const activityCursor = z.string().regex(/^[0-9]+$/).refine(value => Number.isSafeInteger(Number(value)) && Number(value) > 0);
 export const appControlQueryV1Schema = z.strictObject({ view: appControlViewV1Schema, trace_before: activityCursor.optional(), runs_before: activityCursor.optional() }).superRefine((query, ctx) => {
   if (query.view !== 'activity' && (query.trace_before !== undefined || query.runs_before !== undefined)) ctx.addIssue({ code: 'custom', message: 'Activity cursors require the activity view' });
 });
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'account.delete']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
+  confirmation: z.literal('DELETE').optional(),
   revision, request_id: appControlRequestIdV1Schema,
 }).superRefine((action, ctx) => {
   if (action.action === 'channel.unlink' && !messagingSurfaceV1Schema.safeParse(action.id).success) ctx.addIssue({ code: 'custom', path: ['id'], message: 'channel.unlink names a messaging channel in id' });
   // The receipt's navigation is the first-party /c/<ticket> path; the backend decides which features exist.
   if (action.action === 'google.connect' && (action.view !== 'connections' || !action.value || action.value.length > 64)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'google.connect starts from the connections view and names a Google feature in value' });
+  // Deletion signs out every session, so its recorded receipt cannot be read back: a replay is refused
+  // as signed out. An unconfirmed receipt can be read back, and resending the same request_id never
+  // runs a second deletion.
+  const deletion = action.action === 'account.delete';
+  if (deletion !== (action.view === 'account') || deletion !== (action.confirmation === 'DELETE')) ctx.addIssue({ code: 'custom', path: ['confirmation'], message: 'account.delete alone uses the account view, with confirmation DELETE' });
+  if (deletion && (action.id ?? action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume) !== undefined) ctx.addIssue({ code: 'custom', message: 'account.delete carries only its confirmation' });
 });
 
 export const appControlDayDataV1Schema = z.strictObject({
@@ -39,6 +46,7 @@ export const appControlConnectionsDataV1Schema = z.strictObject({
   channels: z.array(appChannelStatusV1Schema).max(messagingSurfaceV1Schema.options.length)
     .refine(channels => new Set(channels.map(status => status.channel)).size === channels.length, 'A channel is listed once').optional(),
 });
+export const appControlAccountDataV1Schema = z.strictObject({ deletion_available: z.boolean() });
 const hop = z.strictObject({ hop: text, ok: z.boolean(), ms: z.number(), note: text });
 export const appControlActivityDataV1Schema = z.strictObject({
   steps: z.array(z.strictObject({ step: text, state: z.enum(['ok', 'failed', 'unseen']), at: text.nullable(), note: text.nullable() })),
@@ -53,6 +61,7 @@ export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('day'), data: appControlDayDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('connections'), data: appControlConnectionsDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('activity'), data: appControlActivityDataV1Schema }),
+  z.strictObject({ ...envelope, view: z.literal('account'), data: appControlAccountDataV1Schema }),
 ]);
 export const appControlReceiptV1Schema = z.strictObject({ state: z.enum(['recorded', 'incomplete', 'rejected', 'unconfirmed']), message: text, navigation: text.optional(), signed_out: z.boolean().optional() });
 export const appControlResultV1Schema = z.strictObject({ request_id: appControlRequestIdV1Schema, receipt: appControlReceiptV1Schema, duplicate: z.boolean() });
