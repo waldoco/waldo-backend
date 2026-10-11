@@ -75,3 +75,27 @@ L2 report (21:40Z) **[unverified until reviewed]**:
   - App-side risk L4 raised: a page with no rows but a cursor hides "Load earlier".
   - Open gap L4 raised with L3: a deferred request drops out of the default approvals list, so the chat card would say "no longer available". It needs a contract answer before L2 offers `defer`.
 - **D5:** skip the `input_origin` row; don't accept it as legacy data. Git evidence in the decisions file. The old alignment session's inference (read-side drift) is half right: the row matches its witness, but no merged build wrote it.
+
+## 22:00Z: research results in (competitors, app capability); D6, D7
+
+- **Competitors and open-source agents** (report `02-competitors-oss.md`) **[lead, sources cited in the report]**:
+  - MetaMuse is Meta Muse (~95%); Instinct is instinct.com (~85-90%).
+  - Compaction converges on: keep a verbatim tail, keep a structured summary, point the model at search for what was dropped.
+  - Waldo drops its oldest turns silently, and `search_episodes` indexes only the legacy (Telegram) store.
+  - Waldo's approvals (button-only, cross-surface clear, undo) are ahead of what Muse and OpenClaw document.
+  - One owner transcript tagged by channel matches OpenClaw's shared session.
+- **App capability at `c2ccd5d0`** (report `06-app-capability.md`) **[code read, not run]**: no golden-path step is proven end to end.
+  - **Missing:** Google sign-in (both sides) and the 18+ checkbox (no schema field).
+  - **Sessions** last 12 hours with no renewal.
+  - **Health** says "Last sent…" when nothing was sent (iOS permission not requested in the flow).
+  - **Main chat:** a 503 shows only "status 503", with no retry, and the composer stays enabled.
+  - **`defer`** is refused by the backend (`app-approvals.ts:46`).
+  - **Reminders** appear only after a refresh, and there's no push.
+  - **The time-zone write isn't built.**
+- **#1066 is now `e1ab2881`**, a merge of `beta-mvp` into the branch (D1 done by L2) **[verified: `git log`]**. CI re-runs on it.
+- **Time-zone deadlock** **[verified in source]**:
+  - `bindIdentity` (`telegram-owner-do.ts:956-965`) and the Telegram webhook path (`:394`) store `x-waldo-timezone` from route config without confirming it.
+  - #1066 confirms only in `timezone.set`.
+  - The app shows its confirm path only when the zones differ.
+  - D6: a confirm row whenever unconfirmed. D7: the 18+ box as an app gate tonight.
+- **Board:** L4's queue is rewritten from these findings.

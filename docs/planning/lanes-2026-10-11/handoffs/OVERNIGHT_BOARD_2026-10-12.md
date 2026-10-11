@@ -50,6 +50,16 @@ I merge after: CI green on the current head (pgTAP included), an independent rev
   3. A read-only readiness check of Google connect on `4bb040f5`: routes, scopes vs the site's "read only" labels, token storage, app error states. Findings go in your batch file.
 
 ### L4 (waldo-app)
-- **Time-zone write, option (a), is an owner ruling.** Build it: write the device zone via `timezone.set` only while `timezone_confirmed` is false and the stored zone is still `'UTC'`.
-- **Then:** the Simulator chat check once L2's follow-up is deployed, and design-system rows on the golden path.
-- **The app repo has no CI.** Before I merge an app PR, I run `pnpm run check` and `pnpm test` myself at the exact head, in a fresh detached worktree. Put your own results in the PR body too.
+Queue, in order. Golden-path gaps come from my read of app `main` `c2ccd5d0`; verify each before building.
+1. **Time zone:**
+   - the auto-write is option (a), an owner ruling: `timezone.set` with the device zone only while `timezone_confirmed` is false and the stored zone is still `'UTC'`;
+   - **plus D6:** a one-tap "Confirm" row whenever `timezone_confirmed` is false, even when the stored zone equals the phone's. Today the "Use this device's time zone" row appears only when they differ, so an owner whose header-written zone matches the phone can never confirm, and #1066 never arms them.
+2. **Health honesty:** without the iOS Health permission the app sends nothing yet shows "Last sent…". Chain the agreements → iOS permission → first upload. Show what was actually sent (a count, never values), or say plainly that nothing was sent.
+3. **Main chat failure state:** today a 503 shows only "status 503", failed loads aren't retried, and the composer stays enabled. Add a "history couldn't load" state with backoff retry, and hold sending until history has loaded.
+4. **Chat refresh while visible:** today a reminder or proactive row appears only after opening, refreshing or foregrounding the app. Refresh on focus and while Main chat is open, and add an unread signal on Home.
+5. **18+ checkbox (D7):** an app-side gate on sign-up tonight. The server-side record is a morning item.
+6. **Design-system rows** on the golden path: the register ranking is coming.
+
+Not tonight: Google sign-in (not built on either side; needs the backend and a security review), push registration (no `/app/v1/devices` route yet), session renewal (sessions last 12 hours; auth work is held for the morning).
+
+**The app repo has no CI.** Before I merge an app PR, I run `pnpm install --frozen-lockfile`, `pnpm run check` and `pnpm test` myself at the exact head, in a fresh detached worktree (D2). Put your own results in the PR body, and mark the PR ready for review when you want it merged.
