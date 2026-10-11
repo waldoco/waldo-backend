@@ -12,12 +12,13 @@ const AUTH = '30000000-0000-0000-0000-000000000003', INVITE = 'ABCDEFGHJKLMNPQRS
 const directory = async (options: { inviteLive?: boolean; member?: string } = {}) => {
   const inviteHash = await linkCodeHash(INVITE);
   const invited = 'new.member@example.test', joined = `owner-${crypto.randomUUID()}`;
-  const state = { inviteLive: options.inviteLive ?? true, owners: new Map<string, string>(options.member ? [[options.member, `owner-${crypto.randomUUID()}`]] : []), otp: [] as string[], signups: [] as Record<string, unknown>[], live: new Set<string>() };
+  const state = { inviteLive: options.inviteLive ?? true, owners: new Map<string, string>(options.member ? [[options.member, `owner-${crypto.randomUUID()}`]] : []), otp: [] as string[], signups: [] as Record<string, unknown>[], live: new Set<string>(), codes: new Set<string>([invited, options.member].filter(Boolean).map(email => `${email}:123456`)) };
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input)), a = JSON.parse(String(init?.body));
     expect(url.origin).toBe(DIRECTORY);
-    if (url.pathname === '/auth/v1/otp') { state.otp.push(a.email); return Response.json({}); }
-    if (url.pathname === '/auth/v1/verify') return a.token === '123456' ? Response.json({ user: { id: AUTH, email: a.email, email_confirmed_at: new Date().toISOString() } }) : new Response('', { status: 403 });
+    // Like Supabase, each requested email code works once; the first is pre-issued so verify-only tests need no request.
+    if (url.pathname === '/auth/v1/otp') { state.otp.push(a.email); state.codes.add(`${a.email}:123456`); return Response.json({}); }
+    if (url.pathname === '/auth/v1/verify') return state.codes.delete(`${a.email}:${a.token}`) ? Response.json({ user: { id: AUTH, email: a.email, email_confirmed_at: new Date().toISOString() } }) : new Response('', { status: 403 });
     const fn = url.pathname.split('/').at(-1)!;
     const signed: Record<string, string> = {
       console_auth_throttle: `throttle.${a.p_key}.${a.p_limit}.${a.p_window_seconds}`, signin_allowed: `signin.${a.p_email}.${a.p_code_hash}`,
@@ -65,6 +66,9 @@ describe('an invited person joins from the app', () => {
     expect(appVerifyResultV1Schema.safeParse(verified.body).success).toBe(true);
     expect(verified.body).toMatchObject({ state: 'active', surface: 'app', account_ref: `acct_${await linkCodeHash(joined)}` });
     expect(state.signups).toEqual([expect.objectContaining({ p_auth_user: AUTH, p_email: invited, p_phone: '', p_code_hash: await linkCodeHash(INVITE) })]);
+    // A lost response cannot be replayed: the used code fails, and a fresh code resolves the owner just created.
+    expect(await app('/auth/verify', { email: invited, code: '123456', invite: INVITE })).toEqual({ status: 200, body: { state: 'needs_invite' } });
+    expect(await app('/auth/code', { email: invited })).toEqual({ status: 200, body: { ok: true } });
     const again = await app('/auth/verify', { email: invited, code: '123456', invite: INVITE });
     expect(again.body).toMatchObject({ state: 'active', account_ref: `acct_${await linkCodeHash(joined)}` });
     expect(state.signups).toHaveLength(1);
