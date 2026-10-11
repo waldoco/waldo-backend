@@ -171,7 +171,7 @@ export function cloudflareGeneralBrowser(options: Options) {
             held.postDispatched=true;
             // Checked against the authority that armed it, so settling the upload
             // cannot strand a POST the server is already answering.
-            const heldAdmit=async()=>{identity(session);if(held.sessionKey!==connectionKey(session)||held.expiresAt<=options.now())throw new GeneralBrowserError('rejected');await held.assertCurrent();identity(session);};
+            const heldAdmit=async()=>{identity(session);if(held.sessionKey!==connectionKey(session)||held.expiresAt<=options.now())throw new GeneralBrowserError('rejected');await held.assertCurrent();identity(session);if(held.expiresAt<=options.now())throw new GeneralBrowserError('rejected');};
             const heldTimeout=()=>{const remaining=Math.min(session.expiresAt,held.expiresAt)-options.now();if(remaining<=0)throw new GeneralBrowserError('rejected');return Math.min(10000,remaining);};
             await heldAdmit();
             if(!await options.authorizeRequest(request.url(),'GET'))throw new GeneralBrowserError('rejected');
@@ -375,6 +375,9 @@ export function cloudflareGeneralBrowser(options: Options) {
       if (failure) throw failure;
     },
     async beginOwnerHandoff(session:BrowserSession,snapshot:GeneralActionSnapshot,reason:string,assertCustody:()=>Promise<void>){
+      // Human requests are not held to the upload's origin fence, so a session
+      // whose page received a file never hands over.
+      if(uploadAuthority)throw new GeneralBrowserError('rejected');
       await assertCustody();identity(session);if(takeover||!connected||connected.sessionKey!==connectionKey(session))throw new GeneralBrowserError('session_lost');
       const page=await select(session,connected.context,snapshot.observation.tab_ref);
       if(await targetId(connected.context,page)!==snapshot.targetId)throw new GeneralBrowserError('stale_observation');
@@ -400,7 +403,7 @@ export function cloudflareGeneralBrowser(options: Options) {
           const bytes=await boundedSemanticRead(session,async()=>new Uint8Array(await response.body()));if(bytes.length>LIMITS.fileBytes)throw new GeneralBrowserError('outcome_uncertain');
           const body=JSON.parse(new TextDecoder().decode(bytes));
           if(body?.filename!==file.name||body?.byte_size!==file.buffer.length||body?.sha256!==sha256)throw new GeneralBrowserError('outcome_uncertain');
-          resolve({filename:file.name,mime:file.mimeType,byte_size:file.buffer.length,sha256});
+          await admit(session);resolve({filename:file.name,mime:file.mimeType,byte_size:file.buffer.length,sha256});
         }catch(error){reject(error);throw error;}
       }};
       uploadAuthority=held;let exposed=false;

@@ -107,3 +107,26 @@ it('a refusal before the file reaches the page leaves no upload authority behind
  await expect(f.driver.navigate(f.session,'https://public-pages.fixture.invalid/a')).rejects.toThrow();
  await f.driver.disconnect();
 },5000);
+
+it('a sign-in handoff cannot reopen the session to other origins once a file reached the page',async()=>{
+ const control=await fixture({ttl:5000});
+ const handoff=await control.driver.beginOwnerHandoff(control.session,await control.driver.observe(control.session),'Sign in',async()=>{});
+ expect(handoff).toBeTruthy();await control.driver.disconnect();
+ const f=await fixture({ttl:5000}),page=commonBrowserFixture.pages[0];
+ const {pending}=await exposed(f,()=>true);
+ await commonBrowserFixture.route!(post(page,DESTINATION,{filename:'report.csv',byte_size:f.file.buffer.length,sha256:await generalDigest(f.file.buffer)}));
+ await pending;
+ await expect(f.driver.beginOwnerHandoff(f.session,await f.driver.observe(f.session),'Sign in',async()=>{})).rejects.toThrow();
+ await f.driver.disconnect();
+},5000);
+
+it('once the upload settles, its approval expiry no longer bounds the session',async()=>{
+ const f=await fixture({ttl:5000}),page=commonBrowserFixture.pages[0];
+ const pending=f.driver.upload(f.session,f.snapshot,f.reference,f.file,{destination:DESTINATION,expiresAt:Date.now()+300,assertCurrent:async()=>{}},async()=>{});
+ for(let tick=0;tick<200&&commonBrowserFixture.uploads<1;tick++)await new Promise(resolve=>setTimeout(resolve,5));
+ await commonBrowserFixture.route!(post(page,DESTINATION,{filename:'report.csv',byte_size:f.file.buffer.length,sha256:await generalDigest(f.file.buffer)}));
+ await pending;
+ await new Promise(resolve=>setTimeout(resolve,350));
+ await expect(f.driver.observe(f.session)).resolves.toMatchObject({observation:expect.anything()});
+ await f.driver.disconnect();
+},5000);
