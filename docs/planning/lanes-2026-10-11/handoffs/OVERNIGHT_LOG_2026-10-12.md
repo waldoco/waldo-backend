@@ -108,3 +108,17 @@ L2 report (21:40Z) **[unverified until reviewed]**:
   - The top 8 for tonight are on L4's board queue (item 6).
   - **For Suyash:** #35 review, G2 names, G5 gauges, Apple-first text in §17 and AuthButton (Apple is out for the beta), time-zone text, the Form-zone table vs `tokens.json`, the Mottle font file, decision 53.
   - **For the owner:** the Telegram row in Connections (decision 52); a go for the netinfo dependency (G17).
+
+## 22:07Z: #1072 review FAIL (wording only); #1066 CI green, review launched
+
+- **#1072** (head `1acb9474`, latency session, draft): independent review **VERDICT: FAIL, wording only** **[reviewer's run: the file 72/72 at head and twice on `4bb040f5`; a mutation making the wrapper pass-through fails exactly the red-first test; `guard-setalarm` ok]**.
+  - **The fix is right; the stated cause is wrong.** `cloudflare:test`'s `runDurableObjectAlarm` deletes the alarm and calls `alarm()` directly, so workerd never retries it. The pending alarm is the scheduler's own post-crash `rearm()` (`multiplexer.ts:228-229` → `alarm-slot.ts:31`, at least 250 ms later). The reviewer's A/B probe showed it: with rearm intact the run resumed with no test action; with rearm disabled it stayed put.
+  - **Required:**
+    - reword three comments (L165-166, L3501, L3957-3958) and the PR body's "Cause";
+    - correct "covers all crash sites" (L3258 crashes through a direct `runLoop.alarm()` that bypasses the wrapper);
+    - optionally rename `platformAlarm`;
+    - rerun CI after a rebase (its CI ran on base `596706c2`, before #1061).
+  - **No production bug is masked:** re-drives are fenced by the coalescer (`do.ts:1816`), pending-effect reconciliation (`:1860`) and `#reconcileTrustedToolReceipt` (`:2788`).
+  - **Not merged.** Its owner (the latency session) is idle, and sends are scarce. Morning batch: hand these findings to the latency session. Tonight, a shard 3/4 `trusted-run-loop` failure on another PR is classified as this known pre-existing flake (#532), and I rerun only that job once, logged.
+- **#1066** head `e1ab2881`: CI 6/6 SUCCESS incl. pgTAP on the current base; `MERGEABLE`/`CLEAN`; not draft **[verified: `gh pr view`]**. Independent review launched. Focus: reminders never held; health-data destinations of proactive text in the canonical transcript; no Telegram-addressed delivery for app-only owners; no burst on later confirmation; the D6 interaction; the strict-load failure mode for a bad row.
+- **Plan if #1066 passes:** merge it into `beta-mvp` as soon as it passes. This revises D1's order for the merge only; deploy order is unchanged. Merging early also tests whether the permission classifier allows merges under the standing go. No deploy until L2's send-path follow-up is merged as well, so staging never runs #1066 without it.
