@@ -20,7 +20,7 @@ The owner is starting successor sessions because the lane sessions have grown to
 | Order | Lane | Handoff | Restart after |
 |---|---|---|---|
 | 1 | L3: approvals, app contracts, Google connect | [`L3_HANDOFF_2026-10-12.md`](L3_HANDOFF_2026-10-12.md) | its handoff. #1070 merged as `21a70277`; waldo-brain #36 waits for the owner. |
-| 2 | L4: Waldo app | [`L4_HANDOFF_2026-10-12.md`](L4_HANDOFF_2026-10-12.md) | its handoff. #74–#76 are merged and the Simulator pass is done. |
+| 2 | L4: Waldo app | [`L4_HANDOFF_2026-10-12.md`](L4_HANDOFF_2026-10-12.md) | its handoff. #74–#76 are merged and the Simulator pass is done. Its successor runs in waldo-app, where the path in its starter prompt doesn't exist; its collection notes give the command that reads this copy. |
 | 3 | L1: health plane and staging deploys | [`L1_HANDOFF_2026-10-12.md`](L1_HANDOFF_2026-10-12.md) | its handoff. It has captured the 503's code, so its log tail is no longer needed. Its successor re-arms the tail to confirm L2's fix after deploying it. |
 | 4 | L2: owner identity and delivery router | [`L2_HANDOFF_2026-10-12.md`](L2_HANDOFF_2026-10-12.md) | its fix for the 503 is in a PR with red-first tests, or written down in its handoff. L2 holds the critical path. |
 | 5 | Alignment | [`ALIGNMENT_HANDOFF_2026-10-12.md`](ALIGNMENT_HANDOFF_2026-10-12.md) | the handoffs are collected and merged. |
