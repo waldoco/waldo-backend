@@ -7,7 +7,7 @@ import { claimStore } from '../src/memory/claims';
 const unused = () => { throw Error('The constellation view reads only owner storage'); };
 const host = (storage: DurableObjectStorage): AppControlsHost => ({
   csrf: 'csrf-constellation', expires: Date.now() + 60_000, storage, assertCurrent: async () => {}, sessions: unused, view: unused, act: unused,
-  account: { owner: 'owner-constellation', auth: null, requestUrl: 'https://app.fixture.invalid/app/v1/controls', eraseOwnerStorage: unused },
+  account: { owner: 'owner-constellation', auth: null, requestUrl: 'https://app.fixture.invalid/app/v1/controls', purgeOwnerFiles: unused, eraseOwnerStorage: unused },
 });
 const get = async (storage: DurableObjectStorage, query: string) => {
   const response = await appControlsRequest(new Request(`https://app.fixture.invalid/app/v1/controls?${query}`), host(storage));

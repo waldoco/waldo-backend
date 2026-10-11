@@ -11,7 +11,7 @@ export type AppControlsHost = Readonly<{
   assertCurrent():Promise<void>; sessions():Promise<readonly {csrf:string;expires:number}[]>;
   view(page?:{traceBefore?:number;runsBefore?:number}):Promise<ConsoleView>;
   act(action:ConsoleAction):Promise<boolean|string|ControlReceipt>;
-  account:Pick<OwnerControlsDeps,'owner'|'auth'|'requestUrl'|'eraseOwnerStorage'>;
+  account:Pick<OwnerControlsDeps,'owner'|'auth'|'requestUrl'|'purgeOwnerFiles'|'eraseOwnerStorage'>;
 }>;
 const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache-control':'private, no-store'}});
 // App memory ids are `memory:claim:<n>` and `memory:node:<n>`: a constant scope, so the DO id never reaches the app.

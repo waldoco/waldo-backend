@@ -6,7 +6,7 @@ function setup() {
   const auth = { memberInvites: vi.fn(async () => [row]), memberInvite: vi.fn(async () => true), deleteOwner: vi.fn(async () => true) };
   const put = vi.fn(async (key: string, value: unknown) => { stored.set(key, JSON.parse(JSON.stringify(value))); });
   const deps: OwnerControlsDeps = { owner: 'trusted-owner', csrf: 'current-csrf', expires: Date.now() + 43200000, auth, requestUrl: 'https://console.example/console/dashboard',
-    sessions: async () => [{ csrf: 'current-csrf', expires: Date.now() + 43200000 }], store: { get: async <T>(key: string) => stored.get(key) as T | undefined, put }, eraseOwnerStorage: vi.fn(async () => { stored.clear(); }) };
+    sessions: async () => [{ csrf: 'current-csrf', expires: Date.now() + 43200000 }], store: { get: async <T>(key: string) => stored.get(key) as T | undefined, put }, purgeOwnerFiles: vi.fn(async () => true), eraseOwnerStorage: vi.fn(async () => { stored.clear(); }) };
   return { deps, auth, stored, put };
 }
 async function form(deps: OwnerControlsDeps, view: 'invites' | 'account' = 'invites') {
@@ -91,7 +91,28 @@ describe('owner account removal actions', () => {
     expect(JSON.stringify(body)).toContain('does not verify that every retained copy or file byte has been purged');
     expect(auth.deleteOwner).toHaveBeenCalledWith('trusted-owner');
     expect(vi.mocked(deps.eraseOwnerStorage).mock.invocationCallOrder[0]).toBeGreaterThan(auth.deleteOwner.mock.invocationCallOrder[0]!);
+    expect(vi.mocked(deps.purgeOwnerFiles).mock.invocationCallOrder[0]).toBeLessThan(auth.deleteOwner.mock.invocationCallOrder[0]!);
     expect(put).toHaveBeenCalledTimes(1); expect(stored.size).toBe(0);
+  });
+  it('removes stored files first and, if they cannot be confirmed removed, deletes nothing and records a rejection that a new request can retry', async () => {
+    const { deps, auth, stored } = setup(); vi.mocked(deps.purgeOwnerFiles).mockResolvedValue(false);
+    const result = await ownerControlsAction(await form(deps, 'account'), deps), body = await result.json() as { receipt: { state: string; signed_out?: boolean } };
+    expect(result.status).toBe(503);
+    expect(body).toMatchObject({ receipt: { state: 'rejected' }, duplicate: false });
+    expect(body.receipt.signed_out).toBeUndefined();
+    expect(auth.deleteOwner).not.toHaveBeenCalled(); expect(deps.eraseOwnerStorage).not.toHaveBeenCalled();
+    expect(stored.size).toBe(1);
+    vi.mocked(deps.purgeOwnerFiles).mockResolvedValue(true);
+    const retry = await form(deps, 'account'); retry.set('request_id', 'request-00002');
+    expect((await ownerControlsAction(retry, deps)).status).toBe(200);
+    expect(auth.deleteOwner).toHaveBeenCalledTimes(1);
+  });
+  it('treats a throwing file purge like an unconfirmed one', async () => {
+    const { deps, auth } = setup(); vi.mocked(deps.purgeOwnerFiles).mockRejectedValue(new Error('private bucket detail'));
+    const result = await ownerControlsAction(await form(deps, 'account'), deps);
+    expect(result.status).toBe(503);
+    expect(JSON.stringify(await result.json())).not.toContain('private bucket detail');
+    expect(auth.deleteOwner).not.toHaveBeenCalled();
   });
   it('keeps refused deletion distinct from partial local removal, without certifying purge', async () => {
     const { deps, auth } = setup(); auth.deleteOwner.mockResolvedValue(false);
