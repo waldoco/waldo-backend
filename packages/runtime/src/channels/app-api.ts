@@ -5,6 +5,7 @@ import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { signedRpc } from '../identity/owner-directory';
+import { computeDailyScores } from '../health/scores';
 import { APP_HEALTH_PATH, handleAppHealth } from './app-health';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
 
@@ -98,7 +99,7 @@ const fenceSession = async (env: AppEnv, owners: NonNullable<AppEnv['TELEGRAM_OW
 };
 
 // App sign-in and the shared main chat. Returns null for paths outside /app/v1 so the caller keeps routing.
-export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth | null = consoleAuth(env)): Promise<Response | null> => {
+export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth | null = consoleAuth(env), defer?: (work: Promise<unknown>) => void): Promise<Response | null> => {
   const url = new URL(request.url);
   if (url.pathname !== APP_PATH && !url.pathname.startsWith(`${APP_PATH}/`)) return null;
   const owners = env.TELEGRAM_OWNER_DO;
@@ -142,7 +143,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   // Health uploads can arrive in long runs, so they spend their own per-owner budget and never the chat one.
   if (url.pathname === APP_HEALTH_PATH || url.pathname.startsWith(`${APP_HEALTH_PATH}/`)) {
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-health:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
-    return handleAppHealth({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody });
+    return handleAppHealth({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: computeDailyScores });
   }
   const bucket = request.method !== 'POST' ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : 'app-chat-send';
   try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${bucket}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
