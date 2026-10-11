@@ -16,8 +16,9 @@ export const epochMsV1Schema = z.int().min(1_000_000_000_000);
 
 export const approvalIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{1,80}$/);
 export const approvalKindV1Schema = z.enum(['calendar_change', 'email_send', 'message_send', 'browser_submit', 'mcp_call', 'google_task_change']);
-// The approval desk's decisions: Do it, Not now, Modify, and Undo after an effect.
-export const approvalActionV1Schema = z.enum(['approve', 'skip', 'edit', 'undo']);
+// The approval desk's decisions: Do it (approve), Modify (edit), Don't do this (skip, final), Not now
+// (defer, the request stays open and comes back), and Undo after an effect.
+export const approvalActionV1Schema = z.enum(['approve', 'skip', 'edit', 'undo', 'defer']);
 export const approvalReviewV1Schema = visibleText(REPLY_TEXT_MAX_CHARS);
 export const payloadDigestV1Schema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 export const replyVisibilityV1Schema = z.enum(['shared', 'app_only']);
@@ -25,7 +26,7 @@ export const replyVisibilityV1Schema = z.enum(['shared', 'app_only']);
 export const replyApprovalPartV1Schema = z.strictObject({
   type: z.literal('approval'), approval_id: approvalIdV1Schema, kind: approvalKindV1Schema,
   review: approvalReviewV1Schema, payload_digest: payloadDigestV1Schema,
-  actions: z.array(approvalActionV1Schema.exclude(['undo'])).min(1).max(3).refine(distinct, 'actions repeat'),
+  actions: z.array(approvalActionV1Schema.exclude(['undo'])).min(1).max(4).refine(distinct, 'actions repeat'),
   expires_at: epochMsV1Schema, fallback_text: fallbackTextV1Schema,
 });
 export const replyQuickRepliesPartV1Schema = z.strictObject({

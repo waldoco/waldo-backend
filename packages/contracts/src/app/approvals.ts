@@ -12,8 +12,10 @@ export const appApprovalStateV1Schema = z.enum([
   'unconfirmed', 'open', 'review_only', 'edit_requested', 'skipped', 'expired', 'superseded', 'done', 'not_done', 'outcome_unknown', 'undone',
 ]);
 export type AppApprovalStateV1 = z.infer<typeof appApprovalStateV1Schema>;
+// Deferring is desk state, so every surface sees it: the approval stays open (it can still expire), the
+// default list leaves it out until Waldo raises it again, and the decision is recorded with approval_state open.
 const DECISIONS_BY_STATE: Readonly<Partial<Record<AppApprovalStateV1, readonly ApprovalActionV1[]>>> = {
-  open: ['approve', 'edit', 'skip'], review_only: ['skip'], done: ['undo'],
+  open: ['approve', 'edit', 'skip', 'defer'], review_only: ['skip', 'defer'], done: ['undo'],
 };
 
 const addresses = z.array(z.string().min(1).max(320)).max(100);
@@ -50,7 +52,7 @@ export const appApprovalV1Schema = z.strictObject({
   approval_id: approvalIdV1Schema, kind: approvalKindV1Schema, state: appApprovalStateV1Schema,
   review: approvalReviewV1Schema, exact: appApprovalExactV1Schema,
   payload_digest: payloadDigestV1Schema, expires_at: epochMsV1Schema,
-  actions: z.array(approvalActionV1Schema).max(3),
+  actions: z.array(approvalActionV1Schema).max(4),
   presented_surfaces: z.array(surfaceNameV1Schema).max(surfaceNameV1Schema.options.length)
     .refine(surfaces => new Set(surfaces).size === surfaces.length, 'surfaces repeat').optional(),
 }).refine(approval => approval.exact[EXACT_BY_KIND[approval.kind]] !== undefined, { error: 'exact must name what this kind changes', path: ['exact'] })
