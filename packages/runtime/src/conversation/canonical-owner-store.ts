@@ -37,7 +37,8 @@ const shapeFault = (entry: ConversationEntry): CanonicalShapeCheck | null => {
   if (entry.role === 'user' && !['owner', 'machine'].includes(entry.inputOrigin ?? '')) return 'input_origin';
   return null;
 };
-export type CanonicalHistoryRead = Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null; skipped: Readonly<Partial<Record<CanonicalShapeCheck, number>>> }>;
+export type CanonicalSkip = Readonly<{ count: number; unwitnessed: number }>;
+export type CanonicalHistoryRead = Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null; skipped: Readonly<Partial<Record<CanonicalShapeCheck, CanonicalSkip>>> }>;
 
 export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage, context: Pick<OwnerContextCapability, 'invocation' | 'assertCurrent'>): ConversationStore & Readonly<{ readForDisplay(): Promise<CanonicalHistoryRead> }> {
   const principal = context.invocation.verified_authority.principal_ref;
@@ -52,25 +53,32 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
   const witness = (entry: ConversationEntry): Witness => ({ lineage: 'canonical_v1', principal_ref: principal, tenant_ref: tenant, entry });
   const matches = (receipt: Witness, entry: ConversationEntry) => receipt.lineage === 'canonical_v1' && receipt.principal_ref === principal
     && receipt.tenant_ref === tenant && stableJson(receipt.entry) === stableJson(entry);
-  // Strict for turns. For display, a row that matches its own witness but fails the shape check is left out and
-  // counted instead of failing the read: it can still never load as owner input. Owner, witness and duplicate faults stay fatal.
+  // Strict for turns. For display, a row that fails the shape check is left out and counted instead of failing the read,
+  // whether its witness matches or is absent: a skipped row never loads as context. A witness that differs, an owner
+  // mismatch, a duplicate id, and any shape-valid row without its exact witness stay fatal.
   const read = async (skipShapeFaults: boolean): Promise<CanonicalHistoryRead> => {
     await context.assertCurrent();
     const rows = await storage.list<ConversationEntry>({ prefix: `${prefix}conv:` });
     const entries: ConversationEntry[] = [];
     const ids = new Set<string>(), seen = new Set<string>(), left = new Set<string>();
-    const skipped: Partial<Record<CanonicalShapeCheck, number>> = {};
+    const skipped: Partial<Record<CanonicalShapeCheck, { count: number; unwitnessed: number }>> = {};
     for (const entry of rows.values()) {
       if (!entry || entry.ownerId !== principal) throw new Error('canonical history owner mismatch');
       const fault = shapeFault(entry);
       if (fault !== null && !skipShapeFaults) throw new Error('canonical history entry invalid');
       const receipt = await storage.get<Witness>(witnessKey(entry.id));
-      // stableJson refuses undefined values, which a shape-faulted row may hold; such a row never loads, so plain JSON equality decides it.
-      if (!receipt || receipt.lineage !== 'canonical_v1' || receipt.principal_ref !== principal || receipt.tenant_ref !== tenant
-        || (fault === null ? stableJson(receipt.entry) !== stableJson(entry) : JSON.stringify(receipt.entry) !== JSON.stringify(entry))
-        || seen.has(entry.id)) throw new Error('canonical history witness mismatch');
+      if (seen.has(entry.id)) throw new Error('canonical history witness mismatch');
       seen.add(entry.id);
-      if (fault !== null) { skipped[fault] = (skipped[fault] ?? 0) + 1; left.add(entry.id); continue; }
+      if (fault !== null) {
+        // stableJson refuses undefined values, which a shape-faulted row may hold; plain JSON equality decides a row that never loads.
+        if (receipt && (receipt.lineage !== 'canonical_v1' || receipt.principal_ref !== principal || receipt.tenant_ref !== tenant
+          || JSON.stringify(receipt.entry) !== JSON.stringify(entry))) throw new Error('canonical history witness mismatch');
+        const tally = skipped[fault] ??= { count: 0, unwitnessed: 0 };
+        tally.count += 1; if (!receipt) tally.unwitnessed += 1;
+        left.add(entry.id); continue;
+      }
+      if (!receipt || receipt.lineage !== 'canonical_v1' || receipt.principal_ref !== principal || receipt.tenant_ref !== tenant
+        || stableJson(receipt.entry) !== stableJson(entry)) throw new Error('canonical history witness mismatch');
       ids.add(entry.id); entries.push(entry);
     }
     const leafId = (await storage.get<string>(`${prefix}leaf`)) ?? null;

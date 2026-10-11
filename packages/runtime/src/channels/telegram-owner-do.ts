@@ -668,7 +668,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const context=await this.appContext(name,hash,'Read my main conversation.','history:'+scope.attempt,now,scope);
         step='history';
         const {entries,skipped}=await canonicalOwnerConversationStore(this.ctx.storage,context).readForDisplay();
-        for(const [check,count] of Object.entries(skipped))console.error(JSON.stringify({hop:'app_history_read',ok:true,code:'history_rows_skipped',check,count}));
+        for(const [check,{count,unwitnessed}] of Object.entries(skipped))console.error(JSON.stringify({hop:'app_history_read',ok:true,code:'history_rows_skipped',check,count,unwitnessed}));
         step='transcript';
         const url=new URL(request.url);return Response.json(appTranscriptPage(entries,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),appApprovalParts(this.ctx.storage.sql)),{headers:{'cache-control':'no-store'}});
       }catch(error){logAppReadFailure('app_history_read',step,error);return fail(503);}finally{abort.abort();}
