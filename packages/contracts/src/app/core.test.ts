@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appErrorCodeV1Schema, appHistoryResultV1Schema, appMessageV1Schema, appProblemV1Schema } from './core';
+import { appCodeRequestSchema, appErrorCodeV1Schema, appHistoryResultV1Schema, appMessageV1Schema, appProblemV1Schema, appVerifyRequestV1Schema } from './core';
 
 const fallback_text = 'Open Waldo to see this.';
 const row = { id: 'entry-1', role: 'assistant', text: 'Done.', parts: [{ type: 'text', text: 'Done.' }], channel: 'app', parent_id: null } as const;
@@ -64,5 +64,23 @@ describe('app problem envelope', () => {
     expect(appProblemV1Schema.safeParse({ error: 'unavailable', code: 'inbox_full' }).success).toBe(false);
     expect(appProblemV1Schema.safeParse({ error: 'conflict', code: 'approval_superseded' }).success).toBe(false);
     expect(appProblemV1Schema.safeParse({ error: 'conflict', detail: 'stack' }).success).toBe(false);
+  });
+});
+
+describe('app sign-in requests', () => {
+  const requests = [[appCodeRequestSchema, { email: 'new@example.test' }], [appVerifyRequestV1Schema, { email: 'new@example.test', code: '123456' }]] as const;
+
+  it('accept an optional 20-character invite code from the console invite alphabet', () => {
+    for (const [schema, body] of requests) {
+      expect(schema.safeParse(body).success).toBe(true);
+      expect(schema.safeParse({ ...body, invite: 'ABCDEFGHJKMNPQRSTUVW' }).success).toBe(true);
+      expect(schema.safeParse({ ...body, invite: 'XYZ23456789ABCDEFGHJ' }).success).toBe(true);
+    }
+  });
+
+  it('refuse an invite code outside that alphabet or length; the app upper-cases and trims before sending', () => {
+    for (const [schema, body] of requests)
+      for (const invite of ['abcdefghjkmnpqrstuvw', 'ABCDEFGHJKMNPQRSTUV', 'ABCDEFGHJKMNPQRSTUVWX', 'IBCDEFGHJKMNPQRSTUVW', 'OBCDEFGHJKMNPQRSTUVW', '0BCDEFGHJKMNPQRSTUVW', '1BCDEFGHJKMNPQRSTUVW', ' ABCDEFGHJKMNPQRSTUVW', '', null])
+        expect({ invite, ok: schema.safeParse({ ...body, invite }).success }).toEqual({ invite, ok: false });
   });
 });
