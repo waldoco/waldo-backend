@@ -6,7 +6,7 @@ import type { ToolName } from '@waldo/contracts';
 export const TOOL_CLAIM_EFFECT: Readonly<Record<ToolName, string | null>> = {
   get_crs: null, get_health: null, query_calendar: null, get_communication: null, search_communication: null,
   read_thread: null, get_tasks: null, get_master_metrics: null, get_context: null, query_availability: null,
-  read_owner_context: null, read_memory: null, search_episodes: null, propose_action: null, web_search: null,
+  read_owner_context: null, read_memory: null, search_episodes: null, propose_action: null, web_search: null, get_weather: null,
   read_document: null, list_artifacts: null, read_artifact: null, read_mcp_tool: null, read_drive: null,
   search_connector: null, propose_schedule: null, search_tools: null, list_reminders: null,
   read_tool_output: null, connect_service: null, browse_page: null, list_health_logs: null, list_standing_orders: null,

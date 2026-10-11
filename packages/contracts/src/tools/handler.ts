@@ -103,6 +103,7 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'read_thread',
   'get_tasks',
   'web_search',
+  'get_weather',
   'read_document',
   'call_mcp_tool',
   'read_mcp_tool',
