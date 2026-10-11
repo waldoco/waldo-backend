@@ -50,6 +50,7 @@ const expectedMigrations = [
   '20261010040000_app_push_custody.sql',
   '20261010060000_owner_runtime_authority.sql',
   '20261011000000_health_plane.sql',
+  '20261011010000_delete_owner_health_context.sql',
   '20261011200000_waldo_connect_channel_app.sql',
 ];
 

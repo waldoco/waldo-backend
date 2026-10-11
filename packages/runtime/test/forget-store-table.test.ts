@@ -48,6 +48,7 @@ const TABLES: Record<string, Row> = {
   planning_execution_leases: exempt('lease ids, fences and times'), execution_writer_rollback_guard: exempt('a flag'),
   judgment_authority_rollback_guard: exempt('a flag'), runtime_invocation_v2_scribe_audit: exempt('run id and version'),
   runtime_run_scribe_audit: exempt('run id and version'), probe_state: exempt('a tick counter'), workspace_upload_lease: exempt('lease token, expiry and byte count'),
+  approval_presentations: exempt('approval id, surface, provider chat/message or run ref, approvable flag, payload digest and times; the app card is rendered from the ledger row at read time, so no review text is stored here'),
   card_pins: exempt('card id and time'), heartbeat_notified: exempt('loop id and times'), artifact_exports: exempt('ids, format, size and time'),
   event_briefs: exempt('event id and times'), schedule_runs: exempt('ids, status codes and times'),
   observed_mail: exempt('provider source/thread/message IDs, update-card row pointer, observation time and judged/attached flags; no sender/subject/snippet/body; unattached pointers expire after seven days'),
