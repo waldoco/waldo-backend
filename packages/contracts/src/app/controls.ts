@@ -28,9 +28,15 @@ export const appControlActionV1Schema = z.strictObject({
   if (deletion && (action.id ?? action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume) !== undefined) ctx.addIssue({ code: 'custom', message: 'account.delete carries only its confirmation' });
 });
 
+// The app-visible message recorded for this card today, or null when none is recorded. Independent of `sent`:
+// a card delivered on another surface, or held for quiet hours, can be sent or unsent with latest null.
+// message_id is the main-chat history row; delivered_at is epoch ms. The excerpt is a prefix, up to 280
+// UTF-16 code units, of the text the chat shows for that row, cut at read time and never stored. A row
+// that is gone or has no text gives latest null.
+const latestDelivery = z.strictObject({ message_id: text.min(1), delivered_at: z.int().positive(), excerpt: text.min(1).max(280) });
 export const appControlDayDataV1Schema = z.strictObject({
   timezone: text, date: text,
-  cards: z.array(z.strictObject({ id: text, name: text, defaultTime: text, time: text.nullable(), reason: text, sent: z.boolean(), pin: text.nullable() })),
+  cards: z.array(z.strictObject({ id: text, name: text, defaultTime: text, time: text.nullable(), reason: text, sent: z.boolean(), pin: text.nullable(), latest: latestDelivery.nullable().optional() })),
   proactivity: z.strictObject({ quiet_start: text.nullable(), quiet_end: text.nullable(), volume: z.enum(['low', 'normal', 'high']) }),
   schedules: z.strictObject({ daily_brief: z.boolean(), followups: z.boolean(), event_briefs: z.boolean(), nightly: z.boolean(), heartbeat: z.boolean() }),
 });
