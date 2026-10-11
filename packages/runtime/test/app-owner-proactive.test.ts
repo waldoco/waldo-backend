@@ -49,7 +49,7 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-type Runtime = Readonly<{ ready: Promise<unknown>; timezone: string; act(action: { action: string; id?: string; value?: string }): Promise<boolean | string> }>;
+type Runtime = Readonly<{ ready: Promise<unknown>; timezone: string; view(session: { token: string; csrf: string; expires: number }, notice: null): Promise<{ timezoneConfirmed: boolean }>; act(action: { action: string; id?: string; value?: string }): Promise<boolean | string> }>;
 type Owner = Readonly<{ setup(channel: string): Runtime; fetch(request: Request): Promise<Response>; alarm(): Promise<void> }>;
 type Stored = Readonly<{ zone?: string; confirmed?: boolean; pins?: Record<string, string> }>;
 
@@ -109,9 +109,11 @@ describe('proactive work for an owner who only uses the app', () => {
   it('the owner\'s first time-zone choice confirms it and arms the jobs in that zone, and the runtime uses the new zone', async () => {
     await withAppOwner('proactive-first-choice', {}, async (owner, state) => {
       await owner.setup('app').ready;
+      expect((await owner.setup('app').view({ token: 't', csrf: 't', expires: Date.now() + 60_000 }, null)).timezoneConfirmed).toBe(false);
       expect(await owner.setup('app').act({ action: 'timezone.set', value: 'Asia/Kolkata' })).toBe(true);
       expect(wire.saved).toEqual(['Asia/Kolkata']);
       expect(state.storage.kv.get('timezone_confirmed')).toBe(true);
+      expect((await owner.setup('app').view({ token: 't', csrf: 't', expires: Date.now() + 60_000 }, null)).timezoneConfirmed).toBe(true);
       const rows = schedule(state);
       expect(JSON.parse(rows[NIGHTLY_ID]!.recurrence!)).toMatchObject({ timezone: 'Asia/Kolkata' });
       expect(rows[HEARTBEAT_ID]?.status).toBe('armed');
