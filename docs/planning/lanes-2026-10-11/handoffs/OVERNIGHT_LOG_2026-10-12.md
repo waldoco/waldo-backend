@@ -213,3 +213,9 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - **PASS on:** reminders never held; no Telegram-addressed delivery for app-only owners; no burst beyond the cross-date case; app.v1 shape; no migration; bounded strict-load failure (retries at 30 s and 60 s, then a 24 h quarantine).
   - → **Held for the morning.** L2 fixes 1-3 tonight (board). The owner rules on the health-log question.
 - **Messages:** 10 used (5 `send_message` + 5 `SendMessage`). From here, lanes get instructions through the board and their own crons.
+
+## 22:34Z: heartbeat (lean, D9)
+
+- Cron `29a6d33d` alive. Staging `/healthz` is still `4bb040f5`, although Workers Builds succeeded on `889efa27`, which confirms that check doesn't promote **[verified]**. Push CI on `889efa27`: pgTAP SUCCESS, shards and verify running.
+- No new #116 comments since 22:20Z. #1066 is draft. Stale ready backend PRs (#1038, #1033, #987, #892, #776) aren't tonight's.
+- **App #78** (L4) "settings: write the phone's time zone over the unconfirmed UTC default", head `cb0ad501`, opened 21:57Z, before D6 reached L4. Its CI-equivalent run and review wait for L4's final head (D9 batch window).
