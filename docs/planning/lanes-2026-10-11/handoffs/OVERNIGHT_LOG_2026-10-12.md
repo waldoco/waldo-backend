@@ -24,3 +24,13 @@ L2 report (21:40Z) **[unverified until reviewed]**:
 - L2 is building the follow-up red-first: `load()` skips with the #1074 rule, children of a skipped row re-link in memory to the nearest loadable ancestor, a skipped leaf resolves to its nearest loadable ancestor, fixed log codes. Canonical-history loader change: independent review required.
 - #1066 head `0bab0a41`, CI 6/6 from 19:01Z (before #1074); merge the follow-up first or together.
 - The day-plan record for L3's Brief `latest` needs a DO ALTER: held for the morning (DO migration lineage).
+
+## 21:50Z: first results and research launched
+
+- **L1 (#116 comment 6114086292)** **[verified: read the comment; not re-probed]**: staging release `4bb040f5`, Worker version `65a07f13`, deployed with the owner's go in L1's session, Worker only (preflight 55 applied, 0 pending). Rollback is version `2d1ae6a0`. `GET /app/v1/chat/main` from the app answered 200 at 21:39:37Z. Skip line: `check` = `input_origin`, `count` = 1, `unwitnessed` = 0. Relayed to L2 (SendMessage `f4f765d0`). L1's next step: one app send.
+- **Also merged at 21:30Z by the owner's account (Pin4sf):** waldo-brain#36 (ADR-0068 reminder push) and waldo-app#77 (approvals `defer` re-pin) **[verified: `gh pr view`]**. So L3's reminder-push contract (its handoff step 1) is unblocked.
+- **#1066** (head `0bab0a41`): no migrations or DO lineage, 8 files; CI 6/6 at 19:08Z on the pre-#1074 base; GitHub `MERGEABLE`/`CLEAN` **[verified]**. Decision D1: merge after L2's send-path follow-up, once brought up to the current base.
+- **The app repo has no CI** (L4 handoff §6). Gate item 1 can't be met literally for app PRs; see the decisions file once settled.
+- **Replied to L2** (SendMessage `bdd3e888`): go ahead red-first; the six tests the review will look for.
+- **Research:** six read-only subagents launched at about 21:45Z (website promises, competitors and open-source agents, design system, harness and context, backend capability, app capability). Reports land in the session scratchpad; the synthesis is `PROMISE_DELIVERY_MAP_2026-10-12.md`.
+- **Message budget:** 4 `send_message` + 2 `SendMessage` used so far.
