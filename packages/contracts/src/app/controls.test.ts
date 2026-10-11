@@ -35,6 +35,28 @@ describe('channel link actions', () => {
   });
 });
 
+describe('Google connect from the app', () => {
+  const connect = { view: 'connections', action: 'google.connect', value: 'calendar', revision, request_id: 'connect-0001' };
+
+  it('starts a connect from the connections view, naming the feature in value', () => {
+    expect(appControlActionV1Schema.safeParse(connect).success).toBe(true);
+    expect(appControlActionV1Schema.safeParse({ ...connect, value: 'tasks' }).success).toBe(true);
+  });
+
+  it('rejects a connect outside the connections view or without a feature', () => {
+    expect(appControlActionV1Schema.safeParse({ ...connect, view: 'day' }).success).toBe(false);
+    const { value: _value, ...bare } = connect;
+    expect(appControlActionV1Schema.safeParse(bare).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...connect, value: '' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...connect, value: 'x'.repeat(65) }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...connect, action: 'google.disconnect' }).success).toBe(false);
+  });
+
+  it('returns the first-party link in the receipt navigation', () => {
+    expect(appControlReceiptV1Schema.safeParse({ state: 'recorded', message: 'Google connect is ready to begin.', navigation: '/c/AAAAAAAAAAAAAAAAAAAAAA' }).success).toBe(true);
+  });
+});
+
 describe('channel status in the connections view', () => {
   it('parses the projection with and without channels', () => {
     expect(appControlProjectionV1Schema.safeParse(projection(connections)).success).toBe(true);

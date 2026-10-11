@@ -3,11 +3,12 @@ import {
   sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type SendMessageArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import type { MessageSendProposal } from '../../channels/approvals';
+import { proposalStatus, type CardPlacement, type MessageSendProposal } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 
 export type MessageDesk = Readonly<{
   proposeSendMessage(proposal: MessageSendProposal): Promise<string>;
+  placement?(id: string): CardPlacement;
 }>;
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
@@ -17,7 +18,7 @@ const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger)
 // ADR-0054's idempotency key collapses a second approval onto the first send.
 export const sendMessageHandler = (desk: MessageDesk): ToolHandler<SendMessageArgs, unknown, ToolDispatcherContext> => ({
   name: 'send_message',
-  description: "Send a message on one of the owner's channels. Goes to the owner first as an approval card; nothing sends until they tap Send it.",
+  description: "Send a message on one of the owner's channels. Goes to the owner first as a review card; nothing sends until they approve it.",
   schema: sendMessageArgsSchema,
   trigger_allowlist: allowlist('send_message'),
   autonomy_gated: false,
@@ -29,6 +30,6 @@ export const sendMessageHandler = (desk: MessageDesk): ToolHandler<SendMessageAr
       content: args.content,
       idempotency_key: args.idempotency_key,
     });
-    return { ok: true, data: { proposal_id, status: 'sent to the owner with Send it / Modify / Not now buttons', sent: false }, source_taint: null };
+    return { ok: true, data: { proposal_id, status: proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Send it / Modify / Not now buttons', 'Nothing was sent.'), sent: false }, source_taint: null };
   },
 });

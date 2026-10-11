@@ -54,9 +54,24 @@ export const reviewGoogleTaskChange = (p: GoogleTaskProposal): string => {
   ].join('\n');
 };
 
+// The app's exact block: the same changed fields the review shows, before and after, with no task,
+// list, etag or connection ids.
+export const googleTaskExact = (p: GoogleTaskProposal) => {
+  const was = p.before, will = finalFields(p), creating = !was;
+  return {
+    action: p.args.action, account: p.account.email, list: p.list.title, task: was?.title ?? null,
+    changes: {
+      ...(creating || was.title !== will.title ? { title: { before: was?.title ?? null, after: will.title } } : {}),
+      ...((creating ? will.notes : was.notes !== will.notes) ? { notes: { before: was?.notes ?? null, after: will.notes } } : {}),
+      ...((creating ? will.due_date : was.due_date !== will.due_date) ? { due_date: { before: was?.due_date ?? null, after: will.due_date } } : {}),
+      ...(!creating && was.status !== will.status ? { status: { before: was.status, after: will.status } } : {}),
+    },
+  };
+};
+
 // Provider adapter only. The shared approval desk owns owner authentication, cards,
 // proposal expiry and lifecycle. The existing effect ledger owns dispatch/recovery.
-export const googleTaskApprovals = (deps: Readonly<{ sql: SqlStorage; google: GoogleAccess; effects: OwnerEffectLedger; ownerRef: string }>) => {
+export const googleTaskApprovals = (deps: Readonly<{ sql: SqlStorage; google: GoogleAccess; effects: OwnerEffectLedger; ownerRef: () => string; ownerRefAliases?: () => readonly string[] }>) => {
   if (!deps.ownerRef || !deps.effects) throw new Error('Google task owner effect custody is required');
   deps.sql.exec('CREATE TABLE IF NOT EXISTS google_task_effect_ack (operation_id TEXT PRIMARY KEY, identity TEXT NOT NULL, task_json TEXT NOT NULL)');
   const acknowledgement = (operationId: string) => deps.sql.exec<Ack>('SELECT identity, task_json FROM google_task_effect_ack WHERE operation_id = ?', operationId).toArray()[0];
@@ -129,7 +144,9 @@ export const googleTaskApprovals = (deps: Readonly<{ sql: SqlStorage; google: Go
       };
       const origin = deps.sql.exec<{origin_run_ref:string|null}>('SELECT origin_run_ref FROM ledger WHERE id = ?', approvalId).toArray()[0]?.origin_run_ref ?? undefined;
       try {
-        const receipt = await deps.effects.execute({ operationId, owner_ref: deps.ownerRef, tool: 'google_task_change', payload: p }, {
+        const ownerRef = deps.ownerRef();
+        if (!ownerRef) throw new Error('Google task owner effect custody is required');
+        const receipt = await deps.effects.execute({ operationId, owner_ref: ownerRef, tool: 'google_task_change', payload: p }, {
           dispatch: async () => {
             // Nothing has been sent yet, so a failure here is not an unknown outcome: it is
             // closed as not applied and the owner asks again.
@@ -155,7 +172,7 @@ export const googleTaskApprovals = (deps: Readonly<{ sql: SqlStorage; google: Go
             return verified;
           },
           reconcile: async () => { if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent(); const receipt = await verify(); if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent(); return receipt ? { status: 'done', receipt } : { status: 'unknown' }; },
-        }, origin);
+        }, origin, deps.ownerRefAliases?.());
         if (ctx?.assertTaskSourceCurrent) await ctx.assertTaskSourceCurrent();
         const result = receipt.result as TaskResult;
         return { status: result.status === 'applied' ? 'done' : result.status, receipt };

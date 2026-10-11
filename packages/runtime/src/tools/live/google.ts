@@ -10,7 +10,7 @@ import {
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import { b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature } from '../../connectors/google';
-import { EmailProposalError, type EmailSendProposal } from '../../channels/approvals';
+import { EmailProposalError, proposalStatus, type CardPlacement, type EmailSendProposal } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 
@@ -23,6 +23,7 @@ export type EffectDesk = Readonly<{
   propose(proposal: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string): Promise<string>;
   proposeSendEmail(proposal: EmailSendProposal): Promise<string>;
   record(kind: string, summary: string, payload: unknown): void;
+  placement?(id: string): CardPlacement;
 }>;
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
@@ -296,7 +297,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<GetTasksArgs, unknown, ToolDispatcherContext>,
   {
     name: 'propose_calendar_change',
-    description: "Propose adding, moving or cancelling an event on the owner's calendar. The owner gets Do it / Modify / Not now buttons; nothing changes until they approve. Include the event title.",
+    description: "Propose adding, moving or cancelling an event on the owner's calendar. The owner gets a review card to approve, change or skip; nothing changes until they approve. Include the event title.",
     schema: proposeCalendarChangeArgsSchema,
     trigger_allowlist: allowlist('propose_calendar_change'),
     autonomy_gated: false,
@@ -304,10 +305,10 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     eligible: granted(google, 'calendar'),
     mutates_state: true,
     async handle(args: ProposeCalendarChangeArgs, ctx?: ToolDispatcherContext) {
-      const result = await withGoogle(google, 'calendar', ctx, async client => ({
-        proposal_id: await desk.propose({...args, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx)),
-        status: 'sent to the owner with Do it / Modify / Not now buttons', applied: false,
-      }), args.account);
+      const result = await withGoogle(google, 'calendar', ctx, async client => {
+        const proposal_id = await desk.propose({...args, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx));
+        return { proposal_id, status: proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Do it / Modify / Not now buttons', 'Nothing has changed.'), applied: false };
+      }, args.account);
       return result.ok ? {...result, source_taint:null} : result;
     },
   } satisfies ToolHandler<ProposeCalendarChangeArgs, unknown, ToolDispatcherContext>,
@@ -343,7 +344,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
   {
     name: 'send_email',
-    description: "Send an email from the owner's Gmail. The owner gets Send it / Modify / Not now buttons showing the exact recipients, subject and body; nothing sends until they approve. Use draft_email instead when the owner wants to review or edit it in Gmail themselves. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it.",
+    description: "Send an email from the owner's Gmail. The owner gets a review card showing the exact recipients, subject and body; nothing sends until they approve. Use draft_email instead when the owner wants to review or edit it in Gmail themselves. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it.",
     schema: sendEmailArgsSchema,
     trigger_allowlist: allowlist('send_email'),
     autonomy_gated: false,
@@ -380,7 +381,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
           ...gate.data.reply, message_id, raw, digest: await sha256Hex(raw), ...(dedupe_key ? { dedupe_key } : {}),
         });
-        return { ok: true, data: { account: gate.data.account, proposal_id, status: 'review card requested in chat; nothing was sent', sent: false }, source_taint: null };
+        return { ok: true, data: { account: gate.data.account, proposal_id, status: proposalStatus(desk.placement?.(proposal_id), 'review card requested in chat; nothing was sent', 'Nothing was sent.'), sent: false }, source_taint: null };
       } catch (error) {
         // A channel timeout may have delivered the card, but no email was sent and the
         // proposal remains blocked. Database/other faults are not card-delivery evidence.

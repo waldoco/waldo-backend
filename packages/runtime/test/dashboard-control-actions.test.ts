@@ -13,3 +13,21 @@ describe('modern control actions',()=>{
  it('refuses new requests at the receipt capacity without forgetting replay protection',async()=>{const {act,deps}=setup();for(let i=0;i<100;i++)await controlAction(form(await controlRevision(day),'timezone.set','request-'+String(i).padStart(4,'0')),deps);const denied=await controlAction(form(await controlRevision(day),'timezone.set','request-overflow'),deps);expect(denied.status).toBe(429);expect(act).toHaveBeenCalledTimes(100);});
  it('preserves partial results and makes uncertain exceptions explicit',async()=>{const {act,deps}=setup();act.mockRejectedValueOnce(new Error('secret'));const result=await controlAction(form(await controlRevision(day)),deps);expect(result.status).toBe(503);const body=JSON.stringify(await result.json());expect(body).toContain('unconfirmed');expect(body).not.toContain('secret');});
 });
+
+describe('approval receipts', () => {
+ it('give the console notice and the app receipt fixed text, never the desk message', async () => {
+  const { approvalControlReceipt } = await import('../src/channels/dashboard-control-actions');
+  const outcomes = [
+   { toast: 'That failed', message: "That didn't work: PROVIDER-SECRET invalid_grant for owner@example.test" },
+   { toast: 'Done', message: 'Done: Run lookup on the crm MCP server. Result (external content, bounded): EXTERNAL-TOOL-OUTPUT' },
+   { toast: 'Not done', message: 'PAGE-SAID: card declined' },
+   { toast: 'Outcome unknown', message: 'PROVIDER-SECRET timeout' },
+   { toast: 'Something new', message: 'PROVIDER-SECRET' },
+  ];
+  for (const out of outcomes) {
+   for (const receipt of [approvalControlReceipt(out), approvalControlReceipt(out, 'rejected'), approvalControlReceipt(out, 'recorded')]) expect(receipt.message).not.toMatch(/PROVIDER-SECRET|owner@example|EXTERNAL-TOOL-OUTPUT|PAGE-SAID/);
+  }
+  expect(approvalControlReceipt({ toast: 'Sent', message: 'Sent: Send email to a@x.test' })).toEqual({ state: 'recorded', message: 'Sent. This cannot be undone.' });
+  expect(approvalControlReceipt({ toast: 'Done', message: 'x' }, 'unconfirmed').message).toBe('The proposal outcome could not be confirmed. Check the records and chat before retrying.');
+ });
+});

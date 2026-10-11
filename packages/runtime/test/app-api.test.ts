@@ -92,6 +92,24 @@ describe('app sign-in and main chat routes', () => {
       expect((await handleApp(new Request(`https://w.test/app/v1${path}`,{headers:{authorization:`Bearer ${CREDENTIAL}`}}),limited,auth))!.status).toBe(429);
     }
   });
+  it('forwards approval reads and decisions to the credential owner DO, with decisions in their own rate bucket', async () => {
+    forwards.length = 0; const keys: string[] = [];
+    const counted = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success: true }; } } } as never;
+    const auth = fakeAuth().auth, bearer = { authorization: `Bearer ${CREDENTIAL}` };
+    expect(await (await handleApp(new Request('https://w.test/app/v1/approvals?state=open', { headers: bearer }), counted, auth))!.json()).toEqual({ forwarded: true });
+    const decision = { approval_id: 'p1', action: 'approve', expected_digest: `sha256:${'a'.repeat(64)}`, request_id: 'decision-0001', owner: 'someone-else' };
+    expect(await (await handleApp(post('/app/v1/approvals/decisions', decision, bearer), counted, auth))!.json()).toEqual({ forwarded: true });
+    expect(forwards.map(r => `${r.method} ${new URL(r.url).pathname}${new URL(r.url).search}`)).toEqual(['GET /app/v1/approvals?state=open', 'POST /app/v1/approvals/decisions']);
+    expect(forwards.map(r => r.headers.get('x-waldo-do-name'))).toEqual(['owner-1', 'owner-1']);
+    expect(keys).toEqual(['app-read:owner-1', 'app-approval-decision:owner-1']);
+    expect((await handleApp(post('/app/v1/approvals', {}, bearer), counted, auth))!.status).toBe(405);
+    expect((await handleApp(new Request('https://w.test/app/v1/approvals/decisions', { headers: bearer }), counted, auth))!.status).toBe(405);
+    const anonymous = await handleApp(post('/app/v1/approvals/decisions', decision), counted, auth);
+    expect([anonymous!.status, await anonymous!.json()]).toEqual([401, { error: 'unavailable' }]);
+    const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
+    expect((await handleApp(post('/app/v1/approvals/decisions', decision, bearer), limited, auth))!.status).toBe(429);
+    expect(forwards).toHaveLength(2);
+  });
   it('rate limits sign-in attempts', async () => {
     const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
     const response = await handleApp(post('/app/v1/auth/code', { email: 'member@example.test' }), limited, fakeAuth().auth);
@@ -111,6 +129,26 @@ describe('main chat transcript page', () => {
     expect(older.messages.map(m => m.text)).toEqual(['text 2', 'text 1', 'text 0']);
     expect(older.messages[2]!.channel).toBe('telegram');
     expect(older.next_cursor).toBeNull();
+  });
+  it('attaches the approval parts presented for a run to the assistant reply to that run', () => {
+    const part: import('../src/channels/surfaces/app').AppApprovalPart = { type: 'approval', approval_id: 'p1', kind: 'calendar_change', review: 'Proposed: Walk', payload_digest: `sha256:${'b'.repeat(64)}`, actions: ['approve', 'edit', 'skip'], expires_at: Date.UTC(2026, 9, 10, 15), fallback_text: 'Walk' };
+    const user = entry(10, 'user', 'app'), first = { ...entry(11, 'assistant', 'app'), parentId: 'e10' }, reply = { ...entry(12, 'assistant', 'app'), parentId: 'e10' };
+    const asked: string[] = [];
+    const page = appTranscriptPage([user, first, reply], null, 10, parentId => { asked.push(parentId); return parentId === 'e10' ? { live: [part], fallbacks: [part.fallback_text] } : { live: [], fallbacks: [] }; });
+    expect(page.messages[0]!.parts).toEqual([{ type: 'text', text: 'text 12' }, part]);
+    expect(page.messages[1]!.parts).toEqual([{ type: 'text', text: 'text 11' }]);
+    expect(page.messages[2]!.parts).toEqual([{ type: 'text', text: 'text 10' }]);
+    expect(asked).toEqual(['e10']);
+  });
+  it('gives a reply that carries an approval part readable text of its own, for readers that drop the part', () => {
+    const part: import('../src/channels/surfaces/app').AppApprovalPart = { type: 'approval', approval_id: 'p2', kind: 'google_task_change', review: 'Google task change to review', payload_digest: `sha256:${'c'.repeat(64)}`, actions: ['approve', 'edit', 'skip'], expires_at: Date.UTC(2026, 9, 10, 15), fallback_text: 'update Google task “Buy milk” in Errands (me@example.com).' };
+    const user = entry(20, 'user', 'app'), silent = { ...entry(21, 'assistant', 'app'), parentId: 'e20', appPayload: '  ' };
+    const [reply] = appTranscriptPage([user, silent], null, 10, () => ({ live: [part], fallbacks: [part.fallback_text] })).messages;
+    expect(reply).toMatchObject({ id: 'e21', text: part.fallback_text, parts: [{ type: 'text', text: part.fallback_text }, part] });
+    const spoken = { ...silent, appPayload: 'I prepared the task change.' };
+    expect(appTranscriptPage([user, spoken], null, 10, () => ({ live: [part], fallbacks: [part.fallback_text] })).messages[0]).toMatchObject({ text: 'I prepared the task change.', parts: [{ type: 'text', text: 'I prepared the task change.' }, part] });
+    const decided = appTranscriptPage([user, silent], null, 10, () => ({ live: [], fallbacks: [part.fallback_text] })).messages[0]!;
+    expect(decided).toEqual({ id: 'e21', role: 'assistant', text: part.fallback_text, parts: [{ type: 'text', text: part.fallback_text }], channel: 'app', parent_id: 'e20' });
   });
   it('skips rows with no role and treats a bad cursor as the start', () => {
     const { role: _role, ...bare } = entry(9, 'user');
