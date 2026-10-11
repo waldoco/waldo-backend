@@ -122,3 +122,28 @@ L2 report (21:40Z) **[unverified until reviewed]**:
   - **Not merged.** Its owner (the latency session) is idle, and sends are scarce. Morning batch: hand these findings to the latency session. Tonight, a shard 3/4 `trusted-run-loop` failure on another PR is classified as this known pre-existing flake (#532), and I rerun only that job once, logged.
 - **#1066** head `e1ab2881`: CI 6/6 SUCCESS incl. pgTAP on the current base; `MERGEABLE`/`CLEAN`; not draft **[verified: `gh pr view`]**. Independent review launched. Focus: reminders never held; health-data destinations of proactive text in the canonical transcript; no Telegram-addressed delivery for app-only owners; no burst on later confirmation; the D6 interaction; the strict-load failure mode for a bad row.
 - **Plan if #1066 passes:** merge it into `beta-mvp` as soon as it passes. This revises D1's order for the merge only; deploy order is unchanged. Merging early also tests whether the permission classifier allows merges under the standing go. No deploy until L2's send-path follow-up is merged as well, so staging never runs #1066 without it.
+
+## 22:12Z: L2 delivers #1075; #1066 back to draft; S7 spike passed; website research in
+
+- **#1075** "App turns and scheduled app messages skip a shape-invalid history row" (L2), head `01e20d19`, CI 6/6 incl. pgTAP, `MERGEABLE`/`CLEAN`, ready **[verified: `gh pr view`]**.
+  - Files: `canonical-owner-store.ts` +62/−17, `telegram-owner-do.ts` +9/−12, two test files.
+  - L2 maps my checklist to named tests: leaf 2/3/10, parent 4, witness 9, no writes 1, `appDeliveryFor` 10, one shared `read()`. The owner's exact case is test 3 (one witnessed `input_origin` leaf with no parent → the new message becomes a root). 12 mutations checked; 12 of 13 tests are red at `4bb040f5` **[unverified: lane report]**.
+  - Independent review launched at 22:10Z.
+  - **My read of the diff [verified]:**
+    - `load()` = `read(true)` (skip + in-memory re-link); `readForDisplay()` = `read(false)`.
+    - Witness-differs, owner mismatch, duplicate id and shape-valid-without-witness stay fatal.
+    - Only rows whose parent was left out are re-linked, so a truly missing parent still fails.
+    - `asStored` maps re-linked rows back on save. A new row can't take a left-out id (`history_conflict`).
+    - The failed app turn now logs a fixed code (`app_turn`).
+    - Edge case to check: a re-linked entry that the runtime modifies (forget redaction) is saved with its in-memory parent.
+  - After deploy, L1's probe should show the send completing and one `app_history_load` line: `input_origin`, count 1, unwitnessed 0, orphans 0, leaf true.
+- **#1066 moved back to draft by L2:** it conflicts with #1075 on one `logAppReadFailure` line. L2 has the resolution at `61817c32` locally (typecheck + 33 tests pass) and pushes it after #1075 merges. My #1066 review on `e1ab2881` continues; I'll re-check only the resolution delta.
+- **`defer` desk branch held for the morning** (L2): it needs a guarded `ALTER TABLE ledger ADD COLUMN deferred_at INTEGER` (DO lineage), and "Waldo raises it again" has no implementation (`present()` runs only when a proposal first opens).
+  - Owner questions: the ALTER; the definition of "raises it again" (L2 proposes "presented again on any surface" via a model-called re-raise).
+  - L4's re-pin isn't a blocker: app `c2ccd5d0` carries `parts.ts` and `approvals.ts` byte-identical to `21a70277` **[unverified: lane report]**.
+- **S7 keyless spike PASSED at 21:55:00Z** (L2, under the owner's go in L2's session): the throwaway Worker `waldo-apns-spike-98c8af` (no bindings or secrets) got 403 + `apns-id` + `MissingProviderToken` from `api.sandbox.push.apple.com`, so Workers reach APNs. Deleted: the CF API and the URL answer 404. `wrangler delete` exits 1 on a KV-cleanup OAuth scope, after deleting **[unverified: lane report]**.
+- **L2 next:** push #1066's resolution after #1075; then S7 W2 prep red-first on a branch. The token read path and device routes are held for the morning (auth/secrets).
+- **Website promises** (report `01-website-promises.md`) **[lead]**:
+  - 120 promises in 16 areas; 94 match ledger rows; 26 aren't in the ledger.
+  - Highest harm: Gmail "read only" vs bodies read and approved sends; export/delete "Working today" (export missing, delete untested from the app); "Undo it in one tap" (only calendar moves, 10 minutes); 6:30 push missing; wearables beyond Apple Watch; "Free while in beta" and Terms gating unledgered.
+  - #18's current head `598e94b0` (16 files) is newer than the ledger's record (`4fcc6f20`) and creates two new contradictions.
