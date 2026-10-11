@@ -61,7 +61,7 @@ select is((select count(*) from waldo.presences where owner_id = '10000000-0000-
 select is((select count(*) from vault.secrets where name = 'conn_secret_c'), 0::bigint, 'the vault secret behind the connection is gone');
 
 select is((select count(*) from public.health_context_daily where user_id = '00000000-0000-0000-0000-00000000000c'), 0::bigint,
-  'the owner''s derived health rows are gone (they are keyed on the auth user, which the delete does not remove)');
+  'the owner''s derived health rows are gone (they are keyed on the auth user)');
 select is((select count(*) from public.health_context_daily where user_id = '00000000-0000-0000-0000-00000000000d')
         + (select count(*) from waldo.health_context_basis where owner_id = '10000000-0000-0000-0000-00000000000d'), 2::bigint,
   'another owner''s derived health row and basis are untouched');
