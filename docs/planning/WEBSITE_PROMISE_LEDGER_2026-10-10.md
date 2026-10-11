@@ -116,7 +116,7 @@ Lane names are the lanes that own the area in `docs/planning/lanes-2026-10-11/RE
 | The right task, at the right time | Working today | deployed (reads and approved writes) | `get_tasks` reads all lists with paging (`tools/live/google.ts:262-297`); `propose_google_task_change` creates, edits, completes or reopens after approval (`tools/live/tasks.ts:10-30`; app-approvable, `approvals.ts:77,105`); `write_task`/`update_task` names still have no handler (`tool-replay-class.ts:48`) | chat on any surface; approvals on app routes, Telegram | L3 (approvals) | Right-time ordering and the energy input; the app approvals screen (#54) is unmerged |
 | Fewer pings | Coming next | none | fixed gates only: volume and quiet hours (`loops.ts:96-102`); `computeAdmission` is used for Prep only (`DO:2415`); no Slack | none | unassigned (#915 K) | Interruption judgment (ruling: no mail holding) |
 | Fixed first, mentioned after (The Patrol) | Working today | deployed (list only) | heartbeat lists past-due loops with no model call and no effect (`heartbeat.ts:97-123`); no standing grant on beta (#932 unmerged); every loop pinned L0 (`loop-policy.ts:127-205`) | Telegram; app transcript for app-only owners [inference, untested] | unassigned (#915 I + J) | Grants, autonomous effects, overlap detector |
-| Patterns (Spots → named pattern) | Coming next | deployed (constellations) | constellation tables (`memory/claims.ts:378-400`); promotion runs from nightly (`DO:2296-2299`, `owner-turn.ts:687`); a health exclusion is located only for transient decisions (`owner-turn.ts:659`) | console memory graph (web-only by ruling) | unassigned (Wave 4) | Named patterns with numeric health deltas; no app view |
+| Patterns (Spots → named pattern) | Coming next | deployed (constellations) | constellation tables (`memory/claims.ts:378-400`); promotion runs from nightly (`DO:2296-2299`, `owner-turn.ts:687`); a health exclusion is located only for transient decisions (`owner-turn.ts:659`) | console memory graph; app view decided (owner answer via L3, 6109120916: Constellations go in the app with full claim text; L3 builds a read-only `view=constellation` after the Brief `latest` field; app #60 renderer open, unwired) | L3 (view), L4 (screen) | Named patterns with numeric health deltas; the app view is not yet a contract |
 | The Slope (six measures vs four weeks) | Coming next | none | labels only (`console.ts:203-204`, `messaging-behavior.ts:27`) | none | unassigned (Wave 4) | Producer and the Stack, Signal Pressure and Task Pileup signals |
 
 ### Talk to Waldo
@@ -197,6 +197,38 @@ The owner decided to keep the published copy (ruling 10). These are the lines wh
 
 No landing edits are planned.
 
+### 6a. Promises on the site that §4 does not cover (read at landing `830bfc2`, 11 October)
+
+Raised by the alignment session's read-only audit and re-read here [verified unless tagged]. None is in a lane; whether each is launch scope is the owner's call. The "See" mockups (`components/site/see/*`) are rendered on the home page, so their lines are published copy, not fixtures.
+
+| Promise | Where | Nearest ledger row | Rung |
+|---|---|---|---|
+| The Fetch as its own moment with its own switch | `app/how-it-works/page.tsx:88,465,476` | §7 (Fetch re-enters as a moment); `schedules` has no Fetch key (`controls.ts:35`) | none |
+| A brief that changes through the day, with decisions and an outbox held until you send | `see/brief.tsx:9-11,18-44`; `see-fixture.ts:23` | one 08:00 Brief card | none |
+| Answers that show what he read, compared and where each fact came from | `see-fixture.ts:24`; `app/page.tsx:167` | "Follow up" provenance only | source (receipts) |
+| Texting a third party on WhatsApp; a watch-battery charge reminder | `see-fixture.ts:473-474` | WhatsApp is Ashish's (D7); no battery signal anywhere | none |
+| Photos, voice notes, clips, screenshots, screen recordings and slides as inputs | `app/page.tsx:174-213` | speech in only | none |
+| Terminal, Apple Watch, Figma comments and Slack as places to talk | `hats-scenes.tsx:10-11,421,585` | app, Telegram, console, WhatsApp | none |
+| Rules per account: work mail batched into two blocks, personal never touched in work hours | `app/connectors/page.tsx:137-143` | conflicts with ruling 5 (no mail holding) | none |
+| Routines by profession (Founders, Engineers, …) | `put-to-work-data.ts:31-104` | — | none |
+| Autonomy that grows week by week: asks, then moves with Undo, then moves silently | `learning-weeks.tsx:13-15` | three-levels enum, no consumer | source (enum) |
+| Works toward an outcome and comes back when done | `app/page.tsx:260` | Outcome and OpenLoop closure (§4 Patrol row) | deployed (Telegram) |
+| An honest record across days, months and years | `handled-cards-section.tsx:63-64` | history 7/30/90 days, no route | none |
+| Read-only shown per tool; one tap to disconnect and what he learned goes too | `key-window.tsx:15-18` | §6 disconnect line; no per-tool read-only switch | none |
+| Spots from caffeine, meals, screen time and tool switches | `see/memory-data.ts:36-84`; `see-fixture.ts:520-524` | Patterns row (health signals only) | none |
+| Weather moving an event; mail batched for 11:30; "breaks big tasks down" | `connector-uses.tsx:182,351-362`; `app/connectors/page.tsx:92` | D5 weather (not registered, #1043) | source |
+| A speak button on every reply | `see/kit.tsx:215` | Voice row (speech in, no speech out) | none |
+
+### 6b. Where the site claims less than the backend does
+
+- **"Gmail access is read-only. Waldo reads when messages arrive and their labels, not subjects or text."** (`trust-panels.tsx:191`, rendered). The backend reads subjects, snippets and full thread bodies (`tools/live/google.ts:42,250`) and sends mail behind approval (`:347`). The "never the words" line is in source comments only (`hats-scenes.tsx:27`, `put-to-work-data.ts:7`). This is a published privacy claim, so the owner picks the copy or the capability; until then no message-content claim goes in the app (L4, 6109166420). The 32,000-character body figure is L4's [reported 6109166420], not re-read here.
+- **"Read only, unless you say so"** (`key-window.tsx:16`) matches approval-gated calendar writes and Gmail send; not a conflict.
+- **"Undo it in one tap"** (`app/page.tsx:272`) and **"What Waldo learned from that tool goes with it"** (`key-window.tsx:18`): already above; undo is calendar-only and there is no purge lineage.
+
+### 6c. The ten most prominent weak promises (home page, by position) [reported, alignment session; quotes re-read]
+
+"nothing hidden" (`app/page.tsx:80`); "Waldo reads all of it" (`:108`); "tells a rough day from an easy one" (`:149`); "One brief that follows your day" (`see-fixture.ts:23`); "where each fact came from" (`:24`); "At 6:30 you get one notification" (`:27`) with no push code and `expo-notifications` never imported in the app [verified at app `d20322ca`]; "Months in, Waldo gets to know you" (`app/page.tsx:244`); "Apple Watch, Oura, WHOOP, Garmin and Fitbit all work" (`:276`); "Done before you're up" (`handled-cards-section.tsx:36`).
+
 ## 7. Rule and wording changes (decided 10 October)
 
 | Promise | Current rule | Change |
@@ -268,6 +300,7 @@ Day cards and update cards used to log no root hop, so their traces were never e
 | D7 | WhatsApp | Ashish (ruling 8) |
 | D8 | Spotify | Deferred until it has a stated job |
 | D9 | Lane conflicts | Retired by ruling 2 |
+| D11 | Constellations in the app | Owner's answer in L3's session, 11 Oct (6109120916): the 11 Oct "memory graph web-only" ruling is superseded; the app shows the same `claims[]` with `text`; L3's order is Brief `latest`, `view=constellation`, memory controls and Spots, then "deliver to" |
 | D10 | Cohort, spend ceiling, launch gate | Cohort 5 to 10, at most 50, and $25 per user per month (ruling 18); #915 L builds the ceiling. The launch gate and browser purchase limits are still the owner's to set |
 
 ## 11. Not website scope: the Instinct-parity bar
@@ -356,12 +389,15 @@ The lane plan is `docs/planning/lanes-2026-10-11/README.md`. That plan assigns t
 | App #56 | Re-pin `core.ts` and `controls.ts` from `90e162d0`; invite field on sign-in; Account screen with delete | merged `839f2133`; Simulator against `a5a523f9` only, where the account view was unserved |
 | App #57 | Home summary: scores, cards, waiting approvals | merged `d7cf271f`; `pnpm test` 516 passed / 1 skipped at its head [reported 6108662556] |
 | App #58 | Sidebar from the design; Home menu button | merged `d20322ca`; no staging evidence |
+| App #59 | Home as stacked cards with score rings; Patrol and Spots as "not shown yet" cards | open; Simulator only against `81c4f892` [reported 6109166420] |
+| App #60 | Constellations renderer | open; unwired until `view=constellation` is served |
 
 ### Findings that set the order
 - **Health in chat.** The chat read needs both consents (`health_basis_live(…, true)`, `health_plane.sql:514`), while scores need storage only (`:486`). On the owner's staging account `model_processing` is off [reported 6107519497], so chat says no health was shared while the scores screen shows Recovery [inference]. The model also gets candidate scores under hardcoded legacy version names with no activation label (`health-context.ts:119-121`).
 - **Proactive on the app.** Only reminders are tested on the app sink. Day cards, standing orders and heartbeat reach it in source through indirect arming (`DO:2619`, `:2300`, `:1239-1247`); Prep and the update card do not. No staging run shows any proactive message in the app.
 - **Delete and re-sign-up from the app.** The backend side is deployed (`81c4f892`) and the app's sign-in screen (invite field) and Account screen (delete) are on main (#56). Neither has run against the deployed Worker: L2 checked only the unauthenticated invite path [reported 6108630533], and L4's Simulator run was against `a5a523f9` [reported 6108662556]. Until a run on a test account is reported, both steps count as browser-proven only. `delete_owner` leaves `auth.users`, the redeemed invite row with its email, R2 objects (`DO:1940`) and the RunLoopDO owner root (`index.ts:299-306`) [inference for the root]. The rejoin pgTAP proves the SQL path only.
 - **C13, generalised: a new approval kind blanks the app.** App #54 re-pinned `approvals.ts`, so `google_task_change` now parses. But the list is still parsed as a strict array with a closed `kind` enum, and one failed parse rejects the whole response (app `appRoutesClient.ts:29-30`); app #51 protects chat history only. So the next kind added to `parts.ts` empties the Approvals screen and the Home "waiting" count on every app built before the re-pin. A kind is a row-level field under the additive-only rule above: version bump or app re-pin first.
+- **A second brain in the app repo** [verified at app `d20322ca`; deploy state unverified]. `supabase/functions/agent` and `insights` call OpenAI with their own prompts (`agent/chat.ts:7,109`), and `agent/commit.ts:123` writes `memory_inbox` through a service-role client; `runtime/waldo-worker` is a second per-user Durable Object keyed by a client-sent `userId` (`src/index.ts:20-22`). No app screen reaches them. This breaks the one-brain rule if any of it is deployed; removal needs the owner's go (alignment session).
 - **App copy that now contradicts the build.** Settings still says invites, export and account deletion are unavailable and that connection controls are missing (app `settings.tsx:20-21`); Home's Brief row says the Brief is not shown in the app yet (`TodaySummary.tsx:54`), which is true; the device build checklist and `Docs/APP_INTEGRATION_GUIDE.md` say the app cannot redeem an invite and that #54/#55 are unmerged. The legacy Supabase `oauth-google` function still redirects to `waldo://connector-callback`, a route the app no longer has (`supabase/functions/oauth-google/index.ts:85`), so an old-path return goes nowhere [verified at app `d20322ca`].
 - **Streaming.** The runtime has no model streaming, and replies pass post-model guards whole.
 - **`channel.unlink`** is accepted by the contract and always 400 (`app-controls.ts:62`); `channel.link_start` does not exist.
@@ -384,7 +420,8 @@ What Suyash can build to and exercise on his own iPhone and Watch, per promise, 
 | Health agreements, Schedule, Main chat, Full history | app | Real server data on main; Simulator-proven | A device run |
 | Activity log | app (Patrol screen) | Route served; screen is a placeholder | Screen; reasons and "left alone" from the backend |
 | Threads, quick replies, charts, thumbs, voice | app | Contract only or Telegram only | Producers and screens; later waves |
-| Invite admin, admin overview, memory graph | console only (approved) | Console | — |
+| Invite admin, admin overview | console only (approved) | Console | — |
+| Constellations (memory graph) | app (D11) | Console today; app renderer in app #60 (open), no served view | `view=constellation` (L3, second in the queue); app re-pin and controller |
 | WhatsApp, iMessage | later (Ashish) | Static "coming soon" copy in onboarding by ruling | — |
 | Watch | later | Placeholder with no data path | A data path (WatchConnectivity or direct) |
 
@@ -395,9 +432,10 @@ What Suyash can build to and exercise on his own iPhone and Watch, per promise, 
 2. Delete-and-recreate from the app is unproven: backend deployed and app screens merged, but no run against `81c4f892` on a test account has been reported, and deletion still leaves the auth identity, invite email, R2 and the RunLoopDO root.
 3. Health on a real device is unproven: foreground-only upload makes Form stale, Weight is always unavailable, sleep debt is computed and discarded, quiet flags and Training have no output, history has no route.
 4. The approvals, connections and scores screens (#53–#55) are merged but Simulator read-only; no approval has been decided from the app on staging, Google connect from the app has never run, and the "connected" notice goes to Telegram.
-5. Memory controls do not exist in the app, not even as a contract; Patterns and Spots are placeholders.
+5. Memory controls and Constellations do not exist in the app as a contract (D11 moves Constellations into the app; L3 queue); Patterns and Spots are placeholders.
 6. Talk surface: threads are contract only; quick replies, charts and thumbs have no producer for the app; machine prompts render as the owner's own bubbles.
 7. Rules: the three levels are an enum with no consumer; the activity log has no reasons; the console deletion copy overclaims.
+8. Fifteen published promises have no ledger row at all (§6a), and one rendered privacy claim says less than the backend does (§6b); both wait on the owner.
 
 **B. Parity ideas beyond published copy (new scope; enter lanes only by owner ruling).** From the 11 October competitor refresh (`docs/planning/waldo-agent-mvp/COMPETITOR_RESEARCH.md`, separate PR).
 1. Per-scope allow/ask/deny rules with a "show details" full-input review before approval (Vellum, Muse state this); Waldo has exact-payload approvals but no rules layer.
