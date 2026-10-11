@@ -1,6 +1,19 @@
 import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vitest/config';
 
+// Tests hold synthetic credentials, so a call that reaches a provider can only be rejected; answer it here with the
+// provider's own rejection. Both are non-retryable 401s: the OpenAI SDK retries a 5xx twice with backoff, and inside
+// the owner DO's serial queue that wait lands on whichever request comes next.
+const rejections: Readonly<Record<string, object>> = {
+  'api.openai.com': { error: { message: 'Incorrect API key provided.', type: 'invalid_request_error', param: null, code: 'invalid_api_key' } },
+  'graph.facebook.com': { error: { message: 'Invalid OAuth access token - Cannot parse access token', type: 'OAuthException', code: 190 } },
+};
+const blockedEgress = (request: Request): Response => {
+  const host = new URL(request.url).host, rejection = rejections[host];
+  const headers = { 'x-waldo-test-egress': 'blocked' };
+  return rejection ? Response.json(rejection, { status: 401, headers }) : new Response(`The test pool blocks egress to ${host}.`, { status: 502, headers });
+};
+
 export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
@@ -15,6 +28,7 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       miniflare: {
+        outboundService: blockedEgress,
         bindings: {
           WALDO_ENV: 'test',
           RUN_LOOP_PROVIDER_MODE: 'fake',
