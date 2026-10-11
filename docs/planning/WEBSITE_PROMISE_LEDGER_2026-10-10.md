@@ -382,6 +382,32 @@ The lane plan is `docs/planning/lanes-2026-10-11/README.md`. That plan assigns t
 - **Merges, deploys and migrations.** Each needs the owner's go, given in the session that runs it. A message relayed from another session is not a go. Merged is not deployed.
 - **Messages between sessions.** Peer messages can be dropped. Anything another lane must know goes on #116 or in a PR.
 
+### Proposed lanes for the rows no lane holds (audit lane, 11 October; the owner approves, nothing is assigned here)
+
+Read from the lane cells in §4 and §5 at this pass. The proposals follow the split already in use (L1 health plane and deploys, L2 owner DO and runtime, L3 app contracts, L4 app, Ashish for Kennel and WhatsApp, Instinct briefs for connector depth) and the waves in `APP_CHAT_PLAN.md`. Voice stays unassigned by ruling (deferred, not dropped).
+
+| Row | Proposed lane | Why there |
+|---|---|---|
+| Your history (7/30/90 dots) | L3 (history range route, G16), L1 (health-plane read), L4 (screen) | the data is in the health plane; the app has no route |
+| The Window | L2 after P3a (a card from best hours), L4 | needs intraday Form, which needs background delivery (L4) first |
+| The Adjustment (weekly) | L2 (a weekly card from the nightly runner), L4 | same arming path as the day cards |
+| Your best hours | L1 (qualitative pattern from Form history), L2 (card), L4 | numeric evidence stays in the health plane by rule |
+| Fewer pings | L2 (#915 K: judgment replaces the fixed cap) | owner DO proactive path |
+| The Patrol | L2 (#915 I and J: reasons, "left alone"), L3 (activity reasons, G8), L4 (Patrol screen) | the list exists; reasons and the screen do not |
+| The Slope | L1 (six measures over four weeks), L3 (Slope read, G19), L4 | health-plane computation with an app read |
+| Follow up on anything | L2 W3 (thread refs in app replies), L3 (provenance part, G6) | Telegram reply-quote has no app equivalent |
+| Quick replies | L2 (producer after the fallback rule), L4 (`ChoiceChips`) | APP_CHAT_PLAN A9 |
+| Charts in replies | L2 (producer), L4 (`Sparkline`, `MetricTile`), L1 for health series on the owner channel | APP_CHAT_PLAN A9 |
+| Thumbs up / down | L2 W4 (ratings in owner-DO SQLite, 6111210911), L4 | contract already merged (#1067) |
+| Three levels, per area | L2 (a consumer for the enum, #915 I), L3 (autonomy per area, G12), L4 (Settings `ChoiceList`) | enum exists with no consumer |
+| The activity log | L4 (draw the served `activity` view, A11), then L2 and L3 (reasons, "left alone") | the view is served and never asked for |
+| Tomorrow, today | L2 (route the Close preview to the app in P3a), L4 | Close exists on Telegram only |
+| Other agents ask Waldo; Codex, Claude Code, Cursor, OpenCode, Pi via Kennel | Ashish (Kennel side); L2 for the backend seam after the launch cut; owner on scope | contract only; a fake today |
+| Galaxy Watch, Health Connect (Android clients) | L4 later wave; owner on whether Android is in the launch cut | backend ready, no client |
+| Oura, WHOOP, Garmin, Fitbit | L1 (provider adapters); owner on launch scope, since the site says "all work" | enums only |
+| Outlook, Microsoft To Do, Slack, Todoist, Linear | owner on scope first; L3 contracts if approved | none or contract only |
+| Voice | unassigned by ruling (deferred) | — |
+
 ### Staging
 - **Worker.** `/healthz` reads `726ad0e7` [verified 19:26Z]; L1 deployed it Worker-only on the owner's go, version `2d1ae6a0`, preflight 55 applied / 0 pending, no wrangler change [reported 6112571547]. Live since this deploy: #1069 (R2 files purged before deletion; a failed purge blocks deletion with 503 and a `rejected` receipt), #1068 (a fixed failure code is logged when an app read answers 503), #1067 (C1 threads, cancel, ratings, message times and devices contract; routes answer 404 until L2's waves), #1065 (read-only `view=constellation`; optional `timezone_confirmed` on `day`), #1064's SQL (applied earlier). Not merged: #1066 (P3a arming), #1070 (defer beside skip). Earlier deploys: `15134581` [verified 17:39Z], `81c4f892`, `a5a523f9`. Nothing deployed today has been exercised from the app on staging except the Simulator reads L4 reported.
 - **Database.** 55 migrations applied, 0 pending, through `20261011230000` (#1064: `delete_owner` now removes the Auth user with its legacy `public.users` row, refresh tokens and sessions, nulls the email on the redeemed invite, and deletes the Vault-held push token) [reported 6112059177]. The owner's staging account holds synthetic Simulator health data and derived scores [reported 6107519497, 6108184771]; no physical device has uploaded. Retention cron `17 3 * * *` is registered on staging only; its first firing is 12 October 03:17Z.
