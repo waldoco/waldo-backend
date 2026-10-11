@@ -1,5 +1,6 @@
 import type { ConversationEntry } from '@waldo/contracts';
 import { APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
+import type { AppApprovalCards } from './approvals';
 import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
@@ -11,6 +12,8 @@ import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LI
 export const APP_PATH = '/app/v1';
 export const APP_CHAT_PATH = `${APP_PATH}/chat/main`;
 export const APP_CHAT_SEND_PATH = `${APP_CHAT_PATH}/messages`;
+export const APP_APPROVALS_PATH = `${APP_PATH}/approvals`;
+export const APP_APPROVAL_DECISIONS_PATH = `${APP_APPROVALS_PATH}/decisions`;
 const MAX_BODY_BYTES = 8192;
 
 type AppEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
@@ -142,7 +145,8 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-health:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
     return handleAppHealth({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: computeDailyScores });
   }
-  try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${request.method === 'POST' ? 'app-chat-send' : 'app-read'}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
+  const bucket = request.method !== 'POST' ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : 'app-chat-send';
+  try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${bucket}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
 
   if (url.pathname === `${APP_PATH}/session`) {
     if (request.method !== 'GET') return fail(405);
@@ -158,9 +162,9 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     return ok({ result: revoked ? 'revoked' : 'already_gone' });
   }
 
-  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`)) {
+  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH) {
     const sending = url.pathname === APP_CHAT_SEND_PATH;
-    if (!['GET', 'POST'].includes(request.method) || (url.pathname === APP_CHAT_PATH && request.method !== 'GET') || (sending && request.method !== 'POST')) return fail(405);
+    if (!['GET', 'POST'].includes(request.method) || ((url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH) && request.method !== 'POST')) return fail(405);
     const mutating = request.method === 'POST';
     const maxBytes = APP_SEND_MAX_WIRE_BYTES;
     const length = request.headers.get('content-length');
@@ -176,21 +180,33 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   return fail(404);
 };
 
-// `text` is always the plain-text form of the row. `parts` is the typed form: v1 emits only type 'text'. Later part types (cards)
-// are added without changing existing fields, and a reader must ignore any part type it does not know and fall back to `text`.
+// `text` is the row's plain text, or for a reply with none of its own, the fallback text of every approval card presented
+// for its run. `parts` is the typed form: that text, plus a part for each approval still live. A reader must ignore any part
+// it cannot read and show `text`.
 export type AppMessage = AppMessageV1;
 
-// Newest-first immutable row cursor. New arrivals cannot shift an older page.
-export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
+// Newest-first immutable row cursor. New arrivals cannot shift an older page. The newest assistant reply
+// to a run also carries the approval cards presented for that run.
+const NO_CARDS: AppApprovalCards = { live: [], fallbacks: [] };
+export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, cards: (parentId: string) => AppApprovalCards = () => NO_CARDS): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
   const shown = entries.filter((entry): entry is ConversationEntry & { role: 'user' | 'assistant' } => entry.role === 'user' || entry.role === 'assistant');
   const taken = cursor !== null && /^\d{1,9}$/.test(cursor) ? Number(cursor) : 0; // old consumers can finish an offset page
   const size = Math.min(Math.max(Math.trunc(limit) || 20, 1), 50);
   const before = cursor?.startsWith('before:') ? shown.findIndex(entry => entry.id === cursor.slice(7)) : -1;
   const end = cursor?.startsWith('before:') ? Math.max(before, 0) : Math.max(shown.length - taken, 0);
   const start = Math.max(end - size, 0);
-  const messages = shown.slice(start, end).reverse().map(entry => ({ id: entry.id, role: entry.role, text: entry.appPayload, parts: [{ type: 'text' as const, text: entry.appPayload }], channel: entry.surface, parent_id: entry.parentId }));
+  const newestReply = new Map(shown.filter(entry => entry.role === 'assistant' && entry.parentId).map(entry => [entry.parentId!, entry.id]));
+  const messages = shown.slice(start, end).reverse().map(entry => {
+    const presented = entry.parentId && newestReply.get(entry.parentId) === entry.id ? cards(entry.parentId) : NO_CARDS;
+    // A reader that cannot parse a part shows only `text`, and a decided card is no longer a part, so a reply that presented cards is never textless.
+    const text = entry.appPayload.trim() || !presented.fallbacks.length ? entry.appPayload : presented.fallbacks.join('\n\n');
+    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...presented.live], channel: entry.surface, parent_id: entry.parentId };
+  });
   return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };
 };
+
+// The owner's stable principal ref, independent of which surface they arrive on.
+export const ownerPrincipalRef = (ownerId: string): string => `prn_${ownerId.toLowerCase().replaceAll('-', '')}`;
 
 // App turns reuse the telegram-shaped update pipeline. The owner id the pipeline sees is a stable number derived from the owner's directory name.
 export const APP_UPDATE_BASE = 8_000_000_000_000;
@@ -205,15 +221,4 @@ export const parseAppSend = (raw: string): (import('../../../contracts/src/app/c
   try { value = JSON.parse(raw); } catch { return null; }
   const parsed = appSendRequestV1Schema.safeParse(value);
   return parsed.success ? { ...parsed.data, clientMessageId: parsed.data.client_message_id } : null;
-};
-
-// A turn's reply reaches the app through the transcript its own turn writes, so a send during a turn is accepted and goes nowhere
-// else. Scheduled work has no turn: while the alarm holds a delivery, the text is written to the transcript, and a failed write
-// throws so the job fails instead of recording a message the owner never got.
-export const appSinkCaller = (scheduledDelivery: () => ((text: string) => Promise<void>) | null = () => null) => async (method: string, body: unknown): Promise<unknown> => {
-  if (method !== 'sendMessage') return undefined;
-  const { chat_id: chatId, text } = body as { chat_id?: number; text?: string };
-  const deliver = scheduledDelivery();
-  if (deliver) await deliver(text ?? '');
-  return { message_id: 1, chat: { id: chatId ?? 0 } };
 };

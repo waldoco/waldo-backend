@@ -3,16 +3,26 @@ import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
 import { googleTaskProposalSchema, proposeGoogleTaskChangeArgsSchema, type BrowserTaskContinuation, type ProposeCalendarChangeArgs, type ProposeGoogleTaskChangeArgs } from '@waldo/contracts';
 import { GoogleError, sha256Hex, verifiedSent, type GoogleClient } from '../connectors/google';
-import { describeGoogleTaskChange, reviewGoogleTaskChange, type GoogleTaskApprovalAdapter, type GoogleTaskProposal } from './google-task-approvals';
+import { describeGoogleTaskChange, googleTaskExact, reviewGoogleTaskChange, type GoogleTaskApprovalAdapter, type GoogleTaskProposal } from './google-task-approvals';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { BrowserSubmitOutcome } from '../tools/live/browser';
 import type { TurnLogEntry } from './telegram-listener';
+import { MASK, isCredentialKey, maskedUrl, maskedValue } from './secret-fields';
+import { APP_REVIEW_MAX_CHARS, appApprovalPart, type AppApprovalPart } from './surfaces/app';
+import { replyApprovalPartV1Schema } from '@waldo/contracts';
+import { appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
 
 export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
 
 type Undo = ({ op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string }) & { applied_etag?: string };
-type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; proposal_digest?: string | null };
+type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; proposal_digest?: string | null; origin_run_ref?: string | null };
+type DeskStatus = 'card_unconfirmed' | 'open' | 'review_only' | 'changing' | 'skipped' | 'expired' | 'done' | 'rejected' | 'failed' | 'stale' | 'uncertain' | 'unverified' | 'undone';
+// One app state per desk status. An approval claimed before its effect resolves reads outcome_unknown, never done.
+export const APP_APPROVAL_STATE: Readonly<Record<DeskStatus, AppApprovalStateV1>> = {
+  card_unconfirmed: 'unconfirmed', open: 'open', review_only: 'review_only', changing: 'edit_requested', skipped: 'skipped', expired: 'expired',
+  done: 'done', rejected: 'not_done', failed: 'not_done', stale: 'not_done', uncertain: 'outcome_unknown', unverified: 'outcome_unknown', undone: 'undone',
+};
 export class EmailProposalError extends Error {
   constructor(readonly reason: 'identifier_reused' | 'card_unconfirmed' | 'already_handled') { super(reason); }
 }
@@ -34,6 +44,9 @@ export type BrowserSubmitProposal = Readonly<{
   continuation?: BrowserTaskContinuation;
   request?: Readonly<{ url: string; method: 'POST'; fields: readonly string[] }>;
   approvalExpiresAt?: number;
+  // Binding keys whose values are masked on every surface whatever their name, e.g. fields the page
+  // marks with isSecretField. Display only: the executor still compares and submits the raw values.
+  secretKeys?: readonly string[];
 }>;
 const BROWSER_SUBMIT_TTL_MS = 30 * 60_000;
 
@@ -55,11 +68,21 @@ export type MessageSendProposal = Readonly<{ operation_ref?: string; channel: st
 export type McpCallProposal = Readonly<{ operation_ref?: string; server: string; tool: string; args: Record<string, unknown> }>;
 
 export type ApprovalDecision = Readonly<{ toast: string; message: string }>;
+export type ApprovalSurface = 'telegram' | 'whatsapp' | 'app' | 'console';
+// Where a decision came from. messageRef names the tapped card when the surface reports one.
+export type ApprovalVia = Readonly<{ surface: ApprovalSurface; messageRef?: string }>;
 export type ApprovalReview =
   | Readonly<{ kind: 'email_send'; account?: string; to: readonly string[]; cc: readonly string[]; bcc: readonly string[]; subject: string; body: string }>
   | Readonly<{ kind: 'message_send'; channel: string; content: string }>
   | Readonly<{ kind: 'google_task_change'; account: string; proposal: GoogleTaskProposal; proposal_digest: string }>
   | Readonly<{ kind: 'calendar_change'; account?: string; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string }>;
+// Where a proposal's card landed, and where a card that can approve it landed: on the proposing desk's own surface and in the app.
+export type CardPlacement = Readonly<{ here: boolean; hereApprovable: boolean; app: boolean; appApprovable: boolean }>;
+// What a proposing tool tells the model about the card, so a reply never points at buttons that are not there.
+export const proposalStatus = (placement: CardPlacement | undefined, shownHere: string, nothingDone: string): string =>
+  !placement || placement.hereApprovable ? shownHere
+    : placement.appApprovable ? `${placement.here ? 'The full review card is in the Waldo app; it could not be shown in full here.' : 'The review card is in the Waldo app; it could not be shown here.'} ${nothingDone}`
+      : `Only a summary card could be shown, so it cannot be approved yet. ${nothingDone}`;
 export type ApprovalItem = Readonly<{ id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; undoable: boolean; review: ApprovalReview | null }>;
 export type ApprovalDesk = Readonly<{
   propose(args: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string): Promise<string>;
@@ -70,10 +93,92 @@ export type ApprovalDesk = Readonly<{
   proposeMcpCall(payload: McpCallProposal): Promise<string>;
   record(kind: string, summary: string, payload: unknown): void;
   callback(query: CallbackQuery, trace: string): Promise<void>;
-  decide(id: string, action: 'a' | 's' | 'e' | 'u', trace: string): Promise<ApprovalDecision>;
+  decide(id: string, action: 'a' | 's' | 'e' | 'u', trace: string, via?: ApprovalVia): Promise<ApprovalDecision>;
   pending(now: number): readonly ApprovalItem[];
+  approvals(now: number, filter?: Readonly<{ state?: AppApprovalStateV1; id?: string }>): Promise<readonly AppApprovalV1[]>;
+  placement(id: string): CardPlacement;
   ledger(reminders: readonly Readonly<{ note: string; at: string; repeat: string }>[]): string;
 }>;
+
+const DECISION = { a: 'approve', e: 'edit', s: 'skip' } as const;
+const CARDS: Readonly<Record<string, Readonly<{ title: string; approve: string; modify: boolean }>>> = {
+  calendar_change: { title: 'Calendar change?', approve: 'Do it', modify: true }, google_task_change: { title: 'Google task change?', approve: 'Do it', modify: true },
+  email_send: { title: 'Send this email?', approve: 'Send it', modify: true }, message_send: { title: 'Send this message?', approve: 'Send it', modify: true },
+  browser_submit: { title: 'Approve this browser action?', approve: 'Do it', modify: false }, mcp_call: { title: 'Run this MCP tool?', approve: 'Do it', modify: false },
+};
+const PROPOSAL_KINDS = Object.keys(CARDS);
+const buttonsFor = (entry: LedgerRow): [string, string][] => {
+  const card = CARDS[entry.kind]!;
+  return [[card.approve, `a:${entry.id}`], ...(card.modify ? [['Modify', `e:${entry.id}`] as [string, string]] : []), ['Not now', `s:${entry.id}`]];
+};
+const approveActions = (entry: LedgerRow): AppApprovalPart['actions'] => buttonsFor(entry).map(([, data]) => DECISION[data[0] as keyof typeof DECISION]);
+
+// The approval card IS the owner's review of a send. Telegram caps a message at 4096 chars:
+// when the full content fits, the card shows every recipient + the complete body and carries
+// the Send it / Modify buttons; when it cannot fit, the card says so and carries NO approve
+// button, because approving would send content the owner never saw.
+const REVIEW_BUDGET = 3800;
+const reviewEmail = (p: EmailSendProposal) =>
+  [...(p.account ? [`From: ${p.account}`] : []), `To: ${p.to.join(', ')}`,
+    ...(p.cc?.length ? [`Cc: ${p.cc.join(', ')}`] : []),
+    ...(p.bcc?.length ? [`Bcc: ${p.bcc.join(', ')}`] : []),
+    `Subject: ${p.subject}`, '', p.body].join('\n');
+const reviewMessage = (p: MessageSendProposal) => p.content;
+// The summary is bounded: a browser summary carries its bindings, which can be as long as the content that did not fit.
+const unreviewable = (kind: string, summary: string) =>
+  `${kind} ${summary.length > 1000 ? `${summary.slice(0, 999)}…` : summary}\n\nThe full content doesn't fit in this card, so it can't be approved here - approving would send text you haven't reviewed. Use the Not now instruction on the card and ask me to show you the full text first.`;
+const expiresAt = (entry: LedgerRow) => {
+  const p = JSON.parse(entry.payload_json) as Partial<Stored> & Partial<BrowserSubmitProposal>;
+  if (entry.kind === 'browser_submit') return Math.min(entry.created_at + BROWSER_SUBMIT_TTL_MS, p.approvalExpiresAt ?? Infinity);
+  return entry.kind === 'calendar_change' && p.start ? Math.min(entry.created_at + PROPOSAL_TTL_MS, Date.parse(p.start)) : entry.created_at + PROPOSAL_TTL_MS;
+};
+// The scope a browser approval names: the page without credentials, query string or fragment.
+const pageOf = (url: string) => { const page = new URL(url); return `${page.origin}${page.pathname}`; };
+const describeBrowser = (p: BrowserSubmitProposal) => {
+  const binding = Object.entries(p.binding).map(([k, v]) => `${k}: ${isCredentialKey(k) || p.secretKeys?.includes(k) ? MASK : v}`).join(', ');
+  return `${p.action.description} on ${maskedUrl(p.url)}${p.request ? ` via ${p.request.method} ${maskedUrl(p.request.url)}` : ''}${binding ? ` (${binding})` : ''}`;
+};
+const describeMcp = (p: McpCallProposal) => `Run ${p.tool} on the ${p.server} MCP server`;
+// Browser and MCP summaries are rebuilt from the payload, so a row stored before masking renders
+// masked too. A payload that no longer parses shows the card title, never the stored summary.
+const summaryOf = (entry: LedgerRow) => {
+  if (entry.kind !== 'browser_submit' && entry.kind !== 'mcp_call') return entry.summary;
+  try { return entry.kind === 'browser_submit' ? describeBrowser(JSON.parse(entry.payload_json)) : describeMcp(JSON.parse(entry.payload_json)); }
+  catch { return CARDS[entry.kind]!.title; }
+};
+// The full review a card shows for each kind, rebuilt from the frozen payload.
+const reviewText = (entry: LedgerRow): string => {
+  const p = JSON.parse(entry.payload_json);
+  if (entry.kind === 'email_send') return `Send this email? ${reviewEmail(p)}`;
+  if (entry.kind === 'message_send') return `Send this message on ${p.channel}?\n\n${reviewMessage(p)}`;
+  if (entry.kind === 'mcp_call') return `Run this MCP tool? ${describeMcp(p)}\n\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
+  if (entry.kind === 'browser_submit') return `Approve this browser action? ${describeBrowser(p)}`;
+  if (entry.kind === 'google_task_change') return reviewGoogleTaskChange(googleTaskProposalSchema.parse(p));
+  return `Proposed: ${entry.summary}`;
+};
+// The app's review: the same full review as a card, approvable while it fits the app's reply budget.
+const appReview = (entry: LedgerRow): Readonly<{ text: string; full: boolean }> => {
+  const text = reviewText(entry);
+  return text.length <= APP_REVIEW_MAX_CHARS ? { text, full: true } : { text: unreviewable(CARDS[entry.kind]!.title, summaryOf(entry)), full: false };
+};
+// What each kind changes, from the frozen payload, exposing no more than the app review.
+const exactFor = (entry: LedgerRow): AppApprovalV1['exact'] => {
+  const p = JSON.parse(entry.payload_json);
+  if (entry.kind === 'email_send') return { recipients: { to: p.to, cc: p.cc ?? [], bcc: p.bcc ?? [] }, ...(p.account ? { scope: p.account } : {}) };
+  if (entry.kind === 'message_send') return { recipients: { to: [p.channel], cc: [], bcc: [] } };
+  if (entry.kind === 'browser_submit') return { scope: pageOf(p.url) };
+  if (entry.kind === 'mcp_call') return { scope: `${p.tool} on the ${p.server} server` };
+  if (entry.kind === 'google_task_change') return { task: googleTaskExact(googleTaskProposalSchema.parse(p)) };
+  return { changes: { action: p.action, title: p.title ?? null, start: p.start ?? null, end: p.end ?? null } };
+};
+// The app's card, rendered from the ledger row and its presentation, so the payload has one stored form.
+const appPartOf = (entry: LedgerRow, shown: Readonly<{ actions: AppApprovalPart['actions']; payload_digest: string }>): AppApprovalPart => {
+  const review = appReview(entry);
+  return { type: 'approval', approval_id: entry.id, kind: entry.kind as AppApprovalPart['kind'], review: review.text, payload_digest: shown.payload_digest,
+    actions: shown.actions, expires_at: expiresAt(entry), fallback_text: review.full ? summaryOf(entry).slice(0, 4000) : review.text };
+};
+// An app card approves only while today's app review still shows the full content; a stored flag alone never does.
+const appShowsInFull = (entry: LedgerRow) => { try { return appReview(entry).full; } catch { return false; } };
 
 // The owner's "door" for effects: proposals become Telegram cards with Do it / Modify / Not now,
 // nothing reaches the calendar before Do it, and every effect lands in one ledger with a
@@ -82,6 +187,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   effects?: OwnerEffectLedger;
   call: TelegramCall;
   owner: number;
+  // The owner's effect identity, shared by every surface's desk; aliases are earlier per-surface refs.
+  ownerRef?: () => string;
+  ownerRefAliases?: () => readonly string[];
   google(intent?: ProxyIntent, feature?: 'mail' | 'calendar', account?: string): Promise<GoogleClient | null>;
   newId(): string;
   now(): number;
@@ -98,6 +206,16 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   googleTasks?: () => GoogleTaskApprovalAdapter;
   // Host-derived correlation of a proposal with the run that raised it; it never grants execution authority.
   currentRunRef?: () => string | undefined;
+  // The surface this desk's cards go out on. Every desk on the DO shares the ledger and its presentations.
+  surface?: Exclude<ApprovalSurface, 'console'>;
+  // Whether the owner has the app, so this desk's cards also show there. An app desk always does.
+  appIdentity?: () => boolean;
+  appLink?: (approvalId: string) => string;
+  commit?: <T>(work: () => T) => T;
+  // Clears a messaging card's decision buttons once another surface decided; best effort.
+  retire?: (presentation: Readonly<{ surface: string; message_ref: string }>) => Promise<void>;
+  // Whether an approved message can go out on its named channel; checked before the decision is claimed.
+  canSendMessage?: (channel: string) => boolean;
 }>): ApprovalDesk => {
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
@@ -105,6 +223,14 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   for (const column of ['proposal_digest', 'origin_run_ref']) {
     if (!sql.exec<{ name: string }>('PRAGMA table_info(ledger)').toArray().some(existing => existing.name === column)) sql.exec(`ALTER TABLE ledger ADD COLUMN ${column} TEXT`);
   }
+  const presentationsExisted = sql.exec('PRAGMA table_info(approval_presentations)').toArray().length > 0;
+  sql.exec(`CREATE TABLE IF NOT EXISTS approval_presentations (
+    approval_id TEXT NOT NULL, surface TEXT NOT NULL, message_ref TEXT NOT NULL, presented_at INTEGER NOT NULL, approvable INTEGER NOT NULL,
+    payload_digest TEXT NOT NULL, retired_at INTEGER, PRIMARY KEY (approval_id, surface, message_ref))`);
+  // Cards opened before presentations were recorded stay decidable where they were shown; the app can only skip them.
+  if (!presentationsExisted) sql.exec("INSERT INTO approval_presentations (approval_id, surface, message_ref, presented_at, approvable, payload_digest, retired_at) SELECT id, 'legacy', 'legacy', created_at, status = 'open', 'legacy', NULL FROM ledger WHERE status IN ('open', 'review_only')");
+  const surface = deps.surface ?? 'telegram';
+  const commit = deps.commit ?? (<T>(work: () => T) => work());
   const bindOrigin = (id: string, origin: string | undefined) => {
     if (origin === undefined) return;
     if (!origin || origin.length > 256 || /[\u0000-\u001f]/.test(origin)) throw new Error('invalid approval origin');
@@ -112,7 +238,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
   const effect = async (operationId: string, tool: string, payload: unknown, dispatch: () => Promise<EffectReceipt>, reconcile: () => Promise<EffectReadback>) => {
     if (!deps.effects) return dispatch();
-    return deps.effects.execute({ operationId, owner_ref: String(deps.owner), tool, payload }, { dispatch, reconcile });
+    return deps.effects.execute({ operationId, owner_ref: deps.ownerRef?.() ?? String(deps.owner), tool, payload }, { dispatch, reconcile }, undefined, deps.ownerRefAliases?.());
   };
   // Owner turns run serially; keep only the current turn, never a cross-turn cache.
   let proposalTurn: string | undefined;
@@ -125,38 +251,88 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     return `Cancel ${name}${p.account ? ` (${p.account})` : ''}`;
   };
   const row = (id: string) => sql.exec<LedgerRow>('SELECT * FROM ledger WHERE id = ?', id).toArray()[0];
-  const setStatus = (id: string, status: string, undo: Undo | null = null) =>
+  const setStatus = (id: string, status: DeskStatus, undo: Undo | null = null) =>
     sql.exec('UPDATE ledger SET status = ?, undo_json = ?, decided_at = ? WHERE id = ?', status, undo ? JSON.stringify(undo) : null, deps.now(), id);
   const say = (text: string, buttons?: [string, string][]) =>
     deps.call('sendMessage', { chat_id: deps.owner, text, ...(buttons ? { reply_markup: { inline_keyboard: [buttons.map(([label, data]) => ({ text: label, callback_data: data }))] } } : {}) });
 
-  // A card the owner never saw cannot be approved: a blocked send (no message returned) leaves the row unconfirmed and fails the proposal.
-  const sayCard = async (id: string, text: string, buttons?: [string, string][], approvable = true) => {
-    if ((await say(text, buttons)) == null) throw new Error('Approval card not confirmed');
-    sql.exec("UPDATE ledger SET status = ? WHERE id = ? AND status = 'card_unconfirmed'", approvable ? 'open' : 'review_only', id);
-  };
-
-  const describeBrowser = (p: BrowserSubmitProposal) => {
-    const binding = Object.entries(p.binding).map(([k, v]) => `${k}: ${v}`).join(', ');
-    return `${p.action.description} on ${p.url}${p.request ? ` via ${p.request.method} ${p.request.url}` : ''}${binding ? ` (${binding})` : ''}`;
-  };
   const describeEmail = (p: EmailSendProposal) => `Send email${p.account ? ` from ${p.account}` : ''} to ${p.to.join(', ')}: "${p.subject}"`;
   const describeMessage = (p: MessageSendProposal) => `Send this on ${p.channel}: "${p.content.length > 120 ? `${p.content.slice(0, 117)}...` : p.content}"`;
-  const describeMcp = (p: McpCallProposal) => `Run ${p.tool} on the ${p.server} MCP server`;
 
-  // The approval card IS the owner's review of a send. Telegram caps a message at 4096 chars:
-  // when the full content fits, the card shows every recipient + the complete body and carries
-  // the Send it / Modify buttons; when it cannot fit, the card says so and carries NO approve
-  // button, because approving would send content the owner never saw.
-  const REVIEW_BUDGET = 3800;
-  const reviewEmail = (p: EmailSendProposal) =>
-    [...(p.account ? [`From: ${p.account}`] : []), `To: ${p.to.join(', ')}`,
-      ...(p.cc?.length ? [`Cc: ${p.cc.join(', ')}`] : []),
-      ...(p.bcc?.length ? [`Bcc: ${p.bcc.join(', ')}`] : []),
-      `Subject: ${p.subject}`, '', p.body].join('\n');
-  const reviewMessage = (p: MessageSendProposal) => p.content;
-  const unreviewable = (kind: string, summary: string) =>
-    `${kind} ${summary}\n\nThe full content doesn't fit in this card, so it can't be approved here - approving would send text you haven't reviewed. Use the Not now instruction on the card and ask me to show you the full text first.`;
+  const sentRef = (sent: unknown) => {
+    const ack = sent as { message_id?: unknown; chat?: { id?: unknown }; messages?: readonly { id?: unknown }[] } | null;
+    if (ack?.message_id !== undefined) return `${String(ack.chat?.id ?? deps.owner)}:${String(ack.message_id)}`;
+    return ack?.messages?.[0]?.id !== undefined ? String(ack.messages[0].id) : 'unreferenced';
+  };
+  // A row opens only once a surface recorded the review: the origin card's provider acknowledgement
+  // and, when the owner has the app, an app card that parses. Approvability is per surface, by how
+  // much review that surface can show. The presentation rows and the status flip commit together.
+  const present = async (id: string) => {
+    const entry = row(id)!;
+    const card = reviewText(entry), buttons = buttonsFor(entry), title = CARDS[entry.kind]!.title;
+    const digest = `sha256:${await sha256Hex(entry.payload_json)}`;
+    const shown: { surface: string; message_ref: string; approvable: boolean }[] = [];
+    let journalFailure: unknown, sendFailure: unknown, inApp: Readonly<{ approvable: boolean }> | null = null;
+    if (surface === 'app' || deps.appIdentity?.()) {
+      try {
+        const approvable = appReview(entry).full;
+        const part = appApprovalPart(appPartOf(entry, { actions: approvable ? approveActions(entry) : ['skip'], payload_digest: digest }));
+        // The app may show only a card it can also decide: the approvals-list item must parse first.
+        appApprovalV1Schema.parse({ approval_id: id, kind: part.kind, state: approvable ? 'open' : 'review_only', review: part.review, exact: exactFor(entry), payload_digest: digest, expires_at: part.expires_at, actions: part.actions });
+        inApp = { approvable };
+      } catch (error) {
+        journalFailure = error;
+        deps.log({ trace: id, hop: 'approval_app_card', ms: 0, ok: false, code: 'unrepresentable' });
+      }
+    }
+    if (surface !== 'app') {
+      const approvable = card.length <= REVIEW_BUDGET;
+      const link = inApp?.approvable && deps.appLink ? ` You can review and approve it in the Waldo app: ${deps.appLink(id)}` : '';
+      try {
+        const sent = await say(approvable ? card : `${unreviewable(title, summaryOf(entry))}${link}`, approvable ? buttons : [['Not now', `s:${id}`]]);
+        if (sent == null) sendFailure = new Error('Approval card not confirmed');
+        else shown.push({ surface, message_ref: sentRef(sent), approvable });
+      } catch (error) { sendFailure = error; }
+    }
+    if (inApp) shown.push({ surface: 'app', message_ref: entry.origin_run_ref ? `run:${entry.origin_run_ref}` : `approval:${id}`, approvable: inApp.approvable });
+    if (!shown.length) throw sendFailure ?? journalFailure ?? new Error('Approval card not confirmed');
+    commit(() => {
+      for (const s of shown) sql.exec('INSERT OR IGNORE INTO approval_presentations (approval_id, surface, message_ref, presented_at, approvable, payload_digest, retired_at) VALUES (?, ?, ?, ?, ?, ?, NULL)',
+        id, s.surface, s.message_ref, deps.now(), s.approvable ? 1 : 0, digest);
+      sql.exec("UPDATE ledger SET status = ? WHERE id = ? AND status = 'card_unconfirmed'", shown.some(s => s.approvable) ? 'open' : 'review_only', id);
+    });
+    return shown;
+  };
+  // Approving or modifying needs a card that showed the full review on the deciding surface. The
+  // console renders the stored review itself, so any full-review presentation serves it.
+  const presentedTo = (entry: LedgerRow, via: ApprovalVia) => {
+    const live = sql.exec<{ surface: string; message_ref: string; approvable: number }>('SELECT surface, message_ref, approvable FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', entry.id).toArray();
+    const approves = (p: { surface: string; approvable: number }) => p.approvable === 1 && (p.surface !== 'app' || appShowsInFull(entry));
+    if (via.surface === 'console') return live.some(approves);
+    const mine = live.filter(p => p.surface === via.surface || (p.surface === 'legacy' && via.surface !== 'app'));
+    const tapped = mine.filter(p => p.message_ref === via.messageRef);
+    return (tapped.length ? tapped : mine).some(approves);
+  };
+  const notPresented = (entry: LedgerRow): ApprovalDecision => {
+    const id = entry.id;
+    const inApp = deps.appLink && appShowsInFull(entry) && sql.exec("SELECT 1 FROM approval_presentations WHERE approval_id = ? AND surface = 'app' AND approvable = 1 AND retired_at IS NULL", id).toArray().length > 0;
+    return inApp
+      ? { toast: 'Review it in the app', message: `That approval wasn't shown in full here, so it can't be approved here. Nothing was done. Review and approve it in the Waldo app: ${deps.appLink!(id)}` }
+      : { toast: 'Not available here', message: "That approval wasn't shown in full here, so it can't be approved here. Nothing was done." };
+  };
+  // The app's view of a proposal: its current state, the app review, and only decisions the desk accepts now.
+  const project = async (entry: LedgerRow, now: number): Promise<AppApprovalV1> => {
+    const shown = sql.exec<{ surface: string; approvable: number; retired_at: number | null }>('SELECT surface, approvable, retired_at FROM approval_presentations WHERE approval_id = ? ORDER BY presented_at, surface', entry.id).toArray();
+    const inApp = shown.find(p => p.surface === 'app');
+    const state = APP_APPROVAL_STATE[entry.status as DeskStatus];
+    const actions = state === 'open' ? (inApp?.approvable === 1 && inApp.retired_at === null && appShowsInFull(entry) ? approveActions(entry) : ['skip'] as const)
+      : state === 'review_only' ? ['skip'] as const
+        : state === 'done' && entry.undo_json && entry.decided_at !== null && now - entry.decided_at <= UNDO_WINDOW_MS ? ['undo'] as const : [];
+    const surfaces = [...new Set(shown.map(p => p.surface).filter(surface => surface !== 'legacy'))];
+    return { approval_id: entry.id, kind: entry.kind as AppApprovalV1['kind'], state, review: appReview(entry).text,
+      exact: exactFor(entry), payload_digest: `sha256:${await sha256Hex(entry.payload_json)}`, expires_at: expiresAt(entry), actions: [...actions],
+      ...(surfaces.length ? { presented_surfaces: surfaces as AppApprovalV1['presented_surfaces'] } : {}) };
+  };
   const describeAny = (entry: LedgerRow) => {
     if (entry.kind === 'task_sources') return 'Task sources (expired)';
     if (entry.kind === 'browser_submit') return describeBrowser(JSON.parse(entry.payload_json) as BrowserSubmitProposal);
@@ -207,20 +383,17 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     return 'undone';
   };
 
-  const decide = async (id: string, action: 'a' | 's' | 'e' | 'u', trace: string): Promise<ApprovalDecision> => {
+  const decide = async (id: string, action: 'a' | 's' | 'e' | 'u', trace: string, via: ApprovalVia = { surface }): Promise<ApprovalDecision> => {
     const started = deps.now();
     const entry = row(id);
     const operationRef = entry ? (JSON.parse(entry.payload_json) as { operation_ref?: string }).operation_ref ?? `approval:${id}` : `approval:${id}`;
     const expected = action === 'u' ? 'done' : 'open';
-    if (entry?.status === 'review_only' && action === 's') {
-      setStatus(id, 'skipped');
-      return { toast: 'Not now', message: 'Left it. Nothing changed.' };
-    }
     if (deps.effects?.isActive(`${operationRef}:${action === 'u' ? 'undo' : 'apply'}`)) return { toast: 'Already handled.', message: 'Already handled.' };
     // An uncertain row with no effect record never reached dispatch (the record is written before the provider call), so it is safe to run again; a record sends it through reconcile instead.
     const recovering = entry?.status === 'uncertain' && deps.effects !== undefined && (action === 'a' || action === 'u' && entry.kind === 'calendar_change' && !!entry.undo_json && !!deps.effects.get(`${operationRef}:undo`));
     if (entry?.status === 'uncertain' && entry.kind !== 'browser_submit' && action === 'a' && !recovering) return { toast: 'Outcome unknown', message: 'The outcome of that approval is unknown. Check the result before retrying; nothing was sent again.' };
-    if (!entry || (entry.status !== expected && !recovering)) return { toast: 'Already handled.', message: 'Already handled.' };
+    if (!entry || (entry.status !== expected && !(action === 's' && entry.status === 'review_only') && !recovering)) return { toast: 'Already handled.', message: 'Already handled.' };
+    if ((action === 'a' || action === 'e') && entry.status === 'open' && !presentedTo(entry, via)) return notPresented(entry);
     const proposal = JSON.parse(entry.payload_json) as Stored;
     try {
       let out: ApprovalDecision;
@@ -359,6 +532,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           out = { toast: "Can't be undone", message: 'A sent message cannot be undone. Nothing was reversed.' };
         } else if (!deps.sendMessage) {
           out = { toast: 'Messaging is not set up', message: 'I could not send that because messaging is not set up on this Waldo yet.' };
+        } else if (deps.canSendMessage?.(mp.channel) === false) {
+          out = { toast: 'Channel not connected', message: `I could not send that because ${mp.channel} is not connected to this Waldo. Nothing was sent.` };
         } else if (!recovering && (() => { const holder = keyHolder(mp.idempotency_key, id); if (!holder) return false; const held = JSON.parse(holder.payload_json) as MessageSendProposal; return held.channel !== mp.channel || held.content !== mp.content ? 'conflict' : holder.status; })()) {
           const holder = keyHolder(mp.idempotency_key, id)!;
           const held = JSON.parse(holder.payload_json) as MessageSendProposal;
@@ -478,8 +653,24 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       return { toast: 'That failed', message: `That didn't work: ${error instanceof Error ? error.message : String(error)}` };
     }
   };
+  // Once a decision moves a row off its cards, every card is retired: durably first, then the
+  // messaging buttons are cleared outside any transaction. The tapped card already cleared its own.
+  const retire = async (id: string, via: ApprovalVia) => {
+    const live = sql.exec<{ surface: string; message_ref: string }>('SELECT surface, message_ref FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', id).toArray();
+    sql.exec('UPDATE approval_presentations SET retired_at = ? WHERE approval_id = ? AND retired_at IS NULL', deps.now(), id);
+    for (const p of live) {
+      if (p.surface === 'app' || p.surface === 'legacy' || (p.surface === via.surface && p.message_ref === via.messageRef)) continue;
+      await deps.retire?.({ surface: p.surface, message_ref: p.message_ref }).catch(() => deps.log({ trace: id, hop: 'approval_retire', ms: 0, ok: false, code: 'retire_failed' }));
+    }
+  };
+  const decideOnce = async (id: string, action: 'a' | 's' | 'e' | 'u', trace: string, via: ApprovalVia = { surface }): Promise<ApprovalDecision> => {
+    const before = row(id)?.status;
+    const out = await decide(id, action, trace, via);
+    if ((before === 'open' || before === 'review_only') && row(id)?.status !== before) await retire(id, via);
+    return out;
+  };
   return {
-    decide,
+    decide: decideOnce,
     async proposeGoogleTaskChange(args, operationRef, ctx) {
       const originRunRef = deps.currentRunRef?.();
       if (!deps.googleTasks || !deps.effects) throw new Error('Google task approval custody is unavailable');
@@ -500,21 +691,23 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const summary = describeGoogleTaskChange(proposal);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, proposal_digest) VALUES (?, 'google_task_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL, ?)", id, summary, JSON.stringify(proposal), deps.now(), digest);
       bindOrigin(id, originRunRef);
-      const review = reviewGoogleTaskChange(proposal);
-      await sayCard(id, review.length <= REVIEW_BUDGET ? review : unreviewable('Google task change?', summary), review.length <= REVIEW_BUDGET ? [['Do it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]], review.length <= REVIEW_BUDGET);
+      await present(id);
       return id;
     },
     async proposeBrowserSubmit(payload) {
+      const originRunRef = deps.currentRunRef?.();
       const id = `p${deps.newId()}`;
       const summary = describeBrowser(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'browser_submit', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
-      await sayCard(id, `Approve this browser action? ${summary}`, [['Do it', `a:${id}`], ['Not now', `s:${id}`]]);
+      bindOrigin(id, originRunRef);
+      await present(id);
       return id;
     },
     async proposeSendEmail(payload) {
       // The turn/content key binds ingress retries; Message-ID is the fallback for exact desk
       // retries. A prior card whose delivery is unknown is not issued again blindly:
       // duplicate cards could each approve one effect.
+      const originRunRef = deps.currentRunRef?.();
       const prior = payload.dedupe_key
         ? sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND json_extract(payload_json, '$.dedupe_key') = ? ORDER BY created_at DESC LIMIT 1", payload.dedupe_key).toArray()[0]
         : sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND json_extract(payload_json, '$.message_id') = ? ORDER BY created_at DESC LIMIT 1", payload.message_id).toArray()[0];
@@ -529,23 +722,24 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const id = `p${deps.newId()}`;
       const summary = describeEmail(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
-      const text = `Send this email? ${reviewEmail(payload)}`;
-      const approvable = text.length <= REVIEW_BUDGET;
+      bindOrigin(id, originRunRef);
+      let shown: Awaited<ReturnType<typeof present>>;
       try {
-        const delivered = await say(approvable ? text : unreviewable('Send this email?', summary),
-          approvable ? [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]]);
-        if (delivered == null) throw new EmailProposalError('card_unconfirmed');
+        shown = await present(id);
       } catch {
         // A timeout can mean the card arrived. Leave it unapprovable until reconciled;
         // never say a card was delivered or attempt a second blind send.
         throw new EmailProposalError('card_unconfirmed');
       }
-      sql.exec("UPDATE ledger SET status = ? WHERE id = ? AND status = 'card_unconfirmed'", approvable ? 'open' : 'review_only', id);
+      const card = shown.find(s => s.surface === surface && s.surface !== 'app');
+      if (!card) return id;
       const url = await deps.reviewUrl?.().catch(() => null);
       const detail = url ? ` View details: ${url}. This page cannot approve email sends.` : '';
-      const receipt = approvable
+      const inApp = deps.appLink && shown.some(s => s.surface === 'app' && s.approvable);
+      const receipt = card.approvable
         ? 'Email ready for review. The card above has the exact recipients, subject and body. If it is right, use the Send it instruction on that card. Nothing has been sent.'
-        : 'The email is too long to approve from its chat card. No Send it approval was offered and nothing has been sent. Ask me for a shorter version or a draft to review.';
+        : inApp ? `The email is too long to approve from its chat card. No Send it approval was offered here and nothing has been sent. Review and approve it in the Waldo app: ${deps.appLink!(id)}`
+          : 'The email is too long to approve from its chat card. No Send it approval was offered and nothing has been sent. Ask me for a shorter version or a draft to review.';
       try {
         await say(`${receipt}${detail}`);
       } catch {
@@ -556,24 +750,25 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       return id;
     },
     async proposeSendMessage(payload) {
+      const originRunRef = deps.currentRunRef?.();
       const id = `p${deps.newId()}`;
       const summary = describeMessage(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'message_send', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
-      const text = `Send this message on ${payload.channel}?\n\n${reviewMessage(payload)}`;
-      await sayCard(id, text.length <= REVIEW_BUDGET ? text : unreviewable('Send this message?', summary),
-        text.length <= REVIEW_BUDGET ? [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]], text.length <= REVIEW_BUDGET);
+      bindOrigin(id, originRunRef);
+      await present(id);
       return id;
     },
     async proposeMcpCall(payload) {
+      const originRunRef = deps.currentRunRef?.();
       const id = `p${deps.newId()}`;
       const summary = describeMcp(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'mcp_call', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
-      const text = `Run this MCP tool? ${summary}\n\nArgs:\n${JSON.stringify(payload.args, null, 2)}`;
-      await sayCard(id, text.length <= REVIEW_BUDGET ? text : unreviewable('Run this MCP tool?', summary),
-        text.length <= REVIEW_BUDGET ? [['Do it', `a:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]], text.length <= REVIEW_BUDGET);
+      bindOrigin(id, originRunRef);
+      await present(id);
       return id;
     },
     async propose(p, turnKey, operationRef) {
+      const originRunRef = deps.currentRunRef?.();
       if (proposalTurn !== turnKey) { calendarProposals.clear(); proposalTurn = turnKey; }
       const digest = turnKey === undefined ? undefined : await sha256Hex(JSON.stringify(
         Object.fromEntries(Object.entries(p).sort(([a], [b]) => a.localeCompare(b))),
@@ -595,7 +790,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         const seen = before?.etag;
         const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...(operationRef ? { operation_ref: operationRef } : {}) };
         sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
-        await sayCard(id, `Proposed: ${summary}`, [['Do it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
+        bindOrigin(id, originRunRef);
+        await present(id);
         return id;
       };
       const pending = prepare();
@@ -643,18 +839,35 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         } catch { return null; }
       };
       return [
-        ...open.map((r) => ({ id: r.id, kind: r.kind, summary: r.summary, state: 'open' as const, undoable: false, review: review(r) })),
-        ...unconfirmed.map((r) => ({ id: r.id, kind: r.kind, summary: r.summary, state: 'unconfirmed' as const, undoable: false, review: review(r) })),
-        ...reviewOnly.map((r) => ({ id: r.id, kind: r.kind, summary: r.summary, state: 'review_only' as const, undoable: false, review: review(r) })),
-        ...undoable.map((r) => ({ id: r.id, kind: r.kind, summary: r.summary, state: 'done' as const, undoable: r.decided_at !== null && now - r.decided_at <= UNDO_WINDOW_MS, review: review(r) })),
+        ...open.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'open' as const, undoable: false, review: review(r) })),
+        ...unconfirmed.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'unconfirmed' as const, undoable: false, review: review(r) })),
+        ...reviewOnly.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'review_only' as const, undoable: false, review: review(r) })),
+        ...undoable.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'done' as const, undoable: r.decided_at !== null && now - r.decided_at <= UNDO_WINDOW_MS, review: review(r) })),
       ];
+    },
+    placement(id) {
+      const shown = sql.exec<{ surface: string; approvable: number }>('SELECT surface, approvable FROM approval_presentations WHERE approval_id = ?', id).toArray();
+      const entry = row(id), appFull = !!entry && appShowsInFull(entry);
+      const on = (where: string, approvable = false) => shown.some(p => p.surface === where && (!approvable || p.approvable === 1 && (where !== 'app' || appFull)));
+      return { here: on(surface), hereApprovable: on(surface, true), app: on('app'), appApprovable: on('app', true) };
+    },
+    async approvals(now, filter = {}) {
+      const statuses = filter.state ? (Object.keys(APP_APPROVAL_STATE) as DeskStatus[]).filter(status => APP_APPROVAL_STATE[status] === filter.state) : null;
+      if (statuses?.length === 0) return [];
+      const where = [`kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')})`, "substr(id, 1, 1) = 'p'", ...(filter.id ? ['id = ?'] : []), ...(statuses ? [`status IN (${statuses.map(() => '?').join(', ')})`] : [])];
+      const rows = sql.exec<LedgerRow>(`SELECT * FROM ledger WHERE ${where.join(' AND ')} ORDER BY created_at DESC, id DESC LIMIT 100`, ...PROPOSAL_KINDS, ...(filter.id ? [filter.id] : []), ...(statuses ?? [])).toArray();
+      const items = await Promise.all(rows.map(entry => project(entry, now).catch(() => {
+        deps.log({ trace: entry.id, hop: 'approval_projection', ms: 0, ok: false, code: 'dropped' });
+        return null;
+      })));
+      return items.filter((item): item is AppApprovalV1 => item !== null);
     },
     async callback(query, trace) {
       const [action = '', id] = (query.data ?? '').split(':');
       const answer = (text: string) => deps.call('answerCallbackQuery', { callback_query_id: query.id, text }).catch(() => undefined);
       if (query.from.id !== deps.owner || !id || !['a', 's', 'e', 'u'].includes(action)) return void (await answer('Not available.'));
       if (query.message) await deps.call('editMessageReplyMarkup', { chat_id: query.message.chat.id, message_id: query.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
-      const out = await decide(id, action as 'a' | 's' | 'e' | 'u', trace);
+      const out = await decideOnce(id, action as 'a' | 's' | 'e' | 'u', trace, { surface, ...(query.message ? { messageRef: `${query.message.chat.id}:${query.message.message_id}` } : {}) });
       // An uncertain card may have reached the owner before a channel timeout. It has
       // no valid send approval until reconciled, so tell the owner what to do next.
       const unconfirmedRow = out.toast === 'Already handled.' ? row(id) : undefined;
@@ -673,15 +886,37 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const done = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status NOT IN ('open', 'changing', 'card_unconfirmed', 'review_only') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
       const lines = [
         'Open',
-        ...(open.length || unconfirmed.length || reviewOnly.length ? open.map((r) => `- ${r.summary} (waiting on you)`) : ['- nothing waiting on you']),
-        ...unconfirmed.map((r) => `- ${r.summary} (review card delivery unconfirmed; cannot approve)`),
-        ...reviewOnly.map((r) => `- ${r.summary} (too long for approval card; cannot send)`),
+        ...(open.length || unconfirmed.length || reviewOnly.length ? open.map((r) => `- ${summaryOf(r)} (waiting on you)`) : ['- nothing waiting on you']),
+        ...unconfirmed.map((r) => `- ${summaryOf(r)} (review card delivery unconfirmed; cannot approve)`),
+        ...reviewOnly.map((r) => `- ${summaryOf(r)} (too long for approval card; cannot send)`),
         '', 'Reminders',
         ...(reminders.length ? reminders.map((r) => `- ${r.at.replace('T', ' ')} ${r.note}${r.repeat === 'daily' ? ' (daily)' : ''}`) : ['- none set']),
         '', 'Recent',
-        ...(done.length ? done.map((r) => `- ${r.status}: ${r.summary}`) : ['- nothing yet']),
+        ...(done.length ? done.map((r) => `- ${r.status}: ${summaryOf(r)}`) : ['- nothing yet']),
       ];
       return lines.join('\n');
     },
   };
+};
+
+// The app cards presented for one run, rendered from their ledger rows, for the history view of the
+// assistant reply to that run. Only a live approval (undecided, card not retired) is carried as a
+// part; every card's fallback text stays available so the reply never reads blank. The current
+// state of each approval comes from the approvals list. One row that cannot render drops only its card.
+export type AppApprovalCards = Readonly<{ live: readonly AppApprovalPart[]; fallbacks: readonly string[] }>;
+export const appApprovalParts = (sql: SqlStorage) => (parentId: string): AppApprovalCards => {
+  if (!sql.exec('PRAGMA table_info(approval_presentations)').toArray().length) return { live: [], fallbacks: [] };
+  const live: AppApprovalPart[] = [], fallbacks: string[] = [];
+  let dropped = 0;
+  for (const entry of sql.exec<LedgerRow & { approvable: number; payload_digest: string; retired_at: number | null }>("SELECT l.*, p.approvable, p.payload_digest, p.retired_at FROM approval_presentations p JOIN ledger l ON l.id = p.approval_id WHERE p.surface = 'app' AND p.message_ref = ? ORDER BY p.presented_at, l.id", `run:${parentId}`).toArray()) {
+    try {
+      const approvable = entry.status === 'open' && entry.approvable === 1 && appShowsInFull(entry);
+      const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions: approvable ? approveActions(entry) : ['skip'], payload_digest: entry.payload_digest }));
+      if (!part.success) { dropped++; continue; }
+      fallbacks.push(part.data.fallback_text);
+      if (entry.retired_at === null && (entry.status === 'open' || entry.status === 'review_only')) live.push(part.data);
+    } catch { dropped++; }
+  }
+  if (dropped) console.error(JSON.stringify({ hop: 'app_approval_parts', ok: false, dropped }));
+  return { live, fallbacks };
 };
