@@ -5,7 +5,7 @@ import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-s
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { surfaceOwnerAdmission } from '../identity/surface-owner-admission';
 import { createOwnerTurnContext, type OwnerContextSources } from '../context-composer/owner-turn';
-import { canonicalOwnerConversationStore } from '../conversation/canonical-owner-store';
+import { canonicalHistoryFault, canonicalOwnerConversationStore, skippedRowLines, type CanonicalSkipped } from '../conversation/canonical-owner-store';
 import { ownerEffectLedger } from './owner-effect-ledger';
 import {commonRuntimeReadiness} from './common-runtime-readiness';
 import { CONSOLE_DEVICES_PATH } from '../devices/contract';
@@ -208,14 +208,10 @@ export const resolveOwnerTelegramId = (
 };
 
 type ChannelKind = 'telegram' | 'whatsapp' | 'app';
-// A failed app read answers a generic 503. The log names only which step failed, from this fixed set, never the error text:
-// a canonical-history fault message can name nothing, but other errors may carry content.
-const CANONICAL_HISTORY_FAULTS: Readonly<Record<string, string>> = {
-  'canonical history owner mismatch': 'history_owner', 'canonical history entry invalid': 'history_invalid',
-  'canonical history witness mismatch': 'history_witness', 'canonical history leaf mismatch': 'history_leaf',
-};
+// A failed app read answers a generic 503. The log names only which step failed, or the canonical-history fault code, never
+// the error text: a canonical-history fault message can name nothing, but other errors may carry content.
 const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read', step: string, error: unknown): void => {
-  const code = error instanceof ClosedRunError ? `${step}_closed` : (error instanceof Error && CANONICAL_HISTORY_FAULTS[error.message]) || step;
+  const code = error instanceof ClosedRunError ? `${step}_closed` : canonicalHistoryFault(error) ?? step;
   console.error(JSON.stringify({ hop, ok: false, code }));
 };
 const offsetKeyOf = (channel: ChannelKind) => channel === 'whatsapp' ? 'wa_offset' : channel === 'app' ? 'app_offset' : 'offset';
@@ -570,6 +566,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
   }
 
+  private readonly logSkippedLoad = (skipped: CanonicalSkipped): void => { for (const line of skippedRowLines('app_history_load', skipped)) console.error(JSON.stringify(line)); };
   // Writes a scheduled message as an assistant row in the owner's app transcript, after re-asking the directory.
   private appDeliveryFor(authority: OwnerRuntimeAuthority): (text: string) => Promise<void> {
     return async text => {
@@ -586,7 +583,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         const context = await surfaceOwnerAdmission({ scope, lookup, expectedPhysicalDoId: this.ctx.id.toString(), surface: 'app', subject: authority.doName,
           occurrenceKey: `scheduled:${crypto.randomUUID()}`, occurredAt: now, text: 'Deliver a scheduled message.' });
-        const store = canonicalOwnerConversationStore(this.ctx.storage, context);
+        const store = canonicalOwnerConversationStore(this.ctx.storage, context, this.logSkippedLoad);
         const { leafId } = await store.load();
         const ownerRef = context.invocation.verified_authority.principal_ref, id = `scheduled-${crypto.randomUUID()}`;
         await store.save([{ id, ownerId: ownerRef, chatId: `owner:${ownerRef}`, parentId: leafId, threadAnchorId: null, surface: 'app',
@@ -668,7 +665,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const context=await this.appContext(name,hash,'Read my main conversation.','history:'+scope.attempt,now,scope);
         step='history';
         const {entries,skipped}=await canonicalOwnerConversationStore(this.ctx.storage,context).readForDisplay();
-        for(const [check,{count,unwitnessed}] of Object.entries(skipped))console.error(JSON.stringify({hop:'app_history_read',ok:true,code:'history_rows_skipped',check,count,unwitnessed}));
+        for(const line of skippedRowLines('app_history_read',skipped))console.error(JSON.stringify(line));
         step='transcript';
         const url=new URL(request.url);return Response.json(appTranscriptPage(entries,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),appApprovalParts(this.ctx.storage.sql)),{headers:{'cache-control':'no-store'}});
       }catch(error){logAppReadFailure('app_history_read',step,error);return fail(503);}finally{abort.abort();}
@@ -760,7 +757,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const subject=appSubjectFor(record.owner);
         await this.turn({update_id:record.updateId,message:{message_id:record.updateId,from:{id:subject,is_bot:false},chat:{id:subject,type:'private'},text:record.text}},'app',true,scope);
         await this.appAuthority(record.owner,record.sessionHash);scope.admit();completed=true;
-      }catch{console.error('app execution outcome unconfirmed');}
+      }catch(error){console.error('app execution outcome unconfirmed');const code=canonicalHistoryFault(error);if(code)console.error(JSON.stringify({hop:'app_turn',ok:false,code}));}
       finally{clearTimeout(timeout);this.appInbox.settle(record,completed);abort.abort();this.appAttempts.delete(record.attempt!);this.activeApp=null;if(this.activeScope===scope){this.activeScope=undefined;this.activeAbort=undefined;}}
     }
     await rearmSharedAlarm(this.ctx.storage,null,Date.now());
@@ -2137,7 +2134,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const context=await this.appContext(record.owner,record.sessionHash,record.text,record.id,record.admittedAt,scope,{health:()=>health??=healthContext.latest(turn.traceId)});
         if(context.conversationRef!==record.conversationRef)throw new ClosedRunError();
         return context;
-      }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context)} : undefined,
+      }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context,this.logSkippedLoad)} : undefined,
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);

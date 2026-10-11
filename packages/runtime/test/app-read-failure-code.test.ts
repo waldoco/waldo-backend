@@ -76,7 +76,7 @@ it('a stored row that matches its witness but fails the entry shape is left out 
   const result = await read('read-skip-invalid', { ...witnessed(good), ...witnessed(bad), [`${PREFIX}leaf`]: bad.id });
   expect(result.status).toBe(200);
   expect((result.body as { messages: { id: string }[] }).messages.map(message => message.id)).toEqual(['stored-reply-good']);
-  expect(result.failures).toEqual([{ hop: 'app_history_read', ok: true, code: 'history_rows_skipped', check: 'role', count: 1, unwitnessed: 0 }]);
+  expect(result.failures).toEqual([{ hop: 'app_history_read', ok: true, code: 'history_rows_skipped', check: 'role', count: 1, unwitnessed: 0, orphans: 0, leaf: true }]);
   expect(result.raw).not.toContain('stored-reply');
   expect(result.raw).not.toContain(ownerHex);
 });
@@ -96,7 +96,7 @@ it('a stored row with no witness that fails the entry shape, with its key left o
   const result = await read('read-skip-unwitnessed', { ...witnessed({ ...entry, id: 'stored-reply-good' }), [`${PREFIX}conv:0000000009`]: noRole, [`${PREFIX}leaf`]: 'stored-reply-orphan' });
   expect(result.status).toBe(200);
   expect((result.body as { messages: { id: string }[] }).messages.map(message => message.id)).toEqual(['stored-reply-good']);
-  expect(result.failures).toEqual([{ hop: 'app_history_read', ok: true, code: 'history_rows_skipped', check: 'role', count: 1, unwitnessed: 1 }]);
+  expect(result.failures).toEqual([{ hop: 'app_history_read', ok: true, code: 'history_rows_skipped', check: 'role', count: 1, unwitnessed: 1, orphans: 0, leaf: true }]);
 });
 
 it('a row that passes the entry shape but has no witness still fails the main-chat read', async () => {
@@ -111,5 +111,5 @@ it('a shape-invalid row between two good rows is left out, and the later good ro
   const result = await read('read-skip-middle', { ...witnessed(first), ...witnessed(middle), ...witnessed(last), [`${PREFIX}leaf`]: last.id });
   expect(result.status).toBe(200);
   expect((result.body as { messages: { id: string; parent_id: string | null }[] }).messages.map(({ id, parent_id }) => ({ id, parent_id }))).toEqual([{ id: last.id, parent_id: middle.id }, { id: first.id, parent_id: null }]);
-  expect(result.failures).toEqual([{ hop: 'app_history_read', ok: true, code: 'history_rows_skipped', check: 'role', count: 1, unwitnessed: 0 }]);
+  expect(result.failures).toEqual([{ hop: 'app_history_read', ok: true, code: 'history_rows_skipped', check: 'role', count: 1, unwitnessed: 0, orphans: 1, leaf: false }]);
 });
