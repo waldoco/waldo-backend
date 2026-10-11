@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { appApprovalDecisionResultV1Schema, appApprovalListV1Schema } from '../../contracts/src/app/approvals';
 import { appApprovalsRequest } from '../src/channels/app-approvals';
-import { approvalDesk } from '../src/channels/approvals';
+import { appApprovalParts, approvalDesk } from '../src/channels/approvals';
 import { appApprovalLink, appCaller } from '../src/channels/surfaces/app';
 import { sha256Hex, type GoogleClient } from '../src/connectors/google';
 
@@ -32,7 +32,7 @@ it('lists app approvals and decides them once against the reviewed digest, with 
     expect(listed.status).toBe(200);
     const { approvals } = appApprovalListV1Schema.parse(await listed.json());
     expect(approvals).toHaveLength(1);
-    expect(approvals[0]).toMatchObject({ approval_id: id, kind: 'email_send', state: 'open', actions: ['approve', 'edit', 'skip'], presented_surfaces: ['app'] });
+    expect(approvals[0]).toMatchObject({ approval_id: id, kind: 'email_send', state: 'open', actions: ['approve', 'edit', 'skip', 'defer'], presented_surfaces: ['app'] });
     expect(current).toBeGreaterThanOrEqual(2);
     for (const query of ['?state=approved', '?state=open&state=done', '?limit=5', '?state=open&cursor=x']) expect([query, (await get(query)).status]).toEqual([query, 400]);
     expect(appApprovalListV1Schema.parse(await (await get('?state=done')).json()).approvals).toEqual([]);
@@ -98,7 +98,7 @@ it('app receipts carry fixed text, never provider errors or the desk message', a
   });
 });
 
-it('refuses Not now until the desk can defer, without deciding or recording anything', async () => {
+it('Not now keeps the approval open and its cards live, leaves it out of the default list, and a later decision by id still works', async () => {
   const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`app-approvals-defer-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_instance, state) => {
     let n = 0, sends = 0;
@@ -107,18 +107,65 @@ it('refuses Not now until the desk can defer, without deciding or recording anyt
       google: async () => client, newId: () => `defer${++n}`, now: () => Date.now(), timezone: 'UTC', log: () => {}, currentRunRef: () => 'app-message-0002' });
     const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
     const decide = (body: unknown) => appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), host);
+    const list = async (query = '') => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request(`https://telegram-owner/app/v1/approvals${query}`), host)).json()).approvals;
     const raw = 'To: b@x.test\r\nSubject: Later\r\n\r\nNot today.';
     const id = await desk.proposeSendEmail({ to: ['b@x.test'], subject: 'Later', body: 'Not today.', message_id: '<defer@waldo-send>', raw, digest: await sha256Hex(raw) });
-    const [item] = appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals'), host)).json()).approvals;
+    const [item] = await list();
     expect(item).toMatchObject({ approval_id: id, state: 'open' });
-    expect(item!.actions).not.toContain('defer');
+    expect(item!.actions).toContain('defer');
+    expect(appApprovalParts(state.storage.sql)('app-message-0002').live.map(part => part.actions)).toEqual([item!.actions]);
 
-    const deferred = await decide({ approval_id: id, action: 'defer', expected_digest: item!.payload_digest, request_id: 'defer-request-0001' });
-    expect([deferred.status, (await deferred.json() as { error: string }).error]).toEqual([409, 'no_longer_eligible']);
-    const [after] = appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals'), host)).json()).approvals;
-    expect(after).toMatchObject({ approval_id: id, state: 'open', payload_digest: item!.payload_digest });
-    const skipped = await decide({ approval_id: id, action: 'skip', expected_digest: item!.payload_digest, request_id: 'defer-request-0001' });
-    expect(appApprovalDecisionResultV1Schema.parse(await skipped.json())).toMatchObject({ duplicate: false, approval_state: 'skipped' });
+    const body = { approval_id: id, action: 'defer', expected_digest: item!.payload_digest, request_id: 'defer-request-0001' };
+    const deferred = await decide(body);
+    expect(deferred.status).toBe(200);
+    expect(appApprovalDecisionResultV1Schema.parse(await deferred.json())).toMatchObject({ duplicate: false, approval_state: 'open', receipt: { state: 'recorded', message: 'Left it for later. It is still waiting, and it can still expire.' } });
+    expect(await list()).toEqual([]);
+    expect((await list('?state=open')).map(approval => [approval.approval_id, approval.state])).toEqual([[id, 'open']]);
+    expect(appApprovalDecisionResultV1Schema.parse(await (await decide(body)).json())).toMatchObject({ duplicate: true, approval_state: 'open' });
+    expect(state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM approval_presentations WHERE approval_id = ? AND retired_at IS NOT NULL', id).one().n).toBe(0);
     expect(sends).toBe(0);
+
+    const sent = await decide({ approval_id: id, action: 'approve', expected_digest: item!.payload_digest, request_id: 'defer-request-0002' });
+    expect(appApprovalDecisionResultV1Schema.parse(await sent.json())).toMatchObject({ approval_state: 'done', receipt: { state: 'recorded' } });
+    expect(sends).toBe(1);
+    expect((await list()).map(approval => [approval.approval_id, approval.state])).toEqual([[id, 'done']]);
+    const late = await decide({ ...body, request_id: 'defer-request-0003' });
+    expect([late.status, (await late.json() as { error: string }).error]).toEqual([409, 'no_longer_eligible']);
+  });
+});
+
+it('a Not now the desk did not take is answered as not done, and the approval stays in the default list', async () => {
+  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`app-approvals-defer-refused-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_instance, state) => {
+    let n = 0;
+    const client = { sendRaw: async () => ({ message_id: 'g1' }) } as unknown as GoogleClient;
+    const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_004, call: appCaller(), appLink: appApprovalLink,
+      google: async () => client, newId: () => `refused${++n}`, now: () => Date.now(), timezone: 'UTC', log: () => {}, currentRunRef: () => 'app-message-0004' });
+    // A decision that raced this one: the desk answers that the row was already handled.
+    const raced = { approvals: desk.approvals, decide: async () => ({ toast: 'Already handled.', message: 'Already handled.' }) };
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk: raced };
+    const raw = 'To: d@x.test\r\nSubject: Race\r\n\r\nRaced.';
+    const id = await desk.proposeSendEmail({ to: ['d@x.test'], subject: 'Race', body: 'Raced.', message_id: '<race@waldo-send>', raw, digest: await sha256Hex(raw) });
+    const list = async () => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals'), host)).json()).approvals;
+    const [item] = await list();
+    const answer = await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ approval_id: id, action: 'defer', expected_digest: item!.payload_digest, request_id: 'refused-request-0001' }) }), host);
+    expect(answer.status).toBe(409);
+    expect(appApprovalDecisionResultV1Schema.parse(await answer.json())).toMatchObject({ approval_state: 'open', receipt: { state: 'rejected' } });
+    expect((await list()).map(approval => approval.approval_id)).toEqual([id]);
+  });
+});
+
+it('adds the deferral column to a ledger created before it, once, and keeps the rows', async () => {
+  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`app-approvals-defer-column-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec(`CREATE TABLE ledger (id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
+      undo_json TEXT, created_at INTEGER NOT NULL, decided_at INTEGER)`);
+    sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, created_at) VALUES ('p-old', 'email_send', 'skipped', 'old', '{}', 1)");
+    const deps = { surface: 'app' as const, owner: 7_000_000_000_003, call: appCaller(), google: async () => ({}) as GoogleClient, newId: () => 'x', now: () => Date.now(), timezone: 'UTC', log: () => {} };
+    approvalDesk(sql, deps); approvalDesk(sql, deps);
+    expect(sql.exec<{ name: string; type: string }>('PRAGMA table_info(ledger)').toArray().filter(column => column.name === 'deferred_at').map(column => column.type)).toEqual(['INTEGER']);
+    expect(sql.exec<{ id: string; deferred_at: number | null }>('SELECT id, deferred_at FROM ledger').toArray()).toEqual([{ id: 'p-old', deferred_at: null }]);
   });
 });
