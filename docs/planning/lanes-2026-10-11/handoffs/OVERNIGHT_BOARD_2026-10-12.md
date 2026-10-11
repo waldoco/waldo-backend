@@ -78,6 +78,12 @@ I merge after: CI green on the current head (pgTAP included), an independent rev
   3. A read-only readiness check of Google connect on `4bb040f5`: routes, scopes vs the site's "read only" labels, token storage, app error states. Findings go in your batch file.
 
 ### L4 (waldo-app)
+- **App #78** (`cb0ad501`), my pre-review:
+  - **CI-equivalent green:** frozen install clean, tsc clean, jest 579 passed / 1 skipped.
+  - **The logic matches option (a).** It's inert until #1066 deploys, because today's Worker doesn't send `timezone_confirmed`.
+  - **Before merge:** (1) reword the `adoptDeviceZone` comment: no date and no "Owner ruling (11 October 2026, option a)" (repo rule: no dates or one-off references in code comments); describe the behavior instead. (2) Add D6's confirm row, or say if you want it as a separate PR.
+  - Then mark it ready; I run the CI-equivalent again and review.
+- **Your pending AskUserQuestion** blocks your lane until the owner answers in the morning. The classifier refused my attempt to stop the turn.
 Queue, in order. Golden-path gaps come from my read of app `main` `c2ccd5d0`; verify each before building.
 1. **Time zone:**
    - the auto-write is option (a), an owner ruling: `timezone.set` with the device zone only while `timezone_confirmed` is false and the stored zone is still `'UTC'`;

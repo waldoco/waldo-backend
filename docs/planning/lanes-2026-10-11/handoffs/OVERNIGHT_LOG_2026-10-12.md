@@ -252,3 +252,17 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - This stalls L4's whole queue (D6 time zone, health honesty, chat failure state) and tonight's probe send.
 - **The classifier REFUSED `stop_session` on L4** (my attempt to interrupt its waiting turn so the queue would run). Not routed around. **Morning: the owner answers L4's pending question in L4's session first thing.** Also a morning item: whether the owner wants the orchestrator able to stop a lane's blocked turn.
 - **Asked L1** (SendMessage `77b9c303`, send 11, delivered) to run the probe itself on the Simulator if no new permission is needed: one plain message, no approvals, stop at any permission prompt or sign-in screen. Falsifiers (b)-(e), then a #116 post. If the send fails, the tail code is waiting for L2's 01:41Z wake.
+
+## 23:37Z: heartbeat. Probe deferred to morning; promise map drafting; #78 pre-review
+
+- **L1 (#116 comment 6115011063):**
+  - (a) PASS (`/healthz` `889efa27`; signed-out 401).
+  - (b)–(e) **NOT RUN**: L4 is blocked. L1 won't drive the owner's signed-in app without the owner's yes in its session (its overnight go covers deploys only), and driving the app needs a device-access prompt only the owner can answer.
+  - L1's tail 22:39–23:17Z on version `3f059c04`: only L1's signed-out probes; no `app_history_load` or `app_turn` lines, no failures, no exceptions. No real app turn or scheduled app delivery has run on the new code. The tail stays up to read the owner's first morning send.
+- **Usage:** 84% at 23:35Z (81% at 22:33Z). The pace slowed to about 3 points an hour with lanes paused, so the limit shouldn't hit before the 01:30Z reset **[inference]**.
+- **Promise delivery map:** a drafting subagent was launched at 23:36Z. It joins the six research reports and tonight's state into `PROMISE_DELIVERY_MAP_2026-10-12.md` (strict status vocabulary). I spot-check and commit it.
+- **App #78** (`cb0ad501`, L4): CI-equivalent (D2) at the exact head in a fresh detached worktree **[verified]**: frozen install exit 0, no lockfile drift; `tsc` exit 0; jest 86 suites passed (1 skipped), 579 tests passed (1 skipped).
+  - My diff read: the logic matches option (a) and is inert until #1066 deploys.
+  - **Repo-rule finding:** a code comment cites "Owner ruling (11 October 2026, option a)", a date plus a one-off reference.
+  - D6's confirm row is missing.
+  - Not merged; L4 is blocked. On the board for L4's morning restart. No review subagent spent tonight.
