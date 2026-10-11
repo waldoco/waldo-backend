@@ -110,7 +110,11 @@ export const readThreadArgsSchema = z.strictObject({
   cursor: z.string().min(1).max(4096).optional(),
   thread_id: z.string().min(1),
   limit: z.int().min(1).max(20).default(10),
-});
+  // Continue one long message body: the id of a message whose body_next_offset was returned, and that offset.
+  body_message_id: z.string().min(1).max(128).optional(),
+  body_offset: z.int().min(0).max(100_000_000).optional(),
+}).refine(args => (args.body_message_id === undefined) === (args.body_offset === undefined), { error: 'body_message_id and body_offset go together', path: ['body_offset'] })
+  .refine(args => args.body_message_id === undefined || args.cursor === undefined, { error: 'a body continuation does not take a thread cursor', path: ['cursor'] });
 export type ReadThreadArgs = z.infer<typeof readThreadArgsSchema>;
 
 // 'all' is a read-filter sentinel, not a task state — write-side status vocabulary lives

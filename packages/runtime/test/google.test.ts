@@ -394,6 +394,86 @@ describe('gmail search + thread read (A1)', () => {
     expect(message!.body).toHaveLength(32000);
   });
 
+  it('readThread returns the first body chunk with a total and next offset; later chunks continue without overlap or gap', async () => {
+    const big = Array.from({ length: 70_000 }, (_, i) => String.fromCharCode(97 + (i % 26))).join('');
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
+      return Response.json({ messages: [{ id: 'm1', internalDate: '1759140000000', payload: { mimeType: 'text/plain', headers: [], body: { data: b64(big) } } }, { id: 'm2', internalDate: '1759140001000', payload: { mimeType: 'text/plain', headers: [], body: { data: b64('short') } } }] });
+    }) as typeof fetch;
+    const client = googleClient(app, { refresh_token: 'rt' }, fetcher);
+    const first = await client.threadPage!('t1', 10);
+    const [m1, m2] = first.messages;
+    expect(m1!.body).toBe(big.slice(0, 32_000));
+    expect(m1!.body_total_chars).toBe(70_000);
+    expect(m1!.body_next_offset).toBe(32_000);
+    expect(m2!.body).toBe('short');
+    expect(m2!.body_next_offset).toBeUndefined();
+    const second = await client.threadPage!('t1', 10, undefined, { messageId: 'm1', offset: 32_000 });
+    expect(second.messages).toHaveLength(1);
+    expect(second.messages[0]!.body).toBe(big.slice(32_000, 64_000));
+    expect(second.messages[0]!.body_next_offset).toBe(64_000);
+    const third = await client.threadPage!('t1', 10, undefined, { messageId: 'm1', offset: 64_000 });
+    expect(third.messages[0]!.body).toBe(big.slice(64_000));
+    expect(third.messages[0]!.body_next_offset).toBeUndefined();
+    expect(first.messages[0]!.body + second.messages[0]!.body + third.messages[0]!.body).toBe(big);
+    await expect(client.threadPage!('t1', 10, undefined, { messageId: 'nope', offset: 0 })).rejects.toThrow('unknown message');
+    await expect(client.threadPage!('t1', 10, undefined, { messageId: 'm1', offset: 70_001 })).rejects.toThrow('invalid body offset');
+  });
+
+  it('readThread lists attachment metadata without fetching content', async () => {
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
+      return Response.json({ messages: [{ id: 'm1', internalDate: '1759140000000', payload: { mimeType: 'multipart/mixed', headers: [], parts: [
+        { mimeType: 'text/plain', body: { data: b64('see attached') } },
+        { mimeType: 'application/pdf', filename: 'plan.pdf', body: { attachmentId: 'a1', size: 12345 } },
+        { mimeType: 'image/png', filename: 'chart.png', body: { attachmentId: 'a2', size: 99 } },
+      ] } }] });
+    }) as typeof fetch;
+    const [message] = (await googleClient(app, { refresh_token: 'rt' }, fetcher).threadPage!('t1', 10)).messages;
+    expect(message!.body).toBe('see attached');
+    expect(message!.attachments).toEqual([{ filename: 'plan.pdf', mime_type: 'application/pdf', size: 12345 }, { filename: 'chart.png', mime_type: 'image/png', size: 99 }]);
+    expect(JSON.stringify(message)).not.toContain('a1');
+  });
+
+  it('a 60-message thread pages by cursor with no repeats', async () => {
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
+      return Response.json({ messages: Array.from({ length: 60 }, (_, i) => ({ id: `m${i}`, internalDate: String(1759140000000 + i), payload: { mimeType: 'text/plain', headers: [], body: { data: b64(`body ${i}`) } } })) });
+    }) as typeof fetch;
+    const client = googleClient(app, { refresh_token: 'rt' }, fetcher);
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let pages = 0; pages < 10; pages++) {
+      const page = await client.threadPage!('t1', 20, cursor);
+      seen.push(...page.messages.map(m => m.id));
+      if (!page.cursor) break;
+      cursor = page.cursor;
+    }
+    expect(seen).toEqual(Array.from({ length: 60 }, (_, i) => `m${i}`));
+  });
+
+  it('read_thread hands a later body chunk to the connector and an OTP in a later chunk is still quarantined', async () => {
+    const big = `${'a'.repeat(32_000)}code 987654 end`;
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
+      return Response.json({ messages: [{ id: 'm1', internalDate: '1759140000000', payload: { mimeType: 'text/plain', headers: [{ name: 'Subject', value: 'Your code' }], body: { data: b64(big) } } }] });
+    }) as typeof fetch;
+    const handlers = googleHandlers({ client: async () => googleClient(app, { refresh_token: 'rt' }, fetcher) }, desk, clock);
+    const read = handlers.find((h) => h.name === 'read_thread')!;
+    const first = await read.handle({ thread_id: 't1', limit: 10 });
+    const firstMessage = (first as { data: { messages: { body: string; body_next_offset?: number }[] } }).data.messages[0]!;
+    expect(firstMessage.body_next_offset).toBe(32_000);
+    const next = await read.handle({ thread_id: 't1', limit: 10, body_message_id: 'm1', body_offset: 32_000 });
+    expect(next.ok).toBe(true);
+    const { messages } = (next as { data: { messages: { body: string; quarantined?: readonly string[] }[] } }).data;
+    expect(messages).toHaveLength(1);
+    expect(JSON.stringify(messages)).not.toContain('987654');
+  });
+
   it('read_thread quarantines a body carrying an OTP - the raw code never reaches the model', async () => {
     const handlers = googleHandlers(access([]), desk, clock);
     const read = handlers.find((h) => h.name === 'read_thread')!;

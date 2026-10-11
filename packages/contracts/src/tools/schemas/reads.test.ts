@@ -365,6 +365,14 @@ describe('searchCommunicationArgs / readThreadArgs (A1)', () => {
     expect(readThreadArgsSchema.safeParse({}).success).toBe(false);
     expect(readThreadArgsSchema.safeParse({ thread_id: '' }).success).toBe(false);
   });
+  it('read_thread body continuation needs both fields and no thread cursor', () => {
+    expect(readThreadArgsSchema.safeParse({ thread_id: 't1', body_message_id: 'm1', body_offset: 32000 }).success).toBe(true);
+    expect(readThreadArgsSchema.safeParse({ thread_id: 't1', body_message_id: 'm1' }).success).toBe(false);
+    expect(readThreadArgsSchema.safeParse({ thread_id: 't1', body_offset: 5 }).success).toBe(false);
+    expect(readThreadArgsSchema.safeParse({ thread_id: 't1', body_message_id: 'm1', body_offset: -1 }).success).toBe(false);
+    expect(readThreadArgsSchema.safeParse({ thread_id: 't1', body_message_id: 'm1', body_offset: 1, cursor: 'c' }).success).toBe(false);
+    expect(readThreadArgsSchema.safeParse({ thread_id: 't1', body_message_id: 'm1', body_offset: 1, extra: 1 }).success).toBe(false);
+  });
 });
 
 // New source-read contracts never accept a caller-selected owner or hidden authority.
