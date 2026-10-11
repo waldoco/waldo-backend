@@ -2,7 +2,7 @@
 
 Planning document, 10 October 2026. It maps promises to source and records the owner's rulings. It does not itself merge, deploy, migrate or spend; those stay per-action owner confirmations. Current source and tests decide capability.
 
-## Owner rulings (10 October 2026)
+## Owner rulings (10 and 11 October 2026)
 
 1. **Scope is final.** Every promise on heywaldo.in ships, including panels labelled "Coming next" and "Planned".
 2. **One writer.** The owner and the owner's Claude Code sessions write and merge everything in `waldo-backend` and `waldo-app`. Instinct may take delegated, disjoint slices (`docs/app/codex-handover/OWNERSHIP_BOUNDARY.md`). Kennel's repository and the WhatsApp surface adapter are Ashish's.
@@ -21,6 +21,11 @@ Planning document, 10 October 2026. It maps promises to source and records the o
 15. **Zone bands (D7)** (same ruling). Candidate bands come from the app's existing bands, written with `activation: candidate_unaccepted` until the formula review ratifies them.
 16. **MCP and browser approvals in the app** (same ruling). The app shows the full review, as Telegram does, and can approve. Query strings and fragments stay stripped from the scope.
 17. **Staging actions** (same ruling). Deploy #1024, and apply `20261010060000` with #1022 once it is merged. Each is still executed by the session that runs it, after that session confirms with the owner.
+18. **Alpha cohort and spend** (10 October, 19:05Z). The alpha cohort is 5 to 10 people, at most 50. The cost ceiling is $25 per user per month. #915 L builds the ceiling; it is not wired yet.
+19. **Browser tasks from any surface** (same ruling). The owner can request a browser task from any surface, and Waldo reports back on that surface.
+20. **Proactive delivery** (11 October). Proactive messages go to the owner's chosen surface, otherwise to the app. Until a "deliver to" setting exists, this includes Telegram-linked owners. One exception holds until L2's slice 1: a Telegram-linked owner who has never opened the app still gets proactive messages on Telegram.
+21. **One main conversation** (11 October). Each owner has one main conversation across all surfaces. Threads stay app and console only.
+22. **Who ties the app and backend together** (11 October). The owner's sessions own the work that ties the app and backend together. Instinct takes disjoint slices under `docs/app/codex-handover/OWNERSHIP_BOUNDARY.md`, and they are reviewed before merge.
 
 **Pins.** Integration branch `beta-mvp` @ `957a2cbb` (#999 merged 10 Oct 10:20Z; CI `verify` green). Rows were audited at `a13c1fb5`; #999 changed only the app sign-in, chat, inbox and controls paths. Open PR heads read: #998 @ `fc4c2b9d` (native + health checkpoint, base `1206d7a8`), #919 @ `032c78a0` (Gmail/Calendar journeys), #932 @ `5506de85` (standing grant contract), #915 @ `2bc64346` (core loop spec, slices S0, A–L). Website copy from `Pin4sf/waldo-landing` `origin/main` @ `830bfc2`. App refs `1980a9d1` (the #16 native-line draft, now superseded and being ported in slices) and `a7a560d1` (#999-pinned line). Rows that cite `1980a9d1` describe that draft, not shipped app state: app main (`waldoco/waldo-app` @ `8d5b4357`, 10 October night) has chat, sign-in and session, sign-out and the native health read module, and its other screens show a placeholder. Re-pin before relying on any row.
 
@@ -252,66 +257,86 @@ Day cards and update cards used to log no root hop, so their traces were never e
 | D7 | WhatsApp | Ashish (ruling 8) |
 | D8 | Spotify | Deferred until it has a stated job |
 | D9 | Lane conflicts | Retired by ruling 2 |
-| D10 | Cohort, spend ceiling, launch gate | Owner sets before outside users; #915 L builds the ceiling |
+| D10 | Cohort, spend ceiling, launch gate | Cohort 5 to 10, at most 50, and $25 per user per month (ruling 18); #915 L builds the ceiling. The launch gate and browser purchase limits are still the owner's to set |
 
 ## 11. Not website scope: the Instinct-parity bar
 
 Booking, payments, logged-in browser errands, parallel workers, rich file outputs and person-to-person agent coordination came from the Instinct comparison. They set the quality bar for Waves 1–2 (claim verification, receipts, recovery, parallel workers) and stay separate from the website commitment.
 
-## 12. Status, lanes and next slices (10 October, late night)
+## 12. Status, lanes and next slices (11 October, morning)
+
+This section replaces the 10 October night status. The lane plan is `docs/planning/lanes-2026-10-11/README.md`. That plan assigns the work, and this section records its state. #1029 is folded in here as C11–C13.
 
 ### Lanes
 | Lane | Owns | Queue |
 |---|---|---|
-| Gap-analysis session (this ledger) | Ledger, traces, health in context and the health reader, the omnipresence pieces (A = S1+S3, B = S2+S4, C = S5+S6 plus context engineering, D = S7+S8 plus the work-log route), sole editor of `packages/contracts/src/app/*` | Piece A fix round, then its PR; #1024; C3 and C4; then B and D |
-| App-backend handoff session | Health ingest backend (H2 to H6), Google connectors, staging deploys from the Mac | #1022 fix round; H3 routes; H4 Recovery producer |
-| App session: "Start waldo-app session" | waldo-app pin of the six app contract files (`src/agent/contracts/`), reader policy, app build order | Controls screens (Settings schedule, Activity, Connections) on owner go |
-| App session: "Take over waldo-app PR #16 in slices" | The iOS health module and the port of #16 | Consent-gated background observers (slice 2); the trace-capture line in the app's rules |
-| Ashish | Kennel, WhatsApp adapter, iMessage connector (#1017, draft, default-off), device bridge (#1006) | Landing order of #1017 relative to S2 and S4 to be agreed |
+| L1: health plane and staging deploys | Health ingest backend (H4 to H6), staging deploys from the Mac, reviews Instinct briefs 01 and 02 | One staging deploy of the `beta-mvp` tip; H4 Recovery producer and its per-day read migration |
+| L2: owner identity and delivery router | Proactive delivery routing, the app delivery sink, push registration (S7), `telegram-owner-do.ts` setup and alarm | #1034 (routing per ruling 20), then slices 1 and 2 |
+| L3: approvals, app contracts, Google connect, ledger | Piece A, sole editor of `packages/contracts/src/app/*`, the "deliver to" contract, Google connect from the app (G1), threads contract, this ledger, reviews Instinct brief 03 | Piece A round 4 PR; G1; "deliver to"; threads |
+| L4: app, TestFlight build | waldo-app `src/agent/**` and the six-file contract pin | Device build (app #42); re-pins only from merged SHAs |
+| Browser and computer (bounded) | Browser drafts audit (#1032), the errand set, the in-app browser experience | #987, then B1 |
+| Instinct | Delegated, disjoint slices under `docs/app/codex-handover/OWNERSHIP_BOUNDARY.md`, reviewed before merge | Briefs 01 (L1 reviews), 02 (L1 reviews), 03 (L3 reviews) |
+| Ashish | Kennel, WhatsApp and iMessage adapters (#1017), device bridge (#1006) | #1017 renumbers its migration before it can apply |
 
 ### Rules between lanes
-- **Hot files.** Announce before touching these; whoever merges second rebases.
-  - `channels/approvals.ts`: piece A (S1+S3).
-  - `channels/telegram-owner-do.ts`: every lane. Keep diffs small and local.
-  - `channels/owner-turn.ts` and `context-composer/*`: the context track (#1014, #1024).
-- **App contracts.** Only this lane edits `packages/contracts/src/app/*`. The app pins six files byte for byte (approvals, controls, core, health-ingest, parts, surfaces). Changes stay additive. The app hears about a new enum value before it ships. The app reader drops a part it cannot parse and keeps the row's `text`, so every row that carries a new part must have readable `text`. A new value in a row-level or page-level field fails the app closed, so those need a version bump.
-- **Migration timestamps.**
-  - Taken: `20261010060000` (#1013, merged, not applied on any hosted database), `20261010120000` (#1017, draft), `20261011000000` (#1022, draft, not applied).
-  - Held by unlanded #998 work: `20261010050000` (rights) and `20261010070000` (channels).
-  - Proposed: S7 push token RPC uses `20261012xxxxxx`.
-  - The staging apply (`scripts/staging-migration-preflight.mjs`) requires the hosted history to be a prefix of the sorted local list and applies every pending file in order. Applying any later migration from `beta-mvp` therefore also applies `20261010060000`, which needs its own owner go, and strands any earlier timestamp that lands afterwards.
-- **Merges and staging.** Merges to beta-mvp, staging deploys and hosted migrations each need the owner's per-action go in the session that executes them. Merged is not deployed.
+- **Hot files.** Announce before touching these on #116. Whoever merges second rebases.
+  - `channels/approvals.ts`: L3 (piece A).
+  - `channels/telegram-owner-do.ts`: every lane. Keep diffs small and local; L2 owns `setup()` and `alarm()`.
+  - `channels/app-api.ts`: L2 (`appSinkCaller`) and L3.
+  - `channels/owner-turn.ts` and `context-composer/*`: the context track.
+- **App contracts.** Only L3 edits `packages/contracts/src/app/*`.
+  - The app pins six files byte for byte: approvals, controls, core, health-ingest, parts and surfaces. L3 posts SHA-256 hashes, not git blob ids.
+  - Changes stay additive, and the app hears about a new enum value before it ships.
+  - The chat reader drops a part it cannot parse and keeps the row's `text`, so every row carrying a new part must have readable `text`.
+  - A new value in a row-level or page-level field fails the app closed. Such a value needs a version bump, or an app re-pin first.
+  - The cheapest additive path is a new view or route the pinned app never requests.
+- **Migration timestamps.** The staging apply (`scripts/staging-migration-preflight.mjs`) needs the hosted history to be a prefix of the sorted local list, and it applies every pending file in order. So a lower timestamp that lands after a higher one is applied is stranded.
+  - Applied on staging (10 October, about 19:00Z):
+    - `20261010060000` (#1013, owner runtime authority);
+    - `20261011000000` (#1022, health plane).
+  - These sort below the applied ones and must renumber before they can apply:
+    - `20261010120000` (#1017, draft);
+    - `20261010050000` (rights) and `20261010070000` (channels), held by unlanded #998 work.
+  - Reserved:
+    - `20261011200000`: L3, G1, allowing connect channel `app`;
+    - the H4 per-day read migration: L1 posts its number on #116;
+    - S7 push token RPC: `20261012xxxxxx` (L2).
+- **Merges, deploys and migrations.** Each needs the owner's go, given in the session that runs it. A message relayed from another session is not a go. Merged is not deployed.
+- **Messages between sessions.** Peer messages can be dropped. Anything another lane must know goes on #116 or in a PR.
 
 ### Staging
-- Worker release `fec37a43` (`/healthz`), runtime only. It includes #1021 and #1023.
-- `/app/v1` serves auth (code, verify, signout), session, `chat/main` (GET, `text` parts only), `chat/main/messages` (POST), controls and actions. Nothing under `/app/v1/health`, no approvals routes, no push, no threads.
-- The legacy `health-sync` Edge Function was deleted from the staging project `togdshayyxycitzckpqv` on 10 October with the owner's go. It ran on that same project and recorded consent implicitly. Restore by redeploying `waldo-app/supabase/functions/health-sync`.
+- **Worker.** The app lane read `/healthz` at 07:16Z on 11 October as `625214cc`. That is the unmerged tip of #1034, not a `beta-mvp` commit. The merged #1022, #1024, #1028, #1030 and #1031 are not all deployed. The next deploy is one deploy of the `beta-mvp` tip (L1).
+- **Database.** `20261010060000` and `20261011000000` are applied, and `health_context_daily` has no rows. No device upload or live `/app/v1/health` call has run yet.
+- **Edge Functions.** The legacy `health-sync` Edge Function was deleted from staging project `togdshayyxycitzckpqv` on 10 October, with the owner's go. To restore it, redeploy `waldo-app/supabase/functions/health-sync`.
 
 ### PRs
 | PR | What | State |
 |---|---|---|
-| #1004, #1007, #1008, #1009, #1010, #1011, #1012, #1014 | Earlier wave 0 work (traces, paging, zod, context accounting, slice 0 contracts, health in the reply) | merged |
-| #1013 | Owner runtime authority without a messaging surface (`20261010060000`) | merged; migration not applied |
-| #1005 | This ledger, the omnipresence design, the trace ruling | merged |
-| #1015 | Google Tasks approvals with a readable before → after card | merged, deployed |
-| #1016 | Weight is the day's demand; Load is its physical part | merged |
-| #1018, #1020 | Health ingest design; H1 health ingest and scores contract | merged; app pinned (waldo-app #30) |
-| #1019 | The agent lists the owner's calendars | merged |
-| #1021 | Dispatcher no longer rejects the Google Tasks proposal result | merged, deployed |
-| #1022 | H2 health plane tables and signed functions | draft; the first review's block and consent gaps are fixed at `c97b0ecd` and the re-review says it is safe to apply once merged; a second fix round (rollback privacy, the never-granted withdraw response, scores-shape gate, ruling 11) is next; not applied |
-| #1023 | The reader accepts a Recovery-first health row | merged, deployed |
-| #1024 | Stable prompt prefix first; offer only tools the owner can use (C1, C2) | merged (`a7b80436`), not deployed |
-| #1028 | Health contract: withdrawing model use alone keeps the owner's data (owner ruling 11) | open |
-| #1017 | iMessage connector (Ashish), default-off | draft |
+| #1013 | Owner runtime authority without a messaging surface (`20261010060000`) | merged; applied on staging |
+| #1015, #1016, #1018 to #1021, #1023 | Tasks approvals, Weight, health design and H1 contract, calendar list, dispatcher fix, Recovery-first reader | merged |
+| #1022 | H2 health plane (`20261011000000`) | merged as `bf477a4e`; applied on staging |
+| #1024 | Stable prompt prefix; tools the owner can use (C1, C2) | merged as `a7b80436`; deploy owed |
+| #1028 | Health contract: withdrawing model use alone keeps the data (ruling 11) | merged as `1757beb2`; the app pin is one revision behind on `health-ingest.ts` |
+| #1031 | H3 health routes | merged as `12bca625` (11 October, 07:12Z); deploy owed |
+| #1034 | App-only owners' reminders delivered in the app (L2) | open; merges before piece A |
+| Piece A | Approvals from any surface, round 4 (L3) | branch `feat/approvals-any-surface-r4`; PR after round 4; rebases onto #1034 |
+| #987 | Browser retained-session upload | open (browser lane) |
+| #1032 | Browser lane audit and any-surface design | draft; design until the owner approves |
+| #1033 | Owner-ingress test isolation | open; rebase and merge, or close |
+| #1029 | App requirements traceability | draft; C11–C13 folded here; close on the owner's go |
+| #1017, #1006 | iMessage connector; device bridge (Ashish) | draft |
 
 ### Findings that set the order
-- Health: no row exists in `health_context_daily` on staging, so health replies say no health was shared until ingest and a producer exist. The upload shape is the merged H1 contract: hourly local buckets, waking-day sleep, a time zone on every batch and an offset on every sample, RMSSD canonical with SDNN as a labelled fallback. The older daily-aggregate upload is superseded. Weight in the app is still physical strain only until the backend computes the day's demand.
-- Consent: storage and model use are separate grants (owner ruling 11). #1022 at `c97b0ecd` gates the prompt read on model use and the app's scores read on storage only. An owner who grants only storage sees scores in the app, but Waldo's replies do not use health. Whether the app's first screen asks for model processing is still with the owner in the app session.
-- Streaming: the runtime has no model streaming, and replies pass post-model guards whole. Step lines for the work log are feasible through a new read route. Text deltas need a chunked-guard design first.
+- **Health.** There are no `health_context_daily` rows, so health replies say that no health was shared. That holds until a device uploads and the H4 producer writes rows. The upload shape is the merged H1 contract.
+- **C13: `google_task_change` in the strict approvals page.**
+  - Piece A adds `google_task_change` to `kind`. That field sits inside every item of the strict `GET /app/v1/approvals` page, so an app pinned before the value fails the whole list.
+  - It is safe only by ordering. waldo-app main has no caller of the approvals routes, and the approval UI stays hidden until staging serves it.
+  - L4 re-pins `approvals.ts` and `parts.ts` from piece A's merged SHA before the app calls the route.
+  - L4 decides whether the approvals page reader drops an item it cannot parse, so that the next new kind does not repeat C13.
+- **Streaming.** The runtime has no model streaming, and replies pass post-model guards whole.
 
-### Next, one at a time (this lane)
-1. Piece A (S1+S3): approvals from any surface. Implemented; an independent review found six fixes (nullable due date, generic receipts, no MCP arguments or browser bindings in the app projection, the stored-card forget gap, where the card actually landed, text fallback). Then a PR, and the final contract diff to the app lane.
-2. C3 (store hardening) and C4 (skills on every surface). #1024 (C1, C2) is merged; its staging deploy and the cache-hit check from traces are owed.
-3. Piece B: S2 proactive routing to the app and scheduled work for app-only owners (needs `20261010060000` applied), and S4 per-surface renderers.
-4. Piece D: S7 push, S8 media, and the work-log steps route if the owner ranks it.
-5. Health: numeric Form, Recovery and Weight in context, and health in background decisions, once a producer writes rows.
+### Next for L3, one at a time
+1. Piece A round 4: ruling 16 plus credential masking on every surface. Then the PR, and the contract hash set to L4.
+2. G1: Google connect from the app (`/c/<ticket>` with surface `app`; migration `20261011200000`). It is visible on TestFlight; today's workaround is connecting Google in the console. Then G2 with L4, retiring the app's legacy `oauth-google` path. The owner confirms one OAuth client: `GOOGLE_CLIENT_ID` vs `GOOGLE_OAUTH_CLIENT_ID`.
+3. The "deliver to" control (ruling 20). The shape is proposed on #116, and L2's router reads it. It comes after G1 because an app-only owner already gets proactive messages in the app.
+4. The threads contract, app and console only (ruling 21), re-cut from #998.
