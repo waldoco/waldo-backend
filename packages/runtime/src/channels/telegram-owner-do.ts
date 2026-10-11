@@ -1292,6 +1292,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (channel === 'telegram' && consoleAuth(this.env) && this.appBound()) {
         const appOwner = await this.appOwnerLookup();
         if (appOwner.kind !== 'admitted') {
+          log({ trace: `alarm:${Date.now()}`, hop: 'scheduled_admission', ms: 0, ok: false, code: appOwner.kind });
           await rearmSharedAlarm(this.ctx.storage, appOwner.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
           return;
         }

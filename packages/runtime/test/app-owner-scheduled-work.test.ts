@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appSubjectFor } from '../src/channels/app-api';
+import { traceBook } from '../src/channels/harness';
 import { armHeartbeat, HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { reminderBook } from '../src/channels/reminders';
 import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
@@ -68,6 +69,7 @@ const driveAlarm = async (name: string, identity: Identity) => {
   return runInDurableObject(stub, async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
+    traceBook(state.storage.sql);
     const clockBack = (ms: number) => () => new Date(Date.now() - ms);
     const book = reminderBook(state.storage.sql, new Scheduler(state.storage.sql, state.storage, productionDeps()), { timezone: 'UTC', now: clockBack(3_600_000) }, () => 'rem-1');
     const reminder = await book.set({ note: 'call Sam', at: clockBack(30 * 60_000)().toISOString().slice(0, 16), repeat: 'none' });
@@ -99,6 +101,7 @@ const driveAlarm = async (name: string, identity: Identity) => {
         queuedOnTelegram: ((await state.storage.get<{ payload: { chat_id: number } }[]>('telegram_final_outbox_v1')) ?? []).map(row => row.payload.chat_id),
         heartbeat: state.storage.sql.exec<{ status: string; attempts: number }>("SELECT status, attempts FROM schedule WHERE id = ?", HEARTBEAT_ID).toArray(),
         heartbeatRuns: state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM schedule_runs WHERE schedule_id = ?", HEARTBEAT_ID).one().n,
+        held: state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM trace_log WHERE hop = 'scheduled_admission'").one().n,
         outcomes: state.storage.sql.exec<{ outcome: string }>("SELECT outcome FROM schedule_runs WHERE schedule_id = ?", reminder.id).toArray().map(row => row.outcome),
       };
     } finally { await state.storage.deleteAlarm(); }
@@ -171,6 +174,7 @@ describe('scheduled reminders for a Telegram-linked owner', () => {
     const outcome = await driveAlarm(`telegram-linked-authority-${authority}`, { telegram: true, app: 'own', heartbeatDue: true });
     expect(outcome).toMatchObject({ transcript: [], queuedOnTelegram: [], due: [{ status: 'armed', attempts: 0 }], outcomes: [], heartbeat: [{ status: 'armed', attempts: 0 }], heartbeatRuns: 0 });
     expect(wire.telegramSent).toEqual([]);
+    expect(outcome.held).toBe(1);
     // The Telegram runtime still plans the day's cards when it boots; no reminder is written.
     expect(model.requests.filter(sent => sent.includes('Reminder due now'))).toEqual([]);
     if (asksAgain) expect(outcome.retriesAt).toBeGreaterThan(30_000);
