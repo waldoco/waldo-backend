@@ -7,8 +7,8 @@
 - Standing ruling (10 Oct): every promise on heywaldo.in ships, including the "Coming next" and "Planned" panels. The website is therefore the acceptance bar for the chat, alongside Claude and ChatGPT parity.
 
 **Pins:**
-- backend `beta-mvp` `497bdcb6`: #1060 (sign out everywhere also revokes app and email sign-ins) merged at 15:32Z on 11 Oct. Source rows below were read at `e5fd7200`; #1060 touches none of them;
-- staging `81c4f892`, so #1060 is merged but not deployed;
+- backend `beta-mvp` `15134581`: #1060 (sign out everywhere also revokes app and email sign-ins) merged at 15:32Z on 11 Oct, then #1059 (an optional latest delivery on day cards). Source rows below were read at `e5fd7200`; neither PR touches them;
+- staging `81c4f892`, so #1060 and #1059 are merged but not deployed;
 - waldo-app `main` `7bbf3135`: #62–#66 merged at about 15:00Z on 11 Oct, and #67 (the C0 review fixes) at 15:44Z. Its tree is identical to #67's head `ce590e4b`, where `tsc --noEmit` exits 0 and jest passes 551 tests in 82 suites (1 suite and 1 test skipped). Rows below that cite app line numbers were read at `9937d456`. Nothing has run on a device;
 - website `Pin4sf/waldo-landing` `main` `830bfc2` (9 Oct), the pin the promise ledger also uses. I have not checked that heywaldo.in serves this commit.
 
@@ -57,11 +57,11 @@ Ranking: what blocks the experience first, then the biggest visible lift for the
 
 | # | Capability | Reference | Waldo today | Work | Lane | Gate |
 |---|---|---|---|---|---|---|
-| 1 | Waldo speaks first: brief, nightly run, heartbeat and reminders, with push | Muse comes back "when something changes or when it needs approval"; Vellum pushes on iOS | Reminders reach the app transcript but are unproven live. Nothing else is armed on the app channel. No push. | P3a (arming, the zone flag), S7 APNs, app push registration, tap a notification to open the chat | L2, L4 | **Blocks** |
+| 1 | Waldo speaks first: brief, nightly run, heartbeat and reminders in the app, and a push for what may interrupt | Muse comes back "when something changes or when it needs approval"; Vellum pushes on iOS | Reminders reach the app transcript but are unproven live. Nothing else is armed on the app channel. No push. | P3a (arming, the zone flag), S7 APNs within the design system's push budget, app push registration, a tap lands on the exact object | L2, L4 | **Blocks** |
 | 2 | Sessions that reach Waldo | Muse: "one main chat plus side chats"; Claude and ChatGPT: a list of conversations | Local drafts only | Threads contract (an ADR-0077 subset); a transcript per session in the DO; routes to list, create, rename, archive, delete, send, read history and get a receipt; the app switches from the local store to the server | contracts, L2, L4 | **Blocks**; storing conversation bodies needs contract review |
 | 3 | Proven on a physical iPhone | n/a | Nothing proven on a device | The live checks and a device run of the loop below | L4, owner go | **Blocks** |
 | 4 | Cards inside the chat: approvals (Do it / Not now / Modify), quick replies, charts, files, artifacts | Muse: structured accept or reject cards; Vellum: inline approval buttons; Claude: artifacts | Approval cards are drawn in the chat (#64; merged, not proven on a device). The other parts are not drawn. | Approval cards: each card's buttons look up the same `approval_id` on the approvals page and decide through the route the approvals screen already uses. A changed digest shows the card as changed, with no buttons. Never act on the history part, which is read tolerantly and for display only (`app-routes-v1.ts`). Next: operation steps, files and artifacts. Backend producers for quick replies and health charts: none exists today. | L4, then L2 and L1 | Additive only; charts carry a health gate (row notes) |
-| 5 | Live progress and sources ("Checking your calendar", then "Checked 3 things" with where each fact came from) | Claude's tool rows; Dots' Activity View; Muse's avatar work snippet; the website's hi-fi chat | Receipt phase only | Emit real trace hops as `operation` steps on the receipt, and draw them. When the turn closes, collapse them into one line that names the sources read. Nothing decorative. | L2, contracts, L4 | Real-data rule |
+| 5 | Live progress and sources ("Checking your calendar", then "Checked 3 things" with where each fact came from) | Claude's tool rows; Dots' Activity View; Muse's avatar work snippet; the website's hi-fi chat | Receipt phase only | Emit real trace hops as steps on a route of their own, not on the receipt, which the app parses strictly (L3's review). Draw them as the design system's working line. When the turn closes, end with one line that names the sources read, never a step count. Nothing decorative. | L2, contracts, L4 | Real-data rule |
 | 6 | Streaming replies and a Stop button | Claude, ChatGPT | No stream route. The receipt contract reserves `cancelled`, `archived`, `deleted` and `thread_changed`, but the runtime emits only `interrupted` and `session_revoked` (`app-inbox.ts:23`). | A cancel route first. Then streaming, after a short ADR: the transport (streaming fetch vs a DO WebSocket) and which checks run before text leaves the DO. | L2, L4 | ADR note |
 | 7 | Readable replies: markdown, links, lists, code; copy and share; a long-press menu | Every chat app | Markdown, links behind a confirm, a long-press menu and a visible "Share or copy" row (#63, #66; merged, not proven on a device). Text inside a reply is selectable again (#67, merged). | The device check | L4 | None |
 | 8 | "Ask Waldo" from any card | Muse, Claude | An approval or the Home health scores puts a first line in the main chat composer (#65; merged) | The main-chat half is done. After #2: open a server session carrying a context reference (ADR-0077 pins). | L4, contracts | Additive |
@@ -143,16 +143,15 @@ The ledger's own count: none of the 19 "Working today" panels is accepted under 
 - Under each answer: copy, thread, thumbs up and down, speak, retry → #7, #8, #15, #9, #12.
 - The composer has a mic that becomes the send arrow while you type → #9.
 
-**The feel, for L4.** Mockups set the feel only; the real-data rule holds.
-- Waldo's words sit in a white bubble with a hairline, its tail at the bottom left. Yours sit in an ink bubble, tail at the bottom right.
-- The app chat shows no avatar, names or times. Charts and lists run full width under Waldo's words.
-- Text is system SF Pro at 16.5. The orange accent appears once per screen, on the send arrow.
-- New lines rise and un-blur. Checks shimmer while running and settle into one line. Sheets rise on a spring.
-- The website's design notes say the bubbles were taken from the app's own `ChatBubble.tsx`, so the app may already match.
+**The feel, for L4: use the design system** (next section). The website's hi-fi chat differs from it in four places:
+- Waldo writes unboxed on the page, not in a white bubble. The app already does this.
+- Waldo's turn shows the mark, "Waldo" and the time.
+- Send is ink, never orange. The one orange on a screen belongs to a decision.
+- The working state is one specific line, never animated dots or a shimmer.
 
 **Conflicts on the site to settle:**
 - **Two session models.** The how-it-works wireframe shows topic tabs ("This week", "Training", "Lisbon trip"). The hi-fi chat shows an auto-titled "New chat" behind a sidebar icon. See decision 2.
-- **At least seven approval vocabularies:** Yes/No, a typed "Do it", Go ahead/Not now, Move it/Leave it, Approve/Reject, "Send with Gmail", Review/Undo. This is a design call for Suyash: one label set for the contract's four actions, `approve`, `skip`, `edit` and `undo`.
+- **At least seven approval vocabularies:** Yes/No, a typed "Do it", Go ahead/Not now, Move it/Leave it, Approve/Reject, "Send with Gmail", Review/Undo. The design system settles this for the app: the button names the effect (next section).
 - **No token streaming anywhere.** The mockups show answers arriving in whole, staged pieces. Progress steps meet the website; token streaming is for Claude and ChatGPT parity (decision 3).
 - **Undo.** One page says both "One tap takes it back" and "Whether an action can be reversed depends on the service".
 - **Where to talk today.** how-it-works says "Talk to it on Telegram and the web today", which the later app-first ruling contradicts.
@@ -168,6 +167,64 @@ The ledger's own count: none of the 19 "Working today" panels is accepted under 
   - I have not checked whether those functions are still deployed.
   - A deployed OAuth handler with no source in any repo is a security surface.
   - The read-only check of the legacy deployments needs the owner's go.
+
+## The design system (shared by the owner, 11 Oct)
+
+The owner's Waldo design system is a claude.ai artifact, visible to the people it is shared with: https://claude.ai/artifact/7wKJuF255GspDEBR643qNS. It holds:
+- tokens for three themes;
+- 67 React components (`window.Waldo`) and eight showcase screens;
+- 19 sections, from colour to voice.
+
+I read it at version `1791721337-e9e9`.
+
+**How an agent reads it** (the Artifact tool's `read` action with a `path`):
+1. `project/README.md`: the principles, the rules agents break most, and the card index.
+2. `project/api/components/<Comp>.md` for a component's props and states, and `project/api/tokens.md` for token values. A value not read from a card is a guess.
+3. `project/components/<Comp>/README.md`: the long-form contract, with states, confirmations, copy and accessibility.
+4. The sections that bear on chat: `09-voice-and-content.md`, `10-agency-and-approval.md`, `11-states.md`, `13-notifications-and-channels.md` and `15-platforms.md`.
+
+The React components are the reference for the web and Kennel. The iPhone app reimplements each one natively against the same tokens, and each component's README is the contract both follow (`15-platforms.md`).
+
+**Components for the checklist rows:**
+
+| Row | Component |
+|---|---|
+| B3 | `NotificationPreview`, `PermissionPrePrompt` |
+| B4, B5 | `ThreadRow`: topic titles, an ink unread dot, "Waldo added a note at 07:14", delete through `ConfirmSheet` |
+| B8 | `Banner`: "You're offline. Showing what Waldo knew at 07:14." |
+| B16 | `AttachmentChip` and the `Composer`'s attachments row |
+| A2 | The `Message` working line ("Checking your last 7 nights…", shown at least 0.5 s), `ProcessingCard` for longer jobs, `SourceCard` and source chips ("No source, no claim"), `EvidenceRow` |
+| A3 | `ProcessingCard`'s two-step Stop ("Stop", then "Stop now?") |
+| A7, A8 | `NeedsYouCard` with `ChangePreview` inside the turn. Once approved, it cross-fades into a `ReceiptCard` with Undo and its window. |
+| A9 | `ChoiceChips` for quick replies; suggestion `Chip`s fill the composer and never send |
+| A10 | `MemoryClaim` |
+| A15, row 8 | `ContextCard` ("Talking about"). It needs the `source` refs that L3's review moved out of C1. |
+
+**What it settles in this plan:**
+- **Approval vocabulary.** The button names the effect ("Move to Fri 10:00"). Edit and Not now lead, "Don't do this" sits under the actions, and "Approve" never appears. Open for L3 and L4: how the contract's `skip` maps to the two ways out, Not now (defer) and Don't do this (deny).
+- **Push** (B3, row 1):
+  - at most three a day, collapsed per object;
+  - only for a Needs You near expiry, a change made under a standing permission, a failed or unconfirmed effect, or a source down for more than 6 hours that breaks a promise;
+  - the Brief never pushes; it waits in the app;
+  - no health values in a push, and no badges;
+  - permission is asked after the first value, as provisional authorisation.
+  - Its table does not say whether a reminder the owner set may push. That is a question for the owner.
+- **Badges** (B14): never. A thread shows an ink unread dot and, when Waldo re-entered it, "Waldo added a note at 07:14".
+- **Dark mode** (B19): light ships. Settings shows Dark as "Coming soon" at launch, and a `contrast` theme serves Increase Contrast.
+- **Session delete copy** (decision 2): `ThreadRow`'s confirmation says "The conversation and its messages go." and "What Waldo did in it stays in Home." Decision 2 adds what Waldo learned, so the copy needs both.
+- **Words:** never "Loading…", "Thinking…", "Oops", "Something went wrong" or an exclamation mark. Receipts are in the past tense, text is in sentence case, and spelling is en-GB.
+
+**Where the app differs today** [verified at app `7bbf3135`]:
+- It uses `nativewind/preset`, with none of the system's semantic tokens (`bg-canvas`, `bg-inset`, `text-secondary`) and no copied `exports/`.
+- The working state shows animated `TypingDots` (`ChatPane.tsx:500`). The system allows one specific line and no dots.
+- The person's bubble is ink (`userBubble`); the system draws it on `bg-inset`.
+- The theme store offers a working dark override; the system ships light, with Dark "Coming soon".
+- Already matching: Waldo's turn is unboxed, with the mark beside it (`assistantTurn`).
+
+**To settle with the owner:**
+- `13-notifications-and-channels.md` calls Telegram "the V1 fallback and demonstration channel". The owner's 10 Oct ruling made Telegram test-only.
+- The website's "Pinned by Waldo" chips (#16) have no component. `ContextCard` is the pin the person brings, not one Waldo picks.
+- `15-platforms.md` describes a `tooling/build.mjs` export pipeline that the artifact does not hold. Where it lives is unverified.
 
 ## Extensions, not replacements
 
@@ -196,12 +253,12 @@ What every chat app and every agent chat app has, against Waldo at app `7bbf3135
 | B11 | Scroll, load earlier, jump to latest | Built. No new-message marker `[inventory]`. | The marker | L4 | XS |
 | B12 | Copy, share, select | Built (#63, #66, #67) | None | | Done |
 | B13 | Markdown, links, code | Built, without tables | None | | Done |
-| B14 | Unread count and badge | Missing | With B3 | L4 | S |
+| B14 | Unread marker | Missing | An ink unread dot per thread, and "Waldo added…" (`ThreadRow`). No badge counts: the design system rules them out. | L4 | S |
 | B15 | Search | Missing | Row 11 (ADR) | | L, C3 |
 | B16 | Photos and files | Missing | Row 10 | | L, C3 |
 | B17 | Voice | Deferred | Row 9 | | Later |
 | B18 | Accessibility | Labels, live regions and reduced motion. #67 opened Waldo's bubble to VoiceOver (not device-tested). | The VoiceOver golden check | L4 | XS |
-| B19 | Dark mode | Built. The light/dark override lives in a store that is not saved, so it resets on restart (`theme.store.ts`). The channel label is a fixed `#BDBDBD` in both themes (`ChatPane.tsx:453`), reported as low contrast on the dark-mode bubble `[inventory]`. | Two fixes | L4 | XS |
+| B19 | Dark mode | Built. The light/dark override lives in a store that is not saved, so it resets on restart (`theme.store.ts`). The channel label is a fixed `#BDBDBD` in both themes (`ChatPane.tsx:453`), reported as low contrast on the dark-mode bubble `[inventory]`. | A design call: the design system ships light, with Dark "Coming soon" at launch and a `contrast` theme | L4, Suyash | XS |
 | B20 | Rate limits | A 429 shows the generic error. The server always sends `Retry-After: 60`. | Say when to try again | L4 | XS |
 
 **Every agent chat app:**
@@ -234,7 +291,7 @@ What every chat app and every agent chat app has, against Waldo at app `7bbf3135
   - one polish PR (B7, B9–B11, B19, B20, A5, the cleanup);
   - one each for activity (A11), offline (B8), push and badges (B3, B14), server sessions (B4, B5), steps (A2), stop and times (A3, B6), and Memory (A10).
 - **L3, contracts:** about 3 PRs after #1059:
-  - one C1 contract PR: the threads subset with a rename revision and last activity, cancel, steps on the receipt, `created_at`, thumbs, the fallback rule and the push register route;
+  - one C1 contract PR: the threads subset with a rename revision and last activity, cancel keyed to the turn, a steps route, `created_at`, thumbs, the fallback rule and the push device routes (L3's review trims the subset);
   - memory;
   - session refresh.
 - **L2, runtime:** about 11 PRs: P3a, S7, the threads port from #998, cancel, steps, times, A14, B2, row 17, thumbs and the `update_memory` handler.
@@ -318,13 +375,23 @@ Still open:
 - **Sessions:** create a session and send in it; Waldo replies. Kill the app and reopen it: the session and its messages come back from the server. Telegram does not show it. The console, which has no threads today, comes later.
 - **Approval card:** ask Waldo to email someone. The card in the chat shows the exact recipients and body. Not now: nothing is sent. Do it: one send, and the receipt shows in the chat.
 - **VoiceOver:** with VoiceOver on, the approval card's details and buttons in the chat can be reached, and so can "Share or copy".
-- **Proactive:** with the app closed, the morning brief arrives as a push. Tapping it opens the main chat at the brief.
+- **Proactive:** with the app closed, a Needs You with a near expiry arrives as a push: title "Waldo", the exact action, its expiry, and no health values. Tapping it opens that request. The Brief is waiting on Home and did not push.
 - **Progress:** a calendar question shows a real "checking your calendar" step. When the turn closes, one line names the sources read. Both match the trace.
 
-## Coordination (11 Oct, about 15:50Z)
+## Coordination (11 Oct, updated about 16:40Z)
 
 - **One writer for `telegram-owner-do.ts` per wave.** Threads, the cancel routes, progress steps, arming and the row 17 fix all touch it. Merge order for each C1 item: L3's contract PR, then L4 pins the contract hash, then L2's runtime PR, then L4's UI PR. The fallback rule (in the baseline checklist) lands before any new part producer.
-- **#1060** is merged and not deployed. L1 is the only staging deployer, and that deploy needs its own go.
+- **#1060 and #1059** are merged and not deployed. L1 is the only staging deployer, and that deploy needs its own go.
+- **L3's C1 review** is on #998 (16:13Z). The owner kept it posted and approved its reduced scope: no replay, media, `source` refs or rights in this wave. It corrects this plan twice:
+  - Live steps cannot go on the receipt, because the app parses receipts strictly. L3 recommends a route of their own; L4 and the owner pick.
+  - A thread's `revision` change also closes turns in other threads that cite it. So rename gets its own `title_revision`, and cancel is keyed to the turn.
+  - The C1 contract PR opens once L4 and L2 have answered the review's questions.
+- **L2's answers** (#116):
+  - `last_activity_at` lives on the thread row, written by one helper.
+  - Ratings go in a new owner-DO table, `message_ratings`, which needs a reserved DO migration.
+  - Owner-DO waves: W1 P3a, started on the owner's go; W2 S7 and the device routes; W3 the threads port, after the C1 contract; W4 steps, ratings and the "Connect Google" fix.
+  - Session refresh runs alongside the waves, outside the DO.
+- **Constellations** is built on L3's local branch `feat/app-constellation-view` (`e6761e42`), not pushed. Its PR and merge need the owner's go in L3's session.
 - **#1061** (draft, test pool only). CI shard 3/4 failed one test, `trusted-run-loop.test.ts:1438`, "settles a pending 'provider_plan' receipt before recomposition can issue the next tool": expected `context:materials_unavailable`, got `llm_observe:effect_receipt_unavailable`.
   - **Classified as flaky and pre-existing, not caused by #1061** (cf002a's session; I re-checked the first two points):
     - The test pool runs the run loop in fake mode, which builds `FakeRunLoopGateway` and no network adapter (`run-loop/adapters.ts:137-151`). #1061's egress stub is never on this path. My first guess, an unmapped host answered with a retried 502, was wrong.
@@ -349,7 +416,9 @@ Still open:
 
 **Open:**
 4. **Go for the live checks and the device run** in L4's session.
-5. **C1 before Constellations?** L3's next item in the owner's order is the Constellations view. Recommendation: the threads review and the main-chat cancel come first. Sessions (#2) block the app chat the owner named the core, and L4 waits on that contract. Constellations follows.
-6. **A second runtime writer for the files outside the owner DO.** These are the APNs sender with its register route (S7), session refresh (B2) and the `update_memory` handler. Recommendation: a short-lived "push and session" lane, so L2's queue loses about three PRs. L1 stays on health and deploys. If the owner prefers fewer sessions, L1 takes these after H5.
+5. **C1 before Constellations:** settled. The owner set the order in L3's session, the review then Constellations, and both are done.
+6. **A second runtime writer for the files outside the owner DO.** These are the APNs sender with its register route (S7), session refresh (B2) and the `update_memory` handler. Recommendation: a short-lived "push and session" lane, so L2's queue loses about three PRs. L1 stays on health and deploys. If the owner prefers fewer sessions, L1 takes these after H5. L2 expects to run session refresh alongside its waves.
+7. **The design system as the app's UI contract.** Recommendation: yes. Where the website's mockups differ, the design system wins for the app.
+8. **What goes into L2's W2.** L2 offers to pull cancel and stored times forward, ahead of push. Recommendation: keep S7 in W2, since push blocks the proactive golden check, and add storing `created_at` there, which is small. Cancel waits for the C1 contract's cancel route in W3.
 
-**A design call for Suyash, not an owner decision:** one approval vocabulary for the app (see the website conflicts).
+**Approval vocabulary:** the design system settles it for the app (buttons name the effect). Still open for L3 and L4: how the contract's `skip` maps to Not now and Don't do this.
