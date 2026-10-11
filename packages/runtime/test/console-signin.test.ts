@@ -40,6 +40,7 @@ const auth = (overrides: Partial<ConsoleAuth> = {}): ConsoleAuth => ({
   sendCode: vi.fn(async () => true),
   throttle: vi.fn(async () => true),
   verify: vi.fn(async () => null),
+  verifyOrJoin: vi.fn(async () => null),
   issueLinkCode: vi.fn(async () => null),
   saveSettings: vi.fn(async () => true),
   unlinkTelegram: vi.fn(async () => true),

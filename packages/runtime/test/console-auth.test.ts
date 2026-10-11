@@ -139,6 +139,7 @@ it('legacy signup cannot send an unverified phone to the atomic owner creation p
   expect(await consoleAuth(env, fetcher as typeof fetch, now)!.verify('new@example.com', '123456', '+14155550100', 'ABCDEFGHJKLMNPQRSTUV')).toBeNull();
   const payload = JSON.parse(String(fetcher.mock.calls[1]?.[1].body));
   expect(payload.p_phone).toBe('');
+  expect(fetcher).toHaveBeenCalledTimes(2);
 });
 
 
