@@ -6,6 +6,7 @@ import { cloudflareGeneralBrowser,GeneralBrowserError } from './cloudflare-gener
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { TaskSourceSnapshot } from './task-source-scope';
 import { PUBLIC_WEB_ORIGIN, isPublicWebUrl } from './public-web-policy';
+import { publicBrowserRequestAuthorizer } from './public-browser-request-filter';
 import type { GeneralSnapshot, GeneralActionSnapshot } from './general-browser-observation';
 import type {workspaceOwnerHost} from './workspace-host';
 import {generalDigest} from './general-browser-observation';
@@ -62,7 +63,7 @@ export function commonBrowserHost(options:Readonly<{
  const makeDriver=(grant:CommonBrowserGrant,operationId?:string,retainConnection=false)=>cloudflareGeneralBrowser({ownerId:options.ownerId,publicRead:true,retainConnection,binding:operationId&&options.config.bindingForOperation?options.config.bindingForOperation(grant,operationId):options.config.binding,cleanupBinding:options.config.cleanupBinding? id=>options.config.cleanupBinding!(grant,id):undefined,loadSdk:options.config.loadSdk,now:options.now,deadline:options.deadline,cleanupTimeoutMs:10000,maxScreenshotBytes:grant.maxScreenshotBytes,
   admit:async()=>{await checked();await options.config.assertGrantCurrent(grant);await checked();const row=options.storage.kv.get<BrowserRecord>(key(grant.taskId));if(row?.cleanup||row?.handoff&&row.handoff.state!=='resuming')throw Error('common browser stopped');},
   authorizeHumanRequest:async(url,_method)=>{await handoffCurrent(grant);return isPublicWebUrl(url,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(new URL(url).origin));},
-  authorizeRequest:async(url,method)=>{if(!['GET','HEAD'].includes(method))return false;try{return isPublicWebUrl(url,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(new URL(url).origin));}catch{return false;}}});
+  authorizeRequest:publicBrowserRequestAuthorizer(grant.allowedOrigins,options.egressAllowlist)});
  const executionDriver=(grant:CommonBrowserGrant,ctx:ToolDispatcherContext)=>{
   if(options.config.bindingForOperation&&(!ctx.turnId||!ctx.toolCallId))throw Error('common browser operation identity unavailable');
   const identity=JSON.stringify(grant);
