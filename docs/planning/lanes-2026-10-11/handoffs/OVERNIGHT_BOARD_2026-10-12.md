@@ -58,7 +58,17 @@ Queue, in order. Golden-path gaps come from my read of app `main` `c2ccd5d0`; ve
 3. **Main chat failure state:** today a 503 shows only "status 503", failed loads aren't retried, and the composer stays enabled. Add a "history couldn't load" state with backoff retry, and hold sending until history has loaded.
 4. **Chat refresh while visible:** today a reminder or proactive row appears only after opening, refreshing or foregrounding the app. Refresh on focus and while Main chat is open, and add an unread signal on Home.
 5. **18+ checkbox (D7):** an app-side gate on sign-up tonight. The server-side record is a morning item.
-6. **Design-system rows** on the golden path: the register ranking is coming.
+6. **Design-system rows,** ranked by my read of `c2ccd5d0` against the artifact `1791742177-7dce` (= waldo-brain#35 `f9068c84`). Verify each before building.
+   1. **With item 5:** the consent screen's 18+ `Switch` becomes the same `Checkbox` (`HealthConsent.tsx:25-32,93-94`; a new `ui/Checkbox.tsx`).
+   2. **G10, approval card actions:** quiet buttons first, the effect last, "Don't do this" under the row, a neutral state pill, and layouts that allow no primary (`approvalsView.ts`, `ApprovalsList.tsx:48,54-58`, `ApprovalCard.tsx:55-59`).
+   3. **G4 + G22 + G8 + G20, one bundle:** the consent Switch track, ink links in replies, the 1.59:1 `#BDBDBD` label, a "Waldo" attribution, "Latest ↓" (`HealthConsent.tsx:29`, `ChatPane.tsx:243,453,467,468`, `tokens.ts:19`).
+   4. **G5:** Home rings in ink, Form in its zone colour, one sweep per mount (`TodaySummary.tsx:79`, `ScoreRing.tsx:20-26`). Recovery and Weight colours stay Suyash's.
+   5. **G20 remainder:** spinners on the Apple Health screens; all-caps section headers (`wearable.tsx:59,89`, `connect-healthkit.tsx:68`, `NativeScaffold.tsx:44,68`, `chats.tsx:96`).
+   6. **G7:** times in the owner's zone (`approvalsView.ts:26,60`, `scoresView.ts:45`, `HealthConsent.tsx:16`).
+   7. **G21:** the pinned 32,768-byte check in place of the 8,192 cap (`appRoutesClient.ts:130`).
+   8. **G3:** the tab bar on Home and Waldo, with Home active (`home.tsx:14`, `GlassDock.tsx`, `GlassTabBar.tsx`).
+   - Not tonight: G17's offline banner needs the netinfo dependency (owner's go); G2 names, G5 gauge colours and the Mottle font are Suyash's.
+   - The primary waldo-app checkout's `node_modules` has React Native 0.76.0 against a pinned 0.81.5. If you build from that checkout, reinstall first.
 
 Not tonight: Google sign-in (not built on either side; needs the backend and a security review), push registration (no `/app/v1/devices` route yet), session renewal (sessions last 12 hours; auth work is held for the morning).
 

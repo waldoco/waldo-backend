@@ -99,3 +99,12 @@ L2 report (21:40Z) **[unverified until reviewed]**:
   - The app shows its confirm path only when the zones differ.
   - D6: a confirm row whenever unconfirmed. D7: the 18+ box as an app gate tonight.
 - **Board:** L4's queue is rewritten from these findings.
+
+## 22:05Z: design-system research in
+
+- **Design system** (report `03-design-system.md`) **[code read at app `c2ccd5d0`; artifact `1791742177-7dce` read and matching waldo-brain#35 `f9068c84`]**:
+  - G1–G22: none closed, 8 partial (G1, G3, G6, G7, G9, G10, G20, G22), 13 open, 1 needs Suyash (G2). Apple sign-in (X1) is closed by the owner's 21:25Z ruling.
+  - **Register corrections:** G2's retired names aren't rendered; G3, no tab bar on Home or Waldo; G4, the live misuse is the consent Switch and blue links, not the chat header; G6 needs no native module; G7's device-zone row exists, so only time formatting is open.
+  - The top 8 for tonight are on L4's board queue (item 6).
+  - **For Suyash:** #35 review, G2 names, G5 gauges, Apple-first text in §17 and AuthButton (Apple is out for the beta), time-zone text, the Form-zone table vs `tokens.json`, the Mottle font file, decision 53.
+  - **For the owner:** the Telegram row in Connections (decision 52); a go for the netinfo dependency (G17).
