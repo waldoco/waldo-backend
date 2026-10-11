@@ -109,3 +109,26 @@ describe('account deletion from the app', () => {
     expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'account', data: {} }).success).toBe(false);
   });
 });
+
+describe('day card latest delivery', () => {
+  const card = { id: 'brief', name: 'Morning Brief', defaultTime: '07:30', time: '07:30', reason: 'planned', sent: true, pin: null };
+  const latest = { message_id: 'entry-1', delivered_at: 1_791_700_000_000, excerpt: 'Good morning. Two meetings before noon.' };
+  const day = (cards: object[]) => ({
+    version: 1, state: 'available', revision, view: 'day',
+    data: { timezone: 'Europe/London', date: '2026-10-11', cards, proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true } },
+  });
+
+  it('accepts a card without latest, with null, and with a recorded delivery', () => {
+    for (const valid of [card, { ...card, latest: null }, { ...card, latest }, { ...card, latest: { ...latest, excerpt: 'x'.repeat(280) } }, { ...card, sent: false, latest }])
+      expect(appControlProjectionV1Schema.safeParse(day([valid])).success).toBe(true);
+  });
+
+  it('refuses a malformed delivery', () => {
+    const { excerpt: _excerpt, ...noExcerpt } = latest;
+    for (const invalid of [
+      { ...latest, excerpt: '' }, { ...latest, excerpt: 'x'.repeat(281) }, noExcerpt, { ...latest, text: 'full body' },
+      { ...latest, delivered_at: 0 }, { ...latest, delivered_at: 1.5 }, { ...latest, delivered_at: '2026-10-11T07:30:00Z' },
+      { ...latest, message_id: '' }, {},
+    ]) expect(appControlProjectionV1Schema.safeParse(day([{ ...card, latest: invalid }])).success).toBe(false);
+  });
+});
