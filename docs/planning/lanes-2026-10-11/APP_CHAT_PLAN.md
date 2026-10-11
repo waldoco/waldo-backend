@@ -326,10 +326,12 @@ Still open:
 - **One writer for `telegram-owner-do.ts` per wave.** Threads, the cancel routes, progress steps, arming and the row 17 fix all touch it. Merge order for each C1 item: L3's contract PR, then L4 pins the contract hash, then L2's runtime PR, then L4's UI PR. The fallback rule (in the baseline checklist) lands before any new part producer.
 - **#1060** is merged and not deployed. L1 is the only staging deployer, and that deploy needs its own go.
 - **#1061** (draft, test pool only). CI shard 3/4 failed one test, `trusted-run-loop.test.ts:1438`, "settles a pending 'provider_plan' receipt before recomposition can issue the next tool": expected `context:materials_unavailable`, got `llm_observe:effect_receipt_unavailable`.
-  - In both recent `beta-mvp` runs (`497bdcb6`, `e5fd7200`), this test finished under vitest's 300 ms slow threshold. On #1061 it took 2,526 ms, while its siblings took 51–84 ms.
-  - #1061 answers every host outside its two-host map with a 502. The run loop's AI Gateway client defines its REST origin as `api.cloudflare.com` (`llm/gateway.ts:19`), which is not in the map; I did not trace whether this test path calls it. A comment in the test and #879 record that the platform can fire the alarm before the test installs its fakes.
-  - So the failure is likely in-branch [inference]: if the alarm wins, the run may reach an unmapped host, and retried 5xx answers cost seconds. Not proven.
-  - cf002a's session checks before merging. Do not rerun until green.
+  - **Classified as flaky and pre-existing, not caused by #1061** (cf002a's session; I re-checked the first two points):
+    - The test pool runs the run loop in fake mode, which builds `FakeRunLoopGateway` and no network adapter (`run-loop/adapters.ts:137-151`). #1061's egress stub is never on this path. My first guess, an unmapped host answered with a retried 502, was wrong.
+    - `beta-mvp` run 38077476494 (`1757beb2`, 10 Oct) failed a sibling crash-and-recover case in the same file at 2,546 ms ("promise resolved false instead of rejecting"), without #1061.
+    - cf002a also reports 0 outbound requests across 3 full runs of the file at #1061's head, and 6/6 and 5/5 local passes.
+  - The pattern: different crash-and-recover cases fail at about 2.5 s, which matches the platform-alarm race the test's own comment and #879 describe [inference].
+  - Next, per the test-failure rule: quarantine and ticket the race with an owner and a removal date. Do not rerun until green. A one-off CI rerun of #1061, and its merge, are the owner's call in cf002a's session.
 
 ## Owner decisions
 
