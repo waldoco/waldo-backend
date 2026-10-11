@@ -25,7 +25,7 @@ L2 report (21:40Z) **[unverified until reviewed]**:
 - #1066 head `0bab0a41`, CI 6/6 from 19:01Z (before #1074); merge the follow-up first or together.
 - The day-plan record for L3's Brief `latest` needs a DO ALTER: held for the morning (DO migration lineage).
 
-## 21:50Z: first results and research launched
+## 21:45Z: first results and research launched
 
 - **L1 (#116 comment 6114086292)** **[verified: read the comment; not re-probed]**: staging release `4bb040f5`, Worker version `65a07f13`, deployed with the owner's go in L1's session, Worker only (preflight 55 applied, 0 pending). Rollback is version `2d1ae6a0`. `GET /app/v1/chat/main` from the app answered 200 at 21:39:37Z. Skip line: `check` = `input_origin`, `count` = 1, `unwitnessed` = 0. Relayed to L2 (SendMessage `f4f765d0`). L1's next step: one app send.
 - **Also merged at 21:30Z by the owner's account (Pin4sf):** waldo-brain#36 (ADR-0068 reminder push) and waldo-app#77 (approvals `defer` re-pin) **[verified: `gh pr view`]**. So L3's reminder-push contract (its handoff step 1) is unblocked.
@@ -34,3 +34,12 @@ L2 report (21:40Z) **[unverified until reviewed]**:
 - **Replied to L2** (SendMessage `bdd3e888`): go ahead red-first; the six tests the review will look for.
 - **Research:** six read-only subagents launched at about 21:45Z (website promises, competitors and open-source agents, design system, harness and context, backend capability, app capability). Reports land in the session scratchpad; the synthesis is `PROMISE_DELIVERY_MAP_2026-10-12.md`.
 - **Message budget:** 4 `send_message` + 2 `SendMessage` used so far.
+
+## 21:48Z: the app send fails, as L2 predicted
+
+- **L1 (#116 comment 6114134139)** **[verified: read the comment]**: `POST /app/v1/chat/main/messages` answered 202 at 21:41:36Z. In the owner DO, hops `respond` and `turn` logged `ok:false`, `code: unknown`, error `canonical history entry invalid` (strict `load()`), then `app execution outcome unconfirmed`. The app showed `effects_unconfirmed`. The GET afterwards was 200 with the same skip line, and the message wasn't stored.
+- L1 **[inference]**: the empty first page without `next_cursor` means the owner's canonical store holds only the one `input_origin` row. So it's the leaf, with no parent.
+- **My grep at `4bb040f5`** **[verified]**: the canonical store has one `read(skip)` (`conversation/canonical-owner-store.ts:89-91`): `load()` is `read(false)`, `readForDisplay()` is `read(true)`. Strict `load()` callers: `owner-turn.ts:557` (`restored()`, app turns, via the `history` factory at `telegram-owner-do.ts:2140`) and `telegram-owner-do.ts:590` (scheduled app delivery). `readForDisplay` is at `:670`. The episodes index wraps only the legacy store (`:2042`). `conversationForgetSources` reads raw rows without validating. L2's caller list is complete.
+- **Sent to L2** (SendMessage `2f6108ca`): the send result, test "skipped leaf with no ancestor → append as root", order D3, and the board. Target: follow-up in review by 00:30Z.
+- **Board** `OVERNIGHT_BOARD_2026-10-12.md` pushed (D4). Review prompt template saved in the session scratchpad.
+- **Message budget:** 4 `send_message` + 3 `SendMessage`.
