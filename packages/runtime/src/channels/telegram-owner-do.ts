@@ -207,6 +207,16 @@ export const resolveOwnerTelegramId = (
 };
 
 type ChannelKind = 'telegram' | 'whatsapp' | 'app';
+// A failed app read answers a generic 503. The log names only which step failed, from this fixed set, never the error text:
+// a canonical-history fault message can name nothing, but other errors may carry content.
+const CANONICAL_HISTORY_FAULTS: Readonly<Record<string, string>> = {
+  'canonical history owner mismatch': 'history_owner', 'canonical history entry invalid': 'history_invalid',
+  'canonical history witness mismatch': 'history_witness', 'canonical history leaf mismatch': 'history_leaf',
+};
+const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read', step: string, error: unknown): void => {
+  const code = error instanceof ClosedRunError ? `${step}_closed` : (error instanceof Error && CANONICAL_HISTORY_FAULTS[error.message]) || step;
+  console.error(JSON.stringify({ hop, ok: false, code }));
+};
 const offsetKeyOf = (channel: ChannelKind) => channel === 'whatsapp' ? 'wa_offset' : channel === 'app' ? 'app_offset' : 'offset';
 const WHATSAPP_PENDING_PREFIX = 'wa_pending:';
 // How often an unfinished WhatsApp payload is looked at again. A cadence, not a limit on how long a turn may run.
@@ -624,9 +634,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       return this.serial(async()=>{
         const auth=consoleAuth(this.env)!;
         const current=async()=>{await this.appAuthority(name,hash);};
+        let step='sessions';
         try{
           const rows=await auth.listSessions(name),row=rows.find(row=>row.session===hash);
           if(!row)return fail();
+          step=path.startsWith('/app/v1/approvals')?'approvals':'controls';
           const expires=Date.parse(row.created_at)+12*60*60_000,session={token:hash,csrf:hash,expires};
           const runtime=this.setup('app');
           const host={...session,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
@@ -638,17 +650,20 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
               :runtime.act(action,current),
           };
           return await (path.startsWith('/app/v1/approvals')?appApprovalsRequest(request,host):appControlsRequest(request,host));
-        }catch{return fail(503);}
+        }catch(error){logAppReadFailure('app_controls_read',step,error);return fail(503);}
       });
     }
     if(path===APP_CHAT_PATH&&request.method==='GET'){
       const now=Date.now(),abort=new AbortController();
       const scope:RunEffectScope={runId:'app-read',attempt:crypto.randomUUID(),deadline:now+60_000,signal:abort.signal,admit:()=>{if(abort.signal.aborted||Date.now()>=now+60_000)throw new ClosedRunError();},commit:work=>this.ctx.storage.transactionSync(work)};
+      let step='context';
       try{
         const context=await this.appContext(name,hash,'Read my main conversation.','history:'+scope.attempt,now,scope);
+        step='history';
         const {entries}=await canonicalOwnerConversationStore(this.ctx.storage,context).load();
+        step='transcript';
         const url=new URL(request.url);return Response.json(appTranscriptPage(entries,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),appApprovalParts(this.ctx.storage.sql)),{headers:{'cache-control':'no-store'}});
-      }catch{return fail(503);}finally{abort.abort();}
+      }catch(error){logAppReadFailure('app_history_read',step,error);return fail(503);}finally{abort.abort();}
     }
     return fail(404);
   }
