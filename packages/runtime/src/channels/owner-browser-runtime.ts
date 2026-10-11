@@ -35,7 +35,9 @@ export function ownerBrowserRuntime(options: Readonly<{
     const row=pointer?options.storage.kv.get<{session:{id:string;state:string;expiresAt:number};cleanup?:string}>(`common-browser:${pointer.taskId}`):undefined;
     return pointer&&row&&!row.cleanup&&row.session.state==='active'&&row.session.id===pointer.sessionHandle&&row.session.expiresAt>Date.now()?pointer:undefined;
   };
-  let uploadProposer:((proposal:BrowserSubmitProposal)=>Promise<string>)|undefined;
+  // Each surface's runtime has its own approval desk, so an upload card goes to
+  // the desk of the call that asked for it, never to whichever surface set up last.
+  const uploadProposers=new WeakMap<object,(proposal:BrowserSubmitProposal)=>Promise<string>>();
   let maintenance:Promise<void>|undefined;
   const automatic = commonOwnerBrowserRegistration({ ...options, loadSdk: commonBrowserSdk() });
   const configuration = (cleanupOnly = false, normalRead = false) => {
@@ -103,7 +105,7 @@ export function ownerBrowserRuntime(options: Readonly<{
       const taskId=sessionHandle?pointer!.taskId:scope.runId,initialAttempt=scope.attempt;
       active={scope,taskId,ownerId:config.ownerId,host:commonBrowserHost({storage:options.storage,config:{...config,retainInteractions:true},ownerId:config.ownerId,egressAllowlist:ctx.egressAllowlist,
         source:()=>({taskId,revision:1,sources:['browser'],ready:true,startRef:initialAttempt}),
-        files:commonFiles,proposeUpload:proposal=>{if(!uploadProposer)throw new ClosedRunError();return uploadProposer(proposal);},
+        files:commonFiles,proposeUpload:(proposal,context)=>{const propose=uploadProposers.get(context);if(!propose)throw new ClosedRunError();return propose(proposal);},
         assertCurrent:async()=>{const admitted=lease;if(!admitted)throw new ClosedRunError();await admitted.assertCurrent();if(lease!==admitted)throw new ClosedRunError();},
         deadline:()=>lease?.deadline??0,now:Date.now})};
     }
@@ -185,7 +187,6 @@ export function ownerBrowserRuntime(options: Readonly<{
       } };
     },
     act(fallback:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>,proposeUpload?:((proposal:BrowserSubmitProposal)=>Promise<string>)):ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>{
-      uploadProposer=proposeUpload;
       return {...fallback,eligible:eligibleWith(fallback),schema:browseActArgsSchema,description:'Use observed refs in the selected Cloudflare owner session. First call browse_page with retain_session:true; continue with its session_handle. Actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download saves an authenticated GET attachment to the private workspace and returns a verified exact-revision owner link; blob/data and POST exports are unsupported. owner_login pauses for human sign-in in the console: end this turn, resume on the owner reply after Done, and verify the intended account from fresh evidence. Uncertain effects cannot repeat. Browserbase requires explicit selection.'+(proposeUpload?' upload proposes an exact workspace file_id/revision for an observed POST-form file input. Owner approval precedes selection. Verification requires a server JSON filename/byte_size/sha256 acknowledgment.':''),async handle(args,ctx){
         try{
           const assertCurrent=current(ctx);await assertCurrent();
@@ -195,6 +196,7 @@ export function ownerBrowserRuntime(options: Readonly<{
           // reinterpret native commands or explicit Cloudflare as a paid fallback.
           if(!args.provider&&!args.session_handle&&args.command&&!options.env.COMMON_BROWSER_REGISTRATION&&!automatic.hasRetained()&&!active)return fallback.handle(args,{...ctx,assertTaskSourceCurrent:assertCurrent});
           const bound=await bindHost(ctx,args.session_handle);
+          if(proposeUpload)uploadProposers.set(bound.context,proposeUpload);
           const result=await bound.active.host.actionHandler.handle(args,bound.context);
           if(args.command?.operation==='owner_login'&&result.ok){const origin=options.storage.kv.get<string>('origin');if(origin&&new URL(origin).protocol==='https:'&&'data' in result&&result.data&&typeof result.data==='object')Object.assign(result.data,{console_url:new URL('/console/browser-handoff',origin).href});}
           if(args.command?.operation==='cancel'&&result.ok){active=undefined;lease=undefined;options.storage.kv.put(continuationKey,null);}else publishPointer();return result;

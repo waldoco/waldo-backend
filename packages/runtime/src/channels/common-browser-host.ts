@@ -46,7 +46,7 @@ const publishCleanup=(storage:DurableObjectStorage,key:string,expected:BrowserRe
 });
 export function commonBrowserHost(options:Readonly<{
  storage:DurableObjectStorage;config:CommonBrowserConfiguration;ownerId:string;egressAllowlist?:readonly string[];
- proposeUpload?(proposal:BrowserSubmitProposal):Promise<string>;
+ proposeUpload?(proposal:BrowserSubmitProposal,ctx:ToolDispatcherContext):Promise<string>;
  files?(assertCurrent:()=>Promise<void>,ownerId:string,approved?:true):Promise<{workspace:Awaited<ReturnType<typeof workspaceOwnerHost>>;origin:string}>;
  source():TaskSourceSnapshot;assertCurrent():Promise<void>;deadline():number;now():number;
 }>) {
@@ -164,7 +164,7 @@ export function commonBrowserHost(options:Readonly<{
      const element=before.state.elements[before.observation.elements.findIndex(element=>element.ref===command.element_ref)]!;
      const proposal:BrowserSubmitProposal={url:before.observation.url,action:{selector:element.selector,description:`Select and upload ${binding.filename} (${binding.byteSize} bytes)`,method:'POST'},binding:{file_id:binding.fileId,revision:String(binding.revision),sha256:binding.sha256,filename:binding.filename,byte_size:String(binding.byteSize),destination:binding.destination,session_handle:binding.sessionHandle,generation:String(binding.generation),document_revision:binding.documentRevision},steps:['Owner approval exposes this exact file to page JavaScript at the named destination.','Verify independent server filename, size and SHA acknowledgment; never repeat an uncertain upload.'],request:{url:binding.destination,method:'POST',fields:[binding.filename]},approvalExpiresAt:binding.expiresAt,nativeUpload:{taskId:grant.taskId,binding}};
      options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(!latest||latest.cleanup||latest.handoff||!sameSession(latest,record!)||latest.observation?.digest!==before.digest||latest.upload?.proposal.nativeUpload?.binding.operationId!==record!.upload?.proposal.nativeUpload?.binding.operationId)throw Error('upload preparation changed');save({...latest,upload:{proposal,state:'proposing'}},storageKey!);});
-     const approvalRef=await options.proposeUpload(proposal);await checked();
+     const approvalRef=await options.proposeUpload(proposal,ctx);await checked();
      options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(!latest||latest.cleanup||!sameSession(latest,record!)||latest.upload?.proposal.nativeUpload?.binding.operationId!==binding.operationId||latest.upload.state!=='proposing')throw Error('upload approval custody changed');save({...latest,upload:{...latest.upload,approvalRef,state:'pending'}},storageKey!);});
      return {ok:true,data:{stopped:'approval_pending',proposal_id:approvalRef,notice:'Approve the exact file and destination before any bytes enter the page.'},source_taint:'external'};
     }
