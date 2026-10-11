@@ -130,14 +130,8 @@ The owner took my recommendations, apart from updating the design system for Pat
   - The website's 6:30 notification is "the one thing that needs your yes" (waldo-landing `830bfc2`, `see-fixture.ts:27`), not a Brief push.
   - The system pushes a Needs You only "with a near expiry". An overnight decision may need a rule that releases it as one push at wake time.
   - The opt-in Brief push I recommended is on hold until the owner confirms it.
-- **Apple sign-in.** My recommendation of Apple, Google and email (the system's `AuthButton`) conflicts with the owner's earlier ruling in L2's session, which dropped Sign in with Apple. I recorded it as decided by mistake.
-  - With no TestFlight, keeping that ruling for the beta is coherent.
-  - App Store guideline 4.8 probably requires an equivalent privacy-preserving login, such as Sign in with Apple, when Google sign-in is offered. That is my recollection, not checked against the current text. If so, Apple sign-in becomes a gate before App Store submission.
-- **The sign-in time-zone write.** L2 withdrew its yes. Once `timezone_confirmed` ships, owners who chose a zone before P3a would be overwritten.
-  - L2's options:
-    - (a) write only while the stored zone is the UTC default;
-    - (b) a backfill that marks existing zones confirmed;
-    - (c) accept the overwrite on staging.
+- **Apple sign-in: closed.** The owner ruled at about 21:25Z on 11 Oct, in L2's session (relayed by L2): no Sign in with Apple for the beta. Revisit before any App Store submission, when guideline 4.8's current text decides whether Google sign-in needs an Apple equivalent. The design system's Apple-first `AuthButton` order and section 17 text go to Suyash.
+- **The sign-in time-zone write: closed.** The owner chose option (a) at about 21:25Z on 11 Oct, in L2's session (relayed by L2). The app writes the phone's zone through `timezone.set` only while `timezone_confirmed` is false and the stored zone is still the `'UTC'` default; a zone chosen earlier is never replaced. App #78 implements it. The orchestrator's delegated decision D6 adds a one-tap confirm row whenever the zone is unconfirmed, because an owner whose unconfirmed stored zone already matches the phone otherwise has no way to confirm (`OVERNIGHT_DECISIONS_2026-10-12.md`).
   - L4 holds its write until the owner picks, in L2's session.
 
 ## For the design owner (Suyash)
