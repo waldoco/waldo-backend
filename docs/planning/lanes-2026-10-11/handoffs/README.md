@@ -6,6 +6,11 @@ The owner is starting successor sessions because the lane sessions have grown to
 1. reads this page first, then its own handoff;
 2. re-verifies every SHA before acting.
 
+**State when collected** (about 20:20Z on 11 Oct):
+- `beta-mvp` is `21a70277`;
+- staging serves `726ad0e7`, from `/healthz`;
+- app `main` is `46e9e669`.
+
 ## The goal, in the owner's words
 
 > full usable app ready + tested and backend agent working ready + tested (both app + telegram with continuity ready for whatsapp and imessages when they arrives)
@@ -14,13 +19,13 @@ The owner is starting successor sessions because the lane sessions have grown to
 
 | Order | Lane | Handoff | Restart after |
 |---|---|---|---|
-| 1 | L3: approvals, app contracts, Google connect | [`L3_HANDOFF_2026-10-12.md`](L3_HANDOFF_2026-10-12.md) | its handoff. It is waiting on #1070's checks and waldo-brain #36. |
+| 1 | L3: approvals, app contracts, Google connect | [`L3_HANDOFF_2026-10-12.md`](L3_HANDOFF_2026-10-12.md) | its handoff. #1070 merged as `21a70277`; waldo-brain #36 waits for the owner. |
 | 2 | L4: Waldo app | [`L4_HANDOFF_2026-10-12.md`](L4_HANDOFF_2026-10-12.md) | its handoff. #74–#76 are merged and the Simulator pass is done. |
-| 3 | L1: health plane and staging deploys | [`L1_HANDOFF_2026-10-12.md`](L1_HANDOFF_2026-10-12.md) | it has reported the 503 capture. Its log tail stops when the session ends. |
-| 4 | L2: owner identity and delivery router | [`L2_HANDOFF_2026-10-12.md`](L2_HANDOFF_2026-10-12.md) | the 503 is fixed or its capture is written down. L2 holds the critical path. |
+| 3 | L1: health plane and staging deploys | [`L1_HANDOFF_2026-10-12.md`](L1_HANDOFF_2026-10-12.md) | its handoff. It has captured the 503's code, so its log tail is no longer needed. Its successor re-arms the tail to confirm L2's fix after deploying it. |
+| 4 | L2: owner identity and delivery router | [`L2_HANDOFF_2026-10-12.md`](L2_HANDOFF_2026-10-12.md) | its fix for the 503 is in a PR with red-first tests, or written down in its handoff. L2 holds the critical path. |
 | 5 | Alignment | [`ALIGNMENT_HANDOFF_2026-10-12.md`](ALIGNMENT_HANDOFF_2026-10-12.md) | the handoffs are collected and merged. |
 
-Each handoff ends with a starter prompt for its successor. Missing file links mean that lane's handoff hadn't arrived when this page was written; the alignment successor adds it.
+All four lane handoffs are here. Each starts with collection notes: what changed between the lane writing it and the alignment session collecting it. Each ends with a starter prompt for its successor.
 
 **Other sessions:**
 - **Audit.** It is the only writer of the ledger (#1057) and keeps its own lane file. It restarts on the same template when the owner chooses.
@@ -35,7 +40,10 @@ Each handoff ends with a starter prompt for its successor. Missing file links me
 ## What "done" means: checks, not claims
 
 **Staging state:**
-- Main chat loads history and answers, for the owner's account and for a fresh account. Today GET `/app/v1/chat/main` answers 503.
+- Main chat loads history and answers, for the owner's account and for a fresh account.
+  - Today GET `/app/v1/chat/main` answers 503 with `history_invalid` (L1's capture at 20:10Z): a stored row in the owner's canonical history fails its shape check.
+  - L2 is fixing it.
+  - App sends probably fail the same way [inferred]; L2 is checking.
 - Proactive messages are armed at first app use (#1066) and arrive in the app at the times the owner set.
 
 **On a real iPhone,** built from source because there is no TestFlight:
@@ -94,7 +102,7 @@ What's missing today:
    - Pin4sf/waldo-brain#35 (after Suyash's review and the font-licence call);
    - waldoco/waldo-backend#1072 (the race fix);
    - #1057 and #1058 (Audit);
-   - #1070 (L3 already holds the go).
+   - L2's fix for the 503, once its PR is up.
 8. **Lane proposals for rows no lane holds:** ledger §12 on #1057.
 9. **The website's Connectors page** still shows Waldo sending through Telegram in its example scenes, and lists Telegram as "Working today". Reworking the illustrations needs Suyash.
 10. **The website's Calendar and Tasks labels** say "read only", but Waldo asks for `calendar.events` and `tasks`. Change the copy or the scopes.

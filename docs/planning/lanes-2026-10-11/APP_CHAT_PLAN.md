@@ -392,6 +392,11 @@ Still open:
   - **Open:** #1068 (L2's 503 diagnostic) and #1066 (P3a). L2 proposes the diagnostic first.
   - **App:** #72 (the generated theme) and #73 (the `controls.ts` re-pin) are merged.
   - **The design system's source** is on waldo-brain #35.
+- **Later that evening (about 20:20Z):**
+  - #1068 merged and is live: staging serves `726ad0e7`.
+  - Its log line showed the 503's cause class, `history_invalid`. L2 is fixing it.
+  - #1070 merged as `21a70277`.
+  - For the current state, read [`handoffs/README.md`](handoffs/README.md).
 
 - **One writer for `telegram-owner-do.ts` per wave.** Threads, the cancel routes, progress steps, arming and the row 17 fix all touch it. Merge order for each C1 item: L3's contract PR, then L4 pins the contract hash, then L2's runtime PR, then L4's UI PR. The fallback rule (in the baseline checklist) lands before any new part producer.
 - **#1060 and #1059** are merged and not deployed. L1 is the only staging deployer, and that deploy needs its own go.

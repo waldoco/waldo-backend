@@ -1,6 +1,6 @@
 # Alignment session: handoff, 12 October 2026
 
-The sessions-alignment session hands off to its successor. Times are UTC unless marked. SHAs come from `git rev-parse`, `git ls-remote` or `gh` at about 20:15Z on 11 Oct.
+The sessions-alignment session hands off to its successor. Times are UTC unless marked. SHAs come from `git rev-parse`, `git ls-remote`, `gh` or staging's `/healthz`, at about 20:20Z on 11 Oct.
 
 ## 1. Role
 
@@ -29,8 +29,8 @@ The sessions-alignment session hands off to its successor. Times are UTC unless 
 
 | What | SHA | Notes |
 |---|---|---|
-| `beta-mvp` | `c3b17f6a` | Over `726ad0e7` it adds only #1061, a test-harness change, so no deploy is owed. |
-| Staging Worker | version `2d1ae6a0`, serving `726ad0e7` | Deployed about 19:00Z with the owner's go in L1's session. 55 migrations applied, none pending. |
+| `beta-mvp` | `21a70277` | Over `726ad0e7` it adds #1062 (docs), #1061 (a test-harness change) and #1070 (the `defer` approval action, which a runtime guard refuses until L2's desk branch exists). None of it is deployed. |
+| Staging Worker | version `2d1ae6a0`, serving `726ad0e7` | Deployed about 19:00Z with the owner's go in L1's session; `/healthz` still showed `726ad0e7` at 20:19Z. 55 migrations applied, none pending. |
 | App `main` | `46e9e669` | #74, #75 and #76, merged by L4 with the owner's go, with checks after each merge. |
 | waldo-brain `main` | `10f20c6a` | |
 
@@ -58,20 +58,21 @@ The sessions-alignment session hands off to its successor. Times are UTC unless 
 - The website work was done in a scratch clone. Its branch `copy/gmail-reads-what-it-reads` is pushed.
 - No background processes are running.
 
-**The Main-chat 503: still undiagnosed, and the critical path.**
+**The Main-chat 503: cause class found, L2 fixing it. This is the critical path.**
 - **Reproductions,** all from the owner's signed-in Simulator against staging:
   - 19:47:20Z and 19:49:10Z;
   - about 19:50Z, by L4;
   - 20:10:19Z (open) and 20:10:28Z (Refresh), on L4's Release build of app `46e9e669`.
-- **What we know:**
-  - #1068's catches logged nothing.
-  - L1's full capture started at 19:55:18Z, so only the 20:10 reproductions can show the Worker event and whether the DO ran.
-  - Only GET `/app/v1/chat/main` fails. Controls, approvals and scores load for the same account (L4).
-- **What has been ruled out:** the resource-limit lead. L2 measured `canonical-owner-store.ts` `load()` at 262 ms for 8,000 rows of 8 KB.
-- **Where 503s come from outside #1068's catches,** in `channels/app-api.ts`:
-  - `:140`, when the session lookup is unavailable;
-  - `:145` and `:149`, when the rate limiter throws;
-  - `:178`, when the DO fetch rejects.
+- **What L1 captured for the 20:10 pair:**
+  - each request logged `{"hop":"app_history_read","ok":false,"code":"history_invalid"}`;
+  - the Durable Object's outcome was `ok`, with no exception and 7 ms and 5 ms of CPU. So the DO answered 503 itself.
+- **What it means:** a row in the owner's canonical history fails `validate()` in `canonical-owner-store.ts`.
+  - L2's lead [inferred]: a staging build that never merged wrote the row, for example #998's thread code at `fc4c2b9d`.
+  - L2's fix direction: `load()` skips only rows that match their witness but fail the shape check, and logs a count and the failed clause. Owner mismatch, witness mismatch and duplicate ids stay fatal. Red tests first.
+  - Edge cases to check: the skipped row is a parent or the leaf.
+  - App sends probably fail the same way [inferred]; L2 is checking.
+- **Ruled out:** the resource-limit lead. L2 measured `load()` at 262 ms for 8,000 rows of 8 KB.
+- Only GET `/app/v1/chat/main` was seen failing. Controls, approvals and scores load for the same account (L4).
 
 ## 4. Owner rulings relayed by this session
 
@@ -113,12 +114,10 @@ All on 11 Oct, quoted exactly.
 
 ## 5. Next steps for the successor
 
-1. **Finish the handoff PR.**
-   - Add any lane handoff not yet in this folder, after reading it for secrets.
-   - Ask the owner to type "merge #N".
-2. **Track the 503 to a fix,** from L1's capture to L2.
+1. **Finish the handoff PR.** All four lane handoffs are in it, each with collection notes. If it isn't merged, ask the owner to type "merge #N".
+2. **Track L2's `history_invalid` fix** to a merge (the owner's go in L2's session), then L1's deploy (the owner's go in L1's session).
    - Then ask the owner for the #1066 merge.
-   - Acceptance: Main chat loads on staging for the owner's account and for a fresh account.
+   - Acceptance: Main chat loads on staging for the owner's account and for a fresh account. L1's tail shows 200 and no `app_history_read` line.
 3. **Batch the owner decisions.** Ask them all at once, from the "Open owner decisions" section of `README.md`.
 4. **After brain #35 merges,** carry out governance step 5:
    - republish the artifact from the merged files, then read it back and byte-compare;
@@ -145,8 +144,7 @@ All on 11 Oct, quoted exactly.
 ## 7. Dependencies
 
 **Waiting on:**
-- L1's capture of the 503;
-- L2's fix;
+- L2's fix for the 503, then L1's deploy;
 - Suyash's review of #35 and his answers on the list;
 - the owner's decisions.
 
@@ -167,5 +165,5 @@ All on 11 Oct, quoted exactly.
 > You are the successor of the Waldo sessions-alignment session.
 > 1. Read `docs/planning/lanes-2026-10-11/handoffs/README.md`, then `ALIGNMENT_HANDOFF_2026-10-12.md` in the same folder.
 > 2. Before acting, re-verify `beta-mvp`, app `main`, staging `/healthz` and the open PRs named there, with `git` and `gh`.
-> 3. First, find out from L1 and L2 where the Main-chat 503 stands.
+> 3. First, find out from L2 where its fix for the Main-chat 503 (`history_invalid`) stands, and from L1 whether it is deployed.
 > 4. Then give the owner one batch of the open decisions.
