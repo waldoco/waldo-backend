@@ -36,6 +36,9 @@ begin
     delete from auth.sessions where user_id = v_auth;
   end if;
   delete from waldo.owners where id = v_owner;
-  if v_auth is not null then delete from auth.users where id = v_auth; end if;
+  if v_auth is not null then
+    delete from auth.users where id = v_auth;
+    if exists (select 1 from auth.users where id = v_auth) then raise exception 'identity erasure unconfirmed'; end if;
+  end if;
   return true;
 end $$;
