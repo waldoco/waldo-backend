@@ -4,6 +4,7 @@ import { expect, it, vi } from 'vitest';
 import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { handleApp } from '../src/channels/app-api';
 import { routerSignature } from '../src/identity/owner-directory';
+import { armAlarm } from '../src/scheduler/alarm-slot';
 
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async () => { throw Error('No Telegram binding exists'); } }));
 
@@ -77,7 +78,7 @@ it('an app-only owner deletes their account from the app: the directory removes 
     expect(view).toMatchObject({ view: 'account', data: { deletion_available: true } });
     expect(JSON.stringify(view)).not.toContain('csrf');
     expect((await app('/controls?view=day', undefined, credential)).status).toBe(200);
-    await seen.state.storage.setAlarm(Date.now() + 3_600_000);
+    await armAlarm(seen.state.storage, Date.now() + 3_600_000);
     expect(stored(seen.state)).toBeGreaterThan(0);
     const response = await app('/actions', remove(view.revision), credential);
     expect(response.status).toBe(200);
