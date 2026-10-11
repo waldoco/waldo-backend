@@ -5,10 +5,22 @@ const text = z.string();
 const count = z.int().nonnegative();
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 export const appControlRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
-export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account']);
+export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation']);
 const activityCursor = z.string().regex(/^[0-9]+$/).refine(value => Number.isSafeInteger(Number(value)) && Number(value) > 0);
-export const appControlQueryV1Schema = z.strictObject({ view: appControlViewV1Schema, trace_before: activityCursor.optional(), runs_before: activityCursor.optional() }).superRefine((query, ctx) => {
+export const APP_MEMORY_PAGE_MAX_V1 = 50;
+const memoryPageSize = z.string().regex(/^[0-9]{1,9}$/).refine(value => Number(value) >= 1 && Number(value) <= APP_MEMORY_PAGE_MAX_V1);
+const memoryCursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/);
+const memoryId = text.min(1).max(256);
+const memoryViews = z.enum(['summary', 'claims', 'interpretations', 'detail', 'pattern']);
+// The constellation keys page the owner's memory graph: limit is required for claims and interpretations,
+// id for detail and pattern, max_nodes and max_links for pattern. Ids and cursors are opaque.
+export const appControlQueryV1Schema = z.strictObject({
+  view: appControlViewV1Schema, trace_before: activityCursor.optional(), runs_before: activityCursor.optional(),
+  memory_view: memoryViews.optional(), cursor: memoryCursor.optional(), limit: memoryPageSize.optional(), id: memoryId.optional(),
+  max_nodes: memoryPageSize.optional(), max_links: memoryPageSize.optional(),
+}).superRefine((query, ctx) => {
   if (query.view !== 'activity' && (query.trace_before !== undefined || query.runs_before !== undefined)) ctx.addIssue({ code: 'custom', message: 'Activity cursors require the activity view' });
+  if (query.view !== 'constellation' && (query.memory_view ?? query.cursor ?? query.limit ?? query.id ?? query.max_nodes ?? query.max_links) !== undefined) ctx.addIssue({ code: 'custom', message: 'Memory paging requires the constellation view' });
 });
 export const appControlActionV1Schema = z.strictObject({
   view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'account.delete']),
@@ -26,11 +38,19 @@ export const appControlActionV1Schema = z.strictObject({
   const deletion = action.action === 'account.delete';
   if (deletion !== (action.view === 'account') || deletion !== (action.confirmation === 'DELETE')) ctx.addIssue({ code: 'custom', path: ['confirmation'], message: 'account.delete alone uses the account view, with confirmation DELETE' });
   if (deletion && (action.id ?? action.value ?? action.quiet_start ?? action.quiet_end ?? action.volume) !== undefined) ctx.addIssue({ code: 'custom', message: 'account.delete carries only its confirmation' });
+  if (action.view === 'constellation') ctx.addIssue({ code: 'custom', path: ['view'], message: 'The constellation view is read-only' });
 });
 
+// The app-visible message recorded for this card today, or null when none is recorded. Independent of `sent`:
+// a card delivered on another surface, or held for quiet hours, can be sent or unsent with latest null.
+// message_id is the main-chat history row; delivered_at is epoch ms. The excerpt is a prefix, up to 280
+// UTF-16 code units, of the text the chat shows for that row, cut at read time and never stored. A row
+// that is gone or has no text gives latest null.
+const latestDelivery = z.strictObject({ message_id: text.min(1), delivered_at: z.int().positive(), excerpt: text.min(1).max(280) });
+// timezone_confirmed is true once the owner set the zone themselves (timezone.set); absent from a Worker that does not say.
 export const appControlDayDataV1Schema = z.strictObject({
-  timezone: text, date: text,
-  cards: z.array(z.strictObject({ id: text, name: text, defaultTime: text, time: text.nullable(), reason: text, sent: z.boolean(), pin: text.nullable() })),
+  timezone: text, timezone_confirmed: z.boolean().optional(), date: text,
+  cards: z.array(z.strictObject({ id: text, name: text, defaultTime: text, time: text.nullable(), reason: text, sent: z.boolean(), pin: text.nullable(), latest: latestDelivery.nullable().optional() })),
   proactivity: z.strictObject({ quiet_start: text.nullable(), quiet_end: text.nullable(), volume: z.enum(['low', 'normal', 'high']) }),
   schedules: z.strictObject({ daily_brief: z.boolean(), followups: z.boolean(), event_briefs: z.boolean(), nightly: z.boolean(), heartbeat: z.boolean() }),
 });
@@ -56,12 +76,45 @@ export const appControlActivityDataV1Schema = z.strictObject({
   page: z.strictObject({ trace_before: count.nullable(), runs_before: count.nullable(), trace_applied: count.nullable(), runs_applied: count.nullable() }),
   ledger: text,
 });
+// The console's memory graph, without its table-local ids. Claim text and writer notes are the owner's own memory:
+// the app shows them and never logs or persists them. Every string here (text, evidence.text, label, summary,
+// domain, relation) renders as plain text, never markdown or links: a claim can come from an untrusted source.
+// A pending forget empties claims and interpretations and marks the graph partial; estimates are uncalibrated
+// model output, not measurements.
+const memoryGraph = { version: z.literal(1), state: z.enum(['available', 'partial', 'unavailable']), complete: z.boolean(), unavailable_claim_count: count };
+const estimate = z.number().min(0).max(1).nullable();
+const memoryClaim = z.strictObject({
+  id: memoryId, kind: text, text, source: text, origin: z.enum(['owner', 'agent', 'shared', 'untrusted', 'legacy']), status: z.enum(['active', 'promoted']),
+  evidence: z.strictObject({ kind: z.literal('writer_note'), text }),
+  source_reference: z.strictObject({ state: z.enum(['unverified', 'unavailable']), link: z.null(), visibility: z.literal('withheld_unverified_pointer'), retrievable: z.literal(false) }),
+  recorded_at: text, writer_seen_count: z.int().positive().nullable(),
+});
+const memoryNode = z.strictObject({
+  id: memoryId, type: z.literal('interpretation'), label: text, summary: text, domain: text, stored_status: text, recorded_active_at: text,
+  estimate, estimate_kind: z.literal('uncalibrated_model_estimate'),
+  support: z.strictObject({ state: z.enum(['stored_links', 'incomplete', 'invalid']), claim_ids: z.array(memoryId), unavailable_count: count, distinct_source_refs: count, independent_observations: z.literal('unverified') }),
+});
+const memoryLink = z.strictObject({ from: memoryId, to: memoryId, relation: text, state: z.literal('unverified_association'), estimate, writer_evidence_count: z.int().positive().nullable(), evidence_links: z.array(text) });
+const memoryPage = z.strictObject({ limit: z.int().positive(), returned: count, total: count, next_cursor: memoryCursor.nullable() });
+export const appControlConstellationDataV1Schema = z.union([
+  z.strictObject({ ...memoryGraph, memory_view: z.literal('summary'), counts: z.strictObject({ claims: count, interpretations: count, associations: count }) }),
+  z.strictObject({ ...memoryGraph, memory_view: z.literal('claims'), items: z.array(memoryClaim), page: memoryPage }),
+  z.strictObject({ ...memoryGraph, memory_view: z.literal('interpretations'), items: z.array(memoryNode), page: memoryPage }),
+  z.strictObject({ ...memoryGraph, memory_view: z.literal('detail'), kind: z.literal('claim'), item: memoryClaim, linked_interpretation_ids: z.array(memoryId) }),
+  z.strictObject({ ...memoryGraph, memory_view: z.literal('detail'), kind: z.literal('interpretation'), item: memoryNode, support_claim_ids: z.array(memoryId), support_unavailable_count: count }),
+  z.strictObject({
+    ...memoryGraph, memory_view: z.literal('pattern'), center: memoryNode, nodes: z.array(memoryNode), associations: z.array(memoryLink),
+    showing: z.strictObject({ nodes: count, of_nodes: count, links: count, of_links: count }), truncated: z.boolean(), omitted_links: count,
+    expand: z.strictObject({ next_cursor: memoryCursor.nullable(), links_capped: z.boolean(), capped_links_recoverable: z.literal(false), capped_links: count }),
+  }),
+]);
 const envelope = { version: z.literal(1), state: z.literal('available'), revision };
 export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('day'), data: appControlDayDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('connections'), data: appControlConnectionsDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('activity'), data: appControlActivityDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('account'), data: appControlAccountDataV1Schema }),
+  z.strictObject({ ...envelope, view: z.literal('constellation'), data: appControlConstellationDataV1Schema }),
 ]);
 export const appControlReceiptV1Schema = z.strictObject({ state: z.enum(['recorded', 'incomplete', 'rejected', 'unconfirmed']), message: text, navigation: text.optional(), signed_out: z.boolean().optional() });
 export const appControlResultV1Schema = z.strictObject({ request_id: appControlRequestIdV1Schema, receipt: appControlReceiptV1Schema, duplicate: z.boolean() });

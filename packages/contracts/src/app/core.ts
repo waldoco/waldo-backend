@@ -30,8 +30,9 @@ export const appVerifyResultV1Schema = z.union([
   z.strictObject({ state: z.literal('needs_invite') }),
 ]);
 export const appSignoutResultV1Schema = z.strictObject({ result: z.enum(['revoked', 'already_gone']) });
+export const appClientMessageIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/);
 export const appSendRequestV1Schema = z.strictObject({
-  client_message_id: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/), text: z.string().trim().min(1).max(4000),
+  client_message_id: appClientMessageIdV1Schema, text: z.string().trim().min(1).max(4000),
 });
 export const appSendResultV1Schema = z.strictObject({
   accepted: z.literal(true), message_id: z.string().min(1),
@@ -44,10 +45,20 @@ export const appMessagePartV1Schema = z.union([
   z.strictObject({ type: z.literal('artifact'), artifact_id: z.string(), revision: z.int().positive(), title: z.string(), download_path: z.string() }),
   replyApprovalPartV1Schema, replyQuickRepliesPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyVoicePartV1Schema,
 ]);
+// `text` is never empty when `parts` holds anything other than a text part, so a reader that draws only `text`
+// always shows the message. `created_at` is epoch ms when the row was stored; rows stored before the time
+// was kept have none, and no time is ever invented for them.
 export const appMessageV1Schema = z.strictObject({
   id: z.string(), role: z.enum(['user', 'assistant']), text: z.string(), parts: z.array(appMessagePartV1Schema),
   channel: z.string(), parent_id: z.string().nullable(), visibility: replyVisibilityV1Schema.optional(),
+  created_at: z.int().nonnegative().optional(),
 });
+// The history row `id`, URL-encoded in a path.
+export const appMessageIdV1Schema = z.string().min(1).max(256);
+// Only assistant messages can be rated; any other id is not found. A rating changes style and which messages
+// arrive, never what is true or what Waldo may do. null clears it. Repeating a request_id returns its first result.
+export const appRatingRequestV1Schema = z.strictObject({ request_id: z.string().regex(/^[A-Za-z0-9_-]{8,80}$/), rating: z.enum(['up', 'down']).nullable() });
+export const appRatingResultV1Schema = z.strictObject({ request_id: appRatingRequestV1Schema.shape.request_id, message_id: appMessageIdV1Schema, rating: appRatingRequestV1Schema.shape.rating });
 export const appHistoryResultV1Schema = z.strictObject({ messages: z.array(appMessageV1Schema), next_cursor: z.string().nullable() });
 // Codes name the non-generic failures a client can act on. The generic error stays code-free, so a
 // pre-authentication answer cannot say whether an address is invited.
@@ -62,6 +73,10 @@ export const appCoreRoutesV1 = [
   { method:'GET', path:'/app/v1/chat/main/messages/{client_message_id}',response:appMessageReceiptV1Schema,authenticated:true,success_status:200 },
   { method: 'GET', path: '/app/v1/chat/main', response: appHistoryResultV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/chat/main/messages', request: appSendRequestV1Schema, response: appSendResultV1Schema, authenticated: true, success_status: 202, max_request_bytes: APP_SEND_MAX_WIRE_BYTES },
+  // Stops that turn. A turn that already closed returns its recorded receipt; an effect dispatched before the
+  // stop leaves effects_unconfirmed true. A Worker without this route answers 404.
+  { method: 'POST', path: '/app/v1/chat/main/messages/{client_message_id}/cancel', response: appMessageReceiptV1Schema, authenticated: true, success_status: 200 },
+  { method: 'PUT', path: '/app/v1/chat/main/messages/{message_id}/rating', request: appRatingRequestV1Schema, response: appRatingResultV1Schema, authenticated: true, success_status: 200 },
 ] as const;
 
 export type AppSessionV1 = z.infer<typeof appSessionV1Schema>;

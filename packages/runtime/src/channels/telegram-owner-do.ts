@@ -1,4 +1,5 @@
 import { appControlsRequest } from './app-controls';
+import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { AppInbox, type AppInboxRecord } from './app-inbox';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
@@ -94,6 +95,7 @@ import { localIso, localToEpoch, reminderBook, reminderHandlers } from './remind
 import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
 import { artifactDelivery, artifactPage, artifactReadAdmission, ARTIFACT_PATH } from './artifact-delivery';
 import { artifactExports, exportArtifactHandler, r2ArtifactBinaries } from './artifact-exports';
+import { ownerFilePrefixes, purgeOwnerFiles } from './owner-files-purge';
 import { ARTIFACT_EXPORT_PATH, artifactExportDownload, exportDownloadUrl } from './artifact-export-download';
 import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
 import { runBook } from './background-runs';
@@ -206,6 +208,16 @@ export const resolveOwnerTelegramId = (
 };
 
 type ChannelKind = 'telegram' | 'whatsapp' | 'app';
+// A failed app read answers a generic 503. The log names only which step failed, from this fixed set, never the error text:
+// a canonical-history fault message can name nothing, but other errors may carry content.
+const CANONICAL_HISTORY_FAULTS: Readonly<Record<string, string>> = {
+  'canonical history owner mismatch': 'history_owner', 'canonical history entry invalid': 'history_invalid',
+  'canonical history witness mismatch': 'history_witness', 'canonical history leaf mismatch': 'history_leaf',
+};
+const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read', step: string, error: unknown): void => {
+  const code = error instanceof ClosedRunError ? `${step}_closed` : (error instanceof Error && CANONICAL_HISTORY_FAULTS[error.message]) || step;
+  console.error(JSON.stringify({ hop, ok: false, code }));
+};
 const offsetKeyOf = (channel: ChannelKind) => channel === 'whatsapp' ? 'wa_offset' : channel === 'app' ? 'app_offset' : 'offset';
 const WHATSAPP_PENDING_PREFIX = 'wa_pending:';
 // How often an unfinished WhatsApp payload is looked at again. A cadence, not a limit on how long a turn may run.
@@ -524,6 +536,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly appAttempts = new Set<string>();
   private activeApp: AppInboxRecord | null = null;
   private get appInbox(): AppInbox { return new AppInbox(this.ctx.storage); }
+  // Account deletion removes stored files before the directory entry; false means a prefix could not be named or confirmed empty.
+  private async purgeOwnerFiles(): Promise<boolean> {
+    const prefixes = ownerFilePrefixes(this.ctx.id.toString(), this.ctx.storage.sql);
+    return prefixes !== null && await purgeOwnerFiles(this.env.ARTIFACTS, prefixes);
+  }
+
   private async appAuthority(name: string, hash: string) {
     if (!name || this.env.TELEGRAM_OWNER_DO?.idFromName(name).toString() !== this.ctx.id.toString()
       || this.ctx.storage.kv.get<string>('do_name') !== name) throw new ClosedRunError();
@@ -623,13 +641,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       return this.serial(async()=>{
         const auth=consoleAuth(this.env)!;
         const current=async()=>{await this.appAuthority(name,hash);};
+        let step='sessions';
         try{
           const rows=await auth.listSessions(name),row=rows.find(row=>row.session===hash);
           if(!row)return fail();
+          step=path.startsWith('/app/v1/approvals')?'approvals':'controls';
           const expires=Date.parse(row.created_at)+12*60*60_000,session={token:hash,csrf:hash,expires};
           const runtime=this.setup('app');
           const host={...session,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
-            account:{owner:name,auth,requestUrl:request.url,eraseOwnerStorage:()=>this.ctx.storage.deleteAll()},
+            account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.ctx.storage.deleteAll()},
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.created_at)+12*60*60_000})),
             view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=await auth.listSessions(name);return {...view,sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.created_at,until:new Date(Date.parse(row.created_at)+12*60*60_000).toISOString(),current:row.session===hash}))};},
             act:async(action:ConsoleAction)=>action.action==='google.connect'
@@ -637,17 +657,20 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
               :runtime.act(action,current),
           };
           return await (path.startsWith('/app/v1/approvals')?appApprovalsRequest(request,host):appControlsRequest(request,host));
-        }catch{return fail(503);}
+        }catch(error){logAppReadFailure('app_controls_read',step,error);return fail(503);}
       });
     }
     if(path===APP_CHAT_PATH&&request.method==='GET'){
       const now=Date.now(),abort=new AbortController();
       const scope:RunEffectScope={runId:'app-read',attempt:crypto.randomUUID(),deadline:now+60_000,signal:abort.signal,admit:()=>{if(abort.signal.aborted||Date.now()>=now+60_000)throw new ClosedRunError();},commit:work=>this.ctx.storage.transactionSync(work)};
+      let step='context';
       try{
         const context=await this.appContext(name,hash,'Read my main conversation.','history:'+scope.attempt,now,scope);
+        step='history';
         const {entries}=await canonicalOwnerConversationStore(this.ctx.storage,context).load();
+        step='transcript';
         const url=new URL(request.url);return Response.json(appTranscriptPage(entries,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),appApprovalParts(this.ctx.storage.sql)),{headers:{'cache-control':'no-store'}});
-      }catch{return fail(503);}finally{abort.abort();}
+      }catch(error){logAppReadFailure('app_history_read',step,error);return fail(503);}finally{abort.abort();}
     }
     return fail(404);
   }
@@ -913,6 +936,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     return new Response('ok');
   }
 
+  // App and email sign-ins live in the directory; Telegram-link sign-ins live only here. The directory
+  // goes first so a failed revocation leaves this browser signed in to retry, never signed out alone.
+  private async signOutEverywhere(): Promise<boolean> {
+    const name = this.ctx.storage.kv.get<string>('do_name'), auth = name ? consoleAuth(this.env) : null;
+    if (auth && name) { try { await auth.signOutAll(name); } catch { consoleLog(consoleTrace(), 'console_signout_all', false, 'directory_unconfirmed'); return false; } }
+    await consoleAccess(this.ctx.storage).signOutAll();
+    return true;
+  }
+
   private markUnlinked(): void {
     const { kv } = this.ctx.storage;
     kv.put('telegram_unlinked', true);
@@ -1040,7 +1072,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           if(current.count>=(actionsRoute?20:90))return Response.json({error:'rate_limited'},{status:429,headers:{...DASHBOARD_OVERVIEW_HEADERS,'retry-after':'60'}});
           this.ctx.storage.kv.put(counterKey,{...current,count:current.count+1});
           if(ownerControlsRoute||ownerActionsRoute){
-            const deps={owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,auth:consoleAuth(this.env),requestUrl:request.url,store:this.ctx.storage,sessions:()=>access.list(),eraseOwnerStorage:()=>this.ctx.storage.deleteAll()};
+            const deps={owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,auth:consoleAuth(this.env),requestUrl:request.url,store:this.ctx.storage,sessions:()=>access.list(),purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.ctx.storage.deleteAll()};
             let response:Response;
             if(ownerControlsRoute){const view=ownerControlsView(url.searchParams);if(!view)return Response.json({error:'invalid_query'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});response=await ownerControlsRead(view,deps);}
             else {let form:FormData;try{form=await request.formData();}catch{return Response.json({error:'invalid_action'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});}response=await ownerControlsAction(form,deps);}
@@ -1079,7 +1111,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
                 if(done)this.markUnlinked();return !!done;
               }
               if(action.action==='session.signout'||action.action==='session.signout.all'){
-                if(action.action==='session.signout.all')await access.signOutAll();else await access.signOut(session.token);
+                if(action.action==='session.signout.all'){if(!await this.signOutEverywhere())return {state:'unconfirmed' as const,message:'Signing out everywhere did not finish. This browser is still signed in; try again.'};}
+                else await access.signOut(session.token);
                 return {state:'recorded' as const,message:'Signed out. Sign in again to open your console.',signed_out:true};
               }
               if(action.action.startsWith('approval.')){
@@ -1163,15 +1196,16 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${encodeURIComponent(approvalControlReceipt(out).message)}` } });
       }
       if (action?.action === 'account.delete') {
-        const done = admin && doName ? await admin.deleteOwner(doName) : false;
+        const done = admin && doName ? await this.purgeOwnerFiles() && await admin.deleteOwner(doName) : false;
         if (!done) return back('invalid');
         const response = new Response('Account deleted. Everything Waldo held for you is gone.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });
         await this.ctx.storage.deleteAll();
         return response;
       }
       if (action?.action === 'session.signout' || action?.action === 'session.signout.all') {
-        if (action.action === 'session.signout.all') await access.signOutAll();
-        else await access.signOut(session.token);
+        if (action.action === 'session.signout.all') {
+          if (!await this.signOutEverywhere()) return new Response('Signing out everywhere did not finish. This browser is still signed in; go back and try again.', { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
+        } else await access.signOut(session.token);
         return new Response('Signed out. Send /console to Waldo on Telegram to sign in again.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });
       }
       const done = action ? await this.serial(() => act(action)) : false;

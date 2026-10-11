@@ -148,3 +148,41 @@ it('a directory deletion whose local erase fails is reported incomplete and stil
     expect((await app('/controls?view=day', undefined, credential)).status).toBe(401);
   });
 });
+
+const BUCKET = (env as typeof env & { ARTIFACTS: R2Bucket }).ARTIFACTS;
+const FOREIGN = `artifacts/by-owner/${'f'.repeat(64)}/keep.md`;
+const filesOf = (state: DurableObjectState) => [`artifacts/by-owner/${state.id.toString()}/note.md`, `artifacts/exports/by-owner/${state.id.toString()}/note.pdf`];
+
+it('the owner\'s stored files are removed with the account and another owner\'s are not', async () => {
+  await fixture('deleted', async (app, seen) => {
+    const credential = await signIn(app);
+    const { revision } = await account(app, credential);
+    for (const key of [...filesOf(seen.state), FOREIGN]) await BUCKET.put(key, 'x');
+    const response = await app('/actions', remove(revision), credential);
+    expect(response.status).toBe(200);
+    expect(appControlResultV1Schema.parse(await response.json()).receipt).toMatchObject({ state: 'recorded', signed_out: true });
+    for (const key of filesOf(seen.state)) expect(await BUCKET.head(key)).toBeNull();
+    expect(await BUCKET.head(FOREIGN)).not.toBeNull();
+    await BUCKET.delete(FOREIGN);
+  });
+});
+
+it('when stored files cannot be confirmed removed, nothing else is deleted and the owner stays signed in to try again', async () => {
+  await fixture('deleted', async (app, seen) => {
+    const credential = await signIn(app);
+    const { revision } = await account(app, credential);
+    for (const key of filesOf(seen.state)) await BUCKET.put(key, 'x');
+    const failing = vi.spyOn(BUCKET, 'delete').mockRejectedValue(Error('Bucket unavailable'));
+    const response = await app('/actions', remove(revision), credential);
+    failing.mockRestore();
+    expect(response.status).toBe(503);
+    expect(appControlResultV1Schema.parse(await response.json()).receipt.state).toBe('rejected');
+    expect(seen.deletes).toBe(0);
+    expect(seen.state.storage.kv.get('do_name')).toBe(seen.name);
+    expect((await app('/controls?view=day', undefined, credential)).status).toBe(200);
+    const retry = await app('/actions', remove((await account(app, credential)).revision, 'delete-request-0002'), credential);
+    expect(retry.status).toBe(200);
+    expect(seen.deletes).toBe(1);
+    for (const key of filesOf(seen.state)) expect(await BUCKET.head(key)).toBeNull();
+  });
+});

@@ -3,15 +3,27 @@ import { controlAction, controlRevision, type ControlReceipt } from './dashboard
 import { projectControls, readControlsQuery } from './dashboard-controls';
 import { ownerControlsAction, ownerControlsRead, type OwnerControlsDeps } from './dashboard-owner-controls';
 import type { ConsoleAction, ConsoleView } from './console';
+import { readMemoryGraph } from './memory-graph';
+import { pageMemoryGraph } from './memory-graph-page';
 
 export type AppControlsHost = Readonly<{
   csrf:string; expires:number; storage:DurableObjectStorage;
   assertCurrent():Promise<void>; sessions():Promise<readonly {csrf:string;expires:number}[]>;
   view(page?:{traceBefore?:number;runsBefore?:number}):Promise<ConsoleView>;
   act(action:ConsoleAction):Promise<boolean|string|ControlReceipt>;
-  account:Pick<OwnerControlsDeps,'owner'|'auth'|'requestUrl'|'eraseOwnerStorage'>;
+  account:Pick<OwnerControlsDeps,'owner'|'auth'|'requestUrl'|'purgeOwnerFiles'|'eraseOwnerStorage'>;
 }>;
 const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache-control':'private, no-store'}});
+// App memory ids are `memory:claim:<n>` and `memory:node:<n>`: a constant scope, so the DO id never reaches the app.
+const MEMORY_SCOPE='memory';
+type Item=Record<string,unknown>&{local_id?:number};
+const withoutLocalId=({local_id:_local,...item}:Item)=>item;
+// The console pager's body, with its sub-view key renamed and the table-local ids and static lists it carries removed.
+const appMemoryGraph=({view,actions:_actions,views:_views,items,item,center,nodes,...rest}:Record<string,unknown>)=>({
+  ...rest,memory_view:view,
+  ...(Array.isArray(items)?{items:items.map(withoutLocalId)}:{}),...(item?{item:withoutLocalId(item as Item)}:{}),
+  ...(center?{center:withoutLocalId(center as Item)}:{}),...(Array.isArray(nodes)?{nodes:nodes.map(withoutLocalId)}:{}),
+});
 type Book=Record<string,{receipt:unknown;expires:number}>;
 export async function appControlsRequest(request:Request,host:AppControlsHost):Promise<Response> {
   const url=new URL(request.url),path=url.pathname;await host.assertCurrent();
@@ -34,8 +46,17 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
   };
   if(path==='/app/v1/controls'){
     if(request.method!=='GET')return reply({error:'method_not_allowed'},405);
-    if([...url.searchParams.keys()].some(key=>!['view','trace_before','runs_before'].includes(key)||url.searchParams.getAll(key).length!==1))return reply({error:'invalid_query'},400);
+    if([...url.searchParams.keys()].some(key=>url.searchParams.getAll(key).length!==1))return reply({error:'invalid_query'},400);
     const query=appControlQueryV1Schema.safeParse(Object.fromEntries(url.searchParams));if(!query.success)return reply({error:'invalid_query'},400);
+    if(query.data.view==='constellation'){
+      const {memory_view,cursor,limit,id,max_nodes,max_links}=query.data;
+      const paging=Object.entries({view:memory_view,cursor,limit,id,max_nodes,max_links}).filter((entry):entry is [string,string]=>entry[1]!==undefined);
+      let paged:ReturnType<typeof pageMemoryGraph>;
+      try{paged=pageMemoryGraph(readMemoryGraph(host.storage.sql,MEMORY_SCOPE),new URLSearchParams(paging));}catch{return reply({error:'projection_unavailable'},503);}
+      if(paged.status!==200)return reply({error:paged.body.error},paged.status);
+      const data=appMemoryGraph(paged.body),parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
+      await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
+    }
     if(query.data.view==='account'){
       const response=await ownerControlsRead('account',owner);if(!response.ok)return reply({error:'projection_unavailable'},503);
       const {csrf:_csrf,...shown}=await response.json() as Record<string,unknown>,parsed=appControlProjectionV1Schema.safeParse(shown);

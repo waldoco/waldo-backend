@@ -31,7 +31,6 @@ function eligible(action:ConsoleAction,view:ConsoleView):boolean {
  if(action.action==='google.connect')return view.google.connectAvailable;
  if(action.action==='google.disconnect')return view.google.accounts.some(a=>a.id===action.id);
  if(action.action==='telegram.unlink')return view.telegram.linked&&view.telegram.unlinkAvailable;
- if(action.action==='session.signout.all')return view.sessionCount>1;
  if(action.action==='file.remove')return view.files.some(f=>String(f.id)===action.id);
  if(action.action.startsWith('approval.')) {
   const p=view.approvals.find(p=>p.id===action.id);if(!p)return false;
