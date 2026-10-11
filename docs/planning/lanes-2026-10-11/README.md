@@ -9,6 +9,7 @@ It is a planning document. Merges, deploys, migrations and PR closes each still 
 | [SESSIONS_ALIGNMENT_REVIEW.md](SESSIONS_ALIGNMENT_REVIEW.md) | A snapshot audit of all 16 Claude sessions, the path to the iPhone, the structural findings and the coverage map |
 | [IDENTITY_ROOT_PLAN.md](IDENTITY_ROOT_PLAN.md) | One owner on every surface: what is already rooted on the user id, what is Telegram-shaped, Google connect, the ordered slices |
 | [APP_CHAT_PLAN.md](APP_CHAT_PLAN.md) | The app chat as the core (owner direction, 11 Oct afternoon): the gap map against Claude, ChatGPT and the website, the session decisions, the order of work |
+| [APP_DESIGN_SYSTEM_GAPS.md](APP_DESIGN_SYSTEM_GAPS.md) | Where the iPhone app does not yet follow the owner's design system, sorted by what unblocks each gap |
 | [lanes/](lanes/) | One brief per lane we own (L1–L4), the bounded browser lane, and the PR sweep |
 | [instinct/](instinct/README.md) | Three self-contained briefs delegated to Instinct |
 | [handoffs/](handoffs/) | The stopped gap-analysis lane's hand-off, kept for L3 |

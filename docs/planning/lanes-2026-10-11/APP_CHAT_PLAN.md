@@ -8,8 +8,8 @@
 
 **Pins:**
 - backend `beta-mvp` `15134581`: #1060 (sign out everywhere also revokes app and email sign-ins) merged at 15:32Z on 11 Oct, then #1059 (an optional latest delivery on day cards). Source rows below were read at `e5fd7200`; neither PR touches them;
-- staging `81c4f892`, so #1060 and #1059 are merged but not deployed;
-- waldo-app `main` `7bbf3135`: #62–#66 merged at about 15:00Z on 11 Oct, and #67 (the C0 review fixes) at 15:44Z. Its tree is identical to #67's head `ce590e4b`, where `tsc --noEmit` exits 0 and jest passes 551 tests in 82 suites (1 suite and 1 test skipped). Rows below that cite app line numbers were read at `9937d456`. Nothing has run on a device;
+- staging `15134581` (Worker version `30b43ff7`), deployed by L1 on the owner's yes in L1's session, so #1060 and #1059 are live;
+- waldo-app `main` `18d5d0c3`: #62–#66 merged at about 15:00Z on 11 Oct, #67 (the C0 review fixes) at 15:44Z, then #68 (why the agent could not be reached) and #69 (the chat follows the design system). The checks below ran at `7bbf3135`. Its tree is identical to #67's head `ce590e4b`, where `tsc --noEmit` exits 0 and jest passes 551 tests in 82 suites (1 suite and 1 test skipped). Rows below that cite app line numbers were read at `9937d456`. Nothing has run on a device;
 - website `Pin4sf/waldo-landing` `main` `830bfc2` (9 Oct), the pin the promise ledger also uses. I have not checked that heywaldo.in serves this commit.
 
 Tags:
@@ -414,11 +414,17 @@ Still open:
 3. **Streaming.** Real progress steps first (#5), token streaming second (#6, after its ADR note).
 - **Voice is deferred, not dropped** (row 9).
 
+**Decided later (11 Oct, about 16:55Z; the owner took the recommendations again):**
+5. **C1 before Constellations:** settled in L3's session (the review, then Constellations); both are done.
+6. **A second runtime writer: withdrawn** after L2's answer. L2's own plan carries S7 in W2 and session refresh alongside its waves. It comes back only if W2 slips.
+7. **The design system is the app's UI contract.** Where the website's mockups differ, it wins for the app.
+   - Its channel page now says Telegram is a test surface (design system version `1791739821-2ff8`).
+   - Where the app differs today, and what unblocks each gap: [APP_DESIGN_SYSTEM_GAPS.md](APP_DESIGN_SYSTEM_GAPS.md).
+8. **L2's W2:** S7 and the device routes, plus storing `created_at`. Cancel lands in W3 with the C1 cancel route.
+
 **Open:**
 4. **Go for the live checks and the device run** in L4's session.
-5. **C1 before Constellations:** settled. The owner set the order in L3's session, the review then Constellations, and both are done.
-6. **A second runtime writer for the files outside the owner DO.** These are the APNs sender with its register route (S7), session refresh (B2) and the `update_memory` handler. Recommendation: a short-lived "push and session" lane, so L2's queue loses about three PRs. L1 stays on health and deploys. If the owner prefers fewer sessions, L1 takes these after H5. L2 expects to run session refresh alongside its waves.
-7. **The design system as the app's UI contract.** Recommendation: yes. Where the website's mockups differ, the design system wins for the app.
-8. **What goes into L2's W2.** L2 offers to pull cancel and stored times forward, ahead of push. Recommendation: keep S7 in W2, since push blocks the proactive golden check, and add storing `created_at` there, which is small. Cancel waits for the C1 contract's cancel route in W3.
+9. **Whether a reminder the owner set may push.** The design system's push table is silent. Recommendation: yes, at the time the owner chose, held by quiet hours, with no health values, and the row added to the design system's table.
+10. **The register's owner questions:** the token pipeline, the tabs, the three scores' colours, dark mode at launch, and deny against `skip`.
 
 **Approval vocabulary:** the design system settles it for the app (buttons name the effect). Still open for L3 and L4: how the contract's `skip` maps to Not now and Don't do this.
