@@ -2,7 +2,8 @@ import { BASELINE_DAYS, higherIsBetter, logZScore, lowerIsBetter, zScore, clampS
 import type { DayRecord, HrvMethod, UnavailableReason } from './types';
 
 export const ALGORITHM = { recovery: 'recovery.candidate.v1', form: 'form.candidate.v1', weight: 'weight.candidate.v1', sleepDebt: 'sleep-debt.candidate.v1' } as const;
-export const RECOVERY_WEIGHTS = { sleep: 0.5, hrv: 0.3, resting_heart_rate: 0.2 } as const;
+// Shares of the Recovery score. Keys name the component's role, not a reading.
+export const RECOVERY_SHARES = { sleep: 0.5, variability: 0.3, pulse: 0.2 } as const;
 
 export interface RecoveryBasis {
   readonly components: readonly Component[];
@@ -29,7 +30,7 @@ export const recoveryBasis = (target: DayRecord, prior: readonly DayRecord[], sl
   if (need === null || need <= 0) return { reason: 'baseline_immature' };
   if (!target.overnightHrv && target.restingHeartRate === null) return { reason: 'missing_resting_signal' };
 
-  const components: Component[] = [{ name: 'sleep', score: clampScore(target.sleep.asleepMinutes / need * 100), weight: RECOVERY_WEIGHTS.sleep }];
+  const components: Component[] = [{ name: 'sleep', score: clampScore(target.sleep.asleepMinutes / need * 100), weight: RECOVERY_SHARES.sleep }];
   const signals = ['sleep'];
   const days = new Set<string>([target.day]);
   let hrvMethod: HrvMethod | null = null;
@@ -39,7 +40,7 @@ export const recoveryBasis = (target: DayRecord, prior: readonly DayRecord[], sl
     // RMSSD and SDNN are different measures: a reading is only compared with its own method.
     const baseline = baselineOf(prior, day => (day.overnightHrv?.method === hrv.method ? day.overnightHrv.value : null));
     if (baseline) {
-      components.push({ name: 'hrv', score: higherIsBetter(logZScore(hrv.value, baseline.map(entry => entry.value))), weight: RECOVERY_WEIGHTS.hrv });
+      components.push({ name: 'hrv', score: higherIsBetter(logZScore(hrv.value, baseline.map(entry => entry.value))), weight: RECOVERY_SHARES.variability });
       signals.push('hrv');
       hrvMethod = hrv.method;
       baseline.forEach(entry => days.add(entry.day));
@@ -48,7 +49,7 @@ export const recoveryBasis = (target: DayRecord, prior: readonly DayRecord[], sl
   if (target.restingHeartRate !== null) {
     const baseline = baselineOf(prior, day => day.restingHeartRate);
     if (baseline) {
-      components.push({ name: 'resting_heart_rate', score: lowerIsBetter(zScore(target.restingHeartRate, baseline.map(entry => entry.value))), weight: RECOVERY_WEIGHTS.resting_heart_rate });
+      components.push({ name: 'resting_heart_rate', score: lowerIsBetter(zScore(target.restingHeartRate, baseline.map(entry => entry.value))), weight: RECOVERY_SHARES.pulse });
       signals.push('resting_heart_rate');
       baseline.forEach(entry => days.add(entry.day));
     }
