@@ -172,3 +172,16 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - CI plumbing on an app-path harness (the L1 scenarios run Telegram, `run-l1.ts:118`).
   - Nightly live runs on matched seeds above 150k tokens.
   - Pre-set bars: +20 points recall; hallucination ≤ today and ≤2%; 0 leaks in ≥200 probes; ≤5% more tokens. A is falsified if the model searches on <50% of out-of-view probes.
+
+## 22:17Z: backend capability in; usage-limit risk
+
+- **Backend capability** (report `05-backend-capability.md`, source `4bb040f5`) **[code read, spot-checked; nothing run]**:
+  - 70 ledger rows: 11 implemented and tested, 2 implemented but untested, 30 partial, 0 flagged off, 27 missing.
+  - Confirms the strict-load send failure, two transcripts (no continuity), and the arming gaps.
+  - **New:** delivery needs `app_subject`, written only on the first chat message (`DO:742`, `:554-557`), and #1066 doesn't change that.
+  - **New:** RunLoopDO and DeviceBridgeDO data survives account deletion.
+  - **New:** `speakerOf` (`episodes.ts:21`) treats only `tg-` ids as the owner, so WhatsApp owner text is already dropped from nightly.
+  - **New:** the only link-code issuer hard-codes `'telegram'`, so WhatsApp linking is impossible.
+  - **New:** weight is always unavailable, sleep debt is computed but dropped, there's no health history route, and yesterday's Form is overwritten as stale.
+- **Usage limit (`get_usage`):** 5-hour window **76% used at 22:16Z, resets 01:30Z**. At the observed rate it could hit 100% around 22:45–23:00Z **[inference]**, stopping every session until 01:30Z. My context: 61%.
+  - **Actions:** no new subagents from me (the falsifying experiment for harness finding 1 is not launched); the promise map is deferred until after the reset; the board carries a budget notice pausing L3, and L2 after #1066's resolution; L4 is narrowed to two items.

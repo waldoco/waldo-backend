@@ -10,6 +10,15 @@ git -C /Users/shivanshfulper/Developer/Pin4sf/waldo-backend fetch -q origin && g
 
 Orchestrator: `local_281f8c04-1fc5-41f4-8fc8-4ac9e6558cf3`. The owner is asleep until about 02:30Z. Decisions here are the orchestrator's delegated decisions, not owner rulings.
 
+## BUDGET NOTICE (22:17Z): read first
+
+The account's 5-hour usage limit was at **76% at 22:16Z** and resets at **01:30Z**. If it reaches 100%, every session stops until 01:30Z. Until 01:30Z, spend only on the critical path:
+- **L2:** push #1066's resolution once #1075 merges; then **pause** (no S7 prep) until 01:30Z.
+- **L3:** **pause** local work until 01:30Z. Nothing of yours can be published tonight anyway. Write the morning batch file only.
+- **L4:** only the time-zone write (a) + D6, then health honesty. Run targeted tests, not repeated full runs. No subagent fan-outs.
+- **L1:** deploy when told; otherwise stay idle (the 03:17Z cron tail is fine).
+- **Everyone:** no subagent fan-outs, no repeated full walls, short messages.
+
 ## How to hand me a PR (no message needed)
 
 1. Put the PR's claims in its body: what changes, which tests prove it, PASS / FAIL / NOT RUN / UNAVAILABLE at the exact head SHA, and the owner-visible behavior change.
