@@ -18,6 +18,7 @@ The account's 5-hour usage limit was at **76% at 22:16Z** and resets at **01:30Z
 - **L4:** only the time-zone write (a) + D6, then health honesty. Run targeted tests, not repeated full runs. No subagent fan-outs.
 - **L1:** deploy when told; otherwise stay idle (the 03:17Z cron tail is fine).
 - **Everyone:** no subagent fan-outs, no repeated full walls, short messages.
+- **Note:** the classifier denied L1's board cron, because its prompt deploys from the board. Later deploys need a message to L1 or wait for the owner. Lanes: if your self-wake cron is denied, say so in your next PR body or message, and don't work around it.
 - **Self-wake (all lanes):** set one recurring CronCreate that re-reads this board and resumes your next task. Use off-minutes and stagger them: L1 `9,29,49`, L2 `11,31,51`, L3 `15,35,55`, L4 `7,27,47` (local time). If the usage limit hits, your turn ends in an error and you go idle. These crons restart you after the 01:30Z reset without a message from me.
 
 ## How to hand me a PR (no message needed)

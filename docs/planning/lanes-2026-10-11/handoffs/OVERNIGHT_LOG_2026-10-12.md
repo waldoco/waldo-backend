@@ -219,3 +219,12 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
 - Cron `29a6d33d` alive. Staging `/healthz` is still `4bb040f5`, although Workers Builds succeeded on `889efa27`, which confirms that check doesn't promote **[verified]**. Push CI on `889efa27`: pgTAP SUCCESS, shards and verify running.
 - No new #116 comments since 22:20Z. #1066 is draft. Stale ready backend PRs (#1038, #1033, #987, #892, #776) aren't tonight's.
 - **App #78** (L4) "settings: write the phone's time zone over the unconfirmed UTC default", head `cb0ad501`, opened 21:57Z, before D6 reached L4. Its CI-equivalent run and review wait for L4's final head (D9 batch window).
+
+## 22:37Z: L1 deploying `889efa27` when CI completes; L1's board cron denied
+
+- **L1** (message) **[unverified: lane report]**: it deploys `889efa27` through its gate when push CI completes; a background watcher wakes it.
+  - Gate checks: the tip equals the SHA; 6 checks green; the diff from live `4bb040f5` has no wrangler, deploy-script, migration or app-contract change (runtime only: owner DO, canonical store, tests); preflight 0 pending; a rollback target recorded.
+  - The tail viewer now captures `orphans` and `leaf`.
+  - After the deploy: the plain probe send with L4, falsifiers (a)–(e), a #116 post.
+- **The auto-mode classifier denied L1's recurring board cron**, whose prompt deploys gated tips from the board. L1 isn't working around it, and nor am I. Later deploys need a message to L1 or the owner in the morning. Tonight none is planned beyond `889efa27` (#1066 is held). Morning batch item: whether the owner wants a standing board-triggered deploy.
+- My sends still deliver: L1's reply arrived after my 10th send. The cap hasn't been hit yet.
