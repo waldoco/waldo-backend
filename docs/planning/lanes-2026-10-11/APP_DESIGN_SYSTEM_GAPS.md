@@ -148,6 +148,9 @@ The owner took my recommendations, apart from updating the design system for Pat
   - Decide whether to keep them and update `09` (and the Spot naming), or rename them.
 - **G5:** the Recovery and Weight gauges. Only Form has zone words.
 - **The morning notification** (above).
+- **Time zones.** `19-internationalisation.md` says times follow the device, and lists a manual override as not offered at launch.
+  - The owner ruled on 11 Oct that a zone the owner set wins over the phone's, with a one-tap "Use this device's time zone" row (G7).
+  - The section and its "Not supported at launch" line need to match. The audit lane found this.
 - **Session-delete copy.** `ThreadRow` says what goes. Decision 2 also keeps what Waldo learned, and the confirmation should say that.
 - **"Pinned by Waldo" chips** (plan row 16): there is no component for them.
 - **Not now and Don't do this** on the chat's approval cards, once L3's contract lands.
