@@ -23,7 +23,7 @@ Planning document, 10 October 2026. It maps promises to source and records the o
 17. **Staging actions** (same ruling). Deploy #1024, and apply `20261010060000` with #1022 once it is merged. Each is still executed by the session that runs it, after that session confirms with the owner.
 18. **Alpha cohort and spend** (10 October, 19:05Z). The alpha cohort is 5 to 10 people, at most 50. The cost ceiling is $25 per user per month. #915 L builds the ceiling; it is not wired yet.
 19. **Browser tasks from any surface** (same ruling). The owner can request a browser task from any surface, and Waldo reports back on that surface.
-20. **Proactive delivery** (11 October). Proactive messages go to the owner's chosen surface, otherwise to the app. Until a "deliver to" setting exists, this includes Telegram-linked owners. One exception, relayed by L2 on #116 and not yet confirmed in L3's session, holds until L2's slice 1: a Telegram-linked owner who has never opened the app still gets proactive messages on Telegram.
+20. **Proactive delivery** (11 October). Proactive messages go to the owner's chosen surface, otherwise to the app. Until a "deliver to" setting exists, this includes Telegram-linked owners. One exception, confirmed by the owner on 11 October, holds until L2's slice 1: a Telegram-linked owner who has never opened the app still gets proactive messages on Telegram.
 21. **One main conversation** (11 October). Each owner has one main conversation across all surfaces. Threads stay app and console only.
 22. **Who ties the app and backend together** (11 October). The owner's sessions own the work that ties the app and backend together. Instinct takes disjoint slices under `docs/app/codex-handover/OWNERSHIP_BOUNDARY.md`, and they are reviewed before merge.
 
@@ -319,11 +319,11 @@ This section replaces the 10 October night status. The lane plan is `docs/planni
 | #1028 | Health contract: withdrawing model use alone keeps the data (ruling 11) | merged as `1757beb2`; the app pin is one revision behind on `health-ingest.ts` |
 | #1031 | H3 health routes | merged as `12bca625` (11 October, 07:12Z); deploy owed |
 | #1034 | App-only owners' reminders delivered in the app (L2) | open; merges before piece A |
-| Piece A | Approvals from any surface, round 4 (L3) | branch `feat/approvals-any-surface-r4`; PR after round 4; rebases onto #1034 |
+| #1048 | Piece A: approvals from any surface, round 4 (L3) | open at `c5db594c`; the owner's go is to merge after #1034, rebased, with the wall green at the new head |
 | #987 | Browser retained-session upload | open (browser lane) |
 | #1032 | Browser lane audit and any-surface design | draft; design until the owner approves |
 | #1033 | Owner-ingress test isolation | open; rebase and merge, or close |
-| #1029 | App requirements traceability | draft; C11–C13 folded here; close on the owner's go |
+| #1029 | App requirements traceability | closed with the owner's go; C11–C13 folded here |
 | #1017, #1006 | iMessage connector; device bridge (Ashish) | draft |
 
 ### Findings that set the order
@@ -336,7 +336,7 @@ This section replaces the 10 October night status. The lane plan is `docs/planni
 - **Streaming.** The runtime has no model streaming, and replies pass post-model guards whole.
 
 ### Next for L3, one at a time
-1. Piece A round 4: ruling 16 plus credential masking on every surface. Then the PR, and the contract hash set to L4.
-2. G1: Google connect from the app (`/c/<ticket>` with surface `app`; migration `20261011200000`). It is visible on TestFlight; today's workaround is connecting Google in the console. Then G2 with L4, retiring the app's legacy `oauth-google` path. The owner confirms one OAuth client: `GOOGLE_CLIENT_ID` vs `GOOGLE_OAUTH_CLIENT_ID`.
+1. Piece A (#1048): rebase onto #1034 once it merges, re-run the wall, merge, then post the final contract hash set to L4.
+2. G1: Google connect from the app (`/c/<ticket>` with surface `app`; migration `20261011200000`). It is visible on TestFlight; today's workaround is connecting Google in the console. Then G2 with L4, retiring the app's legacy `oauth-google` path. G4 is open: the owner is not sure whether `GOOGLE_CLIENT_ID` (backend) and `GOOGLE_OAUTH_CLIENT_ID` (the app's legacy function) hold the same OAuth client. G1 does not depend on it; G2 does, because tokens from a different client cannot move and owners would reconnect once.
 3. The "deliver to" control (ruling 20). The shape is proposed on #116, and L2's router reads it. It comes after G1 because an app-only owner already gets proactive messages in the app.
 4. The threads contract, app and console only (ruling 21), re-cut from #998.
