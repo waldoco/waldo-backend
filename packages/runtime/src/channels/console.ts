@@ -7,6 +7,7 @@ import type { E2EStep, LastRequest, TraceRow } from './harness';
 import type { StoredFile } from './files';
 import { localIso } from './reminders';
 import { signConsoleTicket } from '../identity/console-ticket';
+import { escapeHtml, HTML_PAGE_HEADERS, resultCard, standalonePage, wantsHtml } from './standalone-page';
 
 export const CONSOLE_PATH = '/console';
 export const CONSOLE_ACTION_PATH = `${CONSOLE_PATH}/action`;
@@ -96,9 +97,22 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
 // Link previews (Telegram fetches URLs it sees) must not burn the one-time token, so opening the
 // link only shows a button; the token is spent by the POST that button sends.
 export const signInPage = (token: string): Response => new Response(
-  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo console</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;display:grid;place-items:center;min-height:100vh;margin:0}form{text-align:center}button{font:inherit;font-size:18px;padding:12px 28px;border:0;border-radius:10px;background:#1A1A1A;color:#FAFAF8;cursor:pointer}</style></head><body><form method="post" action="${CONSOLE_PATH}"><p>Waldo console</p><input type="hidden" name="t" value="${/^c1\.[A-Za-z0-9_-]+\.[a-f0-9]{64}$/.test(token) && token.length <= 2048 ? token : token.replace(/[^0-9a-f]/g, '')}"><button>Open console</button></form></body></html>`,
+  standalonePage({ title: 'Open your console · Waldo', layout: 'card', body: `<section class="tile card-body"><h1>Open your Waldo console</h1><p>Press the button to sign this browser in. The link works once.</p><form method="post" action="${CONSOLE_PATH}"><input type="hidden" name="t" value="${/^c1\.[A-Za-z0-9_-]+\.[a-f0-9]{64}$/.test(token) && token.length <= 2048 ? token : token.replace(/[^0-9a-f]/g, '')}"><button class="primary">Open console</button></form></section>` }),
   { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } },
 );
+
+// Ticket and session refusals. Browser navigations get a styled page that never echoes the rejected link; others keep the text.
+export const consoleNotice = (request: Request, status: number, title: string, text: string): Response => wantsHtml(request.headers.get('accept'))
+  ? new Response(standalonePage({ title: `${title} · Waldo`, layout: 'card', body: resultCard({ tone: 'negative', title, body: `<p>${escapeHtml(text)}</p>` }) }), { status, headers: HTML_PAGE_HEADERS })
+  : new Response(text, { status });
+
+// The /link code is shown once in this response and is never stored for recovery.
+export const telegramLinkResult = (code: string | null, text: string): Response => new Response(standalonePage({
+  title: 'Link Telegram · Waldo', layout: 'card', home: true,
+  body: code
+    ? resultCard({ title: 'Link Telegram', body: `<p>Send this to the Waldo bot on Telegram within 10 minutes. It works once.</p><code class="secret">/link ${escapeHtml(code)}</code>`, actions: `<a class="button-link" href="${CONSOLE_PATH}">Back to dashboard</a>` })
+    : resultCard({ tone: 'negative', title: 'Telegram linking unavailable', body: `<p>${escapeHtml(text)}</p>`, actions: `<a class="button-link" href="${CONSOLE_PATH}">Back to dashboard</a>` }),
+}), { headers: HTML_PAGE_HEADERS });
 
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
