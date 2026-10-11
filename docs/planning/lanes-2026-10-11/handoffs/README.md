@@ -22,7 +22,7 @@ The owner is starting successor sessions because the lane sessions have grown to
 | 1 | L3: approvals, app contracts, Google connect | [`L3_HANDOFF_2026-10-12.md`](L3_HANDOFF_2026-10-12.md) | its handoff. #1070 merged as `21a70277`; waldo-brain #36 waits for the owner. |
 | 2 | L4: Waldo app | [`L4_HANDOFF_2026-10-12.md`](L4_HANDOFF_2026-10-12.md) | its handoff. #74–#76 are merged and the Simulator pass is done. Its successor runs in waldo-app, where the path in its starter prompt doesn't exist; its collection notes give the command that reads this copy. |
 | 3 | L1: health plane and staging deploys | [`L1_HANDOFF_2026-10-12.md`](L1_HANDOFF_2026-10-12.md) | its handoff. It has captured the 503's code, so its log tail is no longer needed. Its successor re-arms the tail to confirm L2's fix after deploying it. |
-| 4 | L2: owner identity and delivery router | [`L2_HANDOFF_2026-10-12.md`](L2_HANDOFF_2026-10-12.md) | its fix for the 503 is in a PR with red-first tests, or written down in its handoff. L2 holds the critical path. |
+| 4 | L2: owner identity and delivery router | [`L2_HANDOFF_2026-10-12.md`](L2_HANDOFF_2026-10-12.md) | #1074, its fix for the 503, is merged and deployed, or L2 has written down where it stands. L2 holds the critical path. |
 | 5 | Alignment | [`ALIGNMENT_HANDOFF_2026-10-12.md`](ALIGNMENT_HANDOFF_2026-10-12.md) | the handoffs are collected and merged. |
 
 All four lane handoffs are here. Each starts with collection notes: what changed between the lane writing it and the alignment session collecting it. Each ends with a starter prompt for its successor.
@@ -42,8 +42,9 @@ All four lane handoffs are here. Each starts with collection notes: what changed
 **Staging state:**
 - Main chat loads history and answers, for the owner's account and for a fresh account.
   - Today GET `/app/v1/chat/main` answers 503 with `history_invalid` (L1's capture at 20:10Z): a stored row in the owner's canonical history fails its shape check.
-  - L2 is fixing it on branch `l2/app-history-skip-invalid-rows` (`0692b4b2` at 20:25Z). Its PR opens after the gates pass.
-  - The fix covers only the Main-chat read: a display read skips shape-invalid rows that match their witness. The strict `load()` that turns use is unchanged, so whether app sends still fail is open.
+  - L2's fix is #1074 (head `5ce01a82`). It needs the owner's merge go in L2's session, then L1's deploy.
+  - It covers only the Main-chat read. A shape-invalid row with no witness, or one that matches its witness, is skipped and logged with the check it failed. A witness that differs stays fatal.
+  - Sends still use the strict `load()`, so chatting may stay broken until a follow-up. That follow-up depends on the check the skip line names.
 - Proactive messages are armed at first app use (#1066) and arrive in the app at the times the owner set.
 
 **On a real iPhone,** built from source because there is no TestFlight:
@@ -102,7 +103,7 @@ What's missing today:
    - Pin4sf/waldo-brain#35 (after Suyash's review and the font-licence call);
    - waldoco/waldo-backend#1072 (the race fix);
    - #1057 and #1058 (Audit);
-   - L2's fix for the 503, once its PR is up.
+   - waldoco/waldo-backend#1074, the 503 fix, in L2's session.
 8. **Lane proposals for rows no lane holds:** ledger §12 on #1057.
 9. **The website's Connectors page** still shows Waldo sending through Telegram in its example scenes, and lists Telegram as "Working today". Reworking the illustrations needs Suyash.
 10. **The website's Calendar and Tasks labels** say "read only", but Waldo asks for `calendar.events` and `tasks`. Change the copy or the scopes.

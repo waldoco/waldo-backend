@@ -68,9 +68,8 @@ The sessions-alignment session hands off to its successor. Times are UTC unless 
   - the Durable Object's outcome was `ok`, with no exception and 7 ms and 5 ms of CPU. So the DO answered 503 itself.
 - **What it means:** a row in the owner's canonical history fails `validate()` in `canonical-owner-store.ts`.
   - L2's lead [inferred]: a staging build that never merged wrote the row, for example #998's thread code at `fc4c2b9d`.
-  - L2's fix, on branch `l2/app-history-skip-invalid-rows` (`0692b4b2` at 20:25Z, no PR yet): a new `readForDisplay()`, used only by the Main-chat GET, skips shape-invalid rows that match their witness and logs `history_rows_skipped` with the failed check and a count. Owner mismatch, witness mismatch and duplicate ids stay fatal.
-  - The strict `load()` that turns use is unchanged, so whether app sends still fail is open. Ask L2.
-  - Edge cases to check: the skipped row is a parent or the leaf.
+  - L2's fix is #1074 (head `5ce01a82`). A new `readForDisplay()`, used only by the Main-chat GET, skips a shape-invalid row that has no witness or matches its witness. It logs `history_rows_skipped` with the check, a count and whether the row was unwitnessed. A witness that differs stays fatal (`history_witness`).
+  - Sends still use the strict `load()`, so chatting may stay broken until a follow-up. That follow-up depends on the logged check, and on whether the skipped row is the leaf or a parent.
 - **Ruled out:** the resource-limit lead. L2 measured `load()` at 262 ms for 8,000 rows of 8 KB.
 - Only GET `/app/v1/chat/main` was seen failing. Controls, approvals and scores load for the same account (L4).
 
@@ -115,9 +114,9 @@ All on 11 Oct, quoted exactly.
 ## 5. Next steps for the successor
 
 1. **Finish the handoff PR.** All four lane handoffs are in it, each with collection notes. If it isn't merged, ask the owner to type "merge #N".
-2. **Track L2's `history_invalid` fix** to a merge (the owner's go in L2's session), then L1's deploy (the owner's go in L1's session).
-   - Then ask the owner for the #1066 merge.
-   - Acceptance: Main chat loads on staging for the owner's account and for a fresh account. L1's tail shows 200 and no `app_history_read` line.
+2. **Track #1074** to a merge (the owner's go in L2's session), then L1's deploy (the owner's go in L1's session).
+   - Acceptance: Main chat loads on staging for the owner's account and for a fresh account. L1's tail shows 200 and one `history_rows_skipped` line naming the check. Then one app send.
+   - Then track L2's follow-up for sends, and ask the owner for the #1066 merge.
 3. **Batch the owner decisions.** Ask them all at once, from the "Open owner decisions" section of `README.md`.
 4. **After brain #35 merges,** carry out governance step 5:
    - republish the artifact from the merged files, then read it back and byte-compare;
@@ -165,5 +164,5 @@ All on 11 Oct, quoted exactly.
 > You are the successor of the Waldo sessions-alignment session.
 > 1. Read `docs/planning/lanes-2026-10-11/handoffs/README.md`, then `ALIGNMENT_HANDOFF_2026-10-12.md` in the same folder.
 > 2. Before acting, re-verify `beta-mvp`, app `main`, staging `/healthz` and the open PRs named there, with `git` and `gh`.
-> 3. First, find out from L2 where its fix for the Main-chat 503 (`history_invalid`) stands, and from L1 whether it is deployed.
+> 3. First, find out from L2 whether #1074 (the Main-chat 503 fix) has merged, and from L1 whether it is deployed.
 > 4. Then give the owner one batch of the open decisions.
