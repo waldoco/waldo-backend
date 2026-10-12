@@ -47,6 +47,13 @@ The results feed the 17:00Z re-score of `PILLAR_SCORECARD_2026-10-12.md` and the
 - **t3 re-read probe (17:37–17:39Z on `27214c63`): PASS** for both asks. L1 saw a fresh `tool_query_calendar` (with the `calendar_read` code and count) and a fresh `tool_list_reminders` in their own later turns, and both replies resolved [#116 comment 6129445945].
 - **Probe 5 rerun:** dropped by the owner (relayed by L4).
 
+## Planned for 13 Oct morning: P1 on G1 plus #1098
+
+- Tonight: approve a card from app chat (the owner's yes in L4's session).
+- The morning brief runs. L1 confirms in the tail (`hops_total`) that this job made 6 or more tool calls. If the brief makes fewer, L1 names the job that does and when it fires.
+- Then ask "did it go out?" in app chat. It passes when the reply states the approval's real state from the desk line.
+- This needs #1098 deployed first (tip `5bf2857d` or later).
+
 ## Rule for approval-state probes (P1, t3)
 
 "Did it go out?" counts only when a job with 6 or more tool calls (a morning brief, for example) runs between the approval and the question. That is the everyday sequence, and the 6-row tool-result ring would lose the desk line in it (see the #1091 follow-up).

@@ -1857,3 +1857,22 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **LOWs:**
     - a failing tool's output can name another of the owner's approval ids; only a gated id plus desk state shows, as it already did for successful rows;
     - `record` could require `origin` in its type.
+
+## 18:08Z: #1098 merged as `5bf2857d`
+
+- **Merge:** `gh pr merge 1098 --merge --match-head-commit 46cf827ff56106b89aece0f8e53da284619a1d59`, at 18:08:43Z.
+- **Gate:**
+  - CI 6/6 at `46cf827f`; CLEAN and MERGEABLE against `cf38b379` [verified].
+  - The review at `2915e830` passed and was held for 2 fixes and 2 tests; the delta review at `46cf827f` passed.
+  - The advisor agreed.
+  - Freeze check: no deploy ask names `cf38b379`. No #116 post since 17:40Z mentions it, and L1's open question is about the #1099 and #1089 score changes [verified].
+- **Why the cache-row drop isn't a hold-list deletion change:**
+  - The old shared ring evicts those origin-less rows within six writes anyway; #1098 only brings that forward.
+  - The owner view never showed them.
+  - Forget coverage, memory, receipts and approvals are unchanged.
+  - After its deploy, the rollback target would be `483c7475` (`27214c63`), which has the same key layout and reads #1098's rows fine. L2's `c9de74c5` caveat applies only to a deeper rollback.
+- **Health question closed [verified]:** `87b31948` pushed every row with `taint: 'external'` (`owner-turn.ts:514`), so no reading was ever stored in the staging ledger.
+- **The tip is `5bf2857d`.** The next deploy needs the owner's yes in L1's session.
+- **P1 probe planned for the morning** (probe sheet): approve tonight, let the brief run, ask "did it go out?". L1 confirms the job made 6 or more tool calls (`hops_total`).
+- **The scorecard's EoD list** now has the #1089 guard condition and #1099's ADR-0081:54 version question, with stale lines removed.
+- **Queued by the cap:** L4's reply (17:52Z), L1's #1099 note (18:06Z), and the #1098 merge notice for L2.

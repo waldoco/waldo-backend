@@ -45,29 +45,33 @@ The eight pillars:
   - 8: inconclusive;
   - 9: a day card in the app, on an app-only account; not run.
 
-**Merged, not deployed:** #1097, #1093's test and comment follow-ups (tip `cf38b379`). #1098, the shared-ring fix, is back with L2 for two small fixes.
+**Merged, not deployed (tip `5bf2857d`):**
+- #1097: #1093's test and comment follow-ups.
+- #1098 (merged 18:08Z): the shared-ring fix, so "did it go out?" survives a busy job. Rows from before origins were kept are dropped on the first write after deploy.
+
+The next deploy needs your yes in L1's session, naming the tip at that point.
 
 **Waiting on you:**
 - **Merges:**
   - #1088, skills on app turns (PASS at `1e1a4b39`);
-  - #1089, Weight (PASS at `4b98b1d7`).
+  - #1089, Weight (PASS at `4b98b1d7`). **Before merging, check #1099:** whichever of the two lands second must add `overlapped.has(day.day) ? null : physicalLoadOf(day)` with a test. Otherwise a flagged day with a workout shows a workout-only load as if it were complete. The two don't conflict as text, so nothing forces the guard.
+  - #1099, the zone-overlap net from your zone-id ruling. Its code review passed at `bbae8681`, and L1 is asking for your yes in its session. **The version question to weigh before you answer:** ADR-0081:54 says "a change to a component formula or normalization creates a new version; old rows are never silently reinterpreted". #1099 leaves a flagged day's windows out, so on those days today's and yesterday's Form can change, or become unavailable, under the same `algorithm_version`. The reviewer finds this defensible: it changes only which inputs are admitted, it affects only the producer's two-day rewrite, and Form is still `candidate_unaccepted`. It's your call.
 - **Probes:**
-  - the t3 follow-up turn (your yes in L4's session);
-  - the probe-5 test event;
+  - the P1 morning probe (approve tonight, ask after the brief; your yes in L4's session);
   - probe 9, on an app-only account.
+  - The t3 turn passed at 17:39Z, and you dropped the probe-5 rerun.
 - **Decisions:**
   - standing grants Q1–Q7 (`STANDING_GRANTS_ADR_DRAFT_2026-10-12.md`, Q1 first);
   - whether you want D16's alternative, cross-turn taint;
   - the provenance of notes stored during tainted turns (an ADR-0049 question);
-  - the zone-id producer guard (#116 comment 6127532876).
 - **L3** has been idle since 08:46Z. Resume it in its session for the grants contract and E11.
 - **Your own tasks:** the APNs key (E5), the Google consent move (E8) and the real-iPhone health run.
 
 **Tomorrow, 13 Oct [proposed]:**
-- **#1098 (L2):** the shared-ring fix, so "did it go out?" survives a busy job. The review passed, but it's back with L2 for two small fixes: drop legacy origin-less rows on any write, and keep a failed desk row's desk line.
-- **L2:** after #1098, E15 app-first routing.
+- **L2:** E15 app-first routing. D14 cleared with the `27214c63` deploy.
 - **L4:** refresh-while-open with the unread signal, then Android (E17).
-- **L1:** deploy `27214c63`, then the Weight and Form follow-ups.
+- **P1 probe (morning):** approve a card in the app tonight, let the morning brief run, then ask "did it go out?". L1 checks `hops_total` in the tail to confirm a job made 6 or more tool calls in between. Only that shape credits P1 and t3 for approvals.
+- **L1:** deploy the tip with #1098 on your yes, then #1099 once you've answered, then the Weight and Form follow-ups.
 - **Grants (E16)** once Q1–Q7 are answered.
 
 **Decided on your behalf today** (`OVERNIGHT_DECISIONS_2026-10-12.md`, each reversible):
