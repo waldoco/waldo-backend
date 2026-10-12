@@ -633,7 +633,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // owner and offers no connect link.
   private async calendarDemand(request: Request): Promise<Response> {
     const headers={'cache-control':'no-store'};
-    const range=await verifiedDemandRequest(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.TELEGRAM_OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
+    const range=await verifiedDemandRequest(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
     if(!range)return Response.json({error:'unavailable'},{status:403,headers});
     const runtime=this.setup('app'),started=Date.now(),trace=`calendar-demand:${started}`;
     try{
