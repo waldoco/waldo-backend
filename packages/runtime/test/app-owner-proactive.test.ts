@@ -123,18 +123,32 @@ describe('proactive work for an owner who only uses the app', () => {
     });
   });
 
-  it('a later zone change moves today\'s unsent day cards to the new zone and keeps the owner\'s pins and today\'s planned times', async () => {
-    const pins = { 'card:close': '23:45' }, planned = { 'card:midday': '23:30' };
-    await withAppOwner('proactive-zone-change', { zone: 'Europe/London', confirmed: true, pins }, async (owner, state) => {
-      await owner.setup('app').ready;
-      // A time already planned for the new zone's today, as nightly planning or the owner sets it.
-      dayPlanBook(state.storage.sql).save(localIso(Date.now(), 'America/New_York').slice(0, 10), { card: 'card:midday', time: planned['card:midday'], reason: 'planned' });
-      expect(await owner.setup('app').act({ action: 'timezone.set', value: 'America/New_York' })).toBe(true);
-      const rows = schedule(state), ahead = cardsAhead('America/New_York', { ...pins, ...planned });
-      for (const [card, at] of Object.entries(ahead)) expect(rows[card]?.due_at).toBe(at);
-      for (const card of DAY_CARDS.map(c => c.id).filter(id => !(id in ahead))) expect(rows[card]).toBeUndefined();
-      expect(owner.setup('app').timezone).toBe('America/New_York');
-    });
+  // The test clock is pinned: whether two zones share a date depends on the instant.
+  it.each([
+    ['on the same date in both zones', '2026-10-11T12:00:00Z', 'Europe/London', 'America/New_York', false],
+    ['to a zone still on the previous date', '2026-10-11T23:30:00Z', 'Europe/London', 'America/New_York', false],
+    ['to a zone already on the next date', '2026-10-11T23:30:00Z', 'America/New_York', 'Europe/London', false],
+    ['after a card already went out today in the new zone', '2026-10-11T12:00:00Z', 'Europe/London', 'America/New_York', true],
+  ] as const)('a zone change %s re-plans every day card for today in the new zone, keeps pins and planned times, and leaves no entry from the old zone', async (_case, instant, from, to, closeSent) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse(instant));
+    try {
+      const pins = { 'card:close': '23:45' }, planned = { 'card:midday': '23:30' };
+      await withAppOwner(`proactive-zone-change-${from}-${to}-${closeSent}-${instant}`, { zone: from, confirmed: true, pins }, async (owner, state) => {
+        await owner.setup('app').ready;
+        const book = dayPlanBook(state.storage.sql), today = localIso(Date.now(), to).slice(0, 10);
+        // A time already planned for the new zone's today, as nightly planning or the owner sets it.
+        book.save(today, { card: 'card:midday', time: planned['card:midday'], reason: 'planned' });
+        if (closeSent) book.sent(today, 'card:close');
+        expect(await owner.setup('app').act({ action: 'timezone.set', value: to })).toBe(true);
+        const rows = schedule(state), ahead = cardsAhead(to, { ...pins, ...planned });
+        if (closeSent) delete ahead['card:close'];
+        expect(Object.keys(ahead).length).toBeGreaterThan(0);
+        for (const [card, at] of Object.entries(ahead)) expect(rows[card]?.due_at).toBe(at);
+        for (const card of DAY_CARDS.map(c => c.id).filter(id => !(id in ahead))) expect(rows[card]).toBeUndefined();
+        expect(owner.setup('app').timezone).toBe(to);
+      });
+    } finally { vi.useRealTimers(); }
   });
 
   it('saving quiet hours never writes the time-zone fallback to the directory', async () => {
@@ -156,6 +170,9 @@ describe('proactive work for an owner who only uses the app', () => {
       expect(model.calls).toBe(0);
       expect(await appChat(owner, 'proactive-held-fire')).toEqual([]);
       expect(schedule(state)[HEARTBEAT_ID]?.status).toBe('armed');
+      // Each hold leaves one fixed code naming the kind and the reason, never an id or text.
+      expect(state.storage.sql.exec<{ hop: string; note: string; ok: number }>("SELECT DISTINCT hop, note, ok FROM trace_log WHERE hop = 'scheduled_hold' ORDER BY note").toArray())
+        .toEqual([{ hop: 'scheduled_hold', note: 'daily_brief_timezone_unconfirmed', ok: 1 }, { hop: 'scheduled_hold', note: 'heartbeat_timezone_unconfirmed', ok: 1 }]);
     });
     expect(wire.telegramSent).toBe(0);
   });

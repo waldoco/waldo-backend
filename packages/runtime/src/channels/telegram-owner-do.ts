@@ -1347,7 +1347,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       let fired: readonly ScheduleEntry[];
       try {
         const held = (kind: ScheduleKind) => channel === 'app' && (kind === 'event_briefs' || this.ctx.storage.kv.get<boolean>('timezone_confirmed') !== true);
-        fired = await scheduler.dispatchDue(gateScheduleExecutors({ reminder, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder }, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held));
+        const onHeld = (kind: ScheduleKind) => log({ trace: `alarm:${started}`, hop: 'scheduled_hold', ms: 0, ok: true,
+          code: kind === 'event_briefs' ? 'event_briefs_not_routed' : `${kind}_timezone_unconfirmed` });
+        fired = await scheduler.dispatchDue(gateScheduleExecutors({ reminder, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder }, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held, onHeld));
       } catch (error) {
         // A dispatch throw used to leave no trace at all - the wake was invisible in Langfuse.
         log({ trace: `alarm:${started}`, hop: 'machine_turn', ms: Date.now() - started, ok: false, error: String(error), detail: 'dispatch' });

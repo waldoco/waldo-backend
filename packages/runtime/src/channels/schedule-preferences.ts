@@ -66,10 +66,13 @@ export const applySchedulePreferences = async (prefs: SchedulePreferences, ctx: 
   }
 };
 
-// Re-plan today's unsent cards after the zone changes: keep the times already chosen for today, move them to the new zone, keep pins.
+// Re-plan every day card for today in the new zone after the zone changes: the time already planned for that date where
+// one exists, the default otherwise, pins kept. Entries armed in the old zone can name another date, so a card that is not
+// armed again (it already went out today) keeps no entry.
 export const replanDayCards = async (scheduler: Scheduler, plans: DayPlanBook, timezone: string, now: number): Promise<void> => {
-  const rows = plans.read(localIso(now, timezone).slice(0, 10));
-  await applyDayPlan(scheduler, plans, timezone, now, rows.length ? rows.map(({ card, time, reason }) => ({ card, time, reason })) : defaultPlan(DAY_CARDS));
+  const planned = new Map(plans.read(localIso(now, timezone).slice(0, 10)).map(({ card, time, reason }) => [card, { card, time, reason }]));
+  const handled = new Set((await applyDayPlan(scheduler, plans, timezone, now, defaultPlan(DAY_CARDS).map(card => planned.get(card.card) ?? card))).map(entry => entry.card));
+  for (const card of DAY_CARDS) if (!handled.has(card.id) && scheduler.read(card.id)) await scheduler.cancel(card.id);
 };
 
 // Cancel-only pass for kinds that are off. Run at startup: a stop between saving a preference and cancelling
@@ -95,11 +98,11 @@ const scheduleKindOf = (entry: ScheduleEntry): ScheduleKind | null => {
 // Fire-time recheck: read the preference at dispatch, not only when arming. A disabled entry is cleared and
 // does nothing, so no send, no card state and no model call happens for something the owner turned off.
 // A held kind is skipped without cancelling: the occurrence passes and a recurring entry stays armed for its next one.
-export const gateScheduleExecutors = (executors: ScheduleExecutors, prefs: SchedulePreferenceBook, scheduler: Scheduler, held: (kind: ScheduleKind) => boolean = () => false): ScheduleExecutors =>
+export const gateScheduleExecutors = (executors: ScheduleExecutors, prefs: SchedulePreferenceBook, scheduler: Scheduler, held: (kind: ScheduleKind) => boolean = () => false, onHeld: (kind: ScheduleKind) => void = () => {}): ScheduleExecutors =>
   Object.fromEntries(Object.entries(executors).map(([kind, executor]) => [kind, async (entry: ScheduleEntry) => {
     const owned = scheduleKindOf(entry);
     if (owned !== null && !prefs.enabled(owned)) { await scheduler.cancel(entry.id); return; }
-    if (owned !== null && held(owned)) return;
+    if (owned !== null && held(owned)) { onHeld(owned); return; }
     return executor!(entry);
   }])) as ScheduleExecutors;
 
