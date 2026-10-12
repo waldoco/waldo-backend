@@ -104,7 +104,7 @@ If you choose E1(a), tell each lane in its own session; a relay from me is not a
   - physical load from the workouts and movement the producer already reads;
   - results stay `candidate_unaccepted`.
   It needs Google connected (E8), so it can't be verified live today.
-- **E13, Form deviates from accepted ADR-0081.** The code weights five components differently from the ADR. Align the code or amend the ADR, and decide who edits `scores/`, which is the Instinct contributor lane's code and read-only for L1.
+- **E13: answered in L1's session: "align to ADR-0081, L1 edits". The work is PR #1083.** Form deviates from accepted ADR-0081. The code weights five components differently from the ADR. Align the code or amend the ADR, and decide who edits `scores/`, which is the Instinct contributor lane's code and read-only for L1.
 
 Other held items stay in the morning report: session renewal, the 18+ server record, the Brief `latest` DO ALTER, and #1072.
 

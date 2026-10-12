@@ -574,3 +574,12 @@ Still open:
 - **L4's Health permission and "Last sent" fix** is built on branch `app/health-honest-sent-20261012` (`b7220a4e`). L4 reports 629 tests and 9 faults caught. The PR is next, and its merge needs the owner's yes in L4's session.
 - **D10:** the expiry question (L4 to L3). The server owns approval state, with no client rule, and L3's expiry branch is the fix. Logged in the decisions file and posted on the board for L3, which is still unreachable.
 - **L2:** #1066's body now carries the owner's replies ruling, and its head is unchanged at `075eb8fe`. The connect-honest branch (`61eac09c`) is nearly ready. #1076's verify rerun is still in progress.
+
+## 05:59Z: #1083 (Form aligned to ADR-0081) ready
+
+- **L1 opened #1083**: Form is computed as ADR-0081 `form.safte-fast.v1` (head `4f80da1f`, CI pending).
+  - The owner chose "align to ADR-0081, L1 edits" in L1's session (E13).
+  - Runtime only: `scores/*` and `producer.ts`, plus 3 test files. No migration, contract or wrangler change.
+  - L1 reports 113 health tests passing, typecheck, guards 37/37 and 6 mutations caught.
+  - Resting heart rate no longer substitutes for HRV, which is stricter. Results stay `candidate_unaccepted`.
+- **Gate plan:** the independent reviews for #1066 and #1083 run after the 06:30Z reset. Wave 1 is at about 10:00Z.
