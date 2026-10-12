@@ -1,7 +1,7 @@
 // L1 scenario runner: drives the real telegram responder with the scripted gateway over
 // in-memory sqlite, captures the full hop stream, and checks the scenario's assertions exactly.
 import { DatabaseSync } from 'node:sqlite';
-import { TOOL_PERMISSIONS, triggerTypeSchema, webSearchArgsSchema, WALDO_CHAT_MODEL, type ConnectIntent, type WebSearchArgs } from '@waldo/contracts';
+import { TOOL_PERMISSIONS, triggerTypeSchema, webSearchArgsSchema, WALDO_CHAT_MODEL, type ConnectIntent, type SetReminderArgs, type WebSearchArgs } from '@waldo/contracts';
 import { createTelegramResponder } from '../src/channels/telegram-turn';
 import { reminderHandlers, type ReminderBook } from '../src/channels/reminders';
 import { loopBook, loopHandlers } from '../src/channels/loops';
@@ -51,7 +51,7 @@ const DEFAULT_EVENTS = [
   { id: 'e3', title: 'Dentist', start: '2026-09-24T17:30:00+05:30', end: '2026-09-24T18:15:00+05:30', all_day: false },
 ];
 
-type StubReminder = Readonly<{ id: string; note: string; at: string; repeat: 'none' | 'daily' }>;
+type StubReminder = Readonly<{ id: string; note: string; at: string; repeat: SetReminderArgs['repeat']; cron?: string }>;
 
 export type ScenarioRun = Readonly<{
   replies: readonly string[];
@@ -74,8 +74,8 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
 
   const reminderRows: StubReminder[] = [];
   const reminders = {
-    async set(args: { note: string; at: string; repeat?: 'none' | 'daily' }) {
-      const reminder = { id: `reminder:${reminderRows.length + 1}`, note: args.note, at: args.at, repeat: args.repeat ?? 'none' as const };
+    async set(args: SetReminderArgs) {
+      const reminder = { id: `reminder:${reminderRows.length + 1}`, note: args.note, at: args.at, repeat: args.repeat, ...(args.cron === undefined ? {} : { cron: args.cron }) };
       reminderRows.push(reminder);
       return reminder;
     },
@@ -86,10 +86,13 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
       reminderRows.splice(index, 1);
       return true;
     },
+    async cancelAll() {
+      return reminderRows.splice(0).length;
+    },
     note: (id: string) => reminderRows.find((reminder) => reminder.id === id)?.note ?? null,
     fired: () => undefined,
     unreadable: () => 0,
-  } as unknown as ReminderBook;
+  } satisfies ReminderBook;
 
   const events = scenario.fixtures?.events ?? DEFAULT_EVENTS;
   const connectOffers: ConnectIntent[] = [];
