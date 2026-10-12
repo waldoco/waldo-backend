@@ -1764,3 +1764,24 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - #1097 is CLEAN, CI 6/6, held by the freeze. #1098 is unchanged at `2915e830` while L2 works on the fixes (running, last active 17:34Z).
   - **Blocked on the owner:** L1 has an AskUserQuestion open (the `27214c63` deploy, by its last message). L4 has had an AskUserQuestion open since about 16:59Z (likely the t3 probe or its next item) [inference: the question text isn't visible from here].
   - No new #116 comments since 17:01Z, and no new app PRs.
+
+## 17:38Z: staging on `27214c63` (G1 live); D14 cleared; #1097 merged as `cf38b379`
+
+- **L1 deployed `27214c63`** at 17:37Z as version `483c7475`, on the owner's yes in L1's session. `/healthz` shows `27214c63` at 17:38Z [verified].
+  - Gate: CI 6/6, 0 of 55 pending, no wrangler, migration or contract change; the 401s pass and the cron is registered.
+  - Rollback is `c9de74c5` (`87b31948`), which has the guard, so **D14 is cleared and E15 can go ahead on 13 Oct**. L1 told L2 directly.
+  - L1 confirmed the taint fix `3ca41626` is under the merged head `17e99fc6` before asking.
+  - **Now live on staging:**
+    - #1091 G1: earlier results and approval state reach the next owner turn, and the write guard forces `'external'`;
+    - #1093: the calendar-read line;
+    - #1096: the type check.
+- **The freeze is lifted.** #1097 merged at 17:38:34Z: `gh pr merge 1097 --merge --match-head-commit d3ab86358a76f480911c04bc18bf52cd88ddae3d`.
+  - Gate: CI 6/6 at `d3ab8635`, CLEAN and MERGEABLE against `27214c63`, review PASS. The advisor's plan was to merge once the deploy resolved. Tests and a comment only.
+  - Its LOWs (the case-blind sweep can't fail as written; a duplicate type) are an optional follow-up for L1.
+- **The tip is `cf38b379`.** #1098 merges after L2's fixes. The next deploy needs the owner's yes, naming the SHA then current.
+- **L1's follow-ups are done:** #1096's body is corrected (#116 6128837240), and #1093's LOWs landed in #1097.
+- **Probes now possible on `27214c63`, each needing the owner's yes in L4's session:**
+  - the P1 smoke (approve, then ask "did it go out?" right away);
+  - the t3 follow-up for P4 and P5;
+  - the probe-5 rerun.
+  - P1 credit still needs #1098 deployed and a 6-or-more-tool job between the approval and the question.
