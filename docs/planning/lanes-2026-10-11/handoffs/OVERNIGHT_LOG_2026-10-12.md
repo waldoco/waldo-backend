@@ -1719,3 +1719,7 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **Reversible** by revert. The three PR-body LOWs go to L1.
 - **Tip `27214c63`** is `87b31948` plus #1091 (G1), #1093 and #1096. beta-mvp push CI is pending.
   - Deploying it needs the owner's yes in L1's session, naming the SHA. After that deploy the rollback target is `87b31948`, which has the guard, so D14 clears and E15 can proceed on 13 Oct.
+- **Messages at about 16:58–17:00Z.** All three were delivered and each lane's turn started, so my sends weren't capped after all.
+  - **L2:** #1091 merged; go on the per-origin ring fix with a red-first test (approval, then a job of 6 or more tool calls, then the question); the four LOWs; the history-taint follow-up.
+  - **L4:** L1's two answers (movement minutes accepted; the zone-id design for the owner's ruling); go on refresh-while-open; the follow-up t3 probe, which needs the owner's yes in L4's session; the probe-5 rerun still waits on the owner's event.
+  - **L1:** the tip `27214c63` and what's in it; D14 clears after that deploy; the probes after deploy; the #1093 and #1096 LOWs.
