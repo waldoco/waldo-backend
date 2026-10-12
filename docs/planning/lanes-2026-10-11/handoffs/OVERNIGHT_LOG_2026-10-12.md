@@ -1208,11 +1208,11 @@ No second sweep for now, because the usage window has to last through wave 2 and
 - **#1089:** L1 pushed `2fc0e642`, a one-line forget-inventory entry (EXEMPT: day, zone, digest, minute counts; no owner text). It fixes the shard-1 blocker. My six should-fix findings went to L1 at 11:56Z, queued, and L1's message suggests it hadn't read them yet. The delta re-review waits for L1's next head.
   - L1 classifies a shard-2 failure at the old head `76d9bcaf` as flaky, fixed upstream by #1087's phase fix [inference].
 - **The docs push** was rejected once ("failed") and went through on retry. It was transient.
-- **12:0xZ, L2:** G1's two owner-DO lines (~`:2101`, ~`:2157`) don't overlap #1089's hunks, and #1089 doesn't touch `owner-turn.ts` [L2's check; it matches mine]. L2 is making the hot-file edits locally on `l2/g1-tool-results`, unpushed.
+- **12:04Z, L2:** G1's two owner-DO lines (~`:2101`, ~`:2157`) don't overlap #1089's hunks, and #1089 doesn't touch `owner-turn.ts` [L2's check; it matches mine]. L2 is making the hot-file edits locally on `l2/g1-tool-results`, unpushed.
   - Already committed locally: the ledger reconciliation (24/24) and the red P1 tests for the app and Telegram.
   - L2 is waiting for the slot before it pushes or posts on #116. My "slot is yours" reply is blocked by the message cap until the owner types here.
 
-## 12:1xZ: #1088 review: isolation PASS, but FAIL as written (the app-first, Telegram-later transition)
+## 12:08Z: #1088 review: isolation PASS, but FAIL as written (the app-first, Telegram-later transition)
 
 - **Isolation PASS** [verified by the reviewer]: the custody key comes only from this DO's KV `telegram_subject` or the context principal. No app request field, header or model output reaches it. Skill loading grants no tools.
 - **Blocking as written (MEDIUM): an owner who starts in the app and links Telegram later loses all 16 skills on both surfaces.** I re-read the mechanism myself at `0e2557c3` (`skills/curated-owner.ts`) [verified by reading; not executed]:
@@ -1233,7 +1233,7 @@ No second sweep for now, because the usage window has to last through wave 2 and
 - **Owner:** don't merge #1088 at `0e2557c3`.
 - **Queued for L2** (message cap): this finding, plus the G1 slot message from 11:59Z.
 
-## 12:2xZ: owner on skills and just-in-time loading
+## 12:11Z: owner on skills and just-in-time loading
 
 - **The owner, verbatim:** "all skills should be there what's problem we have around 27..." and "like JIT skills, tool ,memeory loading".
 - **Answer:**
@@ -1261,7 +1261,7 @@ No second sweep for now, because the usage window has to last through wave 2 and
   - L3: unreachable.
 - **Next:** probe 6 at 16:00Z (L1's watch), then the 17:00Z re-score.
 
-## 12:2xZ: #1089 delta re-review PASS at `4b98b1d7`
+## 12:26Z: #1089 delta re-review PASS at `4b98b1d7`
 
 I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 source lines) [verified by reading].
 
@@ -1290,7 +1290,7 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
   - Gate: CI is pending; the independent review is running (no fan-out, about 25 calls).
   - Merge is mine under E1 (not on the hold list); deploy needs the owner's yes in L1's session.
 
-## 12:4xZ: probe 5 FAIL on `02103423`; correction on tool search
+## 12:39Z: probe 5 FAIL on `02103423`; correction on tool search
 
 - **Probe 5 (W2):** sent on the test account at 12:25Z and 12:33Z [reported by L1].
   - Each turn made one `query_calendar` call (ok) and ended `resolved` ok.
@@ -1304,7 +1304,7 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
   - Rerun only on the owner's yes in L4's session: an event 2+ hours ahead on the primary calendar, with a prompt that names its time.
 - **Correction to my 12:2xZ answer:** the registry has a `search_tools` schema (`hooks/registry.ts:214`, classed `read()`), but no runtime handler [verified by grep: no `name: 'search_tools'`]. "Tools don't load just in time" still holds. JIT tool loading would build on that schema.
 
-## 12:5xZ: #1090 review FAIL on claim scope; fixed-id rows are the remaining gap
+## 12:42Z: #1090 review FAIL on claim scope; fixed-id rows are the remaining gap
 
 - **#1090 at `4a644e06`:** the code is correct and safer than base, with no regressions. CI is 6/6 green [verified by the reviewer].
 - **Finding 1 (HIGH, the claim):** `read(id)` on fixed-id rows (heartbeat, nightly, brief sweep, day cards) still throws on an unreadable row.
@@ -1324,3 +1324,9 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
     - It lands before anything reshapes a fixed-id row.
   - L2 is told not to reshape fixed-id schedule rows until then.
 - **Correction to the owner:** after #1090, skip-and-run-the-rest holds only for rows read at dispatch and rearm. A bad heartbeat, nightly or day-card row still stops every job and every chat turn, until L1's next PR.
+
+## 12:43Z: heartbeat
+
+- **Fixed:** six log headings I had guessed ("12:0xZ" to "12:5xZ") are corrected to their commit times. The 12:5xZ one ran ahead of the clock.
+- **#1090:** the head is still `4a644e06`, with CI 6/6 and CLEAN. L1 hasn't edited the body yet (last update 12:31Z). I merge once the edit lands and the head is unchanged.
+- **Other PRs:** nothing new since 12:30Z, apart from this docs PR.
