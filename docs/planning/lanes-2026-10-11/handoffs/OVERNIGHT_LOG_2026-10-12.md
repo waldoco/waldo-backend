@@ -940,3 +940,13 @@ Still open:
   - A day card in the app needs an app-only account, or E15 tomorrow.
   - The page (y1, `w_zone`, P4 probe, E14) and the scorecard (B.1 P4, E14) are updated.
 - **L1 finding** [reported]: the app at `72eae07a` never sends `movement_duration`. On real data, Form's motion and stress parts can't compute (#1083's stress included), and Weight's physical load comes only from workouts. The fix is app-side, with L4 and the owner; L1 has flagged it to both. It's added to W1 on the page.
+
+## 09:47Z: probes dispatched; #1037 read in a subagent; movement ruling
+
+- **Probes:** the owner said "go ahead with the probes on that account". The probe sheet is committed (`9dfea018`) and sent to L1 (tail) and L4 (Simulator sends). Each lane still needs the owner's go in its own session, and the owner types the emailed sign-in code. Probes 1–5 run on wave 1; probe 6 is The Close on Telegram at 16:00Z; probes 7–8 follow wave 2. No deletion on that account.
+- **#1037:** the owner pointed to it for the eval and the golden tests against Instinct. A read-only subagent is mapping its task catalog to the probe rows and to the P8 eval slice.
+- **Owner ruling, in L1's session** [reported by L1, verbatim]: "send all required dta as much as needed for better agent function we can handle legal things later".
+  - L4 plans the app to send `movement_duration`: an AppleExerciseTime read, the permission sheet, the range field, and no backend change.
+  - It is an existing producer input, not a new destination [inference from L1's report].
+  - Revisit the legal side before production.
+- **L1** is building Weight on `l1/weight-demand` from `e4ef5b59`; the owner-DO lines go on #116 for L2 first.
