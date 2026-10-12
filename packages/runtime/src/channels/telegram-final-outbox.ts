@@ -138,7 +138,8 @@ export class TelegramFinalOutbox {
   }
   async drain(options: {
     allowed(record: FinalRecord): Promise<boolean>;
-    send(payload: FinalPayload): Promise<unknown>;
+    // Each part goes with the record it belongs to, so a caller can send it to the surface the record is addressed to.
+    send(payload: FinalPayload, record: FinalRecord): Promise<unknown>;
     defer?(record: FinalRecord): Promise<number | null>;
     settled(record: FinalRecord): Promise<void>;
   }): Promise<void> {
@@ -191,7 +192,7 @@ export class TelegramFinalOutbox {
       const part = parts[index]!;
       let result: unknown;
       try {
-        result = await sendTelegramFinal(options.send, {
+        result = await sendTelegramFinal(part => options.send(part, row), {
           chat_id: row.payload.chat_id,
           text: part.text,
           ...(row.payload.parse_mode === undefined ? {} : { parse_mode: row.payload.parse_mode }),
