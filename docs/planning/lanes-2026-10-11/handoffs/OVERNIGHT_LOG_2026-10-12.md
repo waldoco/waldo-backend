@@ -1732,3 +1732,4 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - Both reviews are running in parallel, one per lane. #1098's review focuses on the KV key layout, rollback and forget coverage across rings.
   - L1 corrected its #1096 note on #116 (6128837240).
   - The scorecard's EoD status is finalized at 17:15Z.
+- **17:16Z, page updated** (pillars and notes): P1 shows G1 merged (not deployed); W2 shows probe 5's missing card and the pending rerun; the EoD note says 0 of 6, probes 1–4 and 6 pass, and the tip `27214c63` waits for the deploy yes. Stamped from `date -u` (17:16:25Z).
