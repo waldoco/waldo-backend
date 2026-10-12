@@ -55,10 +55,21 @@ Each is ready for AskUserQuestion.
 2. **#1076: "Not now".**
    - **Question:** approve its guarded Durable Object `ALTER` (`ledger.deferred_at`)? Should "raises it again" mean "presented again on any surface when the model re-raises it"? Should Telegram's "Not now" become defer?
    - **Options:** (a) **approve L2's proposal (recommended)**; (b) approve without re-raise (deferred items stay hidden until they expire); (c) hold, so "Not now" keeps answering 409.
-3. **L3's work,** in L3's session. Its lane rule needs your yes there for every PR.
-   - Open the reminder-push contract PR (local `l3/reminder-push-contract`; no migration, endpoint or app.v1 change).
-   - Open the one-line ADR-0068 correction (waldo-brain).
-   - L3's four approvals decisions are in its batch file, `L3_MORNING_BATCH_2026-10-12.md` at its worktree root.
+3. **L3's work,** in L3's session. Its lane rule needs your yes there for every push, PR and post. Full text: `L3_MORNING_BATCH_2026-10-12.md` at L3's worktree root (`sweet-germain-e44f4d`).
+   - **(a) Open the reminder-push contract PR**
+     - Branch `l3/reminder-push-contract`, local head `a8882b36`.
+     - The `reminder` push class: exempt, 10 a day, held in quiet hours unless urgent, degrades over cap. `agent_invocable: false`. `set_reminder.urgent` is refused until L2 stores it.
+     - No migration, endpoint or app.v1 change.
+     - L3's full wall PASS at `a8882b36`; pgTAP is left to CI **[lane report]**.
+     - **Recommend: open.** Merging is a second yes, or extend my standing go to L3's PRs.
+   - **(b) Open and merge the one-line ADR-0068 correction** (`agent_invocable: false`). Recommend yes; it matches (a).
+   - **(c) The approvals proposal.**
+     - Put the "why now / if you approve / if you don't / based on" explanations inside the approval digest. Recommend yes: you approve the reason you read.
+     - Ship all three changes as one contract PR and one re-pin. Recommend yes.
+     - Show deferred approvals in the default list, marked `deferred_at`, so the chat card can say "You said not now". Recommend yes. It needs #1076's `ALTER`.
+     - Take the design's "changed" state and version numbers to Suyash. Recommend yes.
+     - Let L3 post the proposal on #116. Recommend yes.
+   - **(d) Let L3 post its exact `telegram-owner-do.ts` lines on #116** before it wires the Brief `latest` reader (lane rule for that hot file).
 4. **The Brief `latest` record.** L2's `day_plan` columns need a Durable Object `ALTER` (your yes in L2's session).
 5. **Server-side 18+ record.** The app gate can ship without it (D7). Recording the attestation needs an additive app.v1 field plus storage, probably a migration. Recommend yes, with a privacy note.
 6. **Sessions last 12 hours with no refresh.** Every user signs in again twice a day. It's auth work, so it needs your go and a security review. Recommend scheduling it next, after the send path is proven.
@@ -97,7 +108,14 @@ All are reversible; the decisions file says how to reverse each.
   - which Mottle font file to bundle;
   - decision 53;
   - the G2 names and G5 gauge colours.
-- **Google.** Verify the consent screen. The website's "read only" Calendar/Tasks labels conflict with the scopes Waldo requests (O2).
+- **Google connect, your first consent** (L3's read-only check at `4bb040f5`: wired end to end in source, fails closed, never exercised).
+  - **Before you try:**
+    - the redirect URI `https://waldo-runtime-staging.piyushfulper3210.workers.dev/oauth/google/callback` is registered on the OAuth client;
+    - your Google account is a listed test user (the app is unverified);
+    - the Worker and the Edge Function use the same client.
+    - Otherwise you land on Google's error page with no way back to the app.
+  - **Expect** the consent screen to show edit access to Calendar and Tasks, send and compose for Gmail, and read access to Drive, Docs, Sheets and Slides. That contradicts the site's "read only" labels (O2).
+  - **Proof:** Connectors shows Calendar, Mail and Tasks granted, and Waldo reads your calendar in Main chat.
 
 ## Risks and what is unverified
 
