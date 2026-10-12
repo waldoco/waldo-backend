@@ -355,3 +355,9 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - Its review follows.
 - **#93–#95** haven't been retargeted yet; #93 and #94 have FAIL reviews waiting for fixes.
 - **P1:** not run yet. The go was repeated on #1103 at 23:00Z.
+
+## 23:16:16Z: the orchestrator runs P1 itself
+
+- **Why:** the App session says `iPhone 17` is back on main's build (`60fce743` copy) and signed in as of 23:12Z, ready for P1 "when you say #1104 is live". But my direct messages are capped, and it doesn't read my PR or board replies, so it can't receive the go. It also doesn't know #93 and #94 failed review.
+- **Decision:** the orchestrator runs P1 now on `iPhone 17`. It's quick, and the App session's next step is code for the shell items. This is test send 1 of 5: to the owner's own address, with the word "probe". If the app is disturbed mid-run (a build install), I stop.
+- **App session:** #97 (B2) is CI green; #93 is retargeted to `main`. It asks for merge commits, not squash, for #93 → #95. It raised a non-blocking question about the approval card summary also clipping, which it will fix after #95. It reported that the proper fix in RN's text drawing needs a dependency patch, which is the owner's call.
