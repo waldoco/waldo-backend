@@ -268,21 +268,24 @@ describe('Weight\'s calendar demand route on the owner object', () => {
     expect(wire.telegramSent).toBe(0);
   });
 
-  it('re-arms a confirmed owner\'s jobs idempotently on every demand request, with no duplicate rows', async () => {
+  it('leaves a confirmed owner\'s armed jobs exactly as they were when a demand request boots the runtime again', async () => {
     const name = 'demand-confirmed', today = localIso(Date.now(), 'Europe/London').slice(0, 10);
     const range = { from: shiftDay(today, -2), to: today, timezone: 'Europe/London' };
-    const snapshots: unknown[] = [];
+    const changed: unknown[] = [];
     // Each pass is a fresh owner object on the same storage, as after an eviction, so the request boots the runtime again.
     for (let pass = 0; pass < 3; pass += 1) {
       await withAppOwner(name, { zone: 'Europe/London', confirmed: true }, async (owner, state) => {
+        const rows = () => state.storage.sql.exec('SELECT * FROM schedule ORDER BY id').toArray();
+        // A job part-way through its life, which has fired and failed twice: a boot must not hand it a fresh start.
+        if (pass > 0) state.storage.sql.exec('UPDATE schedule SET attempts = 2, last_fired_at = due_at - 60000 WHERE id = ?', HEARTBEAT_ID);
+        const before = rows();
         const owners = { idFromName: (n: string) => n as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) };
         expect(await readOwnerDemand(owners, directory.WALDO_ROUTER_HMAC_SECRET, name, range)).toEqual({ state: 'unavailable', reason: 'not_connected' });
         expect(ownJobs(state)).toEqual(expect.arrayContaining([NIGHTLY_ID, HEARTBEAT_ID, BRIEF_SWEEP_ID]));
-        snapshots.push(state.storage.sql.exec('SELECT id, status, due_at, recurrence_json FROM schedule ORDER BY id').toArray());
+        if (pass > 0) changed.push(rows().filter((row, i) => JSON.stringify(row) !== JSON.stringify(before[i])).map(row => row.id));
       });
     }
-    expect(snapshots[1]).toEqual(snapshots[0]);
-    expect(snapshots[2]).toEqual(snapshots[0]);
+    expect(changed).toEqual([[], []]);
     expect(model.calls).toBe(0);
     expect(wire.telegramSent).toBe(0);
   });
