@@ -372,6 +372,16 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
   const expiredReply = (entry: LedgerRow): ApprovalDecision =>
     ({ toast: 'This proposal expired', message: `That proposal expired, so nothing happened: ${describeAny(entry)}. Ask me again if you still want it.` });
+  // An approval that awaited after its checks can find its request gone: a read may have closed it at its expiry.
+  const noLongerOpen = (id: string): ApprovalDecision => {
+    const current = row(id);
+    return current?.status === 'expired' ? expiredReply(current) : { toast: 'Already handled.', message: 'Already handled.' };
+  };
+  // Synchronous compare-and-claim of an open request, right before its effect.
+  const claimOpen = (id: string): ApprovalDecision | null => {
+    sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
+    return sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed === 1 ? null : noLongerOpen(id);
+  };
   const apply = async (client: GoogleClient, p: Stored, eventId?: string, marker?: string): Promise<Undo | null | 'stale'> => {
     if (p.action === 'create') {
       const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end!, ...(eventId ? { id: eventId } : {}), ...(marker ? { operationMarker:marker } : {}) });
@@ -444,8 +454,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           const taskProposal = googleTaskProposalSchema.parse(JSON.parse(entry.payload_json));
           if (!entry.proposal_digest || await sha256Hex(JSON.stringify(taskProposal)) !== entry.proposal_digest) { setStatus(id, 'failed'); throw new Error('Google task proposal identity changed'); }
           if (!recovering) {
-            sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
-            if (sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed !== 1) return { toast: 'Already handled.', message: 'Already handled.' };
+            const lost = claimOpen(id);
+            if (lost) return lost;
           }
           const result = await deps.googleTasks().apply(id, taskProposal, operationRef);
           if (result.status === 'done') { setStatus(id, 'done'); out = { toast: 'Done', message: `The Google task change was applied and independently read back: ${describeGoogleTaskChange(taskProposal)}` }; }
@@ -463,9 +473,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             // Synchronous compare-and-claim before external await. Replay and crash
             // leave a consumed uncertain decision, never another blind browser act.
             if (!recovering) {
-              sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
-              const claimed = sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed;
-              if (claimed !== 1) return { toast: 'Already handled.', message: 'Already handled.' };
+              const lost = claimOpen(id);
+              if (lost) return lost;
             }
             let outcome: BrowserSubmitOutcome | undefined;
             const checkedBrowser = async (value: BrowserSubmitOutcome): Promise<EffectReadback> => {
@@ -526,8 +535,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             out = { toast: 'Email changed', message: `The stored email no longer matches what you approved, so nothing was sent: ${describeEmail(ep)}. Ask me again and I'll prepare a fresh one.` };
           } else {
             if (!recovering) {
-              sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
-              if (sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed !== 1) return { toast: 'Already handled.', message: 'Already handled.' };
+              const lost = claimOpen(id);
+              if (lost) return lost;
             }
             try {
               await effect(`${operationRef}:apply`, 'send_email', ep, async () => {
@@ -573,8 +582,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           }
         } else {
           if (!recovering) {
-            sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
-            if (sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed !== 1) return { toast: 'Already handled.', message: 'Already handled.' };
+            const lost = claimOpen(id);
+            if (lost) return lost;
           }
           try {
             await effect(`${operationRef}:apply`, 'send_message', mp, async () => { const sent = await deps.sendMessage!(mp); if (deps.effects && !sent?.provider_id) throw new EffectUnknownError(); return { provider_id: sent?.provider_id ?? mp.idempotency_key, result: null }; }, async () => ({ status: 'unknown' }));
@@ -615,8 +624,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           const marker = await sha256Hex(`${operationRef}:apply`);
           // A read may have closed the request during the awaits above. The effect is reserved synchronously
           // from here, so a later read sees it on record and leaves the request open.
-          const current = row(id);
-          if (!recovering && current?.status !== 'open') return current?.status === 'expired' ? expiredReply(current) : { toast: 'Already handled.', message: 'Already handled.' };
+          if (!recovering && row(id)?.status !== 'open') return noLongerOpen(id);
           const receipt = await effect(`${operationRef}:apply`, 'calendar_change', proposal, async () => {
             const undo = await apply(client, proposal, deps.effects ? eventId : undefined, marker);
             return { provider_id: eventId, result: undo };

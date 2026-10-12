@@ -177,4 +177,25 @@ describe('approval expiry', () => {
       expect(statusOf(id)).toBe('expired');
     });
   });
+  it('tells the owner an email expired, not that it was handled, when a read closes it before the claim', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-expiry-email-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const sent: string[] = [], fetching = gated();
+      let gate = false;
+      const client = { sendRaw: async (raw: string) => { sent.push(raw); return { message_id: 'm1' }; } } as unknown as GoogleClient;
+      const { desk, statusOf, clock } = deskIn(state, client, async () => { if (gate) await fetching.pass(); return client; });
+      const raw = 'To: a@x.test\r\nSubject: Hi\r\n\r\nHello';
+      const id = await desk.proposeSendEmail({ to: ['a@x.test'], subject: 'Hi', body: 'Hello', message_id: '<exp@waldo-send>', raw, digest: await sha256Hex(raw) });
+      gate = true;
+      const approving = desk.decide(id, 'a', 'test');
+      await fetching.reached;
+      clock.set(NOW + PROPOSAL_TTL_MS);
+      expect(desk.ledger([])).toMatch(/- expired: Send email/);
+      fetching.release();
+      expect(await approving).toMatchObject({ toast: 'This proposal expired' });
+      expect(sent).toEqual([]);
+      expect(statusOf(id)).toBe('expired');
+    });
+  });
+
 });
