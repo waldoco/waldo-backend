@@ -6,6 +6,8 @@ export type SystemSection = 'reasons' | 'behavior' | 'health' | 'clock' | 'memor
 export type ContextShape = Readonly<{
   tools_count: number; tools_bytes: number; tool_turns_bytes: number;
   history_messages: number; history_bytes: number; current_bytes: number; attachments: number;
+  // Oldest history rows left out, as counts: window and held on the reply call only; cap and scribe from the provider's successful attempt.
+  history_cut_window?: number; history_cut_held?: number; history_cut_cap?: number; history_cut_scribe?: number;
   system_sections?: Readonly<Partial<Record<SystemSection, number>>>;
 }>;
 export type TurnLogEntry = Readonly<{ trace: string; hop: string; owner?: string; owner_id?: string; owner_email?: string; owner_identity?: 'verified' | 'email_unavailable' | 'unknown'; ms: number; ok: boolean; error?: string; detail?: string; code?: string; guard?: string; usage?: ModelUsage; cost_kind?: CostKind; responsibility_id?: string; shape?: Readonly<{ system_bytes: number; request_bytes: number; context?: ContextShape }>; text?: TurnText }>;

@@ -205,6 +205,7 @@ export type RuntimeLLMSuccess = {
   usage: LLMUsage;
   attempts: LLMAttempt[];
   routing_logs: readonly RoutingLogEvent[];
+  history_cut?: HistoryCut;
 };
 
 export type RuntimeLLMFailure = {
@@ -258,8 +259,12 @@ type PreLlmHookResult =
   | { ok: true; request: LLMRequest }
   | { ok: false; error: HookHaltError };
 
+// Oldest history messages one model call left out: `cap` by the destination's item and character caps, `scribe` by the
+// trim past a structural scribe deny. Counted apart because only `cap` measures length pressure.
+export type HistoryCut = Readonly<{ cap: number; scribe: number }>;
+
 type SanitiseRequestResult =
-  | { ok: true; request: LLMRequest }
+  | { ok: true; request: LLMRequest; cut: HistoryCut }
   | {
       ok: false;
       error: HookHaltError;
@@ -506,6 +511,7 @@ export class RuntimeLLMProvider {
         usage,
         attempts,
         routing_logs: routingLogs,
+        history_cut: sanitisedRequest.cut,
       };
     }
 
@@ -1436,13 +1442,13 @@ async function sanitiseRequest(
   }
   const history = first === 0 ? request.messages : request.messages.slice(first);
   let messages = await sanitiseValue(history, 'internal_context');
+  let cut = 0;
   // Oldest-first trim: find the smallest cut that passes, so recent context survives ("that one" and "yes" keep their
   // referent). A shorter suffix never fails where a longer one passes, so the cut is found by bisection, not one
   // full re-sanitise per dropped message.
   if (!messages.ok && softScribe(messages.error)) {
     let low = 1;
     let high = history.length - 1;
-    let cut = 0;
     while (low <= high) {
       const drop = Math.floor((low + high) / 2);
       const reduced = await sanitiseValue(history.slice(drop), 'internal_context');
@@ -1628,7 +1634,7 @@ async function sanitiseRequest(
     tool_turns: toolTurns?.payload,
   });
   return parsed.success
-    ? { ok: true, request: parsed.data }
+    ? { ok: true, request: parsed.data, cut: { cap: first, scribe: cut } }
     : {
         ok: false,
         error: new HookHaltError('llm_provider', 'sanitised request invalid', 'transient'),

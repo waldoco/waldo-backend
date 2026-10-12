@@ -218,6 +218,8 @@ export const createOwnerResponder = (
         tool_turns_bytes: turns?.length ? utf8Bytes(JSON.stringify(turns)) : 0,
         history_messages: Math.max(0, userMessages.length - 1), history_bytes: utf8Bytes(JSON.stringify(userMessages.slice(0, -1))),
         current_bytes: utf8Bytes(userMessages.at(-1)?.content ?? ''), attachments: attachments?.length ?? 0,
+        ...(purpose === 'reply' ? { history_cut_window: windowCut, history_cut_held: heldCut } : {}),
+        ...(result.ok && result.history_cut ? { history_cut_cap: result.history_cut.cap, history_cut_scribe: result.history_cut.scribe } : {}),
         ...(typeof systemPrompt === 'string' ? {} : { system_sections: systemPrompt.sections }),
       },
     };
@@ -239,8 +241,11 @@ export const createOwnerResponder = (
   const control = turnControl();
   const tree = new ConversationTree();
   let pending: readonly LLMAttachment[] | undefined;
+  // History rows the reply call left out this turn: the token window, then the held-topic filter (each round, since a forget can widen it).
+  let windowCut = 0;
+  let heldCut = 0;
   // F1 receipt: the window observer fires only when history was actually dropped (content-free).
-  const pathObservers = { onWindow: (stats: { kept: number; dropped: number; estimated_tokens: number; budget_tokens: number }) => { if (stats.dropped > 0) log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `kept ${stats.kept} dropped ${stats.dropped} ~${stats.estimated_tokens}/${stats.budget_tokens} tokens` }); } };
+  const pathObservers = { onWindow: (stats: { kept: number; dropped: number; estimated_tokens: number; budget_tokens: number }) => { windowCut = stats.dropped; if (stats.dropped > 0) log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `kept ${stats.kept} dropped ${stats.dropped} ~${stats.estimated_tokens}/${stats.budget_tokens} tokens` }); } };
   // A held topic withholds only the rows that carry it (same guard the forget proof uses); other recall stays available.
   // Every string in a structured result (keys and values), unserialised: JSON.stringify would double a stored backslash and hide an escaped topic from hidesTopic.
   const structuredStrings = (value: unknown, depth = 0): string[] => {
@@ -415,6 +420,7 @@ export const createOwnerResponder = (
           const visibleOwnerTexts = new Set(request.messages.filter(message => message.role === 'user').map(message => message.content));
           for (const [id, turn] of recentOwnerTurns) if (!visibleOwnerTexts.has(turn.text)) recentOwnerTurns.delete(id);
           const entries = request.messages.filter((message, index) => index === request.messages.length - 1 || !holdsHeldTopic(message.content));
+          heldCut = request.messages.length - entries.length;
           const ownerCurrentText = (entries[entries.length - 1]?.content ?? '') + added;
           if (turnReplyContext) entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + '\n\n' + turnReplyContext };
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };

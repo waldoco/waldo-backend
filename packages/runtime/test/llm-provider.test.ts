@@ -1698,6 +1698,7 @@ describe('sanitiseRequest structural degradation', () => {
     );
     expect(result.ok).toBe(true);
     expect(gateway.requests[0]!.request.messages).toEqual([{ role: 'assistant', content: 'earlier reply' }, { role: 'user', content: 'current question' }]);
+    expect(result.ok && result.history_cut).toEqual({ cap: 0, scribe: 1 });
   });
 
   it('finds the history cut in a bounded number of sanitiser passes on a long conversation', async () => {
@@ -1715,6 +1716,7 @@ describe('sanitiseRequest structural degradation', () => {
     expect(result.ok).toBe(true);
     expect(gateway.requests[0]!.request.messages).toEqual(messages.slice(251));
     expect(passes).toBeLessThanOrEqual(12);
+    expect(result.ok && result.history_cut).toEqual({ cap: 0, scribe: 251 });
   });
 
   it('cuts a very long history to the item cap before scanning, in at most three sanitiser passes', async () => {
@@ -1732,6 +1734,38 @@ describe('sanitiseRequest structural degradation', () => {
     expect(result.ok).toBe(true);
     expect(gateway.requests[0]!.request.messages).toEqual(messages.slice(-1024));
     expect(passes).toBeLessThanOrEqual(3);
+    expect(result.ok && result.history_cut).toEqual({ cap: 310, scribe: 0 });
+  });
+
+  it('cuts history to the character cap before scanning, and counts that cut apart from a scribe trim', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const long = (index: number) => `message ${index} `.repeat(15_000).slice(0, 180_000);
+    const messages = [
+      { role: 'user' as const, content: long(0) },
+      { role: 'assistant' as const, content: long(1) },
+      { role: 'user' as const, content: long(2) },
+      { role: 'user' as const, content: 'current question' },
+    ];
+    const result = await provider.complete(
+      { trigger: 'brief', renderRequest: () => ({ messages, max_tokens: 512, temperature: 0.3 }) },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(true);
+    expect(gateway.requests[0]!.request.messages).toEqual(messages.slice(1));
+    expect(result.ok && result.history_cut).toEqual({ cap: 1, scribe: 0 });
+  });
+
+  it('reports no cut when the whole history passes', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const messages = [{ role: 'user' as const, content: 'earlier' }, { role: 'assistant' as const, content: 'reply' }, { role: 'user' as const, content: 'now' }];
+    const result = await provider.complete(
+      { trigger: 'brief', renderRequest: () => ({ messages, max_tokens: 512, temperature: 0.3 }) },
+      runtimeCtx(),
+    );
+    expect(gateway.requests[0]!.request.messages).toEqual(messages);
+    expect(result.ok && result.history_cut).toEqual({ cap: 0, scribe: 0 });
   });
 
   it('rejects the request when a dropped-or-kept history message carries a canary, even if a later suffix would pass', async () => {
