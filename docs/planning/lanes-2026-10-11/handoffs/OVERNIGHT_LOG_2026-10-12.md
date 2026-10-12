@@ -1971,3 +1971,25 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
     - the Simulator build predates the channel filter.
   - L4 does the P1 approval first. The follow-up PR comes before any tester build.
 - **Sends:** about 9 of 10 since the owner's last message (about 18:11Z). The last one is kept for E15's review or a blocking item.
+
+## 19:15Z: #1099 second delta passes review; L1's time-zone gap; #1100 overlaps #1088
+
+- **#1099 at `aebb0445`** (one commit on `5a141798`, 2 files, +6/−3): my review passes [verified diff].
+  - `ALGORITHM.weight` becomes `weight.candidate.v2`, and the comment names both v2s.
+  - The overlapped-day workout test now gives Weight demand (`busyMonth()`), so a Weight row is written, and it asserts `weight.candidate.v2`. Its original physical-load assertion is unchanged.
+  - The `weight.candidate.v1` strings left in `contracts/src/app/health-ingest.test.ts` are schema examples, not the producer's constant.
+  - merge-tree is clean against `446762f4`.
+  - **How this was reviewed:** the subagent at `5a141798` prescribed this exact fix, and I checked the 6 lines myself. The advisor is the second check before the merge.
+  - **L1's claim that no v1 Weight value was ever written** fits the source: live `5bf2857d` has no `readDemand` wiring [verified]. That Weight was therefore always unavailable on staging is [inference].
+  - **CI:** pgTAP passes; the runtime shards and verify are running. Next: green, then the advisor, then the E1 merge (the owner approved it after review, about 18:10Z). Then L1 asks the owner for one deploy carrying #1089 and #1099. The freeze rule applies while that ask is open.
+- **The time-zone gap L1 found** (#116 comment 6130905141; it predates #1099) [reported by L1, mostly verified in source by L1]. **It goes on the owner's hold list.**
+  - The ingest stamps the batch envelope's zone into each row's `timezone`.
+  - The producer clips a day to its newest row's zone and never reads `utc_offset_minutes`.
+  - So a backfill or revision sent from another zone can clip a day's early hours [inference, untested]. That understates daylight, motion and stress, and can make Form unknown.
+  - The fix (place each window by its own `day` or offset) changes which inputs are admitted, so it needs a new version and the owner's yes. Not started.
+- **#1100** (the founders' cloud session, head `3b583a51`, +1044/−731 across 194 files, DIRTY), "One agent on every surface". **It goes on the owner's hold list:**
+  - a DO `rename_class` migration (`TelegramOwnerDO` becomes `OwnerDO`, bound `OWNER_DO`);
+  - Telegram turns admitted under the directory owner's principal (authority and user isolation).
+  - **It overlaps #1088** (L2's reviewed "skills on app turns", owner-merge, passed): two implementations of the same seam. The owner picks which lands; the other rebases onto it or closes.
+  - **Hot-file collision:** it renames `channels/telegram-owner-do.ts` and widens a type in `owner-turn.ts`, while L2's E15 is in flight on the same owner DO and outbox. Whoever merges second rebases.
+  - **Rollback:** a DO class rename is a migration-lineage change, so L1 checks the rollback path before any deploy carrying it [inference: the Worker versions before the rename may not be valid rollback targets afterwards].
