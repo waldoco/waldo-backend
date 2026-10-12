@@ -42,3 +42,26 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - It still contains the `v6` rename (`wrangler.jsonc`, `owner-do.ts`), so it's **not merged**: the owner's ruling puts the behaviour first, then the rename after a Simulator check.
   - A review subagent is checking the merge resolution in `owner-turn.ts` and `tool-loop.ts` now. Its findings go to #1100 as PR comments, for the cloud lane's split.
 - **Usage:** the 5-hour window reset at 21:30Z (0%). The orchestrator's context is at 55%.
+
+## 21:34Z: mail-reading root causes; E15 follow-ups stay with Connectors; deploy tooling
+
+- **Connectors (old L2) evidence:** L1's hops for the 20:52:49Z turn show `read_thread` ran once and returned ok. About 21 s later the model sent the identical call again, which was refused as `repeat_refusal`. So the model read the thread but didn't trust what came back.
+  - Reproduced with synthetic mail through the real handler, dispatcher and scribe:
+    1. A placeholder text/plain part wins over the HTML part.
+    2. A part that arrives as `attachmentId` with no `data` falls back to the snippet.
+    3. **The scribe's health scan on external text withholds business phrases**, such as "Form 16", "load tests at 200" and "Next steps: 3". "Slept 5 hours" is a correct hit.
+    4. `read_thread` pages the oldest messages first.
+  - A Fireflies recap carries a summary plus a link, so readable bodies are enough to answer "what did we learn".
+- **Decisions (orchestrator, owner asleep):**
+  1. **Body choice follows RFC 2046 §5.1.4:** the last renderable alternative, falling back only when it's empty. There's no length heuristic. Artifact extraction (codes and links) runs over every text part, hrefs included, before the body is chosen.
+     - Why: it's a parsing standard, not a judgment rule.
+     - To reverse: revert that PR.
+  2. **The scribe false positives (3):** Connectors writes them up on #1103 with file:line and what the scan protects, then prepares a narrow PR with a corpus test. The test pairs must-withhold real readings with must-pass business phrases; no true positive may be lost, and nothing changes about persistence. The orchestrator and the advisor decide at review. If no safe narrowing exists, it becomes the owner's first morning decision.
+     - Why: it's a privacy boundary.
+  3. **#1101's six follow-ups stay with Connectors.** They're already built on `l2/e15-followups` (12/12 mutants) and land after #1100's behaviour PR merges. Ansh's A3 keeps only the Telegram-copy switch. Posted on #1103 (6133027170).
+     - Why: avoids redoing finished work, with one writer per file.
+     - This departs from the letter of the 21:20Z ruling, but not its intent.
+  4. **The P1 approval fix comes before mail reading** in the Connectors queue.
+- **Deploy tooling:** L1's scratch dir holds pnpm10, the gate script (identical to the memory copy) and the live tail. Details are in `ORCHESTRATOR.md`.
+  - **connector-proxy** (Supabase Edge Function, v17 since 10 Oct) is staging's Google path and imports `google.ts`. Mail fixes need it redeployed from the same SHA as the Worker. That's backend code, not a migration, so the owner's deploy ruling covers it.
+- **L1 stood down,** with nothing unpushed and nothing in flight.
