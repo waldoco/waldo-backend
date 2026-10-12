@@ -1804,3 +1804,16 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
 - **Cap reached:** the reply to L4 was refused ("messaged Claude Desktop sessions 10 times since your user last typed here"). It's queued here to send after the owner's next message:
   > "No conflict; go ahead. created_at is in the released contract (contracts app/core.ts:54, 8fea3a34) and showing nothing when it's absent matches it. The producer gap (app-api.ts:203; no per-row time in the conversation store) is its own backend slice, queued after E15. Polling and the SecureStore marker are fine; test that a 429 reaches your backoff. App merges still need the owner's yes in your session."
   - L4 is already building, so nothing is blocked.
+
+## 17:57Z: the t3 probe passes; the app is at 2 of 6 under the strict test
+
+- **L1's tail read** (#116 6129445945, codes and times only), from the t3 probe on `27214c63` (version `483c7475`). L4 ran it, with the owner's yes to the exact texts in L4's session.
+  - **Calendar re-ask, sent 17:37:39Z:** `tool_get_context:ok`, then `calendar_read:ok(window_date_range:calendar_primary:page_first)[n=1]` and `tool_query_calendar:ok` at 17:38:02Z. Resolved at 17:38:13Z.
+  - **Reminders, sent 17:38:57Z:** `tool_list_reminders:ok` at 17:39:09Z. Resolved at 17:39:14Z.
+  - No failed hop, no 5xx, no duplicate sends. The calendar turn took about 34 s (three model calls). The new `calendar_read` code reaches the tail intact.
+- **Re-score (17:56Z):** P4 (through reminders) and P5 (for a connected owner) pass t1–t3 in app chat, so **the app goes from 0 of 6 to 2 of 6**, inside today's 2–3 target. It landed about 26 minutes after the assumed 17:30Z EoD.
+  - **Caveats:** a day card in the app (probe 9) and P5's connect step are still unprobed. W2's card probe was dropped by the owner.
+  - Scorecard `c09064a7` (EoD section, section 1, section 2 rows, section 4.3) and the probe sheet are updated.
+  - The page was published at 17:57:23Z (pillars, notes, surfaces).
+- **L2's rollback caveat** (#116 6129493846, via L1): rolling `27214c63` back to `c9de74c5` would stage the newest six #1091 rows as internal, including a failure row with provider text. No health reading is among them, because #1091's guard admits as external. Watch roughly the first six tool calls per owner after any rollback.
+- **#1099 (L1's zone-overlap net, from the owner's zone ruling)** at `bbae8681`: 2 files, CI 6/6, CLEAN. Its review is running, and it checks ADR-0081 versioning, since flagged days' Form turns unavailable. Whichever of #1099 and #1089 lands second nulls `physicalLoad` on overlapped days.
