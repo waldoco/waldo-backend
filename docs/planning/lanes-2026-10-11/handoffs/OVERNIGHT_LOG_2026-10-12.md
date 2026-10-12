@@ -1189,3 +1189,9 @@ No second sweep for now, because the usage window has to last through wave 2 and
 - **#1088** (skills on app turns): head `0e2557c3`, which includes base `614d1aff`. CI 6/6, CLEAN, owner-merge. An independent review is running (no fan-out, about 25 calls). The owner decides on its result.
 - **The old L4** (`local_a2ad79f3`) woke on a message from L1 that went to the wrong lane, stayed stood down and passed the message on. L1 was told the current L4 id.
 - **Usage:** the 5-hour window is at 13 percent and resets at 16:30Z; context is at 57 percent. The page update is deferred to the 17:00Z re-score; the scorecard file is current.
+- **G1 (L2), ~12:00Z:** a red test shows that after the owner approves a send from the app, the next turn has no trace of it: no subject, recipient, id or state.
+  - Shipping tool results alone would make P1 worse. The stored output says "nothing was sent" even after approval.
+  - So G1 ships both halves: tool results, and the receipt reconciled at read time from the approvals ledger, withheld when it can't be read.
+  - Hot-file changes: about 3 lines in the owner DO and about 10 in `owner-turn.ts`.
+  - The new `proposal_ref` field is additive in KV (`tool-output-ledger.ts:109-115` uses `storage.put`) [verified], so it isn't a DO schema change.
+  - L2 has the slot now (D12, restated), with the #116 lines posted first.
