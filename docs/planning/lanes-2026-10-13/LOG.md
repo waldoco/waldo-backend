@@ -157,3 +157,25 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - **Likely cause [inference]:** the 12-hour absolute app session expired. Build `60fce743` deletes the credential on a 401 at launch.
   - **Decision:** the App session drives `iPhone 17` (signed in about 20:40Z, so it lapses about 08:40Z) for the P1 re-run, its PR checks and post-deploy QA on request. The orchestrator stops driving it, leaving one Simulator session tonight.
   - **For the owner in the morning:** sign `iPhone 17 Pro` in again. PR B (the 30-day session) removes this class of break.
+
+## 21:56Z: #1104 review PASS; deploy plan
+
+- **#1104 review: PASS,** with nothing blocking [source-verified by the subagent].
+  - Only the app surface changes, to `native_buttons`. Every card kind the app can render is covered, a card it can't render throws, and authority is unchanged (`presentedTo`, digest and actions checks).
+  - Reverting the line fails the tests.
+  - **Non-blocking, for Connectors:**
+    1. Background `prompt()` and `remind()` reuse the last chat turn's presentation instead of taking the delivery surface's. This predates the PR.
+    2. Two native_buttons-counting ingress tests (`owner-do-ingress-isolation.test.ts:959`, `:1174`, under `vitest.common-caller.config.ts`) run in no CI job.
+- **CI at 21:56Z:** 5 of 6 checks green; `verify` pending. A background watch is running.
+- **Plan:**
+  1. Merge on green, with the advisor's yes.
+  2. Wait for push CI on the merge commit.
+  3. Gate and deploy the merge commit clear of :00 and :30. The rollback target is Worker version `a446c445` (`e93a87c9`).
+  4. Smoke checks.
+  5. The App session re-runs P1 on `iPhone 17`. The orchestrator captures the turn's hops from the tail.
+- **Freeze:** nothing else lands on `beta-mvp` until that deploy is done, cloud PRs included.
+- **Decision:** #1077 is not merged tonight. It stays the owner's morning PR, and `ORCHESTRATOR.md` step 7 now says so.
+- **If the classifier refuses the gate's preflight** (its first use in this session; it reads the access token):
+  - stop, log it and queue the deploy for the owner;
+  - tell the App session that P1 waits;
+  - take no other route.

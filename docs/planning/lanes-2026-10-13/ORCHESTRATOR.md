@@ -24,7 +24,7 @@ You don't write runtime or app code.
    - Old L3: `local_63b3708b-d329-4698-b049-61fada649a9e`. It has been idle since 08:46Z on 12 Oct.
 
    Never archive, stop or delete sessions; the owner does that.
-7. **Merge #1077** (this docs pack and the 12 Oct log) once its CI is green, so the pack is on `beta-mvp` for every session. It's docs only: a light review is enough.
+7. **Don't merge #1077 tonight.** Every push or merge of it moves the tip or reruns CI in the middle of deploys. Sessions read the pack from the branch. It stays the owner's morning PR.
 
 ## Each heartbeat cycle (keep it lean)
 
