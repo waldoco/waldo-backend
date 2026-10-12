@@ -1646,8 +1646,18 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
 - **#1096 (L1)** widens the runtime type check to `scenarios/` and `evals/` and fixes 7 hidden tsc errors. It's the #1092 LOW follow-up: 3 files on `87b31948`. CI is running and the review is running. It isn't on the hold list (no runtime, contract or migration change).
 - **Still open:** #1091 (L2's wall is running on `17e99fc6` plus the fix `3ca41626`; not pushed) and #1093 (L1's colon fix, not pushed).
 - **16:45Z, L1's message** repeats its #116 records (deploy `c9de74c5`, probes 6 and 8). It was sent before L1 read my queued #1093 FAIL. The D14/E15 relay to L2 went out at 16:25Z. #1096 is L1's `satisfies ReminderBook` PR. L1's proposals stay on #116 for later: the Weight `scope_gap` reconnect tags after #1089 (6127581207), and the zone-change double-count answer for L4 (6127532876). L4 can read it there.
-- **16:46Z, #1091 pushed at `17e99fc6`** (L2). The fix is `3ca41626`: `tool-loop.ts` (3 lines) plus a test. The base merge brings in `87b31948`.
+- **16:45Z, #1091 pushed at `17e99fc6`** (L2). The fix is `3ca41626`: `tool-loop.ts` (3 lines) plus a test. The base merge brings in `87b31948`.
   - `ToolLoopEvent.taint` is now the turn's running taint once the result lands, including the starting taint of a reply to an outside message. Its only reader is `owner-turn.ts:529`.
   - Two red-first tests: mail → reminder and forget note → raise_approval, so the next block is exactly the desk line; and a reply to an outside message.
   - Mutations catch 3 of 3. The wall passes 51 gates at `17e99fc6`, including 4,940 worker tests. merge-tree is clean against #1088, #1089, #1093, #1078 and #1083 [reported].
   - The delta review is running (about 15 calls). CI is running.
+- **16:47Z, #1093's fix pushed at `ca027446`** (L1; 2 files, +13/−6; CI running).
+  - The code is now colon-joined (at most 45 characters), and a test pins every code to `^[a-z0-9_:]{1,64}$`. The test is red on the old source.
+  - A read by the account's own address now logs `calendar_primary`. The comparison is in memory, and the address is never logged; there's a new test case.
+  - L1 confirms the probe-5 rerun reads through `tailx.py`, which allows several colons and keeps the count, not through `tail-hops.mjs`.
+  - Next deploy: `87b31948` plus #1093, named exactly when L1 asks the owner.
+  - The delta review is queued behind #1096's, so there's one review per lane at a time.
+- **L4's answers, on #116; L1 can't reach L4 and my sends are used up:**
+  - **Movement minutes:** staging accepts `movement_duration` from Apple (6127401585).
+  - **Zone-id design** (6127532876): overlapping re-sent windows with new sample ids double-count in Form's daylight, motion and stress inputs and in Weight's physical load. L1 recommends the app keep each hour's original offset grid. An optional producer guard is the owner's call, and nothing changes before the owner rules.
+  - L4 can read both on #116, or the owner can point L4 to them.
