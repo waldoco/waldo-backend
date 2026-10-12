@@ -1,10 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { armAlarm } from '../src/scheduler/alarm-slot';
-import {
-  evictDurableObject,
-  runDurableObjectAlarm,
-  runInDurableObject,
-} from 'cloudflare:test';
+import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import {
   recallResultSchema,
   ROSTER,
@@ -18,7 +14,7 @@ import {
   type TrustedToolExecutionResult,
   type TrustedInvocationAdmission,
 } from '@waldo/contracts';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   createContextComposer,
   type ContextComposer,
@@ -135,16 +131,7 @@ type TestRunLoopInstance = {
       tool?: never;
     }) => Promise<{ ok: true } | { ok: false; reason: string; code?: 'rate_limited' | 'transient' }>;
   }): void;
-  __runLoopScheduleTrustedRunForTest(input: {
-    admission: TrustedInvocationAdmission;
-    snapshot_ref: string;
-    snapshot_at: number;
-  }): Promise<string>;
-  __runLoopOpenTrustedRunForTest(input: {
-    admission: TrustedInvocationAdmission;
-    snapshot_ref: string;
-    snapshot_at: number;
-  }): Promise<string>;
+  __runLoopOpenTrustedRunForTest(input: TrustedScheduleInput): Promise<string>;
   __runLoopDriveRunForTest(runId: string): Promise<void>;
   __runLoopAuditTrustedV2ForTest(): void;
   readRunEvidence(runId: string): Promise<unknown>;
@@ -152,28 +139,65 @@ type TestRunLoopInstance = {
   readTrustedRunProof(runId: string): Promise<unknown>;
   replayFixture(runId: string): Promise<unknown>;
   scoreRun(traceId: string): Promise<unknown>;
-  alarm(): Promise<void>;
+};
+
+type TrustedScheduleInput = {
+  admission: TrustedInvocationAdmission;
+  snapshot_ref: string;
+  snapshot_at: number;
 };
 
 let sequence = 0;
+const stubsInTest: TrustedRunLoopStub[] = [];
 
 function freshStub(): TrustedRunLoopStub {
   sequence += 1;
   const namespace = (env as unknown as { RUN_LOOP_DO: DurableObjectNamespace }).RUN_LOOP_DO;
-  return namespace.get(namespace.idFromName(`trusted-run-loop-${sequence}`)) as TrustedRunLoopStub;
+  const stub = namespace.get(namespace.idFromName(`trusted-run-loop-${sequence}`)) as TrustedRunLoopStub;
+  stubsInTest.push(stub);
+  return stub;
 }
 
-// The seam arms the alarm for the row's due_at, about 500 ms out. Under load workerd can fire it before the test has
-// installed its overrides and driven the run, and runDurableObjectAlarm then finds no alarm. Holding the alarm in the
-// same callback leaves only the test to drive the run; due_at is unchanged and inside the scheduler's dispatch lookahead.
-async function scheduleTrustedRun(
-  stub: TrustedRunLoopStub,
-  input: Parameters<TestRunLoopInstance['__runLoopScheduleTrustedRunForTest']>[0],
-): Promise<string> {
+// A held alarm outlives its test; clear it so it cannot wake its DO after the test has finished.
+afterEach(async () => {
+  for (const stub of stubsInTest.splice(0)) {
+    await runInDurableObject(stub, (_instance, state) => state.storage.deleteAlarm());
+  }
+});
+
+// Scheduling arms the alarm about 500 ms out, and an alarm pass re-arms it about 250 ms out (after a crash the row is
+// still armed). Under load workerd can fire either before the test drives the run itself, so every arm is pushed back
+// in the same callback that made it. A pending alarm stays pending; due_at is unchanged and inside the scheduler's
+// dispatch lookahead, so the test's own pass still runs the row.
+async function holdPendingAlarm(storage: DurableObjectStorage): Promise<void> {
+  const pending = await storage.getAlarm();
+  if (pending !== null) await armAlarm(storage, Math.max(pending, Date.now() + 60_000));
+}
+
+async function scheduleTrustedRun(stub: TrustedRunLoopStub, input: TrustedScheduleInput): Promise<string> {
   return runInDurableObject(stub, async (instance, state) => {
-    const runId = await (instance as unknown as TestRunLoopInstance).__runLoopScheduleTrustedRunForTest(input);
-    await armAlarm(state.storage, Date.now() + 60_000);
+    const seam = instance as unknown as { __runLoopScheduleTrustedRunForTest(input: TrustedScheduleInput): Promise<string> };
+    const runId = await seam.__runLoopScheduleTrustedRunForTest(input);
+    await holdPendingAlarm(state.storage);
     return runId;
+  });
+}
+
+async function runHeldAlarmPass(instance: object, storage: DurableObjectStorage): Promise<void> {
+  try {
+    await (instance as { alarm(): Promise<void> }).alarm();
+  } finally {
+    await holdPendingAlarm(storage);
+  }
+}
+
+// cloudflare:test's runDurableObjectAlarm, with the pass's own re-arm held.
+async function runDurableObjectAlarm(stub: DurableObjectStub): Promise<boolean> {
+  return runInDurableObject(stub, async (instance, state) => {
+    if ((await state.storage.getAlarm()) === null) return false;
+    await state.storage.deleteAlarm();
+    await runHeldAlarmPass(instance, state.storage);
+    return true;
   });
 }
 
@@ -1087,21 +1111,23 @@ describe('RunLoopDO trusted invocation convergence', () => {
     });
     expect(hostile.status).toBe(400);
 
-    const admitted = await stub.fetch('https://run-loop.local/local/runs', {
-      method: 'POST',
-      headers,
-      body: '{}',
-    });
+    // Each admission schedules the run, so it is made inside the DO with its alarm held.
+    const admit = () =>
+      runInDurableObject(stub, async (instance, state) => {
+        const route = instance as unknown as { fetch(request: Request): Promise<Response> };
+        const response = await route.fetch(
+          new Request('https://run-loop.local/local/runs', { method: 'POST', headers, body: '{}' }),
+        );
+        await holdPendingAlarm(state.storage);
+        return response;
+      });
+    const admitted = await admit();
     expect(admitted.status).toBe(202);
     const first = (await admitted.json()) as { run_id: string };
 
     // The fixed local schedule identity preserves duplicate admission, rather than opening an
     // alternate loop or accepting caller-selectable idempotency input.
-    const duplicate = await stub.fetch('https://run-loop.local/local/runs', {
-      method: 'POST',
-      headers,
-      body: '{}',
-    });
+    const duplicate = await admit();
     expect((await duplicate.json()) as { run_id: string }).toEqual(first);
 
     expect(await runDurableObjectAlarm(stub)).toBe(true);
@@ -2738,7 +2764,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     });
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
@@ -2750,7 +2776,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
           },
         },
       });
-      await runLoop.alarm();
+      await runHeldAlarmPass(runLoop, state.storage);
     });
 
     const proof = await stub.readTrustedRunProof(runId);
@@ -3053,14 +3079,14 @@ describe('RunLoopDO trusted invocation convergence', () => {
       );
       await evictDurableObject(stub);
 
-      await runInDurableObject(stub, async (instance) => {
+      await runInDurableObject(stub, async (instance, state) => {
         const runLoop = instance as unknown as TestRunLoopInstance;
         runLoop.__runLoopSetTestOverrides({
           gateway,
           contextComposer: frozenComposer().composer,
           replayArtifacts: replayArtifacts(),
         });
-        await runLoop.alarm();
+        await runHeldAlarmPass(runLoop, state.storage);
       });
 
       const proof = await stub.readTrustedRunProof(runId);
@@ -3096,14 +3122,14 @@ describe('RunLoopDO trusted invocation convergence', () => {
     });
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
         contextComposer: frozenComposer().composer,
         replayArtifacts: replayArtifacts(),
       });
-      await runLoop.alarm();
+      await runHeldAlarmPass(runLoop, state.storage);
     });
 
     const proof = await stub.readTrustedRunProof(runId);
@@ -3138,14 +3164,14 @@ describe('RunLoopDO trusted invocation convergence', () => {
     expect(atCrash.outbox).toEqual([{ kind: 'brief', status: 'pending', attempts: 0 }]);
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
         contextComposer: frozenComposer().composer,
         replayArtifacts: replayArtifacts(),
       });
-      await runLoop.alarm();
+      await runHeldAlarmPass(runLoop, state.storage);
     });
 
     const proof = await stub.readTrustedRunProof(runId);
@@ -3193,14 +3219,14 @@ describe('RunLoopDO trusted invocation convergence', () => {
     expect(atCrash.trace.map((event) => event.event)).not.toContain('gated');
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
         contextComposer: frozenComposer().composer,
         replayArtifacts: replayArtifacts(),
       });
-      await runLoop.alarm();
+      await runHeldAlarmPass(runLoop, state.storage);
     });
 
     const proof = await stub.readTrustedRunProof(runId);
@@ -3239,7 +3265,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     );
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
@@ -3248,7 +3274,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       });
       runLoop.__runLoopSetKillFlag({ scope: 'global', loopType: null, active: true });
       runLoop.__runLoopCrashAfterTrustedGovernorDeny = true;
-      await expect(runLoop.alarm()).rejects.toThrow('crash-injection:TRUSTED_GOVERNOR_DENY');
+      await expect(runHeldAlarmPass(runLoop, state.storage)).rejects.toThrow('crash-injection:TRUSTED_GOVERNOR_DENY');
     });
 
     const atCrash = await stub.readTrustedRunProof(runId);
@@ -3258,14 +3284,14 @@ describe('RunLoopDO trusted invocation convergence', () => {
     expect(gateway.requests).toHaveLength(3);
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
         contextComposer: frozenComposer().composer,
         replayArtifacts: replayArtifacts(),
       });
-      await runLoop.alarm();
+      await runHeldAlarmPass(runLoop, state.storage);
     });
 
     const proof = await stub.readTrustedRunProof(runId);
@@ -3312,14 +3338,14 @@ describe('RunLoopDO trusted invocation convergence', () => {
     expect(observationsAtCrash).toBe(1);
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
         contextComposer: frozenComposer().composer,
         replayArtifacts: replayArtifacts(),
       });
-      await runLoop.alarm();
+      await runHeldAlarmPass(runLoop, state.storage);
     });
 
     const proof = await stub.readTrustedRunProof(runId);
@@ -3374,14 +3400,14 @@ describe('RunLoopDO trusted invocation convergence', () => {
     );
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
         contextComposer: frozenComposer().composer,
         replayArtifacts: unavailableArtifacts,
       });
-      await runLoop.alarm();
+      await runHeldAlarmPass(runLoop, state.storage);
     });
 
     const proof = await stub.readTrustedRunProof(runId);
@@ -3438,14 +3464,14 @@ describe('RunLoopDO trusted invocation convergence', () => {
     });
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
         contextComposer: frozenComposer().composer,
         replayArtifacts: replayArtifacts(),
       });
-      await runLoop.alarm();
+      await runHeldAlarmPass(runLoop, state.storage);
     });
 
     const proof = await stub.readTrustedRunProof(runId);
@@ -3499,14 +3525,14 @@ describe('RunLoopDO trusted invocation convergence', () => {
     });
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
         contextComposer: frozenComposer().composer,
         replayArtifacts: replayArtifacts(),
       });
-      await runLoop.alarm();
+      await runHeldAlarmPass(runLoop, state.storage);
     });
 
     const proof = await stub.readTrustedRunProof(runId);
@@ -3546,14 +3572,14 @@ describe('RunLoopDO trusted invocation convergence', () => {
     expect(gateway.requests).toHaveLength(3);
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
         contextComposer: frozenComposer().composer,
         replayArtifacts: replayArtifacts(),
       });
-      await runLoop.alarm();
+      await runHeldAlarmPass(runLoop, state.storage);
     });
 
     const proof = await stub.readTrustedRunProof(runId);
@@ -3609,7 +3635,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       );
       await evictDurableObject(stub);
 
-      await runInDurableObject(stub, async (instance) => {
+      await runInDurableObject(stub, async (instance, state) => {
         const runLoop = instance as unknown as TestRunLoopInstance;
         runLoop.__runLoopSetTestOverrides({
           gateway,
@@ -3628,7 +3654,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
           },
           replayArtifacts: replayArtifacts(),
         });
-        await runLoop.alarm();
+        await runHeldAlarmPass(runLoop, state.storage);
       });
 
       const proof = await stub.readRunProof(runId);
@@ -3661,7 +3687,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     expect((await stub.readRunProof(runId)).outbox).toEqual([{ kind: 'brief', status: 'pending', attempts: 0 }]);
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
@@ -3672,7 +3698,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         },
         replayArtifacts: replayArtifacts(),
       });
-      await runLoop.alarm();
+      await runHeldAlarmPass(runLoop, state.storage);
     });
     const proof = await stub.readRunProof(runId);
     expect(proof.current).toEqual({ state: 'FAILED', failure_reason: 'context:materials_unavailable' });
@@ -3703,7 +3729,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     expect(gateway.requests).toHaveLength(1);
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
@@ -3711,7 +3737,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         contextComposer: frozenComposer().composer,
         replayArtifacts: replayArtifacts(),
       });
-      await runLoop.alarm();
+      await runHeldAlarmPass(runLoop, state.storage);
     });
     const proof = await stub.readRunProof(runId);
     expect(proof.current).toEqual({ state: 'FAILED', failure_reason: 'llm:spend_state_unavailable' });
@@ -3811,14 +3837,14 @@ describe('RunLoopDO trusted invocation convergence', () => {
         );
       });
       await evictDurableObject(stub);
-      await runInDurableObject(stub, async (instance) => {
+      await runInDurableObject(stub, async (instance, state) => {
         const runLoop = instance as unknown as TestRunLoopInstance;
         runLoop.__runLoopSetTestOverrides({
           gateway,
           contextComposer: frozenComposer().composer,
           replayArtifacts: replayArtifacts(),
         });
-        await runLoop.alarm();
+        await runHeldAlarmPass(runLoop, state.storage);
       });
       const proof = await stub.readRunProof(runId);
       // Key mutations fail at the V2 state boundary. Artifact-reference mutations preserve the
@@ -4052,14 +4078,14 @@ describe('RunLoopDO trusted invocation convergence', () => {
       );
     });
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
         contextComposer: frozenComposer().composer,
         replayArtifacts: replayArtifacts(),
       });
-      await runLoop.alarm();
+      await runHeldAlarmPass(runLoop, state.storage);
     });
     const proof = await stub.readRunProof(runId);
     expect(proof.current).toEqual({ state: 'FAILED', failure_reason: 'replay:artifact_invalid' });
@@ -4089,7 +4115,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       'crash-injection:TRUSTED_TOOL_CHECKPOINT',
     );
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
@@ -4108,7 +4134,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
           },
         },
       });
-      await runLoop.alarm();
+      await runHeldAlarmPass(runLoop, state.storage);
     });
     const proof = await stub.readRunProof(runId);
     expect(proof.current).toEqual({ state: 'FAILED', failure_reason: 'replay:artifact_invalid' });
@@ -4196,14 +4222,14 @@ describe('RunLoopDO trusted invocation convergence', () => {
     expect(gateway.requests).toHaveLength(1);
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
         contextComposer: frozenComposer().composer,
         replayArtifacts: sixteenReplayArtifacts(),
       });
-      await runLoop.alarm();
+      await runHeldAlarmPass(runLoop, state.storage);
     });
     const proof = await stub.readTrustedRunProof(runId);
     expect(proof.current).toEqual({ state: 'DONE', failure_reason: null });
@@ -4730,7 +4756,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     });
     await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:DELIVERED');
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
         gateway,
@@ -4741,7 +4767,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         },
         replayArtifacts: replayArtifacts(),
       });
-      await runLoop.alarm();
+      await runHeldAlarmPass(runLoop, state.storage);
     });
     const proof = await stub.readRunProof(runId);
     expect(proof.current).toEqual({ state: 'FAILED', failure_reason: 'context:materials_unavailable' });
