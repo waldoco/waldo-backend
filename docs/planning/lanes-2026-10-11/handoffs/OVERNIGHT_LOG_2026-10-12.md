@@ -1913,3 +1913,7 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - #1099 waits for #1089, then its guard delta. #1088 waits for the owner.
   - L2 is building E15. L4 is mid-test with a reminder: the app closed at 18:33:32Z and reopens after it falls due.
   - No new #116 comments since 18:15Z.
+- **18:55Z heartbeat:** no state change. `beta-mvp` is `5bf2857d`; staging is `27214c63`.
+  - L1's gate passes on `5bf2857d` (5 files since live, 0 migrations pending, rollback `483c7475`). L1 asked the owner to deploy it and how to order the Weight work, so #1089 isn't merged yet. I can't see the answer [inference: L1 has run Bash since, so the question may be answered].
+  - **Freeze while that deploy ask is open:** nothing merges through my gate that would move the tip. #1099 waits for #1089 anyway.
+  - L2 is on E15. L4 is mid-test with a reminder.
