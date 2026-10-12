@@ -87,3 +87,32 @@ describe('calendar prep digest', () => {
     expect(await calendarPrepDigest({ ...event, updated: '2026-10-02T09:00:00.000Z' })).not.toBe(await calendarPrepDigest(event));
   });
 });
+
+describe('calendar details are safe in either deploy order', () => {
+  const detailed = { ...base, hangoutLink: meet, attachments: attached, attendees: [{ email: 'asha@example.test', responseStatus: 'accepted' }] };
+  const client = (options?: { calendarDetails: boolean }) => googleClient({ clientId: 'fixture', clientSecret: 'fixture', redirectUri: 'https://fixture.invalid' }, { refresh_token: 'fixture' },
+    (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('https://oauth2')) return Response.json({ access_token: 'fixture' });
+      if (init?.method === 'POST' || init?.method === 'PATCH' || /\/events\/[^/?]+$/.test(url)) return Response.json(detailed);
+      return Response.json({ kind: 'calendar#events', items: [detailed], nextSyncToken: 'sync' });
+    }) as typeof fetch, undefined, { connection_id: 'c', email: 'o@example.test' }, options);
+  const everyPath = async (google: ReturnType<typeof client>) => [
+    (await google.calendarPage!('primary', '2026-10-03T04:00:00Z', '2026-10-03T06:00:00Z', 10, false)).events[0],
+    (await google.events('2026-10-03T04:00:00Z', '2026-10-03T06:00:00Z', 10, false))[0],
+    await google.event('e1'),
+    await google.createEvent({ title: 'Weekly sync', start: '2026-10-03T05:00:00Z', end: '2026-10-03T05:30:00Z' }),
+    (await google.changedEvents(Date.parse('2026-10-01T00:00:00Z'), Date.parse('2026-10-03T00:00:00Z'), Date.parse('2026-10-04T00:00:00Z')))[0],
+  ];
+
+  it('leaves the three fields out of every mapped event when calendar details are off', async () => {
+    for (const event of await everyPath(client({ calendarDetails: false }))) {
+      expect(event).toMatchObject({ id: 'e1' });
+      for (const field of ['conference_url', 'attachments', 'attendee_emails']) expect(event).not.toHaveProperty(field);
+    }
+  });
+
+  it('carries them on every mapped event by default', async () => {
+    for (const event of await everyPath(client())) expect(event).toMatchObject({ conference_url: meet, attachments: [{ title: 'Q4 plan', file_id: 'drive-file-1' }], attendee_emails: ['asha@example.test'] });
+  });
+});
