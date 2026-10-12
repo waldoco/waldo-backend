@@ -746,3 +746,19 @@ Still open:
 - **#1085** (re-raise, and Telegram "Not now" as defer) is ready at `c001e427`, with CI at 5/6.
   - Independent review launched. It covers authority, Telegram callback compatibility, the WhatsApp parser change, app.v1 parts, abuse limits and the hot files.
   - It must merge base and pass CI again after #1084.
+
+## 07:23Z: #1084 merged
+
+- **MERGED waldoco/waldo-backend#1084** as **`2e5993d65ac0194080ecaf944e2faf55b1f7117e`** at 07:23:23Z, with `--match-head-commit 93351f9826f0c84c001446339d45af26122d8dbd`, under E1.
+- **Evidence:**
+  - The independent review at `6587c579` asked for one truthfulness fix plus nits. The fix delta at `6202b51b` was read by me.
+  - The base merge (`531813cb`) leaves the patch-id identical.
+  - CI 6/6 at `93351f98`. `CLEAN`.
+  - Before the merge, the advisor approved the sequence: no second review subagent for a 13-line delta that does exactly what the reviewer asked.
+- **`beta-mvp` is now `2e5993d6`** (#1075, #1080, #1076, #1066, #1084). The rule is unchanged: no deploy of a tip that has #1076 before #1085 lands.
+- **#1085:** L2's local head is `8a28b1d0`, with three advisor fixes in `6f9bf8de`:
+  - a WhatsApp raise now says a card was sent;
+  - `raise_approval`'s claim effect is null, so a list or a refused raise can't back a "done" claim;
+  - the console says "Don't do this".
+
+  L2 is merging `2e5993d6` before pushing, ETA before 08:00Z. The review is running at `c001e427`; I'll read the delta myself.
