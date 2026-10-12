@@ -44,6 +44,9 @@ The results feed the 17:00Z re-score of `PILLAR_SCORECARD_2026-10-12.md` and the
 - **Probe 6: PASS.** The 16:00:00Z alarm composed (`composer_phase:ok ×5`, `health_context:ok:present`), and the owner confirmed in L1's session that The Close arrived on Telegram at about 16:00Z [reported by L1, #116 comment 6128475229]. The tail couldn't show delivery, because it kept only 6 hops per event; since 16:15:29Z it keeps 16 hops plus `hops_total`.
 - **Probe 8: inconclusive.** There were 0 hold, drop or admission hops from 11:55Z to 16:15Z. That's consistent with no due job for an unconfirmed-zone app owner, but it doesn't prove the path ran.
 
+- **t3 re-read probe (17:37–17:39Z on `27214c63`): PASS** for both asks. L1 saw a fresh `tool_query_calendar` (with the `calendar_read` code and count) and a fresh `tool_list_reminders` in their own later turns, and both replies resolved [#116 comment 6129445945].
+- **Probe 5 rerun:** dropped by the owner (relayed by L4).
+
 ## Rule for approval-state probes (P1, t3)
 
 "Did it go out?" counts only when a job with 6 or more tool calls (a morning brief, for example) runs between the approval and the question. That is the everyday sequence, and the 6-row tool-result ring would lose the desk line in it (see the #1091 follow-up).

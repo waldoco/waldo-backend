@@ -16,10 +16,11 @@ The eight pillars:
 7. payments and identity
 8. evals and observability
 
-## EoD status, 12 October (17:15Z; deploy update 17:38Z)
+## EoD status, 12 October (17:15Z; deploy update 17:38Z; t3 re-score 17:56Z)
 
-**The strict test in app Main chat: 0 of 6 chat-capable pillars.** The target was 2–3.
-- **Triggers (P4) and connectors (P5)** have t1, t2 and the reply half of t3 observed live. One follow-up app turn would settle the rest of t3 for both: a later turn reading the result back ("What was on my calendar tomorrow again?", "What reminders do I have?").
+**The strict test in app Main chat: 2 of 6 chat-capable pillars** (re-scored 17:56Z). The target was 2–3.
+- **Triggers (P4, through reminders) and connectors (P5, for a connected owner) pass.** t1 and t2 were seen in probes 2 and 4. The t3 probe on `27214c63` showed each later turn reading the result back fresh: `tool_query_calendar` at 17:38:02Z and `tool_list_reminders` at 17:39:09Z. Both replies resolved [reported by L1 from the tail; the owner said yes to the texts in L4's session].
+  - Caveats: a day card in the app (probe 9) and P5's connect step itself are still unprobed.
 - **Memory and skills (P3)** waits on #1088 (your merge).
 
 **Live on staging `27214c63`** (deployed 17:37Z as version `483c7475`, on your yes in L1's session; rollback `c9de74c5`, which has the guard, so D14 is cleared and E15 can go ahead on 13 Oct):
@@ -292,7 +293,7 @@ A pillar works by natural language on a surface when it passes three tests:
 
 | Surface | Pillars passing all three | Notes |
 |---|---|---|
-| **App Main chat (the product)** | **0 of 6** chat-capable pillars (re-scored 16:40Z) | Nearest misses: connectors (P5) and reminders (P4). t1 and t2 are observed live (probes 2 and 4), and the reply carries the result, but no later turn has been seen getting it back. One follow-up app turn would settle t3 for both: "What was on my calendar tomorrow again?" and "What reminders do I have?", with L1 confirming the re-read in the tail. After those: memory, text chat |
+| **App Main chat (the product)** | **2 of 6** chat-capable pillars (re-scored 17:56Z): triggers (reminders) and connectors (a connected owner) | t3 was seen live at 17:37–17:39Z on `27214c63`: later turns re-read the calendar and listed reminders fresh. Nearest misses: memory and skills (#1088 awaits your merge), then text chat (push, one transcript) |
 | **Telegram (dev surface)** | **3 of 6**: memory and skills, triggers, connectors | By reading. None observed live on `889efa27` |
 | WhatsApp | 0 | Code exists, but no owner can link it: the link-code issuer hard-codes `telegram` [reported] |
 | iMessage | 0 | The modules exist, but nothing imports them [reported]. Draft #1017 would wire a Mac bridge (default-off) |
@@ -358,8 +359,8 @@ None was verified live when the map was written.
 | **P1** Durable workflows | Owner-DO effects 4. Coordinator and RunLoop 3, but no route reaches them [reported] | partial | partial | Effect safety above; resume below | 1 (1) | An interrupted turn is abandoned, never resumed, and there is no cancel route [reported] |
 | **P2** Computer use | 0 / 3 | no: app-only owners are rejected | partial | Below on the app. The approval-gated submit meets the bar on TG | 1 (1) | Admission requires a Telegram link [verified]. Staging's default browser route has no binding [reported] |
 | **P3** Memory and skills | Memory 3–4. Skills 0 / 4: 16 curated SKILL.md, loaded on demand | partial | **yes** | At the bar on TG; below on the app | 7 (5) | Skills are wired only for Telegram [verified]. App chat is missing from search and nightly |
-| **P4** Triggers and jobs | Reminders 5 (probe 2). App-only day cards 4: #1066 and MUST 3 are on staging, unprobed (probe 9). / The Close on Telegram 5 (probe 6) | partial | **yes** | Below: no event triggers, no push | 19 (14) | t3's later-turn leg is unobserved. A day card in the app is unproven (probe 9); The Close reached Telegram (probe 6). Reminders show only after a manual refresh |
-| **P5** Connectors and auth | Calendar read 5 (probe 4). The connect step from app chat is unprobed: #1084 is on staging, but probe 3's account was already connected | partial | **yes** | Core at the bar; revocation and Google verification below | 28 (17) | t3's later-turn leg is unobserved. Connecting from app chat failed silently at `889efa27` [verified]; #1084's fix is unprobed. No disconnect |
+| **P4** Triggers and jobs | Reminders 5 (probe 2). App-only day cards 4: #1066 and MUST 3 are on staging, unprobed (probe 9). / The Close on Telegram 5 (probe 6) | **yes** (reminders, t3 at 17:39Z) | **yes** | Below: no event triggers, no push | 19 (14) | A day card in the app is unproven (probe 9); The Close reached Telegram (probe 6). Reminders show only after a manual refresh, until L4's refresh-while-open |
+| **P5** Connectors and auth | Calendar read 5 (probe 4). The connect step from app chat is unprobed: #1084 is on staging, but probe 3's account was already connected | **yes** for a connected owner (t3 at 17:38Z) | **yes** | Core at the bar; revocation and Google verification below | 28 (17) | The connect step from app chat is unprobed: it failed silently at `889efa27` [verified], and #1084's fix hasn't been seen. No disconnect |
 | **P6** Text and voice | App text 5 (probe 1 on `e37f60f3`); TG 4; push 1; voice in 3 (TG only); voice out 0; WhatsApp 2; iMessage 2; email 0 | partial | partial | Below: no push, two transcripts | 19 (15) | Push (S7); one transcript across surfaces |
 | **P7** Payments and identity | Email sign-in 4; Google sign-in 0; 18+ at sign-up 0; payments 0 | not a chat capability | not a chat capability | Identity below; payments not promised | 1, plus 3 golden-path rows | No Google sign-in, no 18+ record, and a 12 h session with no refresh |
 | **P8** Evals and observability | Tracing 4; alerts 0; evals 2 | not a chat capability | not a chat capability | Tracing at the bar; evals well below | 0 | No eval or probe gates a merge. No workflow runs evals [verified] |
@@ -438,6 +439,10 @@ The pattern is that the authority layer was built to a high bar, while the conte
     - P3, because #1088 isn't merged;
     - P1, because G1 (#1091) is held for a taint fix.
   - **Staging now runs `87b31948`** (wave 2 plus #1090, #1092 and #1094) [verified: `/healthz` at 16:39Z].
+- **Re-score at 17:56Z, from the t3 probe on `27214c63`** (17:37–17:39Z; the owner said yes to the texts in L4's session; L1 read the tail):
+  - **P4 and P5 pass the strict test in app chat. The app moves from 0 of 6 to 2 of 6.**
+  - The calendar re-ask read fresh (`tool_query_calendar:ok`, with `calendar_read` showing the code and its count), and the reminders ask listed fresh (`tool_list_reminders:ok`). Both replies resolved, with no failed hop and no duplicate send.
+  - Unchanged: the probe-5 rerun was dropped by the owner, so W2's card probe stays unproven; probe 9; P3 (#1088 unmerged); and P1 (G1 is live but unprobed).
 
 ### 4.4 Not promised, still required
 
