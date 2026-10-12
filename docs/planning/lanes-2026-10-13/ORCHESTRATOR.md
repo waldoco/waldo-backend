@@ -67,6 +67,29 @@ You don't write runtime or app code.
 
 ## Deploys (staging, Worker only)
 
+**Tooling (from L1's handover, 21:40Z).** Use L1's scratch dir as `$GSP`: `/private/tmp/claude-501/-Users-shivanshfulper-Developer-Pin4sf-waldo-backend--claude-worktrees-agitated-swanson-736b51/efae3256-6422-4a7c-9ace-29bb71b5a2fb/scratchpad`.
+- `$GSP` already holds pnpm10 and `staging-gate.sh`; the memory copy is identical.
+- Run `bash $GSP/staging-gate.sh <backend checkout> $GSP <sha>`.
+
+**Habits:**
+- Deploy clear of the :00 and :30 alarms.
+- Re-check the tip just before `--deploy`.
+- An in-flight app turn finishes on the old version.
+- After a deploy, curl a signed-out `/app/v1/session` and confirm the 401 lands in the tail view.
+- Classify any push-CI red before rerunning it.
+
+**The live tail.** It writes `$GSP/tail-view.log`, filtered through `tailx.py` (16 hops plus `hops_total`), so it's safe to quote. The processes are supervisor PID 63114 and `wrangler tail` PID 47855. If you stop it, kill the supervisor first, then the tail, by PID only.
+
+**connector-proxy is staging's Google path.** It's the Supabase Edge Function, still v17 from 10 Oct, and it imports `connectors/google.ts`. A Google connector fix reaches Vault-backed connections only after connector-proxy is redeployed, from the same SHA as the Worker. Deploy it from the clean detached checkout like this:
+
+```
+supabase functions deploy connector-proxy --project-ref togdshayyxycitzckpqv --no-verify-jwt
+```
+
+Run it inside `env -i PATH=... bash -c '...'`, with the access token exported inside the subshell so it never appears in argv or output.
+- It's backend code, not a migration, so the owner's deploy ruling covers it.
+- Rollback: redeploy the previous source.
+
 1. **Gate script:** `bash ~/.claude/projects/-Users-shivanshfulper-Developer-Pin4sf-waldo-backend/memory/tools/staging-gate.sh <backend checkout> <scratch dir> <40-hex tip sha>`.
    - Run it first without `--deploy`, then with `--deploy` once it prints `GATE PASS`.
    - It needs pnpm 10.34.4 at `<scratch>/pnpm10`: run `npm install --prefix <scratch>/pnpm10 pnpm@10.34.4`.
