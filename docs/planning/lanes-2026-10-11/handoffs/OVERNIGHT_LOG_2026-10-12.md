@@ -1435,3 +1435,11 @@ The independent review read every line at `10dbfdec`. Nothing is CRITICAL or HIG
 - Store each row's origin and show only owner-turn results, as the PR claims. If job-turn results should appear later, that's a separate decision.
 
 **Queued for L2** (the message cap is reached): findings 1–3 and the LOW fixes. Then I re-review the delta, run the advisor, and merge under E1.
+
+- **13:41Z, #1088 fix** at `1e1a4b39` (L2; owner-merge): custody aliases. The app passes its principal, and Telegram passes the stored `owner_principal_ref` (`prn_` plus 32 hex only). The app re-checks the stored subject.
+  - The transition test crosses both surfaces through the real inbox, with all 16 skills enabled.
+  - All 4 new tests fail at `0e2557c3`, mutations caught 5/6, and workers 4890 pass. CI is running.
+  - Rollback is a **partial revert** that keeps the aliases; a full revert brings the bug back. This was observed with a scratch test [reported].
+  - Residual for E15: relinking to a different Telegram account leaves rows disabled, the same as for Telegram-only owners today.
+  - A delta review is running (no fan-out, about 18 calls).
+- **L2** started the episodes fix (`owner-turn.ts:333-337`) before getting the #1091 findings. Those findings are queued behind the message cap.
