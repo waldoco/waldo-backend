@@ -1588,3 +1588,21 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   4. **LOW:** `live:true` probes are stamped `owner`; only capture probes are `machine`.
   5. **LOW:** the privileged-call test can't catch a seed (its fixture has no autonomy gate). The mail test's taint assertion is what covers it. About 13 of the 19 new cases are red at `10dbfdec`, not 14.
   6. **LOW (rollback):** the stored `taint` now means "this result's own taint". A revert would stage up to 6 null-taint rows as internal. That's health-safe, because the write guard admitted them as external.
+
+## 16:23Z: #1091 held for a taint fix; #1093's findings sent to L1
+
+- **#1091 is held at `b1910118`,** even though the review passed. The advisor asked for one check, which I ran:
+  - Tools allowed on tainted turns: `set_reminder` and `forget_memory` aren't in `PRIVILEGED_ACTION_TOOLS` (`contracts tools/handler.ts:138`), so both run after an external read [verified].
+  - Echo with null taint: both return their text with `source_taint: null`. `forget_memory` returns `scope_note` verbatim (`memory.ts:135`). `set_reminder` returns `book.set(args)`, note included (`reminders.ts:111`) [verified].
+  - The effect: text the model copied from a mail can reach the next turn's block. That breaks D16's promise that no external text crosses turns through the block, and the PR's mail-injection claim.
+  - Why not merge now and fix later: L1 deploys only `beta-mvp` tips, so a merge now would ship before the fix.
+- **The fix for L2, to send when my cap resets (queued text):**
+  > "#1091 at b1910118: the review passed, but I'm holding the merge for one fix. Tools allowed on tainted turns echo text with null taint: set_reminder returns the note (reminders.ts:111) and forget_memory returns scope_note (memory.ts:135), so text taken from a mail reaches the next turn's block. Stamp the row with the turn's running taint (tool-loop.ts:166) instead of the result's own stamp (:195 / owner-turn.ts:529), so a row recorded after an external read is external. Desk lines still show. Add a red-first test: an injected mail plants a reminder note and a forget scope note, and the next owner turn's block shows neither, while the desk line still shows. Push, and I'll re-review the delta and merge under E1. First follow-up after that (MEDIUM, not blocking): keep the 6-row ring per origin, or never evict desk-linked rows. Today a job with 6 or more tool calls (the morning brief) erases the desk line before 'did it go out?'. LOWs for later: send_email's gate failure is stamped null (google.ts:362); live:true probes are stamped owner; the privileged-call test can't catch a seed. ownerTurnActive is safe: turns run through serial()."
+- **Concurrency settled:** the DO runs every entry point through `serial()` (`telegram-owner-do.ts:1371`; callers at :733 turn, :744 app drain, :1267 alarm, :1421 probe), so the shared `ownerTurnActive` flag can't interleave [verified for these entry points].
+- **A pre-existing path, outside #1091:** `list_reminders` returns stored notes with null taint, and reminders fire with their note. A note set during a tainted turn therefore reaches later untainted turns without G1. It's an ADR-0049 question about provenance for stored owner notes. It's logged for the owner and the approvals lane, not this PR.
+- **New re-score rule:** P1 ("did it go out?") and t3 can't be credited from a probe unless a job with 6 or more tool calls runs between the approval and the question. That is the daily sequence: approve in the evening, the brief runs, then the owner asks.
+- **Sent to L1** (queued, my last send until the owner types):
+  - #1093 FAIL: join with `:` plus a shape test. The caveat: `tail-hops.mjs` allows one colon and keeps no count, so L1 should name the viewer the rerun uses.
+  - #1093 LOW: `calendar_primary`.
+  - The tip: `87b31948` plus #1093, without #1091.
+  - Asks: probe 6 and 8 results. Relayed L4's two questions (movement minutes on staging; the zone-id design).
