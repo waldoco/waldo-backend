@@ -3,7 +3,7 @@ import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { AppInbox, type AppInboxRecord } from './app-inbox';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
-import { calendarDemand, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
+import { calendarDemand, demandCode, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
 import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
 import { surfaceOwnerAdmission } from '../identity/surface-owner-admission';
 import { createOwnerTurnContext, type OwnerContextSources } from '../context-composer/owner-turn';
@@ -624,7 +624,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const headers={'cache-control':'no-store'};
     const range=await verifiedDemandRequest(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.TELEGRAM_OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
     if(!range)return Response.json({error:'unavailable'},{status:403,headers});
-    try{return Response.json(await this.setup('app').calendarDemand(range),{headers});}catch{return Response.json({error:'unavailable'},{status:503,headers});}
+    const runtime=this.setup('app'),started=Date.now(),trace=`calendar-demand:${started}`;
+    try{
+      const answer=await runtime.calendarDemand(range);
+      runtime.log({trace,hop:'calendar_demand',ms:Date.now()-started,ok:answer.state==='available',code:demandCode(answer)});
+      return Response.json(answer,{headers});
+    }catch{runtime.log({trace,hop:'calendar_demand',ms:Date.now()-started,ok:false,code:'read_failed'});return Response.json({error:'unavailable'},{status:503,headers});}
   }
   private async appRoute(request: Request): Promise<Response> {
     const path=new URL(request.url).pathname,name=request.headers.get('x-waldo-do-name')??'',hash=request.headers.get('x-waldo-app-session-hash')??'';
@@ -2771,7 +2776,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return true;
       },
       googleConnectUrl: (feature, channel) => google.connectUrl(feature, channel),
-      calendarDemand: (range) => calendarDemand({ sql: this.ctx.storage.sql, accounts: () => google.state(), client: (email) => google.client('calendar', undefined, undefined, email), now: Date.now }).read(range),
+      calendarDemand: (range) => calendarDemand({ sql: this.ctx.storage.sql, now: Date.now,
+        accounts: async () => { await google.migrate(); const failing = await health(); return (await accounts()).map((account) => ({ email: account.email, scopes: account.scopes, error: failing[account.id] || null })); },
+        client: (email) => google.client('availability', undefined, undefined, email) }).read(range),
       openFile: async (id) => {
         const file = Number.isInteger(id) ? files.get(id) : null;
         if (!file) return null;

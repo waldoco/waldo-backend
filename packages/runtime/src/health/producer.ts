@@ -10,13 +10,15 @@ export type ProducerDeps = Readonly<{
   readSeries: (range: { from: string; to: string; signals: readonly string[] }) => Promise<unknown>;
   writeContext: (payload: string) => Promise<unknown>;
   compute: (input: DailyScoresInput) => DailyScores;
-  // Busy minutes per local day across the owner's calendars, for Weight. Absent or failing, Weight is unavailable.
+  // Busy minutes per local day across the owner's calendars, for Weight. Absent, failing or late, Weight is unavailable.
   readDemand?: (range: { from: string; to: string; timezone: string }) => Promise<unknown>;
+  demandGraceMs?: number;
 }>;
 
 const WINDOW_DAYS = 30;
 const HOUR_MS = 3_600_000;
 const MAX_BUSY_MINUTES = 1500;
+const DEMAND_GRACE_MS = 5_000;
 const SIGNALS = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'workout'];
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
@@ -103,10 +105,11 @@ const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ 
 };
 
 // Movement minutes, plus workout minutes in hours that carry no movement reading, so a workout the movement count
-// already holds is not counted twice. Known only on a day the phone reported hourly readings or a workout.
+// already holds is not counted twice. Known only on a day with a movement reading or a workout: heart-rate or daylight
+// hours alone say nothing about load.
 const physicalLoadOf = (day: DayRecord): number | null => {
-  if (!day.hourly.length && !day.workouts.length) return null;
   const moving = day.hourly.filter(bucket => bucket.movementMinutes !== null);
+  if (!moving.length && !day.workouts.length) return null;
   const workoutMs = day.workouts.reduce((sum, workout) => {
     const from = Date.parse(workout.startAt), to = Date.parse(workout.endAt);
     if (!(from < to)) return sum;
@@ -116,21 +119,30 @@ const physicalLoadOf = (day: DayRecord): number | null => {
   return moving.reduce((sum, bucket) => sum + bucket.movementMinutes!, 0) + Math.round(workoutMs / 60_000);
 };
 
-// A day the calendar could not be read is missing here, so it reads as no calendar demand rather than a free day.
-const busyByDay = (answer: unknown): ReadonlyMap<string, number> => {
+type Busy = Readonly<{ minutes: number; partial: boolean }>;
+// A day the calendar could not be read is missing here, so it reads as no calendar demand rather than a free day. A
+// count outside one local day's minutes is rejected, not clipped.
+const busyByDay = (answer: unknown): ReadonlyMap<string, Busy> => {
   const a = asRecord(answer);
   if (a?.state !== 'available' || !Array.isArray(a.days)) return new Map();
-  return new Map(a.days.flatMap((raw): [string, number][] => {
+  return new Map(a.days.flatMap((raw): [string, Busy][] => {
     const d = asRecord(raw);
     return d && typeof d.day === 'string' && DAY.test(d.day) && typeof d.busy_minutes === 'number' && Number.isFinite(d.busy_minutes)
-      && d.busy_minutes >= 0 && d.busy_minutes <= MAX_BUSY_MINUTES ? [[d.day, d.busy_minutes]] : [];
+      && d.busy_minutes >= 0 && d.busy_minutes <= MAX_BUSY_MINUTES ? [[d.day, { minutes: d.busy_minutes, partial: d.partial === true }]] : [];
   }));
+};
+
+type DemandRead = Readonly<{ kind: 'answer'; answer: unknown } | { kind: 'failed' } | { kind: 'late' }>;
+const within = (read: Promise<unknown>, graceMs: number): Promise<DemandRead> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<DemandRead>(resolve => { timer = setTimeout(() => resolve({ kind: 'late' }), graceMs); });
+  return Promise.race([read.then((answer): DemandRead => ({ kind: 'answer', answer }), (): DemandRead => ({ kind: 'failed' })), late]).finally(() => clearTimeout(timer));
 };
 
 const localDay = (at: number, timeZone: string): string =>
   new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(at));
 
-const rowOf = (day: string, scores: DailyScores, basis: Readonly<{ source: string; epoch: number }>, readAt: string, timezone: string, zoneChanged: boolean): object => {
+const rowOf = (day: string, scores: DailyScores, basis: Readonly<{ source: string; epoch: number }>, readAt: string, timezone: string, tags: readonly string[]): object => {
   const { recovery, form, weight } = scores;
   const unavailable = (reason: string) => ({ reason });
   return {
@@ -142,7 +154,7 @@ const rowOf = (day: string, scores: DailyScores, basis: Readonly<{ source: strin
     weight: weight.state === 'unavailable' ? unavailable(weight.reason)
       : { score: weight.score, zone: toRowZone('weight', weight.zone), confidence: weight.coverage, algorithm_version: weight.algorithm_version, activation: weight.activation, hrv_method: weight.hrv_method },
     ...(recovery.state === 'available' ? { confidence: recovery.coverage } : {}),
-    freshness: 'fresh', tags: zoneChanged ? ['zone_changed'] : [],
+    freshness: 'fresh', tags,
   };
 };
 
@@ -154,22 +166,30 @@ const writeOutcome = (answer: unknown): 'written' | 'stale' | 'refused' | 'faile
 };
 
 export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now: number; timezone: string }>): Promise<ProducerOutcome> => {
+  let pending: Promise<unknown> | undefined;
   try {
-    const today = localDay(at.now, at.timezone);
-    const parsed = parseSeries(await deps.readSeries({ from: shiftDay(today, -WINDOW_DAYS), to: today, signals: SIGNALS }));
+    const today = localDay(at.now, at.timezone), range = { from: shiftDay(today, -WINDOW_DAYS), to: today };
+    // Started beside the series read and bounded, so a slow calendar costs Weight, never the Recovery and Form writes.
+    pending = deps.readDemand?.({ ...range, timezone: at.timezone });
+    const demand = pending ? within(pending, deps.demandGraceMs ?? DEMAND_GRACE_MS) : null;
+    const parsed = parseSeries(await deps.readSeries({ ...range, signals: SIGNALS }));
     if (parsed.kind !== 'series') return parsed.kind;
     // One source's readings are computed on its own. Two phones' step counts or sleep for one night are not added up.
     const chosen = [...parsed.series.sources].filter(s => s.readings.length > 0).sort((a, b) => b.readings.length - a.readings.length || a.source.localeCompare(b.source))[0];
     if (!chosen) return 'no_readings';
     const { days: readingDays, zoneChanged } = daysOf(chosen.readings, at.timezone);
-    const busy = deps.readDemand ? busyByDay(await deps.readDemand({ from: shiftDay(today, -WINDOW_DAYS), to: today, timezone: at.timezone }).catch(() => null)) : new Map<string, number>();
-    const days = readingDays.map((day): DayRecord => ({ ...day, demand: { meetingMinutes: busy.get(day.day) ?? null, messageCount: null, openTaskMinutes: null, physicalLoad: physicalLoadOf(day) } }));
+    const read = demand && await demand;
+    if (read && read.kind !== 'answer') console.log(JSON.stringify({ hop: 'weight_demand', ok: false, code: read.kind === 'late' ? 'demand_late' : 'demand_failed' }));
+    const busy = busyByDay(read?.kind === 'answer' ? read.answer : null);
+    const days = readingDays.map((day): DayRecord => ({ ...day, demand: { meetingMinutes: busy.get(day.day)?.minutes ?? null, messageCount: null, openTaskMinutes: null, physicalLoad: physicalLoadOf(day) } }));
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
     for (const targetDay of [shiftDay(today, -1), today]) {
       const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: parsed.series.readAt });
       const nothingToShow = [scores.recovery, scores.form, scores.weight].every(p => p.state === 'unavailable');
       if (nothingToShow && !days.some(d => d.day === targetDay)) continue;
-      const row = rowOf(targetDay, scores, chosen, parsed.series.readAt, at.timezone, zoneChanged.has(targetDay));
+      // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
+      const tags = [...(zoneChanged.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
+      const row = rowOf(targetDay, scores, chosen, parsed.series.readAt, at.timezone, tags);
       outcomes.push(writeOutcome(await deps.writeContext(JSON.stringify(row))));
     }
     for (const outcome of ['failed', 'refused', 'written', 'stale'] as const) if (outcomes.includes(outcome)) return outcome;
@@ -177,5 +197,8 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
   } catch {
     console.error('health producer failed');
     return 'failed';
+  } finally {
+    // A late read still finishes, so the owner object caches it for the next upload.
+    await pending?.catch(() => undefined);
   }
 };

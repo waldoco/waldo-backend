@@ -257,11 +257,32 @@ describe('Weight\'s calendar demand route on the owner object', () => {
       const today = localIso(Date.now(), 'Europe/London').slice(0, 10);
       const range = { from: shiftDay(today, -2), to: today, timezone: 'Europe/London' };
       expect(await readOwnerDemand(owners, directory.WALDO_ROUTER_HMAC_SECRET, 'demand-unconfirmed', range)).toEqual({ state: 'unavailable', reason: 'not_connected' });
+      // One content-free reason code per read.
+      expect(state.storage.sql.exec("SELECT ok, note FROM trace_log WHERE hop = 'calendar_demand'").toArray()).toEqual([{ ok: 0, note: 'not_connected' }]);
       await owner.setup('app').ready;
       expect(ownJobs(state)).toEqual([]);
       await expect(readOwnerDemand(owners, 'forged-router-secret', 'demand-unconfirmed', range)).rejects.toThrow('calendar demand unavailable');
       await expect(readOwnerDemand(owners, directory.WALDO_ROUTER_HMAC_SECRET, 'someone-else', range)).rejects.toThrow('calendar demand unavailable');
     });
+    expect(model.calls).toBe(0);
+    expect(wire.telegramSent).toBe(0);
+  });
+
+  it('re-arms a confirmed owner\'s jobs idempotently on every demand request, with no duplicate rows', async () => {
+    const name = 'demand-confirmed', today = localIso(Date.now(), 'Europe/London').slice(0, 10);
+    const range = { from: shiftDay(today, -2), to: today, timezone: 'Europe/London' };
+    const snapshots: unknown[] = [];
+    // Each pass is a fresh owner object on the same storage, as after an eviction, so the request boots the runtime again.
+    for (let pass = 0; pass < 3; pass += 1) {
+      await withAppOwner(name, { zone: 'Europe/London', confirmed: true }, async (owner, state) => {
+        const owners = { idFromName: (n: string) => n as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) };
+        expect(await readOwnerDemand(owners, directory.WALDO_ROUTER_HMAC_SECRET, name, range)).toEqual({ state: 'unavailable', reason: 'not_connected' });
+        expect(ownJobs(state)).toEqual(expect.arrayContaining([NIGHTLY_ID, HEARTBEAT_ID, BRIEF_SWEEP_ID]));
+        snapshots.push(state.storage.sql.exec('SELECT id, status, due_at, recurrence_json FROM schedule ORDER BY id').toArray());
+      });
+    }
+    expect(snapshots[1]).toEqual(snapshots[0]);
+    expect(snapshots[2]).toEqual(snapshots[0]);
     expect(model.calls).toBe(0);
     expect(wire.telegramSent).toBe(0);
   });

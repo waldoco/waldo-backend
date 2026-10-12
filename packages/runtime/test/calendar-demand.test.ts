@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { busyMinutesByDay, calendarDemand, type DemandClient } from '../src/health/calendar-demand';
+import { busyMinutesByDay, calendarDemand, demandCode, type DemandClient } from '../src/health/calendar-demand';
 import { CALENDAR_DEMAND_PATH, readOwnerDemand, verifiedDemandRequest } from '../src/health/calendar-demand-route';
 import type { CalendarListItem, FreeBusyResult } from '../src/connectors/google';
 
@@ -10,8 +10,13 @@ const TZ = 'Europe/London';
 const NOW = Date.parse('2026-03-20T12:00:00Z');
 const MINUTE = 60_000;
 
+const AUTH = 'https://www.googleapis.com/auth/';
+// What a consent from the current dialog grants for the calendar: events, free/busy and the calendar list.
+const CALENDAR_SCOPES = [`${AUTH}calendar.events`, `${AUTH}calendar.events.freebusy`, `${AUTH}calendar.calendarlist.readonly`];
+
 type Busy = Readonly<{ calendar: string; start: string; end: string }>;
-type FakeAccount = { calendars: Partial<CalendarListItem>[]; busy: Busy[]; errors?: string[] };
+// `failing` calendars answer with a transient error, `gone` calendars with Google's notFound.
+type FakeAccount = { calendars: Partial<CalendarListItem>[]; busy: Busy[]; failing?: string[]; gone?: string[]; scopes?: readonly string[] | null };
 const calendar = (id: string, over: Partial<CalendarListItem> = {}): Partial<CalendarListItem> => ({ id, title: id, access_role: 'owner', primary: false, selected: true, hidden: false, ...over });
 
 const fakeClient = (account: FakeAccount, calls: { from: string; to: string; ids: readonly string[] }[]): DemandClient => ({
@@ -24,7 +29,7 @@ const fakeClient = (account: FakeAccount, calls: { from: string; to: string; ids
     for (const id of ids) {
       calendars[id] = {
         busy: account.busy.filter(b => b.calendar === id && Date.parse(b.end) > Date.parse(from) && Date.parse(b.start) < Date.parse(to)).map(({ start, end }) => ({ start, end })),
-        ...(account.errors?.includes(id) ? { errors: [{ reason: 'notFound' }] } : {}),
+        ...(account.failing?.includes(id) ? { errors: [{ reason: 'backendError' }] } : account.gone?.includes(id) ? { errors: [{ reason: 'notFound' }] } : {}),
       };
     }
     return { from, to, calendars };
@@ -36,17 +41,19 @@ const withDemand = <T>(work: (sql: SqlStorage) => Promise<T>) =>
 
 const setup = (sql: SqlStorage, accounts: Record<string, FakeAccount>, options: { failing?: string[]; now?: () => number } = {}) => {
   const calls: { from: string; to: string; ids: readonly string[] }[] = [];
+  const clients: string[] = [];
   const clock = { now: NOW };
   const demand = calendarDemand({
     sql,
-    accounts: async () => Object.keys(accounts).map(email => ({ email, calendar: true, error: options.failing?.includes(email) ? 'invalid_grant' : null })),
-    client: async email => (accounts[email] ? fakeClient(accounts[email]!, calls) : null),
+    accounts: async () => Object.entries(accounts).map(([email, account]) => ({ email, scopes: account.scopes === undefined ? CALENDAR_SCOPES : account.scopes, error: options.failing?.includes(email) ? 'invalid_grant' : null })),
+    client: async email => { clients.push(email); return accounts[email] ? fakeClient(accounts[email]!, calls) : null; },
     now: options.now ?? (() => clock.now),
   });
-  return { demand, calls, clock };
+  return { demand, calls, clients, clock };
 };
-const byDay = (answer: Awaited<ReturnType<ReturnType<typeof calendarDemand>['read']>>) =>
-  answer.state === 'available' ? Object.fromEntries(answer.days.map(d => [d.day, d.busy_minutes])) : answer;
+type Answer = Awaited<ReturnType<ReturnType<typeof calendarDemand>['read']>>;
+const byDay = (answer: Answer) => answer.state === 'available' ? Object.fromEntries(answer.days.map(d => [d.day, d.busy_minutes])) : answer;
+const partialDays = (answer: Answer) => answer.state === 'available' ? answer.days.filter(d => d.partial).map(d => d.day) : answer;
 
 describe('busy minutes per local day', () => {
   it('counts overlapping blocks from different calendars once', () => {
@@ -79,8 +86,31 @@ describe('calendar demand', () => {
       'work@example.com': { calendars: [calendar('work'), calendar('team', { selected: false })], busy: [{ calendar: 'work', start: '2026-03-19T09:00:00Z', end: '2026-03-19T10:00:00Z' }, { calendar: 'team', start: '2026-03-19T15:00:00Z', end: '2026-03-19T16:00:00Z' }] },
       'home@example.com': { calendars: [calendar('home')], busy: [{ calendar: 'home', start: '2026-03-19T09:30:00Z', end: '2026-03-19T11:00:00Z' }] },
     });
-    expect(byDay(await demand.read(range))).toEqual({ '2026-03-18': 0, '2026-03-19': 120, '2026-03-20': 0 });
+    const answer = await demand.read(range);
+    expect(byDay(answer)).toEqual({ '2026-03-18': 0, '2026-03-19': 120, '2026-03-20': 0 });
+    expect([partialDays(answer), demandCode(answer)]).toEqual([[], 'complete']);
     expect(calls.flatMap(c => c.ids).sort()).toEqual(['home', 'work']);
+  }));
+
+  it('reads an account that granted free/busy and the calendar list without event access', () => withDemand(async sql => {
+    const { demand } = setup(sql, { 'work@example.com': { calendars: [calendar('work')], busy: [{ calendar: 'work', start: '2026-03-19T09:00:00Z', end: '2026-03-19T10:00:00Z' }], scopes: CALENDAR_SCOPES.slice(1) } });
+    expect(byDay(await demand.read(range))).toMatchObject({ '2026-03-19': 60 });
+  }));
+
+  it('is unknown, not free, when a calendar account lacks free/busy or the calendar list', () => withDemand(async sql => {
+    const cases: Record<string, readonly string[] | null> = { eventsOnly: CALENDAR_SCOPES.slice(0, 1), noList: CALENDAR_SCOPES.slice(0, 2), legacyGrant: null };
+    for (const [label, scopes] of Object.entries(cases)) {
+      const { demand, clients } = setup(sql, { 'work@example.com': { calendars: [calendar('work')], busy: [], scopes }, 'home@example.com': { calendars: [calendar('home')], busy: [] } });
+      expect([label, await demand.read(range), clients]).toEqual([label, { state: 'unavailable', reason: 'scope_gap' }, []]);
+    }
+  }));
+
+  it('leaves a mail-only account out of the read', () => withDemand(async sql => {
+    const mailOnly = { calendars: [calendar('mail')], busy: [], scopes: [`${AUTH}gmail.readonly`] };
+    expect(await setup(sql, { 'mail@example.com': mailOnly }).demand.read(range)).toEqual({ state: 'unavailable', reason: 'not_connected' });
+    const { demand, clients } = setup(sql, { 'mail@example.com': mailOnly, 'work@example.com': { calendars: [calendar('work')], busy: [] } });
+    expect((await demand.read(range)).state).toBe('available');
+    expect(clients).toEqual(['work@example.com']);
   }));
 
   it('is unavailable with no calendar connection, and forgets what it had cached', () => withDemand(async sql => {
@@ -105,12 +135,27 @@ describe('calendar demand', () => {
   }));
 
   it('reports a day it could not read as unknown, never as free, and does not cache it', () => withDemand(async sql => {
-    const account = { calendars: [calendar('work'), calendar('shared')], busy: [{ calendar: 'work', start: '2026-03-19T09:00:00Z', end: '2026-03-19T10:00:00Z' }], errors: ['shared'] };
+    const account: FakeAccount = { calendars: [calendar('work'), calendar('shared')], busy: [{ calendar: 'work', start: '2026-03-19T09:00:00Z', end: '2026-03-19T10:00:00Z' }], failing: ['shared'] };
     const { demand, calls } = setup(sql, { 'work@example.com': account });
-    expect(byDay(await demand.read(range))).toEqual({ '2026-03-18': null, '2026-03-19': null, '2026-03-20': null });
-    account.errors = [];
+    const unread = await demand.read(range);
+    expect([byDay(unread), demandCode(unread)]).toEqual([{ '2026-03-18': null, '2026-03-19': null, '2026-03-20': null }, 'days_unknown']);
+    account.failing = [];
     expect(byDay(await demand.read(range))).toEqual({ '2026-03-18': 0, '2026-03-19': 60, '2026-03-20': 0 });
     expect(calls.length).toBe(2);
+  }));
+
+  it('leaves out a calendar Google reports gone, and says so on every day it covers', () => withDemand(async sql => {
+    const account: FakeAccount = { calendars: [calendar('work'), calendar('old')], busy: [{ calendar: 'work', start: '2026-03-19T09:00:00Z', end: '2026-03-19T10:00:00Z' }], gone: ['old'] };
+    const { demand, calls } = setup(sql, { 'work@example.com': account });
+    const first = await demand.read(range);
+    expect([byDay(first), partialDays(first), demandCode(first)]).toEqual([{ '2026-03-18': 0, '2026-03-19': 60, '2026-03-20': 0 }, ['2026-03-18', '2026-03-19', '2026-03-20'], 'calendar_left_out']);
+    expect(partialDays(await demand.read(range))).toEqual(['2026-03-18', '2026-03-19', '2026-03-20']);
+    expect(calls.length).toBe(1);
+  }));
+
+  it('still treats a stretch as unknown when a gone calendar sits beside one that failed', () => withDemand(async sql => {
+    const { demand } = setup(sql, { 'work@example.com': { calendars: [calendar('work'), calendar('old'), calendar('shared')], busy: [], gone: ['old'], failing: ['shared'] } });
+    expect(byDay(await demand.read(range))).toEqual({ '2026-03-18': null, '2026-03-19': null, '2026-03-20': null });
   }));
 
   it('reuses past days, and refreshes today only after 30 minutes', () => withDemand(async sql => {
@@ -123,6 +168,20 @@ describe('calendar demand', () => {
     await demand.read(range);
     expect(calls.length).toBe(2);
     expect(calls[1]).toMatchObject({ from: '2026-03-20T00:00:00.000Z', to: '2026-03-21T00:00:00.000Z' });
+  }));
+
+  it('reads a day again once it has ended if it was cached while still today, so later edits land', () => withDemand(async sql => {
+    const account: FakeAccount = { calendars: [calendar('work')], busy: [] };
+    const { demand, calls, clock } = setup(sql, { 'work@example.com': account });
+    await demand.read(range);
+    account.busy = [{ calendar: 'work', start: '2026-03-20T15:00:00Z', end: '2026-03-20T16:00:00Z' }];
+    clock.now = Date.parse('2026-03-21T10:00:00Z');
+    const later = { ...range, from: '2026-03-19', to: '2026-03-21' };
+    expect(byDay(await demand.read(later))).toEqual({ '2026-03-19': 0, '2026-03-20': 60, '2026-03-21': 0 });
+    expect(calls[1]).toMatchObject({ from: '2026-03-20T00:00:00.000Z', to: '2026-03-22T00:00:00.000Z' });
+    clock.now = Date.parse('2026-03-22T09:00:00Z');
+    await demand.read({ ...range, from: '2026-03-20', to: '2026-03-22' });
+    expect(calls[2]).toMatchObject({ from: '2026-03-21T00:00:00.000Z', to: '2026-03-23T00:00:00.000Z' });
   }));
 
   it('reads again when the calendar selection or the time zone changes', () => withDemand(async sql => {
