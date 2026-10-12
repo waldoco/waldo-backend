@@ -911,3 +911,18 @@ Still open:
 - **Relayed** to L2 and L1. Saved in the owner-rulings memory.
 - **Page datasets updated:** pillars, notes, decisions, lanes and roadmap. The scorecard's section A and section 5 are updated too.
 - **Answered the owner's questions** on why time zones look hard: the problem is trusting the zone, plus routing. Compared with the other agents in report 11's P4 sources.
+
+## 09:34Z: #1086 merged as `e4ef5b59`; P4 probe steps fixed
+
+- **#1086 merged** with `--match-head-commit 5b41101a`. Gate [verified]:
+  - CI passed 6/6 with pgTAP, and the PR was CLEAN.
+  - The head contained `e37f60f3`.
+  - The delta reverts the no-op gate; the base diff no longer touches the `applyDayPlan` card line.
+  - The time-dependent card test is removed.
+  - The held-row test asserts fixed codes with capture off and on.
+  - The advisor approved.
+- **Wave 2 and MUST 3:** #1086 rides wave 2 with MUST 3, which needs the owner's go in L1's session. L2 must merge `e4ef5b59` into MUST 3 and pass CI on that base first.
+- **Owner's account:** the owner told L1 in L1's session that their staging account is app-only. L1's read-only directory check by the work email matched 0 owners. P4 still runs on an app-only test account, per E14.
+- **P4 probe fix:** app chat can't move a day card. Card times are console-only, and `set_schedule_preference` only toggles behaviors [verified at `e4ef5b59`]. The probe now waits for The Close at its default 21:30 local, which is 16:00Z on IST and inside the window [inference from the `DAY_CARDS` defaults]. The zone must be confirmed before 16:00Z. The page (pillars P4, notes y1) and B.1 are updated, and L1 has the new steps.
+- **The page's runs document doesn't exist**, so nothing threw or is mis-marked [inference: the owner had the page open with 0 failed sources].
+- **From now on**, page updates are batched at the wave 2 deploy and the 17:00Z re-score, unless something on the page is wrong.
