@@ -2174,3 +2174,20 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
 - **#1088 is closed** (20:52:36Z), as the owner ruled.
 - **#1100 is unchanged:** head `a2db8589`, DIRTY. It waits for the Ansh session to split out the rename and rebase onto `e93a87c9`. My review covers `owner-turn.ts` and `tool-loop.ts` (G1's D16 filter and taint stamp, and #1098's ring).
 - Step 1 of the proposed deploy order is done.
+
+## 21:03Z heartbeat (the 20:53Z fire, delivered when I went idle)
+
+- **Status:**
+  - Staging is `e93a87c9` [verified 21:01Z]. `beta-mvp` CI is green.
+  - The cron job `29a6d33d` is present.
+  - The usage window is at 74% and resets at 21:30Z, so this cycle stays lean and starts no subagents.
+- **PRs:**
+  - Backend: nothing new is ready. #1100 is still `a2db8589` and DIRTY. #1077 (this docs PR) is running CI on `99804c58`.
+  - App: `main` is `f37223b0`, with no new PRs.
+- **#116 since 20:30Z:** only L1's two records, the flaky shard (6132247308) and the `e93a87c9` deploy (6132440322).
+- **Lanes:** L2 and L4 are both running (active at 21:02Z), and my queued messages are waiting for their turns.
+- **Found: draft #1042** (`instinct/connector-read-depth`, head `fffdb172`, 11 Oct, from an idle lane).
+  - It already adds body chunking past 32k, attachment metadata (no ids, no content), and calendar `attendee_emails` and `has_conference` (no link).
+  - It doesn't expose the Meet link, handle `body.attachmentId`, or fix the case where a plain-text part beats the HTML.
+  - It also adds `CalendarItem` fields, so the prep-digest risk applies.
+  - **Sent to L2** (send 4 since the owner's message): port it into L2's branch with credit, and don't push to its branch.
