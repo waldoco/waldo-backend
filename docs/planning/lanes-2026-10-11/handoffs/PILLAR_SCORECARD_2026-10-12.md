@@ -1,9 +1,10 @@
-# Pillar scorecard, 12 October 2026
+# Pillar scorecard and plan to EoD, 12 October 2026
 
 The owner asked:
 1. How many of the eight pillars every agent product will have are properly built and working through natural language, in the app and on other surfaces?
 2. Do they meet the industry standard?
 3. How do they map across Waldo's UX and promises, and how much is still left to build?
+4. How does Waldo compare with Meta Muse, Instinct, OpenAI Dots, Hermes and other personal agents? And what single plan should we follow to get the promise and the app working end to end by EoD?
 
 The eight pillars:
 1. durable workflows
@@ -38,6 +39,127 @@ The eight pillars:
 - **[proposed]**
 
 No health values appear here.
+
+## Read this first: what EoD can and cannot deliver
+
+**The full goal can't be met by EoD.** The goal is all eight pillars working end to end in the app, on par with Meta Muse, Dots, Hermes and the rest. These parts have external lead times that no lane can compress:
+- **Google verification, plus the CASA assessment** for the three restricted scopes, takes weeks.
+- **WhatsApp's AI-provider terms bar a general-purpose assistant**, and iMessage has no sanctioned bot route.
+- **Google sign-in comes after push (S7)**, by your own ordering.
+- **The staging browser binding (#1071) is a held external integration.**
+- **Resuming interrupted turns (P1) is not a one-day change.**
+
+**What EoD can deliver, if you answer the decisions below by 05:30Z (11:00 IST):**
+- The golden path, observed live in the app on staging.
+- **Four app cells turning "yes"** under the strict test: memory and skills (P3), triggers (P4), connectors (P5) and approvals (W2).
+- **Push (P6)**, if the APNs key exists by 08:00Z.
+- **A first step on P1, P2, P7 and P8.** Each stays partial and has a dated roadmap entry in section 5.
+
+"EoD" here means 23:00 IST (17:30Z). This is an assumption.
+
+## A. Decisions needed today
+
+Each can be asked with AskUserQuestion. The first option is the recommendation.
+
+| # | Decision | Options | Needed by | Unblocks |
+|---|---|---|---|---|
+| E1 | **Merge and deploy authority for today.** The overnight go ended when you woke | (a) **A daytime standing go with the overnight gate.** The orchestrator merges after CI (pgTAP included), an independent review and the advisor; L1 deploys `beta-mvp` tips after preflight; the hold list is unchanged. (b) You approve each merge and deploy yourself | 05:30Z | Everything below. Without (a), each merge waits on you, and that is the EoD bottleneck |
+| E2 | **#1066's health hold** | (a) **Strip** the health-log numbers from the saved day-card prompt, then merge (O10). (b) Merge as is: owner-channel health is allowed in the beta, but it reaches `conv:*` and the episodes index. (c) Hold | 05:30Z | P4 in the app; GP-8; L3's Brief reader |
+| E3 | **Index app chat into episode search and nightly (G3).** This widens where health-bearing text goes, the same question as E2 | (a) **Yes**, under E2's strip rule. (b) Hold | 08:00Z | P3 in the app; part of GP-7 |
+| E4 | **#1076 "Not now"** | (a) **Approve L2's proposal:** the DO ALTER `ledger.deferred_at`, its definition of "raises it again", and Telegram's "Not now" (O11). (b) Hold | 08:00Z | W2 in the app; GP-5b |
+| E5 | **The APNs key** (your task) | (a) **Create the .p8 this morning** and enter it in the secrets store. (b) Push waits | 08:00Z | Push (P6); GP-9 |
+| E6 | **The device routes for push** (`/devices*`): new authenticated endpoints, with the contract already pinned in app #80 | (a) **Approve for staging behind a flag**, with the security checklist's endpoint items (auth, validation, rate limit). (b) Hold | 10:00Z | Push delivery to the phone |
+| E7 | **#1071, the staging browser binding, plus browser admission by canonical identity** | (a) **Approve for staging only**, production off. (b) Hold, so P2 stays Telegram-only | 10:00Z | P2 in the app |
+| E8 | **Google OAuth** | (a) **Confirm the consent screen is "In production"**: in "Testing", refresh tokens expire after 7 days. Run your consent on staging today, and start verification and CASA. (b) Drop the restricted scopes for launch, which breaks the Gmail and Drive promises | 08:00Z for the consent run | P5 in the app; GP-2 |
+| E9 | **Probe sends** | (a) **Allow probes** from your account, or from a test account you create, with L1 reading the tail. (b) Probes wait for you | 10:00Z | Every "verified live" cell |
+| E10 | **WhatsApp and iMessage in the beta promise** | (a) **Take both out of the beta copy**, and keep #1017 as a dev surface. (b) Keep "WhatsApp next" | Before landing #18 | Copy rows only |
+| E11 | **L3's morning batch**, answered in L3's session | (a) **All recommended options:** open the reminder-push contract PR; ADR-0068; approvals 3a–3e | 08:00Z | Push reminders (W2 of S7); approval card fields |
+
+Other held items stay in the morning report: session renewal, the 18+ server record, the Brief `latest` DO ALTER, and #1072.
+
+## B. EoD target
+
+### B.1 App cells to turn by EoD
+
+Each target has a probe in the app Main chat.
+
+| Pillar | Target today | What must land | Probe (app Main chat) | Gates |
+|---|---|---|---|---|
+| **P3** Memory and skills | **yes** | **L2:** skills on app turns. **G3:** app chat in search and nightly | "Prep me for my 3 pm" loads the meeting-prep skill. "What did I tell you this morning about lunch?" finds the app message | E1, E3 |
+| **P4** Triggers and jobs | **yes** | **#1066** with the strip. **L4:** the D6 Confirm row. **L2:** Prep, update cards and mail follow-ups on the app channel (`telegram-owner-do.ts:2417`) | "Remind me in 10 minutes to stretch" arrives on time. After you confirm your zone, the day card arrives at your time | E1, E2 |
+| **P5** Connectors and auth | **yes** for a connected owner | **Your consent run.** **L2:** interim connect text, so the app turn points to Connections instead of reporting a button it dropped | "What's on my calendar tomorrow?" lists real events. "Connect my Google" points to Connections | E1, E8 |
+| **W2** Approvals | **yes** | **#1076.** **L3:** expiry on read. **G1:** approval state in the reply | "Move my 4 pm to 5" shows the card. Tap "Not now". Later, "What's waiting on me?" names it | E1, E4 |
+| **P6** Text and voice | text yes; push if the key lands | **S7** sender and device routes. **L4:** registration | A reminder arrives as a push with the app closed | E5, E6 |
+| **P1** Durable workflows | stays partial | **G1 composer** on both paths | "Draft a note to Sam and send it once I approve." A later turn cites the receipt | E1 |
+| **P2** Computer use | stays no without E7 | Admission by canonical identity, plus the binding | "What are the opening hours on <url>?" | E7 |
+| **P7** Payments and identity | stays partial | **L4:** the 18+ gate at sign-up (D7) | Sign-up stays blocked until 18+ is ticked | none |
+| **P8** Evals and observability | first step | App-path regression tests in CI for tonight's three failures. The 503 and overwrite tests landed with #1075 and #1080; the connect test lands with its fix | CI shows all three | none |
+| **W1** Health | better | **L1:** the Weight producer's `demand: null` (`producer.ts:95`). **L4:** the ingest permission prompt. **Your** real-iPhone run | "How am I doing today?" answers from fresh readings | real iPhone |
+
+### B.2 Golden path, observed live in the app
+
+| Step | Today | Needs |
+|---|---|---|
+| 1a Sign-in with invite | probe | E9; a test account with a fresh invite |
+| 1b Google sign-in | roadmap | After S7 (your order) |
+| 1c 18+ checkbox | app gate today; server record on the roadmap | L4 (D7) |
+| 2 Google connect | probe | E8: your consent run |
+| 3 Health consent, ingest, scores | probe | Real iPhone; L1's Weight fix; L4's permission prompt |
+| 4a/4b Main chat history and send | re-probe on `cdd906dd` | E9 |
+| 5a Approve, "Don't do this" | probe | E9, after Google connects |
+| 5b "Not now" | build | E4, then #1076 |
+| 6 A reminder fires | probe | E9 |
+| 7 Continuity | partial today | E3 (app chat searchable). One transcript across app and Telegram is on the roadmap |
+| 8 Proactive at your times | build | E2, then #1066 and D6 |
+| 9 Push | build | E5, E6, then S7 |
+| 10 Deletion | probe | Your throwaway account; L1's proof |
+
+## C. Today, by lane
+
+**Deploy waves.** Each needs E1, or your go in L1's session:
+- **Wave 1 at about 10:00Z** (15:30 IST): #1066, the interim connect text, the app branch at `:2417`, expiry on read, and the Weight fix.
+- **Wave 2 at about 14:00Z** (19:30 IST): skills on app turns, G1, #1076, G3, and S7 behind its flag.
+
+Then:
+- **Probes:** 14:30–16:30Z.
+- **Scorecard re-scored** from the probes at 17:00Z.
+
+**`telegram-owner-do.ts` has one writer today: L2.** The file's lane rule (post the exact lines on #116 first) still applies. Merge order:
+1. #1066
+2. the interim connect text
+3. the app branch at `:2417`
+4. skills on app turns
+5. the G1 composer
+6. G3, if E3
+7. browser admission, if E7
+
+L3's Brief-reader wiring waits until after step 5.
+
+**Contracts** (app.v1 is additive-only):
+- **Additive.** These can ship before the app reads them:
+  - `timezone_confirmed` (#1066);
+  - read-only views.
+- **A break until L4 re-pins.** No Worker emits these before the re-pin:
+  - a connect card in chat;
+  - a `google.disconnect` action;
+  - approval fields A/B/C;
+  - the 18+ field.
+
+  That is why P5 uses interim text today, and why the connect card and disconnect are on the roadmap.
+
+| Lane | Today, in order |
+|---|---|
+| **L2** (runtime; critical path) | 1. #1066: strip, delta review, merge. 2. The interim connect text, with a test that a dropped app button is never reported as sent. 3. The app branch at `:2417`. 4. Skills on app turns. 5. G1: one composer that carries recent tool results and approval and receipt state into the reply on both paths. #1079's pin flips to the new behaviour. 6. S7 sender behind a flag (E5, E6). 7. G3 (E3). 8. Browser admission (E7) |
+| **L3** (contracts, approvals, Google) | 1. Expiry-on-read PR from the local branch. 2. The reminder-push contract PR (E11). 3. The approval fields A/B/C, if E11. 4. Draft the connect-card and disconnect contracts for tomorrow's re-pin. 5. The Brief `latest` reader, after L2's step 5 |
+| **L4** (app) | 1. The D6 Confirm row. 2. The 18+ gate at sign-up (D7). 3. The chat failure state and retry. 4. The Health permission prompt. 5. Push registration (S7). 6. Threads (C1), once served. 7. Reword #78's dated comment |
+| **L1** (health plane, deploys) | 1. The Weight producer's `demand: null`. 2. Deploy waves 1 and 2. 3. Read the tails during probes and post on #116. 4. The deletion proof with your throwaway account |
+| **Audit** | After wave 2: run the promise probes (Q1–Q10) with the probe account, update the ledger, and send verified rows back |
+| **Orchestrator** | Gate each merge (CI, review, advisor) under E1. Track the waves. Re-score this doc from the probes. Write the evening report |
+| **You** | Decisions E1–E11. The Google consent run, checking the publishing status. The APNs key. Probe say-so. The throwaway account. The real-iPhone run. Suyash's design questions |
+
+---
+
+# Where we stand
 
 ## 1. The answer
 
@@ -208,32 +330,29 @@ These come from report 09, from dated pages fetched 12 Oct.
    - no sensitive data in push payloads (4.5.4).
    - "No Apple sign-in for the beta" holds while the app ships from source.
 5. **Zero data retention.** Several Anthropic features are not ZDR-eligible: Managed Agents, the MCP connector, programmatic tool calling and Agent Skills in the API. That limits adopting them for health-bearing turns.
+6. **Google OAuth "Testing" status.** Google's OAuth page (last updated 26 May 2026; fetched 12 Oct) says an external app in Testing gets refresh tokens that expire after 7 days, unless it asks only for basic identity scopes. It also caps each Google account at 100 refresh tokens per client. If Waldo's consent screen is still in Testing, every beta Google connection dies weekly. Moving it to "In production" while unverified shows the warning screen and caps the app at 100 users [verified fetch; Waldo's current status unverified].
 
-## 5. Build order [proposed]
+## 5. Parity roadmap after EoD [proposed]
 
-Ordered by which app cells flip and which promises close soonest.
+The dates are estimates. The gate column names what holds each item.
 
-1. **Deploy #1080.** Done at 03:46Z (`b72928f0`). Next, one owner-approved send on the new build, read on L1's tail.
-2. **P5 on the app, the smallest flip.**
-   - Render the connect affordance in app chat instead of dropping it.
-   - Make the tool text true on each surface.
-   - Add disconnect.
-   - Owners: an L3 contract, L2 runtime, an L4 card. A new chat part or action kind is a new enum value, so under the app.v1 rule it is a break until L4 re-pins.
-3. **P4 on the app.**
-   - Get the owner's ruling on #1066's health hold, then merge it.
-   - Arm jobs for app-only owners.
-   - Ship push (S7) once the APNs key exists.
-   - Plan Gmail and Calendar watch triggers.
-4. **P3 on the app.** Wire the skill host for app turns, and index app chat into episode search and nightly (G3).
-5. **G1 on both paths.** One composer that carries recent tool results, plus approval and receipt state, into the reply. It flips no cell on its own, but every t3 depends on it.
-6. **P8.**
-   - An app-path eval suite in CI, judged by a model from another family.
-   - Seed it with tonight's real failures: the 503, the overwrite, the dropped connect button.
-   - Add the Audit lane's promise probes, so "deployed, unprobed" rows can become "verified live".
-7. **Tools.** Tool search or a smaller per-turn manifest (ADR-0034). Remove allow-list entries that have no handler.
-8. **P7.** Google sign-in (O2-A), the 18+ server record, session refresh.
-9. **P1.** Either route traffic to WaldoCoordinator and RunLoop or retire them, and add resume or cancel for interrupted turns.
-10. **Owner decisions now.** Google verification or dropping the restricted scopes; a WhatsApp and iMessage strategy, given the platform gates.
+| When | Pillar | Item | Gate |
+|---|---|---|---|
+| 13–14 Oct | P5 | A connect card in app chat, and Google disconnect, with revocation shown to the owner | L3 contract, then L4 re-pin |
+| 13–14 Oct | P7 | Google sign-in (O2-A) once S7 has landed, then session refresh | Security review of the auth change |
+| 13–14 Oct | P8 | A model-graded app-path eval in CI: a judge from another model family, pass^k on the golden tasks, seeded from real failures. Alerts on fatal codes (`history_invalid`, `send_failed`) | You add a model API key as a CI secret |
+| 13–14 Oct | P2 | Browsing from the app, if E7 was a hold today | E7 |
+| 13–14 Oct | Harness | G2: tell the model when history was cut (option A, the out-of-view note) | none |
+| 15–18 Oct | P6 / GP-7 | One transcript across app and Telegram | Canonical-store migration plan |
+| 15–18 Oct | P4 | Event triggers: Gmail push through `users.watch` and Pub/Sub, with renewal and a polling fallback; Calendar push channels | A new external integration (Pub/Sub) |
+| 15–18 Oct | Harness | Tool search or a smaller per-turn tool list (ADR-0034); remove allow-list entries that have no handler | none |
+| 15–18 Oct | P3 / Harness | The conversation working set (option C), with its eval | E2's strip rule |
+| 19–31 Oct | P1 | Resume or cancel an interrupted turn. Decide whether WaldoCoordinator and RunLoop carry traffic or are retired | ADR |
+| 19–31 Oct | P6 | Voice in the app: speech in, then speech out | Provider and DPA review |
+| Start now, weeks | P5 | Google verification and the CASA assessment for `gmail.readonly`, `gmail.compose` and `drive.readonly` | External assessor |
+| Before App Store | P7 | 4.8 equivalent login, 5.1.1(v) deletion, 5.1.2(i) AI consent, 4.5.4 push content | App Store submission |
+| Not for the beta | P7 | Payments: not promised; pricing lines are copy (O7) | none |
+| Not for the beta | P6 | WhatsApp (AI-provider terms) and iMessage beyond the #1017 Mac bridge | Platform terms |
 
 ## 6. Evidence
 
