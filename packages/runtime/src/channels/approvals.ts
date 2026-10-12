@@ -127,11 +127,18 @@ const reviewMessage = (p: MessageSendProposal) => p.content;
 // The summary is bounded: a browser summary carries its bindings, which can be as long as the content that did not fit.
 const unreviewable = (kind: string, summary: string) =>
   `${kind} ${summary.length > 1000 ? `${summary.slice(0, 999)}…` : summary}\n\nThe full content doesn't fit in this card, so it can't be approved here - approving would send text you haven't reviewed. Use the Not now instruction on the card and ask me to show you the full text first.`;
+// A browser expiry that isn't a safe integer closes the request when it was made.
 const expiresAt = (entry: LedgerRow) => {
   const p = JSON.parse(entry.payload_json) as Partial<Stored> & Partial<BrowserSubmitProposal>;
-  if (entry.kind === 'browser_submit') return Math.min(entry.created_at + BROWSER_SUBMIT_TTL_MS, p.approvalExpiresAt ?? Infinity);
+  if (entry.kind === 'browser_submit') return p.approvalExpiresAt !== undefined && !Number.isSafeInteger(p.approvalExpiresAt)
+    ? entry.created_at : Math.min(entry.created_at + BROWSER_SUBMIT_TTL_MS, p.approvalExpiresAt ?? Infinity);
   return entry.kind === 'calendar_change' && p.start ? Math.min(entry.created_at + PROPOSAL_TTL_MS, Date.parse(p.start)) : entry.created_at + PROPOSAL_TTL_MS;
 };
+// A request closes at expires_at; one with no readable expiry is closed.
+const pastExpiry = (entry: LedgerRow, now: number) => !(expiresAt(entry) > now);
+const operationRefOf = (entry: LedgerRow) => (JSON.parse(entry.payload_json) as { operation_ref?: string }).operation_ref ?? `approval:${entry.id}`;
+// The statuses a request can still be decided or edited from, which its expiry closes.
+const EXPIRING: readonly DeskStatus[] = ['card_unconfirmed', 'open', 'review_only', 'changing'];
 // The scope a browser approval names: the page without credentials, query string or fragment.
 const pageOf = (url: string) => { const page = new URL(url); return `${page.origin}${page.pathname}`; };
 const describeBrowser = (p: BrowserSubmitProposal) => {
@@ -346,9 +353,23 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // first send instead of double-delivering.
   const keyHolder = (key: string, selfId: string) =>
     sql.exec<{ id: string; status: string; payload_json: string }>("SELECT id, status, payload_json FROM ledger WHERE kind = 'message_send' AND status IN ('done', 'uncertain') AND id != ? AND json_extract(payload_json, '$.idempotency_key') = ? LIMIT 1", selfId, key).toArray()[0];
-  const expired = (entry: LedgerRow, p: Stored) =>
-    (entry.kind === 'browser_submit' && (p as unknown as BrowserSubmitProposal).approvalExpiresAt !== undefined && (!Number.isSafeInteger((p as unknown as BrowserSubmitProposal).approvalExpiresAt) || deps.now() >= (p as unknown as BrowserSubmitProposal).approvalExpiresAt!)) ||
-    deps.now() - entry.created_at > (entry.kind === 'browser_submit' ? BROWSER_SUBMIT_TTL_MS : PROPOSAL_TTL_MS) || (entry.kind !== 'browser_submit' && p.start !== undefined && Date.parse(p.start) <= deps.now());
+  // Once the apply effect is on record the change may have happened, so expiry never closes that request.
+  const applyOnRecord = (entry: LedgerRow) => !!deps.effects?.get(`${operationRefOf(entry)}:apply`);
+  // A request closes at its expiry the first time a read or a decision sees it. Only its status changes: every reader
+  // gates on status, and a messaging card keeps its buttons until a tap, which answers with the expiry.
+  const expireDue = (id?: string) => {
+    const now = deps.now();
+    const rows = sql.exec<LedgerRow>(`SELECT * FROM ledger WHERE kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')}) AND status IN (${EXPIRING.map(() => '?').join(', ')})${id === undefined ? '' : ' AND id = ?'}`,
+      ...PROPOSAL_KINDS, ...EXPIRING, ...(id === undefined ? [] : [id])).toArray();
+    for (const entry of rows) {
+      let closes: boolean;
+      try { closes = pastExpiry(entry, now) && !applyOnRecord(entry); }
+      catch { deps.log({ trace: entry.id, hop: 'approval_expiry', ms: 0, ok: false, code: 'unreadable' }); continue; }
+      if (closes) sql.exec("UPDATE ledger SET status = 'expired', decided_at = ? WHERE id = ? AND status = ?", now, entry.id, entry.status);
+    }
+  };
+  const expiredReply = (entry: LedgerRow): ApprovalDecision =>
+    ({ toast: 'This proposal expired', message: `That proposal expired, so nothing happened: ${describeAny(entry)}. Ask me again if you still want it.` });
   const apply = async (client: GoogleClient, p: Stored, eventId?: string, marker?: string): Promise<Undo | null | 'stale'> => {
     if (p.action === 'create') {
       const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end!, ...(eventId ? { id: eventId } : {}), ...(marker ? { operationMarker:marker } : {}) });
@@ -385,8 +406,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
 
   const decide = async (id: string, action: 'a' | 's' | 'e' | 'u', trace: string, via: ApprovalVia = { surface }): Promise<ApprovalDecision> => {
     const started = deps.now();
+    expireDue(id);
     const entry = row(id);
-    const operationRef = entry ? (JSON.parse(entry.payload_json) as { operation_ref?: string }).operation_ref ?? `approval:${id}` : `approval:${id}`;
+    if (entry?.status === 'expired' && action !== 'u') return expiredReply(entry);
+    const operationRef = entry ? operationRefOf(entry) : `approval:${id}`;
     const expected = action === 'u' ? 'done' : 'open';
     if (deps.effects?.isActive(`${operationRef}:${action === 'u' ? 'undo' : 'apply'}`)) return { toast: 'Already handled.', message: 'Already handled.' };
     // An uncertain row with no effect record never reached dispatch (the record is written before the provider call), so it is safe to run again; a record sends it through reconcile instead.
@@ -397,9 +420,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const proposal = JSON.parse(entry.payload_json) as Stored;
     try {
       let out: ApprovalDecision;
-      if ((!recovering || !deps.effects?.get(`${operationRef}:apply`)) && action !== 'u' && action !== 's' && expired(entry, proposal)) {
+      if (!applyOnRecord(entry) && action !== 'u' && action !== 's' && pastExpiry(entry, deps.now())) {
         setStatus(id, 'expired');
-        out = { toast: 'This proposal expired', message: `That proposal expired, so nothing happened: ${describeAny(entry)}. Ask me again if you still want it.` };
+        out = expiredReply(entry);
       } else if (action === 's') {
         setStatus(id, 'skipped');
         if (entry.kind === 'browser_submit') await deps.browserDeny?.(JSON.parse(entry.payload_json) as BrowserSubmitProposal);
@@ -588,6 +611,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         } else if (action === 'a') {
           const eventId = proposal.action === 'create' ? await sha256Hex(`${operationRef}:apply`) : proposal.event_id!;
           const marker = await sha256Hex(`${operationRef}:apply`);
+          // A read may have closed the request during the awaits above. The effect is reserved synchronously
+          // from here, so a later read sees it on record and leaves the request open.
+          const current = row(id);
+          if (!recovering && current?.status !== 'open') return current?.status === 'expired' ? expiredReply(current) : { toast: 'Already handled.', message: 'Already handled.' };
           const receipt = await effect(`${operationRef}:apply`, 'calendar_change', proposal, async () => {
             const undo = await apply(client, proposal, deps.effects ? eventId : undefined, marker);
             return { provider_id: eventId, result: undo };
@@ -777,7 +804,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       if (existing) {
         const id = await existing;
         const entry = row(id);
-        if (entry?.status === 'open' && !expired(entry, JSON.parse(entry.payload_json) as Stored)) return id;
+        if (entry?.status === 'open' && !pastExpiry(entry, deps.now())) return id;
       }
       const prepare = async () => {
         const id = `p${deps.newId()}`;
@@ -808,6 +835,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     // The console must show the *stored* recipient, words and final calendar effect before
     // offering an approval action. Never expose raw MIME, tokens or arbitrary MCP args here.
     pending(now) {
+      expireDue();
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'open' ORDER BY created_at").toArray();
       const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'google_task_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
       const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'review_only' ORDER BY created_at").toArray();
@@ -852,6 +880,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       return { here: on(surface), hereApprovable: on(surface, true), app: on('app'), appApprovable: on('app', true) };
     },
     async approvals(now, filter = {}) {
+      expireDue();
       const statuses = filter.state ? (Object.keys(APP_APPROVAL_STATE) as DeskStatus[]).filter(status => APP_APPROVAL_STATE[status] === filter.state) : null;
       if (statuses?.length === 0) return [];
       const where = [`kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')})`, "substr(id, 1, 1) = 'p'", ...(filter.id ? ['id = ?'] : []), ...(statuses ? [`status IN (${statuses.map(() => '?').join(', ')})`] : [])];
@@ -880,6 +909,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       await say(reported.message, action === 'a' && out.toast === 'Done' && out.message.includes('Undo is available') ? [['Undo', `u:${id}`]] : undefined);
     },
     ledger(reminders) {
+      expireDue();
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();
       const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'browser_submit', 'message_send', 'mcp_call', 'calendar_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
       const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'review_only' ORDER BY created_at").toArray();
