@@ -1282,3 +1282,10 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
   - a test for the `read_failed`/503 path;
   - partial flags on baseline days.
 - **Next:** CI at `4b98b1d7`, then the owner's merge (new DO persistence; HEALTH_PLANE_AMENDMENT ruling 1). L1's scheduler fix is on `l1/schedule-row-guard`, red/green not yet run.
+
+- **12:30Z, #1090** (L1, the scheduler bad-row fix): head `4a644e06` on `614d1aff`, changing `multiplexer.ts` plus a new test file.
+  - What it does: each row is guarded in `dueEntries` and `rearm`, and a bad row is left out before the slice. It logs `schedule_row_invalid` with a count once per `dispatchDue` pass, never writes to the row, and sets no wake time for it.
+  - Red first: both new tests failed with a ZodError at `614d1aff` [reported].
+  - Local runs: 204 scheduler tests and 230 RunLoop, tracer and outbox tests pass; tsc passes; guards pass 37/37.
+  - Gate: CI is pending; the independent review is running (no fan-out, about 25 calls).
+  - Merge is mine under E1 (not on the hold list); deploy needs the owner's yes in L1's session.
