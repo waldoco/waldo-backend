@@ -303,3 +303,10 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - The Telegram-owner health leak is in Risks with its evidence level.
   - The report and the board say the standing go ends when the owner is back, and who merges what after each ruling.
   - The L4 timing is corrected (pending by 23:15Z; the start time is inferred).
+
+## 02:15Z: heartbeat. Docs PR green; L2 #1078; Audit delta pass
+
+- #1077 CI 6/6 SUCCESS incl. pgTAP, `CLEAN` **[verified]**.
+- L2 opened #1078 (draft, `863427c6`) "Count the history each reply call leaves out" (long-sessions step 1).
+- Audit: ledger delta pass on #1057 at `604e5538`; #116 comment 6116427714. No action needed before the owner is up.
+- Staging `889efa27`. The morning report has been posted in the orchestrator session.

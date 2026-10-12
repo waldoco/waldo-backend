@@ -10,6 +10,12 @@ Tags: **[verified]** observed tonight; **[lane report]** a lane said so, not re-
 2. **Open Main chat in the app and send one plain message.** For example: "Reply with one short sentence confirming you got this." Ask for no action. The send-path fix (#1075) is live on staging, but nothing has exercised it yet. L1's tail is waiting to read the result. If L1 is idle, ask it in its session to read the tail.
 3. **Work through the batch below,** each answer in the session named.
 
+## Late additions (02:15Z)
+
+- This docs PR (#1077) passed CI: 6/6 incl. pgTAP, `CLEAN` **[verified]**.
+- L2 opened **#1078** (draft), "Count the history each reply call leaves out". It's the measurement step of the long-sessions plan.
+- The Audit lane ran a ledger delta pass on #1057 (`604e5538`) from the map's findings and posted a note on #116.
+
 ## Staging now
 
 | What | State | Evidence |
