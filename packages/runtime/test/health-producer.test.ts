@@ -278,10 +278,12 @@ describe('produceHealthScores', () => {
     it('leaves physical load unknown on a day with an overlapping window, even with a workout', async () => {
       const workout = (day: string) => sample('workout', day, { start_at: `${day}T06:00:00.000Z`, end_at: `${day}T07:00:00.000Z`, value: 60, activity: 'run' });
       const extra = [workout(TODAY), workout(YESTERDAY), window('movement_duration', TODAY, `${TODAY}T08:30:00.000Z`, `${TODAY}T09:30:00.000Z`)];
-      const h = harness(seriesOf([...history(25), ...extra]), undefined, undefined, { readDemand: async () => ({ state: 'available', days: [] }) });
+      const h = harness(seriesOf([...history(25), ...extra]), undefined, undefined, { readDemand: async () => ({ state: 'available', days: busyMonth() }) });
       await run(h);
       const load = (day: string) => h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === day)!.demand?.physicalLoad;
       expect([load(TODAY), load(YESTERDAY)]).toEqual([null, 96 + 60]);
+      // Weight's baselines admit fewer physical-load days too, so Weight is a new version as well.
+      expect((h.writes.find(w => w.day === TODAY)!.weight as Record<string, unknown>).algorithm_version).toBe('weight.candidate.v2');
     });
 
     it('checks the whole series, so an overlap across a day boundary clears both days', async () => {
