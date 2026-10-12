@@ -2086,3 +2086,29 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
     - **No review subagent:** it's contained, and its class (health precision) is parked under the proposed split.
   - L1 answered L4's #90 questions on #116 (6131683073).
 - **20:15Z heartbeat:** staging and `beta-mvp` are both `d704ffff`. #1101 is now marked ready and is CLEAN at `a2737ad1`; it waits for the owner's merge. No new #116 comments and no app PRs since 20:03Z. The split proposal is still unanswered.
+
+## 20:33Z: #1101 merged as `e93a87c9`; #1100 over #1088; Simulator testing by sessions; Build Bible tab
+
+- **The owner's asks at about 20:15Z:**
+  - add a tab to the Build Bible;
+  - progress against the building blocks and the parity matrix;
+  - whether the Ansh session or this session drives the build;
+  - whether email content is read for meeting prep;
+  - small useful features over a full cloud computer.
+- **Mid-turn ruling (verbatim):** "we will do phone testing later no right now I want your session to be able to test on simulator without me babysitting the sessins". It's recorded in `ORCHESTRATOR_BRIEF_2026-10-13.md` and in memory.
+- **The Build Bible tab "Reconciliation at d704ffff"** has five sections:
+  1. what's live since `87b3194`;
+  2. #1100's rollback: Cloudflare blocks rollback across a DO class lifecycle change [verified, docs];
+  3. the ruling conflicts;
+  4. progress;
+  5. the pre-meeting brief.
+- **Meeting prep** [verified in source at `d704ffff`]: the scheduled prep (`event-briefs.ts`) runs with "No tools" on calendar fields only. The calendar mapper drops the Meet link and attachments. Chat has the Gmail and Drive tools plus a `meeting-prep` skill, which reaches app turns with #1100.
+- **Simulator:**
+  - **The orchestrator's own device:** `iPhone 17` (18AC0C6B), booted. It runs the embedded-bundle `Waldo.app` from L4's device (built about 20:13Z; L4 was asked for its commit), launched with the iOS Simulator tool, and sits at the sign-in screen. The owner signs in once; I never type codes.
+  - **Refused:** a compound Bash command (`rm -rf` + `cp` from L4's container + boot + install). I didn't route around it; I used the Simulator tool plus a single `simctl boot`.
+- **#1101 merged as `e93a87c9`** at 20:32:46Z, pinned to `a2737ad1`.
+  - **The owner's yes was given in my session** (AskUserQuestion: "Merge now"). L2's relay of the owner's yes in its own session wasn't used as the authority.
+  - The Telegram copy stays (the owner, in L2's session, verbatim: "Keep the copy, merge now").
+  - It isn't deployed. L1 was told to gate `e93a87c9` and ask the owner. **The freeze applies while that ask is open.**
+- **The owner picked #1100 over #1088** (AskUserQuestion: "#1100, close #1088"). L2 closes #1088. The Ansh cloud session isn't reachable from here, so the #1100 instructions went to the owner to paste: split out the rename, then rebase onto `e93a87c9`.
+- **L2's next work:** one follow-up PR with the six review items, then the set_reminder duplicate check.
