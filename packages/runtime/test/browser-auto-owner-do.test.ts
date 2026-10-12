@@ -12,7 +12,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (input: 
   const previous = (Array.isArray(input.input) ? input.input : []).filter((item: any) => item.type === 'function_call_output');
   const urls = ['https://example.com/a', 'https://example.com/b', 'https://example.com/a'];
   const read = !format && previous.length < urls.length;
-  return { id: 'synthetic-auto-owner', output: read ? [{ type: 'function_call', call_id: `read-${previous.length}`, name: 'browse_page', arguments: JSON.stringify({ provider: 'cloudflare_playwright', url: urls[previous.length], instruction: 'Read the public page' }) }] : [],
+  return { id: 'synthetic-auto-owner', output: read ? [{ type: 'function_call', call_id: `read-${previous.length}`, name: 'browse_page', arguments: JSON.stringify({ url: urls[previous.length], instruction: 'Read the public page' }) }] : [],
     output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : read ? '' : `Owner ${proof.subject} read A/B/A.`, usage: { input_tokens: 1, output_tokens: 1 } };
 } }; } }));
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async (method: string, payload: any) => {

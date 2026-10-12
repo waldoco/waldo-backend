@@ -20,7 +20,6 @@ export const cloudflareBrowserProviderReadiness = (env: Readonly<{ BROWSER?: Bro
 export function browserPublicReadConfiguration(env: Readonly<{ WALDO_ENVIRONMENT?: string; BROWSER?: BrowserWorker }>): BrowserPageProviders {
   const selected = env.WALDO_ENVIRONMENT === 'staging' && stagingSdk !== undefined;
   return {
-    defaultProvider: selected ? 'cloudflare_playwright' : 'browserbase_stagehand_http_v3',
     allowBrowserbase: true,
     cloudflare: selected && env.BROWSER ? cloudflarePublicRead({ binding: env.BROWSER, loadSdk: stagingSdk! }) : undefined,
   };

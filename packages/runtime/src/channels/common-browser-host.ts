@@ -107,7 +107,7 @@ export function commonBrowserHost(options:Readonly<{
   async handle(args,ctx){
    try{
     await ctx.assertTaskSourceCurrent?.();const grant=await granted();
-    if(args.provider&&args.provider!=='cloudflare_playwright'||ctx.authenticatedUserId!==options.ownerId||args.session_handle&&options.storage.kv.get<Record>(key(grant.taskId))?.session.id!==args.session_handle||(!isPublicWebUrl(args.url,options.egressAllowlist)||!grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)&&!grant.allowedOrigins.includes(new URL(args.url).origin)))throw Error('common browser target rejected');
+    if(ctx.authenticatedUserId!==options.ownerId||args.session_handle&&options.storage.kv.get<Record>(key(grant.taskId))?.session.id!==args.session_handle||(!isPublicWebUrl(args.url,options.egressAllowlist)||!grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)&&!grant.allowedOrigins.includes(new URL(args.url).origin)))throw Error('common browser target rejected');
     if(options.config.bindingForOperation&&(!ctx.turnId||!ctx.toolCallId))throw Error('common browser operation identity unavailable');
     const driver=executionDriver(grant,ctx);const storageKey=key(grant.taskId);let record=options.storage.kv.get<Record>(storageKey);
     if(record?.handoff){if(!human)await api.cancel();throw Error('owner login pending');}

@@ -220,9 +220,11 @@ describe('executeActionArgs', () => {
 });
 
 describe('browsePageArgs', () => {
-  it('accepts only explicitly supported browser providers without authority or session arguments', () => {
-    for (const provider of ['cloudflare_playwright', 'browserbase_stagehand_http_v3']) expect(browsePageArgsSchema.parse({ url: 'https://example.com', instruction: 'read', provider })).toMatchObject({ provider });
-    for (const extra of [{ provider: 'auto' }, { provider: 'cloudflare_playwright', session_id: 'foreign' }, { provider: 'cloudflare_playwright', owner_id: 'foreign' }, { provider: 'cloudflare_playwright', allow_hosts: ['*'] }]) expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'read', ...extra }).success).toBe(false);
+  it('refuses a model-chosen provider and authority or session arguments: the host picks the browser', () => {
+    for (const extra of [{ provider: 'cloudflare_playwright' }, { provider: 'browserbase_stagehand_http_v3' }, { provider: 'auto' }, { session_id: 'foreign' }, { owner_id: 'foreign' }, { allow_hosts: ['*'] }]) {
+      expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'read', ...extra }).success).toBe(false);
+      expect(browseActArgsSchema.safeParse({ url: 'https://example.com', task: 'read', ...extra }).success).toBe(false);
+    }
   });
   it('accepts a url + instruction and rejects extras, empty instruction and non-urls', () => {
     expect(browsePageArgsSchema.parse({ url: 'https://example.com', instruction: 'what is on this page' })).toEqual({
@@ -418,7 +420,7 @@ it('browser native commands are strict and cannot smuggle owner, session or subm
 });
 
 it('validates explicit native filter choices without executable selectors or coerced checkbox state',()=>{
- const base={provider:'cloudflare_playwright',url:'https://example.com/',task:'Choose a public filter'};
+ const base={url:'https://example.com/',task:'Choose a public filter'};
  expect(browseActArgsSchema.safeParse({...base,command:{operation:'select',element_ref:'e:observed:0',value:''}}).success).toBe(true);
  expect(browseActArgsSchema.safeParse({...base,command:{operation:'set_checked',element_ref:'e:observed:1',checked:false}}).success).toBe(true);
  for(const command of [{operation:'set_checked',element_ref:'e:observed:1',checked:'true'},{operation:'select',element_ref:'e:observed:0',value:'north',selector:'input'},{operation:'set_checked',checked:true}])expect(browseActArgsSchema.safeParse({...base,command}).success).toBe(false);

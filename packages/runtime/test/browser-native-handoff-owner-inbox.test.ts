@@ -23,9 +23,9 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (input: 
   const outputs=previous.map((row:any)=>JSON.parse(row.output));if(outputs.length){proof.outputs=outputs;const first=outputs.find((row:any)=>row.ok&&row.data?.session_handle);if(first){proof.sessionHandle=first.data.session_handle;proof.tabRef ||= first.data.tab_ref;}}
   const at=format?-1:proof.phaseCalls++;
   const call=format?undefined:proof.phase==='main'?[
-    {name:'browse_page',args:{provider:'cloudflare_playwright',retain_session:true,url:'https://example.com/a',instruction:'Open the owner login page'}},
-    {name:'browse_act',args:{provider:'cloudflare_playwright',url:'https://example.com/a',task:'Owner login',max_actions:1,command:{operation:'owner_login',reason:'Sign in to the intended account and complete MFA.'}}},
-  ][at]:proof.phase==='resume'&&at===0?{name:'browse_act',args:{provider:'cloudflare_playwright',session_handle:proof.sessionHandle,url:'https://example.com/a',task:'Resume and verify intended account',max_actions:1,command:{operation:'resume_owner_login'}}}:undefined;
+    {name:'browse_page',args:{retain_session:true,url:'https://example.com/a',instruction:'Open the owner login page'}},
+    {name:'browse_act',args:{url:'https://example.com/a',task:'Owner login',max_actions:1,command:{operation:'owner_login',reason:'Sign in to the intended account and complete MFA.'}}},
+  ][at]:proof.phase==='resume'&&at===0?{name:'browse_act',args:{session_handle:proof.sessionHandle,url:'https://example.com/a',task:'Resume and verify intended account',max_actions:1,command:{operation:'resume_owner_login'}}}:undefined;
   const read=Boolean(call);
   return { id: 'synthetic-public-browser-reply', output: read ? [{ type: 'function_call', call_id: `public-call-${at}`, name:call!.name, arguments:JSON.stringify(call!.args) }] : [],
     output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : read ? '' : proof.phase==='main'?'Sign in through https://local.invalid/console/browser-handoff then reply after Done.':'Fresh evidence identifies the fictional intended owner.', usage: { input_tokens: 1, output_tokens: 1 } };

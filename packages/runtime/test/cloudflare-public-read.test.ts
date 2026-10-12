@@ -3,7 +3,7 @@ import { browsePageArgsSchema } from '@waldo/contracts';
 import { browsePageHandler } from '../src/tools/live/browser';
 import { cloudflarePublicRead } from '../src/channels/cloudflare-public-read';
 
-const args = { url: 'https://example.com/menu', instruction: 'Find vegetarian options', provider: 'cloudflare_playwright' };
+const args = { url: 'https://example.com/menu', instruction: 'Find vegetarian options' };
 const context = { authenticatedUserId: 'owner-a', egressAllowlist: ['*'], assertTaskSourceCurrent: async () => {} } as never;
 const fake = () => {
   const calls: string[] = []; let active = true;
@@ -17,18 +17,24 @@ const fake = () => {
     return events;
   } }; 
 };
-it('explicit Cloudflare browse_page returns real page text through the existing handler and physically terminates its session', async () => {
+it('on a host without Browserbase keys, browse_page returns real page text through Cloudflare and physically terminates its session', async () => {
   const f = fake(); let paid = 0;
   const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never });
-  const handler = browsePageHandler('bb-key', 'project', undefined, (async () => { paid++; throw Error('paid fallback'); }) as typeof fetch, { defaultProvider: 'cloudflare_playwright', cloudflare: read, allowBrowserbase: true });
+  const handler = browsePageHandler(undefined, undefined, undefined, (async () => { paid++; throw Error('paid fallback'); }) as typeof fetch, { cloudflare: read, allowBrowserbase: true });
   const result = await handler.handle(browsePageArgsSchema.parse(args), context);
   expect(result).toMatchObject({ ok: true, data: { url: args.url, provider: 'cloudflare_playwright', data: { title: 'Menu', text: 'Vegetarian pasta — £12' } }, source_taint: 'external' });
   expect(JSON.stringify(result)).not.toContain('private-id'); expect(paid).toBe(0);
   expect(f.calls).toEqual(['acquire', 'connect', 'navigate', 'context.close', 'Browser.close', 'disconnect']);
 });
-it('does not fall back to paid Browserbase when Cloudflare is unconfigured', async () => {
+it('reads through Browserbase by default when its keys are configured, with a Cloudflare reader also present', async () => {
+  let paid = 0, cloudflare = 0;
+  const handler = browsePageHandler('bb', 'project', undefined, (async () => { paid++; throw Error('paid'); }) as typeof fetch, { cloudflare: (async () => { cloudflare++; return { ok: true }; }) as never, allowBrowserbase: true });
+  await handler.handle(browsePageArgsSchema.parse(args), context);
+  expect(paid).toBeGreaterThan(0); expect(cloudflare).toBe(0);
+});
+it('refuses a read with neither Browserbase keys nor a Cloudflare reader, without any paid call', async () => {
   let paid = 0;
-  const handler = browsePageHandler('bb', 'project', undefined, (async () => { paid++; throw Error('paid'); }) as typeof fetch);
+  const handler = browsePageHandler(undefined, undefined, undefined, (async () => { paid++; throw Error('paid'); }) as typeof fetch);
   expect(await handler.handle(browsePageArgsSchema.parse(args), context)).toMatchObject({ ok: false, code: 'auth_failed' });
   expect(paid).toBe(0);
 });
@@ -99,11 +105,10 @@ it('the actual pinned SDK connects the wrapped binding to the exact acquired ID,
   expect(JSON.stringify(evidence.result)).not.toContain('secret');
 });
 
-it('trusted provider policy cannot be overridden by a model provider argument', async () => {
+it('a host that does not allow Browserbase never pays for it, keys or not', async () => {
   let paid = 0;
-  const handler = browsePageHandler('bb-key', 'project', undefined, (async () => { paid++; throw Error('paid'); }) as typeof fetch, { defaultProvider: 'cloudflare_playwright', allowBrowserbase: false });
-  expect(await handler.handle({ ...args, provider: 'browserbase_stagehand_http_v3' } as never, context)).toMatchObject({ ok: false, code: 'rejected' });
-  expect(await handler.handle({ url: args.url, instruction: args.instruction }, context)).toMatchObject({ ok: false, code: 'auth_failed' });
+  const handler = browsePageHandler('bb-key', 'project', undefined, (async () => { paid++; throw Error('paid'); }) as typeof fetch, { allowBrowserbase: false });
+  expect(await handler.handle({ url: args.url, instruction: args.instruction }, context)).toMatchObject({ ok: false, code: 'rejected' });
   expect(paid).toBe(0);
 });
 

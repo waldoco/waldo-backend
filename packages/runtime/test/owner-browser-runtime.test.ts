@@ -21,7 +21,7 @@ it('late old-run cleanup preserves the newer session; unlink reconstruction clea
  const runtime = ownerBrowserRuntime(options);
  const fallbackHandle = vi.fn(); const fallback = { name: 'browse_page', handle: fallbackHandle } as never;
  const ctx = { authenticatedUserId: ownerId, turnId: 'new-turn', toolCallId: 'new-call', runScope: { ...newer }, egressAllowlist: ['*', '-blocked.example.com'] } as never;
- const args = { provider: 'cloudflare_playwright' as const, url: 'https://example.com/a', instruction: 'Read page' };
+ const args = { url: 'https://example.com/a', instruction: 'Read page' };
  expect(await runtime.read(fallback).handle(args, ctx)).toMatchObject({ ok: true });
  expect(runtime.attachments(newer)).toHaveLength(1);
  await runtime.finish(old);
@@ -53,22 +53,22 @@ it('late old-run cleanup preserves the newer session; unlink reconstruction clea
  expect(fallbackHandle).not.toHaveBeenCalled();
 });
 
- it('preserves an unselected typed fixture host but never falls back for explicit Cloudflare or free-text staging calls',async()=>{
+ it('keeps an unselected typed fixture host, never pays Browserbase for a native command, and sends a plain staging action to Browserbase only when it is configured',async()=>{
  const rows=new Map<string,unknown>([['do_name','fixture-only'],['telegram_subject','81102']]);
  const scope:RunEffectScope={runId:'fixture-run',attempt:'fixture-attempt',deadline:Date.now()+60000,signal:new AbortController().signal,admit(){},commit:work=>work()};
  const storage={kv:{get:(key:string)=>rows.get(key),put:(key:string,value:unknown)=>rows.set(key,value),list:({prefix}:{prefix:string})=>[...rows].filter(([key])=>key.startsWith(prefix))},transactionSync:<T>(work:()=>T)=>work(),getAlarm:async()=>null,setAlarm:async()=>{}} as unknown as DurableObjectStorage;
  const env={WALDO_ENVIRONMENT:'staging',TELEGRAM_OWNER_DO:{idFromName:()=>({toString:()=> 'fixture-physical'})}} as never;
- const runtime=ownerBrowserRuntime({env,storage,actualDoId:'fixture-physical',activeScope:()=>scope});
+ const runtime=ownerBrowserRuntime({env,storage,actualDoId:'fixture-physical',activeScope:()=>scope,typedHost:()=>true});
  const called=vi.fn(async()=>({ok:true as const,data:{fixture:true},source_taint:'external' as const}));
  const fallback={name:'browse_act',handle:called} as never;
  const handler=runtime.act(fallback),ctx={authenticatedUserId:'fixture-owner',runScope:scope} as never;
  const args={url:'https://fixture.example/form',task:'Inspect',max_actions:1,command:{operation:'inspect' as const}};
  expect(await handler.handle(args,ctx)).toMatchObject({ok:true,data:{fixture:true}});expect(called).toHaveBeenCalledTimes(1);
- expect(await handler.handle({...args,provider:'cloudflare_playwright'},ctx)).toMatchObject({ok:false});
  expect(await handler.handle({...args,session_handle:'retained-common-session'},ctx)).toMatchObject({ok:false});
- expect(await runtime.read(fallback).handle({url:args.url,instruction:'Read',session_handle:'retained-common-session',provider:'browserbase_stagehand_http_v3'},ctx)).toMatchObject({ok:false});
+ expect(await runtime.read(fallback).handle({url:args.url,instruction:'Read',session_handle:'retained-common-session'},ctx)).toMatchObject({ok:false});
  expect(await handler.handle({...args,command:undefined},ctx)).toMatchObject({ok:false});expect(called).toHaveBeenCalledTimes(1);
- expect(await handler.handle({...args,provider:'browserbase_stagehand_http_v3'},ctx)).toMatchObject({ok:false});
- expect(await handler.handle({...args,command:undefined,provider:'browserbase_stagehand_http_v3',session_handle:'retained-common-session'},ctx)).toMatchObject({ok:false});expect(called).toHaveBeenCalledTimes(1);
- expect(await handler.handle({...args,command:undefined,provider:'browserbase_stagehand_http_v3'},ctx)).toMatchObject({ok:true});expect(called).toHaveBeenCalledTimes(2);
+ const withBrowserbase=ownerBrowserRuntime({env:{...env as object,BROWSERBASE_API_KEY:'synthetic',BROWSERBASE_PROJECT_ID:'synthetic'} as never,storage,actualDoId:'fixture-physical',activeScope:()=>scope,typedHost:()=>true}).act(fallback);
+ expect(await withBrowserbase.handle({...args,command:undefined,session_handle:'retained-common-session'},ctx)).toMatchObject({ok:false});expect(called).toHaveBeenCalledTimes(1);
+ expect(await withBrowserbase.handle({...args,command:undefined},ctx)).toMatchObject({ok:true});expect(called).toHaveBeenCalledTimes(2);
+ expect(await withBrowserbase.handle(args,ctx)).toMatchObject({ok:true,data:{fixture:true}});expect(called).toHaveBeenCalledTimes(3);
  });

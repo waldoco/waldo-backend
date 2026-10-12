@@ -4,13 +4,13 @@ import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { commonBrowserHost, maintainCommonBrowsers, revokeCommonBrowsers,fenceLostNativeHandoffs } from './common-browser-host';
-import { commonPublicBrowserConfiguration } from './common-public-browser-configuration';
+import { commonPublicBrowserConfiguration, commonPublicBrowserConfigured } from './common-public-browser-configuration';
 import { COMMON_TEST_CEILING_MICROUSD, commonBrowserSdk, commonStagingRegistration } from './common-staging-registration';
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { armAlarm } from '../scheduler/alarm-slot';
 import { commonOwnerBrowserRegistration,CommonBrowserRegistrationUnavailable } from './common-owner-browser-registration';
 import type { LLMGatewayAdapter } from '../llm/provider';
-import { commonOwnerAuthority } from '../identity/common-owner-authority';
+import { localOwnerBinding, ownerBindingCurrent, verifyOwnerBinding } from '../identity/owner-binding';
 import { workspaceOwnerHost, workspaceMetadata } from './workspace-host';
 import {cloudflarePublicRead,PUBLIC_READ_RESERVED_BROWSER_MS} from './cloudflare-public-read';
 import {ordinaryPublicBrowserConfiguration} from './ordinary-public-browser-configuration';
@@ -23,6 +23,7 @@ const traceBrowserFailure=(operation:string,cause:unknown)=>console.warn(JSON.st
 export function ownerBrowserRuntime(options: Readonly<{
   env: TelegramWebhookEnv; storage: DurableObjectStorage; actualDoId: string;
   activeScope(): RunEffectScope | undefined;
+  typedHost?(): boolean;
 }>) {
   fenceLostNativeHandoffs(options.storage,Date.now());
   let active: { scope?: RunEffectScope; taskId:string; ownerId:string; host: ReturnType<typeof commonBrowserHost> } | undefined;
@@ -43,28 +44,30 @@ export function ownerBrowserRuntime(options: Readonly<{
     } : {}) });
   };
   const selectedConfiguration = async (cleanupOnly = false, normalRead = false) => automatic.selected || automatic.hasRetained() ? automatic.configuration(cleanupOnly) : configuration(cleanupOnly, normalRead);
-  // Staging, a registered common browser or a retained one serve browsing natively, without the fallback's provider keys.
-  const eligibleWith = (fallback: Readonly<{ eligible?(): ToolEligibility | Promise<ToolEligibility> }>) => (): ToolEligibility | Promise<ToolEligibility> =>
-    options.env.WALDO_ENVIRONMENT === 'staging' || options.env.COMMON_BROWSER_REGISTRATION || automatic.selected || automatic.hasRetained() || active ? { ok: true } : fallback.eligible?.() ?? { ok: true };
+  // A held session serves browsing; the owner's Cloudflare host serves only where its binding and provider code exist;
+  // otherwise the fallback's Browserbase keys decide.
+  const cloudflareReady = () => Boolean(options.env.BROWSER && (commonBrowserSdk() || commonPublicBrowserConfigured()));
+  const browserbaseReady = () => Boolean(options.env.BROWSERBASE_API_KEY && options.env.BROWSERBASE_PROJECT_ID);
+  const eligibleWith = (fallback: Readonly<{ eligible?(): ToolEligibility | Promise<ToolEligibility> }>, typed = false) => (): ToolEligibility | Promise<ToolEligibility> =>
+    active || typed && options.typedHost?.() || cloudflareReady() && (options.env.WALDO_ENVIRONMENT === 'staging' || options.env.COMMON_BROWSER_REGISTRATION || automatic.selected || automatic.hasRetained()) ? { ok: true } : fallback.eligible?.() ?? { ok: true };
+  // The browser serves the owner bound to this physical object, through Telegram or the app; the directory confirms it.
+  const binding = () => localOwnerBinding(options.storage.kv, options.env.TELEGRAM_OWNER_DO, options.actualDoId);
+  const bound = (held: NonNullable<ReturnType<typeof binding>>) => ownerBindingCurrent(options.storage.kv, options.env.TELEGRAM_OWNER_DO, options.actualDoId, held);
   const assertOwner = async () => {
-      const doName = options.storage.kv.get<string>('do_name'), subject = options.storage.kv.get<string>('telegram_subject');
-      const physical = () => { if (!doName || !subject || options.storage.kv.get('do_name') !== doName || options.storage.kv.get('telegram_subject') !== subject
-        || options.storage.kv.get('telegram_unlinked') === true || options.env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== options.actualDoId) throw new ClosedRunError(); };
-      physical(); const owner = await commonOwnerAuthority(options.env).resolve('telegram', subject!, doName!); physical();
-      if (!owner) throw new ClosedRunError(); return { directoryOwnerId: owner.directoryOwnerId, custodyDigest: owner.custodyDigest };
+      const held = binding();
+      if (!held) throw new ClosedRunError();
+      const owner = await verifyOwnerBinding(options.env, held, options.actualDoId, options.env.TELEGRAM_OWNER_DO);
+      if (!bound(held) || !owner) throw new ClosedRunError(); return { directoryOwnerId: owner.directoryOwnerId, custodyDigest: owner.custodyDigest };
     };
   const current = (ctx: ToolDispatcherContext) => {
-    const scope = options.activeScope(), supplied = ctx.runScope;
-    const doName = options.storage.kv.get<string>('do_name'), subject = options.storage.kv.get<string>('telegram_subject');
+    const scope = options.activeScope(), supplied = ctx.runScope, held = binding();
     // Hooks copy the context object, but retain these host-created functions.
     if (!scope || !supplied || supplied.runId !== scope.runId || supplied.attempt !== scope.attempt
       || supplied.deadline !== scope.deadline || supplied.admit !== scope.admit || supplied.commit !== scope.commit
-      || !doName || !subject || !ctx.authenticatedUserId) throw new ClosedRunError();
+      || !held || !ctx.authenticatedUserId) throw new ClosedRunError();
     return async () => {
       scope.admit();
-      if (options.activeScope() !== scope || options.storage.kv.get('do_name') !== doName
-        || options.storage.kv.get('telegram_subject') !== subject || options.storage.kv.get('telegram_unlinked') === true
-        || options.env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== options.actualDoId) throw new ClosedRunError();
+      if (options.activeScope() !== scope || !bound(held)) throw new ClosedRunError();
       scope.admit();
     };
   };
@@ -133,9 +136,9 @@ export function ownerBrowserRuntime(options: Readonly<{
       return { ...fallback, eligible: eligibleWith(fallback), schema: browsePageArgsSchema, description: fallback.description+' For interactive tasks use retain_session:true to receive DOM/accessibility, a PNG and session_handle, then call browse_act with that handle and current refs. Omit for a one-shot read.', async handle(args, ctx) {
         try {
           const assertCurrent = current(ctx); await assertCurrent();
-          // Browserbase remains an explicit choice. Cloudflare failure never switches providers.
-          if(args.provider==='browserbase_stagehand_http_v3'&&(args.session_handle||args.retain_session))throw new ClosedRunError();
-          if (args.provider === 'browserbase_stagehand_http_v3' || !args.provider && !args.session_handle && !args.retain_session && options.env.WALDO_ENVIRONMENT !== 'staging') return fallback.handle(args, { ...ctx, assertTaskSourceCurrent: assertCurrent });
+          // A one-shot read goes to Browserbase when it is configured, and always outside staging; a retained session stays
+          // on the owner's Cloudflare host. A Cloudflare failure never switches providers.
+          if (!args.session_handle && !args.retain_session && (browserbaseReady() || options.env.WALDO_ENVIRONMENT !== 'staging')) return fallback.handle(args, { ...ctx, assertTaskSourceCurrent: assertCurrent });
           // Omitted lifecycle fields must not silently discard an owner's
           // unsent page state or buy a second browser during a retained journey.
           const heldPointer=options.storage.kv.get<{taskId:string;sessionHandle:string}>(continuationKey);
@@ -162,7 +165,7 @@ export function ownerBrowserRuntime(options: Readonly<{
                 const scope=options.activeScope()!;
                 const declaredLimitMicrousd=options.env.COMMON_BROWSER_REGISTRATION?JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.limitMicrousd:undefined;
                 const effectiveLimitMicrousd=Number.isSafeInteger(declaredLimitMicrousd)?Math.min(declaredLimitMicrousd,COMMON_TEST_CEILING_MICROUSD):declaredLimitMicrousd;
-                return reserveOwnerPublicBrowser({storage:options.storage,ownerId,custodyDigest:owner.custodyDigest,intent:`${scope.runId}:${scope.attempt}:${ctx.toolCallId}`,reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now:Date.now(),declaredLimitMicrousd:effectiveLimitMicrousd,assertCurrent:()=>{scope.admit();if(options.activeScope()!==scope||options.storage.kv.get('telegram_unlinked')===true)throw new ClosedRunError();}});
+                return reserveOwnerPublicBrowser({storage:options.storage,ownerId,custodyDigest:owner.custodyDigest,intent:`${scope.runId}:${scope.attempt}:${ctx.toolCallId}`,reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now:Date.now(),declaredLimitMicrousd:effectiveLimitMicrousd,assertCurrent:()=>{scope.admit();if(options.activeScope()!==scope||!binding())throw new ClosedRunError();}});
               }});
               return read(args,{...ctx,authenticatedUserId:ownerId,assertTaskSourceCurrent:assertReadCurrent});
             }
@@ -173,14 +176,14 @@ export function ownerBrowserRuntime(options: Readonly<{
       } };
     },
     act(fallback:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>):ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>{
-      return {...fallback,eligible:eligibleWith(fallback),schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page retain_session:true first, then use its session_handle. Native actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download uses an observed link for an authenticated GET attachment, stores and verifies bytes in your private workspace, and returns an exact-revision owner download link. Blob/data and POST exports are unsupported. owner_login pauses this turn for human sign-in in the authenticated console; end the turn and ask the owner to reply after Done. Resume only on that later owner reply, then verify the intended signed-in account from fresh evidence. session_handle explicitly continues an existing owner session. File selection and page sends are unsupported; uncertain effects cannot repeat. Browserbase remains an explicit alternative.',async handle(args,ctx){
+      return {...fallback,eligible:eligibleWith(fallback,true),schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page retain_session:true first, then use its session_handle. Native actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download uses an observed link for an authenticated GET attachment, stores and verifies bytes in your private workspace, and returns an exact-revision owner download link. Blob/data and POST exports are unsupported. owner_login pauses this turn for human sign-in in the authenticated console; end the turn and ask the owner to reply after Done. Resume only on that later owner reply, then verify the intended signed-in account from fresh evidence. session_handle explicitly continues an existing owner session. File selection and page sends are unsupported; uncertain effects cannot repeat.',async handle(args,ctx){
         try{
           const assertCurrent=current(ctx);await assertCurrent();
-          if(args.provider==='browserbase_stagehand_http_v3'&&(args.command||args.session_handle))throw new ClosedRunError();
-          if(args.provider==='browserbase_stagehand_http_v3'||!args.provider&&!args.session_handle&&options.env.WALDO_ENVIRONMENT!=='staging')return fallback.handle(args,{...ctx,assertTaskSourceCurrent:assertCurrent});
-          // A configured synthetic task keeps its existing typed host. Never
-          // reinterpret native commands or explicit Cloudflare as a paid fallback.
-          if(!args.provider&&!args.session_handle&&args.command&&!options.env.COMMON_BROWSER_REGISTRATION&&!automatic.hasRetained()&&!active)return fallback.handle(args,{...ctx,assertTaskSourceCurrent:assertCurrent});
+          // Without a session handle: outside staging the fallback serves; a plain action goes to Browserbase when it is
+          // configured; a typed command goes to the enabled task host when one is configured and no common browser is held,
+          // otherwise to the owner's Cloudflare host. Native commands are never reinterpreted as a paid Browserbase action.
+          if(!args.session_handle&&(options.env.WALDO_ENVIRONMENT!=='staging'||!args.command&&browserbaseReady()
+            ||args.command&&options.typedHost?.()&&!options.env.COMMON_BROWSER_REGISTRATION&&!automatic.hasRetained()&&!active))return fallback.handle(args,{...ctx,assertTaskSourceCurrent:assertCurrent});
           const bound=await bindHost(ctx,args.session_handle);
           const result=await bound.active.host.actionHandler.handle(args,bound.context);
           if(args.command?.operation==='owner_login'&&result.ok){const origin=options.storage.kv.get<string>('origin');if(origin&&new URL(origin).protocol==='https:'&&'data' in result&&result.data&&typeof result.data==='object')Object.assign(result.data,{console_url:new URL('/console/browser-handoff',origin).href});}

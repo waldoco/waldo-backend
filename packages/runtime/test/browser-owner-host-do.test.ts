@@ -102,6 +102,7 @@ it('authenticated actual DO typed inspection persists one owner browser session 
   await browserProof(async h => {
     await h.send('Inspect the public fixture.');
     expect(h.starts()).toBe(1); expect(h.inspections()).toBeGreaterThan(0);
+    expect(JSON.stringify(h.requests)).toContain('"browse_act"');
     const before = await h.state.storage.get(BROWSER_TASK_KEY);
     expect(before).toMatchObject({ session: { ownerId: 'prn_10000000000000000000000000000001' }, phase: 'active' });
     h.reload(); await h.send('Inspect that same public fixture again.');
@@ -111,12 +112,13 @@ it('authenticated actual DO typed inspection persists one owner browser session 
     expect(projected).toContain('field_refs');
   });
 });
-for (const mode of ['absent', 'disabled', 'factory_failed'] as const) it(`actual DO ${mode} browser configuration rejects typed calls without provider allocation`, async () => {
+for (const mode of ['absent', 'disabled', 'factory_failed'] as const) it(`actual DO ${mode} browser configuration offers no typed browser and allocates nothing`, async () => {
   await browserProof(async h => {
     await h.send('Inspect the public fixture.');
     expect(h.starts()).toBe(0); expect(h.inspections()).toBe(0);
     expect(await h.state.storage.get(BROWSER_TASK_KEY)).toBeUndefined();
-    expect(JSON.stringify(h.requests)).toContain('rejected');
+    // No browser binding, Browserbase key or enabled task host serves it, so the model is never offered browse_act.
+    expect(JSON.stringify(h.requests)).not.toContain('"browse_act"');
   }, mode);
 });
 for (const mutation of ['foreign', 'stale'] as const) it(`actual owner admission ${mutation} lookup cannot operate a retained browser session`, async () => {
@@ -259,7 +261,7 @@ it('browser approval custody survives reconstruction but denies replaced physica
     await h.send('Inspect the public fixture.');
     const ownerKey = 'telegram:physical-owner-one';
     let currentOwner = ownerKey;
-    const owner = async () => currentOwner;
+    const owner = async () => [currentOwner];
     const payload = { url: 'https://fixture.example/form', action: { selector: '#submit', method: 'click', description: 'synthetic' }, binding: { value: 'synthetic' }, steps: [], continuation: { version: 1 as const, taskRef: 'synthetic-task', proposalId: 'synthetic-proposal', scopeDigest: `sha256:${'a'.repeat(64)}` } };
     browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv, owner).capture(payload, ownerKey);
     const guard = browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv, owner).guard(payload); await guard();
@@ -290,7 +292,7 @@ it('browser approval custody remains valid without a classifier and is revoked b
     const { browserTaskSourceCustody } = await import('../src/channels/browser-task-source');
     await h.send('Inspect the public fixture.');
     const ownerKey = 'telegram:physical-owner';
-    const owner = async () => ownerKey;
+    const owner = async () => [ownerKey];
     const payload = { url: 'https://fixture.example/form', action: { selector: '#submit', method: 'click', description: 'synthetic' }, binding: { value: 'synthetic' }, steps: [], continuation: { version: 1 as const, taskRef: 'synthetic-task', proposalId: 'synthetic-proposal', scopeDigest: `sha256:${'a'.repeat(64)}` } };
     const custody = browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv, owner);
     custody.capture(payload, ownerKey);

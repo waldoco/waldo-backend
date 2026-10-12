@@ -7,7 +7,7 @@ vi.mock('../src/identity/common-owner-authority',()=>({commonOwnerAuthority:()=>
 vi.mock('openai',()=>({default:class{responses={create:async(input:any)=>{
  proof.inputs.push(structuredClone(input));const format=input.text?.format?.name,outputs=(Array.isArray(input.input)?input.input:[]).filter((row:any)=>row.type==='function_call_output');
  const read=!format&&!outputs.length;
- return {id:'normal-public-fake',output:read?[{type:'function_call',call_id:'ordinary-public-read',name:'browse_page',arguments:JSON.stringify({provider:'cloudflare_playwright',url:'https://example.com/menu',instruction:'Read menu'})}]:[],output_text:format==='claim_ops'?'{}':format?'{}':read?'':'Vegetarian pasta is available.',usage:{input_tokens:1,output_tokens:1}};
+ return {id:'normal-public-fake',output:read?[{type:'function_call',call_id:'ordinary-public-read',name:'browse_page',arguments:JSON.stringify({url:'https://example.com/menu',instruction:'Read menu'})}]:[],output_text:format==='claim_ops'?'{}':format?'{}':read?'':'Vegetarian pasta is available.',usage:{input_tokens:1,output_tokens:1}};
 }}}}));
 vi.mock('../src/channels/telegram-api',async load=>({...await load<typeof import('../src/channels/telegram-api')>(),createTelegramCaller:()=>async(method:string,payload:any)=>{if(method==='sendMessage'){proof.sent.push(payload.text);return {message_id:proof.sent.length,chat:{id:payload.chat_id}};}return method==='getMe'?{username:'normal_public_fake_bot'}:true;}}));
 let alive=false;
@@ -23,7 +23,7 @@ it.each(['absent','expired'])('ordinary two-argument ownerDO returns useful publ
   const response=await instance.fetch(new Request('https://fixture.invalid/enqueue',{method:'POST',headers:{'content-type':'application/json','x-waldo-inbox-secret':'normal-public-fake-secret','x-waldo-telegram-subject':String(subject),'x-waldo-do-name':doName},body:JSON.stringify({update_id:81102001,message:{message_id:1,date:Math.floor(Date.now()/1000),chat:{id:subject,type:'private'},from:{id:subject,is_bot:false,first_name:'Fixture'},text:'Use Cloudflare to read the public menu.'}})}));expect(response.status).toBe(200);
   await vi.waitFor(async()=>{await instance.alarm();expect(proof.sent.some(text=>text.includes('Vegetarian pasta'))).toBe(true);},{timeout:10000,interval:50});
   const output=proof.inputs.flatMap(input=>Array.isArray(input.input)?input.input:[]).find((row:any)=>row.type==='function_call_output');
-  expect(JSON.parse(output.output)).toMatchObject({ok:true,data:{provider:'cloudflare_playwright',data:{text:'Vegetarian pasta'}}});
+  expect(JSON.parse(output.output)).toMatchObject({ok:true,data:{data:{text:'Vegetarian pasta'}}});
   const accounting=state.storage.kv.get<any>('owner-public-browser-spend:v2');
   expect(accounting).toMatchObject({ownerId:'prn_10000000000000000000000000000002',reservations:[{settled:true}]});
   expect(accounting.reservedMicrousd).toBeLessThanOrEqual(1250);

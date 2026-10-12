@@ -10,6 +10,7 @@ import { browseActHandler, browsePageHandler } from '../src/tools/live/browser';
 import { readDriveHandler } from '../src/tools/live/drive';
 import { connectServiceHandler, googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 import { callMcpToolHandler, readMcpToolHandler } from '../src/tools/live/mcp';
+import { registerCommonBrowserSdk } from '../src/channels/common-staging-registration';
 
 type Account = Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>;
 const clock = { timezone: 'UTC', now: () => new Date('2026-10-10T09:00:00Z') };
@@ -93,8 +94,8 @@ it('deploy configuration decides MCP, browse and Drive eligibility', async () =>
   expect(await verdict(readMcpToolHandler(readable, undefined, true))).toEqual({ ok: true });
   expect(await verdict(browsePageHandler(undefined, undefined, undefined))).toEqual(missing);
   expect(await verdict(browsePageHandler('key', 'project', undefined))).toEqual({ ok: true });
-  expect(await verdict(browsePageHandler(undefined, undefined, undefined, fetch, { defaultProvider: 'cloudflare_playwright', allowBrowserbase: false, cloudflare: (async () => ({})) as never }))).toEqual({ ok: true });
-  expect(await verdict(browsePageHandler('key', 'project', undefined, fetch, { defaultProvider: 'browserbase_stagehand_http_v3', allowBrowserbase: false }))).toEqual(missing);
+  expect(await verdict(browsePageHandler(undefined, undefined, undefined, fetch, { allowBrowserbase: false, cloudflare: (async () => ({})) as never }))).toEqual({ ok: true });
+  expect(await verdict(browsePageHandler('key', 'project', undefined, fetch, { allowBrowserbase: false }))).toEqual(missing);
   expect(await verdict(browseActHandler(undefined, undefined, undefined))).toEqual(missing);
   expect(await verdict(browseActHandler('key', 'project', undefined))).toEqual({ ok: true });
   expect(await verdict(readDriveHandler({ client: async () => null }, false))).toEqual(missing);
@@ -103,8 +104,13 @@ it('deploy configuration decides MCP, browse and Drive eligibility', async () =>
 
 it('the owner browser keeps browse tools where it serves them natively, and otherwise follows the fallback provider', async () => {
   const storage = { kv: { get: () => undefined, put: () => undefined, list: () => [] } } as unknown as DurableObjectStorage;
-  const runtime = (environment: string) => ownerBrowserRuntime({ env: { WALDO_ENVIRONMENT: environment } as never, storage, actualDoId: 'physical', activeScope: () => undefined });
   const missing = { ok: false, reason: 'not_configured' };
+  const runtime = (environment: string, binding = true) => ownerBrowserRuntime({ env: { WALDO_ENVIRONMENT: environment, ...(binding ? { BROWSER: {} } : {}) } as never, storage, actualDoId: 'physical', activeScope: () => undefined });
+  // Staging serves natively only where its browser binding and provider code exist; without them the fallback's keys decide.
+  expect(await runtime('staging', false).read(browsePageHandler(undefined, undefined, undefined)).eligible!()).toEqual(missing);
+  expect(await runtime('staging', false).act(browseActHandler(undefined, undefined, undefined)).eligible!()).toEqual(missing);
+  expect(await runtime('staging', false).read(browsePageHandler('key', 'project', undefined)).eligible!()).toEqual({ ok: true });
+  registerCommonBrowserSdk(async () => ({}) as never);
   expect(await runtime('production').read(browsePageHandler(undefined, undefined, undefined)).eligible!()).toEqual(missing);
   expect(await runtime('production').act(browseActHandler(undefined, undefined, undefined)).eligible!()).toEqual(missing);
   expect(await runtime('production').read(browsePageHandler('key', 'project', undefined)).eligible!()).toEqual({ ok: true });
