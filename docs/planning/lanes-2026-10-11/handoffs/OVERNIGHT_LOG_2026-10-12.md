@@ -2136,3 +2136,6 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **L1's #116 record (6132247308):** the failing test is `trusted-run-loop.test.ts:3534`. L1 classifies it as flaky, with a hypothesis that the alarm fires on its own under CI load. It passed 3 of 3 times locally, one documented rerun passed (`attempt=2 success` [verified]), and the race fix is a separate task.
   - My earlier line was wrong because `gh run list --status failure` shows only a run's latest attempt.
 - **Test 3, on the owner's ask (20:52:49Z):** "the Razorpay meeting yesterday, plus the Fireflies notes and recap". It runs before any P1 approval; L4 is still waiting on the owner's rulings.
+- **Test 3 result** (answered by about 20:54Z): it **found the meeting and its Fireflies recap email but could not read the recap body.** Drive had no matching doc. It said honestly that it can't summarise what was discussed or owed.
+  - **This is the second mail body tonight it couldn't read**, after test 1's bank alert. The likely cause is that the Gmail read returns only plain-text parts and HTML-only bodies come back empty [inference]. The extraction code wasn't found by a quick grep, so it's for the backend lane to diagnose.
+  - **Priority:** this is the top quality-of-life fix for "meeting notes and follow-ups".
