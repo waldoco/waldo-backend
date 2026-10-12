@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { armAlarm } from '../src/scheduler/alarm-slot';
 import {
   evictDurableObject,
-  runDurableObjectAlarm,
+  runDurableObjectAlarm as platformAlarm,
   runInDurableObject,
 } from 'cloudflare:test';
 import {
@@ -156,6 +156,17 @@ type TestRunLoopInstance = {
 };
 
 let sequence = 0;
+
+// workerd retries an alarm whose handler threw, so an injected crash would otherwise be resumed by the platform,
+// with whatever overrides are installed, before the test drives its own recovery. Clear that retry at the crash.
+async function runDurableObjectAlarm(stub: DurableObjectStub): Promise<boolean> {
+  try {
+    return await platformAlarm(stub);
+  } catch (error) {
+    if (String(error).includes('crash-injection:')) await runInDurableObject(stub, (_instance, state) => state.storage.deleteAlarm());
+    throw error;
+  }
+}
 
 function freshStub(): TrustedRunLoopStub {
   sequence += 1;
@@ -3481,7 +3492,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     });
     await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:LLM_CALLED');
 
-    await runInDurableObject(stub, (_instance, state) => {
+    await runInDurableObject(stub, async (_instance, state) => {
       state.storage.sql.exec(
         `INSERT INTO loop_kill_flags (flag_key, scope, loop_type, active, updated_at)
          VALUES (?, ?, ?, ?, ?)`,
@@ -3491,6 +3502,8 @@ describe('RunLoopDO trusted invocation convergence', () => {
         1,
         SNAPSHOT_AT,
       );
+      // The crash's retry was cleared; this alarm is the resume, armed late enough that only this test runs it.
+      await armAlarm(state.storage, Date.now() + 60_000);
     });
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect((await stub.readRunProof(runId)).delivery_journal).toEqual({
@@ -3940,6 +3953,10 @@ describe('RunLoopDO trusted invocation convergence', () => {
     await expect(runDurableObjectAlarm(stub)).rejects.toThrow(
       'crash-injection:TRUSTED_TOOL_CHECKPOINT',
     );
+    expect(countedTool.physicalCalls()).toBe(1);
+    // Stands in for workerd retrying the alarm whose handler threw. Before the stale intent is
+    // planted it would resume the run and execute the second planned tool.
+    expect(await runDurableObjectAlarm(stub)).toBe(false);
     expect(countedTool.physicalCalls()).toBe(1);
 
     await runInDurableObject(stub, (_instance, state) => {
