@@ -80,7 +80,7 @@ describe('connecting Google from a chat turn', () => {
         const { message_id: id } = await sent.json() as { message_id: string };
         await vi.waitFor(() => expect(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
         const result = connectResult();
-        expect(result).toContain('open the menu, tap Connections and connect Google there');
+        expect(result).toContain('go back to Home, open the menu at the top left, tap Connections and connect Google there');
         expect(result).not.toContain(SENT_CLAIM);
         expect(rpcs).not.toContain('connect_session_issue');
         expect(await state.storage.get('connect:offers')).toBeUndefined();
