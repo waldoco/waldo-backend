@@ -75,3 +75,25 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 2. **#89 item 1a.** The server's Retry-After not-before survives a release and re-hold within one session, and resets on sign-out or account change.
    - **Why [verified]:** app rate limits are keyed per owner, as `${bucket}:${doName}` (app-api.ts:151-152).
    - Both behaviours get tests.
+
+## 21:41Z: #1102 merged; scribe change held for the owner; QA and landing-order changes
+
+- **Merged #1102 as `5b8197fd` at 21:41:12Z** (the flaky run-loop test fix; test-only, one file).
+  - **Gate:** CI 6/6 green at `5c57cefb`; independent review PASS with nothing blocking; advisor yes; CLEAN.
+  - **Not deployed on its own:** it's test-only, so it rides the next deploy.
+  - **Review notes sent to the flaky-fix session** (`local_7fe60b28`) for one follow-up PR:
+    1. The hold covers one alarm run only; the window after a crash is still open, which overlaps #1072.
+    2. The first-alarm window is still open in the test at head:1090-1107.
+    3. Leftover 60 s alarms could fire later in the shard.
+    4. The type-guard seam can be bypassed.
+- **Correction to 21:34Z decision 2:** narrowing the scribe's health scan on external text is **held for the owner**, however its review goes.
+  - It changes what the model sees and what is stored in DO SQLite (history ring, ledger rows, episodes), so it falls in the owner's held class "new places health data goes".
+  - A corpus test proves only the cases someone thought of.
+  - Connectors builds the PR with the corpus, and the owner decides in the morning. The README's held list now says so.
+- **QA rule relaxed:** before P1 is re-run, the orchestrator may make read-only "QA:" turns (no sends, no approvals). The original rule protected the old P1 overnight carry-over, and P1 has to be re-run from scratch anyway.
+- **Landing order for the owner DO, now in the README:**
+  1. #1100's behaviour PR.
+  2. A Simulator check.
+  3. The `v6` rename, deployed on its own.
+  4. Connectors' #1101 follow-up PR, rebased once onto `owner-do.ts`.
+- **Reading of the deploy ruling:** the owner's option text said "deploys those to staging (backend code only)". I read the Supabase `connector-proxy` Edge Function as backend code that ruling covers: it's code, not a migration, it's staging only, and redeploying the previous source rolls it back. The README's "Worker only" was my shorthand.

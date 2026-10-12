@@ -31,7 +31,7 @@ These let you work without asking.
      - database migrations (`supabase/migrations/`, a new DO SQLite table, or DO migration lineage). These include A3's "app connect route with its migration";
      - production and secrets;
      - new third-party services other than Expo (Browserbase is already in the code);
-     - new places health data goes.
+     - new places health data goes. This includes any narrowing of the scribe's health scan on external text: it changes what the model sees and what is stored in DO SQLite. Build the PR with its corpus test; it waits for the owner.
 2. **The `v6` OwnerDO rename** ships in its own deploy right after #1100's behaviour passes a Simulator check, without asking. Rollback across it is forward-only.
 3. **Scheduled meeting prep may read the text of related emails,** within these limits:
    - only the owner's mail;
@@ -90,7 +90,13 @@ https://github.com/waldoco/waldo-backend/issues/1103
 
 **A file outside your list:** coordinate on #1103 first. Whoever merges second rebases.
 
-**`telegram-owner-do.ts`, which #1100 renames to `owner-do.ts`, belongs to Ansh's lane.** Mac sessions don't edit it until #1100's behaviour PR and its rename PR have both merged. After that, announce any edit on #1103 first.
+**`telegram-owner-do.ts`, which #1100 renames to `owner-do.ts`, belongs to Ansh's lane.** The landing order is:
+1. #1100's behaviour PR.
+2. A Simulator check.
+3. The rename PR, deployed on its own.
+4. Connectors' #1101 follow-up PR, rebased once onto `owner-do.ts`.
+
+Until the rename has merged, no Mac session edits that file. After that, announce any edit on #1103 first.
 
 **Parked, each with its record kept. Don't start these:**
 - the health-plane follow-ups: the zone-clipping gap, the trend query across versions, #1083 Form v2;
@@ -151,7 +157,7 @@ https://github.com/waldoco/waldo-backend/issues/1103
   Never drive another session's device.
 - **Sign-in:** a human signs in once per device. Never type sign-in codes. The app session lasts 12 hours until PR B (the 30-day session) is deployed. The orchestrator's device was signed in at about 20:40Z on 12 Oct.
 - **One account:** both devices use the same app-only test account, so turns from either device land in the same Main chat.
-  - The App lane owns the P1 re-run. The orchestrator makes QA turns only after P1 is recorded, and starts each turn with "QA:".
+  - The App lane owns the P1 re-run. Before P1 is recorded, the orchestrator makes only read-only QA turns (no sends, no approvals). Every QA turn starts with "QA:".
   - Relaunch the app before reading Approvals or Home, until the refresh bug is fixed.
 - **Test sends:** only within ruling 6. Never send mail to anyone else, purchase anything or delete real data.
 - **Tooling:** use `mcp__Claude_Code_iOS_Simulator__control` (attach, launch with `app_path`, screenshot, tap, text). Coordinates are device points (402 x 874).
