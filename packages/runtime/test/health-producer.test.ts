@@ -11,7 +11,7 @@ const TODAY = '2026-03-20';
 const READ_AT = '2026-03-20T12:00:00.000123Z';
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 const wobble = (i: number, amp: number) => ((i * 7919) % 13 - 6) / 6 * amp;
-const WINDOW_SIGNALS = ['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration'];
+const SCORED_WINDOW_SIGNALS = ['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration'];
 
 type Sample = Record<string, unknown>;
 const sample = (signal: string, day: string, over: Sample = {}): Sample =>
@@ -271,6 +271,17 @@ describe('produceHealthScores', () => {
       expect([hourly.get(TODAY), hourly.get(YESTERDAY)]).toEqual([0, 8]);
       expect(h.writes.find(w => w.day === TODAY)!.form).toEqual({ reason: 'intraday_inputs_unavailable' });
       expect(h.writes.find(w => w.day === TODAY)!.recovery).toHaveProperty('score');
+      // A window sent again in the new zone also marks the day as read in two zones.
+      expect(h.writes.find(w => w.day === TODAY)!.tags).toContain('zone_changed');
+    });
+
+    it('leaves physical load unknown on a day with an overlapping window, even with a workout', async () => {
+      const workout = (day: string) => sample('workout', day, { start_at: `${day}T06:00:00.000Z`, end_at: `${day}T07:00:00.000Z`, value: 60, activity: 'run' });
+      const extra = [workout(TODAY), workout(YESTERDAY), window('movement_duration', TODAY, `${TODAY}T08:30:00.000Z`, `${TODAY}T09:30:00.000Z`)];
+      const h = harness(seriesOf([...history(25), ...extra]), undefined, undefined, { readDemand: async () => ({ state: 'available', days: [] }) });
+      await run(h);
+      const load = (day: string) => h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === day)!.demand?.physicalLoad;
+      expect([load(TODAY), load(YESTERDAY)]).toEqual([null, 96 + 60]);
     });
 
     it('checks the whole series, so an overlap across a day boundary clears both days', async () => {
@@ -306,11 +317,13 @@ describe('produceHealthScores', () => {
         return { form: h.writes.find(w => w.day === TODAY)!.form, hourly: h.inputs[0]!.days.find(d => d.day === day)?.hourly.length };
       };
       const overlapped = await formOf([...heavy, window('movement_duration', day, `${day}T10:30:00.000Z`, `${day}T11:30:00.000Z`)]);
-      const without = await formOf(heavy.filter(s => !(s.day === day && WINDOW_SIGNALS.includes(s.signal as string))));
+      const without = await formOf(heavy.filter(s => !(s.day === day && SCORED_WINDOW_SIGNALS.includes(s.signal as string))));
       const counted = await formOf(heavy);
       expect([overlapped.hourly, counted.hourly]).toEqual([0, 8]);
       expect(overlapped.form).toEqual(without.form);
       expect(counted.form).not.toEqual(without.form);
+      // Admitting fewer inputs is a new Form version under ADR-0081.
+      expect((counted.form as Record<string, unknown>).algorithm_version).toBe('form.candidate.v2');
     });
   });
 
