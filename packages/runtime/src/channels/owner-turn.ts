@@ -63,7 +63,7 @@ const MAX_TOOL_ROUNDS = 25;
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
 export type OwnerSkillHost = Readonly<{ browserAttachments?(scope?: RunEffectScope): readonly LLMAttachment[]; prepare(turn: OwnerTurnEnvelope, contextOwnerId: string, scope: RunEffectScope): Promise<OwnerSkillCapability | undefined> }>;
-export type OwnerContextHost = Readonly<{ prepare(turn: OwnerTurnEnvelope, scope: RunEffectScope): Promise<OwnerContextCapability> }>;
+export type OwnerContextHost = Readonly<{ prepare(turn: OwnerTurnEnvelope, scope: RunEffectScope): Promise<OwnerContextCapability | undefined> }>;
 export type OwnerHistoryFactory = (context: OwnerContextCapability, scope: RunEffectScope) => ConversationStore;
 export type OwnerContextIntegration = Readonly<{ contextHost: OwnerContextHost; history?: OwnerHistoryFactory }>;
 type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory }>;

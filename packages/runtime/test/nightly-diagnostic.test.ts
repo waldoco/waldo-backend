@@ -7,14 +7,14 @@ import { ensureSchema } from '../src/tracer/schema';
 
 describe('nightly diagnostic', () => {
   it('requires a live owner console session before exposing diagnostic state', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('nightly-diagnostic-unauth'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('nightly-diagnostic-unauth'));
     const response = await stub.fetch('https://telegram-owner/console/diagnostics/nightly');
     expect(response.status).toBe(401);
     expect(await response.text()).not.toContain('nightly-memory');
   });
 
   it('returns only fixed nightly schedule/run state and the alarm without payload or private text', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('nightly-diagnostic'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('nightly-diagnostic'));
     const cookie = await runInDurableObject(stub, async (_instance, state) => {
       ensureSchema(state.storage);
       state.storage.sql.exec(`INSERT INTO schedule (id, kind, occurrence_at, due_at, recurrence_json, payload_json, status, attempts, created_at, updated_at)
