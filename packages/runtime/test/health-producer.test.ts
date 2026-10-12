@@ -85,6 +85,27 @@ describe('produceHealthScores', () => {
     expect(row.freshness).toBe('fresh');
   });
 
+  it('computes Form as ADR-0081 form.safte-fast.v1 from the chosen source and stores its ADR confidence, not its coverage', async () => {
+    const h = harness(seriesOf(history(25), { source: 'samsung' }));
+    await run(h);
+    expect(h.inputs.every(input => input.source === 'samsung')).toBe(true);
+    const form = h.writes.find(w => w.day === TODAY)!.form as Record<string, unknown>;
+    const computed = computeDailyScores(h.inputs.find(input => input.targetDay === TODAY)!).form;
+    if (computed.state !== 'available') throw new Error('expected an available Form');
+    expect(form.algorithm_version).toBe('form.safte-fast.v1');
+    expect(form.score).toBe(computed.score);
+    expect(computed.confidence).toBe(Math.round(computed.coverage * 0.6 * 1000) / 1000);
+    expect(form.confidence).toBe(computed.confidence);
+  });
+
+  it('leaves Form unavailable for a source outside ADR-0081\'s table while Recovery still writes', async () => {
+    const h = harness(seriesOf(history(25), { source: 'health_connect' }));
+    await run(h);
+    const row = h.writes.find(w => w.day === TODAY)!;
+    expect(row.form).toEqual({ reason: 'no_readings' });
+    expect(typeof (row.recovery as Record<string, unknown>).score).toBe('number');
+  });
+
   it('writes only keys the database accepts, and every pillar is either a score or a reason', async () => {
     const h = harness(seriesOf(history(25)));
     await run(h);

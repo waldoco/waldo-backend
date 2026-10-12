@@ -109,7 +109,7 @@ const rowOf = (day: string, scores: DailyScores, basis: Readonly<{ source: strin
     recovery: recovery.state === 'unavailable' ? unavailable(recovery.reason)
       : { score: recovery.score, zone: toRowZone('recovery', recovery.zone), confidence: recovery.coverage, algorithm_version: recovery.algorithm_version, activation: recovery.activation, hrv_method: recovery.hrv_method },
     form: form.state === 'unavailable' ? unavailable(form.reason)
-      : { score: form.score, zone: toRowZone('form', form.zone), confidence: form.coverage, algorithm_version: form.algorithm_version, activation: form.activation, hrv_method: form.hrv_method },
+      : { score: form.score, zone: toRowZone('form', form.zone), confidence: form.confidence, algorithm_version: form.algorithm_version, activation: form.activation, hrv_method: form.hrv_method },
     weight: weight.state === 'unavailable' ? unavailable(weight.reason)
       : { score: weight.score, zone: toRowZone('weight', weight.zone), confidence: weight.coverage, algorithm_version: weight.algorithm_version, activation: weight.activation, hrv_method: weight.hrv_method },
     ...(recovery.state === 'available' ? { confidence: recovery.coverage } : {}),
@@ -135,7 +135,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     const { days, zoneChanged } = daysOf(chosen.readings, at.timezone);
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
     for (const targetDay of [shiftDay(today, -1), today]) {
-      const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: parsed.series.readAt });
+      const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: parsed.series.readAt, source: chosen.source });
       const nothingToShow = [scores.recovery, scores.form, scores.weight].every(p => p.state === 'unavailable');
       if (nothingToShow && !days.some(d => d.day === targetDay)) continue;
       const row = rowOf(targetDay, scores, chosen, parsed.series.readAt, at.timezone, zoneChanged.has(targetDay));

@@ -1,7 +1,7 @@
 import { BASELINE_DAYS, higherIsBetter, logZScore, lowerIsBetter, zScore, clampScore, type Component } from './stats';
 import type { DayRecord, HrvMethod, UnavailableReason } from './types';
 
-export const ALGORITHM = { recovery: 'recovery.candidate.v1', form: 'form.candidate.v1', weight: 'weight.candidate.v1', sleepDebt: 'sleep-debt.candidate.v1' } as const;
+export const ALGORITHM = { recovery: 'recovery.candidate.v1', form: 'form.safte-fast.v1', weight: 'weight.candidate.v1', sleepDebt: 'sleep-debt.candidate.v1' } as const;
 // Shares of the Recovery score. Keys name the component's role, not a reading.
 export const RECOVERY_SHARES = { sleep: 0.5, variability: 0.3, pulse: 0.2 } as const;
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { computeDailyScores } from '../src/health/scores';
+import { formComposite } from '../src/health/scores/form';
 import { localDayWindow } from '../src/health/scores/time';
 import { formZone, recoveryZone, weightZone } from '../src/health/scores/zones';
 import type { DailyScoresInput, DayRecord, HourlyBucket } from '../src/health/scores/types';
@@ -32,7 +33,7 @@ const day = (i: number, over: Partial<DayRecord> = {}): DayRecord => {
 };
 const week = (n = 21): DayRecord[] => Array.from({ length: n }, (_, i) => day(i));
 const input = (days: DayRecord[], over: Partial<DailyScoresInput> = {}): DailyScoresInput =>
-  ({ access: 'granted', targetDay: TARGET, days, sleepNeedMinutes: 480, asOf: `${TARGET}T20:00:00.000Z`, ...over });
+  ({ access: 'granted', targetDay: TARGET, days, sleepNeedMinutes: 480, asOf: `${TARGET}T20:00:00.000Z`, source: 'apple', ...over });
 const replaceTarget = (over: Partial<DayRecord>) => [day(0, over), ...week().slice(1)];
 
 describe('health scores: Recovery', () => {
@@ -130,31 +131,74 @@ describe('health scores: Sleep debt', () => {
   });
 });
 
-describe('health scores: Form', () => {
-  it('scores with recovery, circadian, motion and stress components', () => {
+describe('health scores: Form (ADR-0081 form.safte-fast.v1)', () => {
+  it('scores from sleep, hrv, circadian and motion with the accepted version, full coverage and Apple confidence', () => {
     const f = computeDailyScores(input(week())).form;
     expect(f.state).toBe('available');
     if (f.state !== 'available') return;
+    expect(f.algorithm_version).toBe('form.safte-fast.v1');
+    expect(f.activation).toBe('candidate_unaccepted');
+    expect(Number.isInteger(f.score)).toBe(true);
     expect(f.coverage).toBe(1);
-    expect(f.used.signals).toEqual(expect.arrayContaining(['sleep', 'sleep_midpoint', 'daylight', 'movement', 'stress']));
-    expect(['energized', 'steady', 'flagging', 'depleted']).toContain(f.zone);
+    expect(f.confidence).toBe(1);
+    expect([...f.used.signals].sort()).toEqual(['circadian', 'hrv', 'motion', 'sleep']);
+    expect(f.zone).toBe(formZone(f.score));
   });
-  it('ignores heart rate during a recorded workout so it does not read as stress', () => {
+  it('combines integer components with the accepted weights and rounds half up at every zone edge', () => {
+    expect(formComposite({ sleep: 79, hrv: 80, circadian: 80, motion: 80 })).toEqual({ score: 80, coverage: 1 });
+    expect(formComposite({ sleep: 59, hrv: 60, circadian: 60, motion: 60 })).toEqual({ score: 60, coverage: 1 });
+    expect(formComposite({ sleep: 39, hrv: 40, circadian: 40, motion: 40 })).toEqual({ score: 40, coverage: 1 });
+    expect(formComposite({ sleep: 100, hrv: 0, circadian: 0, motion: 0 })).toEqual({ score: 50, coverage: 1 });
+    expect(formComposite({ sleep: 0, hrv: 100, circadian: 0, motion: 0 })).toEqual({ score: 35, coverage: 1 });
+    // Without circadian the formula renormalises over 0.925: (500*60 + 350*59 + 75*59) / 925 = 59.54.
+    expect(formComposite({ sleep: 60, hrv: 59, circadian: null, motion: 59 })).toEqual({ score: 60, coverage: 0.925 });
+  });
+  it('is unavailable unless sleep, hrv and at least one of circadian or motion are present', () => {
+    expect(formComposite({ sleep: 80, hrv: null, circadian: 80, motion: 80 })).toBeNull();
+    expect(formComposite({ sleep: null, hrv: 80, circadian: 80, motion: 80 })).toBeNull();
+    expect(formComposite({ sleep: 80, hrv: 80, circadian: null, motion: null })).toBeNull();
+  });
+  it('does not let resting heart rate stand in for HRV, unlike Recovery', () => {
+    const days = replaceTarget({ overnightHrv: null });
+    expect(computeDailyScores(input(days)).form).toEqual({ state: 'unavailable', reason: 'missing_resting_signal' });
+    expect(computeDailyScores(input(days)).recovery.state).toBe('available');
+  });
+  it('is baseline_immature while fewer than 14 prior nights back HRV', () => {
+    expect(computeDailyScores(input(week(10))).form).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
+  });
+  it('drops motion, not the score, when the day has no hourly data: coverage 0.925', () => {
+    const f = computeDailyScores(input(replaceTarget({ hourly: [] }))).form;
+    expect(f.state).toBe('available');
+    if (f.state !== 'available') return;
+    expect(f.coverage).toBe(0.925);
+    expect(f.used.signals).not.toContain('motion');
+    expect(f.confidence).toBe(0.925);
+  });
+  it('ignores daytime heart rate: the accepted Form has no stress component', () => {
     const base = computeDailyScores(input(week())).form;
-    const spike = hourly(TARGET, 0).map(b => (['2026-03-20T16:00:00.000Z', '2026-03-20T17:00:00.000Z'].includes(b.startAt) ? { ...b, heartRate: 165 } : b));
-    const withoutWorkout = computeDailyScores(input(replaceTarget({ hourly: spike }))).form;
-    const withWorkout = computeDailyScores(input(replaceTarget({ hourly: spike, workouts: [{ startAt: '2026-03-20T16:00:00.000Z', endAt: '2026-03-20T18:00:00.000Z' }] }))).form;
-    if (base.state !== 'available' || withoutWorkout.state !== 'available' || withWorkout.state !== 'available') throw new Error('expected available');
-    expect(withoutWorkout.score).toBeLessThan(base.score);
-    expect(withWorkout.score).toBeGreaterThan(withoutWorkout.score);
+    const spike = hourly(TARGET, 0).map(b => ({ ...b, heartRate: 165 }));
+    const spiked = computeDailyScores(input(replaceTarget({ hourly: spike }))).form;
+    if (base.state !== 'available' || spiked.state !== 'available') throw new Error('expected available');
+    expect(spiked.score).toBe(base.score);
   });
-  it('is intraday_inputs_unavailable when the target day has no hourly data', () => {
-    expect(computeDailyScores(input(replaceTarget({ hourly: [] }))).form).toEqual({ state: 'unavailable', reason: 'intraday_inputs_unavailable' });
+  it('is fresh up to 36 hours after the night ended, stale (confidence x0.75) up to 72, unavailable beyond', () => {
+    const at = (hours: number) => computeDailyScores(input(week(), { asOf: new Date(Date.parse(`${TARGET}T07:00:00.000Z`) + hours * 3_600_000).toISOString() })).form;
+    const fresh = at(36), stale = at(36.5), edge = at(72), expired = at(72.5);
+    if (fresh.state !== 'available' || stale.state !== 'available' || edge.state !== 'available') throw new Error('expected available');
+    expect(fresh.confidence).toBe(1);
+    expect(stale.confidence).toBe(0.75);
+    expect(edge.confidence).toBe(0.75);
+    expect(stale.score).toBe(fresh.score);
+    expect(expired).toEqual({ state: 'unavailable', reason: 'stale_inputs' });
   });
-  it('is stale_inputs when the newest hourly data is older than 6 hours before asOf', () => {
-    expect(computeDailyScores(input(week(), { asOf: `${addDays(TARGET, 1)}T06:00:00.000Z` })).form).toEqual({ state: 'unavailable', reason: 'stale_inputs' });
+  it('counts only sources in the accepted table: Samsung at 0.6, Health Connect not at all', () => {
+    const samsung = computeDailyScores(input(week(), { source: 'samsung' })).form;
+    if (samsung.state !== 'available') throw new Error('expected available');
+    expect(samsung.confidence).toBe(0.6);
+    expect(computeDailyScores(input(week(), { source: 'health_connect' })).form).toEqual({ state: 'unavailable', reason: 'no_readings' });
+    expect(computeDailyScores(input(week(), { source: null })).form).toEqual({ state: 'unavailable', reason: 'no_readings' });
   });
-  it('passes a Recovery failure through as its own reason', () => {
+  it('passes missing sleep through as its own reason', () => {
     expect(computeDailyScores(input(replaceTarget({ sleep: null }))).form).toEqual({ state: 'unavailable', reason: 'missing_sleep' });
   });
 });

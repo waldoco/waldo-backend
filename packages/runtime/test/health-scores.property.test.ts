@@ -26,7 +26,7 @@ const dayArb = (age: number): fc.Arbitrary<DayRecord> => {
   }));
 };
 const daysArb = fc.integer({ min: 0, max: 40 }).chain(n => fc.tuple(...Array.from({ length: n }, (_, i) => dayArb(i))));
-const toInput = (days: DayRecord[]): DailyScoresInput => ({ access: 'granted', targetDay: TARGET, days, sleepNeedMinutes: 480, asOf: `${TARGET}T20:00:00.000Z` });
+const toInput = (days: DayRecord[]): DailyScoresInput => ({ access: 'granted', targetDay: TARGET, days, sleepNeedMinutes: 480, asOf: `${TARGET}T20:00:00.000Z`, source: 'apple' });
 const numbers = (value: unknown): number[] => (typeof value === 'number' ? [value] : value && typeof value === 'object' ? Object.values(value).flatMap(numbers) : []);
 
 describe('health scores: properties', () => {

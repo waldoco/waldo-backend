@@ -51,7 +51,7 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
   return {
     recovery,
     sleep_debt: sleepDebt(input.targetDay, byDay, prior, input.sleepNeedMinutes),
-    form: formScore(target, prior, input.sleepNeedMinutes, input.asOf),
+    form: formScore(target, prior, input.sleepNeedMinutes, input.asOf, input.source ?? null),
     weight: weightScore(target, prior),
   };
 };

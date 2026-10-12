@@ -49,6 +49,8 @@ export interface DailyScoresInput {
   readonly sleepNeedMinutes: number | null;
   // The newest instant the inputs were read, used only to judge freshness of intraday data.
   readonly asOf: string | null;
+  // The reading source the producer chose. Form counts only sources in ADR-0081's table.
+  readonly source?: string | null;
 }
 
 export interface Unavailable { readonly state: 'unavailable'; readonly reason: UnavailableReason }
@@ -68,7 +70,8 @@ export interface Available<Zone> {
   readonly used: UsedBasis;
 }
 export type RecoveryResult = Available<RecoveryZone> | Unavailable;
-export type FormResult = Available<FormZone> | Unavailable;
+// ADR-0081 confidence: coverage x source confidence x freshness factor, to three places.
+export type FormResult = (Available<FormZone> & { readonly confidence: number }) | Unavailable;
 export type WeightResult = Available<LoadZone> | Unavailable;
 export interface SleepDebtResult {
   readonly state: 'available' | 'partial';
