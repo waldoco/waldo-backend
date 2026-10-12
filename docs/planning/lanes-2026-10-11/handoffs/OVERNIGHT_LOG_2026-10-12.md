@@ -1479,3 +1479,8 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - #1088 is CLEAN at `1e1a4b39`, waiting for the owner's merge.
   - Usage is 51%; the pace has slowed to about 15% an hour, so it should last to the 16:30Z reset.
   - Context is at 82%. Open items are saved to memory for the compaction.
+
+- **13:56Z, L2:**
+  - #1088 has CI 6/6 at `1e1a4b39`; my delta review already passed it, and it waits for the owner's merge.
+  - **#1094** (the episodes fix) is a draft at `f70c0dff` on `2d18e5e5`: `owner-turn.ts:333-342`, +6/−2. Each re-read has its own catch, and one D13 log line is added (`episode_recheck`/`episode_read_failed`, count only). The red test passes, mutations catch 4/4, and the full wall passes 51 gates. `merge-tree` is clean against the open PRs, and it is E1-eligible. I review it when L2 marks it ready.
+  - **Blocked:** L2 is now free but hasn't received the #1091 findings, because of the message cap. That costs G1 time.
