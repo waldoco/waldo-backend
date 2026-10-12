@@ -426,3 +426,16 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - the counts read 0 of 6 chat-capable pillars on the app and 3 of 6 on Telegram (P7 and P8 have no chat tools);
   - the Telegram connect path is spot-checked;
   - build item 2 notes that a new chat part is an enum break until L4 re-pins.
+
+## 03:52Z: heartbeat
+
+- Brief re-read. The owner is back, so the standing go has ended. Merges and deploys now need the owner's yes, given to me or in the lane's session.
+- **Staging** `/healthz`: `{"ok":true,"release":"cdd906dd"}` [verified].
+- **Backend PRs:** none is waiting on me.
+  - #1066 (`c8d3190c`), #1076, #1078 and #1079 are drafts with CI 6/6. #1066 and #1076 wait on the owner's rulings.
+  - #1077 (this docs PR) is ready, with CI running at `d7246f73`.
+- **App:**
+  - `main` is `6dcba63b`.
+  - Open PRs: #29, #27 and draft #16, all older.
+- **#116, new since 02:55Z:** L4's C1 pin (app #80); L1's retention cron; L1's deploy of `cdd906dd` (`b72928f0`, on the owner's yes about 03:37Z).
+- **Scorecard:** draft #1017 (iMessage via a paired Mac bridge, default-off, with a migration) is added to the iMessage row and to platform gate 3.

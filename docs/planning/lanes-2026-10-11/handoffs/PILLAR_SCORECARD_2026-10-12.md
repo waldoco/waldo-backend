@@ -53,7 +53,7 @@ A pillar works by natural language on a surface when it passes three tests:
 | **App Main chat (the product)** | **0 of 6** chat-capable pillars | Nearest misses: connectors, reminders, memory, text chat |
 | **Telegram (dev surface)** | **3 of 6**: memory and skills, triggers, connectors | By reading. None observed live on `889efa27` |
 | WhatsApp | 0 | Code exists, but no owner can link it: the link-code issuer hard-codes `telegram` [reported] |
-| iMessage | 0 | The modules exist, but nothing imports them [reported] |
+| iMessage | 0 | The modules exist, but nothing imports them [reported]. Draft #1017 would wire a Mac bridge (default-off) |
 | Inbound email | 0 | No handler [reported] |
 
 P7 (payments and identity) and P8 (evals and observability) have no chat tools by design, so they can't pass the chat test. They are judged on their engines only. Out of eight, the counts are 0 for the app and 3 for Telegram.
@@ -200,7 +200,7 @@ These come from report 09, from dated pages fetched 12 Oct.
    - General-purpose assistants are barred, except where Meta is legally required to allow them.
    - The EEA position rests on an interim order that Meta is appealing [search snippet].
    - CLAUDE.md's "officially eligible WhatsApp" is the right guard. Plan as if WhatsApp is unavailable outside the EEA.
-3. **iMessage has no bot API.** Apple Messages for Business requires an approved messaging provider, a reachable live agent, and a first reply within 5 seconds (v3.1, 21 Jul 2026).
+3. **iMessage has no bot API.** Apple Messages for Business requires an approved messaging provider, a reachable live agent, and a first reply within 5 seconds (v3.1, 21 Jul 2026). Waldo's own route is draft #1017, from 10 Oct: a paired bridge on the owner's Mac. It is default-off, carries a migration and is proven only locally, so it is held. It is not Apple's business channel, so its terms risk at scale still needs review [inference].
 4. **App Store, at store launch:**
    - guideline 4.8 may require an equivalent privacy-preserving login once Google sign-in ships;
    - in-app account deletion (5.1.1(v)). The app already sends `account.delete` [reported];
