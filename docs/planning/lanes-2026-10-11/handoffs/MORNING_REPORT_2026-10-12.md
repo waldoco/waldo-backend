@@ -6,9 +6,19 @@ Tags: **[verified]** observed tonight; **[lane report]** a lane said so, not re-
 
 ## Do these first, in order
 
-1. **Answer L4's pending question in L4's session.** It was already pending when I checked at 23:15Z. It probably dates from soon after app #78 opened at 21:57Z **[inference]**. L4 has done no work since. I couldn't read the question, and the classifier refused my attempt to stop the waiting turn.
-2. **Open Main chat in the app and send one plain message.** For example: "Reply with one short sentence confirming you got this." Ask for no action. The send-path fix (#1075) is live on staging, but nothing has exercised it yet. L1's tail is waiting to read the result. If L1 is idle, ask it in its session to read the tail.
+1. **(Done at about 02:35Z.)** Answer L4's pending question in L4's session. It was already pending when I checked at 23:15Z. It probably dates from soon after app #78 opened at 21:57Z **[inference]**. L4 has done no work since. I couldn't read the question, and the classifier refused my attempt to stop the waiting turn.
+2. **(Done at 02:41Z, PASS.)** Open Main chat in the app and send one plain message. For example: "Reply with one short sentence confirming you got this." Ask for no action. The send-path fix (#1075) is live on staging, but nothing has exercised it yet. L1's tail is waiting to read the result. If L1 is idle, ask it in its session to read the tail.
 3. **Work through the batch below,** each answer in the session named.
+
+## Update at 02:45Z: Main chat verified live on staging
+
+- **Main chat works on staging `889efa27`, verified.** L4 ran two sends with your yes, on the Simulator with your account (02:41Z and 02:42Z). Both answered 202 and got replies ("Got it." in about 30 s; then a markdown list), and a refresh reads every row back from server history. No interrupted banner, no prototype success. L1's tail: receipt reads 200, no failure line, no exception (#116 comment 6116809142).
+  - Falsifiers: (a) PASS; (b) PASS; (d) PASS, no `history_conflict`.
+  - (c) logged `leaf` false where I predicted true. My prediction was wrong, and nothing is broken.
+  - (e) **The first send overwrote the stored bad row**: no skip line since. That's the pre-existing `commit()` path, which writes at `count + index` without checking the key is free. The row's witness copy probably survives **[inference; unchecked]**.
+  - **Follow-up for L2:** `commit()` must refuse to overwrite an existing key. Also unify the two leaf rules.
+- **App #78 merged** by you in L4's session as `83b5310f` (the time-zone auto-write, option a). It still lacks D6's confirm row and the comment rewording; both are L4 follow-ups.
+- **Still not run:** an approval card in chat (no reply carried one), and a fresh-account check.
 
 ## Late additions (02:15Z)
 

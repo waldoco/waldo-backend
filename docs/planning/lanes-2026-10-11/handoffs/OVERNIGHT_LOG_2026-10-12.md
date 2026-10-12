@@ -316,3 +316,14 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
 - **#1078** (`863427c6`): history-cut counts (`history_cut_window`, `held`, `cap`, `scribe`) on each `llm_reply` context, surfaced to the console and Langfuse. No storage change, no new hop. 9/9 mutations caught; targeted tests pass; CI was pending **[lane report]**.
 - **#1079** (`ed7a13a6`): **harness finding 1 HOLDS on both paths.** One ledger row, a real DO turn per path. Telegram: no `<recent-tool-results>` section. App: "No recent tool results." Causes: the app context host's sources are health-only; Telegram's reply builds its own system prompt and drops the joined composition. The tests pin the gap; no fix in this PR. Unverified: "the ledger is written every turn" (the row was seeded) **[lane report]**.
 - The morning report's risk entry is updated.
+
+## 02:45Z: Main chat verified live on `889efa27`
+
+- **L4** (via the old alignment session) and **L1** (message, plus #116 comment 6116809142):
+  - Two owner-approved sends on the Simulator, owner's account, at 02:41:13Z and 02:42:49Z: POST 202, receipt reads 200, replies shown and read back from history.
+  - Falsifiers: (a) PASS, (b) PASS, (d) PASS.
+  - (c) `leaf` false; the prediction was wrong.
+  - (e) No skip line after send 1: the first new row took the bad row's slot through `commit()`'s `count + index` write. The witness copy wasn't checked **[inference]**.
+  - Approval card in chat: NOT RUN.
+- **App #78 merged by the owner in L4's session** as `83b5310f` (02:39:54Z), without D6 or the comment rewording **[verified: app commits]**.
+- Follow-ups for L2: `commit()` must not overwrite an existing key; unify the two leaf rules.
