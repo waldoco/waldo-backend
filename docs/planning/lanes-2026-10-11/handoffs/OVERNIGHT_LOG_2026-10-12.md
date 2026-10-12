@@ -1785,3 +1785,4 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - the t3 follow-up for P4 and P5;
   - the probe-5 rerun.
   - P1 credit still needs #1098 deployed and a 6-or-more-tool job between the approval and the question.
+- **17:39Z:** the scorecard's EoD section and the page (pillars, notes) now show staging on `27214c63` with G1 live and not yet probed, #1097 merged and #1098 with L2. Stamped from `date -u` (17:39:36Z).
