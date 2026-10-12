@@ -1500,3 +1500,4 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **L2:** the #1091 findings with D15, the #1088 rollback text, and a note to mark #1094 ready. Delivered.
   - **L1:** the #1092 scenario fake and the wording fixes. Delivered.
   - **L4:** the app #86 fixes and the zone follow-up. Queued.
+- **15:16Z, app #86 merged as `108e76bc`** on the owner's yes in L4's session (#116 comment 6127132595). It went in before my review reached L4, because the message cap held it. So main carries the MEDIUM watermark walk-back (`runner.ts:153`) and the `!unasked` issue. L4 is asked to put a follow-up PR with both fixes before any tester build, ahead of refresh-while-open. L1 is still checking that staging accepts `movement_duration`.
