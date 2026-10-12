@@ -1260,3 +1260,25 @@ No second sweep for now, because the usage window has to last through wave 2 and
   - L4: holding for the owner's answers in L4's session (probe 5 time, the per-kind steer).
   - L3: unreachable.
 - **Next:** probe 6 at 16:00Z (L1's watch), then the 17:00Z re-score.
+
+## 12:2xZ: #1089 delta re-review PASS at `4b98b1d7`
+
+I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 source lines) [verified by reading].
+
+| Finding | Status |
+|---|---|
+| 1. Forget class | EXEMPT, with the reason in the body |
+| 2. Physical load | Null without movement or a workout |
+| 3. Finality | `fetched_at` at or after the day's local end |
+| 4. Codes | `calendar_demand` codes plus `read_failed`; `weight_demand` `demand_late`/`demand_failed`; no ids |
+| 5. Gone calendars | `notFound` is left out and marked `partial`, tagged `calendar_partial` on the target day; other errors are unknown |
+| 6. Account selection | By the scopes the read uses; `scope_gap` makes the read unknown |
+| 7. Slow reads | The demand read races 5 s beside the series read; Recovery and Form are written first; `finally` awaits the raw read |
+
+- **Also checked:** the re-arm idempotency test, which pins byte-identical rows across three boots.
+- **I accept L1's three calls:** the 5 s grace, the tag on the target day only, and `scope_gap` for the whole read.
+- **Follow-ups before Weight is shown:**
+  - a reconnect hint for `scope_gap`;
+  - a test for the `read_failed`/503 path;
+  - partial flags on baseline days.
+- **Next:** CI at `4b98b1d7`, then the owner's merge (new DO persistence; HEALTH_PLANE_AMENDMENT ruling 1). L1's scheduler fix is on `l1/schedule-row-guard`, red/green not yet run.
