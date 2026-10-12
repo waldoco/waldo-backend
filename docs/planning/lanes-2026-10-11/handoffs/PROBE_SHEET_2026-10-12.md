@@ -58,3 +58,9 @@ The results feed the 17:00Z re-score of `PILLAR_SCORECARD_2026-10-12.md` and the
 
 "Did it go out?" counts only when a job with 6 or more tool calls (a morning brief, for example) runs between the approval and the question. That is the everyday sequence, and the 6-row tool-result ring would lose the desk line in it (see the #1091 follow-up).
 
+**Refinement, 19:02Z [proposed; confirm with the advisor before scoring P1]:**
+- L1 found that, since 16:15Z, no composed alarm on the test account made 6 or more tool calls: reminders and day plans made 0. The tail can't read schedules, so it can't say which job, if any, would.
+- With #1098 live since 18:55Z, a job can't push an owner row out at all. That's true by construction, and pinned by #1098's end-to-end test of a 7-tool job.
+- So P1 can be credited from a live probe of an approval, then at least one scheduled job, then the question in a later turn. The busy-job case is credited as [test-verified, not live].
+- If any overnight job does make 6 or more tool calls (L1 reports `hops_total`), the probe covers that case live too.
+
