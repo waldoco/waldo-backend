@@ -1672,3 +1672,32 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
     3. Impact should name `deploy-staging.yml:111` (`pnpm -r typecheck`): an `evals/` type error now blocks staging deploys too.
   - Still outside any tsconfig: `packages/runtime/scripts/`, most `vitest.*.config.ts` files, root `scripts/`, and `supabase/functions` (Deno).
 - **#1093's delta review** started now that L1's lane is free (about 10 calls).
+
+## 16:57Z: #1091 (G1) merged as `571891de`
+
+- **Merge:** `gh pr merge 1091 --merge --match-head-commit 17e99fc6787b0e691bbd5ab67b12af7a0be5e20e`, at 16:57:18Z.
+- **Gate:**
+  - **CI:** 6/6 at `17e99fc6`, pgTAP included. CLEAN and MERGEABLE right before the merge [verified].
+  - **Reviews:** the full review at `10dbfdec` (3 MEDIUM, fixed); the delta review at `b1910118` (PASS, but held for the echo gap); the delta review at `17e99fc6` (PASS).
+    - The running taint is folded in at `tool-loop.ts:167-169`, before the emit at `:194-196`, with no await between.
+    - Replies to an outside message start external (`owner-turn.ts:423`).
+    - The only reader is `owner-turn.ts:533`.
+    - Desk lines still show.
+    - The merge brought in only beta-mvp's 19 files (identical patch-ids; `--remerge-diff` empty).
+  - **The advisor** agreed, on the condition of a combined type-check.
+  - **Combined type-check [verified]:** in a temp worktree, `87b31948` plus #1093 `ca027446`, #1091 `17e99fc6` and #1096 `7666100d` merged cleanly (octopus, no commit). `typecheck:worker` and `typecheck:integration` both pass. The worktree and scratch refs are removed.
+- **Why the hold-list clause doesn't hold this PR.** Its design rests on D16, my decision, and the owner's cross-turn option is still open. It is trivially reversible:
+  1. A revert is health-safe. The write guard admitted every ledger row as external, so no reading is ever stored. A revert would stage at most 6 null-taint rows as internal.
+  2. The 6-row ring flushes itself within 6 tool calls.
+  3. Adding a cross-turn seed later is additive, so this merge doesn't rule out the owner's option.
+  4. There's no migration, no contract change and no route. The KV fields are optional and ignored by older code.
+- **Follow-ups for L2:**
+  - **MEDIUM, first:** keep the ring per origin, or never evict desk-linked rows.
+  - **LOWs:**
+    - the ledger comment at `tool-output-ledger.ts:15` still says "the producing tool's own taint";
+    - the new tests should also assert that `set_reminder` and `forget_memory` ran ok and were stored external;
+    - `send_email`'s gate failure is stamped null in untainted turns (`google.ts:362`);
+    - `live:true` probes are stamped owner.
+  - **The history-taint limit:** mail text can reach a later turn through Waldo's stored reply, then be echoed by a tool with a null stamp. That's the ADR-0049 class, the same as the stored-notes provenance question.
+- **Deploy:** the tip is now `571891de` (`87b31948` + #1091). L1's next deploy names its exact SHA when it asks the owner. With #1093 merged it becomes `87b31948` + #1091 + #1093.
+- **Score:** P1 and t3 don't move until G1 is deployed and probed, using the new rule (a job with 6 or more tool calls between the approval and the question).
