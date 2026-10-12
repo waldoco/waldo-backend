@@ -51,8 +51,12 @@ No health values appear here.
 
 **What EoD can deliver, if you answer the decisions below by 05:30Z (11:00 IST):**
 - The golden path, observed live in the app on staging.
-- **Four app cells turning "yes"** under the strict test: memory and skills (P3), triggers (P4), connectors (P5) and approvals (W2).
-- **Push (P6)**, if the APNs key exists by 08:00Z.
+- **Chat-capable pillars in the app: from 0 of 6 to 2–3 of 6** under the strict test.
+  - Must: triggers (P4) and connectors (P5).
+  - Should: memory and skills (P3).
+- **Approvals (W2), counted separately, should reach "Not now" from the app card.** Asking "what's waiting on me?" needs G1, which is a stretch goal.
+- **Push (P6) is a stretch goal**, possible if the APNs key exists by 08:00Z.
+- **Review capacity is the binding limit.** Every merge needs CI, an independent review subagent (about 15–20 minutes and up to 200k tokens each) and the advisor, and the 5-hour usage window is shared with the live lanes. Plan on 6–8 gated merges today.
 - **A first step on P1, P2, P7 and P8.** Each stays partial and has a dated roadmap entry in section 5.
 
 "EoD" here means 23:00 IST (17:30Z). This is an assumption.
@@ -87,11 +91,11 @@ Each target has a probe in the app Main chat.
 
 | Pillar | Target today | What must land | Probe (app Main chat) | Gates |
 |---|---|---|---|---|
-| **P3** Memory and skills | **yes** | **L2:** skills on app turns. **G3:** app chat in search and nightly | "Prep me for my 3 pm" loads the meeting-prep skill. "What did I tell you this morning about lunch?" finds the app message | E1, E3 |
-| **P4** Triggers and jobs | **yes** | **#1066** with the strip. **L4:** the D6 zone row ("Use this device's time zone", or "Keep <zone>"; the design system bans "Confirm" on buttons). **L2:** Prep, update cards and mail follow-ups on the app channel (`telegram-owner-do.ts:2417`) | "Remind me in 10 minutes to stretch" arrives on time. After you confirm your zone, the day card arrives at your time | E1, E2 |
-| **P5** Connectors and auth | **yes** for a connected owner | **Your consent run.** **L2:** interim connect text, so the app turn points to Connections instead of reporting a button it dropped | "What's on my calendar tomorrow?" lists real events. "Connect my Google" points to Connections | E1, E8 |
-| **W2** Approvals | **yes** | **#1076.** **L3:** expiry on read. **G1:** approval state in the reply | "Move my 4 pm to 5" shows the card. Tap "Not now". Later, "What's waiting on me?" names it | E1, E4 |
-| **P6** Text and voice | text yes; push if the key lands | **S7** sender and device routes. **L4:** registration | A reminder arrives as a push with the app closed | E5, E6 |
+| **P3** Memory and skills | **yes (should)** | **L2:** skills on app turns. **G3:** app chat in search and nightly | "Prep me for my 3 pm" loads the meeting-prep skill. "What did I tell you this morning about lunch?" finds the app message | E1, E3 |
+| **P4** Triggers and jobs | **yes (must)** | **#1066** with the strip. **L4:** the D6 zone row ("Use this device's time zone", or "Keep <zone>"; the design system bans "Confirm" on buttons). **L2:** Prep, update cards and mail follow-ups on the app channel (`telegram-owner-do.ts:2417`) | "Remind me in 10 minutes to stretch" arrives on time. Then ask Waldo to move today's day card to a time inside the probe window (14:30–16:30Z), watch it arrive, and set it back. Without that, P4 is verified on reminders plus armed-job lines in L1's log tail | E1, E2 |
+| **P5** Connectors and auth | **yes (must)** for a connected owner | **Your consent run.** **L2:** interim connect text, so the app turn points to Connections instead of reporting a button it dropped | "What's on my calendar tomorrow?" lists real events. "Connect my Google" points to Connections | E1, E8 |
+| **W2** Approvals (not one of the eight) | **should:** the card plus "Not now" | **#1076.** **L3:** expiry on read. **G1:** approval state in the reply | "Move my 4 pm to 5" shows the card. Tap "Not now", and the card reads as put off. "What's waiting on me?" naming it needs G1, a stretch goal | E1, E4 |
+| **P6** Text and voice | text yes; push is a stretch goal | **S7** sender and device routes. **L4:** registration | A reminder arrives as a push with the app closed | E5, E6 |
 | **P1** Durable workflows | stays partial | **G1 composer** on both paths | "Draft a note to Sam and send it once I approve." A later turn cites the receipt | E1 |
 | **P2** Computer use | stays no without E7 | Admission by canonical identity, plus the binding | "What are the opening hours on <url>?" | E7 |
 | **P7** Payments and identity | stays partial | **L4:** the 18+ gate at sign-up (D7) | Sign-up stays blocked until 18+ is ticked | none |
@@ -120,7 +124,7 @@ Each target has a probe in the app Main chat.
 
 **Deploy waves.** Each needs E1, or your go in L1's session:
 - **Wave 1 at about 10:00Z** (15:30 IST): #1066, the interim connect text, the app branch at `:2417`, expiry on read, and the Weight fix.
-- **Wave 2 at about 14:00Z** (19:30 IST): skills on app turns, G1, #1076, G3, and S7 behind its flag.
+- **Wave 2 at about 14:00Z** (19:30 IST): skills on app turns and #1076, plus whichever stretch items (G1, G3, S7) passed the gate.
 
 Then:
 - **Probes:** 14:30–16:30Z.
@@ -151,7 +155,7 @@ L3's Brief-reader wiring waits until after step 5.
 
 | Lane | Today, in order |
 |---|---|
-| **L2** (runtime; critical path) | 1. #1066: strip, delta review, merge. 2. The interim connect text, with a test that a dropped app button is never reported as sent. 3. The app branch at `:2417`. 4. Skills on app turns. 5. G1: one composer that carries recent tool results and approval and receipt state into the reply on both paths. #1079's pin flips to the new behaviour. 6. S7 sender behind a flag (E5, E6). 7. G3 (E3). 8. Browser admission (E7) |
+| **L2** (runtime; critical path) | **Must:** 1. #1066: strip, delta review, merge. 2. The interim connect text, with a test that a dropped app button is never reported as sent. 3. The app branch at `:2417`. **Should:** 4. Skills on app turns. **Stretch:** 5. G1: one composer that carries recent tool results and approval and receipt state into the reply on both paths; #1079's pin flips. 6. G3 (E3). 7. S7 behind a flag (E5, E6). 8. Browser admission (E7) |
 | **L3** (contracts, approvals, Google) | 1. Expiry-on-read PR from the local branch. 2. The reminder-push contract PR (E11). 3. The approval fields A/B/C, if E11. 4. Draft the connect-card and disconnect contracts for tomorrow's re-pin. 5. The Brief `latest` reader, after L2's step 5 |
 | **L4** (app) | 1. The D6 zone row (in progress at 04:15Z). 2. The 18+ gate at sign-up (D7). 3. The chat failure state and retry. 4. The Health permission prompt. 5. Push registration (S7). 6. Threads (C1), once served. 7. Reword #78's dated comment |
 | **L1** (health plane, deploys) | 1. The Weight producer's `demand: null`. 2. Deploy waves 1 and 2. 3. Read the tails during probes and post on #116. 4. The deletion proof with your throwaway account |
@@ -379,7 +383,7 @@ Waldo's row uses this scorecard's evidence. Where the app and Telegram differ, i
 
 | Product | P1 Workflows | P2 Computer | P3 Memory and skills | P4 Triggers | P5 Connectors | P6 Channels | P7 Pay and identity | P8 Activity and evals | Health |
 |---|---|---|---|---|---|---|---|---|---|
-| **Waldo today** | partial: effect ledger strong; no resume, no task view | none / partial | partial / strong (no skills on the app) | partial / strong (clock only) | partial / strong (no disconnect) | partial: two surfaces, no push, two transcripts | partial: email sign-in; payments not promised | partial: receipts; no activity view; evals gate nothing | **partial: the only one building health-aware planning** |
+| **Waldo today** | partial: effect ledger strong; no resume, no task view | none / partial | partial / strong (no skills on the app) | partial / strong (clock only) | partial / strong (no disconnect) | partial: two surfaces, no push, two transcripts | partial: email sign-in; payments not promised | partial: receipts; no activity view; evals gate nothing | **partial: no competitor documents health-aware planning; Waldo's is built but held (E2)** |
 | Meta Muse | partial | strong | strong (memory) | strong | strong | partial | strong | strong | not documented |
 | OpenAI Dots | partial* | partial* | partial* | partial* | partial* | partial* | partial* | partial* | not documented |
 | Instinct | not documented | partial | not documented | not documented | partial | partial | partial | not documented | partial (policy only) |
@@ -393,12 +397,14 @@ Waldo's row uses this scorecard's evidence. Where the app and Telegram differ, i
 
 \* unverified: Dots' pages returned 403.
 
+**This comparison flatters competitors.** Waldo's row is graded on code under the strict test. Competitors are graded on how deeply their public documents describe each pillar, and vendors don't publish their weaknesses.
+
 ### 6.2 Where Waldo leads, and where it trails
 
 **Leads** [inference from the matrix]:
-- **Health-aware planning.** No product documents it. The nearest are OpenClaw's on-demand HealthKit aggregates, Folk's Strava and meal-photo logging, and Poke's empty Oura page. Waldo has consent, ingest and three scores built. #1058's caution stands: the claim must be shown, not asserted, and today the day-card planning is held (E2).
+- **Health-aware planning.** No competitor documents it. That is not proof that none has it, so don't claim uniqueness publicly. The nearest are OpenClaw's on-demand HealthKit aggregates, Folk's Strava and meal-photo logging, and Poke's empty Oura page. Waldo has consent, ingest and three scores built. #1058's caution stands: the claim must be shown, not asserted, and today the day-card planning is held (E2).
 - **Per-action authority.** Waldo's approvals are digest-bound, shown before they can be approved, and dispatched through a ledger with read-back. That matches Muse's Sentinel on per-action approval. Waldo lacks Muse's grant lifetimes and OpenClaw's list-and-revoke.
-- **Memory provenance.** Memory writes are grounded in the owner's own words and carry provenance. No vendor documents per-memory provenance labels [#1058].
+- **Memory provenance.** Waldo's memory writes are grounded in the owner's own words and carry provenance. No vendor documents per-memory provenance labels [#1058], which again is not proof of absence.
 
 **Trails:**
 - **Reach.** Competitors pair a native app with messaging, voice and push (Vellum, OpenClaw). Waldo has no push, two transcripts, and voice only on Telegram.
