@@ -16,7 +16,7 @@ export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
 
 type Undo = ({ op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string }) & { applied_etag?: string };
-type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; proposal_digest?: string | null; origin_run_ref?: string | null };
+type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; proposal_digest?: string | null; origin_run_ref?: string | null; deferred_at?: number | null };
 type DeskStatus = 'card_unconfirmed' | 'open' | 'review_only' | 'changing' | 'skipped' | 'expired' | 'done' | 'rejected' | 'failed' | 'stale' | 'uncertain' | 'unverified' | 'undone';
 // One app state per desk status. An approval claimed before its effect resolves reads outcome_unknown, never done.
 export const APP_APPROVAL_STATE: Readonly<Record<DeskStatus, AppApprovalStateV1>> = {
@@ -115,7 +115,8 @@ const buttonsFor = (entry: LedgerRow): [string, string][] => {
 };
 const approveActions = (entry: LedgerRow): AppApprovalPart['actions'] => buttonsFor(entry).map(([, data]) => DECISION[data[0] as keyof typeof DECISION]);
 // Not now is offered wherever a card is open or review-only; it is desk state, so it never depends on the surface.
-const withDefer = (actions: AppApprovalPart['actions']): AppApprovalPart['actions'] => [...actions, 'defer'];
+// Not now is offered once: an approval already put off offers only the decisions that move it.
+const withDefer = (entry: LedgerRow, actions: AppApprovalPart['actions']): AppApprovalPart['actions'] => entry.deferred_at == null ? [...actions, 'defer'] : actions;
 
 // The approval card IS the owner's review of a send. Telegram caps a message at 4096 chars:
 // when the full content fits, the card shows every recipient + the complete body and carries
@@ -281,7 +282,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (surface === 'app' || deps.appIdentity?.()) {
       try {
         const approvable = appReview(entry).full;
-        const part = appApprovalPart(appPartOf(entry, { actions: withDefer(approvable ? approveActions(entry) : ['skip']), payload_digest: digest }));
+        const part = appApprovalPart(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: digest }));
         // The app may show only a card it can also decide: the approvals-list item must parse first.
         appApprovalV1Schema.parse({ approval_id: id, kind: part.kind, state: approvable ? 'open' : 'review_only', review: part.review, exact: exactFor(entry), payload_digest: digest, expires_at: part.expires_at, actions: part.actions });
         inApp = { approvable };
@@ -330,8 +331,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const shown = sql.exec<{ surface: string; approvable: number; retired_at: number | null }>('SELECT surface, approvable, retired_at FROM approval_presentations WHERE approval_id = ? ORDER BY presented_at, surface', entry.id).toArray();
     const inApp = shown.find(p => p.surface === 'app');
     const state = APP_APPROVAL_STATE[entry.status as DeskStatus];
-    const actions = state === 'open' ? withDefer(inApp?.approvable === 1 && inApp.retired_at === null && appShowsInFull(entry) ? approveActions(entry) : ['skip'])
-      : state === 'review_only' ? withDefer(['skip'])
+    const actions = state === 'open' ? withDefer(entry, inApp?.approvable === 1 && inApp.retired_at === null && appShowsInFull(entry) ? approveActions(entry) : ['skip'])
+      : state === 'review_only' ? withDefer(entry, ['skip'])
         : state === 'done' && entry.undo_json && entry.decided_at !== null && now - entry.decided_at <= UNDO_WINDOW_MS ? ['undo'] as const : [];
     const surfaces = [...new Set(shown.map(p => p.surface).filter(surface => surface !== 'legacy'))];
     return { approval_id: entry.id, kind: entry.kind as AppApprovalV1['kind'], state, review: appReview(entry).text,
@@ -410,7 +411,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         if (entry.kind === 'browser_submit') await deps.browserDeny?.(JSON.parse(entry.payload_json) as BrowserSubmitProposal);
         out = { toast: 'Not now', message: 'Left it. Nothing changed.' };
       } else if (action === 'd') {
-        sql.exec("UPDATE ledger SET deferred_at = ? WHERE id = ? AND status IN ('open', 'review_only')", deps.now(), id);
+        sql.exec("UPDATE ledger SET deferred_at = ? WHERE id = ? AND status IN ('open', 'review_only') AND deferred_at IS NULL", deps.now(), id);
         out = sql.exec<{ changed: number }>('SELECT changes() AS changed').one().changed === 1
           ? { toast: 'Later', message: 'Left it for later. It is still waiting, and it can still expire.' }
           : { toast: 'Already handled.', message: 'Already handled.' };
@@ -864,8 +865,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     async approvals(now, filter = {}) {
       const statuses = filter.state ? (Object.keys(APP_APPROVAL_STATE) as DeskStatus[]).filter(status => APP_APPROVAL_STATE[status] === filter.state) : null;
       if (statuses?.length === 0) return [];
-      // The default list leaves out an approval the owner put off. A deferral stands while the row is still open or
-      // review-only, and ends with any decision on it or its expiry; nothing presents a deferred approval again yet.
+      // The default list leaves out an approval the owner put off, while it is still open or review-only; any decision
+      // that moves the row ends the deferral.
       const standing = !filter.id && !filter.state ? ["NOT (deferred_at IS NOT NULL AND status IN ('open', 'review_only'))"] : [];
       const where = [`kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')})`, "substr(id, 1, 1) = 'p'", ...(filter.id ? ['id = ?'] : []), ...(statuses ? [`status IN (${statuses.map(() => '?').join(', ')})`] : []), ...standing];
       const rows = sql.exec<LedgerRow>(`SELECT * FROM ledger WHERE ${where.join(' AND ')} ORDER BY created_at DESC, id DESC LIMIT 100`, ...PROPOSAL_KINDS, ...(filter.id ? [filter.id] : []), ...(statuses ?? [])).toArray();
@@ -924,7 +925,7 @@ export const appApprovalParts = (sql: SqlStorage) => (parentId: string): AppAppr
   for (const entry of sql.exec<LedgerRow & { approvable: number; payload_digest: string; retired_at: number | null }>("SELECT l.*, p.approvable, p.payload_digest, p.retired_at FROM approval_presentations p JOIN ledger l ON l.id = p.approval_id WHERE p.surface = 'app' AND p.message_ref = ? ORDER BY p.presented_at, l.id", `run:${parentId}`).toArray()) {
     try {
       const approvable = entry.status === 'open' && entry.approvable === 1 && appShowsInFull(entry);
-      const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions: withDefer(approvable ? approveActions(entry) : ['skip']), payload_digest: entry.payload_digest }));
+      const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: entry.payload_digest }));
       if (!part.success) { dropped++; continue; }
       fallbacks.push(part.data.fallback_text);
       if (entry.retired_at === null && (entry.status === 'open' || entry.status === 'review_only')) live.push(part.data);

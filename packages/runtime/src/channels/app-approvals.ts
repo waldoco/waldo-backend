@@ -11,7 +11,7 @@ export type AppApprovalsHost = Readonly<{
 const reply = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'private, no-store' } });
 const LETTER = { approve: 'a', skip: 's', edit: 'e', undo: 'u', defer: 'd' } as const;
 // A decision is recorded only when the row moved to the state that decision produces.
-const TARGET = { approve: 'done', skip: 'skipped', edit: 'edit_requested', undo: 'undone', defer: 'open' } as const satisfies Readonly<Record<keyof typeof LETTER, AppApprovalStateV1>>;
+const TARGET = { approve: 'done', skip: 'skipped', edit: 'edit_requested', undo: 'undone' } as const satisfies Readonly<Record<Exclude<keyof typeof LETTER, 'defer'>, AppApprovalStateV1>>;
 
 // Caller serializes this inside the authenticated owner DO and has checked the session row.
 export async function appApprovalsRequest(request: Request, host: AppApprovalsHost): Promise<Response> {

@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { appApprovalDecisionResultV1Schema, appApprovalListV1Schema } from '../../contracts/src/app/approvals';
 import { appApprovalsRequest } from '../src/channels/app-approvals';
-import { appApprovalParts, approvalDesk } from '../src/channels/approvals';
+import { appApprovalParts, approvalDesk, PROPOSAL_TTL_MS } from '../src/channels/approvals';
 import { appApprovalLink, appCaller } from '../src/channels/surfaces/app';
 import { sha256Hex, type GoogleClient } from '../src/connectors/google';
 
@@ -153,6 +153,71 @@ it('a Not now the desk did not take is answered as not done, and the approval st
     expect(answer.status).toBe(409);
     expect(appApprovalDecisionResultV1Schema.parse(await answer.json())).toMatchObject({ approval_state: 'open', receipt: { state: 'rejected' } });
     expect((await list()).map(approval => approval.approval_id)).toEqual([id]);
+  });
+});
+
+// One app owner's desk on a clock the test moves, with the app's approvals routes over it.
+const deferDesk = async <T>(name: string, run: (tools: Readonly<{ desk: ReturnType<typeof approvalDesk>; clock: { at: number }; sql: SqlStorage;
+  decide(body: unknown): Promise<Response>; list(query?: string): Promise<ReturnType<typeof appApprovalListV1Schema.parse>['approvals']>;
+  propose(subject: string, body: string): Promise<string>; deferredAt(id: string): number | null }>) => Promise<T>) =>
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), async (_instance, state) => {
+    let n = 0;
+    const clock = { at: Date.now() };
+    const client = { sendRaw: async () => ({ message_id: 'g1' }) } as unknown as GoogleClient;
+    const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_006, call: appCaller(), appLink: appApprovalLink,
+      google: async () => client, newId: () => `${name}${++n}`, now: () => clock.at, timezone: 'UTC', log: () => {}, currentRunRef: () => 'app-message-0006' });
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+    return run({ desk, clock, sql: state.storage.sql,
+      decide: body => appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals/decisions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), host),
+      list: async (query = '') => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request(`https://telegram-owner/app/v1/approvals${query}`), host)).json()).approvals,
+      propose: async (subject, body) => {
+        const raw = `To: e@x.test\r\nSubject: ${subject}\r\n\r\n${body}`;
+        return desk.proposeSendEmail({ to: ['e@x.test'], subject, body, message_id: `<${subject.toLowerCase()}@waldo-send>`, raw, digest: await sha256Hex(raw) });
+      },
+      deferredAt: id => state.storage.sql.exec<{ deferred_at: number | null }>('SELECT deferred_at FROM ledger WHERE id = ?', id).one().deferred_at });
+  });
+
+it('a second Not now is refused, offered by neither the list nor the desk, and keeps the first deferral', async () => {
+  await deferDesk('defer-twice', async ({ desk, clock, decide, list, propose, deferredAt }) => {
+    const id = await propose('Twice', 'Once is enough.');
+    const [item] = await list();
+    const first = await decide({ approval_id: id, action: 'defer', expected_digest: item!.payload_digest, request_id: 'twice-request-0001' });
+    expect(first.status).toBe(200);
+    const at = deferredAt(id);
+    expect(at).toBe(clock.at);
+    clock.at += 60_000;
+    const [deferred] = await list('?state=open');
+    expect(deferred!.actions).not.toContain('defer');
+    const again = await decide({ approval_id: id, action: 'defer', expected_digest: item!.payload_digest, request_id: 'twice-request-0002' });
+    expect(again.status).toBe(409);
+    expect((await desk.decide(id, 'd', 'app:approval', { surface: 'app' })).toast).toBe('Already handled.');
+    expect(deferredAt(id)).toBe(at);
+  });
+});
+
+it('Not now on a review-only approval is recorded, keeps it review-only, and leaves it out of the default list', async () => {
+  await deferDesk('defer-review-only', async ({ decide, list, propose, deferredAt }) => {
+    const id = await propose('Huge', 'y'.repeat(33_000));
+    const [item] = await list();
+    expect(item).toMatchObject({ approval_id: id, state: 'review_only', actions: ['skip', 'defer'] });
+    const answer = await decide({ approval_id: id, action: 'defer', expected_digest: item!.payload_digest, request_id: 'review-request-0001' });
+    expect(answer.status).toBe(200);
+    expect(appApprovalDecisionResultV1Schema.parse(await answer.json())).toMatchObject({ approval_state: 'review_only', receipt: { state: 'recorded' } });
+    expect(deferredAt(id)).not.toBeNull();
+    expect(await list()).toEqual([]);
+    expect((await list('?state=review_only')).map(approval => approval.approval_id)).toEqual([id]);
+  });
+});
+
+it('Not now on an approval past its expiry expires it and records no deferral', async () => {
+  await deferDesk('defer-expired', async ({ clock, decide, list, propose, deferredAt }) => {
+    const id = await propose('Stale', 'Too late now.');
+    const [item] = await list();
+    clock.at += PROPOSAL_TTL_MS + 60_000;
+    const answer = await decide({ approval_id: id, action: 'defer', expected_digest: item!.payload_digest, request_id: 'stale-request-0001' });
+    expect(answer.status).toBe(409);
+    expect(appApprovalDecisionResultV1Schema.parse(await answer.json())).toMatchObject({ approval_state: 'expired', receipt: { state: 'rejected' } });
+    expect(deferredAt(id)).toBeNull();
   });
 });
 
