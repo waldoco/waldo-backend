@@ -1178,3 +1178,14 @@ No second sweep for now, because the usage window has to last through wave 2 and
 - **My call, under D13:** a permanent per-calendar error skips that calendar with a recorded code and is surfaced in Weight's used signals. Transient errors stay fail-closed.
 - **Passed:** health destinations (counts only; values reach Supabase through `context_write`); the signed route (HMAC, constant-time compare, owner-scoped; replay is possible within 35 days but returns counts only); no new scope; no contract or migration change; the hot-file pieces change no chat path.
 - **Still owner-merge:** it adds DO persistence, and HEALTH_PLANE_AMENDMENT ruling 1 needs the owner's yes before Weight is shown.
+
+## 11:58Z: wave 2 live on staging; #1088 ready for the owner, with a review running
+
+- **Wave 2:** staging has served `614d1aff` (#1086 and #1087) as version `02103423` since 11:55Z [reported by L1].
+  - Gate: CI 6/6; preflight 55 applied, 0 pending; no wrangler, migration or contract change.
+  - `/healthz` reports `614d1aff`. Signed-out session and chat requests get 401, and the cron is registered.
+  - Rollback is `c7974404` (`e37f60f3`). Recorded on #116, comment 6123770747.
+- **Probe 6** (The Close, 16:00Z): L1 watches from 15:59Z to 16:15Z and reports silence as silence. Probe 9 (MUST 3 on an app-only account) needs the owner's yes.
+- **#1088** (skills on app turns): head `0e2557c3`, which includes base `614d1aff`. CI 6/6, CLEAN, owner-merge. An independent review is running (no fan-out, about 25 calls). The owner decides on its result.
+- **The old L4** (`local_a2ad79f3`) woke on a message from L1 that went to the wrong lane, stayed stood down and passed the message on. L1 was told the current L4 id.
+- **Usage:** the 5-hour window is at 13 percent and resets at 16:30Z; context is at 57 percent. The page update is deferred to the 17:00Z re-score; the scorecard file is current.
