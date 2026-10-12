@@ -150,11 +150,10 @@ Until the rename has merged, no Mac session edits that file. After that, announc
 
 ## Simulator rules
 
-- **One device per session:**
-  - the orchestrator has `iPhone 17` (`18AC0C6B-041B-4632-8FD1-CCF9BA532C36`);
-  - the App lane has `iPhone 17 Pro` (`3D82E6D8-3102-43AF-8819-96754D369187`).
-
-  Never drive another session's device.
+- **Devices (changed at 21:53Z on 12 Oct):** `iPhone 17 Pro` (`3D82E6D8`) lost its sign-in at about 21:52Z, most likely because its 12-hour session expired [inference]. It waits for the owner to sign in again.
+  - Until then, the **App lane alone drives `iPhone 17`** (`18AC0C6B-041B-4632-8FD1-CCF9BA532C36`), which is signed in until about 08:40Z.
+  - The orchestrator asks the App lane to run its post-deploy QA set instead of driving the device itself.
+  - Never drive another session's device.
 - **Sign-in:** a human signs in once per device. Never type sign-in codes. The app session lasts 12 hours until PR B (the 30-day session) is deployed. The orchestrator's device was signed in at about 20:40Z on 12 Oct.
 - **One account:** both devices use the same app-only test account, so turns from either device land in the same Main chat.
   - The App lane owns the P1 re-run. Before P1 is recorded, the orchestrator makes only read-only QA turns (no sends, no approvals). Every QA turn starts with "QA:".

@@ -146,3 +146,14 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Lanes:** App (`local_5eb95055`), Connectors (`local_83ce6587`) and the flaky-fix session (`local_7fe60b28`) are all running. Connectors has created `l2/app-approval-buttons` with no commits yet; its mail PR head is local `2027735f`.
 - **#1103:** only the orchestrator's two comments so far. The cloud lanes haven't posted.
 - **Decision:** push this docs branch once per heartbeat, not after every entry. Each push re-runs #1077's full CI and competes with the lanes' PR CI.
+
+## 21:53Z: #1104 (P1 approval fix) in review; Simulator reassigned
+
+- **#1104** (Connectors) is head `a45ef088`, base `5b8197fd`. It changes one line, `telegram-turn.ts:15`: the app surface becomes `native_buttons`.
+  - Red-first tests: the presentation value; a real app turn through the owner DO whose prompt says "Approval delivery: native_buttons"; Telegram, WhatsApp and iMessage pinned. Two mutations are caught.
+  - CI is pending. A review subagent is running.
+  - Connectors pushed `l2/e15-followups` and `l2/e15-no-copy`. The mail PR is local `2027735f`, with its wall running. The test account's Google connection is Vault-backed (per L1), so the mail fixes need the owner's connector-proxy redeploy.
+- **Simulator:** the App session found `iPhone 17 Pro` signed out at 21:52:42Z. Staging hadn't changed since 20:53Z, and no session drove that device after 21:26Z.
+  - **Likely cause [inference]:** the 12-hour absolute app session expired. Build `60fce743` deletes the credential on a 401 at launch.
+  - **Decision:** the App session drives `iPhone 17` (signed in about 20:40Z, so it lapses about 08:40Z) for the P1 re-run, its PR checks and post-deploy QA on request. The orchestrator stops driving it, leaving one Simulator session tonight.
+  - **For the owner in the morning:** sign `iPhone 17 Pro` in again. PR B (the 30-day session) removes this class of break.
