@@ -1015,3 +1015,14 @@ Reported by L4, with the owner's yes in L4's session and L1 reading the tail. St
 - **L4's question:** why does Main chat show no Telegram turns on a Telegram-linked account?
   - It's today's design: two transcripts. The scorecard's P6 row lists one transcript across surfaces as a gap that remains open.
   - Not a bug, and no app change now. E15's routing tomorrow moves proactive messages into the app; one shared transcript is a later owner decision.
+
+## 10:14Z: L1's tail confirms probes 1–4
+
+Staging `e37f60f3`, version `c7974404`. Codes and times only.
+
+- **1, PASS.** The turn ran from `owner_request` to `resolved` by 10:01:54Z. The history read returned 200 with no `history_conflict`, no strict-load failure and no skipped rows.
+- **2, PASS.** `set_reminder` was ok at 10:02:41Z. The alarm fired at 10:12:02Z through the app runtime: no `reminder failed`, no Telegram send.
+  - Open: L4 reported the reminder as set for 10:12:41Z. If that is its due time, it fired 39 s early. I've asked L1 to compare `due_at` with the fire time; under a minute doesn't fail the probe.
+- **3, PASS.** `tool_connect_service` was ok and resolved by 10:04:07Z, with no link-mint hop.
+- **4, PASS.** `tool_query_calendar` was ok at 10:05:08Z and resolved by 10:05:15Z.
+- **5–8:** pending, as in the probe sheet.
