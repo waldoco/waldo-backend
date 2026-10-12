@@ -100,7 +100,7 @@ Run it inside `env -i PATH=... bash -c '...'`, with the access token exported in
    - An unauthenticated `/app/v1/session` returns 401.
    - `POST /probe/turn` with a body and no token returns 403.
 3. **Simulator QA** follows; see below.
-4. **Record** each deploy: SHA, Worker version and rollback target, in LOG.md and as one #116 record. The deployer lane always posted its own deploy records there.
+4. **Record** each deploy: SHA, Worker version and rollback target, in LOG.md and on #1103. Don't post on #116: the owner hasn't given a go for orchestrator posts there.
 5. **The `v6` rename deploy (owner ruling)** is its own deploy, only after #1100's behaviour has passed a Simulator check on staging.
    - The gate script stops on its `wrangler.jsonc` change. So check the live-to-tip diff by hand: the only wrangler changes may be the `v6` `renamed_classes` entries and the binding rename (`TELEGRAM_OWNER_DO` to `OWNER_DO`); there must be no other migration tag or binding.
    - Then run the gate script's other steps.

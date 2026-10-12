@@ -32,6 +32,7 @@ These let you work without asking.
      - production and secrets;
      - new third-party services other than Expo (Browserbase is already in the code);
      - new places health data goes. This includes any narrowing of the scribe's health scan on external text: it changes what the model sees and what is stored in DO SQLite. Build the PR with its corpus test; it waits for the owner.
+     - **#1100 has a merge condition.** It copies app reply text, which can contain the owner's health numbers, into the full-text `episodes` table. Before the orchestrator merges it, there must be a test showing that health deletion or owner deletion clears `episodes` rows, or a source-cited confirmation that it already does. Without that, #1100 is held for the owner.
 2. **The `v6` OwnerDO rename** ships in its own deploy right after #1100's behaviour passes a Simulator check, without asking. Rollback across it is forward-only.
 3. **Scheduled meeting prep may read the text of related emails,** within these limits:
    - only the owner's mail;

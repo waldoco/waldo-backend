@@ -239,3 +239,15 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **#1100:** no update from the cloud lane.
 - **App:** no PR yet. The session is running, and the P1 re-run is pending its read of #1103.
 - **#1103:** no new lane posts since 22:00Z.
+
+## 22:16Z: #1106 merged; corrections to my own process
+
+- **Merged #1106 as `8195fee6`** (flaky-test follow-up, test-only).
+  - Gate: CI 6/6 at `68158b3f`; independent review PASS (512 assertions before and after, stricter than #1102, no src change); advisor yes; CLEAN.
+  - **Not deployed on its own:** it rides the next real deploy.
+- **Correction: the #116 deploy record at 22:06Z (6133481055) broke the brief's "no #116 posts without the owner's go".** The README already limited posts to #1103 and PR comments. `ORCHESTRATOR.md` now says deploy records go to LOG.md and #1103 only. No further #116 posts.
+- **#1100 merge condition added to the README's held list.** #1100 copies app reply text, which can carry health numbers, into the FTS `episodes` table. Before merging it, there must be a test showing that health or owner deletion clears `episodes`, or a source-cited confirmation that it already does. Otherwise #1100 is held for the owner.
+- **Channels while my direct messages are capped:** answers go both on the lane's own PR and on #1103.
+  - #1104's two review notes went to Connectors on #1105 (6133614208).
+  - The P1 go goes to the App session in a review comment on its first PR.
+- **Timestamps** now come from `date -u` inside the same command that writes the entry.
