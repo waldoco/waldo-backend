@@ -401,7 +401,7 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - Advisor consulted before the merge.
 - `beta-mvp` is now `cdd906dd`. Staging is still `889efa27`. **The deploy needs the owner's go in L1's session**; a relay from me does not authorize L1.
 
-## 04:00Z: pillar scorecard (owner's question)
+## 03:46Z: pillar scorecard (owner's question)
 
 - The owner asked how many of the eight agent-product pillars work by natural language in the app and on Telegram, whether they meet the industry standard, and how much of the promise and UX is left to build.
 - Answer in [PILLAR_SCORECARD_2026-10-12.md](PILLAR_SCORECARD_2026-10-12.md).
