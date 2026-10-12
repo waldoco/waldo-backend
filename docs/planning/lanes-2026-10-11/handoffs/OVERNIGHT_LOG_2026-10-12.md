@@ -824,3 +824,17 @@ Still open:
 **Notes for the owner:**
 - New Telegram cards change meaning: "Not now" now puts off, and "Don't do this" skips.
 - The PR changes one character in the WhatsApp adapter, which another contributor owns.
+
+## 08:47Z: wave 1 deploy has the owner's go in L1's session; rollback checked
+
+- **L1 reports** the owner's go in L1's session: deploy `e37f60f3` to staging once its CI is green, at that exact SHA only. CI run 38225039233 is in progress. If `beta-mvp` moves first, L1 stops and asks the owner again. The rollback target is Worker version `b72928f0` (code `cdd906dd`).
+- **I checked L1's rollback claim against the diff `cdd906dd..e37f60f3`** [verified]:
+  - The only schema change is a guarded nullable `ledger.deferred_at`.
+  - `cdd906dd` reads the ledger with `SELECT *` and no runtime check, and its inserts name their columns.
+  - `timezone_confirmed` is new, and `cdd906dd` never reads it.
+  - `approval_presentations` already exists at `cdd906dd`.
+  - Outside source and tests, only tool contracts changed.
+- **Additions sent to L1 for the rollback note:**
+  1. Put-off approvals show as open again (the pre-#1076 behaviour).
+  2. A `d:` "Not now" tap on a card sent by the new build gets "Not available." from `cdd906dd`, whose allow-list is a/s/e/u: it fails closed [verified, `approvals.ts:868` at `cdd906dd`].
+  3. Rows armed for the app owner keep firing under the old delivery [inference].
