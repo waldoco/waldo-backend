@@ -97,3 +97,26 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   3. The `v6` rename, deployed on its own.
   4. Connectors' #1101 follow-up PR, rebased once onto `owner-do.ts`.
 - **Reading of the deploy ruling:** the owner's option text said "deploys those to staging (backend code only)". I read the Supabase `connector-proxy` Edge Function as backend code that ruling covers: it's code, not a migration, it's staging only, and redeploying the previous source rolls it back. The README's "Worker only" was my shorthand.
+
+## 21:44Z: #1100 review FAIL (one blocker); connector-proxy deploy refused by the classifier
+
+- **#1100 at `655b77a7`: independent review FAIL, on one blocker.** Posted on the PR as 6133141059.
+  - **The blocker:** directory-backed Telegram text turns fork the conversation thread.
+    - The context host passes only `{health}`, so `conversationRef` defaults to `owner:<principal>` instead of `telegram-<subject>`.
+    - Text turns would lose their prior Telegram history, along with reminder and job rows.
+    - Fix: pass `turn.conversationRef`, plus a red test with seeded history.
+  - **Verified clean:** the merge resolution (G1's taint stamp and owner-only carry, and #1098's ring, byte-identical), authority, and E15 routing.
+  - **Non-blocking:**
+    1. Directory re-checks per Telegram turn can quarantine on a blip. Check that each linked owner resolves on staging before deploying.
+    2. The context host skips the subject and ref checks.
+    3. The `physicalDoId` check always passes.
+    4. Telegram turns lose `toolLedger.recent()`.
+    5. App reply text now enters the `episodes` index; whether health deletion covers it is unverified.
+  - It waits for Ansh's cloud lane: split out the rename, fix the blocker, and post the new head.
+- **connector-proxy catch-up: REFUSED by the auto-mode classifier.** The attempt was a `supabase functions deploy` from a clean detached checkout of `5b8197fd`, with the access token read inside a subshell.
+  - Per the rules, I'm not routing around it. That includes not using GitHub workflow dispatch and not asking another session, which would be laundering it.
+  - **What was checked before the attempt:** the drift since v17 (`421dd2ac`) is small. It's `calendar_list` (a new read-only method gated by its own scope) plus one proxy line.
+  - **Impact:** staging's Vault-backed Google connections keep running `google.ts` as of 10 Oct. Connectors' mail-reading fixes will be merged and tested tonight, but reach staging only after the owner redeploys connector-proxy.
+  - **Queued for the owner:** run `supabase functions deploy connector-proxy --project-ref togdshayyxycitzckpqv --no-verify-jwt --use-api` from a clean checkout of the tip. Rollback is to redeploy `421dd2ac`.
+  - **Risk to tonight's plan:** the Worker gate script also reads the access token for its read-only preflight. If the classifier refuses that too, Worker deploys wait for the owner; log it and don't route around it.
+- **Context in use:** about 60%.
