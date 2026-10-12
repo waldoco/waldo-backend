@@ -1208,3 +1208,6 @@ No second sweep for now, because the usage window has to last through wave 2 and
 - **#1089:** L1 pushed `2fc0e642`, a one-line forget-inventory entry (EXEMPT: day, zone, digest, minute counts; no owner text). It fixes the shard-1 blocker. My six should-fix findings went to L1 at 11:56Z, queued, and L1's message suggests it hadn't read them yet. The delta re-review waits for L1's next head.
   - L1 classifies a shard-2 failure at the old head `76d9bcaf` as flaky, fixed upstream by #1087's phase fix [inference].
 - **The docs push** was rejected once ("failed") and went through on retry. It was transient.
+- **12:0xZ, L2:** G1's two owner-DO lines (~`:2101`, ~`:2157`) don't overlap #1089's hunks, and #1089 doesn't touch `owner-turn.ts` [L2's check; it matches mine]. L2 is making the hot-file edits locally on `l2/g1-tool-results`, unpushed.
+  - Already committed locally: the ledger reconciliation (24/24) and the red P1 tests for the app and Telegram.
+  - L2 is waiting for the slot before it pushes or posts on #116. My "slot is yours" reply is blocked by the message cap until the owner types here.
