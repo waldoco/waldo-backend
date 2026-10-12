@@ -13,6 +13,7 @@ import { b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, 
 import { EmailProposalError, proposalStatus, type CardPlacement, type EmailSendProposal } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
+import { connectNeededText } from './connect-text';
 
 export type GoogleAccess = Readonly<{
   client(feature?: GoogleFeature, intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>, account?: string): Promise<GoogleClient | null>;
@@ -35,11 +36,10 @@ const assertCollectionAccount = (observed: { connection_id: string | null; email
 // S4 (CONNECT_FLOW_DESIGN 4.4): auth failures are a typed intent, never a URL in text. The
 // responder sees `connect` and calls the channel's offerConnect seam; the model only ever
 // reads this fixed sentence.
-const CONNECT_SENT_TEXT = 'A connect button is in the chat (or was just sent). Tell the owner to tap it - never quote or retype any link yourself.';
 // source_taint 'external': these handlers are external-origin tools (ADR-0049) - the failure
 // arm must carry the stamp or the dispatcher rejects the result outright.
 const authFailed = (reason: ConnectIntent['reason'], feature: GoogleFeature): ToolResult<never> => ({
-  ok: false, code: 'auth_failed', error: CONNECT_SENT_TEXT, source_taint: 'external',
+  ok: false, code: 'auth_failed', error: connectNeededText(reason, feature), source_taint: 'external',
   connect: { status: 'auth_required', service: 'google', reason, feature },
 });
 
@@ -425,12 +425,12 @@ export const connectServiceHandler = (google: GoogleAccess): ToolHandler<Connect
       const state=await google.state();
       if(!Array.isArray(state)||state.some(account=>!account||typeof account.id!=='string'||!account.id||typeof account.email!=='string'||!account.email||account.email.includes('\n')||account.email.includes('\r')||[account.calendar,account.mail,account.tasks].some(v=>typeof v!=='boolean')||(account.error!==null&&typeof account.error!=='string')))return {ok:false,code:'transient',error:'Connected account metadata unavailable.',source_taint:null};
       const accounts=state.map(account=>({id:account.id,email:account.email,calendar:account.calendar,mail:account.mail,tasks:account.tasks,health:account.error?'unhealthy':'no_recorded_error',provenance:'host_connected_account_metadata_not_email_authorship'}));
-      if((feature==='calendar'||feature==='mail'||feature==='tasks')&&!state.some(account=>account[feature]))return {ok:false,code:'auth_failed',error:CONNECT_SENT_TEXT,connect:{status:'auth_required',service:'google',reason:accounts.length?'scope_missing':'not_connected',feature}};
+      if((feature==='calendar'||feature==='mail'||feature==='tasks')&&!state.some(account=>account[feature]))return {ok:false,code:'auth_failed',error:connectNeededText(accounts.length?'scope_missing':'not_connected',feature),connect:{status:'auth_required',service:'google',reason:accounts.length?'scope_missing':'not_connected',feature}};
       if(accounts.length)return {ok:true,data:{service,connected:true,accounts,message:'Connected account metadata only. Granted features and last recorded health do not prove a fresh provider read; message sender identity needs separate verification.'},source_taint:null};
     }
     if (await google.client(feature ?? 'calendar')) {
       return { ok: true, data: { service, connected: true, message: 'Google is already connected.' }, source_taint: null };
     }
-    return { ok: false, code: 'auth_failed', error: CONNECT_SENT_TEXT, connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: feature ?? 'calendar' } };
+    return { ok: false, code: 'auth_failed', error: connectNeededText('not_connected', feature ?? 'calendar'), connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: feature ?? 'calendar' } };
   },
 });

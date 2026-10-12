@@ -989,11 +989,11 @@ describe('approval presentations', () => {
     });
   });
 
-  it('the app text sink never acknowledges a callback keyboard as shown', async () => {
+  it('the app text sink never acknowledges a keyboard as shown, with decision or link buttons', async () => {
     const { appCaller } = await import('../src/channels/surfaces/app');
     const call = appCaller();
     expect(await call('sendMessage', { chat_id: 7, text: 'Hello' })).toMatchObject({ message_id: 1 });
-    expect(await call('sendMessage', { chat_id: 7, text: 'Connect', reply_markup: { inline_keyboard: [[{ text: 'Connect Google', url: 'https://example.test/c' }]] } })).toMatchObject({ message_id: 1 });
+    expect(await call('sendMessage', { chat_id: 7, text: 'Connect', reply_markup: { inline_keyboard: [[{ text: 'Connect Google', url: 'https://example.test/c' }]] } })).toBeUndefined();
     expect(await call('sendMessage', { chat_id: 7, text: 'Proposed', reply_markup: { inline_keyboard: [[{ text: 'Do it', callback_data: 'a:p1' }]] } })).toBeUndefined();
     expect(await call('editMessageReplyMarkup', { chat_id: 7, message_id: 1 })).toBeUndefined();
   });

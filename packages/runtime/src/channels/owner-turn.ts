@@ -85,7 +85,7 @@ export const createOwnerResponder = (
   // S4 (CONNECT_FLOW_DESIGN 4.4): the channel's connect affordance. The responder calls it when a
   // tool reports auth_required; it mints the short link and sends the button. Optional so tests
   // and non-owner surfaces can run tools without a chat to offer in.
-  offerConnect?: (intent: ConnectIntent) => Promise<boolean>,
+  offerConnect?: (intent: ConnectIntent) => Promise<boolean | string>,
   // L1 scenario harness: a scripted gateway replaces the OpenAI adapter so scenarios drive the
   // real pipeline without a live model. Production callers omit it.
   gateway?: LLMGatewayAdapter,

@@ -10,6 +10,7 @@ import { sha256Hex } from '../../connectors/google';
 import { ProxyIntentError, type ProxyIntent } from '../../connectors/proxy-intent';
 import { isGoogleFeature, isReadOnlyGoogleFeature, type GoogleFeature } from '../../connectors/google';
 import { callMcpToolArgsSchema, triggerTypeSchema, TOOL_PERMISSIONS, type CallMcpToolArgs, type ToolHandler, type ToolName, type ToolResult } from '@waldo/contracts';
+import { connectNeededText } from './connect-text';
 import { proposalStatus, type CardPlacement, type McpCallProposal } from '../../channels/approvals';
 import { callMcpTransport, McpAuthError, McpToolError, type McpTransportServer } from '../../connectors/mcp-transport';
 import type { ToolDispatcherContext } from '../dispatcher';
@@ -108,8 +109,7 @@ export type McpDesk = Readonly<{
 }>;
 
 // Auth failures are a typed intent, never a URL in text (S4): the responder sees `connect` and
-// calls the channel's offerConnect seam; the model only ever reads this fixed sentence.
-const CONNECT_SENT_TEXT = 'A connect button is in the chat (or was just sent). Tell the owner to tap it - never quote or retype any link yourself.';
+// calls the channel's offerConnect seam; the model reads only fixed words.
 
 // Owner channel (desk present): the tool proposes a card instead of executing - ADR-0049's
 // human-confirm route. Surfaces without the desk keep direct execution (tests, console).
@@ -137,7 +137,7 @@ export const callMcpToolHandler = (serversRaw: string | undefined, desk?: McpDes
       return { ok: true, data: { output: content, protocol: protocolVersion, source_taint: 'external' as const }, source_taint: 'external' };
     } catch (error) {
       if (error instanceof McpConnectError) {
-        return { ok: false, code: 'auth_failed', error: CONNECT_SENT_TEXT, source_taint: 'external', connect: { status: 'auth_required', service: 'google', reason: error.reason, ...(error.feature === undefined ? {} : { feature: error.feature }) } };
+        return { ok: false, code: 'auth_failed', error: connectNeededText(error.reason, error.feature), source_taint: 'external', connect: { status: 'auth_required', service: 'google', reason: error.reason, ...(error.feature === undefined ? {} : { feature: error.feature }) } };
       }
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, code: error instanceof ToolExecutionError ? 'rejected' : 'transient', error: message, source_taint: 'external' };
@@ -163,15 +163,8 @@ const readMcpToolDescription = (serversRaw: string | undefined): string => {
   return `${base} Use exactly these server and tool names: ${lines.join('; ')}.`;
 };
 
-// A missing or insufficient Google grant is reported with closed enums only (feature and reason), so the
-// model can tell the owner what to fix. The reconnect button itself is the typed connect intent, never text.
 // Metadata and listing reads only. read_file_content is held (no Drive text into the intent ledger).
 const INTENT_READ_TOOLS: readonly string[] = ['list_recent_files', 'search_files', 'get_file_metadata'];
-const readAuthText = (reason: 'not_connected' | 'reauth_needed' | 'scope_missing', feature: GoogleFeature | undefined): string => {
-  const what = feature ?? 'Google';
-  const state = reason === 'not_connected' ? `${what} is not connected` : reason === 'reauth_needed' ? `the ${what} grant expired` : `${what} is not authorized for this account yet`;
-  return `${state}. A reconnect button is in the chat (or was just sent). Tell the owner to tap it - never quote or retype any link yourself.`;
-};
 
 export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: McpGoogleAuth, readIntents = false): ToolHandler<CallMcpToolArgs, unknown, ToolDispatcherContext> => ({
   name: 'read_mcp_tool',
@@ -224,7 +217,7 @@ export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: 
       return { ok: true, data: { output: content, protocol: protocolVersion, source_taint: 'external' as const }, source_taint: 'external' };
     } catch (error) {
       if (error instanceof McpConnectError) {
-        return { ok: false, code: 'auth_failed', error: readAuthText(error.reason, error.feature), source_taint: 'external', connect: { status: 'auth_required', service: 'google', reason: error.reason, ...(error.feature === undefined ? {} : { feature: error.feature }) } };
+        return { ok: false, code: 'auth_failed', error: connectNeededText(error.reason, error.feature), source_taint: 'external', connect: { status: 'auth_required', service: 'google', reason: error.reason, ...(error.feature === undefined ? {} : { feature: error.feature }) } };
       }
       const message = error instanceof Error ? error.message : String(error);
       // A read has no ledger, so an intent error here means the edge could not run it (for example a revoked or missing grant). Retrying would not change that.
