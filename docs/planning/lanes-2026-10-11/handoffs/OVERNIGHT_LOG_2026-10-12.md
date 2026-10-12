@@ -1701,3 +1701,21 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **The history-taint limit:** mail text can reach a later turn through Waldo's stored reply, then be echoed by a tool with a null stamp. That's the ADR-0049 class, the same as the stored-notes provenance question.
 - **Deploy:** the tip is now `571891de` (`87b31948` + #1091). L1's next deploy names its exact SHA when it asks the owner. With #1093 merged it becomes `87b31948` + #1091 + #1093.
 - **Score:** P1 and t3 don't move until G1 is deployed and probed, using the new rule (a job with 6 or more tool calls between the approval and the question).
+
+## 16:59Z: #1093 merged as `4b8ed3fe`, #1096 as `27214c63`; tip `27214c63`
+
+- **#1093 merged** at 16:58:38Z: `gh pr merge 1093 --merge --match-head-commit ca02744638dfe154928c25aacd88d713101a6e02`.
+  - **Gate:** CI 6/6 at `ca027446`. The full review at `ceac4c5f` failed (fixed); the delta review at `ca027446` passed. The advisor agreed. It was in the combined type-check. CLEAN and MERGEABLE against `571891de`, and merge-tree is clean [verified].
+  - **Verified in the delta:** the code is built from three literal ternaries (8 codes, at most 45 characters) and colon-joined. The address comparison lowercases both sides and reads `client.account` synchronously, so there's no new I/O; only a boolean reaches the log. A null email gives `other`, with no throw.
+  - **LOW follow-up for L1:**
+    - add a null-email read test;
+    - make the never-logs check case-insensitive;
+    - loop over all 8 codes;
+    - state the charset rule in the comment instead of naming "the tail" (a local script).
+- **#1096 merged** at 16:59:11Z: `gh pr merge 1096 --merge --match-head-commit 7666100dec5a917cd095e380bcca031a827d63ac`.
+  - **Gate:** CI 6/6 at `7666100d`; the review passed; the advisor agreed, with this PR last. It was in the combined type-check. CLEAN and MERGEABLE against `4b8ed3fe`.
+  - **What's true, rather than the body's framing:** `scenarios/run-l1.ts` was already type-checked through a test import, so `satisfies` was the real fix there. The `include` change adds only the `evals/` files.
+  - **Blast radius:** open PRs that touch `evals/` (#219, #433, #436, #453, #907) get type-checked on their next base merge. An `evals/` type error now blocks staging deploys too (`deploy-staging.yml:111`).
+  - **Reversible** by revert. The three PR-body LOWs go to L1.
+- **Tip `27214c63`** is `87b31948` plus #1091 (G1), #1093 and #1096. beta-mvp push CI is pending.
+  - Deploying it needs the owner's yes in L1's session, naming the SHA. After that deploy the rollback target is `87b31948`, which has the guard, so D14 clears and E15 can proceed on 13 Oct.
