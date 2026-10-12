@@ -325,3 +325,11 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - **"Gmail beyond 60" has no cap to lift.** Both tools page, and the model stopped after two pages and said so.
   - Both items are closed.
 - **P1:** no result yet, about 40 minutes after the go. Next cycle: if there's still none on #1103 or #92, repeat the go on #92, to be run on the saved `60fce743` build before more PR-head installs.
+
+## 22:57Z: #1108 review FAIL; chain decision
+
+- **#1108 (cloud A1) at `a463b18f`: FAIL.** Scheduled jobs write under `owner:prn_`, while Telegram text turns read `telegram-<owner>`. Telegram-bound owners would lose reminders and the Brief from their reply thread. App-bound owners are unaffected. Failure handling, authority, contract, privacy and tests all PASS.
+- **Decision (orchestrator, under the owner's delegation):** until the single-transcript work (Bible Phase 4, omnipresence slice 5), each surface keeps its own chain. Telegram text, media and jobs use `telegram-<subject>`; the app uses `owner:prn_<owner>`. One chain-naming helper is shared by #1100's context host and `asOwnerJob`, with a continuity test.
+  - **Why:** it's consistent with #1100's blocker fix and the least risky option before Phase 4.
+  - **To reverse:** the Phase 4 single-transcript migration.
+- Posted on #1108, including the request to rebase onto the rename.
