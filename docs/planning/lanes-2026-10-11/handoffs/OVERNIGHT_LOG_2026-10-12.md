@@ -2191,3 +2191,13 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - It doesn't expose the Meet link, handle `body.attachmentId`, or fix the case where a plain-text part beats the HTML.
   - It also adds `CalendarItem` fields, so the prep-digest risk applies.
   - **Sent to L2** (send 4 since the owner's message): port it into L2's branch with credit, and don't push to its branch.
+
+## 21:03Z: the app build under tonight's Simulator tests
+
+- **L4:** the `Waldo.app` installed on my `iPhone 17` was built at 20:13Z from `60fce743` (#91's head), using a clean checkout.
+  - **Verified:** its tree is `9666106f`, the same as app `main` `f37223b0`. So tests 1 to 3 ran on the app as merged, against staging `d704ffff`.
+  - L4 won't drive `iPhone 17`.
+- **L4's queue:**
+  1. P1: L4 asked the owner at 21:03Z, on a fresh card. The time and the card id go in L4's #116 note.
+  2. One follow-up PR for #89's three findings, re-checked on the Simulator at its head.
+  3. The bold-run wrap bug, with a renderer unit test first.
