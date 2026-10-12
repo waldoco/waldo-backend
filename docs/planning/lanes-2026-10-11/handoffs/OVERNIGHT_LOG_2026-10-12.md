@@ -620,3 +620,15 @@ Still open:
 - **#1083** at `4f80da1f`: Form aligned to ADR-0081. The reviewer reads the ADR from the local `waldo-brain` clone (`origin/main`).
 - **#1084** at `6587c579`: honest connect on the app.
 - **Status:** all three are 6/6 on the old base (`cdd906dd`), and `beta-mvp` is now `c5c36a05`. Before merging, #1066 and #1084, which touch the hot file, must merge the new base and pass CI on it. #1083 doesn't touch the hot file, but I'll still require a current base if GitHub reports it out of date.
+
+## 06:35Z: base merged into #1066 and #1084; PR diffs unchanged
+
+- L2 merged `c5c36a05` into both PRs: #1084 is now `2d7235d4` and #1066 is `5b8ed285`. Clean merges, no force push.
+- I compared each PR's diff before and after the merge by `git patch-id --stable`, and the diffs are identical [verified]:
+  - #1084: `6d492d4c…` both ways;
+  - #1066: `8da9ded3…` both ways.
+- So the reviews running at the old heads cover the new heads. CI is running on the new heads.
+- **L2's re-raise follow-up:** local `a8b334b8`, not pushed yet. L2 reports 17/17 mutations caught and a golden DO test.
+  - It also handles a day card calling `raise_approval` on scheduled app work: that now says "back in the list, no card on this reply".
+  - It also changes WhatsApp's text parser so it accepts `d:`. That's a one-character edit in Ashish's adapter.
+  - L2 is on track for about 08:30Z.
