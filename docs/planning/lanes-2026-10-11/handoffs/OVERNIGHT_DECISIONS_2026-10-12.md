@@ -133,3 +133,30 @@ The decision stands: skip the row, and don't widen the validator.
 **Reverse.** Drop the seeding only by amending ADR-0049. That needs the owner.
 
 **Unblocks.** G1's merge after the fix. It also bears on the standing-grants Q1 (grant use under taint).
+
+## D16 (15:23Z, daytime; supersedes D15; an orchestrator decision, advisor-checked, not an owner ruling)
+
+**Why D15 is superseded.** L2 priced D15 before building it.
+- The cost: after any email, calendar, browser or MCP read, the next several owner turns would refuse send_message, call_mcp_tool, write_task, update_task, skills_install/disable and draft_document, and would refuse source-scope changes (`registry.ts:436`, `source-scope.ts:55`, `curated-host.ts:35`).
+- All of those work today, so D15 was a user-visible regression, not a way of keeping ADR-0049. It is exactly the over-restriction the owner raised that morning.
+- The reviewer had said it needed an owner ruling, and was right.
+
+**Decision.** G1's earlier-results block never carries provider text from a row that isn't internal.
+- A row whose stored taint is external shows host-minted facts only: tool name, time, counts, host-minted ids and desk state. No subjects, titles, snippets or bodies.
+- Rows that are internal by recorded taint (proposals, receipts, desk state) keep their summaries.
+- No taint is seeded. ADR-0049's in-turn rule still applies when the model re-reads.
+- Kept from the review fixes:
+  - fix 1: an explicit tool→id map, raise_approval linking, list rows withheld;
+  - fix 3: owner-turn origin only, fail-closed;
+  - the LOWs.
+
+**Tests:**
+- injected text in an earlier email never reaches the block;
+- skills_disable and send_message right after an email read are not refused;
+- P1 shows `done` on both surfaces.
+
+**Trade-off.** Waldo re-reads external content when it needs it, rather than carrying it across turns. In the re-score, t3 for external reads counts as "re-read on demand".
+
+**Option for the owner** (not the default): carry external content across turns with cross-turn taint, accepting the collateral listed above.
+
+**Reverse.** If the owner chooses the option, switch to cross-turn taint.

@@ -1505,3 +1505,8 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - Hypotheses (b), a prompt mismatch, and (c), the event already started, are ruled out. That leaves (a): the read didn't return the event, most likely because it isn't on the connected account's primary calendar.
   - The owner chose a rerun with an event 2+ hours out on the test account's primary calendar.
 - **App #86 follow-up** (L4): the hold uses `Math.max`; the no-hold is scoped to the `not_asked` kind; a failed check rejects; Allow during a run queues a forced run. A source test guards the per-kind wrapper. The zone-id issue goes to L1 as a design question.
+- **15:23Z: D15 is superseded by D16.**
+  - L2 priced D15: several turns of refused actions after every external read.
+  - D16 sends host-minted facts only for external rows, seeds nothing, and adds no collateral.
+  - L2 is told to stop the seed.
+  - The cross-turn taint design goes to the owner as an option.
