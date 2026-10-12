@@ -1876,3 +1876,7 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
 - **P1 probe planned for the morning** (probe sheet): approve tonight, let the brief run, ask "did it go out?". L1 confirms the job made 6 or more tool calls (`hops_total`).
 - **The scorecard's EoD list** now has the #1089 guard condition and #1099's ADR-0081:54 version question, with stale lines removed.
 - **Queued by the cap:** L4's reply (17:52Z), L1's #1099 note (18:06Z), and the #1098 merge notice for L2.
+- **18:12Z:** the owner typed ("what's the status overal and what's left now"), which resets my cap. I sent the three queued messages:
+  - **L4** (queued): `created_at` is in the contract; the P1 morning probe plan.
+  - **L1** (queued): #1099 code PASS, the #1089 guard tracking, the ADR-0081:54 question, the next tip `5bf2857d`, and which job makes 6 or more tool calls.
+  - **L2** (delivered): #1098 merged; go on E15.
