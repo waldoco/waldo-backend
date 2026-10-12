@@ -16,7 +16,7 @@ export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
 
 type Undo = ({ op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string }) & { applied_etag?: string };
-type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; proposal_digest?: string | null; origin_run_ref?: string | null };
+type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; proposal_digest?: string | null; origin_run_ref?: string | null; deferred_at?: number | null };
 type DeskStatus = 'card_unconfirmed' | 'open' | 'review_only' | 'changing' | 'skipped' | 'expired' | 'done' | 'rejected' | 'failed' | 'stale' | 'uncertain' | 'unverified' | 'undone';
 // One app state per desk status. An approval claimed before its effect resolves reads outcome_unknown, never done.
 export const APP_APPROVAL_STATE: Readonly<Record<DeskStatus, AppApprovalStateV1>> = {
@@ -68,6 +68,8 @@ export type MessageSendProposal = Readonly<{ operation_ref?: string; channel: st
 export type McpCallProposal = Readonly<{ operation_ref?: string; server: string; tool: string; args: Record<string, unknown> }>;
 
 export type ApprovalDecision = Readonly<{ toast: string; message: string }>;
+// a approve, s skip, e edit, u undo, d defer ("Not now": the row stays open and keeps its cards).
+export type DeskAction = 'a' | 's' | 'e' | 'u' | 'd';
 export type ApprovalSurface = 'telegram' | 'whatsapp' | 'app' | 'console';
 // Where a decision came from. messageRef names the tapped card when the surface reports one.
 export type ApprovalVia = Readonly<{ surface: ApprovalSurface; messageRef?: string }>;
@@ -93,7 +95,7 @@ export type ApprovalDesk = Readonly<{
   proposeMcpCall(payload: McpCallProposal): Promise<string>;
   record(kind: string, summary: string, payload: unknown): void;
   callback(query: CallbackQuery, trace: string): Promise<void>;
-  decide(id: string, action: 'a' | 's' | 'e' | 'u', trace: string, via?: ApprovalVia): Promise<ApprovalDecision>;
+  decide(id: string, action: DeskAction, trace: string, via?: ApprovalVia): Promise<ApprovalDecision>;
   pending(now: number): readonly ApprovalItem[];
   approvals(now: number, filter?: Readonly<{ state?: AppApprovalStateV1; id?: string }>): Promise<readonly AppApprovalV1[]>;
   placement(id: string): CardPlacement;
@@ -112,6 +114,9 @@ const buttonsFor = (entry: LedgerRow): [string, string][] => {
   return [[card.approve, `a:${entry.id}`], ...(card.modify ? [['Modify', `e:${entry.id}`] as [string, string]] : []), ['Not now', `s:${entry.id}`]];
 };
 const approveActions = (entry: LedgerRow): AppApprovalPart['actions'] => buttonsFor(entry).map(([, data]) => DECISION[data[0] as keyof typeof DECISION]);
+// Not now is offered wherever a card is open or review-only; it is desk state, so it never depends on the surface.
+// Not now is offered once: an approval already put off offers only the decisions that move it.
+const withDefer = (entry: LedgerRow, actions: AppApprovalPart['actions']): AppApprovalPart['actions'] => entry.deferred_at == null ? [...actions, 'defer'] : actions;
 
 // The approval card IS the owner's review of a send. Telegram caps a message at 4096 chars:
 // when the full content fits, the card shows every recipient + the complete body and carries
@@ -223,6 +228,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   for (const column of ['proposal_digest', 'origin_run_ref']) {
     if (!sql.exec<{ name: string }>('PRAGMA table_info(ledger)').toArray().some(existing => existing.name === column)) sql.exec(`ALTER TABLE ledger ADD COLUMN ${column} TEXT`);
   }
+  if (!sql.exec<{ name: string }>('PRAGMA table_info(ledger)').toArray().some(existing => existing.name === 'deferred_at')) sql.exec('ALTER TABLE ledger ADD COLUMN deferred_at INTEGER');
   const presentationsExisted = sql.exec('PRAGMA table_info(approval_presentations)').toArray().length > 0;
   sql.exec(`CREATE TABLE IF NOT EXISTS approval_presentations (
     approval_id TEXT NOT NULL, surface TEXT NOT NULL, message_ref TEXT NOT NULL, presented_at INTEGER NOT NULL, approvable INTEGER NOT NULL,
@@ -276,7 +282,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (surface === 'app' || deps.appIdentity?.()) {
       try {
         const approvable = appReview(entry).full;
-        const part = appApprovalPart(appPartOf(entry, { actions: approvable ? approveActions(entry) : ['skip'], payload_digest: digest }));
+        const part = appApprovalPart(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: digest }));
         // The app may show only a card it can also decide: the approvals-list item must parse first.
         appApprovalV1Schema.parse({ approval_id: id, kind: part.kind, state: approvable ? 'open' : 'review_only', review: part.review, exact: exactFor(entry), payload_digest: digest, expires_at: part.expires_at, actions: part.actions });
         inApp = { approvable };
@@ -325,8 +331,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const shown = sql.exec<{ surface: string; approvable: number; retired_at: number | null }>('SELECT surface, approvable, retired_at FROM approval_presentations WHERE approval_id = ? ORDER BY presented_at, surface', entry.id).toArray();
     const inApp = shown.find(p => p.surface === 'app');
     const state = APP_APPROVAL_STATE[entry.status as DeskStatus];
-    const actions = state === 'open' ? (inApp?.approvable === 1 && inApp.retired_at === null && appShowsInFull(entry) ? approveActions(entry) : ['skip'] as const)
-      : state === 'review_only' ? ['skip'] as const
+    const actions = state === 'open' ? withDefer(entry, inApp?.approvable === 1 && inApp.retired_at === null && appShowsInFull(entry) ? approveActions(entry) : ['skip'])
+      : state === 'review_only' ? withDefer(entry, ['skip'])
         : state === 'done' && entry.undo_json && entry.decided_at !== null && now - entry.decided_at <= UNDO_WINDOW_MS ? ['undo'] as const : [];
     const surfaces = [...new Set(shown.map(p => p.surface).filter(surface => surface !== 'legacy'))];
     return { approval_id: entry.id, kind: entry.kind as AppApprovalV1['kind'], state, review: appReview(entry).text,
@@ -383,7 +389,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     return 'undone';
   };
 
-  const decide = async (id: string, action: 'a' | 's' | 'e' | 'u', trace: string, via: ApprovalVia = { surface }): Promise<ApprovalDecision> => {
+  const decide = async (id: string, action: DeskAction, trace: string, via: ApprovalVia = { surface }): Promise<ApprovalDecision> => {
     const started = deps.now();
     const entry = row(id);
     const operationRef = entry ? (JSON.parse(entry.payload_json) as { operation_ref?: string }).operation_ref ?? `approval:${id}` : `approval:${id}`;
@@ -392,7 +398,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     // An uncertain row with no effect record never reached dispatch (the record is written before the provider call), so it is safe to run again; a record sends it through reconcile instead.
     const recovering = entry?.status === 'uncertain' && deps.effects !== undefined && (action === 'a' || action === 'u' && entry.kind === 'calendar_change' && !!entry.undo_json && !!deps.effects.get(`${operationRef}:undo`));
     if (entry?.status === 'uncertain' && entry.kind !== 'browser_submit' && action === 'a' && !recovering) return { toast: 'Outcome unknown', message: 'The outcome of that approval is unknown. Check the result before retrying; nothing was sent again.' };
-    if (!entry || (entry.status !== expected && !(action === 's' && entry.status === 'review_only') && !recovering)) return { toast: 'Already handled.', message: 'Already handled.' };
+    if (!entry || (entry.status !== expected && !((action === 's' || action === 'd') && entry.status === 'review_only') && !recovering)) return { toast: 'Already handled.', message: 'Already handled.' };
     if ((action === 'a' || action === 'e') && entry.status === 'open' && !presentedTo(entry, via)) return notPresented(entry);
     const proposal = JSON.parse(entry.payload_json) as Stored;
     try {
@@ -404,6 +410,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         setStatus(id, 'skipped');
         if (entry.kind === 'browser_submit') await deps.browserDeny?.(JSON.parse(entry.payload_json) as BrowserSubmitProposal);
         out = { toast: 'Not now', message: 'Left it. Nothing changed.' };
+      } else if (action === 'd') {
+        sql.exec("UPDATE ledger SET deferred_at = ? WHERE id = ? AND status IN ('open', 'review_only') AND deferred_at IS NULL", deps.now(), id);
+        out = sql.exec<{ changed: number }>('SELECT changes() AS changed').one().changed === 1
+          ? { toast: 'Later', message: 'Left it for later. It is still waiting, and it can still expire.' }
+          : { toast: 'Already handled.', message: 'Already handled.' };
       } else if (action === 'e') {
         setStatus(id, 'changing');
         out = { toast: 'Tell me what to change', message: `What should I change? (${describeAny(entry)})` };
@@ -663,7 +674,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       await deps.retire?.({ surface: p.surface, message_ref: p.message_ref }).catch(() => deps.log({ trace: id, hop: 'approval_retire', ms: 0, ok: false, code: 'retire_failed' }));
     }
   };
-  const decideOnce = async (id: string, action: 'a' | 's' | 'e' | 'u', trace: string, via: ApprovalVia = { surface }): Promise<ApprovalDecision> => {
+  const decideOnce = async (id: string, action: DeskAction, trace: string, via: ApprovalVia = { surface }): Promise<ApprovalDecision> => {
     const before = row(id)?.status;
     const out = await decide(id, action, trace, via);
     if ((before === 'open' || before === 'review_only') && row(id)?.status !== before) await retire(id, via);
@@ -854,7 +865,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     async approvals(now, filter = {}) {
       const statuses = filter.state ? (Object.keys(APP_APPROVAL_STATE) as DeskStatus[]).filter(status => APP_APPROVAL_STATE[status] === filter.state) : null;
       if (statuses?.length === 0) return [];
-      const where = [`kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')})`, "substr(id, 1, 1) = 'p'", ...(filter.id ? ['id = ?'] : []), ...(statuses ? [`status IN (${statuses.map(() => '?').join(', ')})`] : [])];
+      // The default list leaves out an approval the owner put off, while it is still open or review-only; any decision
+      // that moves the row ends the deferral.
+      const standing = !filter.id && !filter.state ? ["NOT (deferred_at IS NOT NULL AND status IN ('open', 'review_only'))"] : [];
+      const where = [`kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')})`, "substr(id, 1, 1) = 'p'", ...(filter.id ? ['id = ?'] : []), ...(statuses ? [`status IN (${statuses.map(() => '?').join(', ')})`] : []), ...standing];
       const rows = sql.exec<LedgerRow>(`SELECT * FROM ledger WHERE ${where.join(' AND ')} ORDER BY created_at DESC, id DESC LIMIT 100`, ...PROPOSAL_KINDS, ...(filter.id ? [filter.id] : []), ...(statuses ?? [])).toArray();
       const items = await Promise.all(rows.map(entry => project(entry, now).catch(() => {
         deps.log({ trace: entry.id, hop: 'approval_projection', ms: 0, ok: false, code: 'dropped' });
@@ -911,7 +925,7 @@ export const appApprovalParts = (sql: SqlStorage) => (parentId: string): AppAppr
   for (const entry of sql.exec<LedgerRow & { approvable: number; payload_digest: string; retired_at: number | null }>("SELECT l.*, p.approvable, p.payload_digest, p.retired_at FROM approval_presentations p JOIN ledger l ON l.id = p.approval_id WHERE p.surface = 'app' AND p.message_ref = ? ORDER BY p.presented_at, l.id", `run:${parentId}`).toArray()) {
     try {
       const approvable = entry.status === 'open' && entry.approvable === 1 && appShowsInFull(entry);
-      const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions: approvable ? approveActions(entry) : ['skip'], payload_digest: entry.payload_digest }));
+      const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: entry.payload_digest }));
       if (!part.success) { dropped++; continue; }
       fallbacks.push(part.data.fallback_text);
       if (entry.retired_at === null && (entry.status === 'open' || entry.status === 'review_only')) live.push(part.data);
