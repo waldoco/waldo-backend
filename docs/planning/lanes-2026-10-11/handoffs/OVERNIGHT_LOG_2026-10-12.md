@@ -1744,3 +1744,18 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **Test and mutations:** a red-first end-to-end test (approval, then a job with 7 tools, then "Did it go out?", and the block is exactly the desk line). Mutations catch 7 of 7, and the wall passes 51 gates.
   - **LOWs 1–3 are done.** The view shows a failed row as its tool plus typed code only (`send_email failed (rejected)`), because the dispatcher lets a non-external tool return only null taint. LOW 4 (live probes stamped owner) is deferred, since it touches hot files.
   - **#1079:** L2 asks whether I close the superseded characterization pin. Closing a PR needs explicit confirmation under the posture rules, so it's left to its author (L2) under its own rules, or to the owner.
+- **17:28Z, #1098 review PASS** at `2915e830` (CI 6/6, CLEAN). It's held for two small fixes; the reviewer's LOWs are listed below.
+  - **Verified by the reviewer:**
+    - The key layout (`toolout:` plus `toolout-count`) is unchanged.
+    - Each kind is capped at 6, so storage stays at 12 rows or fewer.
+    - The desk line survives any number of machine calls.
+    - A rollback leaves at most 6 orphans, all hidden and still covered by forget.
+    - All forget and verify walkers list by the `toolout:` prefix.
+    - No contract, migration or DO schema change.
+  - **Fixes sent to L2 (delivered):**
+    1. Drop origin-less legacy rows on any write. Today they leave only after 6 machine writes.
+    2. Change the failure mapping to `desk || entry.ok ? text : failureOf(entry)`.
+    3. A forget test across rings.
+    4. Assert that the job's rows are stored as `machine`.
+  - **[inference, unverified]:** the pre-#1091 guard at `87b31948` (`admitsForPrompt(summary, entry.taint)`) might admit a health-reading summary when the taint is null. L2 will settle it with one test and report in the PR body. It goes to the owner only if confirmed. If so, the `27214c63` deploy (#1091 forces `'external'`) fixes the write side, and fix 1 clears the leftovers.
+- **Freeze:** `beta-mvp` is frozen at `27214c63` until L1's deploy ask is resolved. L1 has an AskUserQuestion open, so the owner's yes names that SHA. #1097 (review PASS) waits only for the freeze. #1097 and the fixed #1098 then merge back to back. The advisor flagged that any merge now would invalidate the SHA in the owner's yes.

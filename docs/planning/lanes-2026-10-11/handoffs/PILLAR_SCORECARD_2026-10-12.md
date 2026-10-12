@@ -67,9 +67,9 @@ Push CI is green at `27214c63` [verified]. To deploy, give your yes in L1's sess
 - **Your own tasks:** the APNs key (E5), the Google consent move (E8) and the real-iPhone health run.
 
 **Tomorrow, 13 Oct [proposed]:**
-- **In review now:**
-  - #1098 (L2): the shared-ring fix, so "did it go out?" survives a busy job;
-  - #1097 (L1): #1093's test and comment follow-ups.
+- **Waiting to merge:** `beta-mvp` is frozen until the `27214c63` deploy is resolved, so the SHA in your yes stays the tip.
+  - #1097 (L1): #1093's test and comment follow-ups. The review passed, and it's held only by the freeze.
+  - #1098 (L2): the shared-ring fix, so "did it go out?" survives a busy job. The review passed, but it's back with L2 for two small fixes: drop legacy origin-less rows on any write, and keep a failed desk row's desk line.
 - **L2:** after #1098, E15 app-first routing.
 - **L4:** refresh-while-open with the unread signal, then Android (E17).
 - **L1:** deploy `27214c63`, then the Weight and Form follow-ups.
