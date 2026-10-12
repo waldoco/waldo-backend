@@ -171,7 +171,8 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const events = page?.events ?? await client.events(from,to,limit,include_declined);
       // One content-free line per calendar read: which window and which kind of calendar were asked for, and how many
       // events came back. Never the calendar id or the account, either of which can be an address. The primary calendar's
-      // id is the account address, so a read by that id counts as primary. The code keeps to [a-z0-9_:], the tail's code set.
+      // id is the account address, so a read by that id counts as primary. The code stays within [a-z0-9_:]{1,64}, so a
+      // log viewer that whitelists hop codes by that charset keeps it.
       const primary = calendar_id === 'primary' || calendar_id.toLowerCase() === client.account?.email?.toLowerCase();
       console.log(JSON.stringify({ hop: 'calendar_read', ok: true, code: `window_${date_range ? 'date_range' : 'default'}:calendar_${primary ? 'primary' : 'other'}:page_${page_token ? 'next' : 'first'}`, count: events.length }));
       return {
