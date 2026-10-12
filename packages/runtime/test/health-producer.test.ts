@@ -11,6 +11,7 @@ const TODAY = '2026-03-20';
 const READ_AT = '2026-03-20T12:00:00.000123Z';
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 const wobble = (i: number, amp: number) => ((i * 7919) % 13 - 6) / 6 * amp;
+const WINDOW_SIGNALS = ['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration'];
 
 type Sample = Record<string, unknown>;
 const sample = (signal: string, day: string, over: Sample = {}): Sample =>
@@ -153,6 +154,63 @@ describe('produceHealthScores', () => {
     expect(today.hourly).toHaveLength(8);
     expect(today.hourly[0]).toMatchObject({ startAt: `${TODAY}T08:00:00.000Z`, daylightMinutes: 20, movementMinutes: 12, hrvMethod: 'rmssd' });
     expect(today.demand).toBeNull();
+  });
+
+  describe('hour windows sent again on another grid', () => {
+    const YESTERDAY = addDays(TODAY, -1);
+    const window = (signal: string, day: string, start: string, end: string, value = 30) => sample(signal, day, { start_at: start, end_at: end, value, timezone: 'Asia/Kolkata', utc_offset_minutes: 330 });
+    const hourlyByDay = async (extra: Sample[]) => {
+      const h = harness(seriesOf([...history(25), ...extra]));
+      await run(h);
+      return { h, hourly: new Map(h.inputs[0]!.days.map(d => [d.day, d.hourly.length])) };
+    };
+
+    it('leaves a day with an overlapping window no hourly windows, so Form says intraday inputs are unavailable', async () => {
+      const { h, hourly } = await hourlyByDay([window('movement_duration', TODAY, `${TODAY}T08:30:00.000Z`, `${TODAY}T09:30:00.000Z`)]);
+      expect([hourly.get(TODAY), hourly.get(YESTERDAY)]).toEqual([0, 8]);
+      expect(h.writes.find(w => w.day === TODAY)!.form).toEqual({ reason: 'intraday_inputs_unavailable' });
+      expect(h.writes.find(w => w.day === TODAY)!.recovery).toHaveProperty('score');
+    });
+
+    it('checks the whole series, so an overlap across a day boundary clears both days', async () => {
+      const { hourly } = await hourlyByDay([window('daylight_duration', TODAY, `${YESTERDAY}T15:30:00.000Z`, `${YESTERDAY}T16:30:00.000Z`)]);
+      expect([hourly.get(TODAY), hourly.get(YESTERDAY), hourly.get(addDays(TODAY, -2))]).toEqual([0, 0, 8]);
+    });
+
+    it('treats the same hour stored under two days as an overlap', async () => {
+      const { hourly } = await hourlyByDay([window('heart_rate_window', TODAY, `${YESTERDAY}T09:00:00.000Z`, `${YESTERDAY}T10:00:00.000Z`)]);
+      expect([hourly.get(TODAY), hourly.get(YESTERDAY)]).toEqual([0, 0]);
+    });
+
+    it('keeps a window that only touches the next one, and a window repeated on the same day', async () => {
+      const { hourly } = await hourlyByDay([
+        window('movement_duration', TODAY, `${TODAY}T16:00:00.000Z`, `${TODAY}T17:00:00.000Z`),
+        window('movement_duration', TODAY, `${TODAY}T08:00:00.000Z`, `${TODAY}T09:00:00.000Z`),
+      ]);
+      expect([hourly.get(TODAY), hourly.get(YESTERDAY)]).toEqual([9, 8]);
+    });
+
+    it('compares windows of one signal only', async () => {
+      const { hourly } = await hourlyByDay([window('daylight_duration', TODAY, `${TODAY}T16:30:00.000Z`, `${TODAY}T17:30:00.000Z`), window('movement_duration', TODAY, `${TODAY}T17:00:00.000Z`, `${TODAY}T18:00:00.000Z`)]);
+      expect(hourly.get(TODAY)).toBe(10);
+    });
+
+    it('leaves an overlapped earlier day out of the baseline, as if it had no hourly windows', async () => {
+      // An earlier day of unusually heavy movement, so whether it is in the baseline shows in today's Form.
+      const day = addDays(TODAY, -3);
+      const heavy = history(25).map(s => (s.day === day && s.signal === 'movement_duration' ? { ...s, value: 55 } : s));
+      const formOf = async (samples: Sample[]) => {
+        const h = harness(seriesOf(samples));
+        await run(h);
+        return { form: h.writes.find(w => w.day === TODAY)!.form, hourly: h.inputs[0]!.days.find(d => d.day === day)?.hourly.length };
+      };
+      const overlapped = await formOf([...heavy, window('movement_duration', day, `${day}T10:30:00.000Z`, `${day}T11:30:00.000Z`)]);
+      const without = await formOf(heavy.filter(s => !(s.day === day && WINDOW_SIGNALS.includes(s.signal as string))));
+      const counted = await formOf(heavy);
+      expect([overlapped.hourly, counted.hourly]).toEqual([0, 8]);
+      expect(overlapped.form).toEqual(without.form);
+      expect(counted.form).not.toEqual(without.form);
+    });
   });
 
   it('computes from the source with the most readings and names only that source as the basis', async () => {
