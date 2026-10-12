@@ -219,6 +219,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   googleTasks?: () => GoogleTaskApprovalAdapter;
   // Host-derived correlation of a proposal with the run that raised it; it never grants execution authority.
   currentRunRef?: () => string | undefined;
+  // The app chat message this turn replies to, only on an app chat turn: a raised card is shown on that reply.
+  appReplyRef?: () => string | undefined;
   // The surface this desk's cards go out on. Every desk on the DO shares the ledger and its presentations.
   surface?: Exclude<ApprovalSurface, 'console'>;
   // Whether the owner has the app, so this desk's cards also show there. An app desk always does.
@@ -711,7 +713,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       }
       raising.add(id);
       try {
-        const runRef = deps.currentRunRef?.();
+        const runRef = deps.appReplyRef?.();
         const shown = await present(id, { runRef });
         return { outcome: 'raised', shown_on: [...new Set(shown.map(s => s.surface))], on_this_reply: surface === 'app' && runRef !== undefined };
       } catch {

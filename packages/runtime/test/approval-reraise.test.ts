@@ -27,7 +27,8 @@ const deskOn = async <T>(surface: 'app' | 'telegram', name: string, run: (tools:
       return method === 'sendMessage' ? (telegram.deliver ? { message_id: sent.length, chat: { id: 42 } } : undefined) : true;
     };
     const desk = approvalDesk(state.storage.sql, { surface, owner: surface === 'app' ? 7_000_000_000_006 : 42, call, appLink: appApprovalLink,
-      google: async () => client, newId: () => `${name}${++n}`, now: () => clock.at, timezone: 'UTC', log: () => {}, currentRunRef: () => runRef.current });
+      google: async () => client, newId: () => `${name}${++n}`, now: () => clock.at, timezone: 'UTC', log: () => {},
+      currentRunRef: () => runRef.current ?? 'scope-run-0001', appReplyRef: () => runRef.current });
     const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
     const handler = approvalHandlers(desk).find(candidate => candidate.name === 'raise_approval')!;
     return run({ desk, clock, runRef, sql: state.storage.sql, sent, telegram,
@@ -99,13 +100,14 @@ it('nothing is sent for an approval that is decided, unknown, or not put off', a
   });
 });
 
-it('raised outside an app run, the approval is back in the list and the model is not told a card is on its reply', async () => {
-  await deskOn('app', 'raise-no-run', async ({ desk, runRef, raise, list, propose }) => {
+it('raised in scheduled work (a run, but no app chat reply), the approval is back in the list and the model is not told a card is on its reply', async () => {
+  await deskOn('app', 'raise-no-run', async ({ desk, runRef, sql, raise, list, propose }) => {
     const id = await propose('Background');
     await desk.decide(id, 'd', 'app:approval', { surface: 'app' });
     runRef.current = undefined;
     expect((await raise({ operation: 'raise', approval_id: id })).data).toMatchObject({ outcome: 'raised', on_this_reply: false });
     expect((await list()).map(item => item.approval_id)).toEqual([id]);
+    expect(appApprovalParts(sql)('scope-run-0001').live).toEqual([]);
   });
 });
 

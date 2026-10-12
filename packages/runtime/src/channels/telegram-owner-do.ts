@@ -1921,7 +1921,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     // surfaces resolve lazily at decision time; the app is never a send destination.
     const destination = (name: string) => name === channel && channel !== 'app' ? { call: routedCall, owner } : name === 'telegram' || name === 'whatsapp' ? this.setup(name) : null;
     const desk = approvalDesk(storage.sql, {
-      effects, googleTasks: () => googleTasks, currentRunRef, ownerRef, ownerRefAliases,
+      effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases,
       surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work),
       retire: async ({ surface, message_ref }) => {
         const [chat = '', message = ''] = message_ref.split(':');
