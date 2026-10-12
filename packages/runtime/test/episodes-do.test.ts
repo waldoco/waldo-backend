@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { armNightly, backfillEpisodes, episodeIndex, ftsQuery, indexedConversationStore, NIGHTLY_ID, speakerOf, transcript } from '../src/channels/episodes';
+import { armNightly, backfillEpisodes, episodeIndex, ftsQuery, indexedConversationStore, NIGHTLY_ID, speakerOf, speakerOfEntry, transcript } from '../src/channels/episodes';
 import { durableConversationStore } from '../src/channels/conversation-store';
 import { ensureSchema } from '../src/tracer/schema';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -15,6 +15,8 @@ const entry = (id: string, text: string, parentId: string | null = null) => ({
 describe('episode history', () => {
   it('names speakers from entry ids and quotes model queries safely', () => {
     expect([speakerOf('tg-5'), speakerOf('tg-5-reply'), speakerOf('reminder:ab:1:0'), speakerOf('reminder:ab:1:0-reply')]).toEqual(['owner', 'waldo', 'system', 'waldo']);
+    // Stamped rows name the speaker on any surface; unstamped rows keep the id convention.
+    expect([speakerOfEntry({ id: 'app-7', role: 'user', inputOrigin: 'owner' }), speakerOfEntry({ id: 'app-7-reply', role: 'assistant' }), speakerOfEntry({ id: 'reminder:ab:1:0', role: 'user', inputOrigin: 'machine' }), speakerOfEntry({ id: 'tg-5' }), speakerOfEntry({ id: 'app-7' })]).toEqual(['owner', 'waldo', 'system', 'owner', 'system']);
     expect(ftsQuery('Knee "pain" OR NEAR(run*)')).toBe('"knee" OR "pain" OR "or" OR "near" OR "run"');
     expect(ftsQuery(' ?! ')).toBeNull();
   });
