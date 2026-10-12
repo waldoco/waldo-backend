@@ -1786,3 +1786,12 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - the probe-5 rerun.
   - P1 credit still needs #1098 deployed and a 6-or-more-tool job between the approval and the question.
 - **17:39Z:** the scorecard's EoD section and the page (pillars, notes) now show staging on `27214c63` with G1 live and not yet probed, #1097 merged and #1098 with L2. Stamped from `date -u` (17:39:36Z).
+- **17:40Z, from L4:**
+  - **The t3 re-read probe ran** on the owner's yes in L4's session, and both answers came back: the calendar re-ask at about 17:37:39Z and reminders at about 17:38:57Z [reported by L4].
+    - It passes only if L1's tail shows fresh `tool_query_calendar` and `list_reminders` hops in those later turns. If it does, P4 and P5 pass the strict test, which makes 2 of 6 in the app.
+    - The deploy landed at 17:37Z, so the calendar turn may have hit either version.
+  - **Owner rulings in L4's session, relayed by L4 [reported]:**
+    1. **Zone ids:** both fixes. The app keeps each day's original offset grid (L4, after refresh-while-open), plus L1's backend producer guard (#116 6127532876).
+    2. **The probe-5 rerun is dropped.** W2's card probe stays unproven.
+  - L4 is starting refresh-while-open with the unread signal on Home.
+- **Sent to L1 (queued):** the t3 probe times to read in the tail, and the zone-id ruling, marked as relayed. L1 asks the owner in its own session if its rules need a first-hand yes. Also that probe 5 is dropped.
