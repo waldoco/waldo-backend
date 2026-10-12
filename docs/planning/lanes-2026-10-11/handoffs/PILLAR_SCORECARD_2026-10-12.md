@@ -156,7 +156,7 @@ Each target has a probe in the app Main chat.
 ## C. Today, by lane
 
 **Deploy waves.** Each needs E1, or your go in L1's session:
-- **Wave 1: code complete at 08:40Z.** `beta-mvp` at `e37f60f3` can deploy now, on your go in L1's session; there is no need to wait for 10:00Z. It carries:
+- **Wave 1: live on staging since 08:49Z** (`e37f60f3`, Worker version `c7974404`; rollback `b72928f0`, which is `cdd906dd`). You gave the go in L1's session. It carries:
   - #1066, merged 07:10Z as `531813cb`;
   - the interim connect text (#1084, `2e5993d6`);
   - #1076 (merged 06:07Z as `c5c36a05`) together with its re-raise follow-up #1085 (merged 08:40Z as `e37f60f3`).

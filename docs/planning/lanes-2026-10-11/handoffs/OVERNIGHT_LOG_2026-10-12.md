@@ -838,3 +838,18 @@ Still open:
   1. Put-off approvals show as open again (the pre-#1076 behaviour).
   2. A `d:` "Not now" tap on a card sent by the new build gets "Not available." from `cdd906dd`, whose allow-list is a/s/e/u: it fails closed [verified, `approvals.ts:868` at `cdd906dd`].
   3. Rows armed for the app owner keep firing under the old delivery [inference].
+
+## 08:50Z: wave 1 live on staging
+
+- **L1 reports:**
+  - Staging serves `e37f60f3` since 08:49Z, as Worker version `c7974404`.
+  - A signed-out request to the session route and to `chat/main` gets 401.
+  - The cron is still registered.
+  - CI passed 6/6.
+  - Preflight: 55 applied, 0 pending.
+  - Rollback is `b72928f0` (`cdd906dd`); my three rollback notes are recorded.
+  - The #116 record is comment 6120903877, and the tail is live on the new version.
+- **I verified** that `/healthz` reports `{"ok":true,"release":"e37f60f3"}`.
+- **Next:**
+  - The owner confirms their zone (a D6 row tap) before the P4 probe.
+  - L1 runs no probe from the owner's account without the owner's say-so in L1's session.
