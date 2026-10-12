@@ -1129,3 +1129,8 @@ Staging `e37f60f3`, version `c7974404`. Codes and times only.
   - L2 is idle after the limit; it was told #1087's state, to mark #1088 ready when green, and to pace itself.
 
 - **11:39Z, L4:** movement minutes is committed locally as `a5f26f16`, not pushed. `check` passes, and tests pass 660, with 1 skipped. Two fixes since: the one-time 30-day re-send now waits for iOS's Exercise Minutes prompt, and the keychain keeps the watermark version. Still to do before a PR: deliberate faults, a native build, and Simulator proof. My steer: a kind that fails is skipped and recorded, never stops the range. Probe 5 waits for a new time from the owner; L4's 10:27Z question went unanswered.
+
+- **11:40Z, L1:**
+  - **#1089** merged base `614d1aff` cleanly; the new head is `dc9cdefc`. Locally, 264 tests pass across 29 files, typecheck passes, and guards pass 37/37; pgTAP is unavailable. CI is running. The review subagent is now running at `dc9cdefc`, under the no-fan-out rule and a budget of about 60 calls.
+  - **The staging tail** was down from about 10:52Z to 11:38Z, after the restart, and is live again. Anything probed in that gap went unobserved.
+  - **Wave 2:** L1 runs the gate and asks the owner for the go in L1's session.
