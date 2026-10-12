@@ -141,15 +141,15 @@ Each target has a probe in the app Main chat.
 |---|---|---|
 | 1a Sign-in with invite | probe | E9; a test account with a fresh invite |
 | 1b Google sign-in | roadmap | After S7 (your order) |
-| 1c 18+ checkbox | app gate today; server record on the roadmap | L4 (D7) |
+| 1c 18+ checkbox | app gate today (app #84, open); server record on the roadmap | L4 (D7) |
 | 2 Google connect | probe | E8: your consent run |
 | 3 Health consent, ingest, scores | probe | Real iPhone; L1's Weight fix; L4's permission prompt |
 | 4a/4b Main chat history and send | **verified live on `cdd906dd`** [reported: L4's two sends with the owner's yes, plus L1's log tail; no overwrite] | done |
 | 5a Approve, "Don't do this" | probe | E9, after Google connects |
-| 5b "Not now" | build | E4, then #1076 |
+| 5b "Not now" | on staging since 08:49Z (#1076, #1085); probe | E9; a test approval |
 | 6 A reminder fires | probe | E9 |
 | 7 Continuity | partial today | E3 (app chat searchable). One transcript across app and Telegram is on the roadmap |
-| 8 Proactive at your times | build | E2, then #1066 and D6 |
+| 8 Proactive at your times | on staging since 08:49Z (#1066); probe after your zone tap | Your zone tap (D6), then a day card moved into the probe window |
 | 9 Push | build | E5, E6, then S7 |
 | 10 Deletion | probe | Your throwaway account; L1's proof |
 
@@ -290,7 +290,7 @@ None was verified live when the map was written.
 |---|---|---|
 | Gather context, act, verify, with subagents for isolation ("Building agents with the Claude Agent SDK", 29 Sep 2025) | `delegate_task` sub-agents share a round budget. Effects are verified by reading the ledger back | At the bar |
 | Just-in-time context, tool-result clearing, compaction ("Effective context engineering for AI agents", 29 Sep 2025; the context editing and compaction docs) | **G1:** earlier turns' tool results reach the reply on neither path. Report 04 found this by reading, report 07 re-checked it, and #1079's tests agree. **G2:** three silent history cuts. No compaction and no working set | Below |
-| Fewer, consolidated tools, with tool search above about 10 tools ("Writing effective tools for agents", 11 Sep 2025; "Introducing advanced tool use", 24 Nov 2025) Up to 49 tools on app turns and 53 on Telegram, every round (Google tools only once connected). 19 allow-listed tools have no handler [reported]. Tool search (ADR-0034) is unbuilt | Below |
+| Fewer, consolidated tools, with tool search above about 10 tools ("Writing effective tools for agents", 11 Sep 2025; "Introducing advanced tool use", 24 Nov 2025) | Up to 49 tools on app turns and 53 on Telegram, every round (Google tools only once connected). 19 allow-listed tools have no handler [reported]. Tool search (ADR-0034) is unbuilt | Below |
 | Tool descriptions are true | On the app, the connect tool tells the model a connect button is in the chat, but the app path drops the button [verified: `surfaces/app.ts:17-24`, `tools/live/google.ts:38`] | Below |
 | Containment before supervision: egress allowlists, credentials kept outside the agent ("How we contain Claude across products", 25 May 2026) | Egress allowlist; tokens held in Vault; external-origin taint; built-in tools are not preauthorized | At or above |
 | One permission check on every call (Agent SDK permissions) | A per-turn capability manifest; digest-bound approvals rechecked before dispatch | At or above |

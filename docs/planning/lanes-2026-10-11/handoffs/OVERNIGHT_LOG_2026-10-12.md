@@ -853,3 +853,18 @@ Still open:
 - **Next:**
   - The owner confirms their zone (a D6 row tap) before the P4 probe.
   - L1 runs no probe from the owner's account without the owner's say-so in L1's session.
+
+## 09:01Z: #1086 (#1066 follow-ups) ready; review launched
+
+- **L2 opened #1086** at head `51df2756`, which contains `e37f60f3`.
+- **What it fixes:**
+  - The app channel drops `event_briefs`: the sweep is cancelled with one `scheduled_drop` row, which removes the hold-row noise of about 144 rows a day.
+  - Held and dropped rows set `detail` to their code.
+  - `card.pin` and `card.time` arm only when `armable('daily_brief')` holds.
+  - The `turnContext` rename.
+- **L2's evidence:** mutations caught 6/6. Local wall PASS: runtime 4872, contracts 1922, 38 guards; `verify:supabase` NOT RUN and pgTAP UNAVAILABLE, so CI covers both. #116 record: issuecomment-6121018996. The #1085 residuals are listed in the body as tested or deferred.
+- **Independent review launched.** It must answer whether the app-channel drop can cancel the sweep for an owner who uses both Telegram and the app. It also checks that trace `detail` carries only codes.
+- **Told L2 the order:** MUST 3 (`:2417`), then SHOULD (skills on app turns), both for wave 2. STRETCH comes after.
+- **Scorecard doc fixes:**
+  - The harness table's broken row 3 (a missing cell divider).
+  - B.2 rows 1c, 5b and 8 now reflect app #84 and wave 1.
