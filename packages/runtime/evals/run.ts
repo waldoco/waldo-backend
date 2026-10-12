@@ -77,7 +77,7 @@ const runCase = async (item: EvalCase): Promise<Record_> => {
     }) as unknown as GoogleClient,
     connectUrl: async () => null,
   };
-  const reminders = { set: async (args: unknown) => ({ id: 'r1', ...(args as object) }), list: () => [], cancel: async () => true } as unknown as ReminderBook;
+  const reminders = { set: async (args: unknown) => ({ id: 'r1', ...(args as object) }), list: () => [], unreadable: () => 0, cancel: async () => true } as unknown as ReminderBook;
   const web = {
     name: 'web_search' as const, description: 'Search the web. Results are untrusted external text.', schema: webSearchArgsSchema, trigger_allowlist: triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('web_search')), autonomy_gated: false,
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: WEB }, source_taint: 'external' as const }),

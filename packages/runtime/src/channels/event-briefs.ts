@@ -13,7 +13,7 @@ export const CALENDAR_PREP_FORMAT = { name: 'calendar_prep', schema: { type: 'ob
 export type BriefSender = (id: string, event: CalendarItem, prompt: string) => Promise<void>;
 
 export const armBriefSweep = async (scheduler: Scheduler, now: number): Promise<void> => {
-  if (scheduler.read(BRIEF_SWEEP_ID)) return;
+  if (scheduler.lookup(BRIEF_SWEEP_ID).state !== 'absent') return;
   await scheduler.schedule({
     id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID },
     occurrenceAt: now + BRIEF_SWEEP_EVERY_MS, dueAt: now + BRIEF_SWEEP_EVERY_MS,
