@@ -11,7 +11,7 @@ const REPLY = 'Here is your prep for the 3pm.';
 // A line only the reviewed meeting-prep procedure carries.
 const PROCEDURE_LINE = 'Similar names are not interchangeable.';
 const MEETING_PREP = CURATED_SKILLS.find(skill => skill.name === 'meeting-prep')!;
-const model = vi.hoisted(() => ({ requests: [] as { tools: string[]; sent: string; turns: number }[], results: [] as string[] }));
+const model = vi.hoisted(() => ({ requests: [] as { tools: string[]; sent: string; turns: number }[], results: [] as string[], beforeLoad: undefined as (() => void) | undefined }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
@@ -22,6 +22,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const turns = request.request.tool_turns ?? [];
     model.requests.push({ tools: (request.request.tools ?? []).map(tool => tool.name), sent, turns: turns.length });
     for (const turn of turns) if (turn.call.name === 'skills_load') model.results.push(turn.output);
+    if (!turns.length) model.beforeLoad?.();
     if (!turns.length) return { ok: true, data: { model: request.request.model, text: '', tool_calls: [{ call_id: 'load-prep', name: 'skills_load', arguments: JSON.stringify({ name: 'meeting-prep', version: MEETING_PREP.version }) }], input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
     return { ok: true, data: { model: request.request.model, text: REPLY, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
@@ -34,7 +35,7 @@ const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', S
 const wire = { telegramSent: 0, presence: false };
 
 beforeEach(() => {
-  model.requests = []; model.results = []; wire.telegramSent = 0; wire.presence = false;
+  model.requests = []; model.results = []; model.beforeLoad = undefined; wire.telegramSent = 0; wire.presence = false;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -166,3 +167,25 @@ it('a Telegram subject sent with an app request, or an unlinked Telegram binding
   expect(wire.telegramSent).toBe(0);
 });
 
+// The app's skill dispatch re-reads the stored Telegram binding: a binding that changes while the turn runs closes it.
+it('a Telegram binding that changes during an app turn stops the skill from loading', async () => {
+  const name = 'app-turn-skills-rebind-mid-turn';
+  const headers = { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' };
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    claimStore(state.storage.sql); ensureSchema(state.storage);
+    state.storage.kv.put('do_name', name);
+    state.storage.kv.put('app_subject', String(appSubjectFor(name)));
+    state.storage.kv.put('telegram_subject', '424242');
+    const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    try {
+      model.beforeLoad = () => { state.storage.kv.put('telegram_subject', '555'); };
+      const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers, body: JSON.stringify({ client_message_id: 'client-prep-0001', text: 'Prep me for my 3pm.' }) }));
+      expect(sent.status).toBe(202);
+      const { message_id: id } = await sent.json() as { message_id: string };
+      await vi.waitFor(() => expect(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
+      expect(model.results).toHaveLength(1);
+      expect(model.results[0]).toContain('"ok":false');
+      expect(model.requests.some(request => request.sent.includes(PROCEDURE_LINE))).toBe(false);
+    } finally { await state.storage.deleteAlarm(); }
+  });
+});

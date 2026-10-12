@@ -132,3 +132,20 @@ it('upgrades the prior compact catalog without reviving a disabled procedure', a
     expect(await upgraded.prompt(turn('loaded'),canaries)).toContain(s.body_markdown);
   });
 });
+
+// An owner's activations under another of their own custodies upgrade like their own; anyone else's never do.
+it('upgrade rewrites an older row stamped under one of this owner\'s other custodies, and leaves another owner\'s alone', async () => {
+  await withDo('bootstrap-upgrade-alias', async (sql) => {
+    new CuratedOwnerSkills(sql, owner, undefined, 'prn_app');
+    const a = CURATED_SKILLS[0]!;
+    const catalog = Object.freeze([Object.freeze({ ...a, version: 3, body_markdown: `${a.body_markdown.slice(0, -20)} Revised.` }), ...CURATED_SKILLS.slice(1)]);
+    const stranger = new CuratedOwnerSkills(sql, owner, undefined, 'telegram:7', catalog, ['prn_other']);
+    expect(rows(sql).find(r => r.name === a.name)).toMatchObject({ version: a.version });
+    expect(stranger.load(a.name, 3, turn('s1')).ok).toBe(false);
+    const upgraded = new CuratedOwnerSkills(sql, owner, undefined, 'telegram:7', catalog, ['prn_app']);
+    expect(rows(sql).find(r => r.name === a.name)).toMatchObject({ status: 'active', version: 3 });
+    expect(upgraded.load(a.name, 3, turn('u1')).ok).toBe(true);
+    expect(await upgraded.prompt(turn('u1'), canaries)).toContain('Revised.');
+    expect(sql.exec<{ created_by: string }>('SELECT created_by FROM skills WHERE name = ?', a.name).one().created_by).toMatch(/:owner:telegram:7$/);
+  });
+});
