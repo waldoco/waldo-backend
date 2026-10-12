@@ -451,3 +451,21 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 
   Items 2–5 must merge before the owner's proxy redeploy.
 - **Security note [inference]:** the table-cell OTP gap is live on staging today for HTML-only mail in chat `read_thread` (the HTML fallback exists at base). Fix 2a closes it with a Worker deploy.
+
+## 23:51Z heartbeat: app #97 merged; R1 held for the owner; #1100 not ready
+
+- **Merged app #97 as `a004f4b8`** (B2 line fit).
+  - **Gate:** the delta at `aad28569` removes the five "(B2)" tags, states the limit for 2x screens and tests it (math only). No "B2" is left in the diff. CI passed. The advisor agreed.
+- **Correction (ruling 7):** R1 (three tabs) may be built on a branch, but it doesn't merge tonight.
+  - **Why:** where Patrol and Spots go is outside Ansh's list, so it waits for the owner. I overstepped at 23:34Z. The correction is on #1103 (6134827924) and sent to the App lane.
+- **The connect-guidance line goes to the backend builder** (`surfaces/app.ts` is its file), with wording that works on both shells.
+  - It merges together with R1, because "reached from their profile" is only true once R1 is in. App `main` already has Settings → Connections (`settings.tsx:21`).
+  - It's off Connectors' queue.
+- **#1100 at `a435beaa`:** behaviour-only now, CI 6/6. **It is not ready, and no review was spent on it.**
+  1. The Telegram thread fork is still there [verified]: `telegram-owner-do.ts:2202-2203` passes only `{ health }`, so the ref defaults to `owner:${principal}` (`owner-turn.ts:112`).
+  2. No test shows that health or owner deletion clears `episodes`.
+
+  Both are posted on the PR (6134842326) and on #1103 (6134842633).
+- **App #93** is at `32beb204` (the not-before fix), CI green. A delta review is running.
+- **Usage:** 62% at 23:49Z; the window resets at 02:30Z. No new reviews unless they unblock a merge.
+- **Test sends:** 1 of 5 used.
