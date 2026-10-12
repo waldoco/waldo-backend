@@ -962,3 +962,15 @@ Still open:
   - Output: `STANDING_GRANTS_ADR_DRAFT_2026-10-12.md`, for L3 and the owner.
   - The code comes after the app musts. The ADR goes to waldo-brain, which only the owner merges.
 - **L3 has been unreachable all morning.** The owner needs to resume L3's session for the contract and E11.
+
+## 09:59Z: D11, the skills custody bridge; #1087 review started
+
+- **D11** (my delegated call, not an owner ruling): L2 asked which custody key app turns use for skills (SHOULD). I chose (b), the bridge, for today. An app turn reads skill activations stamped with this DO's own stored, verified Telegram subject, and otherwise `principal_ref`.
+  - Why: the probe account is Telegram-linked. Under (a), its Telegram-stamped activations would show as disabled on the app, and probe 7 would fail. Skills are instructions, not permissions. No data is rewritten, and reverting the code reverts the behavior.
+  - Conditions sent to L2:
+    - the bridge reads only the DO's stored subject, never one from the request;
+    - tests: a seeded Telegram-custody row loads on an app turn; a fresh DO uses `principal_ref`; a row stamped with another subject or principal stays disabled;
+    - the PR body names the edge case where a re-bound DO inherits activations.
+  - Both surfaces move to `principal_ref`, with a reviewed re-stamp, in E15's routing slice tomorrow. SHOULD goes in its own PR, not #1087.
+  - Next: an advisor check on whether this falls on the hold list (user isolation).
+- **#1087 (MUST 3)** is a draft at `53d0f699` on `e4ef5b59`. pgTAP passed; verify and the four runtime shards are pending. The independent review subagent started at `53d0f699`.
