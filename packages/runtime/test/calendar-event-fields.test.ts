@@ -41,6 +41,11 @@ describe('calendar event fields', () => {
     expect(await mapped({ attendees: [{ responseStatus: 'accepted' }] })).not.toHaveProperty('attendee_emails');
   });
 
+  it('never lists the owner, whom Google marks as self, whatever address the connection recorded', async () => {
+    const event = await mapped({ attendees: [{ email: 'owner.alias@example.test', self: true, responseStatus: 'accepted' }, { email: 'asha@example.test', responseStatus: 'accepted' }] });
+    expect(event.attendee_emails).toEqual(['asha@example.test']);
+  });
+
   it('admits the new fields in the query_calendar page and rejects bad ones', () => {
     const event = { id: 'e1', title: 'Sync', start: '2026-10-03T10:30:00Z', end: '2026-10-03T11:00:00Z', all_day: false, conference_url: meet, attachments: [{ title: 'Q4 plan', file_id: 'drive-file-1' }], attendee_emails: ['a@example.test'] };
     const receipt = { events: [event], next_page_token: null, fetched_count: 1, account: { connection_id: 'c', email: 'o@example.test' }, observed_at: '2026-10-03T04:00:00.000Z' };

@@ -772,7 +772,8 @@ const toItem = (event: GoogleEvent): CalendarItem => ({
   ...(typeof event.originalStartTime?.dateTime === 'string' && validCalendarInstant(event.originalStartTime.dateTime) ? { original_start: event.originalStartTime.dateTime } : {}),
   ...(calendarSourceUrl(event.htmlLink) ? { source_url: calendarSourceUrl(event.htmlLink) } : {}),
   ...(event.attendees?.some(a => typeof a.displayName === 'string' && a.displayName.trim() && a.responseStatus !== 'declined') ? { attendee_names: event.attendees.filter(a => a.responseStatus !== 'declined' && typeof a.displayName === 'string' && a.displayName.trim()).slice(0, 20).map(a => a.displayName!.trim().slice(0, 200)) } : {}),
-  ...(event.attendees?.some(a => typeof a.email === 'string' && a.email.trim() && a.responseStatus !== 'declined') ? { attendee_emails: event.attendees.filter(a => a.responseStatus !== 'declined' && typeof a.email === 'string' && a.email.trim()).slice(0, 20).map(a => a.email!.trim().slice(0, 320)) } : {}),
+  // The owner's own entry (self) is never listed: a meeting's attendees are the other people in it.
+  ...(event.attendees?.some(a => typeof a.email === 'string' && a.email.trim() && a.responseStatus !== 'declined' && !a.self) ? { attendee_emails: event.attendees.filter(a => a.responseStatus !== 'declined' && !a.self && typeof a.email === 'string' && a.email.trim()).slice(0, 20).map(a => a.email!.trim().slice(0, 320)) } : {}),
   ...(conferenceUrl(event) ? { conference_url: conferenceUrl(event) } : {}),
   ...(attachmentsOf(event).length ? { attachments: attachmentsOf(event) } : {}),
 });
