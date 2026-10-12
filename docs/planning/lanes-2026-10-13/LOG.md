@@ -287,3 +287,12 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **App workspace:** the frozen offline install and `pod install --deployment` are done, with `Podfile.lock` unchanged. Four watch-target lines in `project.pbxproj` stay out of every commit.
 - **Reviews:** two subagents are running, one on #92 and #93 (logic) and one on #94 and #95. The second checks that Patrol and Spots are kept and that nothing goes beyond the listed items.
 - **P1 go** is posted on #92 (6133876163), because the App session reads its own PRs and my direct messages are capped.
+
+## 22:39Z: app #94 FAIL, #95 PASS
+
+- **#94 (wording P1–P8): FAIL,** on one blocker. Posted on the PR as 6133972116.
+  - P8's approve-button label says "Change the event" for a calendar create, move or cancel, and "Change the task" for a task create. That's a false description on the approve button and its VoiceOver label, and it understates a cancel.
+  - The fix: name each action from the approval (Add, Move or Cancel the event; Add, Change, Complete or Reopen the task), with one test per action value.
+  - Patrol and Spots are kept, with counts identical across base, #94 and #95.
+- **#95 (screens P9–P13): PASS** (6133972515). It needs a rebase after #94's fix.
+- **#92 and #93:** review still running.
