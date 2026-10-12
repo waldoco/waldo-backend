@@ -152,24 +152,24 @@ describe('scheduled work for an owner with no Telegram link', () => {
 });
 
 describe('scheduled reminders for a Telegram-linked owner', () => {
-  it('delivers a due reminder in the app once the owner has used the app, and queues nothing on Telegram', async () => {
+  it('delivers a due reminder in the app once the owner has used the app, queues nothing on Telegram, and sends Telegram one plain copy', async () => {
     const outcome = await driveAlarm('telegram-linked-with-app', { telegram: true, app: 'own' });
     expect(outcome.askedByAlarm).toContain('owner_runtime_authority');
     expect(outcome.transcript).toEqual([{ role: 'assistant', surface: 'app', text: REMINDER_TEXT }]);
     expect(outcome.queuedOnTelegram).toEqual([]);
-    expect(wire.telegramSent).toEqual([]);
+    expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REMINDER_TEXT }]);
     expect(outcome.due).toEqual([]);
     expect(outcome.outcomes).toEqual(['ok']);
   });
 
-  it('still delivers a queued Telegram turn reply on Telegram while the reminder goes to the app', async () => {
+  it('still delivers a queued Telegram turn reply on Telegram while the reminder goes to the app with one plain copy', async () => {
     const outcome = await driveAlarm('telegram-linked-reply-and-reminder', { telegram: true, app: 'own', telegramReply: 'Here is your answer.', alarms: 2 });
-    expect(wire.telegramSent).toEqual([{ chat_id: 7, text: 'Here is your answer.' }]);
+    expect(wire.telegramSent).toEqual([{ chat_id: 7, text: 'Here is your answer.' }, { chat_id: 7, text: REMINDER_TEXT }]);
     expect(outcome.transcript).toEqual([{ role: 'assistant', surface: 'app', text: REMINDER_TEXT }]);
     expect(outcome.outcomes).toEqual(['ok']);
   });
 
-  it('keeps running the event-brief sweep on Telegram for an owner who also uses the app', async () => {
+  it('runs the event-brief sweep for an owner who also uses the app, with no hold for a time zone the app has not confirmed', async () => {
     const outcome = await driveAlarm('telegram-linked-app-sweep', { telegram: true, app: 'own', sweepDue: true });
     expect(outcome).toMatchObject({ sweep: ['armed'], sweepRuns: 1, dropped: 0 });
   });
