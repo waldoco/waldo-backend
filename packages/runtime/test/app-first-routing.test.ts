@@ -18,6 +18,7 @@ import { persistTransportWake } from '../src/scheduler/alarm-slot';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
+import { presenceAuthority } from './helpers/directory-presence';
 
 // Proactive work for an owner on both Telegram and the app goes to the app, and Telegram gets one plain copy of it.
 const CARD_TEXT = 'Your morning is clear until noon.';
@@ -81,6 +82,7 @@ beforeEach(() => {
     if (fn === 'health_log_recent') return Response.json([]);
     if (fn === 'health_context_read') return Response.json(null);
     if (fn === 'assert_channel_presence') return Response.json(wire.presence);
+    if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
     if (/^https:\/\/api\.telegram\.org\/bot[^/]+\/sendMessage$/.test(url)) {
       const sent = JSON.parse(String(init?.body)) as Sent;
       wire.telegramSent.push({ chat_id: sent.chat_id, text: sent.text, ...(sent.reply_markup === undefined ? {} : { reply_markup: sent.reply_markup }) });

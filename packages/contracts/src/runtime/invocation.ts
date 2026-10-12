@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { briefVariantSchema, triggerTypeSchema } from '../core/trigger';
+import { briefVariantSchema, triggerTypeSchema, type TriggerType } from '../core/trigger';
 import { sourceTaintSchema } from '../memory/sanitise';
 import {
   EXTERNAL_ORIGIN_TOOLS,
@@ -8,6 +8,7 @@ import {
 } from '../tools/handler';
 import { TOOL_PERMISSIONS, toolNameSchema } from '../tools/permissions';
 import { runtimeContextSourceKindSchema, runtimeRunRecordSchema, runtimeToolDispatchFailureReasonSchema } from './run';
+import { scheduleKindSchema } from './schedule';
 
 const opaqueRef = (prefix: string) =>
   z.string().regex(new RegExp(`^${prefix}_[a-f0-9]{32}$`), {
@@ -62,6 +63,17 @@ export const invocationInputReferenceSchema = z.strictObject({
 });
 export type InvocationInputReference = z.infer<typeof invocationInputReferenceSchema>;
 
+// The schedule kinds the owner's own Durable Object runs through the owner responder.
+export const ownerJobSchema = scheduleKindSchema.extract(['brief', 'pre_activity_spot', 'dreaming', 'reminder', 'heartbeat', 'standing_order']);
+export type OwnerJob = z.infer<typeof ownerJobSchema>;
+
+// A reminder, heartbeat or standing-order fire reaches out to the owner without an owner message, which is what the
+// intervention trigger names; the other jobs keep the trigger their schedule kind already carries.
+const OWNER_JOB_TRIGGER: Readonly<Record<OwnerJob, TriggerType>> = {
+  brief: 'brief', pre_activity_spot: 'pre_activity_spot', dreaming: 'dreaming_mode',
+  reminder: 'intervention', heartbeat: 'intervention', standing_order: 'intervention',
+};
+
 export const invocationIntentSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('respond_to_user') }),
   z.strictObject({ kind: z.literal('assemble_brief'), variant: briefVariantSchema }),
@@ -75,6 +87,7 @@ export const invocationIntentSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('intervene') }),
   z.strictObject({ kind: z.literal('dream') }),
   z.strictObject({ kind: z.literal('prepare_pre_activity') }),
+  z.strictObject({ kind: z.literal('run_owner_job'), job: ownerJobSchema }),
 ]);
 export type InvocationIntent = z.infer<typeof invocationIntentSchema>;
 
@@ -95,6 +108,7 @@ function admissionSourceAllowsIntent(
   source: TrustedInvocationAdmissionSource,
   intent: InvocationIntent,
 ): boolean {
+  if (intent.kind === 'run_owner_job') return source === 'trusted_scheduler';
   return (source === 'authenticated_ingress') === (intent.kind === 'respond_to_user');
 }
 
@@ -571,6 +585,8 @@ function runtimeBindingForIntent(intent: InvocationIntent): RuntimeInvocationBin
       return { trigger: 'dreaming_mode', variant: null, governor_resolution: 'from_trigger' };
     case 'prepare_pre_activity':
       return { trigger: 'pre_activity_spot', variant: null, governor_resolution: 'from_trigger' };
+    case 'run_owner_job':
+      return { trigger: OWNER_JOB_TRIGGER[intent.job], variant: null, governor_resolution: 'from_trigger' };
   }
 }
 
