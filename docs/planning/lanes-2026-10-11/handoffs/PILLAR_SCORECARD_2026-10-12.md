@@ -104,7 +104,14 @@ If you choose E1(a), tell each lane in its own session; a relay from me is not a
   - physical load from the workouts and movement the producer already reads;
   - results stay `candidate_unaccepted`.
   It needs Google connected (E8), so it can't be verified live today.
-- **E13: answered in L1's session: "align to ADR-0081, L1 edits". The work is PR #1083.** Form deviates from accepted ADR-0081. The code weights five components differently from the ADR. Align the code or amend the ADR, and decide who edits `scores/`, which is the Instinct contributor lane's code and read-only for L1.
+- **E13, Form deviates from accepted ADR-0081.** In L1's session the owner chose "align to ADR-0081, L1 edits" (PR #1083).
+  - The independent review then failed #1083 (07:05Z).
+  - The owner then ruled in this session:
+    - **amend the ADR to keep stress** in Form;
+    - SDNN confidence factor 0.8, marked candidate;
+    - **fix source choice before merging**, so Health-Connect and mixed owners keep Form.
+  - **#1083 is not an EoD item.** It needs a waldo-brain ADR amendment that the owner approves and merges, a code re-alignment, the source-choice fix, and the review's test fixes.
+  - Earlier detail on the deviation: The code weights five components differently from the ADR. Align the code or amend the ADR, and decide who edits `scores/`, which is the Instinct contributor lane's code and read-only for L1.
 
 Other held items stay in the morning report: session renewal, the 18+ server record, the Brief `latest` DO ALTER, and #1072.
 
@@ -125,7 +132,7 @@ Each target has a probe in the app Main chat.
 | **P2** Computer use | stays no without E7 | Admission by canonical identity, plus the binding | "What are the opening hours on <url>?" | E7 |
 | **P7** Payments and identity | stays partial | **L4:** the 18+ gate at sign-up (D7) | Sign-up stays blocked until 18+ is ticked | none |
 | **P8** Evals and observability | first step | App-path regression tests in CI for tonight's three failures. The 503 and overwrite tests landed with #1075 and #1080; the connect test lands with its fix | CI shows all three | none |
-| **W1** Health | better | **L4:** the ingest permission prompt. **Your** real-iPhone run. Weight is a design decision, not a fix (E12), and can't be verified live today | "How am I doing today?" answers from fresh readings | real iPhone |
+| **W1** Health | better | **L4:** the ingest permission prompt (merged as app #83, `eab22e88`). **Your** real-iPhone run. Weight is a design decision, not a fix (E12). Form alignment (#1083) slips past EoD (E13) | "How am I doing today?" answers from fresh readings | real iPhone |
 
 ### B.2 Golden path, observed live in the app
 
@@ -149,12 +156,12 @@ Each target has a probe in the app Main chat.
 
 **Deploy waves.** Each needs E1, or your go in L1's session:
 - **Wave 1 at about 10:00Z** (15:30 IST):
-  - #1066;
+  - #1066, merged 07:10Z as `531813cb`;
   - the interim connect text (#1084);
-  - the app branch at `:2417`;
-  - expiry on read;
+  - expiry on read, if L3 is back;
   - #1076 (merged 06:07Z as `c5c36a05`) together with L2's re-raise follow-up. Every tip from now on carries #1076, so the follow-up is a wave-1 must.
-- **Wave 2 at about 14:00Z** (19:30 IST): skills on app turns, plus whichever stretch items (G1, G3, S7) passed the gate.
+- **Wave 2 at about 14:00Z** (19:30 IST): the app branch at `:2417` (MUST 3, which slips here behind the re-raise PR on the hot file) and skills on app turns, plus whichever stretch items (G1, G3, S7) passed the gate.
+- **After wave 1, before the P4 probe:** the owner's zone must be confirmed. That means a tap on the D6 row, or the Simulator's one-time automatic write. Until then the app runtime arms nothing. The P4 probe (a reminder, plus the day card moved into the probe window) rides on #1066 alone.
 
 Then:
 - **Probes:** 14:30–16:30Z.

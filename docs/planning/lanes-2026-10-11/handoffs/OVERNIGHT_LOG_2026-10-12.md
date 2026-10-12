@@ -679,3 +679,50 @@ Still open:
   - aligning to ADR-0081 drops Form's HR/HRV stress part, against the 10 Oct §7 ruling and the site's "Form (circadian, motion, stress)";
   - owners whose only source is Health Connect lose Form.
 - **L4 told:** Form's `confidence` will mean the ADR product, while Recovery's and Weight's still mean coverage, in the same response.
+
+## 07:12Z: #1066 merged; #1083 off EoD; CHECKPOINT
+
+- **MERGED waldoco/waldo-backend#1066** as **`531813cb99f261c796c37b03565b9b7e8316f85a`** at 07:10:51Z, with `--match-head-commit 5b8ed285ab779c5d673c1116381bb9975d216aea`.
+  - The delta review PASSED at `075eb8fe`: the original FAIL items are fixed; the strip holds across all four stores (with a mutation run per store); arming waits for zone confirmation; the contract change is only `timezone_confirmed`, which the app already pins; concurrency is safe.
+  - Patch-id check: `5b8ed285` carries the identical diff. CI was 6/6 there, and the PR was `CLEAN`. Advisor OK.
+  - Follow-ups sent to L2: event-brief hold noise (about 144 rows a day); `card.pin` and `card.time` arming without the confirmation check; the shadowed `context`; an empty trace detail; card loss on `timezone.set`.
+- **#1083: the owner's answers (about 07:05Z, in this session):**
+  - amend ADR-0081 to keep stress;
+  - SDNN factor 0.8, candidate;
+  - fix source choice before merging.
+
+  Relayed to L1. #1083 is no longer an EoD item.
+- **#1084:** review fixes are at `6202b51b`. Next, L2 merges `531813cb`; then a patch-id check, my read of the delta, CI, and the merge.
+- **L4:** app #83 (health honesty and the iOS read step) merged as `eab22e88`, on the owner's yes in L4's session.
+  - The change in what Form's confidence means needs no app change, because the app doesn't read `confidence`.
+  - App ingest is Apple Health only.
+  - The owner deferred naming the health data kinds (5.1.3(i)) to the App Store list.
+  - L4 is now on D7.
+
+### CHECKPOINT (07:12Z): state for a resume
+
+- **`beta-mvp`:** `531813cb`, which carries #1075, #1080, #1076 and #1066. **Staging:** `cdd906dd` (`b72928f0`). #1080 is verified live there (reported).
+- **App `main`:** `eab22e88`, which carries #78, #79, #80, #81 (Constellations), #82 (D6) and #83.
+- **Rule: L1 deploys no tip that contains #1076 without L2's re-raise PR.**
+  - Wave 1, at about 10:00Z, needs the owner's go in L1's session. It carries #1066, #1084 and the re-raise PR, plus L3's expiry fix if L3 returns.
+  - After wave 1, the owner confirms their zone (by tapping the D6 row) before the P4 probe.
+- **Pending PRs and their next gate step:**
+
+  | PR | Next step |
+  |---|---|
+  | #1084 | base merge, then patch-id check, my delta read, CI, merge |
+  | Re-raise (`l2/approval-reraise`, local `a8b334b8`, due about 08:30Z) | push, then an independent review, CI on the current base, and the advisor |
+  | #1083 | ADR amendment, then re-align, source choice and tests. Not today |
+  | #1077 (docs) | the owner merges it |
+
+- **Next for L2:** MUST 3 (`:2417`), which slips to wave 2, then skills on app turns.
+- **Owner-pending:**
+  - E5: the APNs key.
+  - E10: WhatsApp and iMessage copy.
+  - E11: L3's batch, which needs L3's session resumed.
+  - E12: Weight.
+  - The ADR stress formula.
+  - The `today:` copy question from the #1066 review: a number copied from a reply into the next stored day-card prompt. Does that count as "replies as written"?
+  - The Google consent move and run (E8, under way).
+- **L3** is unreachable (not in `ListAgents`). Its queue, L2's merge-order note and L4's expiry question are on the board.
+- **Usage:** the 5-hour window reset at 06:30Z. Three reviews used part of it. My context is about 80%.
