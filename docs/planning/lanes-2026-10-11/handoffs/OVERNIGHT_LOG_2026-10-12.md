@@ -1847,3 +1847,13 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
     - the `WINDOW_SIGNALS` name clashes with the contract's list.
 - **Queued for L1** (cap reached):
   > "#1099 code PASS (bbae8681). Not merged until you report the owner's yes from your session. Please record the #1089 guard on #1089's body, since nothing forces it. Put the ADR-0081:54 version question to the owner with the yes. LOWs: the DayRecord flag, withinLocalDay ordering, non-adjacent and zone_changed tests, the unused overlapped, and the WINDOW_SIGNALS name."
+- **18:07Z, #1098 delta review PASS** at `46cf827f` (CI 6/6, CLEAN).
+  - **The drop is safe:** the fenced path puts, lists and deletes inside one `scope.commit` closure (`transactionSync`, with the fence checked first; `telegram-owner-do.ts:430-434`). It drops only `origin === undefined` (:67), so it never touches a row that has an origin. The `'machine'` default is set at write time only, and redaction copies rows unchanged.
+  - **Bounded:** at most 6 owner rows plus 6 machine rows.
+  - **Fix 2:** `(desk || entry.ok) ? text : failureOf(entry)`. The failed-desk text is `${tool} failed: proposed approval ${id} (${kind}) … is ${state}`, from the desk only, never provider text.
+  - **Forget:** every `toolout:` row is walked, and the new test's owner row sits outside the newest six.
+  - **Data effect:** acceptable. Origin-less rows were never in the owner view, so only the composer feed loses up to six. Memory, receipts and approvals are untouched.
+  - **Merge:** it brings in only `d3ab8635` and `cf38b379`, with no hand edits; merge-tree is clean.
+  - **LOWs:**
+    - a failing tool's output can name another of the owner's approval ids; only a gated id plus desk state shows, as it already did for successful rows;
+    - `record` could require `origin` in its type.
