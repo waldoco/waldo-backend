@@ -1349,3 +1349,8 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
   - Likeliest causes: (a) the event is on another calendar or account; (b) the model passed a `date_range` or zone that excluded it. L1 is asked for the tool args and the count; the owner, for the event's account and calendar.
   - **Quality note:** asking which date for "my 6 pm" suggests the turn may lack a clear local "today" [inference]. Check the turn context once the cause is known.
   - L4 is building the per-kind skip into movement minutes, with the owner's approval.
+- **L1's follow-up scope** [reported; its lines are verified by L1]: the fixed-id arm, cancel and day-plan paths skip unreadable rows and never write to them; cancels are included, since the roll-forward Worker's startup reconcile cancels kinds that are switched off.
+  - Two more read paths fail the same way and are added: `standingOrdersPrompt` in the prompt builder (`~:2102`), and the reminder `list()` (`repeatFromRecurrence`). The reminder list feeds `promptLedger`, which covers update cards, follow-ups, the evening job, `/ledger` and the dashboard.
+  - `read(id)` keeps throwing only on cancels the owner starts for a known id.
+  - L1 is waiting for L2's OK on `event-briefs.ts`, `schedule-preferences.ts` and `day-cards.ts`.
+  - **D14** (adopted): a fixed-id row may be reshaped only one release after the guard is live, so the rollback target has it too.

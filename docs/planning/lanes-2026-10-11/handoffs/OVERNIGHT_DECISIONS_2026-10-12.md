@@ -105,3 +105,15 @@ The decision stands: skip the row, and don't widen the validator.
 - L1: the scheduler fix (`multiplexer.ts`). One bad row currently stops all scheduled jobs for that owner [verified].
 - L2: the per-hit episode-read fix (`owner-turn.ts:333-337`), after G1.
 - Backlog: `loops.ts` `proactivity()`, `update-cards.ts` `unfolded()`, and the recall length cap. Each needs a corrupt row or a live recall gateway first.
+
+## D14 (12:47Z, daytime; a release-sequencing rule proposed by L1 and adopted, not an owner ruling)
+
+**Question.** #1090 and L1's follow-up guard against unreadable schedule rows. When can a change safely reshape a fixed-id schedule row (heartbeat, nightly, brief sweep, day cards)?
+
+**Decision.** Only one release after the guard is live on staging. The rollback target then has the guard too. A merge alone isn't enough: today both the live version (`02103423`) and the rollback target (`c7974404`) lack it.
+
+**Why.** The reshape fails exactly when an older Worker meets a newer row. A rollback lands on the target version, so that version has to tolerate the new shape.
+
+**Reverse.** Drop the rule once every deployable version carries the guard.
+
+**Unblocks.** E15's routing slice and the grants work, both of which may reshape fixed-id rows. L1 has told L2.
