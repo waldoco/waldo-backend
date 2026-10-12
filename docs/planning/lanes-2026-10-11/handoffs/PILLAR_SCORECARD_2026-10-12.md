@@ -18,12 +18,12 @@ The eight pillars:
 ## Basis
 
 **Pins**
-- Backend `beta-mvp` `889efa27`, which staging runs as Worker `3f059c04`.
-- `cdd906dd` (#1080, merged at 03:36Z) is not deployed.
+- Backend `beta-mvp` `889efa27`, read for this scorecard.
+- At 03:46Z L1 deployed `cdd906dd` (#1080) to staging as Worker `b72928f0`, on the owner's go. Its only change from `889efa27` is #1080's history-store fix, so the reading below still holds.
 - App `main` `6dcba63b`.
 
 **Method**
-- Source was read, not run. The only live observation is the Main chat probe at 02:41Z.
+- Source was read, not run. The only live observation is the Main chat probe at 02:41Z [reported: L4's Simulator sends and L1's log lines].
 - Four read-only research agents wrote reports 07–10 in [research-2026-10-12/](research-2026-10-12/):
   - [07 surfaces](research-2026-10-12/07-surfaces-natural-language.md)
   - [08 engines](research-2026-10-12/08-pillar-engines.md)
@@ -50,13 +50,15 @@ A pillar works by natural language on a surface when it passes three tests:
 
 | Surface | Pillars passing all three | Notes |
 |---|---|---|
-| **App Main chat (the product)** | **0 of 8** | Nearest misses: connectors, reminders, memory, text chat |
-| **Telegram (dev surface)** | **3 of 8**: memory and skills, triggers, connectors | By reading. None observed live on `889efa27` |
+| **App Main chat (the product)** | **0 of 6** chat-capable pillars | Nearest misses: connectors, reminders, memory, text chat |
+| **Telegram (dev surface)** | **3 of 6**: memory and skills, triggers, connectors | By reading. None observed live on `889efa27` |
 | WhatsApp | 0 | Code exists, but no owner can link it: the link-code issuer hard-codes `telegram` [reported] |
 | iMessage | 0 | The modules exist, but nothing imports them [reported] |
 | Inbound email | 0 | No handler [reported] |
 
-**Observed live:** one slice of one pillar, app text chat (send, reply, history read-back) on `889efa27` at 02:41Z. That same probe triggered the history overwrite that #1080 fixes.
+P7 (payments and identity) and P8 (evals and observability) have no chat tools by design, so they can't pass the chat test. They are judged on their engines only. Out of eight, the counts are 0 for the app and 3 for Telegram.
+
+**Observed live:** one slice of one pillar, app text chat (send, reply, history read-back) on `889efa27` at 02:41Z [reported: L4's Simulator sends and L1's log lines]. That same probe triggered the history overwrite that #1080 fixes.
 
 ### Against the industry bar
 
@@ -71,7 +73,7 @@ From report 09's sources [inference]:
   - Earlier turns' tool results never reach the reply (G1).
   - App chat is invisible to search and nightly memory (G3).
   - History is cut three ways without the model being told (G2).
-  - Every round carries 49–53 tools, with no tool search.
+  - Up to 49 tools ride every app round, and 53 on Telegram (Google tools only once connected), with no tool search.
 - **Below the bar: proactivity and reach.**
   - No event triggers and no push notifications.
   - The app and Telegram keep separate transcripts.
@@ -110,7 +112,7 @@ None was verified live when the map was written.
 | **P3** Memory and skills | Memory 3–4. Skills 0 / 4: 16 curated SKILL.md, loaded on demand | partial | **yes** | At the bar on TG; below on the app | 7 (5) | Skills are wired only for Telegram [verified]. App chat is missing from search and nightly |
 | **P4** Triggers and jobs | 2 / 4 | partial | **yes** | Below: no event triggers, no push | 19 (14) | Nothing is armed for app-only owners [verified]. #1066 is held |
 | **P5** Connectors and auth | 4, unproven live | partial | **yes** | Core at the bar; revocation and Google verification below | 28 (17) | Connecting from app chat fails silently [verified]. No disconnect |
-| **P6** Text and voice | App text 5; TG 4; push 1; voice in 3 (TG only); voice out 0; WhatsApp 2; iMessage 2; email 0 | partial | partial | Below: no push, two transcripts | 19 (15) | Push (S7); one transcript across surfaces |
+| **P6** Text and voice | App text 5 [reported]; TG 4; push 1; voice in 3 (TG only); voice out 0; WhatsApp 2; iMessage 2; email 0 | partial | partial | Below: no push, two transcripts | 19 (15) | Push (S7); one transcript across surfaces |
 | **P7** Payments and identity | Email sign-in 4; Google sign-in 0; 18+ at sign-up 0; payments 0 | not a chat capability | not a chat capability | Identity below; payments not promised | 1, plus 3 golden-path rows | No Google sign-in, no 18+ record, and a 12 h session with no refresh |
 | **P8** Evals and observability | Tracing 4; alerts 0; evals 2 | not a chat capability | not a chat capability | Tracing at the bar; evals well below | 0 | No eval or probe gates a merge. No workflow runs evals [verified] |
 | **W1** Health plane (Waldo) | Consent, ingest and scores wired. Golden-path step partial: ingest fails silently without the iOS permission [reported] | partial | partial | n/a | 21 (16) | The health-log tools check no consent [reported]. #1066's health hold |
@@ -122,14 +124,14 @@ None was verified live when the map was written.
 |---|---|---|
 | Gather context, act, verify, with subagents for isolation ("Building agents with the Claude Agent SDK", 29 Sep 2025) | `delegate_task` sub-agents share a round budget. Effects are verified by reading the ledger back | At the bar |
 | Just-in-time context, tool-result clearing, compaction ("Effective context engineering for AI agents", 29 Sep 2025; the context editing and compaction docs) | **G1:** earlier turns' tool results reach the reply on neither path. Report 04 found this by reading, report 07 re-checked it, and #1079's tests agree. **G2:** three silent history cuts. No compaction and no working set | Below |
-| Fewer, consolidated tools, with tool search above about 10 tools ("Writing effective tools for agents", 11 Sep 2025; "Introducing advanced tool use", 24 Nov 2025) | 49 tools on app turns and 53 on Telegram, every round. 19 allow-listed tools have no handler [reported]. Tool search (ADR-0034) is unbuilt | Below |
+| Fewer, consolidated tools, with tool search above about 10 tools ("Writing effective tools for agents", 11 Sep 2025; "Introducing advanced tool use", 24 Nov 2025) Up to 49 tools on app turns and 53 on Telegram, every round (Google tools only once connected). 19 allow-listed tools have no handler [reported]. Tool search (ADR-0034) is unbuilt | Below |
 | Tool descriptions are true | On the app, the connect tool tells the model a connect button is in the chat, but the app path drops the button [verified: `surfaces/app.ts:17-24`, `tools/live/google.ts:38`] | Below |
 | Containment before supervision: egress allowlists, credentials kept outside the agent ("How we contain Claude across products", 25 May 2026) | Egress allowlist; tokens held in Vault; external-origin taint; built-in tools are not preauthorized | At or above |
 | One permission check on every call (Agent SDK permissions) | A per-turn capability manifest; digest-bound approvals rechecked before dispatch | At or above |
 | Long-running work resumes from a durable log ("Effective harnesses for long-running agents", 26 Nov 2025; "Scaling Managed Agents", 8 Apr 2026) | An interrupted app turn ends `interrupted` and never reruns. The canonical Coordinator and RunLoop sit behind flags that no staging config sets [reported] | Below |
 | Evals built from real failures, with code graders, judges calibrated against humans, and pass^k (report 09, P8) | A 46-case manual runner, judged by the chat model itself (`JUDGE = WALDO_CHAT_MODEL`), driving the Telegram responder only [verified: `packages/runtime/evals/run.ts`]. No CI workflow mentions evals [verified] | Well below |
 
-The pattern is that the authority layer was built to a high bar, while the context and quality layers were not. Tonight's three failures were all continuity bugs on the app path: the 503, the overwrite and the dropped connect button. An app-path eval or journey test could have caught each one [inference].
+The pattern is that the authority layer was built to a high bar, while the context and quality layers were not. Tonight's app-path failures were continuity bugs: two were observed (the 503 and the overwrite), and one was found by reading (the dropped connect button). An app-path eval or journey test could have caught each one [inference].
 
 ## 4. Promises and UX: what's left
 
@@ -171,8 +173,8 @@ The pattern is that the authority layer was built to a high bar, while the conte
 
 ### 4.3 Moves since the map
 
-- **GP-4a** (history loads) and **GP-4b** (send works) move from "deployed, unprobed" to **verified live**, observed at 02:41Z on `889efa27`. GP-4b carries the overwrite defect: #1080 is merged but not deployed.
-- **No WP row moves on that probe alone** [inference]. The chat rows' remaining gaps are threads, quick replies, push and continuity, and the probe touched none of them.
+- **GP-4a** (history loads) and **GP-4b** (send works) move from "deployed, unprobed" to **verified live**, observed at 02:41Z on `889efa27` [reported]. GP-4b carried the overwrite defect, which #1080 fixes; that fix is deployed as of 03:46Z, but no send has been observed on it yet.
+- **No WP row moves.** Every chat-section row (WP-005 to WP-014) is `partial` or `missing`, and none was waiting on a probe.
 - **App #78, #79 and #80 move no status:**
   - #78's zone write does nothing until #1066 deploys [reported];
   - #79 fixes a label;
@@ -211,12 +213,12 @@ These come from report 09, from dated pages fetched 12 Oct.
 
 Ordered by which app cells flip and which promises close soonest.
 
-1. **Deploy #1080.** This needs the owner's go in L1's session.
+1. **Deploy #1080.** Done at 03:46Z (`b72928f0`). Next, one owner-approved send on the new build, read on L1's tail.
 2. **P5 on the app, the smallest flip.**
    - Render the connect affordance in app chat instead of dropping it.
    - Make the tool text true on each surface.
    - Add disconnect.
-   - Owners: an additive L3 contract, L2 runtime, an L4 card.
+   - Owners: an L3 contract, L2 runtime, an L4 card. A new chat part or action kind is a new enum value, so under the app.v1 rule it is a break until L4 re-pins.
 3. **P4 on the app.**
    - Get the owner's ruling on #1066's health hold, then merge it.
    - Arm jobs for app-only owners.
@@ -236,6 +238,7 @@ Ordered by which app cells flip and which promises close soonest.
 ## 6. Evidence
 
 **Spot-checked by the orchestrator at `889efa27`:**
+- **Telegram connect:** `deliverConnectLink` sends a URL button through the channel's `sendMessage` and treats an undefined result as blocked (`telegram-owner-do.ts:1672-1683`). On Telegram that is a real send. On the app, `appCaller` acknowledges it without delivering.
 - **Browser admission** requires `telegram_subject` and resolves the owner through `telegram` (`owner-browser-runtime.ts:49-70`).
 - **App setup arms no background work** (`telegram-owner-do.ts:2024`).
 - **The curated skill capability** is created only inside the Telegram `prepare` hook (`telegram-owner-do.ts:2077`, `:2112`). There are 16 product `SKILL.md` files under `packages/runtime/skills/`.

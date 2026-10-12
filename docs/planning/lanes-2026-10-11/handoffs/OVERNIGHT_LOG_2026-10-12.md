@@ -411,3 +411,18 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
 - Four read-only research agents wrote the inputs, which are committed as `research-2026-10-12/07` to `10`. I spot-checked the key claims at `889efa27`.
 - The 5-hour usage window went from 31% to 54% over the fan-out.
 - Out of scope: `owner-do-smoke.yml` pins four actions by tag, against the security checklist. I offered the owner a separate task chip and did not fix it here.
+
+## 03:49Z: #1080 deployed to staging
+
+- **L1 deployed `cdd906dd`** at 03:46Z, as Worker version `b72928f0`, on the owner's go in L1's session, after push CI went 6/6.
+  - `/healthz` reports `cdd906dd`.
+  - Signed out, `/app/v1/session` and `/app/v1/chat/main` answer 401.
+  - The cron is still registered.
+  - The gate saw 2 files changed from the live build, and no wrangler, migration or contract change. Preflight 55/0.
+  - Rollback: `3f059c04` (`889efa27`). #116: 6117374443 [lane report].
+- No app send has run on the new build yet. A send needs the owner's say-so, and L1 will read the tail.
+- Scorecard updated after an advisor pass:
+  - the 02:41Z observation is labelled [reported];
+  - the counts read 0 of 6 chat-capable pillars on the app and 3 of 6 on Telegram (P7 and P8 have no chat tools);
+  - the Telegram connect path is spot-checked;
+  - build item 2 notes that a new chat part is an enum break until L4 re-pins.

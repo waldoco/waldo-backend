@@ -1,5 +1,11 @@
 # A. What the model can do by natural language, per surface, at `889efa27`
 
+> **Later updates (03:49Z), superseding what follows:**
+> - #1080 was merged as `cdd906dd` at 03:36Z.
+> - L1 deployed it to staging at 03:46Z as Worker `b72928f0`.
+> - The owner's store held one old row [reported by L1 and L2], so the overwrite stopped after the first send.
+> - This replaces the "#1080 is a draft" status and the advice below to keep the account quiet.
+
 Read-only research for the overnight orchestrator, 12 Oct 2026 (pillar assessment, slice A: surfaces).
 
 **Pins**

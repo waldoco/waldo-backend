@@ -1,5 +1,11 @@
 # B. Engine maturity for pillars P1, P2, P3, P4, P6, P7 and P8
 
+> **Later updates (03:49Z), superseding what follows:**
+> - #1080 was merged as `cdd906dd` at 03:36Z.
+> - L1 deployed it to staging at 03:46Z as Worker `b72928f0`.
+> - The owner's store held one old row [reported by L1 and L2], so the overwrite stopped after the first send.
+> - This replaces the "#1080 is a draft" status and the advice below to keep the account quiet.
+
 Read-only research for the overnight orchestrator, 12 Oct 2026. Nothing was edited, run, committed, pushed, posted or deployed. No Waldo endpoint was called. Read-only `gh pr view` calls were made for #1032 (metadata and body, as the brief asked), and also for #1071 and #1080 (metadata only).
 
 ## Pins, shorthand and labels
