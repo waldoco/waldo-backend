@@ -522,3 +522,14 @@ Still open:
   - My context: 70%.
 - **Scorecard:** the W2 probe now notes that with #1076 alone, a deferred chat card may read "no longer available". Reading "put off" also needs L3's `deferred_at` field and L4's re-pin.
 - **Board:** L2's merge-order note for L3's expiry rebase. L3 is still unreachable.
+
+## 04:56Z: L1 corrects the plan on Weight; Form deviates from ADR-0081
+
+- **L1:** Weight is a design decision, not a fix. The scorecard now lists it as E12, asked in L1's session, and it is out of wave 1.
+  - The producer runs in the Worker (`app-api.ts:146`, before any DO forward). Calendar access exists only in the owner DO.
+  - Weight has no ADR, and its weights are drafts.
+  - L1's proposed slice: freebusy busy minutes per local day as counts only, plus physical load from data the producer already reads, with results kept `candidate_unaccepted`. It needs E8, so it can't be verified live today.
+- **E13, found by L4 and verified by L1:** `form.ts` weights differ from accepted ADR-0081. The owner decides whether to align the code or amend the ADR, and who edits `scores/`, which belongs to the Instinct contributor lane.
+- **Other L1 items:**
+  - The deletion-proof script is ready; L1 is asking the owner for a throwaway account.
+  - L1 asked L4 for the two-send re-probe on `cdd906dd`.

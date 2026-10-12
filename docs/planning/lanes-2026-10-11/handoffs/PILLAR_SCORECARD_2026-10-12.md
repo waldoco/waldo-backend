@@ -98,6 +98,14 @@ Each can be asked with AskUserQuestion. The first option is the recommendation.
 
 If you choose E1(a), tell each lane in its own session; a relay from me is not a yes there. L4's brief, for one, requires your yes in L4's session for every app merge.
 
+**Asked in L1's session (about 04:56Z):**
+- **E12, Weight.** It never computes because its demand input has no producer. The producer runs in the Worker, and calendar access exists only in the owner DO. Filling it is a design decision, because Weight has no ADR and its weights are drafts. L1's smallest slice:
+  - freebusy busy minutes per local day over the 30-day window, as counts only, with no titles;
+  - physical load from the workouts and movement the producer already reads;
+  - results stay `candidate_unaccepted`.
+  It needs Google connected (E8), so it can't be verified live today.
+- **E13, Form deviates from accepted ADR-0081.** The code weights five components differently from the ADR. Align the code or amend the ADR, and decide who edits `scores/`, which is the Instinct contributor lane's code and read-only for L1.
+
 Other held items stay in the morning report: session renewal, the 18+ server record, the Brief `latest` DO ALTER, and #1072.
 
 ## B. EoD target
@@ -117,7 +125,7 @@ Each target has a probe in the app Main chat.
 | **P2** Computer use | stays no without E7 | Admission by canonical identity, plus the binding | "What are the opening hours on <url>?" | E7 |
 | **P7** Payments and identity | stays partial | **L4:** the 18+ gate at sign-up (D7) | Sign-up stays blocked until 18+ is ticked | none |
 | **P8** Evals and observability | first step | App-path regression tests in CI for tonight's three failures. The 503 and overwrite tests landed with #1075 and #1080; the connect test lands with its fix | CI shows all three | none |
-| **W1** Health | better | **L1:** the Weight producer's `demand: null` (`producer.ts:95`). **L4:** the ingest permission prompt. **Your** real-iPhone run | "How am I doing today?" answers from fresh readings | real iPhone |
+| **W1** Health | better | **L4:** the ingest permission prompt. **Your** real-iPhone run. Weight is a design decision, not a fix (E12), and can't be verified live today | "How am I doing today?" answers from fresh readings | real iPhone |
 
 ### B.2 Golden path, observed live in the app
 
@@ -140,7 +148,7 @@ Each target has a probe in the app Main chat.
 ## C. Today, by lane
 
 **Deploy waves.** Each needs E1, or your go in L1's session:
-- **Wave 1 at about 10:00Z** (15:30 IST): #1066, the interim connect text, the app branch at `:2417`, expiry on read, and the Weight fix.
+- **Wave 1 at about 10:00Z** (15:30 IST): #1066, the interim connect text, the app branch at `:2417`, and expiry on read.
 - **Wave 2 at about 14:00Z** (19:30 IST): skills on app turns and #1076, plus whichever stretch items (G1, G3, S7) passed the gate.
 
 Then:
@@ -175,7 +183,7 @@ L3's Brief-reader wiring waits until after step 5.
 | **L2** (runtime; critical path) | **Must:** 1. #1066: strip, delta review, merge. 2. The interim connect text, with a test that a dropped app button is never reported as sent. 3. The app branch at `:2417`. **Should:** 4. Skills on app turns. **Stretch:** 5. G1: one composer that carries recent tool results and approval and receipt state into the reply on both paths; #1079's pin flips. 6. G3 (E3). 7. S7 behind a flag (E5, E6). 8. Browser admission (E7) |
 | **L3** (contracts, approvals, Google) | 1. Expiry-on-read PR from the local branch. 2. The reminder-push contract PR (E11). 3. The approval fields A/B/C, if E11. 4. Draft the connect-card and disconnect contracts for tomorrow's re-pin. 5. The Brief `latest` reader, after L2's step 5 |
 | **L4** (app) | 1. The D6 zone row (in progress at 04:15Z). 2. The 18+ gate at sign-up (D7). 3. The chat failure state and retry. 4. The Health permission prompt. 5. Push registration (S7). 6. Threads (C1), once served. 7. Reword #78's dated comment |
-| **L1** (health plane, deploys) | 1. The Weight producer's `demand: null`. 2. Deploy waves 1 and 2. 3. Read the tails during probes and post on #116. 4. The deletion proof with your throwaway account |
+| **L1** (health plane, deploys) | 1. Put E12 and E13 to the owner. 2. Deploy waves 1 and 2. 3. Read the tails during probes and post on #116. 4. The deletion proof with your throwaway account |
 | **Audit** | After wave 2: run the promise probes (Q1–Q10) with the probe account, update the ledger, and send verified rows back |
 | **Orchestrator** | Gate each merge (CI, review, advisor) under E1. Track the waves. Re-score this doc from the probes. Write the evening report |
 | **You** | Decisions E1–E11. The Google consent run, checking the publishing status. The APNs key. Probe say-so. The throwaway account. The real-iPhone run. Suyash's design questions |
