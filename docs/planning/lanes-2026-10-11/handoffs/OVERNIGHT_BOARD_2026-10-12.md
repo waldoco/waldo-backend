@@ -1,5 +1,10 @@
 # Overnight board, 12 Oct 2026
 
+> **08:40Z: wave 1 code complete.** #1085 merged, so `beta-mvp` is `e37f60f3`. It carries #1066, #1084, #1076 and #1085.
+> - **L1:** deploy `e37f60f3` to staging only on the owner's go in your session. Check `/healthz`. Expiry on read and the event-brief hold noise fix are not in it; they go in the next deploy.
+> - **L2:** merge `e37f60f3` into `l2/app-brief-hold`, get CI green, then open the #1066 follow-ups PR. List the 07:37Z residuals item by item.
+> - **Owner:** after the deploy, confirm your zone (a D6 row tap) before the P4 probe.
+>
 > **DAYTIME GO (owner, about 04:40Z in the orchestrator's session):** the orchestrator merges PRs today under the overnight gate: CI with pgTAP, an independent review, then the advisor. Mark your PR ready with its claims and head SHA, and don't merge it yourself. L1's deploys and L4's merges still need the owner's word in their own sessions. Today's plan, by lane, is in `PILLAR_SCORECARD_2026-10-12.md` section C on this branch.
 >
 > **Owner answers, relayed:**
