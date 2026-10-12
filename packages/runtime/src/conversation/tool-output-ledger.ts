@@ -57,6 +57,13 @@ type KeyValueStorage = {
 };
 
 const entryKey = (seq: number) => `toolout:${String(seq).padStart(10, '0')}`;
+// The owner's own turns keep their newest rows apart from everything else, so a busy job never pushes them out.
+const ownersRow = (row: ToolOutputEntry) => row.origin === 'owner';
+// The rows past the newest MAX_KEPT of the new row's kind, oldest first.
+const evicted = (rows: Iterable<[string, ToolOutputEntry]>, added: ToolOutputEntry): string[] => {
+  const kind = [...rows].filter(([, row]) => ownersRow(row) === ownersRow(added)).map(([key]) => key).sort();
+  return kind.slice(0, Math.max(0, kind.length - MAX_KEPT));
+};
 
 const summaryAdmissionSchema: StrictSchema<string> = {
   safeParse(value) {
@@ -118,11 +125,11 @@ const ledgerSourcesFromRows = (topic: string, rows: Iterable<[string, ToolOutput
 };
 
 // Each kept row with what a later turn may read of it; a row that names an approval the desk can't answer for is left out.
-const shownRows = async (storage: KeyValueStorage, options: Readonly<{ proposalState?: ProposalState }>, texts: readonly string[]) => {
+const shownRows = async (storage: KeyValueStorage, options: Readonly<{ proposalState?: ProposalState }>, texts: readonly string[], kept: (row: ToolOutputEntry) => boolean = () => true) => {
   const redact = summaryRedactor(texts, '[forgotten]');
   const rows = await storage.list<ToolOutputEntry>({ prefix: 'toolout:' });
   const entries = [...rows.entries()]
-    .filter(([key]) => key !== 'toolout-count')
+    .filter(([key, row]) => key !== 'toolout-count' && kept(row))
     .sort(([a], [b]) => a.localeCompare(b))
     .slice(-MAX_KEPT);
   // Same guard on read: legacy entries persisted before the write guard existed are evicted
@@ -170,13 +177,17 @@ export const toolOutputLedger = (storage: KeyValueStorage, options: Readonly<{ p
     const row: ToolOutputEntry = { ...entry, summary, ...(link === undefined ? {} : { proposal_ref: link }) };
     const count = (await storage.get<number>('toolout-count')) ?? 0;
     if (scope) {
-      if (!storage.kv) throw new Error('fenced synchronous ledger unavailable');
-      scope.commit(() => { storage.kv!.put(entryKey(count), row); storage.kv!.put('toolout-count', count + 1); if (count + 1 > MAX_KEPT) storage.kv!.delete(entryKey(count - MAX_KEPT)); });
+      const kv = storage.kv;
+      if (!kv?.list) throw new Error('fenced synchronous ledger unavailable');
+      scope.commit(() => {
+        kv.put(entryKey(count), row); kv.put('toolout-count', count + 1);
+        for (const key of evicted(kv.list!<ToolOutputEntry>({ prefix: 'toolout:' }), row)) kv.delete(key);
+      });
       return;
     }
     await storage.put({ [entryKey(count)]: row, 'toolout-count': count + 1 });
-    // Ring: drop the oldest once we exceed the cap.
-    if (count + 1 > MAX_KEPT) await storage.delete([entryKey(count - MAX_KEPT)]);
+    const stale = evicted(await storage.list<ToolOutputEntry>({ prefix: 'toolout:' }), row);
+    if (stale.length) await storage.delete(stale);
   },
   // Verification covers every retained row, not just the six staged fragments.
   async remaining(texts: readonly string[]): Promise<number> {
@@ -200,7 +211,7 @@ export const toolOutputLedger = (storage: KeyValueStorage, options: Readonly<{ p
   // What the owner's own earlier turns' tools returned. Provider text never carries across turns: an external result shows
   // only when it is the desk's state for an approval it proposed.
   async ownerTurnResults(texts: readonly string[] = []): Promise<readonly string[]> {
-    return (await shownRows(storage, options, texts)).filter(({ entry, desk }) => entry.origin === 'owner' && (desk || entry.taint === null)).map(({ text }) => text);
+    return (await shownRows(storage, options, texts, ownersRow)).filter(({ entry, desk }) => desk || entry.taint === null).map(({ text }) => text);
   },
 });
 

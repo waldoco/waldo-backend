@@ -312,3 +312,53 @@ describe('earlier results for the owner\'s turn', () => {
     expect((await ledger.recent())[0]!.source.source_taint).toBe('external');
   });
 });
+
+describe('what the ring keeps', () => {
+  const ID = 'p3e9a1c07';
+  const desk = { proposalState: async (id: string) => (id === ID ? { kind: 'email_send', state: 'done' } : null) };
+  const proposed = JSON.stringify({ ok: true, data: { proposal_id: ID, sent: false } });
+  const LINE = `send_email succeeded: proposed approval ${ID} (email_send). Its current state on the approval desk is done; this replaces what the tool reported when it proposed.`;
+  // The owner DO records inside its run scope, through synchronous storage; the scope commits the write.
+  const fencedStorage = () => {
+    const storage = fakeStorage();
+    return Object.assign(storage, { kv: {
+      put: (k: string, v: unknown) => { storage.data.set(k, v); },
+      delete: (k: string) => storage.data.delete(k),
+      list: <T,>({ prefix }: { prefix: string }) => new Map([...storage.data].filter(([k]) => k.startsWith(prefix)) as [string, T][]),
+    } });
+  };
+  const scope = { commit: (write: () => void) => write() } as never;
+
+  it.each([['awaited', undefined], ['fenced', scope]] as const)('%s: a job\'s results never push out the owner\'s; an approval the owner proposed still shows after six job calls', async (_path, runScope) => {
+    const storage = fencedStorage();
+    const ledger = toolOutputLedger(storage as never, desk);
+    await ledger.record({ tool: 'send_email', ok: true, at: 1000, taint: null, origin: 'owner', summary: proposed }, runScope);
+    for (let i = 0; i < 7; i += 1) await ledger.record({ tool: 'search_episodes', ok: true, at: 1001 + i, taint: null, origin: 'machine', summary: `job ${i}` }, runScope);
+    expect(await ledger.ownerTurnResults()).toEqual([LINE]);
+    expect((await ledger.recent()).map(fragment => fragment.text)).toEqual(['job 1', 'job 2', 'job 3', 'job 4', 'job 5', 'job 6'].map(text => `search_episodes succeeded: ${text}`));
+  });
+
+  it.each([['awaited', undefined], ['fenced', scope]] as const)('%s: each origin keeps its own newest six', async (_path, runScope) => {
+    const storage = fencedStorage();
+    const ledger = toolOutputLedger(storage as never);
+    for (let i = 0; i < 8; i += 1) {
+      await ledger.record({ tool: 'search_episodes', ok: true, at: 2000 + i, taint: null, origin: 'owner', summary: `owner ${i}` }, runScope);
+      await ledger.record({ tool: 'search_episodes', ok: true, at: 3000 + i, taint: null, origin: 'machine', summary: `job ${i}` }, runScope);
+    }
+    const kept = [...storage.data].filter(([key]) => key.startsWith('toolout:')).map(([, row]) => (row as { summary: string }).summary);
+    expect(kept.sort()).toEqual(['job 2', 'job 3', 'job 4', 'job 5', 'job 6', 'job 7', 'owner 2', 'owner 3', 'owner 4', 'owner 5', 'owner 6', 'owner 7']);
+    expect(await ledger.ownerTurnResults()).toEqual(['owner 2', 'owner 3', 'owner 4', 'owner 5', 'owner 6', 'owner 7'].map(text => `search_episodes succeeded: ${text}`));
+  });
+
+  it('counts a row stored before origins were kept with the jobs, never against the owner\'s six', async () => {
+    const storage = fencedStorage();
+    storage.data.set('toolout:0000000000', { tool: 'search_episodes', ok: true, at: 1000, taint: null, summary: 'from before' });
+    storage.data.set('toolout-count', 1);
+    const ledger = toolOutputLedger(storage as never);
+    for (let i = 0; i < 6; i += 1) await ledger.record({ tool: 'search_episodes', ok: true, at: 2000 + i, taint: null, origin: 'owner', summary: `owner ${i}` });
+    expect(storage.data.has('toolout:0000000000')).toBe(true);
+    for (let i = 0; i < 6; i += 1) await ledger.record({ tool: 'search_episodes', ok: true, at: 3000 + i, taint: null, origin: 'machine', summary: `job ${i}` });
+    expect(storage.data.has('toolout:0000000000')).toBe(false);
+    expect(await ledger.ownerTurnResults()).toHaveLength(6);
+  });
+});
