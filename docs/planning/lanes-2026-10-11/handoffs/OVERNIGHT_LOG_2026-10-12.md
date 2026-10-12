@@ -1026,3 +1026,28 @@ Staging `e37f60f3`, version `c7974404`. Codes and times only.
 - **3, PASS.** `tool_connect_service` was ok and resolved by 10:04:07Z, with no link-mint hop.
 - **4, PASS.** `tool_query_calendar` was ok at 10:05:08Z and resolved by 10:05:15Z.
 - **5–8:** pending, as in the probe sheet.
+
+## 10:15Z: #1087 review FAIL (one blocking); L2 has the fix; D11's evidence
+
+- **#1087 (MUST 3) at `53d0f699`**: the independent review says FAIL. I re-read the blocking line myself [verified].
+  - **Blocking: legacy briefs reach the app with the flag off.** With `CALENDAR_GROUNDED_PREP` set to `"0"` (production's value, `wrangler.jsonc:20`; staging is `"1"` at `:84`), a confirmed app owner's `event_briefs` sweep falls through to the legacy branch (`telegram-owner-do.ts:2497-2511`). That branch has no channel check, so the brief goes to the app transcript:
+    - without the final outbox;
+    - send before record (`event-briefs.ts:109-110`);
+    - retried on every sweep;
+    - with the full tool set.
+
+    At the base, `held` and `armable` kept `event_briefs` off the app.
+  - **The fix:** return through `updateCheck` when the channel isn't Telegram, plus a test with the flag at `"0"`.
+  - **Should-fix:**
+    - the stale comment at `:2041`;
+    - an unpinned Telegram feedback keyboard (no test contains `fb:`);
+    - a narrow health-strip oracle (sentinel values needed);
+    - the re-arm test, which lacks the zero-Telegram assertion.
+  - **Everything else passed:** the health strip, honest delivery, unchanged Telegram owners, the three-part app authority check, re-arm once, no app.v1 change and no migrations. CI is green at `53d0f699` (run 38233018531) [reported by the reviewer].
+  - I sent the fix list to L2 and will re-review only the delta, then go to the advisor, then merge. Wave 2 still needs the owner's go in L1's session.
+- **D11 evidence** [reported by L2, in the SHOULD PR body]:
+  - `waldo.owners.do_name` is `not null unique` and minted as `'owner-' || gen_random_uuid()`.
+  - No migration rewrites it; deleting an owner removes the row.
+  - The app principal is `prn_<owner_id>`, resolved by `do_name`.
+
+  So skill inheritance stays within one owner. The schema doesn't stop a future rename. The PR is marked for the owner's merge.
