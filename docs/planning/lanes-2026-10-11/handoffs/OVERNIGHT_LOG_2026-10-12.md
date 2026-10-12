@@ -1562,3 +1562,7 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
 - **LOW follow-up:** `satisfies ReminderBook` wasn't added, so `as unknown as` remains in both fakes.
 - **The deployable tip `87b31948`** is wave 2 plus #1090, #1092 and #1094. #1088 is still open and not in it. The deploy needs the owner's yes in L1's session. D14 holds through this deploy, because the rollback target becomes `02103423`, which lacks the guard.
 - **Asked L1** for probe 6 and probe 8.
+- **16:03Z, #1091** at `b1910118`, built to D16 (option b). CI is running.
+  - Fix 1: explicit tool-to-id map. Fix 3: origin is recorded, owner rows only, fail-closed. D16: real taint, internal rows plus desk state only, no seed, ctx byte-identical. The LOWs are done.
+  - 14 tests red at `10dbfdec`; mutations catch 15/16; the wall passes 51 gates [reported].
+  - The delta review is running (no fan-out, about 25 calls).
