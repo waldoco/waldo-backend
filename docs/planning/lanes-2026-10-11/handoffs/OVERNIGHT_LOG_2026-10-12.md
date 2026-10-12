@@ -1330,3 +1330,16 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
 - **Fixed:** six log headings I had guessed ("12:0xZ" to "12:5xZ") are corrected to their commit times. The 12:5xZ one ran ahead of the clock.
 - **#1090:** the head is still `4a644e06`, with CI 6/6 and CLEAN. L1 hasn't edited the body yet (last update 12:31Z). I merge once the edit lands and the head is unchanged.
 - **Other PRs:** nothing new since 12:30Z, apart from this docs PR.
+
+## 12:44Z: #1090 merged as `2d18e5e5`
+
+- **The merge:** `gh pr merge 1090 --merge --match-head-commit 4a644e06edb71f0a15148b9850dd8142d39c84f0`.
+- **Gate:**
+  - CI passed 6/6 at `4a644e06`, pgTAP included.
+  - An independent review found the code correct and safer than base, and failed only the claim's scope.
+  - The body was edited, with the head unchanged [verified by `git rev-parse`]. It now covers the scope, the reaper exception, and `read(id)`'s blast radius in NOT DONE.
+  - The advisor approved the plan: a body-only edit needs no new review.
+  - CLEAN.
+  - Files: `multiplexer.ts` and a new test.
+  - Not on the hold list.
+- **Not deployed:** staging stays on `614d1aff`. Deploying needs the owner's yes in L1's session. It's worth deploying with L1's fixed-id follow-up, which is L1's top priority, stacked on `4a644e06`.
