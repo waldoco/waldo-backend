@@ -2139,3 +2139,28 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
 - **Test 3 result** (answered by about 20:54Z): it **found the meeting and its Fireflies recap email but could not read the recap body.** Drive had no matching doc. It said honestly that it can't summarise what was discussed or owed.
   - **This is the second mail body tonight it couldn't read**, after test 1's bank alert. The likely cause is that the Gmail read returns only plain-text parts and HTML-only bodies come back empty [inference]. The extraction code wasn't found by a quick grep, so it's for the backend lane to diagnose.
   - **Priority:** this is the top quality-of-life fix for "meeting notes and follow-ups".
+
+## 21:00Z: correction on the unreadable mail, and the split recommendation
+
+- **Correction to my test 1 and test 3 cause:** the HTML fallback already exists [verified at `origin/beta-mvp`].
+  - `connectors/google.ts:330-336` `threadBody` reads text/plain first, then turns text/html into text; the thread fetch uses `format=full` (:522).
+  - So "HTML-only bodies come back empty" was wrong, and so was "a quick grep found no extraction code": I had searched the wrong files.
+  - **Live candidates, all [inference]:**
+    1. A non-empty but useless text/plain part wins, because the HTML fallback runs only when the plain part is empty.
+    2. A large part comes back with `body.attachmentId` and no `body.data`, so the snippet is used. `attachmentId` isn't handled anywhere in `google.ts`.
+    3. The model never called `read_thread`.
+    4. A Fireflies recap may only link to the notes.
+  - The E1 relay replaces only the matched spans, so it's unlikely to be the cause.
+- **Calendar digest risk [verified]:** `calendarPrepDigest` (`event-briefs.ts:34`) spreads `...event`. Any field added to `CalendarItem`, such as the Meet link or attachments, changes every event's digest and could re-send prep notes after deploy. L2 must hash a fixed projection or prove with a test that an unchanged event isn't re-prepped.
+- **Sends (3 since the owner's message):**
+  - L2: mail reading first (red test from the 20:52:49Z turn's tool calls; the calendar Meet link and attachments with the digest guard; Gmail beyond 60), E15 follow-ups after #1100's rename; then the correction above.
+  - L4: correcting my count, there were three turns on its account, not two. I'm making no more turns until after the morning question.
+- **Split recommendation to the owner** [proposed]: the Ansh cloud session is the one backend-runtime writer, with four changes.
+  1. Mail reading goes first, done by L2 locally (connector files, not the owner DO file).
+  2. Deploy order keeps rollback:
+     1. `e93a87c9`.
+     2. #1100's behaviour.
+     3. A Simulator check.
+     4. Only then the `v6` rename, with its own deploy on the owner's yes.
+  3. Queue by value: #1100 → PR B → PR A rest → email-aware prep (after the email-body review) → push → PR C/D → Phase 4. The instruction rewrite comes early, and the Telegram-copy switch stays with L2.
+  4. Cloud guardrails: no deploy, migrations, secrets or merges; at most 2 subagents; every PR goes through the gate.
