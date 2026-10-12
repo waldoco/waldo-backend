@@ -114,8 +114,8 @@ export const applyDayPlan = async (
 export const armDayCards = async (scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number): Promise<boolean> => {
   const day = localIso(now, timezone).slice(0, 10);
   if (book.read(day).length > 0) return false;
-  await applyDayPlan(scheduler, book, timezone, now, defaultPlan(DAY_CARDS));
-  return true;
+  // Nothing seeded (every card unreadable) means nothing to plan, so no plan is asked for on each start.
+  return (await applyDayPlan(scheduler, book, timezone, now, defaultPlan(DAY_CARDS))).length > 0;
 };
 
 export const dayWindow = (now: number, timezone: string): Readonly<{ from: number; to: number }> => {

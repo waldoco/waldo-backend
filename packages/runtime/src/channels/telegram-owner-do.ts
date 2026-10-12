@@ -91,7 +91,7 @@ import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../to
 import { webSearchHandler } from '../tools/live/web-search';
 import { healthLogBook, healthLogHandlers, healthSection } from './health-log';
 import { healthContextBook } from './health-context';
-import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
+import { localIso, localToEpoch, reminderBook, reminderHandlers, unreadableRemindersLine } from './reminders';
 import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
 import { artifactDelivery, artifactPage, artifactReadAdmission, ARTIFACT_PATH } from './artifact-delivery';
 import { artifactExports, exportArtifactHandler, r2ArtifactBinaries } from './artifact-exports';
@@ -1995,7 +1995,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     // those reach the model as the turn's context, which is never stored.
     const healthLogLines = async () => healthSection(await healthLogs.recent(10), clock.timezone);
     const promptLedger = async () =>
-      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), proactivityLine(loops.proactivity()), schedulePreferencesLine(schedPrefs.all())]
+      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), unreadableRemindersLine(book.unreadable()), proactivityLine(loops.proactivity()), schedulePreferencesLine(schedPrefs.all())]
         .filter((section) => section !== '')
         .join('\n\n');
     const ledger = async () => [await promptLedger(), await healthLogLines()].filter((section) => section !== '').join('\n\n');
@@ -2746,6 +2746,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         } else {
           const card = cardFor(id);
           if (card === null) return false;
+          // A card whose row this version cannot read is not changed, so reporting that it was would be false.
+          if (action !== 'card.unpin' && scheduler.lookup(card.id).state === 'unreadable') return false;
           if (action === 'card.unpin') plans.pin(card.id, null);
           else {
             if (!isClock(value)) return false;

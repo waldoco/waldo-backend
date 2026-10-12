@@ -96,4 +96,38 @@ describe('a fixed-id schedule row this Worker cannot read, on an app owner with 
       expect(model.calls).toBeGreaterThan(0);
     });
   });
+
+  type Runtime = Readonly<{ ready: Promise<unknown>; act(action: { action: string; id?: string; value?: string }): Promise<boolean | string>; ledger(): Promise<string> }>;
+  const runtimeOf = (owner: Owner) => (owner as unknown as { setup(channel: string): Runtime }).setup('app');
+
+  it('refuses to pin or set today\'s time for a card whose row cannot be read, and still unpins it', async () => {
+    const name = 'unreadable-card-actions', card = DAY_CARDS[0]!.id;
+    let before: unknown[] = [];
+    await boot(name, sql => { plantReshaped(sql, card, 'brief' as never, Date.now() + 6 * 3_600_000); before = rowOf(sql, card); }, async (owner, state) => {
+      const runtime = runtimeOf(owner);
+      await runtime.ready;
+      expect(await runtime.act({ action: 'card.pin', id: card, value: '08:30' })).toBe(false);
+      expect(await runtime.act({ action: 'card.today', id: card, value: '08:45' })).toBe(false);
+      expect(rowOf(state.storage.sql, card)).toEqual(before);
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM card_pins WHERE card = ?", card).one().n).toBe(0);
+      expect(await runtime.act({ action: 'card.unpin', id: card })).toBe(true);
+    });
+  });
+
+  it('counts reminders it cannot read in the ledger, and leaves the ledger as it was when there are none', async () => {
+    await boot('unreadable-ledger-none', () => undefined, async owner => {
+      const ledger = await runtimeOf(owner).ledger();
+      expect(ledger).not.toContain('more reminder');
+      expect(ledger).not.toContain('\n\n\n');
+    });
+    await boot('unreadable-ledger-one', sql => {
+      sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)');
+      sql.exec("INSERT INTO reminder_notes (id, note, created_at) VALUES ('reminder-unreadable', 'call Sam', ?)", Date.now());
+      plantReshaped(sql, 'reminder-unreadable', 'reminder', Date.now() + 3_600_000);
+    }, async owner => {
+      const ledger = await runtimeOf(owner).ledger();
+      expect(ledger).toContain("1 more reminder was saved in a form this version can't read");
+      expect(ledger).not.toContain('call Sam');
+    });
+  });
 });

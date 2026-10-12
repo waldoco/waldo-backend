@@ -77,7 +77,8 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
     // resets the entry to armed, so a crashed release retry re-arms idempotently; yesterday's
     // held cards are stale and stay as the historical record of the hold.
     const today = localIso(firedAt, deps.timezone).slice(0, 10);
-    const heldCards = deps.releaseHeldCards === false ? [] : deps.plans.heldToday(today);
+    // A held card whose row this version cannot read is left for the version that wrote it.
+    const heldCards = (deps.releaseHeldCards === false ? [] : deps.plans.heldToday(today)).filter(card => deps.scheduler.lookup(card).state !== 'unreadable');
     for (const card of heldCards) {
       await deps.scheduler.schedule({
         id: card, kind: 'brief', payloadRefs: { id: card },

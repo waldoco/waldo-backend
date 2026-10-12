@@ -147,7 +147,9 @@ export class Scheduler {
     const row = this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule WHERE id = ?', id).toArray()[0];
     if (!row) return { state: 'absent' };
     const [entry] = readable([row]).entries;
-    return entry ? { state: 'entry', entry } : { state: 'unreadable' };
+    if (entry) return { state: 'entry', entry };
+    console.log(JSON.stringify({ hop: 'schedule_row_invalid', ok: false, code: 'lookup', count: 1 }));
+    return { state: 'unreadable' };
   }
 
   async cancelReadable(id: string): Promise<void> {

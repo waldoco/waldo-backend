@@ -11,6 +11,8 @@ type Reminder = Readonly<{ id: string; note: string; at: string; repeat: SetRemi
 export type ReminderBook = Readonly<{
   set(args: SetReminderArgs): Promise<Reminder>;
   list(): readonly Reminder[];
+  // Reminders kept in a form this version cannot read: left out of list(), but they still exist.
+  unreadable(): number;
   cancel(id: string): Promise<boolean>;
   cancelAll(): Promise<number>;
   note(id: string): string | null;
@@ -54,6 +56,10 @@ export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: Owner
       return sql.exec<{ id: string; note: string; due_at: number; recurrence_json: string | null }>(
         "SELECT s.id, n.note, s.due_at, s.recurrence_json FROM schedule s JOIN reminder_notes n ON n.id = s.id WHERE s.kind = 'reminder' ORDER BY s.due_at",
       ).toArray().filter(row => scheduler.lookup(row.id).state === 'entry').map(toReminder);
+    },
+    unreadable() {
+      return sql.exec<{ id: string }>("SELECT s.id FROM schedule s JOIN reminder_notes n ON n.id = s.id WHERE s.kind = 'reminder'")
+        .toArray().filter(row => scheduler.lookup(row.id).state === 'unreadable').length;
     },
     async cancel(id) {
       const known = scheduler.read(id)?.kind === 'reminder';
@@ -99,6 +105,10 @@ export const nextAfter = (due: number, now: number) => (due > now ? due : due + 
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 
+// '' when every reminder can be read, so the ledger reads exactly as before.
+export const unreadableRemindersLine = (count: number): string =>
+  count === 0 ? '' : `${count} more reminder${count === 1 ? ' was' : 's were'} saved in a form this version can't read; they are kept, but this version can't show or change them.`;
+
 export const reminderHandlers = (book: ReminderBook) => [
   {
     name: 'set_reminder',
@@ -122,9 +132,10 @@ export const reminderHandlers = (book: ReminderBook) => [
     trigger_allowlist: allowlist('list_reminders'),
     autonomy_gated: false,
     async handle() {
-      return { ok: true, data: { reminders: book.list() }, source_taint: null };
+      const unreadable = book.unreadable();
+      return { ok: true, data: { reminders: book.list(), ...(unreadable > 0 ? { unreadable } : {}) }, source_taint: null };
     },
-  } satisfies ToolHandler<ListRemindersArgs, { reminders: readonly Reminder[] }, ToolDispatcherContext>,
+  } satisfies ToolHandler<ListRemindersArgs, { reminders: readonly Reminder[]; unreadable?: number }, ToolDispatcherContext>,
   {
     name: 'cancel_reminder',
     description: "Cancel one reminder by id, or all of the owner's reminders with all: true.",
