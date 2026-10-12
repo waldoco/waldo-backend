@@ -1127,3 +1127,5 @@ Staging `e37f60f3`, version `c7974404`. Codes and times only.
 - **Lanes:**
   - L4 had committed movement minutes locally (`a5f26f16`, 660 tests passed) and asked the owner about probe 5's 4 pm window; that question was interrupted. Probe 5 needs a new time.
   - L2 is idle after the limit; it was told #1087's state, to mark #1088 ready when green, and to pace itself.
+
+- **11:39Z, L4:** movement minutes is committed locally as `a5f26f16`, not pushed. `check` passes, and tests pass 660, with 1 skipped. Two fixes since: the one-time 30-day re-send now waits for iOS's Exercise Minutes prompt, and the keychain keeps the watermark version. Still to do before a PR: deliberate faults, a native build, and Simulator proof. My steer: a kind that fails is skipped and recorded, never stops the range. Probe 5 waits for a new time from the owner; L4's 10:27Z question went unanswered.
