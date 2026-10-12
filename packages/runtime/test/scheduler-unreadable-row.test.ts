@@ -8,9 +8,9 @@ import { heartbeatTick, HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { loopBook } from '../src/channels/loops';
 import { reminderBook, reminderHandlers, unreadableRemindersLine } from '../src/channels/reminders';
 import { applySchedulePreferences, reconcileSchedulePreferences } from '../src/channels/schedule-preferences';
-import { standingOrderBook } from '../src/channels/standing-orders';
+import { standingOrderBook, standingOrderHandlers, standingOrdersPrompt } from '../src/channels/standing-orders';
 import { DAY_CARDS } from '../src/prompt/day-cards';
-import { Scheduler } from '../src/scheduler/multiplexer';
+import { Scheduler, UnreadableScheduleRowError } from '../src/scheduler/multiplexer';
 import type { Deps } from '../src/seams/deps';
 
 let seq = 0;
@@ -98,6 +98,8 @@ describe('reading one id whose row this Worker cannot read', () => {
       expect(rowsLike(state.storage.sql, 'unreadable-')).toEqual(before);
       expect(scheduler.lookup('valid').state).toBe('absent');
       expect(JSON.stringify(log.mock.calls)).not.toContain('unreadable-row');
+      // read(id) still refuses, with an error a caller can tell apart from a passing fault.
+      expect(() => scheduler.read('unreadable-row')).toThrow(UnreadableScheduleRowError);
     });
   });
 
@@ -181,7 +183,18 @@ describe('reading one id whose row this Worker cannot read', () => {
       const orders = standingOrderBook(sql, scheduler, clock, () => 'order-1');
       sql.exec("INSERT INTO standing_orders (id, scope, trigger, at, gate, escalation, created_at) VALUES ('order-1', 'tidy the inbox', 'daily', '09:00', 'confirm_first', 'none', ?)", now);
       plantUnknownKind(sql, 'order-1', now + 60 * MINUTE, 'standing_order', RESHAPED);
-      expect(orders.list().map(order => [order.id, order.cron])).toEqual([['order-1', undefined]]);
+      expect(orders.list().map(order => [order.id, order.cron, order.schedule_unreadable])).toEqual([['order-1', undefined, true]]);
+      sql.exec("INSERT INTO standing_orders (id, scope, trigger, at, gate, escalation, created_at) VALUES ('order-cron', 'weekly review', 'cron', NULL, 'confirm_first', 'none', ?)", now + 1);
+      plantUnknownKind(sql, 'order-cron', now + 60 * MINUTE, 'standing_order', RESHAPED);
+      const prompt = standingOrdersPrompt(orders);
+      expect(prompt).toContain("runs cron on a schedule stored in a form this version can't read");
+      expect(prompt).not.toContain('at null');
+      // Cancelling one can never succeed here, so it is refused as final, not as a passing fault, and nothing changes.
+      const orderRows = () => sql.exec("SELECT * FROM standing_orders WHERE id = 'order-1'").toArray();
+      const ordersBefore = [orderRows(), rowsLike(sql, 'order-1')];
+      const cancelOrder = standingOrderHandlers(orders).find(handler => handler.name === 'cancel_standing_order')!;
+      expect(await (cancelOrder as unknown as { handle: (args: { id: string }) => Promise<unknown> }).handle({ id: 'order-1' })).toMatchObject({ ok: false, code: 'rejected' });
+      expect([orderRows(), rowsLike(sql, 'order-1')]).toEqual(ordersBefore);
       const reminders = reminderBook(sql, scheduler, clock, () => 'unused');
       for (const id of ['reminder-unreadable', 'reminder-readable']) sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', id, 'call Sam', now);
       plantUnknownKind(sql, 'reminder-unreadable', now + 30 * MINUTE, 'reminder', RESHAPED);
@@ -191,6 +204,11 @@ describe('reading one id whose row this Worker cannot read', () => {
       expect(reminders.unreadable()).toBe(1);
       const listTool = reminderHandlers(reminders).find(handler => handler.name === 'list_reminders')!;
       expect(await (listTool as unknown as { handle: () => Promise<unknown> }).handle()).toMatchObject({ ok: true, data: { reminders: [{ id: 'reminder-readable' }], unreadable: 1 } });
+      const cancelReminder = reminderHandlers(reminders).find(handler => handler.name === 'cancel_reminder')!;
+      const reminderRows = () => [sql.exec("SELECT * FROM reminder_notes WHERE id = 'reminder-unreadable'").toArray(), rowsLike(sql, 'reminder-unreadable')];
+      const remindersBefore = reminderRows();
+      expect(await (cancelReminder as unknown as { handle: (args: { id: string }) => Promise<unknown> }).handle({ id: 'reminder-unreadable' })).toMatchObject({ ok: false, code: 'rejected' });
+      expect(reminderRows()).toEqual(remindersBefore);
       expect(unreadableRemindersLine(0)).toBe('');
       expect(unreadableRemindersLine(2)).toContain('2 more reminders');
     });

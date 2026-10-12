@@ -2746,8 +2746,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         } else {
           const card = cardFor(id);
           if (card === null) return false;
-          // A card whose row this version cannot read is not changed, so reporting that it was would be false.
-          if (action !== 'card.unpin' && scheduler.lookup(card.id).state === 'unreadable') return false;
+          // A card whose row this version cannot read is not changed, and the owner is told why.
+          if (scheduler.lookup(card.id).state === 'unreadable') return 'card.unreadable.failed';
           if (action === 'card.unpin') plans.pin(card.id, null);
           else {
             if (!isClock(value)) return false;

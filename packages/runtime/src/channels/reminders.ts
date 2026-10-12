@@ -2,7 +2,7 @@ import {
   cancelReminderArgsSchema, listRemindersArgsSchema, setReminderArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ScheduleRecurrence, type CancelReminderArgs, type ListRemindersArgs, type ScheduleEntry, type SetReminderArgs, type ToolHandler, type ToolName,
 } from '@waldo/contracts';
-import { nextOccurrence, type Scheduler } from '../scheduler/multiplexer';
+import { nextOccurrence, UnreadableScheduleRowError, type Scheduler } from '../scheduler/multiplexer';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { OwnerClock } from '../tools/live/get-context';
 
@@ -107,7 +107,7 @@ const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger)
 
 // '' when every reminder can be read, so the ledger reads exactly as before.
 export const unreadableRemindersLine = (count: number): string =>
-  count === 0 ? '' : `${count} more reminder${count === 1 ? ' was' : 's were'} saved in a form this version can't read; they are kept, but this version can't show or change them.`;
+  count === 0 ? '' : `${count} more reminder${count === 1 ? ' was' : 's were'} saved in a form this version can't read. They are kept, and this version can't show or change them one by one; cancelling all reminders removes them too.`;
 
 export const reminderHandlers = (book: ReminderBook) => [
   {
@@ -146,7 +146,13 @@ export const reminderHandlers = (book: ReminderBook) => [
     async handle({ id, all }) {
       if (all === true) return { ok: true, data: { cancelled: await book.cancelAll() }, source_taint: null };
       if (id === undefined) return { ok: false, code: 'invalid_args', error: 'Supply a reminder id or all: true.' };
-      return { ok: true, data: { id, cancelled: await book.cancel(id) }, source_taint: null };
+      try {
+        return { ok: true, data: { id, cancelled: await book.cancel(id) }, source_taint: null };
+      } catch (error) {
+        // Retrying cannot help: nothing was cancelled, and this version will never read the row.
+        if (error instanceof UnreadableScheduleRowError) return { ok: false, code: 'rejected', error: "That reminder is stored in a form this version can't read, so it can't be cancelled here. Nothing was changed." };
+        throw error;
+      }
     },
   } satisfies ToolHandler<CancelReminderArgs, { id: string; cancelled: boolean } | { cancelled: number }, ToolDispatcherContext>,
 ];
