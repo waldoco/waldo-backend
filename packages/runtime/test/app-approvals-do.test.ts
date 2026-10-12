@@ -81,7 +81,7 @@ it('approves from the app with exactly one effect, refuses a stale digest, and r
       const history = appHistoryResultV1Schema.parse(await (await app('/chat/main', undefined, credential)).json());
       const reply = history.messages.find(message => message.role === 'assistant' && message.parent_id === sent.message_id)!;
       const part = reply.parts.find(candidate => candidate.type === 'approval') as Extract<(typeof reply.parts)[number], { type: 'approval' }>;
-      expect(part).toMatchObject({ kind: 'calendar_change', actions: ['approve', 'edit', 'skip'] });
+      expect(part).toMatchObject({ kind: 'calendar_change', actions: ['approve', 'edit', 'skip', 'defer'] });
       expect(part.review).toContain('Design review');
       const [moving] = await list(credential, '?state=open');
       expect(moving).toMatchObject({ approval_id: part.approval_id, state: 'open', presented_surfaces: ['app'], payload_digest: part.payload_digest, exact: { changes: { action: 'move', title: 'Design review', start, end } } });

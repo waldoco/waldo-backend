@@ -9,9 +9,9 @@ export type AppApprovalsHost = Readonly<{
   desk: Pick<ApprovalDesk, 'approvals' | 'decide'>;
 }>;
 const reply = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'private, no-store' } });
-const LETTER = { approve: 'a', skip: 's', edit: 'e', undo: 'u' } as const;
+const LETTER = { approve: 'a', skip: 's', edit: 'e', undo: 'u', defer: 'd' } as const;
 // A decision is recorded only when the row moved to the state that decision produces.
-const TARGET = { approve: 'done', skip: 'skipped', edit: 'edit_requested', undo: 'undone' } as const satisfies Readonly<Record<keyof typeof LETTER, AppApprovalStateV1>>;
+const TARGET = { approve: 'done', skip: 'skipped', edit: 'edit_requested', undo: 'undone' } as const satisfies Readonly<Record<Exclude<keyof typeof LETTER, 'defer'>, AppApprovalStateV1>>;
 
 // Caller serializes this inside the authenticated owner DO and has checked the session row.
 export async function appApprovalsRequest(request: Request, host: AppApprovalsHost): Promise<Response> {
@@ -42,15 +42,16 @@ export async function appApprovalsRequest(request: Request, host: AppApprovalsHo
   const book = await loadReceiptBook(host.storage, host.sessions), prior = book[key];
   if (prior) return prior.fingerprint === fingerprint ? reply(result(prior.receipt, (prior.approval_state ?? item.state) as AppApprovalStateV1, true), prior.status) : reply({ error: 'request_reused', code: 'request_reused' }, 409);
   if (receiptCapacityReached(book, session)) return reply({ error: 'receipt_capacity', code: 'receipt_capacity', message: 'This session has reached its change limit. Sign in again after this session expires; existing receipts remain available.' }, 429);
-  // The desk has no defer path yet, so it never offers defer and Not now is refused like any decision it does not offer.
-  if (action === 'defer' || !item.actions.includes(action)) return reply({ error: 'no_longer_eligible', code: 'no_longer_eligible', message: 'This decision is no longer available. Refresh the approvals.' }, 409);
+  if (!item.actions.includes(action)) return reply({ error: 'no_longer_eligible', code: 'no_longer_eligible', message: 'This decision is no longer available. Refresh the approvals.' }, 409);
   const pending: ControlReceipt = { state: 'unconfirmed', message: 'The outcome is not confirmed. Refresh the approvals before deciding again.' };
   book[key] = { fingerprint, status: 503, receipt: pending, expires: host.expires, approval_state: 'outcome_unknown' }; await host.storage.put(RECEIPT_BOOK_KEY, book);
   let receipt = pending, status = 503, state: AppApprovalStateV1 = 'outcome_unknown';
   try {
     const out = await host.desk.decide(id, LETTER[action], 'app:approval', { surface: 'app' });
     state = (await listed({ id }))[0]?.state ?? 'outcome_unknown';
-    receipt = approvalControlReceipt(out, state === TARGET[action] && item.state !== state ? 'recorded' : state === 'outcome_unknown' ? 'unconfirmed' : 'rejected');
+    // Not now leaves the row where it was, so the desk's own answer proves it, alongside the unchanged state.
+    const moved = action === 'defer' ? out.toast === 'Later' && state === item.state : state === TARGET[action] && item.state !== state;
+    receipt = approvalControlReceipt(out, moved ? 'recorded' : state === 'outcome_unknown' ? 'unconfirmed' : 'rejected');
     status = receipt.state === 'recorded' ? 200 : receipt.state === 'unconfirmed' ? 503 : 409;
   } catch { console.error('app approval decision outcome unconfirmed'); }
   book[key] = { fingerprint, status, receipt, expires: host.expires, approval_state: state }; await host.storage.put(RECEIPT_BOOK_KEY, book);
