@@ -926,3 +926,17 @@ Still open:
 - **P4 probe fix:** app chat can't move a day card. Card times are console-only, and `set_schedule_preference` only toggles behaviors [verified at `e4ef5b59`]. The probe now waits for The Close at its default 21:30 local, which is 16:00Z on IST and inside the window [inference from the `DAY_CARDS` defaults]. The zone must be confirmed before 16:00Z. The page (pillars P4, notes y1) and B.1 are updated, and L1 has the new steps.
 - **The page's runs document doesn't exist**, so nothing threw or is mis-marked [inference: the owner had the page open with 0 failed sources].
 - **From now on**, page updates are batched at the wave 2 deploy and the 17:00Z re-score, unless something on the page is wrong.
+
+## 09:38Z: heartbeat; owner named a Telegram-linked test account; L1's movement finding
+
+- **Checks:**
+  - The heartbeat cron `29a6d33d` is present.
+  - Context is at 86%, so cycles stay lean. The 5-hour window is at 52% and resets at 11:30Z.
+  - `beta-mvp` is `e4ef5b59`; staging serves `e37f60f3` [verified].
+  - Open PRs: #1083 (Form v2, waits on brain #34/#37 and the owner), #1081 and #1082 (the CI pin PRs from the owner's separate task; not mine to merge), #1077 (this docs PR, UNSTABLE).
+  - #116 since 09:00Z: L4's D7 note and L2's #1086 line.
+- **Owner instruction:** use an existing test account for the probes; the owner says it's linked to Telegram. The address went to L1 only and is kept out of the repo and the page.
+  - On that account, P4 is proven in the app through reminders, and day cards (The Close at 16:00Z on IST) arrive on Telegram.
+  - A day card in the app needs an app-only account, or E15 tomorrow.
+  - The page (y1, `w_zone`, P4 probe, E14) and the scorecard (B.1 P4, E14) are updated.
+- **L1 finding** [reported]: the app at `72eae07a` never sends `movement_duration`. On real data, Form's motion and stress parts can't compute (#1083's stress included), and Weight's physical load comes only from workouts. The fix is app-side, with L4 and the owner; L1 has flagged it to both. It's added to W1 on the page.
