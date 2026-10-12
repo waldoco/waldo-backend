@@ -400,3 +400,14 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - CI 6/6 at `f17be611`, pgTAP included. The checks were unchanged after `gh pr ready`. `CLEAN`.
   - Advisor consulted before the merge.
 - `beta-mvp` is now `cdd906dd`. Staging is still `889efa27`. **The deploy needs the owner's go in L1's session**; a relay from me does not authorize L1.
+
+## 04:00Z: pillar scorecard (owner's question)
+
+- The owner asked how many of the eight agent-product pillars work by natural language in the app and on Telegram, whether they meet the industry standard, and how much of the promise and UX is left to build.
+- Answer in [PILLAR_SCORECARD_2026-10-12.md](PILLAR_SCORECARD_2026-10-12.md).
+  - Under the strict three-test bar, read at `889efa27`: the app passes 0 of 8, Telegram 3 of 8.
+  - The authority and safety layer meets the industry bar or beats it. Context, continuity and proactivity fall below it, and evals fall well below.
+  - Of the 120 promises, about 76 need code, 20 copy, 12 owner or ops, and 12 only a probe.
+- Four read-only research agents wrote the inputs, which are committed as `research-2026-10-12/07` to `10`. I spot-checked the key claims at `889efa27`.
+- The 5-hour usage window went from 31% to 54% over the fan-out.
+- Out of scope: `owner-do-smoke.yml` pins four actions by tag, against the security checklist. I offered the owner a separate task chip and did not fix it here.

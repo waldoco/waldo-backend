@@ -1,0 +1,166 @@
+id	source	primary	secondary	status_as_written	closes_by	note
+WP-001	map	P5	P3	partial	build	First-run onboarding gap could also sit under P7
+WP-002	map	P7		merged, not deployed	probe	Caveats: invite-only by ruling; 12 h session, no refresh
+WP-003	map	P5	P6	partial	build	
+WP-004	map	P5	W2	merged, not deployed	probe	Drawn "Connect Oura?" prompt has no code
+WP-005	map	P6	P4	partial	build	Send also needs its probe (GP 4b)
+WP-006	map	P6		missing	build	
+WP-007	map	P6	P4	partial	build	
+WP-008	map	P6		missing	build	
+WP-009	map	P6		missing	build	
+WP-010	map	P6	W2	partial	build	
+WP-011	map	P6	P3	partial	build	Ratings could also be P3 learning or P8 feedback
+WP-012	map	P6	W2	partial	build	Answer provenance; P8 or W2 also defensible
+WP-013	map	P6		partial	build	
+WP-014	map	P6		partial	build	
+WP-015	map	P3	W3	partial	owner-ops	Owner sets memory-controls scope; then build list, correct, forget
+WP-016	map	P3	P6	partial	build	
+WP-017	map	P3	W1	partial	build	
+WP-018	map	P3		partial	build	Weak promise (ledger §6c); copy change also possible
+WP-019	map	P3	W1	missing	build	Inputs span health, device and desktop; filed under Spots
+WP-020	map	P3		copy decision	copy	
+WP-021	map	P3		partial	build	
+WP-022	map	W1	W3	missing	build	Record may be broader than health; retention limits reach
+WP-023	map	P4	W2	partial	build	#1066 held (review fixes, O10); needs a first chat
+WP-024	map	P4	P6	missing	build	Day-plan record's DO ALTER is held
+WP-025	map	P4	W2	missing	build	
+WP-026	map	P4	W2	missing	build	Day moment; needs calendar grant and sharpest-hours signal
+WP-027	map	P4	P6	partial	build	
+WP-028	map	P4	W2	partial	build	
+WP-029	map	P4		partial	build	
+WP-030	map	P4	W2	missing	build	
+WP-031	map	P4		missing	owner-ops	Suyash designs it first; then build key, card, switch
+WP-032	map	P4	W2	partial	build	
+WP-033	map	P4	W2	missing	build	
+WP-034	map	W1	P4	missing	build	Site says Coming next, scenes show it; P3 also defensible
+WP-035	map	P4	P5	copy decision	copy	Then build interruption judgment (#915 K)
+WP-036	map	P4		partial	build	
+WP-037	map	P1	P6	partial	build	App delivery also untested
+WP-038	map	W1	P4	missing	owner-ops	D19 scope and grant first; then build health nudges
+WP-039	map	P4		partial	build	
+WP-040	map	P4		partial	build	
+WP-041	map	P4		partial	build	Standing orders on the app also need a probe
+WP-042	map	P4	P5	missing	owner-ops	Owner scope first; then build presets; O6 redraws 8 routines
+WP-043	map	P4	W1	missing	copy	Ledger proposes dropping the scene; else build a battery signal
+WP-044	map	W2		partial	build	Not now waits on #1076 and O11
+WP-045	map	W2	P5	merged, not deployed	probe	
+WP-046	map	W2		missing	build	
+WP-047	map	W2		missing	build	
+WP-048	map	W2		partial	build	
+WP-049	map	W2		copy decision	copy	O4 also extends undo to task changes (build)
+WP-050	map	P2	P7	missing	build	Spend limits first (ruling 14); no browser binding on staging
+WP-051	map	P6	W2	missing	build	
+WP-052	map	P5		deployed, unprobed	probe	Build gaps: archive, labels, attachments; app mail follow-ups
+WP-053	map	P4	P5	copy decision	copy	Gmail row filed with WP-035 under interruption judgment
+WP-054	map	P5	W3	open PR	copy	
+WP-055	map	P5	W3	open PR	copy	
+WP-056	map	P5		merged, not deployed	probe	One consent asks Calendar, Mail and Tasks together
+WP-057	map	P5		copy decision	copy	Multi-account fan-out is unbuilt either way
+WP-058	map	P5	P4	partial	build	
+WP-059	map	P5	W2	partial	build	
+WP-060	map	P5		copy decision	copy	O2 recommends a scope change (build) to keep the copy
+WP-061	map	P5	W2	missing	build	Weather tool plus autonomous moves; W1 planning also defensible
+WP-062	map	P5		missing	owner-ops	Owner decides scope first; then build an Outlook connector
+WP-063	map	P5	W1	partial	build	
+WP-064	map	P5	W1	partial	build	Day-design row (DD-8); P4 or W1 also defensible
+WP-065	map	P5		missing	build	Lane names owner scope; Gap text is empty
+WP-066	map	W1		partial	build	
+WP-067	map	W1		partial	build	O13 decides whether Android is in the launch
+WP-068	map	W1		partial	build	O13 decides whether Android is in the launch
+WP-069	map	W1		copy decision	copy	O5 recommends building four wearables; relabel meanwhile
+WP-070	map	P5		missing	build	
+WP-071	map	P5		missing	build	Backend seam has no owner yet
+WP-072	map	P5	P8	copy decision	copy	Coverage claim; P8 also defensible
+WP-073	map	P5		missing	build	Roadmap count with no lane; copy change also possible
+WP-074	map	P5		partial	build	Also Drive copy fix; production flag is the owner's
+WP-075	map	P5	P4	partial	build	WALDO_EVENT_SOURCES var unset; app-only owners get nothing
+WP-076	map	P5		partial	build	Telegram label needs copy (O6)
+WP-077	map	P5	W3	deployed, unprobed	probe	Website form only; privacy page omits the form
+WP-078	map	P5		copy decision	copy	
+WP-079	map	P5		missing	build	
+WP-080	map	W1		merged, not deployed	probe	C1 silent break and foreground-only upload are build gaps
+WP-081	map	W1		partial	build	
+WP-082	map	W1	P5	partial	build	
+WP-083	map	W1		partial	build	
+WP-084	map	W1	P4	partial	build	
+WP-085	map	W1		partial	build	
+WP-086	map	W1	P5	partial	build	
+WP-087	map	W1		missing	build	
+WP-088	map	W1		merged, not deployed	owner-ops	Physical iPhone run; app sends 30 of 90 days (build)
+WP-089	map	W1		missing	build	
+WP-090	map	W1		partial	build	
+WP-091	map	W1		partial	build	Weak promise; copy change also possible
+WP-092	map	W1	P8	deployed, unprobed	probe	No named probe; proof needs reply evals
+WP-093	map	W1		partial	build	WHOOP scene has no code; owner's model_processing consent off
+WP-094	map	W3		partial	build	Q10 deletion probe also pending (O3)
+WP-095	map	W3	P5	missing	build	
+WP-096	map	W2		merged, not deployed	probe	
+WP-097	map	W3		copy decision	owner-ops	Legal: the final privacy policy (O8)
+WP-098	map	W3		copy decision	copy	Legal disclosure (O8); owner-ops also defensible
+WP-099	map	W2	W3	partial	build	Weak promise in privacy section; filed under activity log
+WP-100	map	P5	W2	partial	build	Revoke access; W3 also defensible
+WP-101	map	W3	P5	copy decision	owner-ops	Legal: published policy for restricted Google scopes (O8)
+WP-102	map	W3	P7	copy decision	owner-ops	Legal: final terms, or amend the line (O8)
+WP-103	map	W3		copy decision	owner-ops	Support address; W3 via legal-pages bundle (O8), X possible
+WP-104	map	W3	W2	copy decision	copy	
+WP-105	map	W3		deployed, unprobed	probe	
+WP-106	map	W3		deployed, unprobed	probe	
+WP-107	map	P6		open PR	copy	
+WP-108	map	P6		copy decision	copy	Suyash illustration redraw follows (O6)
+WP-109	map	P6	P7	partial	build	
+WP-110	map	P6		partial	build	
+WP-111	map	P6	P2	missing	build	
+WP-112	map	X	P7	copy decision	copy	
+WP-113	map	P6	P4	missing	owner-ops	Wake-time rule open (O9); then routes, sender, APNs key
+WP-114	map	P6	P4	copy decision	copy	
+WP-115	map	X	P7	copy decision	copy	Keeping the line needs waitlist order recorded (O7)
+WP-116	map	X	P7	copy decision	copy	
+WP-117	map	P6	W1	missing	build	Platform availability; X also defensible; O13 decides scope
+WP-118	map	X	P7	copy decision	owner-ops	Owner confirms (O7); holds today, no billing code
+WP-119	map	P5	P1	missing	build	Agent supervision; P1 also defensible
+WP-120	map	X		deployed, unprobed	probe	
+GP-1a	golden	P7		merged, not deployed	probe	Build gaps: 12 h session, no refresh; no first-run flow
+GP-1b	golden	P7	P5	missing	build	
+GP-1c	golden	P7		missing	build	
+GP-2	golden	P5		merged, not deployed	probe	Build gaps: app connected notice, disconnect, read/write split
+GP-3	golden	W1		partial	build	
+GP-4a	golden	P6		deployed, unprobed	probe	503 failure UX (no retry) is an app build gap
+GP-4b	golden	P6		deployed, unprobed	probe	
+GP-5a	golden	W2		merged, not deployed	probe	Build gaps: Change it composer, approval push
+GP-5b	golden	W2		open PR	owner-ops	O11 rulings; then merge #1076, deploy, probe
+GP-6	golden	P4	P6	deployed, unprobed	probe	Build gaps: app_subject, push, live refresh, quiet hours
+GP-7	golden	P6	P3	missing	build	
+GP-8	golden	P4	P6	partial	build	#1066 also needs the O10 health ruling
+GP-9	golden	P6	P4	missing	owner-ops	APNs key first; then device routes, sender, app side
+GP-10	golden	W3	P7	partial	build	Q10 probe pending; console delete copy overclaims
+DS-G1	design	X		partial	owner-ops	Suyash reviews #35 first; then app copies exports
+DS-G2	design	X		needs Suyash	copy	Owner kept Patrol and Spots; Suyash decides naming
+DS-G3	design	X		partial	build	
+DS-G4	design	X		open	build	
+DS-G5	design	W1		open	build	Recovery and Weight gauge design waits on Suyash
+DS-G6	design	X		partial	build	
+DS-G7	design	P4		partial	build	Time display; touches approvals and health screens
+DS-G8	design	P6		open	build	
+DS-G9	design	P6		partial	build	
+DS-G10	design	W2		partial	build	
+DS-G11	design	W2		open	build	
+DS-G12	design	P6		open	build	
+DS-G13	design	P6	P4	open	build	Backend device routes first; APNs key per GP-9
+DS-G14	design	P6		open	build	
+DS-G15	design	P6		open	build	
+DS-G16	design	P3		open	build	
+DS-G17	design	P6		open	build	App-state UX; X also defensible
+DS-G18	design	X		open	build	Mottle and DM Mono need assets and a licence check
+DS-G19	design	X		open	build	
+DS-G20	design	X		partial	build	
+DS-G21	design	P6		open	build	
+DS-G22	design	X		partial	build	
+DS-S1	design	X		Still open	copy	
+DS-S2	design	W1		Still open	owner-ops	
+DS-S3	design	P6	P4	Still open	owner-ops	
+DS-S4	design	P4		Still open	copy	Design-system text lags the owner's zone ruling
+DS-S5	design	W3	P6	Open	copy	
+DS-S6	design	P6	P3	Open	owner-ops	Suyash designs the component; contract and build follow
+DS-S7	design	W2		Nothing is needed from Suyash beyond review	owner-ops	Only Suyash's review remains; app layout is DS-G10
+DS-S8	design	P6	P4	Open	owner-ops	Reminder push policy; P4 also defensible
+DS-S9	design	X		Open, with no review decision	owner-ops	
