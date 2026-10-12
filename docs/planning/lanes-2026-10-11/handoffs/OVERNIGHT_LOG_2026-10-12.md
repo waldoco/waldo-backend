@@ -1232,3 +1232,16 @@ No second sweep for now, because the usage window has to last through wave 2 and
   - The alternative is to land E15 (both surfaces on `principal_ref`) first.
 - **Owner:** don't merge #1088 at `0e2557c3`.
 - **Queued for L2** (message cap): this finding, plus the G1 slot message from 11:59Z.
+
+## 12:2xZ: owner on skills and just-in-time loading
+
+- **The owner, verbatim:** "all skills should be there what's problem we have around 27..." and "like JIT skills, tool ,memeory loading".
+- **Answer:**
+  - The code has 16 reviewed skills: `bundled-text.ts` at `614d1aff`, generated from `skills/*/SKILL.md` [verified]. #1088's transition bug would hide all 16 after a later Telegram link, and the fix keeps every skill on both surfaces.
+  - The 27 are the website's profession-preset routines (WP-042, missing). That is a separate promise.
+- **Just-in-time loading:**
+  - Skills already load just in time: `skills_list` returns metadata, then `skills_load` returns one skill's instructions (`curated-host.ts:41-45`) [verified].
+  - Tools don't: there's no tool search or deferred loading in the runtime [verified by grep].
+  - Memory is a working set plus on-demand search [inference].
+- **Roadmap:** just-in-time tool loading is added to §5 for after the app musts, with a tool-choice eval.
+- **The cap has reset.** L2 got the G1 slot and the #1088 finding in one message, queued.

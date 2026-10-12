@@ -393,6 +393,7 @@ The dates are estimates. The gate column names what holds each item.
 |---|---|---|---|
 | 13–14 Oct | P4 / P6 | App-first routing: proactive messages (day cards, prep, update cards, follow-ups) go to the app for anyone who uses it, with Telegram as a dev copy (E15) | L2's slice after MUST 3, with its own tests |
 | Next, alongside iOS (E17) | all | Android end to end: a build from source on a phone; Health Connect reads (today only Samsung Health's SDK); FCM push (the contract accepts `fcm`, but there is no sender) | The owner: the Android SDK or a cloud build, a Firebase project and key, a test phone. FCM is a new external integration |
+| After the app musts | P8 / harness | Just-in-time tool loading: a short tool list plus a tool search, so each turn carries only the definitions it needs. Skills already load this way (`skills_list`, then `skills_load`); tools don't. Memory keeps a small working set plus on-demand search | A design, and a tool-choice eval that shows no regression |
 | After the app musts | P4 / W2 | Standing grants (E16), then the autonomy dial, then the Patrol acting under a grant. Ten promise rows: WP-025, -026, -028, -030, -032, -033, -034, -046, -047, -061 | The ADR in waldo-brain and a DO migration, both the owner's |
 | 13–14 Oct | P5 | A connect card in app chat, and Google disconnect, with revocation shown to the owner | L3 contract, then L4 re-pin |
 | 13–14 Oct | P7 | Google sign-in (O2-A) once S7 has landed, then session refresh | Security review of the auth change |
