@@ -19,7 +19,7 @@ import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './da
 import {CONTROLS_PATH,readControlsQuery,projectControls} from './dashboard-controls';
 import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt} from './dashboard-control-actions';
 import { createScopedCuratedSkillCapability } from '../skills/curated-host';
-import { ownerMessageAdmission } from '../identity/owner-message-admission';
+import { OwnerAdmissionError, ownerMessageAdmission } from '../identity/owner-message-admission';
 import { MEMORY_GRAPH_PATH, readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
 import {TelegramLinkInbox,LINK_MODE,type LinkBinding} from './telegram-link-inbox';
@@ -31,7 +31,7 @@ import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
 import { APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, armWhatsappPendingWake, persistInboxWake, persistTransportWake, rearmSharedAlarm } from '../scheduler/alarm-slot';
-import { admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
+import { addressedTo, admittedRoute, appFirstExecutors, appRecordSend, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
@@ -190,6 +190,8 @@ type OwnerRuntime = Readonly<{
 const LATE_FIRE_MS = 5 * 60_000;
 // A directory outage at the alarm leaves the app owner's scheduled work waiting; this is how soon the alarm asks again.
 const APP_ADMISSION_RETRY_MS = 60_000;
+// The app delivery's directory checks all run before its one all-or-nothing write, so a refusal means nothing was written.
+const unwrittenAppDelivery = (error: unknown) => error instanceof OwnerAdmissionError;
 
 const validZone = (zone: string): boolean => {
   try {
@@ -1340,7 +1342,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const routeFor = (surface: ChannelKind): OutboxRoute => {
           const runtime = this.setup(surface);
           return {
-            addressed: r => r.payload.chat_id === runtime.owner && r.ownerSubject === String(runtime.owner),
+            addressed: addressedTo(runtime.owner),
             allowed: async r => (!r.commonExecution || r.commonExecution.settled===true) && (!(r.mailFollowup || r.calendarPrep) || runtime.retainedRecallAvailable()) && r.payload.chat_id === runtime.owner && r.ownerSubject === String(runtime.owner)
               && (!r.bot || r.bot === this.env.TELEGRAM_BOT_TOKEN?.split(':')[0])
               && r.doName === (this.ctx.storage.kv.get<string>('do_name') ?? '')
@@ -1355,7 +1357,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
               if ((r.mailFollowup || r.calendarPrep) && !runtime.retainedRecallAvailable()) return Math.min(Date.now() + 10 * 60_000, r.expiresAt ?? r.createdAt + 86400000);
               return (r.mailFollowup || r.calendarPrep) && ((r.mailFollowup && !proactiveEnabled(this.env.MAIL_SOURCE_FOLLOWUPS, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) || (r.calendarPrep && !proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) || loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume === 'low' || isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) ? Date.now() + 10 * 60_000 : null;
             },
-            send: payload => runtime.call('sendMessage', payload),
+            send: surface === 'app' ? appRecordSend(payload => runtime.call('sendMessage', payload), () => this.scheduledAppDelivery, unwrittenAppDelivery) : payload => runtime.call('sendMessage', payload),
           };
         };
         const routes = [routeFor(channel)];
@@ -1363,7 +1365,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           const found = await this.appOwnerLookup();
           if (found.kind === 'admitted') this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(found.authority));
           return found.kind;
-        }, () => Date.now() + APP_ADMISSION_RETRY_MS));
+        }, () => Date.now() + APP_ADMISSION_RETRY_MS, kind => log({ trace: `outbox:${Date.now()}`, hop: 'outbox_admission', ms: 0, ok: false, code: kind, detail: kind })));
         try { await finalOutbox.drain({ ...routedDelivery(routes), settled: settleFinal }); } finally { await scheduler.rearm(); }
         return;
       }
@@ -1381,7 +1383,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(appOwner.authority));
         const app = this.setup('app');
         await app.ready;
-        executors = { ...executors, reminder: app.fire, heartbeat: app.beat, pre_activity_spot: app.briefs, brief: app.cards, standing_order: app.fireOrder };
+        executors = appFirstExecutors(executors, app);
       }
       const started = Date.now();
       let fired: readonly ScheduleEntry[];

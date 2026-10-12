@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { TelegramFinalOutbox, FINAL_OUTBOX_KEY, FINAL_OUTBOX_DUE_KEY } from '../src/channels/telegram-final-outbox';
+import { FinalNotSent, TelegramFinalOutbox, FINAL_OUTBOX_KEY, FINAL_OUTBOX_DUE_KEY } from '../src/channels/telegram-final-outbox';
 import { TelegramRejection } from '../src/channels/telegram-api';
 import { rearmSharedAlarm } from '../src/scheduler/alarm-slot';
 const fixture = () => {
@@ -109,4 +109,29 @@ it('idle maintenance scrubs delivered and ambiguous text independently of enqueu
   const rows = f.outbox.records(); rows[0]!.status = 'delivered'; rows[0]!.settled = true; rows[0]!.createdAt = -90000000;
   f.kv.put(FINAL_OUTBOX_KEY, rows); await f.outbox.maintain();
   expect(f.outbox.records()[0]?.payload.text).toBe(''); expect(f.kv.get(FINAL_OUTBOX_DUE_KEY)).toBeNull();
+});
+
+describe('a send that is certain nothing was sent', () => {
+  it('comes due again, then is blocked once the attempts run out, never quarantined', async () => {
+    const f = fixture();
+    await f.outbox.enqueue(f.input);
+    const send = vi.fn(async () => { throw new FinalNotSent('nothing was written'); });
+    for (const [attempt, dueIn] of [[1, 30_000], [2, 60_000]] as const) {
+      f.advance();
+      const at = f.now();
+      await f.outbox.drain({ allowed: async () => true, send, settled: f.settled });
+      expect(f.outbox.records()[0]).toMatchObject({ status: 'pending', reason: 'not_sent', attempts: attempt, dueAt: at + dueIn });
+    }
+    f.advance(); f.advance();
+    await f.outbox.drain({ allowed: async () => true, send, settled: f.settled });
+    expect(f.outbox.records()[0]).toMatchObject({ status: 'blocked', reason: 'not_sent', attempts: 3, settled: true });
+    expect(send).toHaveBeenCalledTimes(3);
+  });
+
+  it('still quarantines any other send failure as uncertain', async () => {
+    const f = fixture();
+    await f.outbox.enqueue(f.input); f.advance();
+    await f.outbox.drain({ allowed: async () => true, send: async () => { throw new Error('storage fault'); }, settled: f.settled });
+    expect(f.outbox.records()[0]).toMatchObject({ status: 'quarantined', reason: 'send_unknown', attempts: 1 });
+  });
 });

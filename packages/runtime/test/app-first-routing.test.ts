@@ -95,7 +95,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; fetch(request: Request): Promise<Response>; alarm(): Promise<void> }>;
 type Ctx = { now: number; name: string; appSubject: number };
-type Binding = Readonly<{ app?: boolean }>;
+type Binding = Readonly<{ app?: boolean; telegram?: boolean }>;
 
 // An owner bound to Telegram (subject 7) who has also used the app, with Google connected, the clock pinned, and no time
 // zone confirmed in the app. The jobs each runtime arms on its first build are cleared, so each test schedules exactly the
@@ -108,7 +108,7 @@ const withOwner = async (name: string, run: (owner: Owner, state: DurableObjectS
     try {
       claimStore(state.storage.sql); ensureSchema(state.storage); traceBook(state.storage.sql);
       state.storage.kv.put('do_name', name);
-      state.storage.kv.put('telegram_subject', '7');
+      if (binding.telegram !== false) state.storage.kv.put('telegram_subject', '7');
       if (binding.app) state.storage.kv.put('app_subject', String(ctx.appSubject));
       state.storage.kv.put('timezone', 'UTC');
       await state.storage.put('origin', 'https://fixture.invalid');
@@ -116,7 +116,7 @@ const withOwner = async (name: string, run: (owner: Owner, state: DurableObjectS
         scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly'] }]);
       const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
         WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', MAIL_SOURCE_FOLLOWUPS: '1', CALENDAR_GROUNDED_PREP: '1' }) as unknown as Owner;
-      await owner.setup('telegram').ready;
+      if (binding.telegram !== false) await owner.setup('telegram').ready;
       await owner.setup('app').ready;
       state.storage.sql.exec('DELETE FROM schedule');
       wire.telegramSent = [];
@@ -139,6 +139,7 @@ const appChat = async (owner: Owner, ctx: Ctx) => {
   return (await response.json() as { messages: { role: string; text: string; channel: string }[] }).messages.map(({ role, text, channel }) => ({ role, text, channel }));
 };
 const outbox = (state: DurableObjectState) => state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? [];
+const admissionLog = (state: DurableObjectState) => state.storage.sql.exec<{ ok: number; note: string }>("SELECT ok, note FROM trace_log WHERE hop = 'outbox_admission'").toArray();
 const copyLog = (state: DurableObjectState) => state.storage.sql.exec<{ ok: number; note: string }>("SELECT ok, note FROM trace_log WHERE hop = 'telegram_copy'").toArray();
 // A record already frozen in the outbox: a reply to an earlier Telegram turn, or a nudge addressed to the app.
 const queue = (state: DurableObjectState, ctx: Ctx, record: 'telegram' | 'app', changed: Partial<FinalRecord> = {}) => new TelegramFinalOutbox(state.storage.kv, () => Date.now() - 60_000, (rows, at) => persistTransportWake(state.storage, rows, at))
@@ -275,6 +276,7 @@ describe('the delivery outbox for an owner on both surfaces', () => {
       await outboxPass(owner, state, ctx);
       expect(outbox(state).map(record => [record.id, record.status])).toEqual([['nudge:app-1', 'pending'], ['turn:telegram-1', 'delivered']]);
       expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REPLY_TEXT }]);
+      expect(admissionLog(state)).toEqual([{ ok: 0, note: 'retry' }]);
       // The record owns its one retry: it is due again once, a minute after the outage was met.
       const held = outbox(state).find(record => record.id === 'nudge:app-1')!;
       expect(held.dueAt - ctx.now).toBeGreaterThan(55_000);
@@ -294,12 +296,13 @@ describe('the delivery outbox for an owner on both surfaces', () => {
       await outboxPass(owner, state, ctx);
       // Blocked is terminal and settled: nothing is left due, so the record asks the directory no more.
       expect(outbox(state).map(record => [record.status, record.reason, record.settled])).toEqual([['blocked', 'owner_binding', true]]);
+      expect(admissionLog(state)).toEqual([{ ok: 0, note: 'dormant' }]);
       expect(await appChat(owner, ctx)).toEqual([]);
       expect(wire.telegramSent).toEqual([]);
     });
   });
 
-  it.each([['Telegram', 'telegram', { ownerSubject: '8' }], ['app', 'app', { ownerSubject: '8' }], ['app', 'app', { doName: 'another-owner' }]] as const)('blocks a record for the %s whose owner is not this one (%o), and sends it nowhere', async (_surface, record, changed) => {
+  it.each([['Telegram', 'telegram', { ownerSubject: '8' }], ['Telegram', 'telegram', { doName: 'another-owner' }], ['Telegram', 'telegram', { bot: '9' }], ['app', 'app', { ownerSubject: '8' }], ['app', 'app', { doName: 'another-owner' }]] as const)('blocks a record for the %s whose owner is not this one (%o), and sends it nowhere', async (_surface, record, changed) => {
     await withOwner(`routing-foreign-${record}-${Object.keys(changed)[0]}`, async (owner, state, ctx) => {
       await queue(state, ctx, record, changed);
       await outboxPass(owner, state, ctx);
@@ -322,16 +325,61 @@ describe('the delivery outbox for an owner on both surfaces', () => {
     });
   });
 
-  it('sends no copy for a message the app did not take', async () => {
+  it('sends no copy for a message the app did not take, holds it as not sent, and blocks it once the directory still refuses', async () => {
     await withOwner('routing-app-refused', async (owner, state, ctx) => {
       await queue(state, ctx, 'app');
       // The drain admits the owner; the delivery's own check, just before the write, finds the account revoked.
       wire.authority = 'revoked'; wire.authorityAfter = wire.asked + 1;
       await outboxPass(owner, state, ctx);
+      expect(outbox(state).map(record => [record.status, record.reason])).toEqual([['pending', 'not_sent']]);
+      ctx.now += 60_000;
+      await outboxPass(owner, state, ctx);
+      expect(outbox(state).map(record => [record.status, record.reason, record.settled])).toEqual([['blocked', 'owner_binding', true]]);
       expect(await appChat(owner, ctx)).toEqual([]);
       expect(wire.telegramSent).toEqual([]);
-      expect(outbox(state).map(record => record.status)).not.toContain('delivered');
     });
+  });
+
+  it('holds a message as not sent when the directory is unreachable at the delivery\'s own check, then delivers it once with one copy', async () => {
+    await withOwner('routing-recheck-outage', async (owner, state, ctx) => {
+      await queue(state, ctx, 'app');
+      wire.authority = 'outage'; wire.authorityAfter = wire.asked + 1;
+      await outboxPass(owner, state, ctx);
+      expect(outbox(state).map(record => [record.status, record.reason])).toEqual([['pending', 'not_sent']]);
+      wire.authority = 'current';
+      ctx.now += 60_000;
+      await outboxPass(owner, state, ctx);
+      await outboxPass(owner, state, ctx);
+      expect(outbox(state).map(record => record.status)).toEqual(['delivered']);
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: NUDGE_TEXT, channel: 'app' }]);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: NUDGE_TEXT }]);
+    });
+  });
+
+  it('keeps a failure that may come after the app write as uncertain: quarantined, never sent again', async () => {
+    await withOwner('routing-write-fault', async (owner, state, ctx) => {
+      await queue(state, ctx, 'app');
+      // The fault hits only while the record is being sent, so it lands in the delivery's own write.
+      const write = state.storage.transactionSync.bind(state.storage);
+      state.storage.transactionSync = (<T,>(work: () => T): T => {
+        if (outbox(state)[0]?.status === 'attempting') throw new Error('storage fault');
+        return write(work);
+      }) as typeof state.storage.transactionSync;
+      try { await outboxPass(owner, state, ctx); } finally { state.storage.transactionSync = write; }
+      expect(outbox(state).map(record => [record.status, record.reason])).toEqual([['quarantined', 'send_unknown']]);
+      await outboxPass(owner, state, ctx);
+      expect(wire.telegramSent).toEqual([]);
+    });
+  });
+
+  it('holds an app-only owner\'s message as not sent too, when the delivery\'s own check is refused', async () => {
+    await withOwner('routing-app-only-refused', async (owner, state, ctx) => {
+      await queue(state, ctx, 'app');
+      wire.authority = 'outage'; wire.authorityAfter = wire.asked + 1;
+      await outboxPass(owner, state, ctx);
+      expect(outbox(state).map(record => [record.status, record.reason])).toEqual([['pending', 'not_sent']]);
+      expect(wire.telegramSent).toEqual([]);
+    }, { app: true, telegram: false });
   });
 
   it.each([['fails', 'copy_failed'], ['blocked', 'copy_blocked']] as const)('writes the app message once and settles it when the Telegram copy %s, with one fixed-code log line and no retry', async (failure, code) => {

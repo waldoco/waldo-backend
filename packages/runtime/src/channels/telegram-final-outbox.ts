@@ -8,6 +8,10 @@ export const FINAL_OUTBOX_KEY = 'telegram_final_outbox_v1';
 export const FINAL_OUTBOX_DUE_KEY = 'telegram_final_outbox_due_v1';
 const MAX_RECORDS = 256;
 const MAX_ATTEMPTS = 3;
+
+// Thrown by a send that is certain nothing reached the surface. The part comes due again, as a retryable rejection does, and
+// once the attempts run out the record is blocked: nothing was sent, so it is never left uncertain.
+export class FinalNotSent extends Error {}
 export type FinalPayload = TelegramFinalPayload;
 // One sendable sendMessage unit of a frozen final. Computed at enqueue and stored on the
 // record so redelivery resumes per part instead of resending the whole message.
@@ -206,7 +210,10 @@ export class TelegramFinalOutbox {
         });
       } catch (error) {
         if (!currentAttempt()) return;
-        if (error instanceof TelegramRejection && error.retryable && !(typeof error.retryAfter === 'number' && error.retryAfter > 3600) && row.attempts < MAX_ATTEMPTS) {
+        if (error instanceof FinalNotSent) {
+          if (row.attempts < MAX_ATTEMPTS) { row.status = 'pending'; row.dueAt = this.now() + 30_000 * row.attempts; } else row.status = 'blocked';
+          row.reason = 'not_sent';
+        } else if (error instanceof TelegramRejection && error.retryable && !(typeof error.retryAfter === 'number' && error.retryAfter > 3600) && row.attempts < MAX_ATTEMPTS) {
           row.status = 'pending'; row.reason = 'provider_rejected';
           row.dueAt = this.now() + Math.max(30_000 * row.attempts, (typeof error.retryAfter === 'number' && Number.isFinite(error.retryAfter) && error.retryAfter >= 0 ? Math.min(3600, error.retryAfter) : 0) * 1_000);
         } else {
