@@ -30,17 +30,22 @@ describe('the calendar read log line', () => {
     log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     expect((await read({}, () => ({ kind: 'calendar#events', items: [event('a', 9), event('b', 10), event('f', 12)] }))).ok).toBe(true);
     expect((await read({ calendar_id: TEAM, date_range: { from: '2026-10-11T00:00:00Z', to: '2026-10-12T00:00:00Z' } }, () => ({ kind: 'calendar#events', items: [event('c', 11)] }))).ok).toBe(true);
+    // The primary calendar read by its id, which is the account address.
+    expect((await read({ calendar_id: 'Owner@Example.test' }, () => ({ kind: 'calendar#events', items: [event('h', 13), event('i', 14)] }))).ok).toBe(true);
     // A continuation repeats its explicit window.
     const window = { date_range: { from: '2026-10-10T00:00:00Z', to: '2026-10-11T00:00:00Z' }, limit: 1 };
     const first = await read(window, () => ({ kind: 'calendar#events', items: [event('d', 9)], nextPageToken: 'provider-next' }));
     const next = await read({ ...window, page_token: first.data!.next_page_token }, () => ({ kind: 'calendar#events', items: [] }));
     expect(next.ok).toBe(true);
     expect(readLines()).toEqual([
-      { hop: 'calendar_read', ok: true, code: 'window_default.calendar_primary.page_first', count: 3 },
-      { hop: 'calendar_read', ok: true, code: 'window_date_range.calendar_other.page_first', count: 1 },
-      { hop: 'calendar_read', ok: true, code: 'window_date_range.calendar_primary.page_first', count: 1 },
-      { hop: 'calendar_read', ok: true, code: 'window_date_range.calendar_primary.page_next', count: 0 },
+      { hop: 'calendar_read', ok: true, code: 'window_default:calendar_primary:page_first', count: 3 },
+      { hop: 'calendar_read', ok: true, code: 'window_date_range:calendar_other:page_first', count: 1 },
+      { hop: 'calendar_read', ok: true, code: 'window_default:calendar_primary:page_first', count: 2 },
+      { hop: 'calendar_read', ok: true, code: 'window_date_range:calendar_primary:page_first', count: 1 },
+      { hop: 'calendar_read', ok: true, code: 'window_date_range:calendar_primary:page_next', count: 0 },
     ]);
+    // Codes stay inside the staging tail's code set, or the viewer drops them and keeps only the count.
+    for (const line of readLines()) expect(line.code).toMatch(/^[a-z0-9_:]{1,64}$/);
   });
 
   it('never logs the calendar id, the account, the window or any event text, and logs nothing for a calendar listing', async () => {

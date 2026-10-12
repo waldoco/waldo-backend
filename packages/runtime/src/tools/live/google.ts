@@ -170,8 +170,10 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       if (!page && (page_token || calendar_id !== 'primary')) throw new Error('Calendar pagination or selected calendar adapter unavailable');
       const events = page?.events ?? await client.events(from,to,limit,include_declined);
       // One content-free line per calendar read: which window and which kind of calendar were asked for, and how many
-      // events came back. Never the calendar id or the account, either of which can be an address.
-      console.log(JSON.stringify({ hop: 'calendar_read', ok: true, code: `window_${date_range ? 'date_range' : 'default'}.calendar_${calendar_id === 'primary' ? 'primary' : 'other'}.page_${page_token ? 'next' : 'first'}`, count: events.length }));
+      // events came back. Never the calendar id or the account, either of which can be an address. The primary calendar's
+      // id is the account address, so a read by that id counts as primary. The code keeps to [a-z0-9_:], the tail's code set.
+      const primary = calendar_id === 'primary' || calendar_id.toLowerCase() === client.account?.email?.toLowerCase();
+      console.log(JSON.stringify({ hop: 'calendar_read', ok: true, code: `window_${date_range ? 'date_range' : 'default'}:calendar_${primary ? 'primary' : 'other'}:page_${page_token ? 'next' : 'first'}`, count: events.length }));
       return {
         timezone: clock.timezone, from, to, events,
         observed_at: page?.observed_at ?? clock.now().toISOString(), next_page_token: page?.next_page_token ?? null,
