@@ -1529,3 +1529,7 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - #1088 and app #87 wait for the owner's merge. App #86 is merged.
   - `beta-mvp` is `2d18e5e5`.
   - Probe 6 is at 16:00Z (L1 is watching).
+- **15:47Z, app #87 merged as `505d1a3d`** on the owner's yes in L4's session (#116 comment 6127667913). The review fixes are on main ahead of any tester build.
+  - The probe 5 rerun adds a read-only first step ("What's on my calendar today?") to tell a missing read apart from the model declining.
+  - L4's next item: refresh-while-open with the unread signal on Home.
+  - The app #87 review LOWs, sent at about 15:4xZ, are a later follow-up.
