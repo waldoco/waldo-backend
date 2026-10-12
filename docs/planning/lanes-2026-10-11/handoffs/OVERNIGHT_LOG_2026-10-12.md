@@ -2164,3 +2164,13 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
      4. Only then the `v6` rename, with its own deploy on the owner's yes.
   3. Queue by value: #1100 → PR B → PR A rest → email-aware prep (after the email-body review) → push → PR C/D → Phase 4. The instruction rewrite comes early, and the Telegram-copy switch stays with L2.
   4. Cloud guardrails: no deploy, migrations, secrets or merges; at most 2 subagents; every PR goes through the gate.
+
+## 21:01Z: #1101 live on staging; the freeze lifts
+
+- **Staging serves `e93a87c9`** [verified: `/healthz` release `e93a87c9` at 21:01Z]. L1 deployed it at 20:53Z (version `a446c445`) on the owner's yes in L1's session. Rollback is `b6b2c5ec` (`d704ffff`).
+  - L1's gate: 0 of 55 migrations pending; no wrangler, contract or environment-variable change. Signed-out requests return 401. The record is on #116.
+  - **Test 3 ran on the old version:** the 20:52:49Z app turn finished on `d704ffff` and resolved ok at 20:53:42Z.
+- **The freeze lifts.** `beta-mvp` push CI for `e93a87c9` is green, after the documented rerun [verified].
+- **#1088 is closed** (20:52:36Z), as the owner ruled.
+- **#1100 is unchanged:** head `a2db8589`, DIRTY. It waits for the Ansh session to split out the rename and rebase onto `e93a87c9`. My review covers `owner-turn.ts` and `tool-loop.ts` (G1's D16 filter and taint stamp, and #1098's ring).
+- Step 1 of the proposed deploy order is done.
