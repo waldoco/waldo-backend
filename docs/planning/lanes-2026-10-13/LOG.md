@@ -275,3 +275,15 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **App:** running, no PR yet. The P1 re-run is pending.
 - **Cloud lanes:** nothing posted on #1103 yet, and #1100 is unchanged.
 - **Orchestrator:** context at 80%; it auto-compacts at 95%. The state is in this log and in memory. The 5-hour usage window is at 27%.
+
+## 22:32Z: four app PRs open; reviews running; P1 go via PR comment
+
+- **The App session opened four stacked waldo-app PRs.** Each reports local check and test exit 0 and its deliberate-fault results at its exact head.
+  1. **#92** (#89's follow-ups), `b748e670`, base `main`. 759 tests; faults 15/15.
+  2. **#93** (B1, approvals re-read on focus and when a chat reply carries an approval part), `08f4ac79`. 775 tests; faults 16/16.
+  3. **#94** (the design review's wording fixes P1–P8), `7b36a0ca`. 781 tests; faults 18/18.
+  4. **#95** (its screen fixes P9–P13), `af997104`. 785 tests; faults 8/8.
+- **Merge order:** #92 first; the App session retargets each next PR to `main` after the one below merges.
+- **App workspace:** the frozen offline install and `pod install --deployment` are done, with `Podfile.lock` unchanged. Four watch-target lines in `project.pbxproj` stay out of every commit.
+- **Reviews:** two subagents are running, one on #92 and #93 (logic) and one on #94 and #95. The second checks that Patrol and Spots are kept and that nothing goes beyond the listed items.
+- **P1 go** is posted on #92 (6133876163), because the App session reads its own PRs and my direct messages are capped.
