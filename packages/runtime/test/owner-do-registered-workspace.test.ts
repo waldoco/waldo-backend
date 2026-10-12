@@ -37,6 +37,7 @@ vi.mock('openai', () => ({ default: class {
 } }));
 const OWNER = '10000000-0000-0000-0000-000000000001';
 const OTHER = '10000000-0000-0000-0000-000000000002';
+const PRESENCE = '10000000-0000-0000-0000-00000000000a';
 const BYTES = 'Exact owner workspace bytes\nहैलो 🌿\n';
 const writeArgs = { path: 'notes/fixture.txt', text: BYTES, mime: 'text/plain', expected_revision: 0 };
 const call = (name: string, args: unknown, id = name): Call => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) });
@@ -105,6 +106,10 @@ async function proof(work: (h: {
         case 'assert_channel_presence':
           expect([args.p_do_name, args.p_provider, args.p_subject]).toEqual([name, 'telegram', '81101']);
           message = `presence.${name}.telegram.81101`; break;
+        case 'common_owner_authority':
+          expect([args.p_provider, args.p_subject, args.p_do_name]).toEqual(['telegram', '81101', name]);
+          expect(args.p_locator).toBe(JSON.stringify(['telegram', '81101', name]));
+          message = `common.owner.${args.p_locator}`; break;
         case 'health_context_read': expect(args.p_do_name).toBe(name); message = `healthctx.read.${name}`; break;
         case 'health_log_recent': expect(args.p_do_name).toBe(name); message = `health.recent.${name}.${args.p_limit}`; break;
         default: unexpected.push(url); throw new Error(`local fixture denies unexpected signed RPC: ${fn}`);
@@ -114,7 +119,8 @@ async function proof(work: (h: {
         if (mappingPause && dispatches.mock.calls.some(([call]) => call.name === 'workspace_write') && (!pauseAfterReservation || manifest()?.operations.some(operation => operation.status === 'pending'))) { const slot = mappingPause; mappingPause = undefined; slot.entered(); await slot.wait; }
         return missing ? new Response('missing', { status: 404 }) : Response.json({ ...mapping });
       }
-      return Response.json(fn === 'assert_channel_presence' ? true : fn === 'health_log_recent' ? [] : null);
+      return Response.json(fn === 'assert_channel_presence' ? true : fn === 'health_log_recent' ? [] : fn === 'common_owner_authority'
+        ? { admission_revision: '1', auth_user_id: OWNER, do_name: name, owner_id: OWNER, presence_id: PRESENCE, provider: 'telegram', subject: '81101', state_version: 0 } : null);
     });
     const dispatches = vi.spyOn(dispatcher, 'dispatchTool'); // Observes original dispatcher, including losing async continuations.
     let instance = new OwnerDO(state, fixtureEnv);
