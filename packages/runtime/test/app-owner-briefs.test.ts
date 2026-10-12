@@ -140,7 +140,7 @@ describe('event-brief work for an owner who only uses the app', () => {
         created: new Date(AT - 86_400_000).toISOString() } as CalendarChange];
       await dueSweep(state);
       await sweepPass(owner, state);
-      expect(await appChat(owner, 'app-briefs-update-card')).toContainEqual({ role: 'assistant', text: UPDATE_TEXT });
+      expect(await appChat(owner, 'app-briefs-update-card')).toEqual([{ role: 'assistant', text: UPDATE_TEXT }]);
       expect(state.storage.sql.exec('SELECT pushed, text FROM update_cards').toArray()).toEqual([{ pushed: 1, text: UPDATE_TEXT }]);
       expectHealthOnlyInTheRequest(state, 'Changed event');
     });
@@ -158,7 +158,7 @@ describe('event-brief work for an owner who only uses the app', () => {
       await sweepPass(owner, state);
       expect(outbox(state).filter(record => record.mailFollowup).map(record => ({ status: record.status, bot: record.bot }))).toEqual([{ status: 'pending', bot: undefined }]);
       await outboxPass(owner, state, ctx);
-      expect(await appChat(owner, 'app-briefs-mail-followup')).toContainEqual({ role: 'assistant', text: FOLLOWUP_TEXT });
+      expect(await appChat(owner, 'app-briefs-mail-followup')).toEqual([{ role: 'assistant', text: FOLLOWUP_TEXT }]);
       expect(state.storage.sql.exec('SELECT delivery_state FROM loop_mail_sources').toArray()).toEqual([{ delivery_state: 'delivered' }]);
       expectHealthOnlyInTheRequest(state, 'Mail follow-up check');
     });
@@ -174,7 +174,7 @@ describe('event-brief work for an owner who only uses the app', () => {
       expect(outbox(state).filter(record => record.calendarPrep).map(record => ({ status: record.status, bot: record.bot }))).toEqual([{ status: 'pending', bot: undefined }]);
       expect(state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM event_briefs').one().n).toBe(1);
       await outboxPass(owner, state, ctx);
-      expect(await appChat(owner, 'app-briefs-prep')).toContainEqual({ role: 'assistant', text: PREP_TEXT });
+      expect(await appChat(owner, 'app-briefs-prep')).toEqual([{ role: 'assistant', text: PREP_TEXT }]);
       expect(outbox(state).find(record => record.calendarPrep)?.status).toBe('delivered');
       expect(fixture.requests.filter(sent => sent.includes('[Meeting prep decision'))).toHaveLength(1);
     });
@@ -194,7 +194,7 @@ describe('event-brief work for an owner who only uses the app', () => {
       state.storage.kv.delete(key);
       if (key === 'app_subject') state.storage.kv.put('app_subject', String(appSubjectFor(`app-briefs-prep-${key}`)));
       await outboxPass(owner, state, ctx);
-      expect(await appChat(owner, `app-briefs-prep-${key}`)).not.toContainEqual({ role: 'assistant', text: PREP_TEXT });
+      expect(await appChat(owner, `app-briefs-prep-${key}`)).toEqual([]);
     });
     expect(wire.telegramSent).toBe(0);
   });
@@ -215,10 +215,10 @@ describe('event-brief work for an owner who only uses the app', () => {
       wire.revoked = true;
       await outboxPass(owner, state, ctx);
       expect(outbox(state).find(record => record.mailFollowup)?.status).toBe('pending');
-      expect(await appChat(owner, 'app-briefs-revoked')).not.toContainEqual({ role: 'assistant', text: FOLLOWUP_TEXT });
+      expect(await appChat(owner, 'app-briefs-revoked')).toEqual([]);
       wire.revoked = false;
       await outboxPass(owner, state, ctx);
-      expect(await appChat(owner, 'app-briefs-revoked')).toContainEqual({ role: 'assistant', text: FOLLOWUP_TEXT });
+      expect(await appChat(owner, 'app-briefs-revoked')).toEqual([{ role: 'assistant', text: FOLLOWUP_TEXT }]);
     });
     expect(wire.telegramSent).toBe(0);
   });
