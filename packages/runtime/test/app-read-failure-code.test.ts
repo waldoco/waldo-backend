@@ -25,8 +25,9 @@ afterEach(() => { vi.unstubAllGlobals(); });
 const entry = { id: 'stored-reply-1', ownerId: `prn_${ownerHex}`, chatId: 'main', parentId: null, threadAnchorId: null, surface: 'app', modelPayload: 'Stored reply.', appPayload: 'Stored reply.', modelProjection: { mode: 'include' }, role: 'assistant' };
 type Stored = Readonly<Record<string, unknown>>;
 // Reads the app route once and returns its status with the failure lines it logged.
-const read = (name: string, stored: Stored, path = '/app/v1/chat/main') => runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+const read = (name: string, stored: Stored, path = '/app/v1/chat/main', before: (state: DurableObjectState) => void = () => undefined) => runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
   state.storage.kv.put('do_name', name);
+  before(state);
   for (const [key, value] of Object.entries(stored)) state.storage.kv.put(key, value);
   const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: undefined });
   const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -49,6 +50,18 @@ it.each([
   expect(result.raw).not.toContain(name);
   expect(result.raw).not.toContain('Stored reply');
   expect(result.raw).not.toContain(ownerHex);
+});
+
+it.each(['constructor', 'toString', '__proto__'])('a history error whose message is the object key %s still logs the plain history step', async message => {
+  const result = await read(`read-fault-proto-${message.replaceAll('_', '')}`, {}, '/app/v1/chat/main', state => {
+    const list = state.storage.list.bind(state.storage);
+    vi.spyOn(state.storage, 'list').mockImplementation((async (options?: DurableObjectListOptions) => {
+      if (options?.prefix?.startsWith('canonical-owner-v1:')) throw new Error(message);
+      return list(options);
+    }) as typeof state.storage.list);
+  });
+  expect(result.status).toBe(503);
+  expect(result.failures).toEqual([{ hop: 'app_history_read', ok: false, code: 'history' }]);
 });
 
 it('a main-chat read whose owner context fails after routing logs the context step', async () => {

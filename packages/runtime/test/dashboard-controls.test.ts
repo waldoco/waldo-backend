@@ -25,6 +25,11 @@ describe('narrow controls read projection', () => {
     expect(result.data.proactivity).toEqual({ quiet_start: '23:00', quiet_end: '07:30', volume: 'normal' });
   });
 
+  it('says whether the owner confirmed the day\'s time zone', () => {
+    expect(projectControls({ ...SAMPLE_CONSOLE_VIEW, timezoneConfirmed: true }, 'day').data).toMatchObject({ timezone: 'Asia/Kolkata', timezone_confirmed: true });
+    expect(projectControls({ ...SAMPLE_CONSOLE_VIEW, timezoneConfirmed: false }, 'day').data).toMatchObject({ timezone_confirmed: false });
+  });
+
   it('keeps granted accounts distinct from reconnect state without refresh errors or secrets', () => {
     const source = { ...SAMPLE_CONSOLE_VIEW, google: { connectAvailable: false, accounts: [
       { id: 'g1', email: 'owner@test.invalid', error: null, calendar: true, mail: false, tasks: true, refresh_token: 'secret-token' },

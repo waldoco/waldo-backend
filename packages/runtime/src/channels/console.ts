@@ -158,6 +158,8 @@ export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: stri
 export type ConsoleView = Readonly<{
   release: string;
   timezone: string;
+  // True once the owner chose the zone themselves (timezone.set); a stored or fallback zone is not confirmed.
+  timezoneConfirmed: boolean;
   now: string;
   sessionUntil: string;
   sessionCount: number;
