@@ -996,3 +996,22 @@ Still open:
 - **Strict checks:** reads of stored data skip the bad item and record a code, as #1075 does. Authority and safety checks still fail closed. A read-only sweep subagent is listing every whole-read failure at `e4ef5b59`.
 - **Promise count correction:** the grant-blocked promises are ten rows, not "about eight": WP-025, -026, -028, -030, -032, -033, -034, -046, -047 and -061. WP-023 and WP-038 depend on grants in part.
 - **L1:** the tail for probes 1–8 is live on `c7974404` (10:00:31Z), with the owner's confirmation in L1's session. Results come per probe.
+
+## 10:13Z: probes 1–4 pass on the test account; probe 5 waits for a test event
+
+Reported by L4, with the owner's yes in L4's session and L1 reading the tail. Staging is `e37f60f3`; the app build is main `5017f0c8`.
+
+| # | Pillar | Result | Times (Z) |
+|---|---|---|---|
+| 1 | P6, GP-4 | **PASS.** The reply appears under the message, and the receipt is `completed`. L1's tail shows no `history_conflict` and no strict-load failure | Sent 10:01:41; replied by 10:02:10 |
+| 2 | P4 | **PASS.** The reminder is set for 10:12:41, and the Waldo row is in Main chat after a manual refresh. L1 confirms the set; the fire and delivery lines are still to come | Sent 10:02:22; seen 10:13:01 |
+| 3 | P5 (#1084) | **PASS, with a note.** Google was already connected, so Waldo said so. It claimed no button or link, and no link was minted (L1's tail) | Sent 10:03:48 |
+| 4 | P5 | **PASS.** One named event tomorrow is listed, and `tool_query_calendar` is ok (L1). The owner can confirm it's real | Sent 10:04:54; listed by 10:05:30 |
+| 5 | W2 | **Pending.** The owner is creating a 4 pm test event. L4 won't touch the two existing approvals | — |
+
+- **Also:**
+  - App #85 (Main chat failure state and retry) is merged as `5017f0c8`.
+  - The reminder needed a manual refresh. L4's next item is refresh-while-open with an unread signal on Home, after `movement_duration`, whose merge needs the owner's yes in L4's session.
+- **L4's question:** why does Main chat show no Telegram turns on a Telegram-linked account?
+  - It's today's design: two transcripts. The scorecard's P6 row lists one transcript across surfaces as a gap that remains open.
+  - Not a bug, and no app change now. E15's routing tomorrow moves proactive messages into the app; one shared transcript is a later owner decision.
