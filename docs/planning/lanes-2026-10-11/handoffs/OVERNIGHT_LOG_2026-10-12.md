@@ -1661,3 +1661,14 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **Movement minutes:** staging accepts `movement_duration` from Apple (6127401585).
   - **Zone-id design** (6127532876): overlapping re-sent windows with new sample ids double-count in Form's daylight, motion and stress inputs and in Weight's physical load. L1 recommends the app keep each hour's original offset grid. An optional producer guard is the owner's call, and nothing changes before the owner rules.
   - L4 can read both on #116, or the owner can point L4 to them.
+- **16:53Z, #1096 review PASS** at `7666100d`. CI 6/6 and CLEAN [verified]. The tsconfig keeps `noEmit` and only adds `scenarios` and `evals` to `include`.
+  - Nothing new is emitted or bundled: there's no `rootDir`, `outDir` or `composite`, and `wrangler.jsonc` doesn't use the tsconfig.
+  - The fakes match the real `ReminderBook` and `EffectDesk`, with no `any` and no new casts.
+  - `satisfies` is now at `evals/run.ts:84` and `scenarios/run-l1.ts:95`. A mutation that removes `cancelAll` and `proposeSendEmail` gives 5 tsc errors.
+  - The reviewer ran `tsc --noEmit` and the scenario suite (144/144) in a temp worktree, since removed.
+  - **Three LOW fixes to the PR body (not blockers):**
+    1. `run-l1.ts` was already type-checked through a test import, so `satisfies` was the real fix there. The `include` change adds only the `evals/` files.
+    2. "Not closed" should also list the remaining casts: `run-l1.ts:109`, `:28`, `:43` and `:136`; `evals/run.ts:39` and `:99`; `isolated-telegram-ingress.ts:58`; and `test/reminders.test.ts:67`.
+    3. Impact should name `deploy-staging.yml:111` (`pnpm -r typecheck`): an `evals/` type error now blocks staging deploys too.
+  - Still outside any tsconfig: `packages/runtime/scripts/`, most `vitest.*.config.ts` files, root `scripts/`, and `supabase/functions` (Deno).
+- **#1093's delta review** started now that L1's lane is free (about 10 calls).
