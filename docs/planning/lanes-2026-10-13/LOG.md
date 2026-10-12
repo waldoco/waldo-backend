@@ -296,3 +296,12 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - Patrol and Spots are kept, with counts identical across base, #94 and #95.
 - **#95 (screens P9–P13): PASS** (6133972515). It needs a rebase after #94's fix.
 - **#92 and #93:** review still running.
+
+## 22:44Z: app #92 PASS, #93 FAIL
+
+- **#92 (#89's follow-ups): PASS.** It merges once its Simulator line is in.
+  - Non-blocking: make the not-before a shared read clock (every GET shares `app-read:${doName}`), and clamp it to the server's requested wait.
+- **#93 (B1): FAIL.** The approvals re-read on focus and on return to foreground ignores #92's not-before on the same server bucket, and an approvals 429's Retry-After is dropped.
+  - The fix: check the not-before, call `keepServerWait` on failure, and add a test.
+- **Merge order is now:** #92 once its Simulator line is in; then #93 and #94 once fixed; then #95, rebased.
+- All reviews are posted on the PRs.
