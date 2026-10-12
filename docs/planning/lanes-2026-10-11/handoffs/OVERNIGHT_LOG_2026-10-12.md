@@ -902,4 +902,4 @@ Still open:
   - Held-row notes are tested with capture on and off.
   - Residuals are listed in the body.
   - Next: I read the delta, then CI, the advisor, and the merge.
-- **The one-time auto-write:** a `date -u` check caught a dataset update stamp ahead of the clock; it was corrected.
+- **Stamp check:** a `date -u` check caught a dataset update stamp ahead of the clock; it was corrected.
