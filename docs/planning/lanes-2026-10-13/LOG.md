@@ -251,3 +251,18 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - #1104's two review notes went to Connectors on #1105 (6133614208).
   - The P1 go goes to the App session in a review comment on its first PR.
 - **Timestamps** now come from `date -u` inside the same command that writes the entry.
+
+## 22:18Z: #1107 review FAIL (deploy-order compatibility)
+
+- **#1107 at `3aadc20e`: independent review FAIL,** also applying at `b5060251`. Posted on the PR.
+  - **Verified sound:** the digest pin (`95196f39…` is the base digest; reverting to `...event` is caught), privacy and the contract.
+  - **The blocker:** it requires "Worker first" instead of the decided either-order opt-in. With an old Worker and a new proxy:
+    - `query_calendar` throws (strictObject);
+    - every digest changes, so meetings re-prep and queued prep notes are dropped;
+    - emails, join links and Drive ids spread into day and brief prompts.
+  - **The fix:** a top-level body flag that gates the new fields in the proxy's `toItem` (off by default), sent by the new Worker, with tests on both sides.
+  - **Non-blocking:**
+    - a compile-time hashed/excluded key map;
+    - the size guard should measure the prep projection;
+    - normalise `conference_url` with `new URL().href`, plus a contract https check.
+- **Posted on #1103** (6133624517) so Connectors knows #1104 is live, #1105 is blocked, and #1107 needs the D3 opt-in.
