@@ -96,6 +96,10 @@ Each can be asked with AskUserQuestion. The first option is the recommendation.
   - E10: WhatsApp and iMessage copy.
   - E11: L3's batch, in L3's session. L3 isn't reachable by message right now.
 
+**Answered at about 09:25Z, in the orchestrator's session:**
+- **E14, P4 proof:** P4 in the app is proven on an app-only test account you create with a fresh invite. A Telegram-linked owner's day cards, heartbeat and nightly run on Telegram, and only reminders go to the app [verified at `e37f60f3`].
+- **E15, routing:** app-first. Proactive messages (day cards, prep, update cards, follow-ups) go to the app for anyone who uses it, with Telegram as a dev copy. L2 builds it on 13 Oct as the slice after MUST 3; MUST 3 stays app-channel only.
+
 If you choose E1(a), tell each lane in its own session; a relay from me is not a yes there. L4's brief, for one, requires your yes in L4's session for every app merge.
 
 **Asked in L1's session (about 04:56Z):**
@@ -385,6 +389,7 @@ The dates are estimates. The gate column names what holds each item.
 
 | When | Pillar | Item | Gate |
 |---|---|---|---|
+| 13–14 Oct | P4 / P6 | App-first routing: proactive messages (day cards, prep, update cards, follow-ups) go to the app for anyone who uses it, with Telegram as a dev copy (E15) | L2's slice after MUST 3, with its own tests |
 | 13–14 Oct | P5 | A connect card in app chat, and Google disconnect, with revocation shown to the owner | L3 contract, then L4 re-pin |
 | 13–14 Oct | P7 | Google sign-in (O2-A) once S7 has landed, then session refresh | Security review of the auth change |
 | 13–14 Oct | P8 | A model-graded app-path eval in CI: a judge from another model family, pass^k on the golden tasks, seeded from real failures. Alerts on fatal codes (`history_invalid`, `send_failed`) | You add a model API key as a CI secret |

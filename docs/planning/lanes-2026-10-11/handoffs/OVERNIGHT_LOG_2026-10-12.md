@@ -903,3 +903,11 @@ Still open:
   - Residuals are listed in the body.
   - Next: I read the delta, then CI, the advisor, and the merge.
 - **Stamp check:** a `date -u` check caught a dataset update stamp ahead of the clock; it was corrected.
+
+## 09:30Z: owner rulings E14 and E15; page and doc updated
+
+- **E14:** P4 in the app is proven on an app-only test account the owner creates with a fresh invite.
+- **E15:** app-first routing. Proactive messages go to the app for anyone who uses it, with Telegram as a dev copy. L2 builds it on 13 Oct after MUST 3; MUST 3 stays app-channel only today.
+- **Relayed** to L2 and L1. Saved in the owner-rulings memory.
+- **Page datasets updated:** pillars, notes, decisions, lanes and roadmap. The scorecard's section A and section 5 are updated too.
+- **Answered the owner's questions** on why time zones look hard: the problem is trusting the zone, plus routing. Compared with the other agents in report 11's P4 sources.
