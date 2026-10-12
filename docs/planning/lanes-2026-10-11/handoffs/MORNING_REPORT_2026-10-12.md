@@ -46,7 +46,7 @@ Nothing else was merged or deployed.
 
 Each is ready for AskUserQuestion.
 
-1. **#1066: proactive messages for app-only owners.** L2 is fixing the review's bugs after 01:41Z.
+1. **#1066: proactive messages for app-only owners.** L2 pushed its fixes as `c8d3190c` at 01:47Z ("Re-plan every day card on a zone change and log each held job"). CI 6/6 incl. pgTAP, `CLEAN` **[verified]**. CI passed at about 01:50Z, inside the 23:00–04:00Z window where the old test 4 failed, which suggests the clock fix landed **[inference]**. Those fixes haven't been independently re-reviewed yet: a short delta review comes before any merge.
    - **Question:** may #1066 merge once the day-card prompt it saves no longer carries health-log lines ("~N kcal, estimate", "N min")?
    - **Options:**
      - (a) **Strip, then merge (recommended).** CLAUDE.md forbids numeric health values in transcripts, and the same change fixes Telegram owners, who have this leak today.

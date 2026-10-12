@@ -288,3 +288,8 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
 - 5-hour window: **0%** after the 01:30Z reset **[verified: `get_usage`]**. My context: 81%, so cycles stay lean.
 - Board: budget notice lifted. L2's queue after #1066's fixes: (1) measure history cuts with fixed-code counts per turn (long-sessions step 1); (2) a falsifying test for harness finding 1. Each a separate draft PR.
 - L3's batch file was read at 01:15Z and summarized in the morning report (not published, per L3's lane rule). No changes on staging (`889efa27`), PRs or #116 since 01:14Z.
+
+## 01:55Z: heartbeat. #1066 fixes pushed
+
+- **#1066** (L2): `c8d3190c` "Re-plan every day card on a zone change and log each held job", pushed 01:47Z, draft. CI 6/6 SUCCESS incl. pgTAP, `CLEAN` **[verified]**. Still held for the owner's health ruling; the fixes need a short delta review before any merge.
+- Staging `889efa27`. No #116 comments since 01:34Z. The app probe is still waiting for the owner's morning send.
