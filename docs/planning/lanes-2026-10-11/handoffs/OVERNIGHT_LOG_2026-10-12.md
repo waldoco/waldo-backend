@@ -726,3 +726,4 @@ Still open:
   - The Google consent move and run (E8, under way).
 - **L3** is unreachable (not in `ListAgents`). Its queue, L2's merge-order note and L4's expiry question are on the board.
 - **Usage:** the 5-hour window reset at 06:30Z. Three reviews used part of it. My context is about 80%.
+- **The owner, at about 07:13Z in this session:** a health number copied from an earlier reply into the day card's stored `today:` summary "counts as replies", so it is stored as written. The `today:` copy question is closed. Relayed to L2.
