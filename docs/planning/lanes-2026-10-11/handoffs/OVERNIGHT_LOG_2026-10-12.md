@@ -378,7 +378,7 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - Zone heads-up: once #1066 deploys, the Simulator app (signed in as the owner) writes its zone once to the owner's staging account, if the account is still unconfirmed and on `UTC`.
 - The owner asked for a pillar assessment (8 agent-product pillars × surfaces × industry bar × promises). I launched four read-only research agents, at 31% of the 5-hour window.
 
-## 03:40Z: #1080 tests pushed; the old build is named
+## 03:20Z: #1080 tests pushed; the old build is named
 
 - **L2 pushed `f17be611`** with the reviewer's two tests and the nits. I read the delta: one comment line and 30 test lines.
   - By reading, test (a) fails under M7, which writes at slots 1–2, and on base, which writes at slot 0.
