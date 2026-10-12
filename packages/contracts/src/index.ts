@@ -42,6 +42,7 @@ export * from './tools/schemas/health';
 export * from './tools/schemas/responsibilities';
 export * from './tools/schemas/standing-orders';
 export * from './tools/schemas/loops';
+export * from './tools/schemas/approvals';
 export * from './tools/schemas/calendar';
 export * from './tools/schemas/threading';
 export * from './runtime/delivery-policy';

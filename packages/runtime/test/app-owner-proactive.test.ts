@@ -179,6 +179,19 @@ describe('proactive work for an owner who only uses the app', () => {
     expect(wire.telegramSent).toBe(0);
   });
 
+  it('a day card is a machine turn: it is never offered raise_approval', async () => {
+    await withAppOwner('proactive-no-raise', { zone: 'UTC', confirmed: true }, async (owner, state) => {
+      dayPlanBook(state.storage.sql).save(localIso(Date.now(), 'UTC').slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
+      const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+      await scheduler.schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: null });
+      model.requests = [];
+      await owner.alarm();
+      const offered = model.requests.map(request => (JSON.parse(request) as { tools?: { name?: string }[] }).tools?.map(tool => tool.name) ?? []);
+      expect(offered.some(names => names.length > 0)).toBe(true);
+      expect(offered.flat()).not.toContain('raise_approval');
+    });
+  });
+
   it('with a confirmed zone, a due day card reaches the app chat and nothing goes to Telegram', async () => {
     await withAppOwner('proactive-confirmed-fire', { zone: 'UTC', confirmed: true }, async (owner, state) => {
       // Today's plan already exists, as it does once nightly or the first arming has planned the day.

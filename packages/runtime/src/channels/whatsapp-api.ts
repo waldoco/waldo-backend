@@ -129,7 +129,7 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
     // update exists, so no downstream consumer (turn pipeline, episodes, traces) ever sees the raw
     // code or link. The original stays owner-inspectable in their own WhatsApp thread. Approval
     // replies are channel commands that can never carry an artifact, so they skip the filter.
-    if (/^([aseu]):(\S+)$/.exec(text)) {
+    if (/^([aseud]):(\S+)$/.exec(text)) {
       updates.push({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum, is_bot: false }, data: text, message: { message_id: 0, chat: { id: ownerNum } } } });
       continue;
     }
