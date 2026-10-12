@@ -335,3 +335,13 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - Diff read **[verified]**: app rows unlabelled, other channels named (`iMessage` spelling added), drafts "local", the `#BDBDBD` inline colour removed, the Waldo mark gets a VoiceOver label, tests added. No rule issues.
   - The standing go has ended, so this merge needs the owner's yes.
 - Staging `889efa27`; no new #116 comments.
+
+## 03:00Z: INCIDENT. The first send after #1075 overwrote the owner's skipped row; fix #1080 drafted
+
+- **L2 (message)** **[lane report; cause reproduced red locally by L2; matches L1's tail]**: `commit()` writes new rows at the stored `count` key, which defaults to 0. The owner's store came from an older, never-merged build with no `leaf` key (L1's `leaf: false` shows that) and, by inference, no `count` key. So L4's test send at about 02:41Z replaced `conv:0000000000`. #1075's fixtures always set `count`, so its tests and its review missed this case.
+  - **Damage:** once. The store is consistent now.
+  - **The original row** should survive as its witness copy (commit never deletes witnesses). Unverified; nobody writes to staging storage for this.
+  - **Exposure:** any owner whose store an older build wrote without `count` loses one row on their first send.
+- **Fix: draft #1080** (`c67516c3`, 2 files): new rows go to max(count, last slot + 1) on both commit paths; a non-slot key stops the save. 5/5 mutations caught **[lane report]**. CI running. Independent review launched at 02:58Z.
+- **Owner questions:** (1) leave or restore the overwritten row (L2 and I recommend leaving it: it was shape-invalid and hidden, and was written by a build outside `beta-mvp`; see D5); (2) approve #1080 for merge and deploy once CI and the review pass.
+- **Lesson:** the #1075 review named this hazard as "pre-existing, needs a stale `count`" and judged it unlikely from one inference (a matching witness implies `commit()` wrote the row). That inference was wrong: an older build wrote the row. The falsifier I gave L1 caught it on the first real send.
