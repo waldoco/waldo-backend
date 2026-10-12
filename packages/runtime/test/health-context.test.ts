@@ -68,6 +68,12 @@ describe('toContextHealthMaterial', () => {
     expect(formZoneOf(at(41)!)).toBe('flagging');
     expect(formZoneOf(at(12)!)).toBe('depleted');
   });
+  it('keeps the Form zone for a row computed by candidate form.safte-fast.v2', () => {
+    const v2 = { score: 72, zone: 'good', confidence: 0.8, algorithm_version: 'form.safte-fast.v2', activation: 'candidate_unaccepted' };
+    const material = toContextHealthMaterial(row({ context: { ...row().context!, form: v2 } }), clock);
+    expect(material && formZoneOf(material)).toBe('steady');
+    expect(material?.narrative.zone).toBe('steady');
+  });
 
   it('bridges the app zone vocabulary for recovery and load', () => {
     const at = (recoveryZone: string, weightZone: string) =>

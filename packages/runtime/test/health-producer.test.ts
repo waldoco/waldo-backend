@@ -85,6 +85,61 @@ describe('produceHealthScores', () => {
     expect(row.freshness).toBe('fresh');
   });
 
+  it('computes Form as candidate form.safte-fast.v2 from the chosen source and stores its confidence, not its coverage', async () => {
+    const h = harness(seriesOf(history(25), { source: 'samsung' }));
+    await run(h);
+    expect(h.inputs.every(input => input.source === 'samsung')).toBe(true);
+    const form = h.writes.find(w => w.day === TODAY)!.form as Record<string, unknown>;
+    const computed = computeDailyScores(h.inputs.find(input => input.targetDay === TODAY)!).form;
+    if (computed.state !== 'available') throw new Error('expected an available Form');
+    expect(form.algorithm_version).toBe('form.safte-fast.v2');
+    expect(form.score).toBe(computed.score);
+    expect(computed.confidence).toBe(Math.round(computed.coverage * 0.6 * 1000) / 1000);
+    expect(form.confidence).toBe(computed.confidence);
+  });
+
+  it('computes Form for a Health Connect source at its candidate confidence', async () => {
+    const h = harness(seriesOf(history(25), { source: 'health_connect' }));
+    await run(h);
+    const row = h.writes.find(w => w.day === TODAY)!;
+    const computed = computeDailyScores(h.inputs.find(input => input.targetDay === TODAY)!).form;
+    if (computed.state !== 'available') throw new Error('expected an available Form');
+    expect((row.form as Record<string, unknown>).score).toBe(computed.score);
+    expect(computed.confidence).toBe(Math.round(computed.coverage * 0.6 * 1000) / 1000);
+    expect(row.basis).toEqual([{ source: 'health_connect', consent_epoch: 3 }]);
+  });
+
+  it('names every source Form drew a pillar from in the basis', async () => {
+    const withoutNightHrv = history(25).filter(s => s.signal !== 'overnight_hrv');
+    const series = { access: 'granted', read_at: READ_AT, sources: [
+      { source: 'apple', consent_epoch: 4, truncated: false, samples: withoutNightHrv },
+      { source: 'samsung', consent_epoch: 2, truncated: false, samples: history(25) },
+    ] };
+    const h = harness(series);
+    await run(h);
+    const row = h.writes.find(w => w.day === TODAY)!;
+    const computed = computeDailyScores(h.inputs.find(input => input.targetDay === TODAY)!).form;
+    if (computed.state !== 'available') throw new Error('expected an available Form');
+    expect(computed.sources).toEqual(['apple', 'samsung']);
+    expect(row.basis).toEqual([{ source: 'samsung', consent_epoch: 2 }, { source: 'apple', consent_epoch: 4 }]);
+    expect((row.form as Record<string, unknown>).confidence).toBe(computed.confidence);
+  });
+
+  it('offers Form the chosen source and the two most trusted others, so the basis never exceeds three', async () => {
+    const series = { access: 'granted', read_at: READ_AT, sources: [
+      { source: 'samsung', consent_epoch: 1, truncated: false, samples: history(25) },
+      { source: 'garmin', consent_epoch: 1, truncated: false, samples: history(26) },
+      { source: 'whoop', consent_epoch: 1, truncated: false, samples: history(25) },
+      { source: 'oura', consent_epoch: 1, truncated: false, samples: history(25) },
+      { source: 'apple', consent_epoch: 1, truncated: false, samples: history(25) },
+    ] };
+    const h = harness(series);
+    await run(h);
+    expect(h.inputs[0]!.formSources!.map(s => s.source)).toEqual(['garmin', 'apple', 'oura']);
+    expect(h.writes.every(w => (w.basis as unknown[]).length <= 3)).toBe(true);
+    expect(h.writes.find(w => w.day === TODAY)!.basis).toEqual([{ source: 'garmin', consent_epoch: 1 }, { source: 'apple', consent_epoch: 1 }]);
+  });
+
   it('writes only keys the database accepts, and every pillar is either a score or a reason', async () => {
     const h = harness(seriesOf(history(25)));
     await run(h);
@@ -155,7 +210,7 @@ describe('produceHealthScores', () => {
     expect(today.demand).toBeNull();
   });
 
-  it('computes from the source with the most readings and names only that source as the basis', async () => {
+  it('computes from the source with the most readings and, when Form needs nothing else, names only that source as the basis', async () => {
     const series = { access: 'granted', read_at: READ_AT, sources: [
       { source: 'health_connect', consent_epoch: 1, truncated: false, samples: history(3) },
       { source: 'apple', consent_epoch: 4, truncated: false, samples: history(25) },
