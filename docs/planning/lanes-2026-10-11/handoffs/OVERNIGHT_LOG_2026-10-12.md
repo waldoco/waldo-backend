@@ -507,7 +507,7 @@ Still open:
 - No new #116 comments since 04:40Z.
 - L3 is still absent from `ListAgents`. Nothing is ready to merge.
 
-## 04:57Z: #1076 ready; gate started
+## 04:56Z: #1076 ready; gate started
 
 - **L2 marked #1076 ready** at `eb959538`, with `cdd906dd` merged in. CI is 6/6, pgTAP included, and the PR is `CLEAN`.
   - The owner approved it twice: in this session (E4) and in L2's ("Merge as is, rest today").
