@@ -1163,3 +1163,18 @@ No second sweep for now, because the usage window has to last through wave 2 and
 **D13** is written up in the decisions file: one log shape, rows behind owner-visible promises are skipped and never mutated, and authority chains keep failing closed.
 
 - **11:55Z, wave 2 deploying.** L1 has the owner's go in L1's session for `614d1aff` (#1086 and #1087) and is deploying through its gate, with CI 6/6. Probe 7 depends on #1088 and is not a MUST 3 failure. Probe 8 tests wave 2. A new probe 9 proves MUST 3 on an app-only account with a confirmed zone and an event 35–40 minutes out. The Telegram-linked test account can't prove MUST 3. The owner's own staging account qualifies, if the owner agrees. The probe sheet is updated.
+
+## 11:56Z: #1089 (Weight) review FAIL at `dc9cdefc`; findings sent to L1
+
+- **Blocking** [verified]: CI shard 1/4 fails (run 38244121825). The new DO table `calendar_demand` has no row in the forget inventory (`forget-store-table.test.ts`). L1 picks its forget class and gives the reason; the reviewer proposes EXEMPT (counts only, purged on disconnect, erased by `deleteAll`).
+- **Should-fix:**
+  - fake zero load on days with no movement (`producer.ts:107-117`);
+  - past-day rows treated as final when they were fetched mid-day (`calendar-demand.ts:120`);
+  - failures are silent, with no code recorded;
+  - accounts are chosen by `calendar.events`, not by the scopes the read uses;
+  - Recovery and Form wait on the demand read inside `waitUntil`;
+  - a missing test that a confirmed owner's upload re-arms idempotently, since uploads now run `setup('app')`;
+  - the PR body says "capped", but the code drops the values.
+- **My call, under D13:** a permanent per-calendar error skips that calendar with a recorded code and is surfaced in Weight's used signals. Transient errors stay fail-closed.
+- **Passed:** health destinations (counts only; values reach Supabase through `context_write`); the signed route (HMAC, constant-time compare, owner-scoped; replay is possible within 35 days but returns counts only); no new scope; no contract or migration change; the hot-file pieces change no chat path.
+- **Still owner-merge:** it adds DO persistence, and HEALTH_PLANE_AMENDMENT ruling 1 needs the owner's yes before Weight is shown.
