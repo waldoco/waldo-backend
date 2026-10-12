@@ -5,7 +5,7 @@ import { appApprovalV1Schema } from '../../contracts/src/app/approvals';
 import { appApprovalParts, approvalDesk, PROPOSAL_TTL_MS } from '../src/channels/approvals';
 import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { appCaller } from '../src/channels/surfaces/app';
-import type { GoogleClient } from '../src/connectors/google';
+import { sha256Hex, type GoogleClient } from '../src/connectors/google';
 
 const NOW = Date.UTC(2026, 9, 10, 9, 0, 0);
 const HOUR = 60 * 60_000;
@@ -13,10 +13,11 @@ const at = (ms: number) => new Date(ms).toISOString() as never;
 
 const deskIn = (state: DurableObjectState, client: Partial<GoogleClient> = {}, google: () => Promise<GoogleClient> = async () => client as GoogleClient) => {
   let now = NOW, n = 0;
+  const logs: object[] = [];
   const desk = approvalDesk(state.storage.sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), newId: () => `exp${++n}`, now: () => now,
-    timezone: 'UTC', log: () => {}, google, currentRunRef: () => 'run-exp', effects: ownerEffectLedger(state.storage, () => now) });
+    timezone: 'UTC', log: entry => logs.push(entry), google, currentRunRef: () => 'run-exp', effects: ownerEffectLedger(state.storage, () => now) });
   const statusOf = (id: string) => state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status;
-  return { desk, statusOf, clock: { set: (ms: number) => { now = ms; }, get: () => now } };
+  return { desk, statusOf, logs, clock: { set: (ms: number) => { now = ms; }, get: () => now } };
 };
 const walk = (start: number, title = 'Walk') => ({ action: 'create' as const, title, start: at(start), end: at(start + 30 * 60_000), reason: 'a free slot' });
 
@@ -24,7 +25,7 @@ describe('approval expiry', () => {
   it('closes a request at its expiry on every reader, and offers no decision after it', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-expiry-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
-      const { desk, statusOf, clock } = deskIn(state);
+      const { desk, statusOf, logs, clock } = deskIn(state);
       const first = await desk.propose(walk(NOW + HOUR));
       const second = await desk.propose(walk(NOW + 2 * HOUR, 'Swim'));
       const message = await desk.proposeSendMessage({ channel: 'whatsapp', content: 'Running late.', idempotency_key: 'e'.repeat(64) });
@@ -39,6 +40,7 @@ describe('approval expiry', () => {
       expect(ledger).not.toMatch(/Walk.*waiting on you/);
       expect(ledger).toMatch(/- expired: Add "Walk"/);
       expect(statusOf(first)).toBe('expired');
+      expect(logs).toEqual([{ trace: 'approvals', hop: 'approvals_sweep', ms: 0, ok: true, code: 'approvals_expired', detail: '1' }]);
 
       clock.set(NOW + 2 * HOUR);
       expect(desk.pending(clock.get()).map(item => item.id)).toEqual([message]);
@@ -125,20 +127,32 @@ describe('approval expiry', () => {
     });
   });
 
-  it('finishes, after expiry, an approval whose change was already on record', async () => {
+  it('reconciles, after expiry, an approval whose change Google already applied, and never writes it twice', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-expiry-recorded-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
-      const created: string[] = [], dispatch = gated();
-      dispatch.release();
-      const { desk, statusOf, clock } = deskIn(state, calendarClient(created, dispatch));
-      const id = await desk.propose(walk(NOW + HOUR));
+      const events = new Map<string, Record<string, unknown>>(), writes: string[] = [], reads: string[] = [];
+      const client = {
+        createEvent: async ({ id, title, start, end, operationMarker }: { id: string; title: string; start: string; end: string; operationMarker: string }) => {
+          writes.push(id); events.set(id, { id, title, start, end, all_day: false, etag: 'e1', status: 'confirmed', operation_marker: operationMarker }); return { id, etag: 'e1' };
+        },
+        event: async (id: string) => { reads.push(id); const event = events.get(id); if (!event) throw new Error('not found'); return event; },
+      } as unknown as GoogleClient;
+      const { desk, statusOf, clock } = deskIn(state, client);
+      const proposal = walk(NOW + HOUR);
+      const id = await desk.propose(proposal);
       const payload = JSON.parse(state.storage.sql.exec<{ payload_json: string }>('SELECT payload_json FROM ledger WHERE id = ?', id).one().payload_json);
-      // An approval reserved its change and the object restarted before the change finished.
-      ownerEffectLedger(state.storage, () => NOW).reserve({ operationId: `approval:${id}:apply`, owner_ref: '7000000000001', tool: 'calendar_change', payload });
+      // Before a restart, the approval's change reached Google but its result was never recorded: the journal holds
+      // an attempting effect (the ledger's own key) and the request is still open.
+      const operation = `approval:${id}:apply`, marker = await sha256Hex(operation);
+      const reserved = ownerEffectLedger(state.storage, () => NOW).reserve({ operationId: operation, owner_ref: '7000000000001', tool: 'calendar_change', payload });
+      state.storage.kv.put(`owner:effect:${operation}`, { ...reserved, state: 'attempting' });
+      await client.createEvent({ id: marker, title: proposal.title, start: proposal.start, end: proposal.end, operationMarker: marker });
+
       clock.set(NOW + HOUR + 1);
       expect(desk.ledger([])).not.toContain('- expired:');
       expect((await desk.decide(id, 'a', 'test')).toast).toBe('Done');
-      expect(created).toHaveLength(1);
+      expect(writes).toEqual([marker]);
+      expect(reads).toEqual([marker]);
       expect(statusOf(id)).toBe('done');
     });
   });
