@@ -533,3 +533,24 @@ Still open:
 - **Other L1 items:**
   - The deletion-proof script is ready; L1 is asking the owner for a throwaway account.
   - L1 asked L4 for the two-send re-probe on `cdd906dd`.
+
+## 05:12Z: #1076 review FAIL (one required change); not merged
+
+- **Independent review at `eb959538`: FAIL.** It read the code and the CI run (38205232381, 6/6) and ran no tests locally.
+  - **Required:** the API accepts a second defer of the same approval.
+    - `project()` offers defer without checking `deferred_at` (`approvals.ts:333-334`), and the UPDATE guards on status only (`:413`).
+    - Fix: add `AND deferred_at IS NULL`, plus a red-first test.
+  - **Body claims to correct:**
+    - "ends with its expiry" is false until L3's expiry fix lands, because only `decide()` writes `expired`;
+    - "approve from its chat card or the open list" is false in the shipped app.
+  - **Test gaps:** no test catches dropping `|| action === 'd'`, leaving `'d'` out of the expiry check, or dropping `'review_only'` from the filter.
+  - **PASSes:**
+    - the DO ALTER (PRAGMA-guarded, in the only desk factory, reversible);
+    - app.v1 unchanged;
+    - no auth or egress change; health N/A;
+    - concurrency, since everything runs inside `serial()`.
+- **Residual 1, for the owner:** the shipped app can't decide a deferred approval.
+  - The app reads only the default list. App-turn proposals get no Telegram card, and console approval is limited.
+  - So "Not now" on an app proposal is a dead end until L2's re-raise follow-up ships.
+  - Recommendation: deploy #1076 in the same wave as that follow-up.
+- Findings sent to L2 (SendMessage). Merge after the fix: a delta check, CI, then the advisor.
