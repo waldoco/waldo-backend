@@ -15,11 +15,12 @@ import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 
 const CARD_TEXT = 'Your morning is clear until noon.';
-const model = vi.hoisted(() => ({ calls: 0 }));
+const model = vi.hoisted(() => ({ calls: 0, requests: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete(request: import('../src/llm/provider').LLMGatewayRequest) {
     model.calls += 1;
+    model.requests.push(JSON.stringify(request.request));
     return { ok: true as const, data: { model: request.request.model, text: CARD_TEXT, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -30,10 +31,10 @@ const OWNER_ID = '4a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
 // A fallback zone that differs from the directory's 'UTC' default, so saving the fallback is observable.
 const FALLBACK = 'Asia/Tokyo';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
-const wire = { saved: [] as string[], telegramSent: 0, other: [] as string[] };
+const wire = { saved: [] as string[], telegramSent: 0, other: [] as string[], healthLogs: [] as unknown[] };
 
 beforeEach(() => {
-  model.calls = 0; wire.saved = []; wire.telegramSent = 0; wire.other = [];
+  model.calls = 0; model.requests = []; wire.saved = []; wire.telegramSent = 0; wire.other = []; wire.healthLogs = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -41,6 +42,7 @@ beforeEach(() => {
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
     if (fn === 'set_owner_settings') { wire.saved.push(asked.p_timezone!); return Response.json(true); }
+    if (fn === 'health_log_recent') return Response.json(wire.healthLogs);
     if (fn === 'health_context_read' || fn === 'assert_channel_presence') return Response.json(fn === 'assert_channel_presence' ? true : null);
     if (url.startsWith('https://api.telegram.org/')) { wire.telegramSent += 1; return Response.json({ ok: true, result: { message_id: 1, chat: { id: 7 } } }); }
     wire.other.push(url);
@@ -187,5 +189,35 @@ describe('proactive work for an owner who only uses the app', () => {
       expect(await appChat(owner, 'proactive-confirmed-fire')).toContainEqual({ role: 'assistant', text: CARD_TEXT });
     });
     expect(wire.telegramSent).toBe(0);
+  });
+
+  // Every stored copy in the owner DO: KV values and the rows of every table it can read.
+  const storedText = (state: DurableObjectState) => {
+    const kv = [...state.storage.kv.list()].map(([key, value]) => `${key} ${JSON.stringify(value)}`);
+    const tables = state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\'").toArray().map(row => row.name);
+    return [...kv, ...tables.flatMap(table => state.storage.sql.exec(`SELECT * FROM "${table}"`).toArray().map(row => JSON.stringify(row)))].join('\n');
+  };
+
+  it('a day card is written with the owner\'s health logs, but no stored copy of its prompt carries their numbers', async () => {
+    const name = 'proactive-health-strip';
+    const at = new Date(Date.now() - 3_600_000).toISOString();
+    wire.healthLogs = [
+      { id: 1, kind: 'meal', logged_at: at, payload: { description: 'oat bowl', calories_estimate: 640 } },
+      { id: 2, kind: 'workout', logged_at: at, payload: { type: 'run', duration_minutes: 37 } },
+    ];
+    await withAppOwner(name, { zone: 'UTC', confirmed: true }, async (owner, state) => {
+      dayPlanBook(state.storage.sql).save(localIso(Date.now(), 'UTC').slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
+      await new Scheduler(state.storage.sql, state.storage, productionDeps())
+        .schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: null });
+      await owner.alarm();
+      expect(await appChat(owner, name)).toContainEqual({ role: 'assistant', text: CARD_TEXT });
+      const reply = model.requests.find(request => request.includes('oat bowl'));
+      expect(reply).toContain('~640 kcal, estimate');
+      expect(reply).toContain('run, 37 min');
+      const stored = storedText(state);
+      expect(stored).toContain(CARD_TEXT);
+      expect(stored).not.toContain('640 kcal');
+      expect(stored).not.toContain('37 min');
+    });
   });
 });

@@ -1981,10 +1981,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const runs = runBook(storage.sql, clock, () => deps.newRunId().slice(0, 8));
     // A9: recent meal/workout logs join the proactive context; the read degrades to empty
     // when the store is unlinked so beats and the /ledger command never break on it.
-    const ledger = async () =>
-      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), proactivityLine(loops.proactivity()), schedulePreferencesLine(schedPrefs.all()), healthSection(await healthLogs.recent(10), clock.timezone)]
+    // A job prompt is stored with the conversation and indexed for search, so it carries the ledger without the health logs;
+    // those reach the model as the turn's context, which is never stored.
+    const healthLogLines = async () => healthSection(await healthLogs.recent(10), clock.timezone);
+    const promptLedger = async () =>
+      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), proactivityLine(loops.proactivity()), schedulePreferencesLine(schedPrefs.all())]
         .filter((section) => section !== '')
         .join('\n\n');
+    const ledger = async () => [await promptLedger(), await healthLogLines()].filter((section) => section !== '').join('\n\n');
     const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
     // Media reads are per-channel: Telegram file ids go through getFile; WhatsApp media ids go
     // through the Graph two-step (W4). Both feed the same transcriber/attachment pipeline.
@@ -2151,6 +2155,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return context;
       }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context,this.logSkippedLoad)} : undefined,
     );
+    // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
+    const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4]) =>
+      responder.prompt(trace, owner, said, async (_hop, work) => work(), toolNames, undefined, undefined, await healthLogLines());
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
       if (input === null) return;
@@ -2519,8 +2526,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const analysisChanges = sourceFollowups ? [...changes.filter(change => change.source !== 'mail'), ...pendingMail] : changes;
         let text: string | null = null;
         if (canSend && analysisChanges.length) {
-          const said = updateCardPrompt(localIso(now, clock.timezone), { changes: changeLines(analysisChanges), ledger: await ledger(), feedback: updates.feedback(), volume: volume === 'high' ? 'high' : 'normal', sourceFollowups });
-          const reply = (await responder.prompt(trace, owner, said, async (hop, work) => work(), sourceFollowups ? ['get_context', 'read_owner_context', 'search_episodes', 'open_loop'] : undefined)).trim();
+          const said = updateCardPrompt(localIso(now, clock.timezone), { changes: changeLines(analysisChanges), ledger: await promptLedger(), feedback: updates.feedback(), volume: volume === 'high' ? 'high' : 'normal', sourceFollowups });
+          const reply = (await ledgerJob(trace, said, sourceFollowups ? ['get_context', 'read_owner_context', 'search_episodes', 'open_loop'] : undefined)).trim();
           if (reply && reply !== SKIP_UPDATE) text = reply;
           updates.judgedMail(pendingMail);
         }
@@ -2530,7 +2537,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           updates.pushed(id, text);
         }
         await reviewMailFollowup({ loops, now, timezone: clock.timezone, allowed: sourceFollowups && canSend && analysisChanges.length === 0,
-          ledger, prompt: said => { followupPrompted = true; return responder.prompt(`${trace}:mail-followup`, owner, said, async (_hop, work) => work(), ['get_context', 'read_owner_context', 'search_episodes']); },
+          ledger: promptLedger, prompt: said => { followupPrompted = true; return ledgerJob(`${trace}:mail-followup`, said, ['get_context', 'read_owner_context', 'search_episodes']); },
           enqueue: async (text, mailFollowup) => {
             const id = `mail-followup:${mailFollowup.loopId}:${mailFollowup.due}:${mailFollowup.timezone}:${mailFollowup.messageId}`;
             const known = finalOutbox.records().find(record => record.id === id);
@@ -2571,10 +2578,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const midnight = localToEpoch(`${localIso(now, clock.timezone).slice(0, 10)}T00:00`, clock.timezone);
       const said = await composeDayCard(card, now, clock.timezone, {
         google: client, connectable: !client && google.configured(),
-        ledger: await ledger(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
+        ledger: await promptLedger(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
       });
       try {
-        const text = (await responder.prompt(trace, owner, said, async (hop, work) => work())).trim();
+        const text = (await ledgerJob(trace, said)).trim();
         const skipped = !text || isSkip(text);
         if (!skipped) await sentOrThrow(api.sendMessage({ chat_id: owner, text }));
         plans.sent(localIso(entry.occurrence_at, clock.timezone).slice(0, 10), card.id);
