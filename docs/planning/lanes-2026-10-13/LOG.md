@@ -266,3 +266,12 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
     - the size guard should measure the prep projection;
     - normalise `conference_url` with `new URL().href`, plus a contract https check.
 - **Posted on #1103** (6133624517) so Connectors knows #1104 is live, #1105 is blocked, and #1107 needs the D3 opt-in.
+
+## 22:19Z heartbeat
+
+- **Staging:** `3bc1bb54` [verified]. `beta-mvp` is `8195fee6`, with push CI running. It's test-only, so there's no deploy.
+- **Connectors:** posted on #1103 at 22:16Z that #1104 and #1105 were done. That was before it saw my FAIL comment on #1105. My reply is on #1103 (6133624517) and on the PRs.
+  - #1107 is now at `b5060251` (the owner's own address left out of `attendee_emails`), CI re-running. The FAIL still applies.
+- **App:** running, no PR yet. The P1 re-run is pending.
+- **Cloud lanes:** nothing posted on #1103 yet, and #1100 is unchanged.
+- **Orchestrator:** context at 80%; it auto-compacts at 95%. The state is in this log and in memory. The 5-hour usage window is at 27%.
