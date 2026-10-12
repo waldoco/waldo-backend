@@ -337,7 +337,7 @@ describe('gmail search + thread read (A1)', () => {
     if (url.includes('/gmail/v1/users/me/threads/t1')) return Response.json({ messages: [
       { id: 'm1', internalDate: '1759140000000', snippet: 'snip',
         payload: { mimeType: 'multipart/alternative', headers: [{ name: 'From', value: 'sam@example.com' }, { name: 'Subject', value: 'Dinner' }],
-          parts: [{ mimeType: 'text/plain', body: { data: b64('Thursday works, 7pm.') } }, { mimeType: 'text/html', body: { data: b64('<p>ignored</p>') } }] } },
+          parts: [{ mimeType: 'text/plain', body: { data: b64('Thursday works, 7pm.') } }, { mimeType: 'text/html', body: { data: b64('<p>Thursday works, <b>7pm</b>.</p>') } }] } },
       { id: 'm2', internalDate: '1759143600000', snippet: 'code falls back',
         payload: { mimeType: 'text/plain', headers: [{ name: 'From', value: 'noreply@example.com' }, { name: 'Subject', value: 'Sign in' }], body: { data: b64('Your login code is 123456.') } } },
     ] });
@@ -378,7 +378,7 @@ describe('gmail search + thread read (A1)', () => {
     expect(listUrl).toContain(`before:${Math.floor(Date.parse('2026-09-30T00:00:00Z') / 1000)}`);
   });
 
-  it('readThread decodes the text/plain body, falls back to the snippet, and caps at 32,000 chars', async () => {
+  it('readThread decodes the last alternative (here HTML), and caps at 32,000 chars', async () => {
     const client = googleClient(app, { refresh_token: 'rt' }, mailFetcher([]));
     const messages = await client.readThread('t1', 10);
     expect(messages).toHaveLength(2);

@@ -175,7 +175,13 @@ export type CalendarChange = Omit<CalendarItem, 'status'> & Readonly<{ status: s
 export type MailItem = Readonly<{ id: string; thread_id: string; from: string; subject: string; snippet: string; at: string }>;
 // A1: a thread-read message carries the decoded body; the list projection (MailItem) stays
 // snippet-only so 'what is new' scans never pull bodies into a turn.
-export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string; message_id?: string; references?: readonly string[] }>;
+// body_source says what the body was read from; 'snippet' means only Gmail's preview rendered.
+// artifact_scan carries HTML link targets for the verification-artifact relay only and is never shown.
+// fullBodies is opt-in: it fetches parts Gmail holds by attachmentId and returns HTML link targets as
+// artifact_scan, so a caller that only needs headers pays no extra fetches and a caller that does not
+// strip artifact_scan never receives it.
+export type ThreadRead = Readonly<{ fullBodies?: boolean }>;
+export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string; message_id?: string; references?: readonly string[]; body_source?: 'plain' | 'html' | 'snippet' | 'none'; artifact_scan?: string }>;
 export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string; messageId?: string; inReplyTo?: string; references?: readonly string[] }>;
 
 // Conservative wire Message-ID validation: never interpolate model/provider header text.
@@ -295,7 +301,7 @@ export type GoogleClient = Readonly<{
   newMail(since: number, limit: number): Promise<readonly MailItem[]>;
   searchMail(query: string, limit: number): Promise<readonly MailItem[]>;
   readThread(threadId: string, limit: number): Promise<readonly ThreadMessage[]>;
-  threadPage?(threadId: string, limit: number, cursor?: string): Promise<Readonly<{messages: readonly ThreadMessage[]; cursor: string | null}>>;
+  threadPage?(threadId: string, limit: number, cursor?: string, read?: ThreadRead): Promise<Readonly<{messages: readonly ThreadMessage[]; cursor: string | null}>>;
   tasks(status: TaskStatusFilter, limit: number): Promise<readonly TaskItem[]>;
 }>;
 
@@ -313,27 +319,47 @@ const b64urlDecode = (data: string): string => {
 // Thread bodies enter model context only through the E1 verification-artifact quarantine
 // (tools/live/google.ts); this cap is the second wall - a huge body never floods a turn.
 const BODY_CAP = 32_000;
-type GmailPayload = Readonly<{ mimeType?: string; body?: { data?: string }; parts?: GmailPayload[]; headers?: { name: string; value: string }[] }>;
+type GmailPayload = Readonly<{ mimeType?: string; filename?: string; body?: { data?: string; attachmentId?: string; size?: number }; parts?: GmailPayload[]; headers?: { name: string; value: string }[] }>;
 type GmailFullMessage = Readonly<{ id?: string; threadId?: string; snippet?: string; internalDate?: string; payload?: GmailPayload }>;
-const htmlText = (html: string): string => {
+const LINK_SCAN_CAP = 100;
+const htmlText = (html: string): Readonly<{ text: string; links: readonly string[] }> => {
   const blocks = new Set(['p', 'div', 'br', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'section', 'article', 'hr']);
   let suppressed = 0;
   const chunks: string[] = [];
+  const links: string[] = [];
   const boundary = () => { if (!suppressed && chunks.length && chunks.at(-1) !== '\n') chunks.push('\n'); };
   new Parser({
-    onopentag(name) { if (name === 'script' || name === 'style') suppressed++; else if (blocks.has(name)) boundary(); },
+    onopentag(name, attributes) {
+      if (name === 'script' || name === 'style') suppressed++;
+      else if (blocks.has(name)) boundary();
+      if (name === 'a' && /^https?:\/\//i.test(attributes.href ?? '') && links.length < LINK_SCAN_CAP) links.push(attributes.href!);
+    },
     ontext(text) { if (!suppressed) chunks.push(text); },
     onclosetag(name) { if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) boundary(); },
   }, { decodeEntities: true }).end(html);
-  return chunks.join('').trim();
+  return { text: chunks.join('').trim(), links };
 };
-const threadBody = (payload: GmailPayload | undefined): string => {
-  const partText = (part: GmailPayload, mime: string): string => {
-    if (part.mimeType === mime && part.body?.data) return b64urlDecode(part.body.data);
-    for (const child of part.parts ?? []) { const text = partText(child, mime); if (text.trim()) return text; }
-    return '';
-  };
-  return (payload ? partText(payload, 'text/plain').trim() || htmlText(partText(payload, 'text/html')) : '').trim().slice(0, BODY_CAP);
+// A huge text part held by attachmentId is left to the snippet rather than decoded whole.
+const MAX_FETCHED_BODY_BYTES = 1_000_000;
+const attachedFile = (part: GmailPayload) => Boolean(part.filename) || (part.headers ?? []).some(h => h.name.toLowerCase() === 'content-disposition' && /^\s*attachment\b/i.test(h.value));
+type RenderedBody = Readonly<{ text: string; source: 'plain' | 'html'; links: readonly string[] }>;
+// RFC 2046 5.1.4: alternatives run from least to most faithful, so the last one that renders is the body.
+// Any other multipart takes its first part that renders; attached files are never the body.
+const renderedBody = async (part: GmailPayload, data: (part: GmailPayload) => Promise<string | null>): Promise<RenderedBody | null> => {
+  if (attachedFile(part)) return null;
+  if (part.mimeType === 'text/plain' || part.mimeType === 'text/html') {
+    const raw = await data(part);
+    if (raw === null) return null;
+    const html = part.mimeType === 'text/html';
+    const rendered = html ? htmlText(raw) : { text: raw.trim(), links: [] };
+    return rendered.text ? { ...rendered, source: html ? 'html' : 'plain' } : null;
+  }
+  const children = part.parts ?? [];
+  for (const child of part.mimeType === 'multipart/alternative' ? [...children].reverse() : children) {
+    const body = await renderedBody(child, data);
+    if (body) return body;
+  }
+  return null;
 };
 
 // Single-shot access-token mint for callers that need a raw bearer (Google-auth MCP servers on
@@ -517,7 +543,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     const header = (name: string) => message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
     return { id, thread_id: message.threadId ?? '', from: header('From'), subject: header('Subject'), snippet: message.snippet ?? '', at: new Date(Number(message.internalDate ?? 0)).toISOString() };
   }));
-  const threadPage = async (threadId: string, limit: number, cursor?: string): Promise<Readonly<{messages:readonly ThreadMessage[];cursor:string|null}>> => {
+  const threadPage = async (threadId: string, limit: number, cursor?: string, read?: ThreadRead): Promise<Readonly<{messages:readonly ThreadMessage[];cursor:string|null}>> => {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw new Error('invalid thread page limit');
       const json = await call(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`) as { id?:string; messages?: GmailFullMessage[] };
       if (!json || !Array.isArray(json.messages) || (json.id !== undefined && json.id !== threadId) || json.messages.some(m => !m || typeof m.id !== 'string' || !m.id || m.threadId !== undefined && m.threadId !== threadId)) throw new Error('invalid Gmail thread response');
@@ -531,13 +557,31 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
           offset = decoded.offset;
         } catch { throw new Error('invalid thread cursor or thread changed; read the first page again'); }
       }
-      const messages = json.messages.slice(offset, offset + limit).map(message => {
+      const partData = (messageId: string) => async (part: GmailPayload): Promise<string | null> => {
+        if (part.body?.data) return b64urlDecode(part.body.data);
+        const attachment = part.body?.attachmentId;
+        if (!read?.fullBodies || !attachment || (part.body?.size ?? 0) > MAX_FETCHED_BODY_BYTES) return null;
+        try {
+          const { data } = await call(`${GMAIL}/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachment)}`) as { data?: unknown };
+          return typeof data === 'string' ? b64urlDecode(data) : null;
+        } catch (error) {
+          // A refused part falls back like an empty one; body_source then says only the snippet was read.
+          if (error instanceof GoogleError) return null;
+          throw error;
+        }
+      };
+      const messages = await Promise.all(json.messages.slice(offset, offset + limit).map(async message => {
         const header = (name: string) => message.payload?.headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
         const messageIds = message.payload?.headers?.filter(h => h.name.toLowerCase() === 'message-id') ?? [];
         const messageId = messageIds.length === 1 ? messageIds[0]!.value.trim() : '';
         const references = (message.payload?.headers?.filter(h => h.name.toLowerCase() === 'references').map(h => h.value).join(' ') ?? '').trim().split(/\s+/).filter(Boolean);
-        return { ...(validMessageId(messageId) ? {message_id:messageId} : {}), ...(references.length ? {references} : {}), id: message.id ?? '', from: header('From'), subject: header('Subject'), at: new Date(Number(message.internalDate ?? 0)).toISOString(), body: threadBody(message.payload) || (message.snippet ?? '').slice(0, BODY_CAP) };
-      });
+        const rendered = message.payload ? await renderedBody(message.payload, partData(message.id!)) : null;
+        const snippet = message.snippet ?? '';
+        const body: Pick<ThreadMessage, 'body' | 'body_source' | 'artifact_scan'> = rendered
+          ? { body: rendered.text.slice(0, BODY_CAP), body_source: rendered.source, ...(read?.fullBodies && rendered.links.length ? { artifact_scan: rendered.links.join('\n') } : {}) }
+          : { body: snippet.slice(0, BODY_CAP), body_source: snippet.trim() ? 'snippet' : 'none' };
+        return { ...(validMessageId(messageId) ? {message_id:messageId} : {}), ...(references.length ? {references} : {}), id: message.id ?? '', from: header('From'), subject: header('Subject'), at: new Date(Number(message.internalDate ?? 0)).toISOString(), ...body };
+      }));
       const next = offset + messages.length;
       return {messages, cursor: next < ids.length ? b64url(new TextEncoder().encode(JSON.stringify({binding,offset:next}))) : null};
   };
