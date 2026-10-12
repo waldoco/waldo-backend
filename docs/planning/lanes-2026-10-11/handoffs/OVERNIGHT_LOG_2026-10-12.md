@@ -583,3 +583,19 @@ Still open:
   - L1 reports 113 health tests passing, typecheck, guards 37/37 and 6 mutations caught.
   - Resting heart rate no longer substitutes for HRV, which is stricter. Results stay `candidate_unaccepted`.
 - **Gate plan:** the independent reviews for #1066 and #1083 run after the 06:30Z reset. Wave 1 is at about 10:00Z.
+
+## 06:06Z: #1084 (honest connect on the app) ready
+
+- **L2 opened #1084** (MUST 2) at head `6587c579`, CI pending, mergeable.
+- **What it changes on the app:**
+  - Nothing is minted or sent: no chat connect offer and no dead-grant reconnect notice. Minting a ticket revokes the owner's open connect sessions.
+  - The model gets L4's path to Connections, and the tool loop tells it what happened to an offer.
+  - The app text sink refuses link keyboards.
+- **L2's evidence:**
+  - the full local wall passed at `402703d0`;
+  - 12 mutations caught at `6587c579`;
+  - it merges cleanly with #1066 and #1076;
+  - #116 lines posted (6118675388);
+  - `verify:supabase` NOT RUN locally, pgTAP UNAVAILABLE; CI covers both.
+- **L2's note for MUST 3:** once Prep, update cards and mail follow-ups run on the app, a grant that dies there goes unannounced. L2 will add a link-free app notice with MUST 3, or right after it.
+- **Review queue for after the 06:30Z reset:** #1066 (delta), #1083 and #1084, in parallel. #1076 waits only on its CI rerun.
