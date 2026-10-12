@@ -1466,3 +1466,10 @@ The reviewer read `d7d73e68` [verified by reading]:
 **Recommendation:** fix 2 and 3 before the merge, since both are small. Track 1 as a follow-up for L4 and L1, with stable window ids across zone changes, before any wider beta or travel. Or fix it first, if the owner wants.
 
 These can't reach L4 yet: the message cap applies, and L4 is asking the owner directly.
+
+- **13:52Z, #1088 delta review PASS** at `1e1a4b39` (source-only; CI 6/6 green).
+  - `owner_principal_ref` has one writer (DO `:629`). It is directory-verified, the first write wins, and a mismatch returns 403. No header, model or tool path writes it.
+  - The transition test discriminates; without an alias it shows 0 enabled. The partial-revert rollback is sound.
+  - **LOW, for the body:** rolling the *Worker version* back past this deploy acts like the full revert. Skills turn off until a roll forward; nothing is destroyed. Add "fix forward; never roll back the Worker past this deploy".
+  - **Notes:** `bindIdentity` also runs on WhatsApp admission (this predates the PR). The stranger-alias negative test is weak.
+  - **Ready for the owner's merge.** The rollback-text fix for L2 is queued behind the message cap.
