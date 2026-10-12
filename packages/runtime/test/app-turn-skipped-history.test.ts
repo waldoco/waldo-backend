@@ -160,6 +160,22 @@ describe('an app turn over a history that holds a row failing the entry shape', 
     });
   });
 
+  it('a turn over three stored rows without count or leaf keys keeps all three and writes after the last', async () => {
+    const name = 'turn-three-no-count';
+    const rows = [user('u1', 'First question.', null), reply('u1-reply', 'First answer.', 'u1'), broken('broken-1', 'u1-reply')];
+    const stored = history(rows, 'broken-1');
+    delete stored[`${PREFIX}count`];
+    delete stored[`${PREFIX}leaf`];
+    await withOwner(name, stored, async (owner, state) => {
+      const turn = await send(owner, state, name, 'client-three-0001', 'Next question.');
+      expect(turn.outcome).toBe('completed');
+      const slot = (index: number) => state.storage.kv.get<Row>(`${PREFIX}conv:${String(index).padStart(10, '0')}`);
+      expect([0, 1, 2].map(slot)).toEqual(rows);
+      expect([3, 4].map(index => slot(index)?.id)).toEqual([turn.id, `${turn.id}-reply`]);
+      expect(state.storage.kv.get(`${PREFIX}count`)).toBe(5);
+    });
+  });
+
   it('a save outside a run scope also writes after the last stored row', async () => {
     const { inputOrigin: _origin, ...lone } = user('u1', 'Lone question.', null);
     const stored = history([lone as Row], 'u1');
@@ -184,6 +200,20 @@ describe('an app turn over a history that holds a row failing the entry shape', 
       await expect(store.save([user('u2', 'Next question.', 'u1-reply') as never], 'u2')).rejects.toThrow('canonical history entry invalid');
       expect(state.storage.kv.get(`${PREFIX}witness:u2`)).toBeUndefined();
       expect(state.storage.kv.get(`${PREFIX}count`)).toBe(1);
+    });
+  });
+
+  it('inside a run scope, a last stored row under a key that is not a slot number stops the save and changes nothing', async () => {
+    const first = user('u1', 'First question.', null);
+    const stored = { ...history([first], 'u1'), [`${PREFIX}conv:stray`]: reply('u1-reply', 'First answer.', 'u1'), [`${PREFIX}witness:u1-reply`]: { lineage: 'canonical_v1', principal_ref: PRINCIPAL, tenant_ref: TENANT, entry: reply('u1-reply', 'First answer.', 'u1') } };
+    await withOwner('save-scoped-stray-slot', stored, async (_owner, state) => {
+      const store = canonicalOwnerConversationStore(state.storage, { invocation: { verified_authority: { principal_ref: PRINCIPAL, tenant_ref: TENANT } }, assertCurrent: async () => undefined } as never);
+      await store.load();
+      const snapshot = () => JSON.stringify([...state.storage.kv.list({ prefix: PREFIX })]);
+      const before = snapshot();
+      const scope = { runId: 'run-stray', attempt: 'attempt-one', deadline: Date.now() + 30_000, signal: new AbortController().signal, admit: () => undefined, commit: (work: () => void) => work() };
+      await expect(store.save([user('u2', 'Next question.', 'u1-reply') as never], 'u2', scope as never)).rejects.toThrow('canonical history entry invalid');
+      expect(snapshot()).toBe(before);
     });
   });
 

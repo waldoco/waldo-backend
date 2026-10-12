@@ -148,7 +148,7 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
       if (!checked.some(entry => entry.id === leafId) && (!previousLeaf || !matches(previousLeaf, validate(previousLeaf.entry)))) throw new Error('canonical history leaf mismatch');
       await context.assertCurrent();
       // New rows go after both the stored count and the last stored row. An older build could leave rows the count
-      // does not cover, and a write at the count would then replace a row the read left out.
+      // does not cover, and a write at the count would then replace any stored row at or past it.
       const nextSlot = (count: number, last: string | undefined) => {
         if (last === undefined) return count;
         const slot = last.slice(`${prefix}conv:`.length);
