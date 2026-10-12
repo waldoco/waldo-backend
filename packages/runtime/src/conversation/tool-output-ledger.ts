@@ -12,8 +12,8 @@ export type ToolOutputEntry = Readonly<{
   tool: string;
   ok: boolean;
   at: number;
-  // The producing tool's own taint. Admission and staging treat every row as external data whatever it is; a row
-  // without one counts as external.
+  // The turn's running taint when this output landed: external when it or anything earlier in the turn came from
+  // outside. Admission and staging treat every row as external data whatever it is; a row without one counts as external.
   taint: SourceTaint;
   // 'owner' when the owner's own turn produced the output. A row stored before origins were kept is never the owner's.
   origin?: 'owner' | 'machine';
@@ -124,6 +124,13 @@ const ledgerSourcesFromRows = (topic: string, rows: Iterable<[string, ToolOutput
   return { sources, incomplete };
 };
 
+// A failure's text can carry a provider's words even from a tool that is not external, so later turns see only its typed code.
+const failureOf = (entry: ToolOutputEntry): string => {
+  let code: unknown;
+  try { code = (JSON.parse(entry.summary.slice(0, entry.summary.lastIndexOf('}') + 1)) as { code?: unknown } | null)?.code; } catch { /* A cut or untyped failure shows no code. */ }
+  return `${entry.tool} failed${typeof code === 'string' && /^[a-z_]{1,40}$/.test(code) ? ` (${code})` : ''}`;
+};
+
 // Each kept row with what a later turn may read of it; a row that names an approval the desk can't answer for is left out.
 const shownRows = async (storage: KeyValueStorage, options: Readonly<{ proposalState?: ProposalState }>, texts: readonly string[], kept: (row: ToolOutputEntry) => boolean = () => true) => {
   const redact = summaryRedactor(texts, '[forgotten]');
@@ -209,9 +216,9 @@ export const toolOutputLedger = (storage: KeyValueStorage, options: Readonly<{ p
     }));
   },
   // What the owner's own earlier turns' tools returned. Provider text never carries across turns: an external result shows
-  // only when it is the desk's state for an approval it proposed.
+  // only when it is the desk's state for an approval it proposed, and a failure only as its tool and code.
   async ownerTurnResults(texts: readonly string[] = []): Promise<readonly string[]> {
-    return (await shownRows(storage, options, texts, ownersRow)).filter(({ entry, desk }) => desk || entry.taint === null).map(({ text }) => text);
+    return (await shownRows(storage, options, texts, ownersRow)).filter(({ entry, desk }) => desk || entry.taint === null).map(({ entry, text }) => entry.ok ? text : failureOf(entry));
   },
 });
 

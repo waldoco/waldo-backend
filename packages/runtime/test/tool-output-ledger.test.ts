@@ -300,6 +300,15 @@ describe('earlier results for the owner\'s turn', () => {
     ]);
   });
 
+  it('show a failed result as its tool and typed code only, never its error text', async () => {
+    const ledger = toolOutputLedger(fakeStorage() as never);
+    const refused = '{"ok":false,"error":"Google refused the request (403): mail quota for project 4417 exceeded","code":"rejected"}';
+    await ledger.record({ tool: 'send_email', ok: false, at: 1000, taint: null, origin: 'owner', summary: refused });
+    await ledger.record({ tool: 'set_reminder', ok: false, at: 1001, taint: null, origin: 'owner', summary: 'not json' });
+    expect(await ledger.ownerTurnResults()).toEqual(['send_email failed (rejected)', 'set_reminder failed']);
+    expect((await ledger.recent())[0]!.text).toBe(`send_email failed: ${refused}`);
+  });
+
   it('admits a row as external data whatever its own taint, so an own result carrying a health reading is never kept', async () => {
     const storage = fakeStorage();
     await toolOutputLedger(storage as never).record({ tool: 'read_owner_context', ok: true, at: 1000, taint: null, origin: 'owner', summary: '{"ok":true,"data":{"note":"blood pressure 128/84"}}' });
