@@ -632,3 +632,28 @@ Still open:
   - It also handles a day card calling `raise_approval` on scheduled app work: that now says "back in the list, no card on this reply".
   - It also changes WhatsApp's text parser so it accepts `d:`. That's a one-character edit in Ashish's adapter.
   - L2 is on track for about 08:30Z.
+
+## 06:47Z: #1084 review: one required truthfulness fix; not merged
+
+- **Independent review at `6587c579`.** The reviewer read the code and ran no tests.
+  - **Verdict:** HOLD, but the reason is a code fix, not an owner hold.
+  - **Required:**
+    - `unconnectedLine` (`messaging-behavior.ts:132`) still tells the model "…so a connect button is sent". It goes into every reply's system prompt (`owner-turn.ts:471`) on every runtime, so it is false on the app for an owner with no grant.
+    - Fix: reword it, and assert in the app test that the reply prompt doesn't contain it.
+  - **Nits:**
+    - a bare `catch` without a log (`tool-loop.ts:129`);
+    - a comment with no code (`mcp.ts:111-112`);
+    - a stale comment (`owner-turn.ts:85-87`);
+    - the skip logs `ok:false`;
+    - "the app chat shows none" overstates it.
+  - **PASS:**
+    - the app path returns guidance before any mint or write;
+    - Telegram and WhatsApp are unchanged;
+    - the `noteHealth` skip is placed correctly;
+    - the tests catch the key mutations;
+    - no auth or route change, and app.v1 is unchanged;
+    - concurrency is safe.
+  - **Residuals:**
+    - leftover `google:reauth-noticed` entries from the base's fake acknowledgement;
+    - `APP_CONNECT_GUIDANCE` hard-codes app navigation with no contract behind it ("top left" unverified).
+- Findings sent to L2.
