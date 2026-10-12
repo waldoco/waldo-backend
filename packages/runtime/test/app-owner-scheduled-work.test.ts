@@ -76,7 +76,9 @@ const driveAlarm = async (name: string, identity: Identity) => {
     const reminder = await book.set({ note: 'call Sam', at: clockBack(30 * 60_000)().toISOString().slice(0, 16), repeat: 'none' });
     state.storage.kv.put('do_name', name);
     if (identity.heartbeatDue) await armHeartbeat(new Scheduler(state.storage.sql, state.storage, productionDeps()), Date.now() - 60 * 60_000);
-    if (identity.sweepDue) await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: { type: 'interval', every_ms: 10 * 60_000, phase_ms: 0 } });
+    // The interval's phase sits on the due occurrence, so no later occurrence has come due yet whatever the wall clock reads.
+    const sweepAt = Date.now() - 60_000;
+    if (identity.sweepDue) await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: sweepAt, dueAt: sweepAt, recurrence: { type: 'interval', every_ms: 10 * 60_000, phase_ms: sweepAt % (10 * 60_000) } });
     if (identity.telegram) state.storage.kv.put('telegram_subject', '7');
     if (identity.telegramUnlinked) state.storage.kv.put('telegram_unlinked', true);
     if (identity.app === 'own') state.storage.kv.put('app_subject', String(appSubjectFor(name)));
