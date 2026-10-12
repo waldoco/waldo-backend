@@ -22,6 +22,7 @@ The eight pillars:
 - Backend `beta-mvp` `889efa27`, read for this scorecard.
 - At 03:46Z L1 deployed `cdd906dd` (#1080) to staging as Worker `b72928f0`, on the owner's go. Its only change from `889efa27` is #1080's history-store fix, so the reading below still holds.
 - App `main` `6dcba63b`.
+- **Re-scored at 16:40Z** from probes 1–4. They ran at 10:01–10:05Z on staging `e37f60f3` (version `c7974404`) with app build `5017f0c8`, on the Telegram-linked test account (E14) [reported by L4, with L1's tail]. Probe 6 (The Close) is not a pass: it composed at 16:00Z, but delivery wasn't observed. Probe 8 is inconclusive. Staging has since moved to wave 2, and at 16:39Z `/healthz` reports `87b31948` [verified]. Only a live probe moves a cell.
 
 **Method**
 - Source was read, not run. The only live observation is the Main chat probe at 02:41Z [reported: L4's Simulator sends and L1's log lines].
@@ -148,12 +149,12 @@ Each target has a probe in the app Main chat.
 | 1a Sign-in with invite | probe | E9; a test account with a fresh invite |
 | 1b Google sign-in | roadmap | After S7 (your order) |
 | 1c 18+ checkbox | app gate merged (app #84, `72eae07a`); server record on the roadmap | An additive app.v1 field and storage, then a small app slice (L4); the same box on web sign-up |
-| 2 Google connect | probe | E8: your consent run |
+| 2 Google connect | probe. A connected account's calendar read is observed live (probe 4); the connect step itself isn't | E8: your consent run |
 | 3 Health consent, ingest, scores | probe | Real iPhone; L1's Weight fix; L4's permission prompt |
 | 4a/4b Main chat history and send | **verified live on `cdd906dd`** [reported: L4's two sends with the owner's yes, plus L1's log tail; no overwrite] | done |
 | 5a Approve, "Don't do this" | probe | E9, after Google connects |
 | 5b "Not now" | on staging since 08:49Z (#1076, #1085); probe | E9; a test approval |
-| 6 A reminder fires | probe | E9 |
+| 6 A reminder fires | **verified live on `e37f60f3`** (probe 2: set 10:02:41Z, fired 10:12:02Z on its minute; Main chat needed a manual refresh) | Refresh-while-open with the unread signal (L4, next) |
 | 7 Continuity | partial today | E3 (app chat searchable). One transcript across app and Telegram is on the roadmap |
 | 8 Proactive at your times | on staging since 08:49Z (#1066); probe after your zone tap | Your zone tap (D6), then a day card moved into the probe window |
 | 9 Push | build | E5, E6, then S7 |
@@ -225,7 +226,7 @@ A pillar works by natural language on a surface when it passes three tests:
 
 | Surface | Pillars passing all three | Notes |
 |---|---|---|
-| **App Main chat (the product)** | **0 of 6** chat-capable pillars | Nearest misses: connectors, reminders, memory, text chat |
+| **App Main chat (the product)** | **0 of 6** chat-capable pillars (re-scored 16:40Z) | Nearest misses: connectors (P5) and reminders (P4). t1 and t2 are observed live (probes 2 and 4), and the reply carries the result, but no later turn has been seen getting it back. One follow-up app turn would settle t3 for both: "What was on my calendar tomorrow again?" and "What reminders do I have?", with L1 confirming the re-read in the tail. After those: memory, text chat |
 | **Telegram (dev surface)** | **3 of 6**: memory and skills, triggers, connectors | By reading. None observed live on `889efa27` |
 | WhatsApp | 0 | Code exists, but no owner can link it: the link-code issuer hard-codes `telegram` [reported] |
 | iMessage | 0 | The modules exist, but nothing imports them [reported]. Draft #1017 would wire a Mac bridge (default-off) |
@@ -234,6 +235,12 @@ A pillar works by natural language on a surface when it passes three tests:
 P7 (payments and identity) and P8 (evals and observability) have no chat tools by design, so they can't pass the chat test. They are judged on their engines only. Out of eight, the counts are 0 for the app and 3 for Telegram.
 
 **Observed live:** one slice of one pillar, app text chat (send, reply, history read-back) on `889efa27` at 02:41Z [reported: L4's Simulator sends and L1's log lines]. That same probe triggered the history overwrite that #1080 fixes.
+
+**Observed live since, on `e37f60f3`** (10:01–10:05Z; reported by L4, confirmed in L1's tail):
+- probe 1: an app send and reply, receipt `completed`, with no history conflict;
+- probe 2: a reminder set from app chat fired on its minute (10:12:02Z) and reached Main chat after a manual refresh;
+- probe 3: on an already-connected account, "Connect my Google" made no false claim of a button or link (the connect step itself wasn't exercised);
+- probe 4: a calendar read listed a real event.
 
 ### Against the industry bar
 
@@ -285,9 +292,9 @@ None was verified live when the map was written.
 | **P1** Durable workflows | Owner-DO effects 4. Coordinator and RunLoop 3, but no route reaches them [reported] | partial | partial | Effect safety above; resume below | 1 (1) | An interrupted turn is abandoned, never resumed, and there is no cancel route [reported] |
 | **P2** Computer use | 0 / 3 | no: app-only owners are rejected | partial | Below on the app. The approval-gated submit meets the bar on TG | 1 (1) | Admission requires a Telegram link [verified]. Staging's default browser route has no binding [reported] |
 | **P3** Memory and skills | Memory 3–4. Skills 0 / 4: 16 curated SKILL.md, loaded on demand | partial | **yes** | At the bar on TG; below on the app | 7 (5) | Skills are wired only for Telegram [verified]. App chat is missing from search and nightly |
-| **P4** Triggers and jobs | 2 / 4 | partial | **yes** | Below: no event triggers, no push | 19 (14) | Nothing is armed for app-only owners [verified]. #1066 is held |
-| **P5** Connectors and auth | 4, unproven live | partial | **yes** | Core at the bar; revocation and Google verification below | 28 (17) | Connecting from app chat fails silently [verified]. No disconnect |
-| **P6** Text and voice | App text 5 [reported]; TG 4; push 1; voice in 3 (TG only); voice out 0; WhatsApp 2; iMessage 2; email 0 | partial | partial | Below: no push, two transcripts | 19 (15) | Push (S7); one transcript across surfaces |
+| **P4** Triggers and jobs | Reminders 5 (probe 2). App-only day cards 4: #1066 and MUST 3 are on staging, unprobed (probe 9). / 4 | partial | **yes** | Below: no event triggers, no push | 19 (14) | t3's later-turn leg is unobserved. The Close composed at 16:00Z, but delivery wasn't observed (probe 6). App-only day cards are unproven. Reminders show only after a manual refresh |
+| **P5** Connectors and auth | Calendar read 5 (probe 4). The connect step from app chat is unprobed: #1084 is on staging, but probe 3's account was already connected | partial | **yes** | Core at the bar; revocation and Google verification below | 28 (17) | t3's later-turn leg is unobserved. Connecting from app chat failed silently at `889efa27` [verified]; #1084's fix is unprobed. No disconnect |
+| **P6** Text and voice | App text 5 (probe 1 on `e37f60f3`); TG 4; push 1; voice in 3 (TG only); voice out 0; WhatsApp 2; iMessage 2; email 0 | partial | partial | Below: no push, two transcripts | 19 (15) | Push (S7); one transcript across surfaces |
 | **P7** Payments and identity | Email sign-in 4; Google sign-in 0; 18+ at sign-up 0; payments 0 | not a chat capability | not a chat capability | Identity below; payments not promised | 1, plus 3 golden-path rows | No Google sign-in, no 18+ record, and a 12 h session with no refresh |
 | **P8** Evals and observability | Tracing 4; alerts 0; evals 2 | not a chat capability | not a chat capability | Tracing at the bar; evals well below | 0 | No eval or probe gates a merge. No workflow runs evals [verified] |
 | **W1** Health plane (Waldo) | Consent, ingest and scores wired. Golden-path step partial: ingest fails silently without the iOS permission [reported] | partial | partial | n/a | 21 (16) | The health-log tools check no consent [reported]. #1066's health hold |
@@ -354,6 +361,17 @@ The pattern is that the authority layer was built to a high bar, while the conte
   - #78's zone write does nothing until #1066 deploys [reported];
   - #79 fixes a label;
   - #80 pins a contract.
+- **Re-score at 16:40Z** (probes 1–4 on `e37f60f3`; only a live probe moves a cell):
+  - **GP-6** (a reminder fires) moves to **verified live**.
+  - **Engine level 5** for P4's reminders, P5's calendar read and P6's app text.
+  - **No strict-test cell moves.** The app stays at 0 of 6, because no later turn has been seen getting a result back (t3). One follow-up app turn is the cheapest way to settle it for P4 and P5.
+  - **Unchanged:**
+    - P5's connect step and GP-2, because probe 3's account was already connected;
+    - W2, because probe 5 showed no card and its rerun is pending;
+    - The Close, because delivery wasn't observed;
+    - P3, because #1088 isn't merged;
+    - P1, because G1 (#1091) is held for a taint fix.
+  - **Staging now runs `87b31948`** (wave 2 plus #1090, #1092 and #1094) [verified: `/healthz` at 16:39Z].
 
 ### 4.4 Not promised, still required
 
