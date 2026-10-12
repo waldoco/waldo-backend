@@ -440,7 +440,7 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
 - **#116, new since 02:55Z:** L4's C1 pin (app #80); L1's retention cron; L1's deploy of `cdd906dd` (`b72928f0`, on the owner's yes about 03:37Z).
 - **Scorecard:** draft #1017 (iMessage via a paired Mac bridge, default-off, with a migration) is added to the iMessage row and to platform gate 3.
 
-## 04:10Z: L4 update; the owner asks for a parity plan
+## 04:08Z: L4 update; the owner asks for a parity plan
 
 - **L4 (04:05Z):** app #81 (Constellations) merged as `baff45b5`, on the owner's yes in L4's session. It reads the pinned `view=constellation` with no contract change, and shows the map plus a list by topic, with grey hubs and no percentages. Checked only in the Simulator against `cdd906dd`.
   - Known gap: picking a row from the list doesn't scroll to its card.
