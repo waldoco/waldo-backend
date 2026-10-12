@@ -98,11 +98,15 @@ const scheduleKindOf = (entry: ScheduleEntry): ScheduleKind | null => {
 // Fire-time recheck: read the preference at dispatch, not only when arming. A disabled entry is cleared and
 // does nothing, so no send, no card state and no model call happens for something the owner turned off.
 // A held kind is skipped without cancelling: the occurrence passes and a recurring entry stays armed for its next one.
-export const gateScheduleExecutors = (executors: ScheduleExecutors, prefs: SchedulePreferenceBook, scheduler: Scheduler, held: (kind: ScheduleKind) => boolean = () => false, onHeld: (kind: ScheduleKind) => void = () => {}): ScheduleExecutors =>
+// A dropped kind is cancelled: it cannot run on this surface at all, so it is not kept waking.
+export type ScheduleHold = 'hold' | 'drop' | false;
+export const gateScheduleExecutors = (executors: ScheduleExecutors, prefs: SchedulePreferenceBook, scheduler: Scheduler, held: (kind: ScheduleKind) => ScheduleHold = () => false, onHeld: (kind: ScheduleKind, outcome: Exclude<ScheduleHold, false>) => void = () => {}): ScheduleExecutors =>
   Object.fromEntries(Object.entries(executors).map(([kind, executor]) => [kind, async (entry: ScheduleEntry) => {
     const owned = scheduleKindOf(entry);
     if (owned !== null && !prefs.enabled(owned)) { await scheduler.cancel(entry.id); return; }
-    if (owned !== null && held(owned)) { onHeld(owned); return; }
+    const outcome = owned === null ? false : held(owned);
+    if (outcome === 'drop') await scheduler.cancel(entry.id);
+    if (outcome) { onHeld(owned!, outcome); return; }
     return executor!(entry);
   }])) as ScheduleExecutors;
 

@@ -179,6 +179,19 @@ describe('proactive work for an owner who only uses the app', () => {
     expect(wire.telegramSent).toBe(0);
   });
 
+  it('an event-brief sweep armed by the Telegram runtime is cancelled the first time the app alarm meets it, with one trace row', async () => {
+    await withAppOwner('proactive-brief-drop', { zone: 'UTC', confirmed: true }, async (owner, state) => {
+      const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+      await scheduler.schedule({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: { type: 'interval', every_ms: 10 * 60_000, phase_ms: 0 } });
+      await owner.alarm(); await owner.alarm();
+      expect(model.calls).toBe(0);
+      expect(schedule(state)[BRIEF_SWEEP_ID]?.status ?? 'none').not.toBe('armed');
+      expect(state.storage.sql.exec<{ hop: string; note: string }>("SELECT hop, note FROM trace_log WHERE note = 'event_briefs_not_routed'").toArray())
+        .toEqual([{ hop: 'scheduled_drop', note: 'event_briefs_not_routed' }]);
+    });
+    expect(wire.telegramSent).toBe(0);
+  });
+
   it('with a confirmed zone, a due day card reaches the app chat and nothing goes to Telegram', async () => {
     await withAppOwner('proactive-confirmed-fire', { zone: 'UTC', confirmed: true }, async (owner, state) => {
       // Today's plan already exists, as it does once nightly or the first arming has planned the day.

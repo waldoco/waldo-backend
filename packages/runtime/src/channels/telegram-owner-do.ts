@@ -68,7 +68,7 @@ import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-
 import { armNightly, backfillEpisodes, consolidationDay, episodeIndex, indexedConversationStore, transcript } from './episodes';
 import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
-import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleKind } from './schedule-preferences';
+import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
 import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT } from './event-briefs';
 import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
 import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
@@ -1346,9 +1346,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const started = Date.now();
       let fired: readonly ScheduleEntry[];
       try {
-        const held = (kind: ScheduleKind) => channel === 'app' && (kind === 'event_briefs' || this.ctx.storage.kv.get<boolean>('timezone_confirmed') !== true);
-        const onHeld = (kind: ScheduleKind) => log({ trace: `alarm:${started}`, hop: 'scheduled_hold', ms: 0, ok: true,
-          code: kind === 'event_briefs' ? 'event_briefs_not_routed' : `${kind}_timezone_unconfirmed` });
+        // Event briefs have no app delivery yet, so an app owner's sweep (armed by a Telegram runtime build) is cancelled, not held.
+        const held = (kind: ScheduleKind): ScheduleHold => channel !== 'app' ? false : kind === 'event_briefs' ? 'drop' : this.ctx.storage.kv.get<boolean>('timezone_confirmed') !== true ? 'hold' : false;
+        const onHeld = (kind: ScheduleKind, outcome: 'hold' | 'drop') => {
+          const code = kind === 'event_briefs' ? 'event_briefs_not_routed' : `${kind}_timezone_unconfirmed`;
+          log({ trace: `alarm:${started}`, hop: outcome === 'drop' ? 'scheduled_drop' : 'scheduled_hold', ms: 0, ok: true, code, detail: code });
+        };
         fired = await scheduler.dispatchDue(gateScheduleExecutors({ reminder, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder }, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held, onHeld));
       } catch (error) {
         // A dispatch throw used to leave no trace at all - the wake was invisible in Langfuse.
