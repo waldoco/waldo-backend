@@ -70,10 +70,12 @@ const sleepOf = (readings: readonly Reading[]): DayRecord['sleep'] => {
   return asleep && midpoint && when ? { ...when, asleepMinutes: asleep.value, midpointMinute: midpoint.value } : null;
 };
 
+const SCORED_WINDOW_SIGNALS = ['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration'];
+
 const hourlyOf = (readings: readonly Reading[]): HourlyBucket[] => {
   const buckets = new Map<string, { -readonly [K in keyof HourlyBucket]: HourlyBucket[K] }>();
   for (const r of readings) {
-    if (!r.startAt || !['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration'].includes(r.signal)) continue;
+    if (!r.startAt || !SCORED_WINDOW_SIGNALS.includes(r.signal)) continue;
     const bucket = buckets.get(r.startAt) ?? { startAt: r.startAt, heartRate: null, hrv: null, hrvMethod: null, daylightMinutes: null, movementMinutes: null };
     if (r.signal === 'heart_rate_window') bucket.heartRate = r.value;
     else if (r.signal === 'hrv_window' && hrvMethod(r.method)) { bucket.hrv = r.value; bucket.hrvMethod = hrvMethod(r.method); }
@@ -84,11 +86,31 @@ const hourlyOf = (readings: readonly Reading[]): HourlyBucket[] => {
   return [...buckets.values()].sort((a, b) => a.startAt.localeCompare(b.startAt));
 };
 
-// Each day keeps the zone its newest reading was read in; a day that holds readings from two zones is flagged.
-const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ days: DayRecord[]; zoneChanged: ReadonlySet<string> }> => {
+// A phone that changes zone can send hours again on a new hour grid, or under the neighbouring day. Those windows overlap
+// ones already stored, and summing both would count the same minutes twice. Every day holding either window of an
+// overlapping pair is returned, across the whole series. A window repeated on the same day is one bucket, not an overlap.
+const overlappingWindowDays = (readings: readonly Reading[]): ReadonlySet<string> => {
+  const days = new Set<string>();
+  for (const signal of SCORED_WINDOW_SIGNALS) {
+    const windows = readings.flatMap(r => (r.signal === signal && r.startAt && r.endAt && r.startAt < r.endAt ? [{ day: r.day, start: r.startAt, end: r.endAt }] : []))
+      .sort((a, b) => a.start.localeCompare(b.start));
+    const open: typeof windows = [];
+    for (const w of windows) {
+      open.splice(0, open.length, ...open.filter(o => o.end > w.start));
+      for (const o of open) if (o.start !== w.start || o.end !== w.end || o.day !== w.day) days.add(o.day).add(w.day);
+      open.push(w);
+    }
+  }
+  return days;
+};
+
+// Each day keeps the zone its newest reading was read in; a day that holds readings from two zones is flagged. A day
+// holding an overlapping window keeps no hourly windows, so its window-based parts read as unknown, never doubled.
+const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ days: DayRecord[]; zoneChanged: ReadonlySet<string>; overlapped: ReadonlySet<string> }> => {
   const byDay = new Map<string, Reading[]>();
   for (const r of readings) byDay.set(r.day, [...(byDay.get(r.day) ?? []), r]);
   const zoneChanged = new Set<string>();
+  const overlapped = overlappingWindowDays(readings);
   const days = [...byDay].map(([day, rs]): DayRecord => {
     const zones = new Set(rs.flatMap(r => (r.timezone ? [r.timezone] : [])));
     if (zones.size > 1) zoneChanged.add(day);
@@ -97,11 +119,11 @@ const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ 
     return {
       day, timezone: newest(rs.filter(r => r.timezone))?.timezone ?? fallbackZone, sleep: sleepOf(rs),
       overnightHrv: hrv ? { value: hrv.value, method: hrvMethod(hrv.method)! } : null,
-      restingHeartRate: resting?.value ?? null, hourly: hourlyOf(rs),
+      restingHeartRate: resting?.value ?? null, hourly: overlapped.has(day) ? [] : hourlyOf(rs),
       workouts: rs.filter(r => r.signal === 'workout').flatMap(r => span(r) ?? []), demand: null,
     };
   });
-  return { days, zoneChanged };
+  return { days, zoneChanged, overlapped };
 };
 
 // Movement minutes, plus workout minutes in hours that carry no movement reading, so a workout the movement count
@@ -177,11 +199,11 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     // One source's readings are computed on its own. Two phones' step counts or sleep for one night are not added up.
     const chosen = [...parsed.series.sources].filter(s => s.readings.length > 0).sort((a, b) => b.readings.length - a.readings.length || a.source.localeCompare(b.source))[0];
     if (!chosen) return 'no_readings';
-    const { days: readingDays, zoneChanged } = daysOf(chosen.readings, at.timezone);
+    const { days: readingDays, zoneChanged, overlapped } = daysOf(chosen.readings, at.timezone);
     const read = demand && await demand;
     if (read && read.kind !== 'answer') console.log(JSON.stringify({ hop: 'weight_demand', ok: false, code: read.kind === 'late' ? 'demand_late' : 'demand_failed' }));
     const busy = busyByDay(read?.kind === 'answer' ? read.answer : null);
-    const days = readingDays.map((day): DayRecord => ({ ...day, demand: { meetingMinutes: busy.get(day.day)?.minutes ?? null, messageCount: null, openTaskMinutes: null, physicalLoad: physicalLoadOf(day) } }));
+    const days = readingDays.map((day): DayRecord => ({ ...day, demand: { meetingMinutes: busy.get(day.day)?.minutes ?? null, messageCount: null, openTaskMinutes: null, physicalLoad: overlapped.has(day.day) ? null : physicalLoadOf(day) } }));
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
     for (const targetDay of [shiftDay(today, -1), today]) {
       const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: parsed.series.readAt });
