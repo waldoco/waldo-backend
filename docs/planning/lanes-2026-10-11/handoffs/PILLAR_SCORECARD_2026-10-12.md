@@ -141,7 +141,7 @@ Each target has a probe in the app Main chat.
 |---|---|---|
 | 1a Sign-in with invite | probe | E9; a test account with a fresh invite |
 | 1b Google sign-in | roadmap | After S7 (your order) |
-| 1c 18+ checkbox | app gate today (app #84, open); server record on the roadmap | L4 (D7) |
+| 1c 18+ checkbox | app gate merged (app #84, `72eae07a`); server record on the roadmap | An additive app.v1 field and storage, then a small app slice (L4); the same box on web sign-up |
 | 2 Google connect | probe | E8: your consent run |
 | 3 Health consent, ingest, scores | probe | Real iPhone; L1's Weight fix; L4's permission prompt |
 | 4a/4b Main chat history and send | **verified live on `cdd906dd`** [reported: L4's two sends with the owner's yes, plus L1's log tail; no overwrite] | done |

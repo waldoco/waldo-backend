@@ -868,3 +868,23 @@ Still open:
 - **Scorecard doc fixes:**
   - The harness table's broken row 3 (a missing cell divider).
   - B.2 rows 1c, 5b and 8 now reflect app #84 and wave 1.
+
+## 09:16Z: #1086 review FAIL (one blocking item); app #84 merged; scorecard page published
+
+**#1086.** The independent review at `51df2756` (head now `5e097fc3`, a test-only change) FAILed on one item, which I checked against the code:
+- **Blocking: claim 3's `card.pin`/`card.time` gate has no live caller.** app.v1 actions exclude cards (`contracts/src/app/controls.ts`), and the console's `card.today`/`card.pin` run on the Telegram runtime, where `armable` is always true. The test reaches the gate only through a made-up `card.time` called on `setup('app').act()`.
+- **Should-fix:**
+  - The card test is red at base only part of the day; pin the clock.
+  - "Set for today" is dropped silently before the zone is confirmed, yet the receipt still says "set".
+- **Verified fine:**
+  - A dual-channel owner keeps the sweep (pinned by `5e097fc3`).
+  - `detail` carries only a fixed code.
+  - No contract, migration or endpoint change.
+  - #1085's test is intact.
+- The fixes are with L2, and nothing merges until they land.
+
+**MUST 3.** L2 asked how to handle its overlap with #1086. Answer: (a), merge #1086 after its fixes and stack MUST 3 on it, plus a red-first re-arm test for app owners whose sweep the interim drop deleted. MUST 3 stays on the app channel only. Moving a Telegram-bound owner's proactive jobs to the app is a routing decision for the owner. Whether the owner's staging account is Telegram-bound is not verified; if it is, the P4 app proof needs an app-only test account, which only the owner can create.
+
+**App #84** (the 18+ gate at sign-up) is merged as `72eae07a`, on the owner's yes in L4's session. It has separate Sign in and Create account. The server record, the web sign-up box and invites from links are still open. B.2 row 1c is updated.
+
+**Scorecard page published:** https://claude.ai/artifact/QQyVwrydfu3Exn6xVHyA8Q. It is a dashboard built from 13 data files; the build script checks the per-row counts against the doc's tables. Four rows were refreshed for #84 and #1086. Four superseded copies of the data files are still in the artifact's file store; I didn't delete them, because the brief bars deleting data.
