@@ -1566,3 +1566,10 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - Fix 1: explicit tool-to-id map. Fix 3: origin is recorded, owner rows only, fail-closed. D16: real taint, internal rows plus desk state only, no seed, ctx byte-identical. The LOWs are done.
   - 14 tests red at `10dbfdec`; mutations catch 15/16; the wall passes 51 gates [reported].
   - The delta review is running (no fan-out, about 25 calls).
+- **16:06Z, app #88 merged as `520f12ea`** (merged 15:56Z) in L4's session, right after an AskUserQuestion to the owner [inference: the owner said yes, as with #86 and #87]. It fixes #87's review LOWs on movement minutes:
+  - a failed new-kinds check keeps the watermark version, so it can't trigger a second 30-day re-send;
+  - the run after Allow waits for the current run's result;
+  - the Swift source check is tighter (8/8 deliberate faults caught) [reported; #116 comment 6127822753].
+  - L4's update to me was held by its cross-session cap; I read it from L4's transcript.
+  - L4 is idle. It waits on L1 (does staging accept movement minutes; the zone-id design) and on the owner (the probe-5 event's time and title). Its next item is refresh-while-open plus the unread signal on Home.
+- **16:06Z heartbeat:** #1091 CI is running (pgTAP green) and its delta review is running. L1 is busy (probe 6 was due at 16:00Z). My cross-session sends are about 9 of 10; the last one is kept for #1091's result to L2. The 5-hour usage window is 78% full and resets at 16:30Z.
