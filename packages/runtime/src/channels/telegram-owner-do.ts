@@ -1738,6 +1738,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           await storage.put('google:reauth-noticed', remaining);
         }
         if (!transition.send) return;
+        // The app chat shows no buttons and a new ticket revokes the owner's open ones, so on the app nothing is minted:
+        // the app's Connections screen shows the grant as needing a reconnect.
+        if (channel === 'app') { log({ trace: `google:${Date.now()}`, hop: 'google_reauth_notice', ms: 0, ok: false, code: 'app_no_button' }); return; }
         const account = (await accounts()).find((known) => known.id === id);
         const url = await google.connectUrl('calendar');
         const sent = url !== null && (await deliverConnectLink(url, 'reconnect', account?.email));

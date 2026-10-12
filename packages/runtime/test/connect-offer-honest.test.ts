@@ -5,6 +5,7 @@ import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
 const ASK = 'connect my google calendar';
+const READ = 'what is on my calendar';
 const SENT_CLAIM = 'connect button is in the chat';
 const model = vi.hoisted(() => ({ requests: [] as { tool_turns?: unknown; messages: { content: string }[]; response_format?: unknown }[] }));
 const telegram = vi.hoisted(() => ({ deliver: true, sent: [] as unknown[] }));
@@ -21,12 +22,23 @@ vi.mock('../src/channels/telegram-turn', async load => {
   const gateway = { async complete(request: import('../src/llm/provider').LLMGatewayRequest) {
     model.requests.push(request.request as never);
     const writer = request.request.response_format !== undefined;
-    const asks = !writer && !request.request.tool_turns?.length && (request.request.messages.at(-1)?.content ?? '').includes(ASK);
+    const last = request.request.messages.at(-1)?.content ?? '';
+    const asks = !writer && !request.request.tool_turns?.length && last.includes(ASK);
+    const reads = !writer && !request.request.tool_turns?.length && last.includes(READ);
     const text = request.request.response_format?.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}'
-      : writer ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : asks ? '' : 'Done.';
-    return { ok: true as const, data: { model: request.request.model, text, ...(asks ? { tool_calls: [{ call_id: 'connect-1', name: 'connect_service', arguments: JSON.stringify({ service: 'google', feature: 'calendar' }) }] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+      : writer ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : asks || reads ? '' : 'Done.';
+    const call = asks ? { call_id: 'connect-1', name: 'connect_service', arguments: JSON.stringify({ service: 'google', feature: 'calendar' }) } : reads ? { call_id: 'read-1', name: 'query_calendar', arguments: '{}' } : null;
+    return { ok: true as const, data: { model: request.request.model, text, ...(call ? { tool_calls: [call] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+});
+// A calendar read on a dead grant: the client reports invalid_grant to the host, as the token refresh does, then fails 401.
+vi.mock('../src/connectors/google', async load => {
+  const original = await load<typeof import('../src/connectors/google')>();
+  return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, health: (error: string) => void, account: unknown) => ({
+    account, events: async () => [],
+    calendarPage: async () => { health('invalid_grant'); throw new original.GoogleError(401, 'invalid_grant'); },
+  }) };
 });
 const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
 
@@ -74,6 +86,29 @@ describe('connecting Google from a chat turn', () => {
         expect(await state.storage.get('connect:offers')).toBeUndefined();
         expect([...state.storage.kv.list({ prefix: 'connect_channel:' })]).toEqual([]);
         expect(traceHops(state).filter(hop => hop.startsWith('oauth_link_sent'))).toEqual([]);
+      } finally { await state.storage.deleteAlarm(); }
+    });
+  });
+
+  it('on the app, a grant that stops working mints no link: the Connections screen shows it needs a reconnect', async () => {
+    const name = 'connect-app-reauth';
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+      claimStore(state.storage.sql); ensureSchema(state.storage);
+      state.storage.kv.put('do_name', name);
+      await state.storage.put('origin', 'https://fixture.invalid');
+      await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+      const owner = new TelegramOwnerDO(state, { ...env, ...directory, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+      try {
+        const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: 'client-reauth-0001', text: READ }) }));
+        expect(sent.status).toBe(202);
+        const { message_id: id } = await sent.json() as { message_id: string };
+        await vi.waitFor(() => expect(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
+        await vi.waitFor(() => expect(traceHops(state)).toContain('google_reauth_notice:0'), { timeout: 5_000, interval: 20 });
+        expect(await state.storage.get('google:health')).toEqual({ 'local:owner@example.test': 'invalid_grant' });
+        expect(rpcs).not.toContain('connect_session_issue');
+        expect([...state.storage.kv.list({ prefix: 'connect_channel:' })]).toEqual([]);
+        expect(traceHops(state).filter(hop => hop.startsWith('oauth_link_sent'))).toEqual([]);
+        expect(await state.storage.get('google:reauth-noticed')).toBeUndefined();
       } finally { await state.storage.deleteAlarm(); }
     });
   });

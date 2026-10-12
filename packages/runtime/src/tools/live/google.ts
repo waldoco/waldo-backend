@@ -416,7 +416,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
 // affordance (Telegram: a URL button minted at click time). No link ever enters model text.
 export const connectServiceHandler = (google: GoogleAccess): ToolHandler<ConnectServiceArgs, Readonly<{service:string;connected:boolean;message:string;accounts?:readonly Readonly<{id:string;email:string;calendar:boolean;mail:boolean;tasks:boolean;health:string;provenance:string}>[]}>, ToolDispatcherContext> => ({
   name: 'connect_service',
-  description: 'Read connected Google account addresses and granted feature/health metadata, or connect Google. Pass feature to offer one that is not granted yet. Host account metadata is not evidence that a message sender is the owner. Use whenever the owner asks to connect, link or set up a service, asks why you cannot see their calendar or email, or mentions a connector. The link arrives as a button in chat; never quote or transcribe it.',
+  description: 'Read connected Google account addresses and granted feature/health metadata, or connect Google. Pass feature to offer one that is not granted yet. Host account metadata is not evidence that a message sender is the owner. Use whenever the owner asks to connect, link or set up a service, asks why you cannot see their calendar or email, or mentions a connector. The result says whether a connect button reached the owner or where else they connect; never quote or transcribe a link.',
   schema: connectServiceArgsSchema,
   trigger_allowlist: allowlist('connect_service'),
   autonomy_gated: false,
