@@ -732,7 +732,7 @@ Still open:
   - L1's order: the brain amendment PR, then the re-work of #1083.
   - E12 answered: the owner approved Weight's free/busy design, using all selected calendars. It comes after #1083, and its owner-DO route will be sequenced with L2.
 
-## 07:16Z: heartbeat. #1084 rebased and its fix read; #1085 review launched
+## 07:14Z: heartbeat. #1084 rebased and its fix read; #1085 review launched
 
 - **Staging:** `cdd906dd`. **`beta-mvp`:** `531813cb`.
 - **#1084** at `93351f98`, after L2 merged `531813cb` in. Its patch-id matches `6202b51b` [verified].
