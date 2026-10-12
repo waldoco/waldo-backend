@@ -17,6 +17,11 @@ describe('whatsapp ingress normalization', () => {
     expect(updates[0]).toMatchObject({ callback_query: { from: { id: 15550001111, is_bot:false }, data: 'a:p12' } });
   });
 
+  it('a Not now reply (d:) reaches the desk as a decision, not as chat text', () => {
+    const { updates } = whatsappIngressUpdates([{ id: 'wamid.3', from: '15550001111', type: 'text', text: { body: 'd:p12' } }], '15550001111', 0);
+    expect(updates).toEqual([expect.objectContaining({ callback_query: expect.objectContaining({ data: 'd:p12' }) })]);
+  });
+
   it('E1: a verification artifact in inbound text is redacted before the turn exists', () => {
     const { updates } = whatsappIngressUpdates([
       { id: 'wamid.otp', from: '15550001111', type: 'text', text: { body: 'Fwd: Your WhatsApp code: 123-456. Do not share it.' } },
