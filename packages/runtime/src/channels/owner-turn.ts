@@ -646,7 +646,7 @@ export const createOwnerResponder = (
       pending = undefined;
       return converse(id, conversationRef, `[Reminder due now, set earlier by the owner: "${note}"] Send the reminder briefly in your own words. Do not add a sentence explaining that they asked for it.`, time, false, surface);
     },
-    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, context) {
+    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext) {
       // Cards read in seconds, so a job's prompt gets half the provider budget; the guard keeps the opening and closing and cuts the data between.
       const said = fitPromptToBudget(jobText, Math.floor(deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2));
       backgroundCurrent = current;
@@ -666,7 +666,7 @@ export const createOwnerResponder = (
           const bounded = context;
           return await time('background_decision', () => ask(id, 'background_decision', [messagingSystemPrompt([]), ownerClockLine(clock), bounded].filter(Boolean).join('\n\n'), said, decision));
         }
-        promptContext = context ?? '';
+        promptContext = turnContext ?? '';
         return await converse(id, conversationRef, said, time, false, surface, toolNames);
       } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; }
     },
