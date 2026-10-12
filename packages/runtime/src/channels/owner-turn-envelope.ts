@@ -45,7 +45,8 @@ export type OwnerResponder = Readonly<{
   respond(turn: OwnerTurnEnvelope, time: TurnTimer): Promise<string>;
   chooseReaction(turn: OwnerTurnEnvelope): Promise<string | null>;
   remind(id: string, conversationRef: string, note: string, time: TurnTimer, surface?: string): Promise<string>;
-  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>): Promise<string>;
+  // `context` reaches the model with `said` on this turn only; it is never stored with the conversation.
+  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, context?: string): Promise<string>;
   consolidate(trace: string, day: string, sides?: { owner: string; waldo: string }): Promise<string>;
   migrate(trace: string, input: string): Promise<string>;
   promote(trace: string): Promise<string>;
