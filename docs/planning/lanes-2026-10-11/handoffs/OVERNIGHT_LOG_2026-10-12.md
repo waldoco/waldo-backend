@@ -1511,3 +1511,9 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - L2 is told to stop the seed.
   - The cross-turn taint design goes to the owner as an option.
 - **15:32Z, D16 implementation:** L2's option (b). Show null-taint rows only and remove the seed. Evidence: with D15 built, `curated-skills-owner-do` failed 4/4, and its expectation stays unchanged.
+- **15:33Z, app #87** (L4): fixes for #86's review, head `daff130b`; the owner merges it in L4's session.
+  - The fixes: the `Math.max` hold, and no-hold scoped to `not_asked`.
+  - LOWs: CHECK_FAILED rejects; Allow during a run queues a forced run.
+  - A source-level native seam is added: 14 deliberate faults, all caught.
+  - Results: 680 tests pass, the build is OK, and the Simulator smoke test is OK [reported].
+  - A small delta review is running. The zone-id question is with L1 for planning.
