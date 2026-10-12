@@ -480,3 +480,7 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - L2 got E1, E4, E2-pending and its tiered queue (SendMessage, delivered).
   - L3's socket is stale, and L3 isn't in `ListAgents`, so the update went on the board.
   - The board now carries a DAYTIME GO banner.
+- **E2 answered (about 04:48Z):** "Strip copies, build history read (Recommended)".
+  - #1066 ships with health-log numbers kept out of chat history and the episodes index.
+  - A governed, owner-scoped health-history read over the health plane is added to the roadmap, gated on a bounded contract under ADR-0081. It is not an EoD item.
+  - Relayed to L2 (SendMessage). E3 stays open.

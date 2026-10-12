@@ -79,6 +79,15 @@ Each can be asked with AskUserQuestion. The first option is the recommendation.
 | E10 | **WhatsApp and iMessage in the beta promise** | (a) **Take both out of the beta copy**, and keep #1017 as a dev surface. (b) Keep "WhatsApp next" | Before landing #18 | Copy rows only |
 | E11 | **L3's morning batch**, answered in L3's session | (a) **All recommended options:** open the reminder-push contract PR; ADR-0068; approvals 3a–3e | 08:00Z | Push reminders (W2 of S7); approval card fields |
 
+**Answered at about 04:48Z, in the orchestrator's session:**
+- **E1:** (a), the daytime standing go.
+- **E2:** strip the transcript copies and build a health-history read, chosen after the owner asked how Waldo can learn patterns without history.
+  - #1066 ships today with health-log numbers kept out of chat history and the search index.
+  - A governed history read over the health plane follows as a roadmap item.
+- **E4:** (a).
+- **E8:** (a).
+- **Still open:** E3, E5, E6, E7, E9, E10 and E11.
+
 If you choose E1(a), tell each lane in its own session; a relay from me is not a yes there. L4's brief, for one, requires your yes in L4's session for every app merge.
 
 Other held items stay in the morning report: session renewal, the 18+ server record, the Brief `latest` DO ALTER, and #1072.
@@ -350,6 +359,7 @@ The dates are estimates. The gate column names what holds each item.
 | 13–14 Oct | P2 | Browsing from the app, if E7 was a hold today | E7 |
 | 13–14 Oct | Harness | G2: tell the model when history was cut (option A, the out-of-view note) | none |
 | 15–18 Oct | P6 / GP-7 | One transcript across app and Telegram | Canonical-store migration plan |
+| 13–18 Oct | W1 / P3 | A governed, owner-scoped health-history read over the health plane: ranges and aggregates. The model and a pattern job use the full history, and memory keeps only qualitative patterns (E2) | Bounded contract under ADR-0081 |
 | 15–18 Oct | P4 | Event triggers: Gmail push through `users.watch` and Pub/Sub, with renewal and a polling fallback; Calendar push channels | A new external integration (Pub/Sub) |
 | 15–18 Oct | Harness | Tool search or a smaller per-turn tool list (ADR-0034); remove allow-list entries that have no handler | none |
 | 15–18 Oct | P3 / Harness | The conversation working set (option C), with its eval | E2's strip rule |
