@@ -81,10 +81,10 @@ it('an approval past its expiry is expired, never shown again, and never listed 
     const id = await propose('Stale');
     await desk.decide(id, 'd', 'app:approval', { surface: 'app' });
     clock.at += PROPOSAL_TTL_MS + 60_000;
+    expect((await raise({ operation: 'list' })).data).toEqual({ approvals: [] });
     expect((await raise({ operation: 'raise', approval_id: id })).data).toMatchObject({ approval_id: id, outcome: 'expired' });
     expect(sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe('expired');
     expect(shownCount(id)).toBe(1);
-    expect((await raise({ operation: 'list' })).data).toMatchObject({ approvals: [] });
   });
 });
 
