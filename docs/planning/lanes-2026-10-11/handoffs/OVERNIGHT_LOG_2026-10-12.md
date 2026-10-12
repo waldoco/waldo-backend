@@ -1947,3 +1947,27 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **My delta review is running.** Its focus is every consumer of the version string (DB constraints, the fence regex, app.v1, readers), old v1 rows, and #1083's overlapping `ALGORITHM.form` line.
 - **P1 job question (L1):** the tail can't tie events to an account or read schedules. Since 16:15Z no composed alarm made 6 or more tool calls (reminders and day plans made 0), so which job does 6 or more must come from the DO schedule (L2 or the console). L1 now reports `hops_total` for every composed alarm.
 - **App #89 merged as `3862bb26`** at `b3ecc11f`, on the owner's yes in L4's session, before my review result. The findings go to L4 for a follow-up PR. L4 waits for the deploy report, then makes the P1 approval with the owner before about 21:44Z.
+
+## 19:08Z: #1099 delta review fails on Weight's version; app #89 findings sent
+
+- **#1099 delta review at `5a141798`: FAIL, one fix.** Sent to L1 at 19:08Z; it was delivered and L1's turn started.
+  - **MEDIUM, blocking:** Weight's admitted inputs change, but its version doesn't [verified at `5a141798`]. The new guard nulls physicalLoad on overlapped days, and `weight.ts` builds each field's baseline from earlier days' `demand`, yet `recovery.ts:5` still reads `weight.candidate.v1`.
+    - Under the owner's 18:30Z ruling, that's a new version.
+    - Fix: `weight.candidate.v2`, with a version assertion beside the workout test, or an owner exemption on the record.
+  - **Not blocking:** #1083 (`c2f652b2`) sets `form.safte-fast.v2` on the same `ALGORITHM` line. Whichever lands second takes a fresh version.
+  - **LOW, for the owner's hold list:** the trend `previous` query (`health_plane.sql:537-543`) has no version filter, so a v2 score can be trended against a v1 row. A fix needs a migration.
+  - **For the owner:** the producer rewrites yesterday's row in place (`producer.ts:208`). On the first run after deploy, yesterday's v1 value becomes v2. It's labelled, not silent.
+  - **Everything else passes:**
+    - the fence and app.v1 regexes accept `.v2`;
+    - there's no CHECK or enum on the version;
+    - CI is 6/6 and the PR is CLEAN;
+    - merge-tree is clean against `446762f4`.
+- **App #89 review, after the merge (`3862bb26`): the code passes, with three follow-up findings.** Sent to L4 at 19:12Z; it's queued while L4 finishes a task. I checked each finding myself at `3862bb26`:
+  1. **MEDIUM: any new hold drops a server Retry-After.** `watchChat` and `watchRead` in `appRuntime.ts` read at once on a new hold, and a release clears the timer and the failure count.
+  2. **LOW: a 401 found at cold start skips the end hook.** `onEnd` runs only at `appSessionController.ts:96` and `:101`, never in `restore()`'s catch, so the seen marker, the pending turn and the health queue aren't cleared. The stored items are account-bound, so this is a cleanup gap, not a cross-account leak [inference].
+  3. **LOW: `created_at: 0` renders a 1970 date** (`wroteLine.ts:4`).
+  - **Also reported:**
+    - #89 merged with 0 reviews and 0 checks, because the app repo has no CI;
+    - the Simulator build predates the channel filter.
+  - L4 does the P1 approval first. The follow-up PR comes before any tester build.
+- **Sends:** about 9 of 10 since the owner's last message (about 18:11Z). The last one is kept for E15's review or a blocking item.
