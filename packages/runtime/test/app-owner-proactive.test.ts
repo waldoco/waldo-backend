@@ -96,13 +96,13 @@ describe('proactive work for an owner who only uses the app', () => {
     expect(model.calls).toBe(0);
   });
 
-  it('arms nightly, heartbeat and today\'s day cards in a confirmed zone on first app use, and never the event-brief sweep', async () => {
+  it('arms nightly, heartbeat, the event-brief sweep and today\'s day cards in a confirmed zone on first app use', async () => {
     await withAppOwner('proactive-confirmed-boot', { zone: 'Europe/London', confirmed: true }, async (owner, state) => {
       await owner.setup('app').ready;
       const rows = schedule(state);
       expect(JSON.parse(rows[NIGHTLY_ID]!.recurrence!)).toMatchObject({ type: 'daily_local', timezone: 'Europe/London' });
       expect(rows[HEARTBEAT_ID]?.status).toBe('armed');
-      expect(rows[BRIEF_SWEEP_ID]).toBeUndefined();
+      expect(rows[BRIEF_SWEEP_ID]?.status).toBe('armed');
       for (const [card, at] of Object.entries(cardsAhead('Europe/London'))) expect(rows[card]?.due_at).toBe(at);
     });
     expect(model.calls).toBe(0);
@@ -119,7 +119,7 @@ describe('proactive work for an owner who only uses the app', () => {
       const rows = schedule(state);
       expect(JSON.parse(rows[NIGHTLY_ID]!.recurrence!)).toMatchObject({ timezone: 'Asia/Kolkata' });
       expect(rows[HEARTBEAT_ID]?.status).toBe('armed');
-      expect(rows[BRIEF_SWEEP_ID]).toBeUndefined();
+      expect(rows[BRIEF_SWEEP_ID]?.status).toBe('armed');
       for (const [card, at] of Object.entries(cardsAhead('Asia/Kolkata'))) expect(rows[card]?.due_at).toBe(at);
       expect(owner.setup('app').timezone).toBe('Asia/Kolkata');
     });
@@ -179,15 +179,15 @@ describe('proactive work for an owner who only uses the app', () => {
     expect(wire.telegramSent).toBe(0);
   });
 
-  it.each([false, true])('an event-brief sweep on the app is cancelled the first time the alarm meets it, with one trace row naming why (text capture %s)', async capture => {
-    await withAppOwner(`proactive-brief-drop-${capture}`, { zone: 'UTC', confirmed: true, capture }, async (owner, state) => {
+  it.each([false, true])('while no zone is confirmed, an event-brief sweep on the app is cancelled the first time the alarm meets it, with one trace row naming why (text capture %s)', async capture => {
+    await withAppOwner(`proactive-brief-drop-${capture}`, { zone: 'UTC', capture }, async (owner, state) => {
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
       await scheduler.schedule({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: { type: 'interval', every_ms: 10 * 60_000, phase_ms: 0 } });
       await owner.alarm(); await owner.alarm();
       expect(model.calls).toBe(0);
       expect(schedule(state)[BRIEF_SWEEP_ID]?.status ?? 'none').not.toBe('armed');
-      expect(state.storage.sql.exec<{ hop: string; note: string }>("SELECT hop, note FROM trace_log WHERE note = 'event_briefs_not_routed'").toArray())
-        .toEqual([{ hop: 'scheduled_drop', note: 'event_briefs_not_routed' }]);
+      expect(state.storage.sql.exec<{ hop: string; note: string }>("SELECT hop, note FROM trace_log WHERE hop IN ('scheduled_drop', 'scheduled_hold')").toArray())
+        .toEqual([{ hop: 'scheduled_drop', note: 'event_briefs_timezone_unconfirmed' }]);
     });
     expect(wire.telegramSent).toBe(0);
   });
