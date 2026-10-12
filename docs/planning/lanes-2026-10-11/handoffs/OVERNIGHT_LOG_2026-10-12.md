@@ -452,3 +452,17 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
     - ChatGPT, Gemini and Claude rows are deferred until after the 06:30Z reset;
     - the doc separates an EoD target from a dated roadmap.
   - The 5-hour window stood at 60% at 04:06Z.
+
+## 04:34Z: scorecard becomes the plan to EoD
+
+- **`PILLAR_SCORECARD_2026-10-12.md` is now the single doc to follow.** In order:
+  - what EoD can and can't deliver;
+  - decisions E1–E11, each with a recommendation and a deadline;
+  - the EoD target, with an app-chat probe per pillar and the golden-path checklist;
+  - today, by lane: deploy waves, one writer for `telegram-owner-do.ts`, contract gating;
+  - where we stand;
+  - a dated parity roadmap;
+  - the competitor comparison across eight pillars plus health.
+- **Competitor matrix:** report 11, built by one synthesis agent with no web access from #1058, report 02 and report 09. Covers Meta Muse, OpenAI Dots, Instinct, Poke, Folk, Vellum, OpenClaw, Hermes, Letta and Khoj. Dots is unverified (403). ChatGPT, Gemini and Claude are deferred until after the 06:30Z reset.
+- **Verified fetch:** Google's OAuth page (updated 26 May 2026) says an external app in "Testing" gets refresh tokens that expire after 7 days. This is now in E8 and platform gate 6. Waldo's publishing status is unverified.
+- **L4 (04:15Z):** building D6 as its own PR. The row reads "Use this device's time zone" or "Keep <zone>", because the design system bans "Confirm". L4 is also rewording #78's comment. App merges go through the owner in L4's session.

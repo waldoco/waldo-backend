@@ -75,6 +75,8 @@ Each can be asked with AskUserQuestion. The first option is the recommendation.
 | E10 | **WhatsApp and iMessage in the beta promise** | (a) **Take both out of the beta copy**, and keep #1017 as a dev surface. (b) Keep "WhatsApp next" | Before landing #18 | Copy rows only |
 | E11 | **L3's morning batch**, answered in L3's session | (a) **All recommended options:** open the reminder-push contract PR; ADR-0068; approvals 3a–3e | 08:00Z | Push reminders (W2 of S7); approval card fields |
 
+If you choose E1(a), tell each lane in its own session; a relay from me is not a yes there. L4's brief, for one, requires your yes in L4's session for every app merge.
+
 Other held items stay in the morning report: session renewal, the 18+ server record, the Brief `latest` DO ALTER, and #1072.
 
 ## B. EoD target
@@ -86,7 +88,7 @@ Each target has a probe in the app Main chat.
 | Pillar | Target today | What must land | Probe (app Main chat) | Gates |
 |---|---|---|---|---|
 | **P3** Memory and skills | **yes** | **L2:** skills on app turns. **G3:** app chat in search and nightly | "Prep me for my 3 pm" loads the meeting-prep skill. "What did I tell you this morning about lunch?" finds the app message | E1, E3 |
-| **P4** Triggers and jobs | **yes** | **#1066** with the strip. **L4:** the D6 Confirm row. **L2:** Prep, update cards and mail follow-ups on the app channel (`telegram-owner-do.ts:2417`) | "Remind me in 10 minutes to stretch" arrives on time. After you confirm your zone, the day card arrives at your time | E1, E2 |
+| **P4** Triggers and jobs | **yes** | **#1066** with the strip. **L4:** the D6 zone row ("Use this device's time zone", or "Keep <zone>"; the design system bans "Confirm" on buttons). **L2:** Prep, update cards and mail follow-ups on the app channel (`telegram-owner-do.ts:2417`) | "Remind me in 10 minutes to stretch" arrives on time. After you confirm your zone, the day card arrives at your time | E1, E2 |
 | **P5** Connectors and auth | **yes** for a connected owner | **Your consent run.** **L2:** interim connect text, so the app turn points to Connections instead of reporting a button it dropped | "What's on my calendar tomorrow?" lists real events. "Connect my Google" points to Connections | E1, E8 |
 | **W2** Approvals | **yes** | **#1076.** **L3:** expiry on read. **G1:** approval state in the reply | "Move my 4 pm to 5" shows the card. Tap "Not now". Later, "What's waiting on me?" names it | E1, E4 |
 | **P6** Text and voice | text yes; push if the key lands | **S7** sender and device routes. **L4:** registration | A reminder arrives as a push with the app closed | E5, E6 |
@@ -151,7 +153,7 @@ L3's Brief-reader wiring waits until after step 5.
 |---|---|
 | **L2** (runtime; critical path) | 1. #1066: strip, delta review, merge. 2. The interim connect text, with a test that a dropped app button is never reported as sent. 3. The app branch at `:2417`. 4. Skills on app turns. 5. G1: one composer that carries recent tool results and approval and receipt state into the reply on both paths. #1079's pin flips to the new behaviour. 6. S7 sender behind a flag (E5, E6). 7. G3 (E3). 8. Browser admission (E7) |
 | **L3** (contracts, approvals, Google) | 1. Expiry-on-read PR from the local branch. 2. The reminder-push contract PR (E11). 3. The approval fields A/B/C, if E11. 4. Draft the connect-card and disconnect contracts for tomorrow's re-pin. 5. The Brief `latest` reader, after L2's step 5 |
-| **L4** (app) | 1. The D6 Confirm row. 2. The 18+ gate at sign-up (D7). 3. The chat failure state and retry. 4. The Health permission prompt. 5. Push registration (S7). 6. Threads (C1), once served. 7. Reword #78's dated comment |
+| **L4** (app) | 1. The D6 zone row (in progress at 04:15Z). 2. The 18+ gate at sign-up (D7). 3. The chat failure state and retry. 4. The Health permission prompt. 5. Push registration (S7). 6. Threads (C1), once served. 7. Reword #78's dated comment |
 | **L1** (health plane, deploys) | 1. The Weight producer's `demand: null`. 2. Deploy waves 1 and 2. 3. Read the tails during probes and post on #116. 4. The deletion proof with your throwaway account |
 | **Audit** | After wave 2: run the promise probes (Q1–Q10) with the probe account, update the ledger, and send verified rows back |
 | **Orchestrator** | Gate each merge (CI, review, advisor) under E1. Track the waves. Re-score this doc from the probes. Write the evening report |
@@ -347,6 +349,9 @@ The dates are estimates. The gate column names what holds each item.
 | 15–18 Oct | P4 | Event triggers: Gmail push through `users.watch` and Pub/Sub, with renewal and a polling fallback; Calendar push channels | A new external integration (Pub/Sub) |
 | 15–18 Oct | Harness | Tool search or a smaller per-turn tool list (ADR-0034); remove allow-list entries that have no handler | none |
 | 15–18 Oct | P3 / Harness | The conversation working set (option C), with its eval | E2's strip rule |
+| 15–18 Oct | P1 / P8 | An activity view the owner can see: tasks and their states, receipts and approved permissions. Uncertain outcomes read "Unknown" | L3 contract, then L4 re-pin |
+| 15–18 Oct | P3 | Memory editing in the app: view, edit and forget, beyond the read-only Constellations. Owner-taught skills, staged for approval | Contract and re-pin; ADR review for skill writes |
+| Later | P5 | Standing grants with lifetimes and a revocation list (draft #932) | Explicit contract and ADR review, as CLAUDE.md requires for standing grants |
 | 19–31 Oct | P1 | Resume or cancel an interrupted turn. Decide whether WaldoCoordinator and RunLoop carry traffic or are retired | ADR |
 | 19–31 Oct | P6 | Voice in the app: speech in, then speech out | Provider and DPA review |
 | Start now, weeks | P5 | Google verification and the CASA assessment for `gmail.readonly`, `gmail.compose` and `drive.readonly` | External assessor |
@@ -354,7 +359,69 @@ The dates are estimates. The gate column names what holds each item.
 | Not for the beta | P7 | Payments: not promised; pricing lines are copy (O7) | none |
 | Not for the beta | P6 | WhatsApp (AI-provider terms) and iMessage beyond the #1017 Mac bridge | Platform terms |
 
-## 6. Evidence
+## 6. Against other personal agents
+
+**Sources:**
+- Audit's competitor refresh (#1058, `[#1058]`).
+- Reports 02 and 09.
+- Report 11, which assembles them by pillar: [11-competitor-pillar-matrix.md](research-2026-10-12/11-competitor-pillar-matrix.md).
+
+**Reading the matrix:**
+- No new web research went into this section.
+- The verdicts measure how deeply each product's public sources document a pillar, not hands-on quality.
+- "Not documented" is not "absent".
+- Every OpenAI Dots cell rests on search snippets, owner transcription and press, because its pages returned 403.
+- ChatGPT, Gemini and Claude rows are not here yet. They are one capped research pass after the 06:30Z usage reset.
+
+### 6.1 Overview
+
+Waldo's row uses this scorecard's evidence. Where the app and Telegram differ, it reads app / Telegram.
+
+| Product | P1 Workflows | P2 Computer | P3 Memory and skills | P4 Triggers | P5 Connectors | P6 Channels | P7 Pay and identity | P8 Activity and evals | Health |
+|---|---|---|---|---|---|---|---|---|---|
+| **Waldo today** | partial: effect ledger strong; no resume, no task view | none / partial | partial / strong (no skills on the app) | partial / strong (clock only) | partial / strong (no disconnect) | partial: two surfaces, no push, two transcripts | partial: email sign-in; payments not promised | partial: receipts; no activity view; evals gate nothing | **partial: the only one building health-aware planning** |
+| Meta Muse | partial | strong | strong (memory) | strong | strong | partial | strong | strong | not documented |
+| OpenAI Dots | partial* | partial* | partial* | partial* | partial* | partial* | partial* | partial* | not documented |
+| Instinct | not documented | partial | not documented | not documented | partial | partial | partial | not documented | partial (policy only) |
+| Poke | partial | not documented | partial | partial | partial | partial | partial | not documented | partial (advertised) |
+| Folk | partial | strong | strong (memory) | strong | strong | partial | strong | partial | partial |
+| Vellum Assistant | strong (open bugs) | partial | strong | strong (open bugs) | strong | strong | partial | partial | none |
+| OpenClaw | strong | not documented | strong | strong | partial | strong | partial | partial | partial (data only) |
+| Hermes Agent | strong | not documented | strong | strong | partial | strong | partial | partial | not documented |
+| Letta | partial | not documented | partial | partial | partial | partial | partial | partial | not documented |
+| Khoj | not documented | not documented | not documented | partial | not documented | partial | not documented | not documented | not documented |
+
+\* unverified: Dots' pages returned 403.
+
+### 6.2 Where Waldo leads, and where it trails
+
+**Leads** [inference from the matrix]:
+- **Health-aware planning.** No product documents it. The nearest are OpenClaw's on-demand HealthKit aggregates, Folk's Strava and meal-photo logging, and Poke's empty Oura page. Waldo has consent, ingest and three scores built. #1058's caution stands: the claim must be shown, not asserted, and today the day-card planning is held (E2).
+- **Per-action authority.** Waldo's approvals are digest-bound, shown before they can be approved, and dispatched through a ledger with read-back. That matches Muse's Sentinel on per-action approval. Waldo lacks Muse's grant lifetimes and OpenClaw's list-and-revoke.
+- **Memory provenance.** Memory writes are grounded in the owner's own words and carry provenance. No vendor documents per-memory provenance labels [#1058].
+
+**Trails:**
+- **Reach.** Competitors pair a native app with messaging, voice and push (Vellum, OpenClaw). Waldo has no push, two transcripts, and voice only on Telegram.
+- **Computer use.** Muse and Folk run their own cloud computer through to checkout. Waldo browses only on Telegram.
+- **Owner-visible activity and controls.** Muse shows an activity log with approved permissions; Dots shows an Activity View (unverified). Waldo shows receipts and cards, with no activity or permissions view.
+- **Event triggers.** Muse events, Vellum watchers and OpenClaw standing intents are all ahead. Waldo runs on the clock only.
+- **Skills that grow.** OpenClaw's Skill Workshop has versions and undo; Hermes stages skill writes for approval. Waldo's owner-written skills are a stub.
+
+### 6.3 Parity bar per pillar, and Waldo's gap
+
+| Pillar | On par means [from the matrix] | Waldo's gap | When |
+|---|---|---|---|
+| **P1** | Run records survive a restart, with a stated rule for missed runs. Owner-visible task states. Uncertain outcomes shown as "Unknown", never "ok". Approval waits that time out closed. A stopped run cancels its approval | Expired approvals still show as open. No task or activity view. Interrupted turns never resume | Expiry: today (L3). Activity view: 15–18 Oct. Resume: 19–31 Oct |
+| **P2** | An isolated browser or computer that fills forms. Credentials out of the model's reach. Sensitive steps handed back. Stated limits | No browsing from the app. No staging binding | Today if E7, else 13–14 Oct |
+| **P3** | The owner can view, edit and forget memory. Corrections replace old facts. Agent writes are capped or staged. AgentSkills-style skills with versions and undo, or approval | No skills on the app. App chat isn't searched or consolidated. No memory editing in the app UI. Owner-written skills are a stub | Skills and G3: today (E3). Memory editing and owner skills: roadmap |
+| **P4** | Durable schedules plus event triggers. Silence allowed, failures always surface. A proactivity dial. Active hours in the owner's zone. DST-correct | App-only owners get reminders only. No event triggers | #1066 and the `:2417` branch: today. Events: 15–18 Oct |
+| **P5** | Mail, calendar and MCP or custom connectors. Scoped grants with a lifetime. Revocation the owner can use. Credentials kept from the model | Connecting from app chat fails silently. No disconnect. No standing grants (draft #932). Google verification pending | Interim text: today. Disconnect: 13–14 Oct. Grants: roadmap. Verification: weeks |
+| **P6** | A native surface plus messaging. One transcript. Structured approvals. Voice. iOS push | No push. Two transcripts. No voice in the app | Push: today if E5 and E6. One transcript: 15–18 Oct. Voice: 19–31 Oct |
+| **P7** | Exact-detail approval for every purchase. Narrow payment instruments. Published tiers | Payments not promised. 12 h session with no refresh. No Google sign-in. 18+ only enforced in the app | 18+ gate: today. Refresh and Google: 13–14 Oct. Pricing: copy (O7) |
+| **P8** | An activity log with approved permissions. Task states and run history. Honest degraded or unknown status. No vendor publishes evals | No activity view. Evals gate nothing | App-path eval in CI: 13–14 Oct. Activity view: 15–18 Oct |
+| **Health** | Nobody plans with health. The documented bar is opt-in, on-demand data access | Day-card planning held (E2). The Weight producer bug. The model sees only zone words | E2 and the Weight fix: today. Real iPhone: you |
+
+## 7. Evidence
 
 **Spot-checked by the orchestrator at `889efa27`:**
 - **Telegram connect:** `deliverConnectLink` sends a URL button through the channel's `sendMessage` and treats an undefined result as blocked (`telegram-owner-do.ts:1672-1683`). On Telegram that is a real send. On the app, `appCaller` acknowledges it without delivering.
