@@ -131,12 +131,12 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
 }
 
 export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string; operation_marker?: string;
-  status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[] }>;
+  status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[]; attendee_emails?: readonly string[]; has_conference?: boolean }>;
 
 // Provider-internal etags are unnecessary in model-facing context. Keep them in the
 // connector API for concurrency (moveEvent/cancelEvent), not in a card prompt.
-export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker'> => {
-  const { etag: _etag, operation_marker: _marker, ...projection } = event;
+export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'attendee_emails' | 'has_conference'> => {
+  const { etag: _etag, operation_marker: _marker, attendee_emails: _emails, has_conference: _conference, ...projection } = event;
   return projection;
 };
 
@@ -175,7 +175,11 @@ export type CalendarChange = Omit<CalendarItem, 'status'> & Readonly<{ status: s
 export type MailItem = Readonly<{ id: string; thread_id: string; from: string; subject: string; snippet: string; at: string }>;
 // A1: a thread-read message carries the decoded body; the list projection (MailItem) stays
 // snippet-only so 'what is new' scans never pull bodies into a turn.
-export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string; message_id?: string; references?: readonly string[] }>;
+export type AttachmentMeta = Readonly<{ filename: string; mime_type: string; size: number }>;
+// body holds one chunk. When the full text is longer, body_total_chars and body_next_offset say where the
+// next chunk starts; threadPage reads it with the same message id and that offset.
+export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string; message_id?: string; references?: readonly string[]; body_total_chars?: number; body_next_offset?: number; attachments?: readonly AttachmentMeta[] }>;
+export type ThreadBodyRead = Readonly<{ messageId: string; offset: number }>;
 export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string; messageId?: string; inReplyTo?: string; references?: readonly string[] }>;
 
 // Conservative wire Message-ID validation: never interpolate model/provider header text.
@@ -295,7 +299,7 @@ export type GoogleClient = Readonly<{
   newMail(since: number, limit: number): Promise<readonly MailItem[]>;
   searchMail(query: string, limit: number): Promise<readonly MailItem[]>;
   readThread(threadId: string, limit: number): Promise<readonly ThreadMessage[]>;
-  threadPage?(threadId: string, limit: number, cursor?: string): Promise<Readonly<{messages: readonly ThreadMessage[]; cursor: string | null}>>;
+  threadPage?(threadId: string, limit: number, cursor?: string, body?: ThreadBodyRead): Promise<Readonly<{messages: readonly ThreadMessage[]; cursor: string | null}>>;
   tasks(status: TaskStatusFilter, limit: number): Promise<readonly TaskItem[]>;
 }>;
 
@@ -313,7 +317,7 @@ const b64urlDecode = (data: string): string => {
 // Thread bodies enter model context only through the E1 verification-artifact quarantine
 // (tools/live/google.ts); this cap is the second wall - a huge body never floods a turn.
 const BODY_CAP = 32_000;
-type GmailPayload = Readonly<{ mimeType?: string; body?: { data?: string }; parts?: GmailPayload[]; headers?: { name: string; value: string }[] }>;
+type GmailPayload = Readonly<{ mimeType?: string; filename?: string; body?: { data?: string; size?: number; attachmentId?: string }; parts?: GmailPayload[]; headers?: { name: string; value: string }[] }>;
 type GmailFullMessage = Readonly<{ id?: string; threadId?: string; snippet?: string; internalDate?: string; payload?: GmailPayload }>;
 const htmlText = (html: string): string => {
   const blocks = new Set(['p', 'div', 'br', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'section', 'article', 'hr']);
@@ -327,13 +331,30 @@ const htmlText = (html: string): string => {
   }, { decodeEntities: true }).end(html);
   return chunks.join('').trim();
 };
+const ATTACHMENT_LIST_CAP = 50;
+const attachmentsOf = (payload: GmailPayload | undefined): readonly AttachmentMeta[] => {
+  const found: AttachmentMeta[] = [];
+  const walk = (part: GmailPayload) => {
+    if (part.filename && part.body?.attachmentId && found.length < ATTACHMENT_LIST_CAP) {
+      found.push({ filename: part.filename.slice(0, 255), mime_type: part.mimeType ?? 'application/octet-stream', size: Number.isSafeInteger(part.body.size) ? part.body.size! : 0 });
+    }
+    part.parts?.forEach(walk);
+  };
+  if (payload) walk(payload);
+  return found;
+};
 const threadBody = (payload: GmailPayload | undefined): string => {
   const partText = (part: GmailPayload, mime: string): string => {
     if (part.mimeType === mime && part.body?.data) return b64urlDecode(part.body.data);
     for (const child of part.parts ?? []) { const text = partText(child, mime); if (text.trim()) return text; }
     return '';
   };
-  return (payload ? partText(payload, 'text/plain').trim() || htmlText(partText(payload, 'text/html')) : '').trim().slice(0, BODY_CAP);
+  return (payload ? partText(payload, 'text/plain').trim() || htmlText(partText(payload, 'text/html')) : '').trim();
+};
+const bodyChunk = (text: string, offset: number): Pick<ThreadMessage, 'body' | 'body_total_chars' | 'body_next_offset'> => {
+  if (offset > text.length) throw new Error('invalid body offset');
+  const next = offset + BODY_CAP;
+  return { body: text.slice(offset, next), ...(text.length > next ? { body_total_chars: text.length, body_next_offset: next } : {}) };
 };
 
 // Single-shot access-token mint for callers that need a raw bearer (Google-auth MCP servers on
@@ -517,8 +538,9 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     const header = (name: string) => message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
     return { id, thread_id: message.threadId ?? '', from: header('From'), subject: header('Subject'), snippet: message.snippet ?? '', at: new Date(Number(message.internalDate ?? 0)).toISOString() };
   }));
-  const threadPage = async (threadId: string, limit: number, cursor?: string): Promise<Readonly<{messages:readonly ThreadMessage[];cursor:string|null}>> => {
+  const threadPage = async (threadId: string, limit: number, cursor?: string, bodyRead?: ThreadBodyRead): Promise<Readonly<{messages:readonly ThreadMessage[];cursor:string|null}>> => {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw new Error('invalid thread page limit');
+      if (bodyRead && (cursor || !Number.isSafeInteger(bodyRead.offset) || bodyRead.offset < 0)) throw new Error('invalid body offset');
       const json = await call(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`) as { id?:string; messages?: GmailFullMessage[] };
       if (!json || !Array.isArray(json.messages) || (json.id !== undefined && json.id !== threadId) || json.messages.some(m => !m || typeof m.id !== 'string' || !m.id || m.threadId !== undefined && m.threadId !== threadId)) throw new Error('invalid Gmail thread response');
       const ids = json.messages.map(message => message.id);
@@ -531,13 +553,17 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
           offset = decoded.offset;
         } catch { throw new Error('invalid thread cursor or thread changed; read the first page again'); }
       }
-      const messages = json.messages.slice(offset, offset + limit).map(message => {
+      const messages = (bodyRead ? json.messages.filter(message => message.id === bodyRead.messageId) : json.messages.slice(offset, offset + limit)).map(message => {
         const header = (name: string) => message.payload?.headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
         const messageIds = message.payload?.headers?.filter(h => h.name.toLowerCase() === 'message-id') ?? [];
         const messageId = messageIds.length === 1 ? messageIds[0]!.value.trim() : '';
         const references = (message.payload?.headers?.filter(h => h.name.toLowerCase() === 'references').map(h => h.value).join(' ') ?? '').trim().split(/\s+/).filter(Boolean);
-        return { ...(validMessageId(messageId) ? {message_id:messageId} : {}), ...(references.length ? {references} : {}), id: message.id ?? '', from: header('From'), subject: header('Subject'), at: new Date(Number(message.internalDate ?? 0)).toISOString(), body: threadBody(message.payload) || (message.snippet ?? '').slice(0, BODY_CAP) };
+        return { ...(validMessageId(messageId) ? {message_id:messageId} : {}), ...(references.length ? {references} : {}), id: message.id ?? '', from: header('From'), subject: header('Subject'), at: new Date(Number(message.internalDate ?? 0)).toISOString(), ...bodyChunk(threadBody(message.payload) || (message.snippet ?? ''), bodyRead?.offset ?? 0), ...(attachmentsOf(message.payload).length ? { attachments: attachmentsOf(message.payload) } : {}) };
       });
+      if (bodyRead) {
+        if (messages.length === 0) throw new Error('unknown message in thread');
+        return {messages, cursor: null};
+      }
       const next = offset + messages.length;
       return {messages, cursor: next < ids.length ? b64url(new TextEncoder().encode(JSON.stringify({binding,offset:next}))) : null};
   };
@@ -767,6 +793,8 @@ const toItem = (event: GoogleEvent): CalendarItem => ({
   ...(typeof event.recurringEventId === 'string' ? { recurring_event_id: event.recurringEventId.slice(0, 1024) } : {}),
   ...(typeof event.originalStartTime?.dateTime === 'string' && validCalendarInstant(event.originalStartTime.dateTime) ? { original_start: event.originalStartTime.dateTime } : {}),
   ...(calendarSourceUrl(event.htmlLink) ? { source_url: calendarSourceUrl(event.htmlLink) } : {}),
+  ...(typeof event.hangoutLink === 'string' && event.hangoutLink !== '' || event.conferenceData?.entryPoints?.some(point => typeof point.uri === 'string' && point.uri !== '') ? { has_conference: true } : {}),
+  ...(event.attendees?.some(a => typeof a.email === 'string' && a.email.trim() && a.responseStatus !== 'declined') ? { attendee_emails: event.attendees.filter(a => a.responseStatus !== 'declined' && typeof a.email === 'string' && a.email.trim()).slice(0, 20).map(a => a.email!.trim().slice(0, 320)) } : {}),
   ...(event.attendees?.some(a => typeof a.displayName === 'string' && a.displayName.trim() && a.responseStatus !== 'declined') ? { attendee_names: event.attendees.filter(a => a.responseStatus !== 'declined' && typeof a.displayName === 'string' && a.displayName.trim()).slice(0, 20).map(a => a.displayName!.trim().slice(0, 200)) } : {}),
 });
 
@@ -774,5 +802,6 @@ type GoogleEvent = {
   id: string; etag?: string; status?: string; summary?: string; location?: string; description?: string; created?: string; updated?: string; recurringEventId?: string; originalStartTime?: { dateTime?: string; date?: string }; htmlLink?: string;
   start: { dateTime?: string; date?: string }; end: { dateTime?: string; date?: string };
   extendedProperties?: { private?: Record<string,string> };
-  attendees?: { self?: boolean; responseStatus?: string; displayName?: string }[];
+  attendees?: { self?: boolean; responseStatus?: string; displayName?: string; email?: string }[];
+  hangoutLink?: string; conferenceData?: { entryPoints?: { uri?: string }[] };
 };

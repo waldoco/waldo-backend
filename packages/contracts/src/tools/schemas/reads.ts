@@ -65,7 +65,7 @@ export const calendarPageSchema = z.strictObject({
   events: z.array(z.strictObject({
     id:z.string().min(1).max(1024),title:z.string().max(2000),start:z.string().min(1).max(64),end:z.string().min(1).max(64),all_day:z.boolean(),
     location:z.string().max(2000).optional(),description:z.string().max(2000).optional(),attendees:z.int().min(0).optional(),etag:z.string().max(1024).optional(),
-    status:z.enum(['confirmed','tentative','cancelled']).optional(),updated:iso8601Schema.optional(),recurring_event_id:z.string().max(1024).optional(),original_start:iso8601Schema.optional(),source_url:z.string().max(2048).optional(),attendee_names:z.array(z.string().max(320)).max(50).optional(),
+    status:z.enum(['confirmed','tentative','cancelled']).optional(),updated:iso8601Schema.optional(),recurring_event_id:z.string().max(1024).optional(),original_start:iso8601Schema.optional(),source_url:z.string().max(2048).optional(),attendee_names:z.array(z.string().max(320)).max(50).optional(),attendee_emails:z.array(z.string().max(320)).max(20).optional(),has_conference:z.boolean().optional(),
   }).refine(event => {
     const time = event.all_day ? z.iso.date() : iso8601Schema;
     return time.safeParse(event.start).success && time.safeParse(event.end).success && Date.parse(event.start) < Date.parse(event.end);
@@ -110,7 +110,11 @@ export const readThreadArgsSchema = z.strictObject({
   cursor: z.string().min(1).max(4096).optional(),
   thread_id: z.string().min(1),
   limit: z.int().min(1).max(20).default(10),
-});
+  // Continue one long message body: the id of a message whose body_next_offset was returned, and that offset.
+  body_message_id: z.string().min(1).max(128).optional(),
+  body_offset: z.int().min(0).max(100_000_000).optional(),
+}).refine(args => (args.body_message_id === undefined) === (args.body_offset === undefined), { error: 'body_message_id and body_offset go together', path: ['body_offset'] })
+  .refine(args => args.body_message_id === undefined || args.cursor === undefined, { error: 'a body continuation does not take a thread cursor', path: ['cursor'] });
 export type ReadThreadArgs = z.infer<typeof readThreadArgsSchema>;
 
 // 'all' is a read-filter sentinel, not a task state — write-side status vocabulary lives
