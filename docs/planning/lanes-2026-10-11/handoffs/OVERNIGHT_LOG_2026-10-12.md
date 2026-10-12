@@ -1993,3 +1993,24 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **It overlaps #1088** (L2's reviewed "skills on app turns", owner-merge, passed): two implementations of the same seam. The owner picks which lands; the other rebases onto it or closes.
   - **Hot-file collision:** it renames `channels/telegram-owner-do.ts` and widens a type in `owner-turn.ts`, while L2's E15 is in flight on the same owner DO and outbox. Whoever merges second rebases.
   - **Rollback:** a DO class rename is a migration-lineage change, so L1 checks the rollback path before any deploy carrying it [inference: the Worker versions before the rename may not be valid rollback targets afterwards].
+
+## 19:23Z: #1099 merged as `d704ffff`; L1 asks the owner for one deploy
+
+- **#1099 merged as `d704ffff`** at 19:23:41Z, pinned to `aebb0445` [verified: `gh pr view`]. `beta-mvp` is `d704ffff`, which carries #1089 (`446762f4`) and #1099. Neither is deployed.
+  - **Gate:**
+    - CI passed 6 of 6, pgTAP included;
+    - the PR was CLEAN and MERGEABLE, with no migration or wrangler paths;
+    - an independent delta review subagent passed (5 calls, no fan-out);
+    - the advisor agreed;
+    - the owner approved merging after review (about 18:10Z, in L1's session);
+    - no deploy ask was open (the `5bf2857d` ask closed at 18:55Z).
+  - **The review's main point:** `busyMonth()` supplies only meeting minutes, so the workout test still fails if the overlapped guard is deleted (TODAY would read 60), and a v1 Weight fails on the version string.
+  - **Its nits, passed to L1:** the test comment's wording (the overlapped day is the target day), and an optional `confidence` assertion.
+- **Sent to L1** (delivered; its turn started): gate `d704ffff` and ask the owner for the single deploy naming it. **The freeze applies while that ask is open.**
+- **My cross-session sends are at the cap** (10 of 10 since the owner's message at about 18:11Z). Replies still reach me, and lane records on #116 are read on each heartbeat.
+- **The scorecard's EoD section is refreshed** (evening update, 19:24Z):
+  - staging `5bf2857d`;
+  - #1089 and #1099 merged, not deployed;
+  - the version answer: Form's v1→v2 rewrite applies to Form only;
+  - new owner items: #1088 or #1100, the time-zone gap, the trend query, and app #89's follow-up;
+  - the P1 crediting constraint.
