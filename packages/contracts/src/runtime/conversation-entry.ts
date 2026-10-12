@@ -24,6 +24,8 @@ export type ConversationEntry = Readonly<{
   role?: ConversationRole;
   // Canonical owner-history ingress evidence; older rows remain unstamped.
   inputOrigin?: 'owner' | 'machine';
+  // Epoch ms when the path that appends the entry made it. Rows stored before the time was kept have none.
+  createdAt?: number;
 }>;
 
 // Privacy redaction uses literal text only; it never decides what the owner meant.

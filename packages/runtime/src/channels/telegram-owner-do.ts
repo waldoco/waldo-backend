@@ -19,7 +19,7 @@ import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './da
 import {CONTROLS_PATH,readControlsQuery,projectControls} from './dashboard-controls';
 import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt} from './dashboard-control-actions';
 import { createScopedCuratedSkillCapability } from '../skills/curated-host';
-import { ownerMessageAdmission } from '../identity/owner-message-admission';
+import { OwnerAdmissionError, ownerMessageAdmission } from '../identity/owner-message-admission';
 import { MEMORY_GRAPH_PATH, readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
 import {TelegramLinkInbox,LINK_MODE,type LinkBinding} from './telegram-link-inbox';
@@ -45,7 +45,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
 import { workspaceToolHandlers } from '../tools/live/workspace';
 import { workspaceDownload, workspacePage, workspaceRead } from './console-workspace';
-import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from '@waldo/contracts';
+import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ConversationEntry, type ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
@@ -191,6 +191,9 @@ const LATE_FIRE_MS = 5 * 60_000;
 // A directory outage at the alarm leaves the app owner's scheduled work waiting; this is how soon the alarm asks again.
 const APP_ADMISSION_RETRY_MS = 60_000;
 
+// The notice for a run that stopped before it finished, so its outcome is unknown.
+const RUN_DID_NOT_FINISH = 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.';
+
 const validZone = (zone: string): boolean => {
   try {
     return zone.length > 0 && Boolean(new Intl.DateTimeFormat('en', { timeZone: zone }));
@@ -296,6 +299,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     });
   }
 
+  // When an owner's request arrived, in their time zone, for a notice about it.
+  private requestReceived(at: number): string {
+    const zone = this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', noticeZone = validZone(zone) ? zone : 'UTC';
+    return `Request received: ${localIso(at, noticeZone).slice(0, 16).replace('T', ' ')} ${noticeZone}.`;
+  }
+
   private async notifyUncertainRecovery(): Promise<void> {
     for (const child of await this.inbox.records()) {
       if (child.outcomeNoticeQueued || child.outcomeNoticeBlocked) continue;
@@ -307,20 +316,17 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       let eligible = false;
       this.commitRecoveryNotice(child, () => { eligible = true; });
       if (!eligible) continue;
-      const zone = this.setup().timezone;
-      const noticeZone = validZone(zone) ? zone : 'UTC';
-      const requestTime = `${localIso(child.admittedAt, noticeZone).slice(0, 16).replace('T', ' ')} ${noticeZone}`;
       const noticeId = `${ordinary ? 'failure' : 'steer-failure'}:${child.id}:${child.attempt}`;
       const noticeText = ordinary
           ? child.reason === 'common_execution_indeterminate' ? 'The task expired before its result could be verified for delivery. A private result may already be saved. I did not send the unverified final or run the work again. Check the saved result before retrying changes.'
             : child.reason === 'owner_stopped' ? 'Stopped. In-flight changes may still finish.'
-            : child.reason === 'execution_closed' ? 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.'
+            : child.reason === 'execution_closed' ? RUN_DID_NOT_FINISH
             : 'Your request was interrupted, and its outcome is uncertain. Some changes may have completed. Please check the result before retrying.'
           : child.reason === 'not_consumed'
           ? 'Your added message was not processed. Please send it again if you still want me to act on it.'
           : 'Your added message was used by a run whose outcome is uncertain. In-flight changes may still finish. Please check before retrying changes.';
       await this.setup().finalOutbox.enqueueFenced({ id: noticeId, trace: ownerTurnTrace('telegram', child.updateId),
-        payload: { chat_id: Number(child.subject), text: noticeText + (ordinary ? `\n\nRequest received: ${requestTime}.` : '') },
+        payload: { chat_id: Number(child.subject), text: noticeText + (ordinary ? `\n\n${this.requestReceived(child.admittedAt)}` : '') },
         ownerSubject: child.subject, doName: child.doName, bot: child.bot,
       }, work => this.commitRecoveryNotice(child, current => {
         // An in-process failure may already have frozen a notice for this same attempt.
@@ -572,29 +578,65 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   private readonly logSkippedLoad = (skipped: CanonicalSkipped): void => { for (const line of skippedRowLines('app_history_load', skipped)) console.error(JSON.stringify(line)); };
-  // Writes a scheduled message as an assistant row in the owner's app transcript, after re-asking the directory.
-  private appDeliveryFor(authority: OwnerRuntimeAuthority): (text: string) => Promise<void> {
-    return async text => {
-      const now = Date.now(), abort = new AbortController();
-      const scope: RunEffectScope = { runId: 'app-scheduled', attempt: crypto.randomUUID(), deadline: now + 60_000, signal: abort.signal,
-        admit: () => { if (abort.signal.aborted || Date.now() >= now + 60_000) throw new ClosedRunError(); },
-        commit: work => this.ctx.storage.transactionSync(work) };
-      const lookup = async () => {
-        scope.admit(); const current = await this.appOwnerLookup(); scope.admit();
-        if (current.kind !== 'admitted') throw new ClosedRunError();
-        const { ownerId, doName, admissionRevision } = current.authority;
-        return { ownerId, bindingRef: `runtime:${doName}`, revision: admissionRevision, physicalDoId: this.ctx.id.toString() };
-      };
-      try {
-        const context = await surfaceOwnerAdmission({ scope, lookup, expectedPhysicalDoId: this.ctx.id.toString(), surface: 'app', subject: authority.doName,
-          occurrenceKey: `scheduled:${crypto.randomUUID()}`, occurredAt: now, text: 'Deliver a scheduled message.' });
-        const store = canonicalOwnerConversationStore(this.ctx.storage, context, this.logSkippedLoad);
-        const { leafId } = await store.load();
-        const ownerRef = context.invocation.verified_authority.principal_ref, id = `scheduled-${crypto.randomUUID()}`;
-        await store.save([{ id, ownerId: ownerRef, chatId: `owner:${ownerRef}`, parentId: leafId, threadAnchorId: null, surface: 'app',
-          modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role: 'assistant' }], id, scope);
-      } finally { abort.abort(); }
+  // Writes one assistant row into the owner's app transcript under a fresh admission that re-asks the directory.
+  // `place` picks the row and the new leaf from the history it loads; `commit` is the write's transaction.
+  private async appAssistantRow(purpose: Readonly<{ subject: string; occurrence: string; text: string }>,
+    place: (history: Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null }>, ownerRef: string) => Readonly<{ entry: ConversationEntry; leafId: string }>,
+    commit: <T>(work: () => T) => T = work => this.ctx.storage.transactionSync(work)): Promise<void> {
+    const now = Date.now(), abort = new AbortController();
+    const scope: RunEffectScope = { runId: 'app-transcript-row', attempt: crypto.randomUUID(), deadline: now + 60_000, signal: abort.signal,
+      admit: () => { if (abort.signal.aborted || Date.now() >= now + 60_000) throw new ClosedRunError(); }, commit };
+    const lookup = async () => {
+      scope.admit(); const current = await this.appOwnerLookup(); scope.admit();
+      if (current.kind !== 'admitted') throw new ClosedRunError();
+      const { ownerId, doName, admissionRevision } = current.authority;
+      return { ownerId, bindingRef: `runtime:${doName}`, revision: admissionRevision, physicalDoId: this.ctx.id.toString() };
     };
+    try {
+      const context = await surfaceOwnerAdmission({ scope, lookup, expectedPhysicalDoId: this.ctx.id.toString(), surface: 'app', subject: purpose.subject,
+        occurrenceKey: purpose.occurrence, occurredAt: now, text: purpose.text });
+      const store = canonicalOwnerConversationStore(this.ctx.storage, context, this.logSkippedLoad);
+      const { entry, leafId } = place(await store.load(), context.invocation.verified_authority.principal_ref);
+      await store.save([entry], leafId, scope);
+    } finally { abort.abort(); }
+  }
+
+  // Writes a scheduled message as an assistant row at the end of the owner's app transcript.
+  private appDeliveryFor(authority: OwnerRuntimeAuthority): (text: string) => Promise<void> {
+    return text => this.appAssistantRow({ subject: authority.doName, occurrence: `scheduled:${crypto.randomUUID()}`, text: 'Deliver a scheduled message.' }, ({ leafId }, ownerRef) => {
+      const id = `scheduled-${crypto.randomUUID()}`;
+      return { entry: { id, ownerId: ownerRef, chatId: `owner:${ownerRef}`, parentId: leafId, threadAnchorId: null, surface: 'app',
+        modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role: 'assistant', createdAt: Date.now() }, leafId: id };
+    });
+  }
+
+  // Each interrupted app turn leaves one "did not finish" reply in the owner's transcript. It hangs under the owner's
+  // message when that was saved, else after the last row, and becomes the leaf only when it extends the conversation, so
+  // a turn that already moved on keeps its place. The reply and the closed notice commit together. A directory outage
+  // keeps notices due for the next pass; an account the directory no longer admits gets none.
+  private async writeAppNotices(): Promise<void> {
+    const due = this.appInbox.noticesDue();
+    if (!due.length) return;
+    const found = await this.appOwnerLookup();
+    if (found.kind === 'retry') { this.appInbox.deferWake(30_000); return; }
+    const drop = (id: string) => { try { this.appInbox.closeNotice(id, 'dropped'); } catch (error) { if (!(error instanceof ClosedRunError)) throw error; } };
+    for (const record of due) {
+      if (found.kind === 'dormant') { drop(record.id); continue; }
+      const text = `${RUN_DID_NOT_FINISH}\n\n${this.requestReceived(record.admittedAt)}`;
+      try {
+        await this.appAssistantRow({ subject: found.authority.doName, occurrence: `notice:${record.id}`, text: 'Tell the owner a message did not finish.' }, ({ entries, leafId }, ownerRef) => {
+          const id = `${record.id}-did-not-finish`, parentId = entries.some(entry => entry.id === record.id) ? record.id : leafId;
+          return { entry: { id, ownerId: ownerRef, chatId: `owner:${ownerRef}`, parentId, threadAnchorId: null, surface: 'app',
+            modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role: 'assistant', createdAt: Date.now() },
+          leafId: leafId === null || parentId === leafId ? id : leafId };
+        }, work => { let written!: ReturnType<typeof work>; this.appInbox.closeNotice(record.id, 'written', () => { written = work(); }); return written; });
+      } catch (error) {
+        if (error instanceof ClosedRunError) continue;
+        if (error instanceof OwnerAdmissionError && error.code === 'unavailable') { this.appInbox.deferWake(30_000); return; }
+        drop(record.id);
+        console.error(JSON.stringify({ hop: 'app_notice', ok: false, code: canonicalHistoryFault(error) ?? 'write_failed' }));
+      }
+    }
   }
 
   // For an owner on both surfaces, a scheduled message is written to the app, then Telegram gets a plain copy.
@@ -656,7 +698,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(path.startsWith(APP_CHAT_SEND_PATH+'/')&&request.method==='GET'){
       const client=path.slice(APP_CHAT_SEND_PATH.length+1);
       if(!/^[A-Za-z0-9_-]{8,64}$/.test(client))return fail(404);
-      this.appInbox.recover(this.appAttempts);
+      this.recoverApp();
       const receipt=this.appInbox.receipt(name,client);return receipt?Response.json(receipt,{headers:{'cache-control':'no-store'}}):fail(404);
     }
     if(path==='/app/v1/controls'||path==='/app/v1/actions'||path.startsWith('/app/v1/actions/')||path==='/app/v1/approvals'||path==='/app/v1/approvals/decisions'){
@@ -683,6 +725,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
     }
     if(path===APP_CHAT_PATH&&request.method==='GET'){
+      this.recoverApp();
       const now=Date.now(),abort=new AbortController();
       const scope:RunEffectScope={runId:'app-read',attempt:crypto.randomUUID(),deadline:now+60_000,signal:abort.signal,admit:()=>{if(abort.signal.aborted||Date.now()>=now+60_000)throw new ClosedRunError();},commit:work=>this.ctx.storage.transactionSync(work)};
       let step='context';
@@ -769,8 +812,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
     return Response.json({accepted:true,message_id:result.record.id,state:result.record.state},{status:202,headers:{'cache-control':'no-store'}});
   }
+  // A read can be the first request after a restart. A turn it finds interrupted gets its "did not finish" reply from a drain.
+  private recoverApp(): void {
+    this.appInbox.recover(this.appAttempts);
+    if(this.appInbox.noticesDue().length)this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
+  }
   private async drainApp(): Promise<void> {
     this.appInbox.recover(this.appAttempts);
+    await this.writeAppNotices();
     for(const pending of this.appInbox.records().filter(row=>row.state==='admitted')){
       let current=false;
       try{await this.appAuthority(pending.owner,pending.sessionHash);current=true;}catch(error){if(error instanceof AppSessionAuthorityError&&error.kind==='unavailable'){this.appInbox.deferWake(30_000);await rearmSharedAlarm(this.ctx.storage,null,Date.now(),30_000);return;}}
@@ -785,6 +834,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await this.appAuthority(record.owner,record.sessionHash);scope.admit();completed=true;
       }catch(error){console.error('app execution outcome unconfirmed');const code=canonicalHistoryFault(error);if(code)console.error(JSON.stringify({hop:'app_turn',ok:false,code}));}
       finally{clearTimeout(timeout);this.appInbox.settle(record,completed);abort.abort();this.appAttempts.delete(record.attempt!);this.activeApp=null;if(this.activeScope===scope){this.activeScope=undefined;this.activeAbort=undefined;}}
+      await this.writeAppNotices();
     }
     await rearmSharedAlarm(this.ctx.storage,null,Date.now());
   }
