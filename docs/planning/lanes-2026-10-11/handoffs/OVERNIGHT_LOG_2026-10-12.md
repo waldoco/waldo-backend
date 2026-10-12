@@ -1495,3 +1495,4 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
 - **14:14Z heartbeat:** no PR updates in either repo since 14:00Z, and the lane messages are still held by the cap.
 - **14:34Z heartbeat:** no PR updates since 14:10Z; the lanes look stalled on the held fixes. I sent the owner one push notification. I am not routing around the cap with PR comments or the other send tool.
 - **14:54Z heartbeat:** still no PR updates in either repo; the owner hasn't typed. Next timed items: probe 6 at 16:00Z (L1's watch is armed) and the re-score at 17:00Z.
+- **15:14Z heartbeat:** no PR updates; the owner hasn't typed; the lanes are idle on the held fixes.
