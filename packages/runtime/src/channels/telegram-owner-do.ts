@@ -2777,7 +2777,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       googleConnectUrl: (feature, channel) => google.connectUrl(feature, channel),
       calendarDemand: (range) => calendarDemand({ sql: this.ctx.storage.sql, now: Date.now,
-        accounts: async () => { await google.migrate(); const failing = await health(); return (await accounts()).map((account) => ({ email: account.email, scopes: account.scopes, error: failing[account.id] || null })); },
+        accounts: async () => { await google.migrate(); const failing = await health(); return (await accounts()).map((account) => ({ email: account.email, scopes: account.scopes, error: failing[account.id] ?? null })); },
         client: (email) => google.client('availability', undefined, undefined, email) }).read(range),
       openFile: async (id) => {
         const file = Number.isInteger(id) ? files.get(id) : null;
