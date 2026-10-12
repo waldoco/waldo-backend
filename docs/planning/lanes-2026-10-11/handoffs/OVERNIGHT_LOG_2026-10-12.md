@@ -794,3 +794,33 @@ Still open:
 - **L2's local wall at `ee213723`:** all pass, including 4868 runtime tests and 28/28 mutations. `verify:supabase` NOT RUN; pgTAP UNAVAILABLE. CI is pending at `ee213723`. Merge follows green CI and the advisor.
 - **#1083 v2 (`c2f652b2`, L1):** stress pillar, per-pillar source choice, HC 0.6, SDNN ×0.8, and a stale source is dropped. It waits on the owner merging waldo-brain #34, then #37, and on the owner's yes. It needs a fresh independent review. Not an EoD item.
 - **L2 next:** the #1066 follow-ups are on `l2/app-brief-hold` (three commits). The PR comes after #1085 merges.
+
+## 08:40Z: #1085 merged as `e37f60f3`; wave 1 code complete
+
+**CHECKPOINT**
+- **Tip:** `beta-mvp` is `e37f60f3`. It carries #1075, #1080, #1076, #1066, #1084 and #1085.
+- **Staging:** `cdd906dd`.
+- **Wave 1:** deploy `e37f60f3`, on the owner's go in L1's session; no need to wait for 10:00Z. It doesn't carry expiry on read (L3 is out) or the event-brief hold noise fix, which goes in the next deploy.
+- **After the deploy:** the owner confirms their zone (a D6 row tap) before the P4 probe.
+- **Pending:**
+  - L2's #1066 follow-ups PR (`l2/app-brief-hold`);
+  - #1083 v2, which waits on brain #34 and #37, the owner's yes and a fresh review;
+  - E5, E10, E11;
+  - docs #1077;
+  - app #84.
+
+**Gate for #1085** [verified]:
+- Head `ee213723`; base `2e5993d6` is an ancestor of it; CI passed 6/6 including pgTAP; CLEAN. Merged with `--match-head-commit`.
+- I read the full `owner-turn.ts:308` filter. The `raise_approval` condition is added as a new conjunct, so the `remember`/`forget_memory` own-turn restriction is intact. `raise_approval` is offered only when `activeOwnerTurn !== undefined`.
+- The test deltas of the two fix commits (`6f9bf8de`, `ee213723`) contain:
+  - expired-never-put-off returns `expired`, with status `expired` and 0 live presentations;
+  - a day-card job is offered tools, but not `raise_approval`;
+  - a WhatsApp raise reports a sent card;
+  - a raise backs no done claim;
+  - a stale Telegram `d:` answers "Already put off" and keeps the card decidable.
+- The context-composer test edit only removes a comment that was never true: the pinned `context_ref` is the same at every commit.
+- The advisor approved the merge.
+
+**Notes for the owner:**
+- New Telegram cards change meaning: "Not now" now puts off, and "Don't do this" skips.
+- The PR changes one character in the WhatsApp adapter, which another contributor owns.
