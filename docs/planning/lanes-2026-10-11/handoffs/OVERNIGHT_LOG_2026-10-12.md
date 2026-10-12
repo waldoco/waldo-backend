@@ -1545,3 +1545,20 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - It's not on the hold list. Forget only gets more conservative.
 - **Follow-up** (reviewer finding D, not a blocker): when every re-read fails while a topic is held, the model sees `withheld_items:N` with no retry signal. It might then tell the owner the results were held back for privacy when storage actually failed. The fix is a separate unreadable count in the tool output, an additive tool-contract change.
 - **The deployable tip** is now `f2c1b6e3`: #1090 and #1094 on top of wave 2. #1092 is still to merge (CI at `7e91fa58`). Deploying needs the owner's go in L1's session.
+
+## 15:56Z: #1092 merged as `87b31948`; the deployable tip is ready
+
+- **#1092 merged:** `gh pr merge 1092 --merge --match-head-commit 7e91fa58a0054e6cf717c736983b8592a3a9cd4c`.
+- **Gate:**
+  - CI 6/6 at `7e91fa58`.
+  - The full review, then a subagent delta review at `fdfb23ca` (FAIL, now fixed), then my own delta review at `7e91fa58`. I read all 10 files: no `packages/contracts` change, and `card.unreadable` isn't in contracts.
+  - The advisor approved, and the PR was CLEAN.
+- **The delta I read:**
+  - An unreadable card returns `card.unreadable.failed` with "Nothing was changed". This replaces the unpin exemption, as the reviewer's LOW asked.
+  - `read(id)` throws a typed `UnreadableScheduleRowError`, which both cancel paths turn into `rejected`, so they no longer report `transient`.
+  - The ledger wording names cancel-all.
+  - The standing-order prompt now says "a schedule stored in a form this version can't read", not "at null".
+  - The scenario and eval fakes gained `unreadable: () => 0`.
+- **LOW follow-up:** `satisfies ReminderBook` wasn't added, so `as unknown as` remains in both fakes.
+- **The deployable tip `87b31948`** is wave 2 plus #1090, #1092 and #1094. #1088 is still open and not in it. The deploy needs the owner's yes in L1's session. D14 holds through this deploy, because the rollback target becomes `02103423`, which lacks the guard.
+- **Asked L1** for probe 6 and probe 8.
