@@ -69,11 +69,6 @@ type TrustedRunLoopProof = {
 };
 
 type TrustedRunLoopStub = DurableObjectStub & {
-  __runLoopScheduleTrustedRunForTest(input: {
-    admission: TrustedInvocationAdmission;
-    snapshot_ref: string;
-    snapshot_at: number;
-  }): Promise<string>;
   readTrustedRunProof(runId: string): Promise<TrustedRunLoopProof>;
   readRunProof(runId: string): Promise<{
     fsm: string[];
@@ -166,6 +161,20 @@ function freshStub(): TrustedRunLoopStub {
   sequence += 1;
   const namespace = (env as unknown as { RUN_LOOP_DO: DurableObjectNamespace }).RUN_LOOP_DO;
   return namespace.get(namespace.idFromName(`trusted-run-loop-${sequence}`)) as TrustedRunLoopStub;
+}
+
+// The seam arms the alarm for the row's due_at, about 500 ms out. Under load workerd can fire it before the test has
+// installed its overrides and driven the run, and runDurableObjectAlarm then finds no alarm. Holding the alarm in the
+// same callback leaves only the test to drive the run; due_at is unchanged and inside the scheduler's dispatch lookahead.
+async function scheduleTrustedRun(
+  stub: TrustedRunLoopStub,
+  input: Parameters<TestRunLoopInstance['__runLoopScheduleTrustedRunForTest']>[0],
+): Promise<string> {
+  return runInDurableObject(stub, async (instance, state) => {
+    const runId = await (instance as unknown as TestRunLoopInstance).__runLoopScheduleTrustedRunForTest(input);
+    await armAlarm(state.storage, Date.now() + 60_000);
+    return runId;
+  });
 }
 
 async function withNonLocalRunLoopEnvironment<T>(
@@ -767,7 +776,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
 
-    const runId = await stub.__runLoopScheduleTrustedRunForTest({
+    const runId = await scheduleTrustedRun(stub, {
       admission: trustedScheduledAdmission(),
       snapshot_ref: 'snp_ffffffffffffffffffffffffffffffff',
       snapshot_at: SNAPSHOT_AT,
@@ -907,8 +916,8 @@ describe('RunLoopDO trusted invocation convergence', () => {
       },
     };
     const [runA, runB] = await Promise.all([
-      stub.__runLoopScheduleTrustedRunForTest(trustedInput(tenantA)),
-      stub.__runLoopScheduleTrustedRunForTest(trustedInput(tenantB)),
+      scheduleTrustedRun(stub, trustedInput(tenantA)),
+      scheduleTrustedRun(stub, trustedInput(tenantB)),
     ]);
     const gateway = new ScriptedGateway([
       response(ROSTER.primary, toolCall('call-v2-first', 1)),
@@ -1044,7 +1053,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     'fails closed when the trusted %s owner scope no longer matches the accepted authority',
     async (table) => {
       const stub = freshStub();
-      const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+      const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
       await runInDurableObject(stub, async (instance, state) => {
         state.storage.sql.exec(
           `UPDATE ${table} SET user_id = 'own_ffffffffffffffffffffffffffffffff' WHERE run_id = ?`,
@@ -1263,7 +1272,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as TestRunLoopInstance).__runLoopSetTestOverrides({
         gateway,
@@ -1316,7 +1325,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         response(ROSTER.primary, toolCall('call-v2-second', 2)),
         response(ROSTER.primary, 'safe ephemeral synthesis'),
       ]);
-      const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+      const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
       await runInDurableObject(stub, (instance) => {
         const runLoop = instance as unknown as TestRunLoopInstance;
         runLoop.__runLoopSetTestOverrides({
@@ -1396,7 +1405,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       const stub = freshStub();
       const gateway = new ScriptedGateway(responses);
       const countedTool = countingReconciledGetCrsHandler();
-      const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+      const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
       await runInDurableObject(stub, (instance) => {
         const runLoop = instance as unknown as TestRunLoopInstance;
         runLoop.__runLoopSetTestOverrides({
@@ -1408,13 +1417,8 @@ describe('RunLoopDO trusted invocation convergence', () => {
         runLoop.__runLoopCrashAfterTrustedProviderEffect = phase;
       });
 
-      // The platform fires the scheduled alarm on its own clock and can hit the armed crash before this call; then there is no alarm left and this call
-      // resolves false. Either way the crash happened once, and the checks below (physical tool calls before recovery) prove where it stopped.
-      await runDurableObjectAlarm(stub).then(
-        () => undefined,
-        (error: unknown) => {
-          expect(String(error)).toContain(`crash-injection:TRUSTED_${phase.toUpperCase()}_EFFECT`);
-        },
+      await expect(runDurableObjectAlarm(stub)).rejects.toThrow(
+        `crash-injection:TRUSTED_${phase.toUpperCase()}_EFFECT`,
       );
       expect(countedTool.physicalCalls()).toBe(physicalToolsBeforeRecovery);
 
@@ -1474,7 +1478,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         response(ROSTER.primary, toolCall('call-v2-second', 2)),
         response(ROSTER.primary, 'safe ephemeral synthesis'),
       ]);
-      const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+      const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
       await runInDurableObject(stub, (instance) => {
         const runLoop = instance as unknown as TestRunLoopInstance;
         runLoop.__runLoopSetTestOverrides({
@@ -1540,7 +1544,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         recordSuccess: () => undefined,
         recordFailure: () => undefined,
       };
-      const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+      const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
       await runInDurableObject(stub, (instance) => {
         const runLoop = instance as unknown as TestRunLoopInstance;
         runLoop.__runLoopSetTestOverrides({
@@ -1605,7 +1609,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         response(ROSTER.primary, 'safe ephemeral synthesis'),
       ]);
     const cause = new Error('trusted provider reconciler storage sentinel');
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as TestRunLoopInstance).__runLoopSetTestOverrides({
         gateway,
@@ -1660,7 +1664,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     const gateway = new ScriptedGateway([
       response(ROSTER.primary, toolCall('call-v2-first', 1)),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -1717,7 +1721,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
     const countedTool = countingReconciledGetCrsHandler();
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -1765,7 +1769,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     const countedTool = countingReconciledGetCrsHandler({
       onReconcile: () => events.push('tool-reconcile'),
     });
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -1836,7 +1840,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     const stub = freshStub();
     const gateway = new ScriptedGateway([response(ROSTER.primary, toolCall('call-v2-first', 1))]);
     const countedTool = countingReconciledGetCrsHandler({ rejectedError: privateToolReceipt });
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -1907,7 +1911,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     const countedTool = countingReconciledGetCrsHandler({
       onReconcile: () => events.push('tool-reconcile'),
     });
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -1977,7 +1981,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-first', 1)),
     ]);
     const countedTool = countingReconciledGetCrsHandler();
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -2038,7 +2042,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -2096,7 +2100,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
     const countedTool = countingReconciledGetCrsHandler();
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -2143,7 +2147,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -2220,7 +2224,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -2288,7 +2292,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
 
   it('preserves a valid V2 sidecar when an audit write has an unexpected storage fault', async () => {
     const stub = freshStub();
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
 
     await runInDurableObject(stub, (instance, state) => {
       const before = state.storage.sql
@@ -2346,7 +2350,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-first', 1)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
 
     await runInDurableObject(stub, async (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
@@ -2394,7 +2398,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-first', 1)),
     ]);
     const oversizedPrompt = '😀'.repeat(8_192);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as TestRunLoopInstance).__runLoopSetTestOverrides({
         gateway,
@@ -2446,7 +2450,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     for (const testCase of cases) {
       const stub = freshStub();
       const gateway = new ScriptedGateway(testCase.responses);
-      const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+      const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
       await runInDurableObject(stub, (instance) => {
         (instance as unknown as TestRunLoopInstance).__runLoopSetTestOverrides({
           gateway,
@@ -2531,7 +2535,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       const providerCanary = `private-crash-window-provider-receipt-${'😀'.repeat(9_000)}`;
       const stub = freshStub();
       const gateway = new ScriptedGateway(responses(providerCanary));
-      const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+      const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
       await runInDurableObject(stub, (instance) => {
         const runLoop = instance as unknown as TestRunLoopInstance;
         runLoop.__runLoopSetTestOverrides({
@@ -2600,7 +2604,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-first', 1)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -2656,7 +2660,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       source_taint: null,
       tool: 'get_crs',
     };
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -2792,7 +2796,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     for (const testCase of cases) {
       const stub = freshStub();
       const gateway = new ScriptedGateway([]);
-      const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+      const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
       await runInDurableObject(stub, (instance) => {
         (instance as unknown as TestRunLoopInstance).__runLoopSetTestOverrides({
           gateway,
@@ -3006,7 +3010,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     expect(atCrash.current).toEqual({ state: 'PENDING', failure_reason: null });
     expect(atCrash.trace.map((event) => event.event)).toEqual(['scheduled_wake']);
 
-    expect(await stub.__runLoopScheduleTrustedRunForTest(input)).toBe(admittedRunId);
+    expect(await scheduleTrustedRun(stub, input)).toBe(admittedRunId);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     const proof = await stub.readTrustedRunProof(admittedRunId);
     expect(proof.current).toEqual({ state: 'DONE', failure_reason: null });
@@ -3024,7 +3028,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         response(ROSTER.primary, toolCall('call-v2-second', 2)),
         response(ROSTER.primary, 'safe ephemeral synthesis'),
       ]);
-      const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+      const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
       await runInDurableObject(stub, (instance) => {
         const runLoop = instance as unknown as TestRunLoopInstance;
         runLoop.__runLoopSetTestOverrides({
@@ -3074,7 +3078,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -3117,7 +3121,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -3159,7 +3163,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -3220,7 +3224,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -3283,7 +3287,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -3355,7 +3359,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         return 'safe ephemeral synthesis';
       },
     };
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -3402,7 +3406,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -3465,7 +3469,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -3521,7 +3525,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -3584,12 +3588,9 @@ describe('RunLoopDO trusted invocation convergence', () => {
         response(ROSTER.primary, toolCall('call-v2-second', 2)),
         response(ROSTER.primary, 'safe ephemeral synthesis'),
       ]);
-      const runId = await runInDurableObject(stub, async (instance, state) => {
+      const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
+      await runInDurableObject(stub, (instance) => {
         const runLoop = instance as unknown as TestRunLoopInstance;
-        const runId = await runLoop.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
-        // Keep the host alarm from firing between setup and the explicit crash assertion.
-        // runDurableObjectAlarm drives it explicitly; schedule due_at itself is unchanged.
-        await armAlarm(state.storage, Date.now() + 60_000);
         runLoop.__runLoopSetTestOverrides({
           gateway,
           contextComposer: frozenComposer().composer,
@@ -3600,7 +3601,6 @@ describe('RunLoopDO trusted invocation convergence', () => {
         } else {
           runLoop.__runLoopCrashAfterTrustedSynthesisReceipt = true;
         }
-        return runId;
       });
       await expect(runDurableObjectAlarm(stub)).rejects.toThrow(
         failure.crash === 'tool_checkpoint'
@@ -3647,7 +3647,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -3689,7 +3689,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -3765,7 +3765,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         response(ROSTER.primary, toolCall('call-v2-second', 2)),
         response(ROSTER.primary, 'safe ephemeral synthesis'),
       ]);
-      const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+      const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
       await runInDurableObject(stub, (instance) => {
         const runLoop = instance as unknown as TestRunLoopInstance;
         runLoop.__runLoopSetTestOverrides({
@@ -3837,7 +3837,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -3926,7 +3926,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         return 'safe ephemeral synthesis';
       },
     };
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -4003,7 +4003,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -4075,7 +4075,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -4130,7 +4130,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         ),
       ),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as TestRunLoopInstance).__runLoopSetTestOverrides({
         gateway,
@@ -4180,7 +4180,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCalls(sixteenCalls)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -4221,7 +4221,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       providerCalls: number;
     }> = [
       {
-        input: async (stub) => stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission())),
+        input: async (stub) => scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission())),
         configure: (runLoop, gateway) => {
           const frozen = frozenComposer();
           runLoop.__runLoopSetTestOverrides({
@@ -4241,7 +4241,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         providerCalls: 0,
       },
       {
-        input: async (stub) => stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission())),
+        input: async (stub) => scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission())),
         configure: (runLoop, gateway) => {
           const frozen = frozenComposer();
           runLoop.__runLoopSetTestOverrides({
@@ -4266,7 +4266,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         providerCalls: 0,
       },
       {
-        input: async (stub) => stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission())),
+        input: async (stub) => scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission())),
         configure: (runLoop, gateway) => {
           const frozen = frozenComposer();
           runLoop.__runLoopSetTestOverrides({
@@ -4291,7 +4291,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         providerCalls: 0,
       },
       {
-        input: async (stub) => stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission())),
+        input: async (stub) => scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission())),
         configure: (runLoop, gateway) => {
           runLoop.__runLoopSetTestOverrides({
             gateway,
@@ -4307,7 +4307,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         providerCalls: 0,
       },
       {
-        input: async (stub) => stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission())),
+        input: async (stub) => scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission())),
         configure: (runLoop, gateway) => {
           runLoop.__runLoopSetTestOverrides({
             gateway,
@@ -4328,7 +4328,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         providerCalls: 0,
       },
       {
-        input: async (stub) => stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission())),
+        input: async (stub) => scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission())),
         configure: (runLoop, gateway) => {
           runLoop.__runLoopSetTestOverrides({
             gateway,
@@ -4344,7 +4344,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         providerCalls: 0,
       },
       {
-        input: async (stub) => stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission())),
+        input: async (stub) => scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission())),
         configure: (runLoop, gateway) => {
           runLoop.__runLoopSetTestOverrides({
             gateway,
@@ -4360,7 +4360,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         providerCalls: 0,
       },
       {
-        input: async (stub) => stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission())),
+        input: async (stub) => scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission())),
         configure: (runLoop, gateway) => {
           runLoop.__runLoopSetTestOverrides({
             gateway,
@@ -4377,7 +4377,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         providerCalls: 1,
       },
       {
-        input: async (stub) => stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission())),
+        input: async (stub) => scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission())),
         configure: (runLoop, gateway) => {
           runLoop.__runLoopSetTestOverrides({
             gateway,
@@ -4410,7 +4410,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     }
 
     const missingStub = freshStub();
-    const missingRunId = await missingStub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const missingRunId = await scheduleTrustedRun(missingStub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(missingStub, async (instance, state) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -4427,7 +4427,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     });
 
     const tamperedStub = freshStub();
-    const tamperedRunId = await tamperedStub.__runLoopScheduleTrustedRunForTest(
+    const tamperedRunId = await scheduleTrustedRun(tamperedStub,
       trustedInput(trustedScheduledAdmission()),
     );
     const tamperedState = JSON.stringify({ prompt: PRIVATE_STAGED_INPUT });
@@ -4454,11 +4454,11 @@ describe('RunLoopDO trusted invocation convergence', () => {
     expect(tampered.state_json).toBe('{"format":"corrupt_v2_state"}');
     expect(tampered.state_json).not.toContain(PRIVATE_STAGED_INPUT);
     expect(
-      await tamperedStub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission())),
+      await scheduleTrustedRun(tamperedStub, trustedInput(trustedScheduledAdmission())),
     ).toBe(tamperedRunId);
 
     const canonicalStub = freshStub();
-    const canonicalRunId = await canonicalStub.__runLoopScheduleTrustedRunForTest(
+    const canonicalRunId = await scheduleTrustedRun(canonicalStub,
       trustedInput(trustedScheduledAdmission()),
     );
     const canonicalGateway = new ScriptedGateway([]);
@@ -4494,7 +4494,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
     expect(canonicalGateway.requests).toHaveLength(0);
 
     const markerStub = freshStub();
-    const markerRunId = await markerStub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const markerRunId = await scheduleTrustedRun(markerStub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(markerStub, async (instance, state) => {
       state.storage.sql.exec(
         'UPDATE runtime_runs SET invocation_format = NULL WHERE run_id = ?',
@@ -4514,7 +4514,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const gatedRunId = await gatedStub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const gatedRunId = await scheduleTrustedRun(gatedStub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(gatedStub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -4547,7 +4547,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -4606,7 +4606,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -4661,7 +4661,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as TestRunLoopInstance).__runLoopSetTestOverrides({
         gateway,
@@ -4718,7 +4718,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, toolCall('call-v2-second', 2)),
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (instance) => {
       const runLoop = instance as unknown as TestRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({
@@ -4761,7 +4761,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
       response(ROSTER.primary, 'safe ephemeral synthesis'),
     ]);
     const input = trustedInput(trustedScheduledAdmission());
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(input);
+    const runId = await scheduleTrustedRun(stub, input);
     await runInDurableObject(stub, (_instance, state) => {
       const row = state.storage.sql
         .exec<{ state_json: string }>(
@@ -4811,14 +4811,14 @@ describe('RunLoopDO trusted invocation convergence', () => {
         .one(),
     );
     expect(sidecar.state_json).toBe('{"format":"corrupt_v2_state"}');
-    expect(await stub.__runLoopScheduleTrustedRunForTest(input)).toBe(runId);
+    expect(await scheduleTrustedRun(stub, input)).toBe(runId);
   });
 
   it('fails closed before a V2 disposition mutation can confuse solicited and proactive branches', async () => {
     const stub = freshStub();
     const composer = frozenComposer();
     const gateway = new ScriptedGateway([]);
-    const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+    const runId = await scheduleTrustedRun(stub, trustedInput(trustedScheduledAdmission()));
     await runInDurableObject(stub, (_instance, state) => {
       const row = state.storage.sql
         .exec<{ state_json: string }>(
@@ -4871,10 +4871,10 @@ describe('RunLoopDO trusted invocation convergence', () => {
       snapshot_at: SNAPSHOT_AT + 1,
     };
     const runIds = await Promise.all([
-      stub.__runLoopScheduleTrustedRunForTest(input),
-      stub.__runLoopScheduleTrustedRunForTest(input),
-      stub.__runLoopScheduleTrustedRunForTest(input),
-      stub.__runLoopScheduleTrustedRunForTest(alternateFrozenSnapshot),
+      scheduleTrustedRun(stub, input),
+      scheduleTrustedRun(stub, input),
+      scheduleTrustedRun(stub, input),
+      scheduleTrustedRun(stub, alternateFrozenSnapshot),
     ]);
     expect(new Set(runIds).size).toBe(1);
     expect((await stub.readTrustedRunProof(runIds[0]!)).v2.snapshot).toEqual({
