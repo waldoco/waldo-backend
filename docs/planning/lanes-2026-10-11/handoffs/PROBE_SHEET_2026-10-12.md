@@ -41,7 +41,7 @@ The results feed the 17:00Z re-score of `PILLAR_SCORECARD_2026-10-12.md` and the
 
 ## Results so far (16:25Z, from L1's whitelisted tail; #116 comment 6128149432)
 
-- **Probe 6: not a pass yet.** The 16:00:00Z alarm composed (`composer_phase:ok ×5`, `health_context:ok:present`), but the viewer kept only 6 hops per event, so delivery can't be seen. The owner can settle it directly: did The Close arrive on the test account's Telegram at about 21:30 IST? Otherwise, retry at the next Close. The viewer keeps 16 hops plus `hops_total` since 16:15:29Z.
+- **Probe 6: PASS.** The 16:00:00Z alarm composed (`composer_phase:ok ×5`, `health_context:ok:present`), and the owner confirmed in L1's session that The Close arrived on Telegram at about 16:00Z [reported by L1, #116 comment 6128475229]. The tail couldn't show delivery, because it kept only 6 hops per event; since 16:15:29Z it keeps 16 hops plus `hops_total`.
 - **Probe 8: inconclusive.** There were 0 hold, drop or admission hops from 11:55Z to 16:15Z. That's consistent with no due job for an unconfirmed-zone app owner, but it doesn't prove the path ran.
 
 ## Rule for approval-state probes (P1, t3)

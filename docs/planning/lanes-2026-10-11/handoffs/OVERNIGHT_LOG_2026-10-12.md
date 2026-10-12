@@ -1624,3 +1624,24 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
     - The base is merged cleanly (`17e99fc6`). The full wall is running; push and the head come after it.
   - **Correction to the review's LOW 5:** L2 saw this same fixture refuse `send_message` under the D15 seed. That matches the code: the registry gate keys on `PRIVILEGED_ACTION_TOOLS` plus `toolArgSourceTaint`, not `autonomy_gated` (`hooks/registry.ts:432-447`), and `send_message` is privileged. So the send test does catch a seed, and LOW 5 is withdrawn. The red count is 13 of 19 (L2 agrees).
   - **#116, iMessage lane (comment 6128311027):** #1017 is rebased onto `beta-mvp` as draft #1095 and handed back to Ashish on the owner's instruction. It isn't in my gate: it's a draft, and its DO migration is on the hold list.
+
+## 16:45Z: staging on `87b31948`; probe 6 passes; re-score and page published
+
+- **L1 deployed `87b31948`** at 16:36Z as version `c9de74c5`, on the owner's yes in L1's session at about 16:33Z [reported: #116 comment 6128475229]. `/healthz` showed `87b31948` at 16:39Z [verified].
+  - Gate: CI 6/6, 19 files from `614d1aff`, no wrangler, migration or app-contract change, 55 applied and 0 pending. Signed-out app routes return 401.
+  - Rollback is `02103423`. D14 holds: no fixed-id row may be reshaped, and E15 waits one more release.
+- **Probe 6 (The Close): PASS.** It composed at 16:00:00Z, and the owner confirmed in L1's session that it arrived on Telegram [reported by L1]. The probe sheet and scorecard are updated.
+- **Re-score at 16:40Z** (scorecard commit `95be34d0`, plus the probe 6 correction):
+  - **The app stays at 0 of 6 under the strict test.** Probes 1, 2 and 4 observed t1, t2 and the reply leg of t3. No later turn has been seen getting a result back. The advisor flagged this before the write.
+  - **GP-6 (a reminder fires) is verified live.**
+  - **Engine level 5** for P4's reminders, The Close on Telegram, P5's calendar read and P6's app text.
+  - **P4's planned probe set is complete:** probe 2 plus probe 6.
+  - **Unchanged:** P5's connect step and GP-2 (probe 3's account was already connected), W2 (the probe 5 rerun is pending), P3 (#1088 unmerged) and P1 (#1091 held).
+  - **Offered to the owner:** one follow-up app turn ("What was on my calendar tomorrow again?" and "What reminders do I have?") with L1 reading the tail. It would settle t3 for P4 and P5.
+- **Page published** (https://claude.ai/artifact/QQyVwrydfu3Exn6xVHyA8Q). It's the first publish since 09:37Z.
+  - **16:42:54Z:** six datasets (pillars, surfaces, decisions, golden path, roadmap and notes) via asset upload plus one atomic `datasets` batch.
+  - **16:45:06Z:** pillars and notes again, for probe 6.
+  - **Also new on the page:** E16 and E17; the roadmap rows for Android (E17), just-in-time tool loading and standing grants (E16); and "After the app (E17)" for WhatsApp and iMessage, which replaces "Not for the beta".
+  - **One classifier retry:** the first upload attempt said the artifact's sharing state had changed since its last review and asked for the identical call once more. I repeated it once, as instructed, and it went through. The page appears to be shared more widely now [inference].
+- **#1096 (L1)** widens the runtime type check to `scenarios/` and `evals/` and fixes 7 hidden tsc errors. It's the #1092 LOW follow-up: 3 files on `87b31948`. CI is running and the review is running. It isn't on the hold list (no runtime, contract or migration change).
+- **Still open:** #1091 (L2's wall is running on `17e99fc6` plus the fix `3ca41626`; not pushed) and #1093 (L1's colon fix, not pushed).
