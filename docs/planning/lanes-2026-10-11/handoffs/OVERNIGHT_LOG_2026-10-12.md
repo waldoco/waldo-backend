@@ -1245,3 +1245,18 @@ No second sweep for now, because the usage window has to last through wave 2 and
   - Memory is a working set plus on-demand search [inference].
 - **Roadmap:** just-in-time tool loading is added to §5 for after the app musts, with a tool-choice eval.
 - **The cap has reset.** L2 got the G1 slot and the #1088 finding in one message, queued.
+
+## 12:14Z: heartbeat
+
+- Cron `29a6d33d` is present. `beta-mvp` is `614d1aff`, and staging serves it (wave 2).
+- **Open PRs:**
+  - **#1089** at `2fc0e642` is CLEAN after the forget-class line. My six should-fix findings are with L1, and the PR stays owner-merge.
+  - **#1088** at `0e2557c3` is CLEAN but fails as written (the transition). L2 has the fix, and the PR stays owner-merge.
+  - **App:** no new PRs since 11:00Z.
+- **#116:** since 11:55Z, only L1's wave-2 record.
+- **Lanes:**
+  - L1: the #1089 should-fixes and the scheduler fix.
+  - L2: G1 (both halves) and the #1088 fix.
+  - L4: holding for the owner's answers in L4's session (probe 5 time, the per-kind steer).
+  - L3: unreachable.
+- **Next:** probe 6 at 16:00Z (L1's watch), then the 17:00Z re-score.
