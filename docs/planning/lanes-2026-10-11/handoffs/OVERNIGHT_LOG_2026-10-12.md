@@ -1051,3 +1051,11 @@ Staging `e37f60f3`, version `c7974404`. Codes and times only.
   - The app principal is `prn_<owner_id>`, resolved by `do_name`.
 
   So skill inheritance stays within one owner. The schema doesn't stop a future rename. The PR is marked for the owner's merge.
+
+## 10:17Z: probe 2's timing closed: the reminder fired on time
+
+- **On time, not early.** 10:12:41Z was L1's estimate, not the stored due time.
+  - `set_reminder` takes owner-local wall clock to the minute (`contracts tools/schemas/reminders.ts:11`) [reported by L1].
+  - The model chose 15:42 IST, which is 10:12:00Z. The alarm fired at 10:12:02Z, about 2 s after the due minute.
+- **A one-shot reminder at a time already past is rejected, not fired** [verified at `beta-mvp`: `packages/runtime/src/channels/reminders.ts:31`].
+- **So "in 1 minute" fires at the next minute the model picks.** That is between a few seconds and about a minute after the request [inference], and nothing fires early.
