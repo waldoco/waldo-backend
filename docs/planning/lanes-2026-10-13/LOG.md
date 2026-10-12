@@ -211,3 +211,20 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - the App session's P1 re-run on `iPhone 17`, with trace hops from the tail;
   - #1105's review and merge, then #1106;
   - the cloud lanes' #1100 split.
+
+## 22:08Z: #1105 review FAIL on a security blocker
+
+- **#1105 at `2027735f`: independent review FAIL.** Posted on the PR as 6133491959.
+  - **The blocker:** when the HTML alternative wins, an OTP in a minified HTML table cell renders as "Verification code482913". The extractor misses it (verified on the head's extractor), so the code reaches the model. Before this PR, the plain twin was read and caught.
+  - **The fix:**
+    1. Scan the non-chosen alternatives' text for artifacts.
+    2. Scrub relayed OTPs from the shown body, whitespace-tolerant.
+    3. Add `td` and `th` separators.
+    4. A red falsifier test first.
+  - **MEDIUM:** `artifact_scan` is uncapped, and the extractor is roughly quadratic. Measured: 5.7 s at 128 KB. The fix is to drop hrefs over about 2 KB and cap the scan at `BODY_CAP`.
+  - **Non-blocking:**
+    - no timeout on `attachments.get`;
+    - an unbounded fetch when `size` is missing;
+    - a cosmetic double relay;
+    - the proxy wire path is untested.
+- My direct messages are capped, so Connectors finds the findings on the PR. It isn't merged.
