@@ -248,7 +248,7 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
 ## 23:18Z: heartbeat. L4 blocked on a question to the owner; stop refused
 
 - No probe result yet; `/healthz` is `889efa27`; no PR or #116 changes since 22:55Z.
-- **L4 is blocked** **[verified: `list_events`]**: its last action is a pending AskUserQuestion to the owner, who is asleep. My 22:03Z message sits behind it. The transcript view hides tool content, so I can't see the question.
+- **L4 is blocked** **[verified: `list_events`]**: its last action is a pending AskUserQuestion to the owner, who is asleep. It was pending by 23:15Z, when I checked; it probably dates from soon after #78 opened at 21:57Z **[inference]**. My 22:03Z message sits behind it. The transcript view hides tool content, so I can't see the question.
   - This stalls L4's whole queue (D6 time zone, health honesty, chat failure state) and tonight's probe send.
 - **The classifier REFUSED `stop_session` on L4** (my attempt to interrupt its waiting turn so the queue would run). Not routed around. **Morning: the owner answers L4's pending question in L4's session first thing.** Also a morning item: whether the owner wants the orchestrator able to stop a lane's blocked turn.
 - **Asked L1** (SendMessage `77b9c303`, send 11, delivered) to run the probe itself on the Simulator if no new permission is needed: one plain message, no approvals, stop at any permission prompt or sign-in screen. Falsifiers (b)-(e), then a #116 post. If the send fails, the tail code is waiting for L2's 01:41Z wake.
@@ -293,3 +293,13 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
 
 - **#1066** (L2): `c8d3190c` "Re-plan every day card on a zone change and log each held job", pushed 01:47Z, draft. CI 6/6 SUCCESS incl. pgTAP, `CLEAN` **[verified]**. Still held for the owner's health ruling; the fixes need a short delta review before any merge.
 - Staging `889efa27`. No #116 comments since 01:34Z. The app probe is still waiting for the owner's morning send.
+
+## 02:00Z: final checks before the morning report
+
+- **Advisor's final review applied:**
+  - Audit got its findings (send 12, `a4bc29d4`, delivered; map §6 plus the research folder; leads only, no ledger edits).
+  - The report's reversal cells are filled.
+  - **Hygiene scan** of the research copies, the map and my docs: no emails, no invite codes. The UUIDs are Claude session ids; the long numbers are migration timestamps, #116 comment ids, the artifact version and an all-digit commit prefix.
+  - The Telegram-owner health leak is in Risks with its evidence level.
+  - The report and the board say the standing go ends when the owner is back, and who merges what after each ruling.
+  - The L4 timing is corrected (pending by 23:15Z; the start time is inferred).

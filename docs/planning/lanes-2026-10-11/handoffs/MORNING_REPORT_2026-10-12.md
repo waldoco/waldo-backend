@@ -6,7 +6,7 @@ Tags: **[verified]** observed tonight; **[lane report]** a lane said so, not re-
 
 ## Do these first, in order
 
-1. **Answer L4's pending question in L4's session.** L4 asked you something at about 23:00Z and has waited since, so the app lane did no work overnight. I couldn't read the question, and the classifier refused my attempt to stop the waiting turn.
+1. **Answer L4's pending question in L4's session.** It was already pending when I checked at 23:15Z. It probably dates from soon after app #78 opened at 21:57Z **[inference]**. L4 has done no work since. I couldn't read the question, and the classifier refused my attempt to stop the waiting turn.
 2. **Open Main chat in the app and send one plain message.** For example: "Reply with one short sentence confirming you got this." Ask for no action. The send-path fix (#1075) is live on staging, but nothing has exercised it yet. L1's tail is waiting to read the result. If L1 is idle, ask it in its session to read the tail.
 3. **Work through the batch below,** each answer in the session named.
 
@@ -81,6 +81,16 @@ Each is ready for AskUserQuestion.
 9. **Copy versus build** (map §5, O1–O14): landing #18, Calendar/Tasks scopes ("read only"), export and delete ("Working today", with no export), "Undo it in one tap", the wearables list, Telegram copy, beta pricing and the Terms gate, the 6:30 push, twelve "Working today" labels with no code, Android, mail holding. Each has options and a recommendation in the map.
 10. **Already held under the brief:** #1071 (staging browser binding), Audit's #1057 and #1058, waldo-brain#35 (Suyash's review and the font licence), Pin4sf/waldo-landing#18.
 
+## When you're back: the standing go ends
+
+- Your overnight standing go ends now. L1's deploy go ends when you're next in L1's session. Merges and deploys go back to per-action yeses.
+- **After each ruling, who merges:**
+  - **#1066:** a short delta review of `c8d3190c` first; then your "merge #1066".
+  - **#1076:** your yes on the `ALTER`, in L2's session; then the merge; then L1's deploy.
+  - **App #78:** after L4's comment fix and the D6 row, your yes in L4's session.
+  - **L3's PRs:** your yes in L3's session.
+- I've put a closing line on the board, so the lanes stop acting on overnight instructions.
+
 ## Decisions I made on your behalf
 
 All are reversible; the decisions file says how to reverse each.
@@ -90,12 +100,12 @@ All are reversible; the decisions file says how to reverse each.
 | D1/D1a | L2's send fix (#1075) before #1066; #1066 may merge once it passes, but no deploy without the fix | Merge order only |
 | D2 | The app repo has no CI: before an app merge, I run frozen install + `tsc` + jest at the exact head in a fresh worktree ("CI-equivalent, not CI") | Rule that app merges wait for you |
 | D3 | L2 builds the "Not now" desk branch before the push spike (golden path first) | Swap back |
-| D4 | Lanes take instructions from a board file, not messages, because sends are capped | — |
+| D4 | Lanes take instructions from a board file, not messages, because sends are capped | Return to messages |
 | D5 | Skip the bad `input_origin` row; don't accept it as legacy data. No merged build ever wrote it, and accepting it would mean guessing whether the text was your input | A separate, reviewed change |
 | D6 | The app shows a one-tap "Confirm" time-zone row whenever the zone is unconfirmed, even when it matches the phone. Otherwise those owners can never arm #1066's jobs | Remove the row |
 | D7 | The 18+ checkbox first ships as an app-side gate | Remove the gate |
-| D8 | #1066 held for your health ruling; L2 fixes its bugs meanwhile | — |
-| D9 | Under the usage limit: no new subagents, lean heartbeats, app merges batched after the 01:30Z reset | — |
+| D8 | #1066 held for your health ruling; L2 fixes its bugs meanwhile | Merge after your ruling |
+| D9 | Under the usage limit: no new subagents, lean heartbeats, app merges batched after the 01:30Z reset | Resume full cycles (the window reset at 01:30Z) |
 
 ## Your own tasks
 
@@ -120,6 +130,7 @@ All are reversible; the decisions file says how to reverse each.
 ## Risks and what is unverified
 
 - **The send fix is unprobed.** Your first send is the proof.
+- **A health-data leak, live today for Telegram owners:** health-log lines (calorie estimates, minutes) go into the day-card prompt, which is saved verbatim to `conv:*` and the episodes full-text index. CLAUDE.md forbids numeric health values in transcripts, independent of #1066. Evidence: the #1066 reviewer's code read plus a probe on synthetic data in a test worktree. Not observed on staging. Option (a) of question 1 fixes it for everyone.
 - **No proactive message reaches the app** until #1066 merges and deploys.
 - **Telegram and the app keep two transcripts.** The episodes index and nightly consolidation don't see app chat. Fixing that is structural work for L2 (owner principal, slice 2) **[verified by code read]**.
 - **Harness finding:** tool results from earlier turns don't reach the reply model on either path. That's a code read, unverified by a test, and it contradicts the long-conversations brief (`research-2026-10-12/04-harness-context.md`). It matters for the working-set work (option C).

@@ -1,5 +1,7 @@
 # Overnight board, 12 Oct 2026
 
+> **CLOSED when the owner is back (about 02:30Z).** From then, follow the owner's direction in your own session. Merges and deploys go back to per-action owner yeses, and the overnight standing go no longer applies.
+
 The orchestrator's standing instructions to the lanes. Cross-session messages are capped, so this file is the main channel from the orchestrator to the lanes.
 
 **Read it** at the start of every new task and after you open or update a PR:
