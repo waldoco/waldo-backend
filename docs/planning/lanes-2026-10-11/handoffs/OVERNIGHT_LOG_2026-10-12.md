@@ -1381,3 +1381,9 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
   - Proposed: the lanes pace down (no subagents, fewer long turns) until 16:30Z, or the owner accepts a pause.
 
 - **13:14Z heartbeat:** #1092, L1's fixed-id follow-up, is open at `457c0f67` with CI running. #1091 (G1) is a draft at `10dbfdec`. No new app PRs. The #1092 review starts when L1 reports the head and CI, so it doesn't chase a moving head.
+
+- **13:15Z, #1092 ready for review** (L1): head `457c0f67`, which merges `2d18e5e5` into `e200dccc` with the tree unchanged.
+  - The change: `Scheduler.lookup(id)` and `cancelReadable(id)`. The arm paths treat an unreadable row as present, and the preference cancels and day plan skip it. The prompt paths leave it out. `read(id)` still throws for cancels the owner starts.
+  - Red first [reported]: at `4a644e06`, a reshaped heartbeat, nightly or brief-sweep row ends an app turn `interrupted`, and the planner deletes a reshaped day-card row. With the fix, all 4 cases pass and the row stays byte-identical.
+  - Evidence: 4891 tests pass under the default config, mutants 14/14, tsc and guards pass. CI is running.
+  - The independent review is running, with no fan-out and about 30 calls. L1 wants one deploy after #1092 merges, which needs the owner's yes in L1's session.
