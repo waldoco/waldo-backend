@@ -1907,3 +1907,9 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
     - L4 told first if any app.v1 value changes;
     - the hot file stays wiring only, with its lines posted on #116.
   - The possible duplicate reminder is queued for L2 after E15, red test first.
+- **18:35Z heartbeat:**
+  - The cron job is present. `beta-mvp` is `5bf2857d`; staging is `27214c63`.
+  - #1089 is CLEAN at `b4383587` (CI green). L1 merges it on the owner's yes in L1's session; it isn't merged yet, and L1 is active.
+  - #1099 waits for #1089, then its guard delta. #1088 waits for the owner.
+  - L2 is building E15. L4 is mid-test with a reminder: the app closed at 18:33:32Z and reopens after it falls due.
+  - No new #116 comments since 18:15Z.
