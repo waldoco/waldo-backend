@@ -16,7 +16,7 @@ The eight pillars:
 7. payments and identity
 8. evals and observability
 
-## EoD status, 12 October (17:01Z)
+## EoD status, 12 October (17:15Z)
 
 **The strict test in app Main chat: 0 of 6 chat-capable pillars.** The target was 2–3.
 - **Triggers (P4) and connectors (P5)** have t1, t2 and the reply half of t3 observed live. One follow-up app turn would settle the rest of t3 for both: a later turn reading the result back ("What was on my calendar tomorrow again?", "What reminders do I have?").
@@ -48,7 +48,7 @@ The eight pillars:
 - #1093: one content-free log line per calendar read.
 - #1096: the type check now covers `evals/` and `scenarios/`.
 
-To deploy, give your yes in L1's session, naming `27214c63`. That deploy makes `87b31948` (with its guard) the rollback target, which clears D14 for E15 tomorrow.
+Push CI is green at `27214c63` [verified]. To deploy, give your yes in L1's session, naming `27214c63`. That deploy makes `87b31948` (with its guard) the rollback target, which clears D14 for E15 tomorrow.
 
 **Waiting on you:**
 - **Merges:**
@@ -67,7 +67,10 @@ To deploy, give your yes in L1's session, naming `27214c63`. That deploy makes `
 - **Your own tasks:** the APNs key (E5), the Google consent move (E8) and the real-iPhone health run.
 
 **Tomorrow, 13 Oct [proposed]:**
-- **L2:** the shared-ring fix, so "did it go out?" survives a busy job, then E15 app-first routing.
+- **In review now:**
+  - #1098 (L2): the shared-ring fix, so "did it go out?" survives a busy job;
+  - #1097 (L1): #1093's test and comment follow-ups.
+- **L2:** after #1098, E15 app-first routing.
 - **L4:** refresh-while-open with the unread signal, then Android (E17).
 - **L1:** deploy `27214c63`, then the Weight and Form follow-ups.
 - **Grants (E16)** once Q1–Q7 are answered.

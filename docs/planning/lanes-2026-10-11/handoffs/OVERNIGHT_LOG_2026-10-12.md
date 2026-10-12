@@ -1724,3 +1724,11 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **L4:** L1's two answers (movement minutes accepted; the zone-id design for the owner's ruling); go on refresh-while-open; the follow-up t3 probe, which needs the owner's yes in L4's session; the probe-5 rerun still waits on the owner's event.
   - **L1:** the tip `27214c63` and what's in it; D14 clears after that deploy; the probes after deploy; the #1093 and #1096 LOWs.
 - **17:00Z heartbeat:** the cron job is present and the brief is unchanged. `beta-mvp` is `27214c63`. Push CI: `87b31948` succeeded; `571891de` and `4b8ed3fe` are running; `27214c63` is queued. Staging is `87b31948`. No new PRs in either repo. L2 is on the ring fix, L4 on refresh-while-open, and L1 has the tip. Next: the EoD summary at about 17:25Z (EoD is 17:30Z).
+- **17:15Z heartbeat:**
+  - Push CI is green at `27214c63`, `4b8ed3fe` and `571891de` [verified]. Staging is still `87b31948`; the `27214c63` deploy waits on the owner's yes in L1's session.
+  - **New PRs:**
+    - #1098 (L2, `2915e830`): the per-origin ledger ring. 3 files, +103/−10; CI started.
+    - #1097 (L1, `d3ab8635`): #1093's LOW follow-ups. 2 files; CI 6/6 and CLEAN.
+  - Both reviews are running in parallel, one per lane. #1098's review focuses on the KV key layout, rollback and forget coverage across rings.
+  - L1 corrected its #1096 note on #116 (6128837240).
+  - The scorecard's EoD status is finalized at 17:15Z.
