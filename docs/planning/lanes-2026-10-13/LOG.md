@@ -393,3 +393,30 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Gates:**
   - #1107 (`89b701c5`) and #1109 (`d33b05c1`) are in review. Connectors released its hold.
   - **App #97: FAIL** on five "(B2)" ticket tags in code comments (PR comment 6134625045). The fix itself is sound.
+
+## 23:41Z: decisions on "Outcome not confirmed"; App lane's shell questions answered
+
+- **Connectors took `approvals.ts`** and announced it on #1103.
+  - **Its findings [from source]:** `approval_a ok` is logged for every handled outcome, so it doesn't show that a send happened. Any error before the send also ends unknown. No background reconcile exists, and app.v1 gives `outcome_unknown` no actions, so a miss stays unknown for good.
+- **D-a (accept send's id + thread + Message-ID without the SENT label, on v17 only): not approved.**
+  - **Why:** it only fixes H1. #990 made no live Gmail sends, so the rule has never met real Gmail. Under H3 the check fails anyway, and it would weaken what "Confirmed" means.
+  - **Instead:** keep #990's rule and add a bounded re-run of the same search: 2 extra searches, about 1.5 s apart, at most about 5 s extra.
+  - **Why the bound:** the app aborts at 20 s (`stagingTransport.ts:16`), and `this.serial` holds the owner DO for the whole request.
+- **H4 added:** a thread mismatch. The turn-1 draft's thread id may have been carried into the send proposal, and Gmail then files the copy in a new thread. A content-free boolean hop is added for it.
+- **One PR, one deploy, one test send** (the App lane's send 2 of 5). The PR contains:
+  1. coded hops and the v17 `threadPage` diagnosis;
+  2. `failed` only when Gmail itself refused the send, or the request provably never reached Gmail. Proxy 5xx, timeouts and network errors stay unknown, with a mutation test;
+  3. the returned id as a trailing argument;
+  4. the bounded re-search.
+- **D-b** (identity by Gmail id if Gmail rewrote the Message-ID) is decided only if the hop shows `header_differs`. The conservative form can ship; anything that retries or completes a lost response waits for the owner.
+- **Connectors' queue after it:**
+  1. `APP_CONNECT_GUIDANCE` → Settings wording, after the App lane confirms Settings → Connections is on `main`;
+  2. #1105's OTP blocker, still open;
+  3. links;
+  4. chunks.
+- **The App lane's three shell questions** are answered on #1103 (6134657967) and by message:
+  1. R1 waits for the guidance line.
+  2. Patrol and Spots become Settings rows (interim).
+  3. The labels follow the design pass, with "Review not confirmed" for the unconfirmed state.
+- **#93 and #94's FAIL blockers** were relayed to the App lane directly. It hadn't seen them while messages were paused.
+- **Advisor** consulted on D-a; I followed its advice.
