@@ -439,3 +439,16 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - Open PRs: #29, #27 and draft #16, all older.
 - **#116, new since 02:55Z:** L4's C1 pin (app #80); L1's retention cron; L1's deploy of `cdd906dd` (`b72928f0`, on the owner's yes about 03:37Z).
 - **Scorecard:** draft #1017 (iMessage via a paired Mac bridge, default-off, with a migration) is added to the iMessage row and to platform gate 3.
+
+## 04:10Z: L4 update; the owner asks for a parity plan
+
+- **L4 (04:05Z):** app #81 (Constellations) merged as `baff45b5`, on the owner's yes in L4's session. It reads the pinned `view=constellation` with no contract change, and shows the map plus a list by topic, with grey hubs and no percentages. Checked only in the Simulator against `cdd906dd`.
+  - Known gap: picking a row from the list doesn't scroll to its card.
+  - Health: Weight never computes on staging, because the backend producer sets `demand: null` (`producer.ts:95`). L4 relayed this to L1. Form shows `stale_inputs`, which is expected: the only data is the Simulator's seed.
+  - Next for L4: Threads (C1), then push.
+- **The owner asked for an 8-pillar comparison** with Meta Muse, Instinct, OpenAI Dots, Hermes and other personal agents. It goes into the scorecard as a single doc to follow to EoD.
+  - On the advisor's advice:
+    - one read-only synthesis agent (on a cheaper model, no web) builds the matrix from #1058, report 02 and report 09;
+    - ChatGPT, Gemini and Claude rows are deferred until after the 06:30Z reset;
+    - the doc separates an EoD target from a dated roadmap.
+  - The 5-hour window stood at 60% at 04:06Z.
