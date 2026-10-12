@@ -12,10 +12,11 @@ export type ToolOutputEntry = Readonly<{
   tool: string;
   ok: boolean;
   at: number;
-  // The producing tool's own taint. Admission and staging treat every row as external data whatever it is; a row
-  // without one counts as external.
+  // The turn's running taint when this output landed: external when it or anything earlier in the turn came from
+  // outside. Admission and staging treat every row as external data whatever it is; a row without one counts as external.
   taint: SourceTaint;
-  // 'owner' when the owner's own turn produced the output. A row stored before origins were kept is never the owner's.
+  // 'owner' when the owner's own turn produced the output; anything else is 'machine', the default when a writer names
+  // none. Absent only on a row stored before origins were kept, which the next write drops.
   origin?: 'owner' | 'machine';
   summary: string;
   // The approval a proposing tool's output names, read from the full output before the summary is cut: '' when the row
@@ -57,6 +58,14 @@ type KeyValueStorage = {
 };
 
 const entryKey = (seq: number) => `toolout:${String(seq).padStart(10, '0')}`;
+// The owner's own turns keep their newest rows apart from everything else, so a busy job never pushes them out.
+const ownersRow = (row: ToolOutputEntry) => row.origin === 'owner';
+// The rows a write drops: any stored before origins were kept, and those past the newest MAX_KEPT of the new row's kind.
+const evicted = (rows: Iterable<[string, ToolOutputEntry]>, added: ToolOutputEntry): string[] => {
+  const all = [...rows];
+  const kind = all.filter(([, row]) => row.origin !== undefined && ownersRow(row) === ownersRow(added)).map(([key]) => key).sort();
+  return [...all.filter(([, row]) => row.origin === undefined).map(([key]) => key), ...kind.slice(0, Math.max(0, kind.length - MAX_KEPT))];
+};
 
 const summaryAdmissionSchema: StrictSchema<string> = {
   safeParse(value) {
@@ -117,12 +126,19 @@ const ledgerSourcesFromRows = (topic: string, rows: Iterable<[string, ToolOutput
   return { sources, incomplete };
 };
 
+// A failure's text can carry a provider's words even from a tool that is not external, so later turns see only its typed code.
+const failureOf = (entry: ToolOutputEntry): string => {
+  let code: unknown;
+  try { code = (JSON.parse(entry.summary.slice(0, entry.summary.lastIndexOf('}') + 1)) as { code?: unknown } | null)?.code; } catch { /* A cut or untyped failure shows no code. */ }
+  return `${entry.tool} failed${typeof code === 'string' && /^[a-z_]{1,40}$/.test(code) ? ` (${code})` : ''}`;
+};
+
 // Each kept row with what a later turn may read of it; a row that names an approval the desk can't answer for is left out.
-const shownRows = async (storage: KeyValueStorage, options: Readonly<{ proposalState?: ProposalState }>, texts: readonly string[]) => {
+const shownRows = async (storage: KeyValueStorage, options: Readonly<{ proposalState?: ProposalState }>, texts: readonly string[], kept: (row: ToolOutputEntry) => boolean = () => true) => {
   const redact = summaryRedactor(texts, '[forgotten]');
   const rows = await storage.list<ToolOutputEntry>({ prefix: 'toolout:' });
   const entries = [...rows.entries()]
-    .filter(([key]) => key !== 'toolout-count')
+    .filter(([key, row]) => key !== 'toolout-count' && kept(row))
     .sort(([a], [b]) => a.localeCompare(b))
     .slice(-MAX_KEPT);
   // Same guard on read: legacy entries persisted before the write guard existed are evicted
@@ -167,16 +183,20 @@ export const toolOutputLedger = (storage: KeyValueStorage, options: Readonly<{ p
     // Admission guard at write time: a poisoned summary is dropped, never persisted.
     if (!admitsForPrompt(summary, 'external')) return;
     const link = linkOf(entry.tool, entry.summary);
-    const row: ToolOutputEntry = { ...entry, summary, ...(link === undefined ? {} : { proposal_ref: link }) };
+    const row: ToolOutputEntry = { ...entry, origin: entry.origin ?? 'machine', summary, ...(link === undefined ? {} : { proposal_ref: link }) };
     const count = (await storage.get<number>('toolout-count')) ?? 0;
     if (scope) {
-      if (!storage.kv) throw new Error('fenced synchronous ledger unavailable');
-      scope.commit(() => { storage.kv!.put(entryKey(count), row); storage.kv!.put('toolout-count', count + 1); if (count + 1 > MAX_KEPT) storage.kv!.delete(entryKey(count - MAX_KEPT)); });
+      const kv = storage.kv;
+      if (!kv?.list) throw new Error('fenced synchronous ledger unavailable');
+      scope.commit(() => {
+        kv.put(entryKey(count), row); kv.put('toolout-count', count + 1);
+        for (const key of evicted(kv.list!<ToolOutputEntry>({ prefix: 'toolout:' }), row)) kv.delete(key);
+      });
       return;
     }
     await storage.put({ [entryKey(count)]: row, 'toolout-count': count + 1 });
-    // Ring: drop the oldest once we exceed the cap.
-    if (count + 1 > MAX_KEPT) await storage.delete([entryKey(count - MAX_KEPT)]);
+    const stale = evicted(await storage.list<ToolOutputEntry>({ prefix: 'toolout:' }), row);
+    if (stale.length) await storage.delete(stale);
   },
   // Verification covers every retained row, not just the six staged fragments.
   async remaining(texts: readonly string[]): Promise<number> {
@@ -198,9 +218,9 @@ export const toolOutputLedger = (storage: KeyValueStorage, options: Readonly<{ p
     }));
   },
   // What the owner's own earlier turns' tools returned. Provider text never carries across turns: an external result shows
-  // only when it is the desk's state for an approval it proposed.
+  // only as the desk's state for an approval it proposed, and a failure that names no approval only as its tool and code.
   async ownerTurnResults(texts: readonly string[] = []): Promise<readonly string[]> {
-    return (await shownRows(storage, options, texts)).filter(({ entry, desk }) => entry.origin === 'owner' && (desk || entry.taint === null)).map(({ text }) => text);
+    return (await shownRows(storage, options, texts, ownersRow)).filter(({ entry, desk }) => desk || entry.taint === null).map(({ entry, desk, text }) => desk || entry.ok ? text : failureOf(entry));
   },
 });
 

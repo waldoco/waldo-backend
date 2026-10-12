@@ -118,6 +118,9 @@ it('text a tool echoes after a mail read in the same turn stays out of later tur
     );
     await turn('owner-1', 'Read the planning thread and handle it.');
     expect(seen.calls).toEqual([]);
+    const stored = [...(await state.storage.list<{ tool: string; ok: boolean; taint: unknown }>({ prefix: 'toolout:' })).values()];
+    expect(stored.filter(row => ['set_reminder', 'forget_memory'].includes(row.tool)).map(({ tool, ok, taint }) => ({ tool, ok, taint })))
+      .toEqual([{ tool: 'set_reminder', ok: true, taint: 'external' }, { tool: 'forget_memory', ok: true, taint: 'external' }]);
     const [first] = await turn('owner-2', 'Did it go out?');
     expect(ownerTurn(first!)).not.toContain(NOTE);
     expect(ownerTurn(first!)).not.toContain(SCOPE);
@@ -135,5 +138,20 @@ it('text a tool echoes in a turn replying to an outside message stays out of lat
     const [first] = await turn('owner-2', 'Anything else?');
     expect(ownerTurn(first!)).not.toContain(NOTE);
     expect(block(first!)).toEqual([]);
+  });
+});
+
+it('an approval raised in an owner turn still shows its desk state after a job runs seven tools before the owner asks', async () => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('origin-taint-busy-job')), async (_instance, state) => {
+    const ID = 'p3e9a1c07';
+    const { seen, responder, turn } = harness(state, false, async id => (id === ID ? { kind: 'email_send', state: 'done' } : null));
+    await turn('owner-1', 'Bring that approval back.', { name: 'raise_approval', arguments: JSON.stringify({ operation: 'raise', approval_id: ID }) });
+    for (let i = 1; i <= 7; i += 1) seen.calls.push({ name: 'search_episodes', arguments: JSON.stringify({ query: `plan ${i}` }) });
+    await responder.prompt('job-brief', 'owner', 'Write the morning brief.', timer);
+    expect(seen.calls).toEqual([]);
+    const stored = [...(await state.storage.list<{ tool: string; origin?: string }>({ prefix: 'toolout:' })).values()].map(({ tool, origin }) => ({ tool, origin }));
+    expect(stored).toEqual([{ tool: 'raise_approval', origin: 'owner' }, ...Array.from({ length: 6 }, () => ({ tool: 'search_episodes', origin: 'machine' }))]);
+    const [first] = await turn('owner-2', 'Did it go out?');
+    expect(block(first!)).toEqual([`- raise_approval succeeded: proposed approval ${ID} (email_send). Its current state on the approval desk is done; this replaces what the tool reported when it proposed.`]);
   });
 });
