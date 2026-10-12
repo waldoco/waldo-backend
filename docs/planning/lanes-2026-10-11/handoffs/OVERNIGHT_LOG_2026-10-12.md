@@ -1392,3 +1392,9 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
   - Chosen: option (3). L1 writes a count-only log line for the tool (window default | date_range, calendar primary | other, events N), with L2's OK on the tool path. It falls under the D13 standard and merges under E1 after the gate.
   - Still open: option (1), the owner naming the account and calendar. Option (2), Langfuse, is not used without the owner's go.
   - Message cap: 9 of 10 sends used since the owner's last message.
+
+- **13:19Z, #1091 (G1) READY** at `10dbfdec`, CI 6/6 with pgTAP [reported]. Since the draft:
+  - P1 is pinned through to what the owner sees.
+  - Capture-mode probes get no block; that test was red first.
+  - Not in this PR: a verifier that checks reply claims against the desk.
+  - The independent review is running, with no fan-out and about 30 calls. It reads the changed test first.
