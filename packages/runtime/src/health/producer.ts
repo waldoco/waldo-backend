@@ -10,9 +10,15 @@ export type ProducerDeps = Readonly<{
   readSeries: (range: { from: string; to: string; signals: readonly string[] }) => Promise<unknown>;
   writeContext: (payload: string) => Promise<unknown>;
   compute: (input: DailyScoresInput) => DailyScores;
+  // Busy minutes per local day across the owner's calendars, for Weight. Absent, failing or late, Weight is unavailable.
+  readDemand?: (range: { from: string; to: string; timezone: string }) => Promise<unknown>;
+  demandGraceMs?: number;
 }>;
 
 const WINDOW_DAYS = 30;
+const HOUR_MS = 3_600_000;
+const MAX_BUSY_MINUTES = 1500;
+const DEMAND_GRACE_MS = 5_000;
 const SIGNALS = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'workout'];
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
@@ -64,10 +70,12 @@ const sleepOf = (readings: readonly Reading[]): DayRecord['sleep'] => {
   return asleep && midpoint && when ? { ...when, asleepMinutes: asleep.value, midpointMinute: midpoint.value } : null;
 };
 
+const SCORED_WINDOW_SIGNALS = ['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration'];
+
 const hourlyOf = (readings: readonly Reading[]): HourlyBucket[] => {
   const buckets = new Map<string, { -readonly [K in keyof HourlyBucket]: HourlyBucket[K] }>();
   for (const r of readings) {
-    if (!r.startAt || !['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration'].includes(r.signal)) continue;
+    if (!r.startAt || !SCORED_WINDOW_SIGNALS.includes(r.signal)) continue;
     const bucket = buckets.get(r.startAt) ?? { startAt: r.startAt, heartRate: null, hrv: null, hrvMethod: null, daylightMinutes: null, movementMinutes: null };
     if (r.signal === 'heart_rate_window') bucket.heartRate = r.value;
     else if (r.signal === 'hrv_window' && hrvMethod(r.method)) { bucket.hrv = r.value; bucket.hrvMethod = hrvMethod(r.method); }
@@ -78,11 +86,31 @@ const hourlyOf = (readings: readonly Reading[]): HourlyBucket[] => {
   return [...buckets.values()].sort((a, b) => a.startAt.localeCompare(b.startAt));
 };
 
-// Each day keeps the zone its newest reading was read in; a day that holds readings from two zones is flagged.
-const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ days: DayRecord[]; zoneChanged: ReadonlySet<string> }> => {
+// A phone that changes zone can send hours again on a new hour grid, or under the neighbouring day. Those windows overlap
+// ones already stored, and summing both would count the same minutes twice. Every day holding either window of an
+// overlapping pair is returned, across the whole series. A window repeated on the same day is one bucket, not an overlap.
+const overlappingWindowDays = (readings: readonly Reading[]): ReadonlySet<string> => {
+  const days = new Set<string>();
+  for (const signal of SCORED_WINDOW_SIGNALS) {
+    const windows = readings.flatMap(r => (r.signal === signal && r.startAt && r.endAt && r.startAt < r.endAt ? [{ day: r.day, start: r.startAt, end: r.endAt }] : []))
+      .sort((a, b) => a.start.localeCompare(b.start));
+    const open: typeof windows = [];
+    for (const w of windows) {
+      open.splice(0, open.length, ...open.filter(o => o.end > w.start));
+      for (const o of open) if (o.start !== w.start || o.end !== w.end || o.day !== w.day) days.add(o.day).add(w.day);
+      open.push(w);
+    }
+  }
+  return days;
+};
+
+// Each day keeps the zone its newest reading was read in; a day that holds readings from two zones is flagged. A day
+// holding an overlapping window keeps no hourly windows, so its window-based parts read as unknown, never doubled.
+const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ days: DayRecord[]; zoneChanged: ReadonlySet<string>; overlapped: ReadonlySet<string> }> => {
   const byDay = new Map<string, Reading[]>();
   for (const r of readings) byDay.set(r.day, [...(byDay.get(r.day) ?? []), r]);
   const zoneChanged = new Set<string>();
+  const overlapped = overlappingWindowDays(readings);
   const days = [...byDay].map(([day, rs]): DayRecord => {
     const zones = new Set(rs.flatMap(r => (r.timezone ? [r.timezone] : [])));
     if (zones.size > 1) zoneChanged.add(day);
@@ -91,17 +119,52 @@ const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ 
     return {
       day, timezone: newest(rs.filter(r => r.timezone))?.timezone ?? fallbackZone, sleep: sleepOf(rs),
       overnightHrv: hrv ? { value: hrv.value, method: hrvMethod(hrv.method)! } : null,
-      restingHeartRate: resting?.value ?? null, hourly: hourlyOf(rs),
+      restingHeartRate: resting?.value ?? null, hourly: overlapped.has(day) ? [] : hourlyOf(rs),
       workouts: rs.filter(r => r.signal === 'workout').flatMap(r => span(r) ?? []), demand: null,
     };
   });
-  return { days, zoneChanged };
+  return { days, zoneChanged, overlapped };
+};
+
+// Movement minutes, plus workout minutes in hours that carry no movement reading, so a workout the movement count
+// already holds is not counted twice. Known only on a day with a movement reading or a workout: heart-rate or daylight
+// hours alone say nothing about load.
+const physicalLoadOf = (day: DayRecord): number | null => {
+  const moving = day.hourly.filter(bucket => bucket.movementMinutes !== null);
+  if (!moving.length && !day.workouts.length) return null;
+  const workoutMs = day.workouts.reduce((sum, workout) => {
+    const from = Date.parse(workout.startAt), to = Date.parse(workout.endAt);
+    if (!(from < to)) return sum;
+    const counted = moving.reduce((inside, bucket) => { const start = Date.parse(bucket.startAt); return inside + Math.max(0, Math.min(to, start + HOUR_MS) - Math.max(from, start)); }, 0);
+    return sum + to - from - counted;
+  }, 0);
+  return moving.reduce((sum, bucket) => sum + bucket.movementMinutes!, 0) + Math.round(workoutMs / 60_000);
+};
+
+type Busy = Readonly<{ minutes: number; partial: boolean }>;
+// A day the calendar could not be read is missing here, so it reads as no calendar demand rather than a free day. A
+// count outside one local day's minutes is rejected, not clipped.
+const busyByDay = (answer: unknown): ReadonlyMap<string, Busy> => {
+  const a = asRecord(answer);
+  if (a?.state !== 'available' || !Array.isArray(a.days)) return new Map();
+  return new Map(a.days.flatMap((raw): [string, Busy][] => {
+    const d = asRecord(raw);
+    return d && typeof d.day === 'string' && DAY.test(d.day) && typeof d.busy_minutes === 'number' && Number.isFinite(d.busy_minutes)
+      && d.busy_minutes >= 0 && d.busy_minutes <= MAX_BUSY_MINUTES ? [[d.day, { minutes: d.busy_minutes, partial: d.partial === true }]] : [];
+  }));
+};
+
+type DemandRead = Readonly<{ kind: 'answer'; answer: unknown } | { kind: 'failed' } | { kind: 'late' }>;
+const within = (read: Promise<unknown>, graceMs: number): Promise<DemandRead> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<DemandRead>(resolve => { timer = setTimeout(() => resolve({ kind: 'late' }), graceMs); });
+  return Promise.race([read.then((answer): DemandRead => ({ kind: 'answer', answer }), (): DemandRead => ({ kind: 'failed' })), late]).finally(() => clearTimeout(timer));
 };
 
 const localDay = (at: number, timeZone: string): string =>
   new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(at));
 
-const rowOf = (day: string, scores: DailyScores, basis: Readonly<{ source: string; epoch: number }>, readAt: string, timezone: string, zoneChanged: boolean): object => {
+const rowOf = (day: string, scores: DailyScores, basis: Readonly<{ source: string; epoch: number }>, readAt: string, timezone: string, tags: readonly string[]): object => {
   const { recovery, form, weight } = scores;
   const unavailable = (reason: string) => ({ reason });
   return {
@@ -113,7 +176,7 @@ const rowOf = (day: string, scores: DailyScores, basis: Readonly<{ source: strin
     weight: weight.state === 'unavailable' ? unavailable(weight.reason)
       : { score: weight.score, zone: toRowZone('weight', weight.zone), confidence: weight.coverage, algorithm_version: weight.algorithm_version, activation: weight.activation, hrv_method: weight.hrv_method },
     ...(recovery.state === 'available' ? { confidence: recovery.coverage } : {}),
-    freshness: 'fresh', tags: zoneChanged ? ['zone_changed'] : [],
+    freshness: 'fresh', tags,
   };
 };
 
@@ -125,20 +188,30 @@ const writeOutcome = (answer: unknown): 'written' | 'stale' | 'refused' | 'faile
 };
 
 export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now: number; timezone: string }>): Promise<ProducerOutcome> => {
+  let pending: Promise<unknown> | undefined;
   try {
-    const today = localDay(at.now, at.timezone);
-    const parsed = parseSeries(await deps.readSeries({ from: shiftDay(today, -WINDOW_DAYS), to: today, signals: SIGNALS }));
+    const today = localDay(at.now, at.timezone), range = { from: shiftDay(today, -WINDOW_DAYS), to: today };
+    // Started beside the series read and bounded, so a slow calendar costs Weight, never the Recovery and Form writes.
+    pending = deps.readDemand?.({ ...range, timezone: at.timezone });
+    const demand = pending ? within(pending, deps.demandGraceMs ?? DEMAND_GRACE_MS) : null;
+    const parsed = parseSeries(await deps.readSeries({ ...range, signals: SIGNALS }));
     if (parsed.kind !== 'series') return parsed.kind;
     // One source's readings are computed on its own. Two phones' step counts or sleep for one night are not added up.
     const chosen = [...parsed.series.sources].filter(s => s.readings.length > 0).sort((a, b) => b.readings.length - a.readings.length || a.source.localeCompare(b.source))[0];
     if (!chosen) return 'no_readings';
-    const { days, zoneChanged } = daysOf(chosen.readings, at.timezone);
+    const { days: readingDays, zoneChanged, overlapped } = daysOf(chosen.readings, at.timezone);
+    const read = demand && await demand;
+    if (read && read.kind !== 'answer') console.log(JSON.stringify({ hop: 'weight_demand', ok: false, code: read.kind === 'late' ? 'demand_late' : 'demand_failed' }));
+    const busy = busyByDay(read?.kind === 'answer' ? read.answer : null);
+    const days = readingDays.map((day): DayRecord => ({ ...day, demand: { meetingMinutes: busy.get(day.day)?.minutes ?? null, messageCount: null, openTaskMinutes: null, physicalLoad: overlapped.has(day.day) ? null : physicalLoadOf(day) } }));
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
     for (const targetDay of [shiftDay(today, -1), today]) {
       const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: parsed.series.readAt });
       const nothingToShow = [scores.recovery, scores.form, scores.weight].every(p => p.state === 'unavailable');
       if (nothingToShow && !days.some(d => d.day === targetDay)) continue;
-      const row = rowOf(targetDay, scores, chosen, parsed.series.readAt, at.timezone, zoneChanged.has(targetDay));
+      // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
+      const tags = [...(zoneChanged.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
+      const row = rowOf(targetDay, scores, chosen, parsed.series.readAt, at.timezone, tags);
       outcomes.push(writeOutcome(await deps.writeContext(JSON.stringify(row))));
     }
     for (const outcome of ['failed', 'refused', 'written', 'stale'] as const) if (outcomes.includes(outcome)) return outcome;
@@ -146,5 +219,8 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
   } catch {
     console.error('health producer failed');
     return 'failed';
+  } finally {
+    // A late read still finishes, so the owner object caches it for the next upload.
+    await pending?.catch(() => undefined);
   }
 };

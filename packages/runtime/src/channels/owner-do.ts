@@ -3,6 +3,8 @@ import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { AppInbox, type AppInboxRecord } from './app-inbox';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
+import { calendarDemand, demandCode, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
+import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
 import { surfaceOwnerAdmission } from '../identity/surface-owner-admission';
 import { createOwnerTurnContext, type OwnerContextSources } from '../context-composer/owner-turn';
 import { canonicalHistoryFault, canonicalOwnerConversationStore, skippedRowLines, type CanonicalSkipped } from '../conversation/canonical-owner-store';
@@ -30,6 +32,7 @@ import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
 import { APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, armWhatsappPendingWake, persistInboxWake, persistTransportWake, rearmSharedAlarm } from '../scheduler/alarm-slot';
+import { admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
@@ -175,6 +178,7 @@ type OwnerRuntime = Readonly<{
   overview(): Promise<ReturnType<typeof dashboardOverview>>;
   act(action: ConsoleAction, assertCurrent?: () => Promise<void>): Promise<boolean | string>;
   googleConnectUrl(feature: GoogleFeature, channel?: ConnectChannel): Promise<string | null>;
+  calendarDemand(range: DemandRequest): Promise<DemandAnswer>;
   google: Readonly<{
     finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>>;
     beginSession(ticketHash: string): Promise<Readonly<{ url: string; nonce: string }> | null>;
@@ -596,6 +600,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
   }
 
+  // For an owner on both surfaces, a scheduled message is written to the app, then Telegram gets a plain copy.
+  private copiedToTelegram(deliver: (text: string) => Promise<void>): (text: string) => Promise<void> {
+    const telegram = this.setup('telegram');
+    return withPlainCopy(deliver, text => telegram.call('sendMessage', { chat_id: telegram.owner, text }),
+      code => telegram.log({ trace: `copy:${Date.now()}`, hop: 'telegram_copy', ms: 0, ok: false, code, detail: code }));
+  }
+
   private async appContext(name: string, hash: string, text: string, occurrence: string, occurredAt: number, scope: RunEffectScope, sources?: OwnerContextSources) {
     const lookup=async()=>{
       scope.admit(); const session=await this.appAuthority(name,hash); scope.admit();
@@ -617,6 +628,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const fenced=this.appInbox.revokeSession(hash);
     if(this.activeApp?.sessionHash===hash)this.activeAbort?.abort();
     return Response.json({fenced},{headers:{'cache-control':'no-store'}});
+  }
+  // Worker-to-DO only: Weight's busy minutes per day from the owner's own calendar connections. It sends nothing to the
+  // owner and offers no connect link.
+  private async calendarDemand(request: Request): Promise<Response> {
+    const headers={'cache-control':'no-store'};
+    const range=await verifiedDemandRequest(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.TELEGRAM_OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
+    if(!range)return Response.json({error:'unavailable'},{status:403,headers});
+    const runtime=this.setup('app'),started=Date.now(),trace=`calendar-demand:${started}`;
+    try{
+      const answer=await runtime.calendarDemand(range);
+      runtime.log({trace,hop:'calendar_demand',ms:Date.now()-started,ok:answer.state==='available',code:demandCode(answer)});
+      return Response.json(answer,{headers});
+    }catch{runtime.log({trace,hop:'calendar_demand',ms:Date.now()-started,ok:false,code:'read_failed'});return Response.json({error:'unavailable'},{status:503,headers});}
   }
   private async appRoute(request: Request): Promise<Response> {
     const path=new URL(request.url).pathname,name=request.headers.get('x-waldo-do-name')??'',hash=request.headers.get('x-waldo-app-session-hash')??'';
@@ -679,6 +703,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   override async fetch(request: Request): Promise<Response> {
     const path=new URL(request.url).pathname;
     if(path===APP_SESSION_FENCE_PATH)return this.appSessionFence(request);
+    if(path===CALENDAR_DEMAND_PATH)return this.calendarDemand(request);
     if(path.startsWith('/app/v1/'))return this.appRoute(request);
     if(path==='/enqueue-link')return this.enqueueLink(request);
     if(this.ctx.storage.kv.get(LINK_MODE))return new Response('not found',{status:404});
@@ -1288,7 +1313,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return;
         }
       }
-      const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal, call, owner, calendarPrepCurrent, retainedRecallAvailable } = this.setup(channel);
+      const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal } = this.setup(channel);
       await ready;
       await finalOutbox.maintain();
       // Reconcile finals before quarantining recovered claims with committed payloads.
@@ -1314,29 +1339,41 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (selected === 3) { this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()])); await scheduler.rearm(); return; }
       if (selected === 0) { try { await this.drainInbox(); } finally { await scheduler.rearm(); } return; }
       if (selected === 1) {
-        try { await finalOutbox.drain({
-          allowed: async r => (!r.commonExecution || r.commonExecution.settled===true) && (!(r.mailFollowup || r.calendarPrep) || retainedRecallAvailable()) && r.payload.chat_id === owner && r.ownerSubject === String(owner)
-            && (!r.bot || r.bot === this.env.TELEGRAM_BOT_TOKEN?.split(':')[0])
-            && r.doName === (this.ctx.storage.kv.get<string>('do_name') ?? '')
-            && this.ctx.storage.kv.get<boolean>(`${channel}_unlinked`) !== true
-            && (!r.mailFollowup || (loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume !== 'low' && loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).reviewEligible(r.mailFollowup, this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')))
-            && (!r.calendarPrep || await calendarPrepCurrent(r.calendarPrep))
-            && heartbeatEligible(r, this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', Date.now()),
-          defer: async r => {
-            if(r.commonExecution&&!r.commonExecution.settled)return Date.now()+30_000;
-            // Frozen source-derived outputs cannot replay retained facts while coverage is unproved.
-            // Keep bytes and transport state intact; current owner replies use a separate lane.
-            if ((r.mailFollowup || r.calendarPrep) && !retainedRecallAvailable()) return Math.min(Date.now() + 10 * 60_000, r.expiresAt ?? r.createdAt + 86400000);
-            return (r.mailFollowup || r.calendarPrep) && ((r.mailFollowup && !proactiveEnabled(this.env.MAIL_SOURCE_FOLLOWUPS, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) || (r.calendarPrep && !proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) || loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume === 'low' || isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) ? Date.now() + 10 * 60_000 : null;
-          },
-          send: payload => call('sendMessage', payload), settled: settleFinal,
-        }); } finally { await scheduler.rearm(); }
+        // Each record goes to the surface it is addressed to, with that surface's checks.
+        const routeFor = (surface: ChannelKind): OutboxRoute => {
+          const runtime = this.setup(surface);
+          return {
+            addressed: r => r.payload.chat_id === runtime.owner && r.ownerSubject === String(runtime.owner),
+            allowed: async r => (!r.commonExecution || r.commonExecution.settled===true) && (!(r.mailFollowup || r.calendarPrep) || runtime.retainedRecallAvailable()) && r.payload.chat_id === runtime.owner && r.ownerSubject === String(runtime.owner)
+              && (!r.bot || r.bot === this.env.TELEGRAM_BOT_TOKEN?.split(':')[0])
+              && r.doName === (this.ctx.storage.kv.get<string>('do_name') ?? '')
+              && this.ctx.storage.kv.get<boolean>(`${surface}_unlinked`) !== true
+              && (!r.mailFollowup || (loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume !== 'low' && loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).reviewEligible(r.mailFollowup, this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')))
+              && (!r.calendarPrep || await runtime.calendarPrepCurrent(r.calendarPrep))
+              && heartbeatEligible(r, this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', Date.now()),
+            defer: async r => {
+              if(r.commonExecution&&!r.commonExecution.settled)return Date.now()+30_000;
+              // Frozen source-derived outputs cannot replay retained facts while coverage is unproved.
+              // Keep bytes and transport state intact; current owner replies use a separate lane.
+              if ((r.mailFollowup || r.calendarPrep) && !runtime.retainedRecallAvailable()) return Math.min(Date.now() + 10 * 60_000, r.expiresAt ?? r.createdAt + 86400000);
+              return (r.mailFollowup || r.calendarPrep) && ((r.mailFollowup && !proactiveEnabled(this.env.MAIL_SOURCE_FOLLOWUPS, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) || (r.calendarPrep && !proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) || loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume === 'low' || isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) ? Date.now() + 10 * 60_000 : null;
+            },
+            send: payload => runtime.call('sendMessage', payload),
+          };
+        };
+        const routes = [routeFor(channel)];
+        if (channel === 'telegram' && consoleAuth(this.env) && this.appBound()) routes.push(admittedRoute(routeFor('app'), async () => {
+          const found = await this.appOwnerLookup();
+          if (found.kind === 'admitted') this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(found.authority));
+          return found.kind;
+        }, () => Date.now() + APP_ADMISSION_RETRY_MS));
+        try { await finalOutbox.drain({ ...routedDelivery(routes), settled: settleFinal }); } finally { await scheduler.rearm(); }
         return;
       }
-      // Reminders go to the app, the default surface, once the owner has used it; Telegram keeps them only for an owner with
-      // no app binding. The other jobs stay on Telegram until they are routed too. A refusal holds the whole scheduled pass,
-      // never falling back to Telegram: a revoked account runs nothing, and an outage asks again without spending attempts.
-      let reminder = fire;
+      // Proactive work goes to the app, the default surface, once the owner has used it, and Telegram gets a plain copy of it;
+      // Telegram keeps it only for an owner with no app binding. A refusal holds the whole scheduled pass, never falling back
+      // to Telegram: a revoked account runs nothing, and an outage asks again without spending attempts.
+      let executors = { reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder };
       if (channel === 'telegram' && consoleAuth(this.env) && this.appBound()) {
         const appOwner = await this.appOwnerLookup();
         if (appOwner.kind !== 'admitted') {
@@ -1344,8 +1381,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await rearmSharedAlarm(this.ctx.storage, appOwner.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
           return;
         }
-        this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority);
-        reminder = this.setup('app').fire;
+        this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(appOwner.authority));
+        const app = this.setup('app');
+        await app.ready;
+        executors = { ...executors, reminder: app.fire, heartbeat: app.beat, pre_activity_spot: app.briefs, brief: app.cards, standing_order: app.fireOrder };
       }
       const started = Date.now();
       let fired: readonly ScheduleEntry[];
@@ -1357,7 +1396,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const code = `${kind}_timezone_unconfirmed`;
           log({ trace: `alarm:${started}`, hop: outcome === 'drop' ? 'scheduled_drop' : 'scheduled_hold', ms: 0, ok: true, code, detail: code });
         };
-        fired = await scheduler.dispatchDue(gateScheduleExecutors({ reminder, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder }, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held, onHeld));
+        fired = await scheduler.dispatchDue(gateScheduleExecutors(executors, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held, onHeld));
       } catch (error) {
         // A dispatch throw used to leave no trace at all - the wake was invisible in Langfuse.
         log({ trace: `alarm:${started}`, hop: 'machine_turn', ms: Date.now() - started, ok: false, error: String(error), detail: 'dispatch' });
@@ -2198,7 +2237,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const ownerKey = await currentTaskOwnerKey(); await context.assertTaskSourceCurrent();
         browserSources.capture(payload, ownerKey);
         const id = await desk.proposeBrowserSubmit(payload); await context.assertTaskSourceCurrent(); return id;
-      }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
+      }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
       (opt) => opt ? openLoopsPrompt(loops, clock.timezone, opt.loopsRoom) : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
@@ -2810,6 +2849,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return true;
       },
       googleConnectUrl: (feature, channel) => google.connectUrl(feature, channel),
+      calendarDemand: (range) => calendarDemand({ sql: this.ctx.storage.sql, now: Date.now,
+        accounts: async () => { await google.migrate(); const failing = await health(); return (await accounts()).map((account) => ({ email: account.email, scopes: account.scopes, error: failing[account.id] ?? null })); },
+        client: (email) => google.client('availability', undefined, undefined, email) }).read(range),
       openFile: async (id) => {
         const file = Number.isInteger(id) ? files.get(id) : null;
         if (!file) return null;
