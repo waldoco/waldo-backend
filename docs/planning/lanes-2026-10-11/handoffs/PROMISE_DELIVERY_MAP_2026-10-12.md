@@ -22,7 +22,7 @@ Tags:
 
 ### Inputs
 
-**Research reports:**
+**Research reports** (copied into [`research-2026-10-12/`](research-2026-10-12/); each labels its claims verified or inference):
 - 01: the 120 website promises, with `WP-` IDs.
 - 02: competitors and open-source agents.
 - 03: the design system, G1–G22.
