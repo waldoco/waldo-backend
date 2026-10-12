@@ -344,3 +344,14 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - Connectors' latest message didn't acknowledge either blocker, so I re-posted both on #1103 with links.
 - **P1:** still not run. The go is repeated on #1103, for the saved `60fce743` build or #92's build.
 - **#1108:** its builder posted on #1103 (6134170687). My FAIL review (the chain fork) is on the PR.
+
+## 23:14Z heartbeat
+
+- **Staging:** `3bc1bb54` [verified]. App `main` is `e9066140` (#92).
+- **#1107:** Connectors pushed the D3 commit, `89b701c5`: a request-body flag `calendar_details` that the Worker sends, the new proxy maps fields only when it sees it, and an old proxy ignores it. CI is running. A delta review follows when it's green. #1109 stays held behind it.
+- **#1105** is unchanged at `c982da6c`. **The OTP blocker is still unacknowledged by Connectors**; its messages reach me, but it doesn't read my PR or board replies. It stays FAIL.
+- **App #97** (B2: a bold run at the end of a bullet doesn't wrap) is at `b82f28ef`, with app CI running.
+  - The diagnosis was measured: Yoga's float32 rounding leaves the frame one step short, so iOS drops a line. The fix is `fitLines`.
+  - Its review follows.
+- **#93–#95** haven't been retargeted yet; #93 and #94 have FAIL reviews waiting for fixes.
+- **P1:** not run yet. The go was repeated on #1103 at 23:00Z.
