@@ -2,7 +2,9 @@
 
 **The plan of record is Ansh's "Waldo Build Bible"** (Claude Doc, 12 Oct), §7 Phase 1. HEAD code wins over it and over this brief.
 - **Goal:** both founders run the daily loop on their own phones: Suyash on iPhone with Apple Watch, Ansh on Android with Galaxy Watch.
-- **Acceptance:** a screen recording from a founder's phone plus a trace id. Simulator and unit runs count as progress, not proof.
+- **Acceptance (owner ruling, 13 Oct, about 02:00 IST):** phone testing comes later. For now, a Simulator run the sessions make on their own, with screenshots and a trace id, is acceptance. The owner does not approve each run.
+  - **Simulator devices:** each testing session uses its own. L4 has `iPhone 17 Pro` (3D82E6D8); the orchestrator has `iPhone 17` (18AC0C6B).
+  - **Sign-in:** a human signs in once per device. The app session lasts 12 hours today, and 30 days after PR B, so PR B comes first.
 
 ## State at handover (12 Oct, 20:10Z)
 
