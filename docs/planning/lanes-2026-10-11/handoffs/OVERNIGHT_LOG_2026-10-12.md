@@ -1408,3 +1408,9 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
     - `lookup` logs nothing, so it needs a D13 code.
   - **Notes:** a cron order shows `at null`, and an unreadable cancel returns a retry-inviting "transient".
   - Sent to L1. That was my 10th cross-session send since the owner's last message, so the cap is reached.
+
+- **13:32Z, app #86** (L4): movement minutes and the per-kind skip, head `d7d73e68`, +422/−45 across 15 files. Open; the owner merges it in L4's session. The app repo has no CI.
+  - The native fault run passed [reported]: Exercise Minutes forced to fail, 2,086 readings still sent, the kind named, the watermark held, and the day re-read on the next run.
+  - **Finding:** iOS refuses to read a kind it has never asked about, so without the per-kind skip `a5f26f16` alone would have stopped all sending on every updated install. Any lane adding HealthKit kinds needs to know this.
+  - An independent review is running (no fan-out, about 22 calls) as evidence for the owner. L1 is checking that staging accepts `movement_duration`.
+  - **Usage:** 46% at 13:32Z, about 19% an hour, which reaches the limit near 16:20Z, close to the 16:30Z reset. Context is at 77%.
