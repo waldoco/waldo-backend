@@ -5,6 +5,8 @@ import { claimStore } from '../src/memory/claims';
 import { CURATED_SKILLS, CuratedOwnerSkills, seededSkillCustody } from '../src/skills/curated-owner';
 import { ensureSchema } from '../src/tracer/schema';
 import type { LLMGatewayRequest } from '../src/llm/provider';
+import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
+import { persistInboxWake } from '../src/scheduler/alarm-slot';
 
 // An app turn runs the same reviewed skill book as a Telegram turn: the catalog is in the system prompt, skills_load
 // works, and the owner's lifecycle state (one custody key) is shared across surfaces.
@@ -23,6 +25,8 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
+// The Telegram test below sends through the bot API; nothing leaves the fixture.
+vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async (method: string) => method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: 1 } : true }));
 const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
 
 const OWNER_ID = '7c2e9a14-3b5d-4f60-8a71-92b3c4d5e6f7';
@@ -116,5 +120,50 @@ it('a skill the owner disabled on Telegram stays disabled on the app', async () 
 it('no reviewed rows yet means no seeded custody', async () => {
   await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('app-skills-empty')), async (_instance, state) => {
     expect(seededSkillCustody(state.storage.sql)).toBeUndefined();
+  });
+});
+
+it('an app-first owner keeps the principal key when Telegram links later: no second custody, the skill loads on Telegram', async () => {
+  const name = 'telegram-after-app-skills';
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    claimStore(state.storage.sql);
+    ensureSchema(state.storage);
+    // The app seeded the book under the owner principal; then the owner linked Telegram chat 42.
+    new CuratedOwnerSkills(state.storage.sql, PRINCIPAL);
+    expect(custodies(state)).toEqual([PRINCIPAL]);
+    await state.storage.put({ telegram_subject: '42', do_name: name });
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const owner = new TelegramOwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: '7.fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC' });
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    const update = 910001;
+    try {
+      await inbox.admit({ bot: '7.fixture', subject: '42', doName: name }, update, JSON.stringify({ update_id: update, message: { message_id: update, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, text: 'What does my day look like?' } }));
+      await (owner as unknown as { drainInbox(): Promise<void> }).drainInbox();
+      expect((await inbox.records()).find(row => row.updateId === update)?.state).toBe('awaiting_delivery');
+      expect(model.systems[0]).toContain(CATALOG_LINE);
+      expect(model.systems[1]).toContain(DAY_BRIEF.body_markdown);
+      expect(custodies(state)).toEqual([PRINCIPAL]);
+      expect(state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM skills').toArray()[0]?.n).toBe(CURATED_SKILLS.length);
+    } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
+  });
+});
+
+it('rows the book would not admit never vote on the custody: foreign names, an over-long source, a provisional row', async () => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('skills-custody-vote')), async (_instance, state) => {
+    const sql = state.storage.sql;
+    telegramBook(state);
+    expect(seededSkillCustody(sql)).toBe(TELEGRAM_CUSTODY);
+    // More system rows than the catalog has, under another custody, but with names outside the catalog.
+    const junk = Array.from({ length: CURATED_SKILLS.length + 1 }, (_, i) => ({ ...DAY_BRIEF, name: `junk-${i}` }));
+    new CuratedOwnerSkills(sql, PRINCIPAL, undefined, 'evil', junk);
+    expect(custodies(state)).toEqual(expect.arrayContaining([TELEGRAM_CUSTODY, 'evil']));
+    expect(seededSkillCustody(sql)).toBe(TELEGRAM_CUSTODY);
+    // A catalog row whose source is over the 256-byte bound, and one marked provisional, carry a third custody.
+    sql.exec('UPDATE skills SET created_by=? WHERE name=?', `reviewed-builtin:${DAY_BRIEF.name}@${DAY_BRIEF.version}:owner:${'x'.repeat(300)}`, DAY_BRIEF.name);
+    sql.exec('UPDATE skills SET provisional=1, created_by=? WHERE name=?', `reviewed-builtin:${CURATED_SKILLS[1]!.name}@${CURATED_SKILLS[1]!.version}:owner:prov`, CURATED_SKILLS[1]!.name);
+    expect(seededSkillCustody(sql)).toBe(TELEGRAM_CUSTODY);
+    // Only the catalog's own admitted rows count: with them all gone, no custody is seeded.
+    sql.exec('DELETE FROM skills WHERE created_by LIKE ?', `%:owner:${TELEGRAM_CUSTODY}`);
+    expect(seededSkillCustody(sql)).toBeUndefined();
   });
 });
