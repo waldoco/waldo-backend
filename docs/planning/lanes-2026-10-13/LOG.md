@@ -488,3 +488,10 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 
   Its review runs shortly before that, to save usage.
 - **`created_at` on chat rows:** the contract field exists, but the backend never sets it and `ConversationEntry` has no time. I asked the backend lane on #1103. A new DO column would be a migration and waits for the owner.
+
+## 23:57Z: app #93 delta FAIL (the transport drops an approvals 429's wait)
+
+- **The not-before blocker is fixed:** every quiet re-read is gated, there are 24/24 tests, and 2 mutations were caught.
+- **Still open:** the live `stagingTransport` drops Retry-After on JSON error routes (approvals, actions, health). In the real app an approvals 429 leaves no wait, so it was reproduced as 3 reads where 2 were expected. The gap predates the PR, but the PR's claim depends on it.
+- **Fix:** keep Retry-After in that branch, add a transport test, and add one runtime test through the real transport. It's posted on #93 (6134907734) and sent to the App lane.
+- **#94 and #95** wait for #93.
