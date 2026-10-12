@@ -50,6 +50,14 @@ export type ScheduleInput = {
   recurrence?: ScheduleRecurrence | null;
 };
 
+// Thrown by read(id) for a row this Worker cannot parse, so a caller can tell it apart from a passing fault.
+export class UnreadableScheduleRowError extends Error {
+  constructor() { super('schedule row unreadable'); this.name = 'UnreadableScheduleRowError'; }
+}
+
+// One id's row as this Worker reads it. `unreadable` is a row this Worker cannot parse, such as one a newer Worker wrote.
+export type ScheduleLookup = Readonly<{ state: 'absent' } | { state: 'entry'; entry: ScheduleEntry } | { state: 'unreadable' }>;
+
 export type ScheduleExecutor = (entry: ScheduleEntry) => Promise<void | 'delivery_pending'>;
 export type ScheduleExecutors = Partial<Record<ScheduleKind, ScheduleExecutor>>;
 
@@ -135,7 +143,25 @@ export class Scheduler {
     const row = this.sql
       .exec<ScheduleSqlRow>('SELECT * FROM schedule WHERE id = ?', id)
       .toArray()[0];
-    return row ? toEntry(row) : null;
+    if (!row) return null;
+    const [entry] = readable([row]).entries;
+    if (!entry) throw new UnreadableScheduleRowError();
+    return entry;
+  }
+
+  // For callers that arm or cancel a fixed id at start-up. They treat an unreadable row as present and leave it as it is,
+  // so one reshaped row neither fails the runtime's start nor is overwritten before the Worker that wrote it returns.
+  lookup(id: string): ScheduleLookup {
+    const row = this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule WHERE id = ?', id).toArray()[0];
+    if (!row) return { state: 'absent' };
+    const [entry] = readable([row]).entries;
+    if (entry) return { state: 'entry', entry };
+    console.log(JSON.stringify({ hop: 'schedule_row_invalid', ok: false, code: 'lookup', count: 1 }));
+    return { state: 'unreadable' };
+  }
+
+  async cancelReadable(id: string): Promise<void> {
+    if (this.lookup(id).state === 'entry') await this.cancel(id);
   }
 
   hasDue(): boolean { return this.dueEntries(this.deps.now()).entries.length > 0; }

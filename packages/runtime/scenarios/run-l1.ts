@@ -88,6 +88,7 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
     },
     note: (id: string) => reminderRows.find((reminder) => reminder.id === id)?.note ?? null,
     fired: () => undefined,
+    unreadable: () => 0,
   } as unknown as ReminderBook;
 
   const events = scenario.fixtures?.events ?? DEFAULT_EVENTS;
