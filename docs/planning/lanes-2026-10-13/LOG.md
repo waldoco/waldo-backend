@@ -179,3 +179,16 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - stop, log it and queue the deploy for the owner;
   - tell the App session that P1 waits;
   - take no other route.
+
+## 21:58Z: cross-session cap reached; #1105 and #1106 open; scribe goes to the owner
+
+- **The cross-session message cap was reached:** 10 sends since the owner's last message at about 21:27Z.
+  - Direct messages to sessions are paused until the owner types. Messages from sessions to the orchestrator still arrive.
+  - I'm not routing around the cap. Necessary coordination (deploy notices, the P1 trigger, merge results) goes on board #1103, the founders' board for overnight coordination, which the owner's ruling allows. Only what's needed goes there.
+  - The flaky-fix session's reply was not delivered. It needed no action.
+- **#1105** (Connectors, mail reading) is open at head `2027735f`, with a full local wall passed. Its review subagent is running.
+  - It merges after the #1104 deploy (freeze).
+  - **Effective on staging only after the owner's connector-proxy redeploy:** the test account is Vault-backed.
+- **#1106** (flaky-fix follow-up, test-only, all four review notes) is open at `68158b3f`, with CI pending. It's gated after the #1104 deploy.
+  - **#1072** is superseded according to the flaky-fix session's evidence (#1072 comment 6133334539; #1103 comment 6133334197). It's not closed overnight: closing another lane's PR waits for the owner or the latency session.
+- **The scribe false positives go to the owner.** Connectors' corpus at `5b8197fd` shows no safe narrowing: the pairs are lexically identical, for example "form 71" vs "form 3 of 5" and "steps: 8000" vs "Next steps: 3". Options A/B/C are on #1103. This is the owner's first morning decision.
