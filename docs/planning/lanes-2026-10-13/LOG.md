@@ -65,3 +65,13 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Deploy tooling:** L1's scratch dir holds pnpm10, the gate script (identical to the memory copy) and the live tail. Details are in `ORCHESTRATOR.md`.
   - **connector-proxy** (Supabase Edge Function, v17 since 10 Oct) is staging's Google path and imports `google.ts`. Mail fixes need it redeployed from the same SHA as the Worker. That's backend code, not a migration, so the owner's deploy ruling covers it.
 - **L1 stood down,** with nothing unpushed and nothing in flight.
+
+## 21:38Z: App session decisions
+
+1. **Workspace setup.** The App worktree's `node_modules` dates from July (RN 0.76, expo 53, zod 3), but `package.json` wants RN 0.81.5, expo 54 and zod 4. The lane's classifier refused cloning another worktree's `node_modules`, and the lane didn't retry.
+   - **Decision:** run `npx -y pnpm@9.15.9 install --frozen-lockfile --offline`, dropping `--offline` if the store lacks packages, and `pod install --deployment`.
+   - **Why:** a frozen-lockfile install changes no dependency. The "no installs or upgrades" limit covers adding or bumping packages.
+   - **If the classifier refuses this too:** push the branch, mark check and test as not run, and the orchestrator sets up a worktree to run them.
+2. **#89 item 1a.** The server's Retry-After not-before survives a release and re-hold within one session, and resets on sign-out or account change.
+   - **Why [verified]:** app rate limits are keyed per owner, as `${bucket}:${doName}` (app-api.ts:151-152).
+   - Both behaviours get tests.
