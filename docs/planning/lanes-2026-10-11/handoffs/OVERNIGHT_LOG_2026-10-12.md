@@ -554,3 +554,15 @@ Still open:
   - So "Not now" on an app proposal is a dead end until L2's re-raise follow-up ships.
   - Recommendation: deploy #1076 in the same wave as that follow-up.
 - Findings sent to L2 (SendMessage). Merge after the fix: a delta check, CI, then the advisor.
+
+## 05:48Z: replies ruling; #1076 fix read; CI infra failure rerun
+
+- **The owner (about 05:15Z, in this session):** "Store replies as written (Recommended)". Model replies that quote health numbers are stored and indexed as written, as on Telegram, with no filter on model output. Revisit before production. E3's strip rule covers machine-written job prompts only. Relayed to L2.
+- **#1066 ready at `075eb8fe`.** The strip covers three job prompts (day card, update card, mail follow-up): the health logs go to the model as context for that turn only. L2 reports:
+  - red-first, with 10/10 mutations caught;
+  - 18 neighbouring files and 173 tests passing, plus typecheck and guards;
+  - #116 lines posted (6118177181), on the owner's go in L2's session.
+
+  The delta review is deferred until after the 06:30Z usage reset (79% at 05:14Z). Wave 1 isn't until about 10:00Z.
+- **#1076 fix at `3aefff5c`, read by me.** It adds `AND deferred_at IS NULL`, offers `withDefer` only while `deferred_at` is null, drops `defer` from TARGET, fixes the comment, and adds 67 test lines. L2 reports red-first and 5/5 mutations caught.
+- **CI `verify` failed at infrastructure**, before any test ran: the Supabase docker container failed to set up networking (run 38207328547). The four runtime shards and pgTAP passed. Classified as runner infra, not flaky code. I requested a rerun of the failed job once, with the reason logged here.
