@@ -282,3 +282,9 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
 - `MORNING_REPORT_2026-10-12.md` drafted. It gets updated after the 01:30Z reset with L2's fixes, L3's batch file and any probe.
 - **Docs PR waldoco/waldo-backend#1077** opened as a draft against `beta-mvp` (head branch `docs/overnight-2026-10-12`) and bound to this session. It becomes ready after the final update (target 02:10Z). The owner merges it.
 - **Plan to the deadline:** reset at 01:30Z; L2 resumes at 01:41Z; read L3's batch file at about 01:45Z; final report, advisor and PR ready by 02:10Z; the report goes to the owner in this session by 02:15Z.
+
+## 01:35Z: usage window reset; budget notice lifted
+
+- 5-hour window: **0%** after the 01:30Z reset **[verified: `get_usage`]**. My context: 81%, so cycles stay lean.
+- Board: budget notice lifted. L2's queue after #1066's fixes: (1) measure history cuts with fixed-code counts per turn (long-sessions step 1); (2) a falsifying test for harness finding 1. Each a separate draft PR.
+- L3's batch file was read at 01:15Z and summarized in the morning report (not published, per L3's lane rule). No changes on staging (`889efa27`), PRs or #116 since 01:14Z.

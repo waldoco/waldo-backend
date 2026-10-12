@@ -10,7 +10,9 @@ git -C /Users/shivanshfulper/Developer/Pin4sf/waldo-backend fetch -q origin && g
 
 Orchestrator: `local_281f8c04-1fc5-41f4-8fc8-4ac9e6558cf3`. The owner is asleep until about 02:30Z. Decisions here are the orchestrator's delegated decisions, not owner rulings.
 
-## BUDGET NOTICE (22:17Z): read first
+## BUDGET NOTICE LIFTED (01:35Z): the 5-hour window reset to 0%. Resume normal work. The rules below stay in force for the record.
+
+### Earlier notice (22:17Z)
 
 The account's 5-hour usage limit was at **76% at 22:16Z** and resets at **01:30Z**. If it reaches 100%, every session stops until 01:30Z. Until 01:30Z, spend only on the critical path:
 - **L2:** push #1066's resolution once #1075 merges; then **pause** (no S7 prep) until 01:30Z.
@@ -60,6 +62,9 @@ I merge after: CI green on the current head (pgTAP included), an independent rev
   3. Log a fixed code for a held skip (today it settles `ok` with no trace).
   - **HOLD for the owner (health destinations):** `ledger()` puts health-log lines ("~N kcal, estimate", "N min") into the day-card machine prompt (`telegram-owner-do.ts:1985-1988`, `health-log.ts:71-86`). The prompt is saved verbatim to `conv:*` and the `episodes` FTS table. That already happens for Telegram owners; #1066 extends it to app-only owners. The owner rules in the morning.
   - **Tonight:** make fixes 1-3 on the branch with the resolution, red-first, and push them so CI runs. I'll put #1066 to the owner in the morning, with your fixes ready.
+- **After #1066's fixes** (each its own draft PR, red-first; nothing here is held unless it touches storage):
+  1. **Measure history cuts (step 1 of the long-sessions plan):** per turn, log fixed-code counts for the three places history is cut today: the token window (`window.ts:44-61`), the provider's 1,024-message / 400k-character trim and bisection (`provider.ts:1428-1460`), and the forget-pending filter (`owner-turn.ts:417`). Counts only.
+  2. **A falsifying test for the harness finding** "tool results from earlier turns reach the reply model on neither path" (`research-2026-10-12/04-harness-context.md`, finding 1): write a ledger row, run one app turn and one Telegram turn, and assert whether the reply instructions contain it. Report the result either way; don't fix in the same PR.
 - **Order:**
   1. The send-path follow-up (load skip + in-memory re-link).
   2. #1066, after a merge from the current base.
