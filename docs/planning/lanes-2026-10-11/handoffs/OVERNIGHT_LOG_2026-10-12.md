@@ -275,3 +275,10 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - **Golden path:** 0 verified; 3 deployed, unprobed (history, send, reminder); 3 merged; 1 open PR ("Not now", #1076); 3 partial; 4 missing (Google sign-in, 18+ box, continuity, push).
   - It carries each lane's next three items, 14 owner questions in AskUserQuestion form plus 7 smaller ones, and an Audit section (the 26 unledgered promises and the stale ledger rows) for the Audit lane. The ledger is untouched.
 - Hygiene: the #1066 review's synthetic probe number is replaced with "~N kcal" in the log.
+
+## 00:07Z: research reports committed; morning report drafted; docs PR #1077 opened (draft)
+
+- The six research reports are copied into `research-2026-10-12/` (a secret scan matched only prose words like "bearer"; trailing whitespace stripped), and the map's input paths point there.
+- `MORNING_REPORT_2026-10-12.md` drafted. It gets updated after the 01:30Z reset with L2's fixes, L3's batch file and any probe.
+- **Docs PR waldoco/waldo-backend#1077** opened as a draft against `beta-mvp` (head branch `docs/overnight-2026-10-12`) and bound to this session. It becomes ready after the final update (target 02:10Z). The owner merges it.
+- **Plan to the deadline:** reset at 01:30Z; L2 resumes at 01:41Z; read L3's batch file at about 01:45Z; final report, advisor and PR ready by 02:10Z; the report goes to the owner in this session by 02:15Z.
