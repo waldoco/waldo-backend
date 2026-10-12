@@ -209,7 +209,7 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
     - `replanDayCards` misses entries armed for another date (a pinned card stayed 11 h off; a stale Brief fired at 19:00 in the new zone; `cards` never checks `sent`, so a duplicate card is possible);
     - test 4 depends on the wall clock and fails about 23:00–04:00Z;
     - held skips settle `ok` with no trace.
-  - **HOLD (health destinations):** `ledger()` puts health-log lines ("~612 kcal, estimate", "N min") into the day-card machine prompt, which is saved verbatim to `conv:*` and the `episodes` FTS table. That already happens for Telegram owners; #1066 extends it to app-only owners.
+  - **HOLD (health destinations):** `ledger()` puts health-log lines ("~N kcal, estimate", "N min") into the day-card machine prompt, which is saved verbatim to `conv:*` and the `episodes` FTS table. That already happens for Telegram owners; #1066 extends it to app-only owners.
   - **PASS on:** reminders never held; no Telegram-addressed delivery for app-only owners; no burst beyond the cross-date case; app.v1 shape; no migration; bounded strict-load failure (retries at 30 s and 60 s, then a 24 h quarantine).
   - → **Held for the morning.** L2 fixes 1-3 tonight (board). The owner rules on the health-log question.
 - **Messages:** 10 used (5 `send_message` + 5 `SendMessage`). From here, lanes get instructions through the board and their own crons.
@@ -266,3 +266,12 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - **Repo-rule finding:** a code comment cites "Owner ruling (11 October 2026, option a)", a date plus a one-off reference.
   - D6's confirm row is missing.
   - Not merged; L4 is blocked. On the board for L4's morning restart. No review subagent spent tonight.
+
+## 00:03Z: promise delivery map committed
+
+- `PROMISE_DELIVERY_MAP_2026-10-12.md` (654 lines), drafted by one subagent from the six research reports plus tonight's log, decisions and board.
+  - **I checked:** the structure; the summary; the status rule ("app-first rows take the weaker of their two halves", so nothing on `889efa27` is `verified live` until a probe runs); the golden-path table; one contradiction it settled from source (WhatsApp `^([aseu]):(\S+)$` → an approval callback, `whatsapp-api.ts:132`, **[verified]**); and a scan for health-value patterns (none).
+  - **120 promises:** verified live 0; deployed, unprobed 6; merged, not deployed 7; open PR 3 (landing #18); partial 50; missing 33; copy decision 21.
+  - **Golden path:** 0 verified; 3 deployed, unprobed (history, send, reminder); 3 merged; 1 open PR ("Not now", #1076); 3 partial; 4 missing (Google sign-in, 18+ box, continuity, push).
+  - It carries each lane's next three items, 14 owner questions in AskUserQuestion form plus 7 smaller ones, and an Audit section (the 26 unledgered promises and the stale ledger rows) for the Audit lane. The ledger is untouched.
+- Hygiene: the #1066 review's synthetic probe number is replaced with "~N kcal" in the log.
