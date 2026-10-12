@@ -2042,3 +2042,20 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
 - **The freeze is lifted:** the deploy ask is closed, and `beta-mvp` and staging are both `d704ffff`.
 - **P1:** the approval can now be made on a build that has #1098, in L4's session before about 21:44Z.
 - **The scorecard's EoD section is updated** (19:35Z): staging `d704ffff`, nothing merged and undeployed, and the zone gap on hold.
+
+## 19:55Z: E15 is draft #1101 (owner-merge); my review is running
+
+- **#1101** (L2): head `a2737ad1`, based on `d704ffff`, a draft. CI is running; #116 comment 6131547535.
+  - **The source change is small:** `delivery-routes.ts` +47, `telegram-final-outbox.ts`, and `telegram-owner-do.ts` (the hot file; wiring is claimed). The tests add about 444 lines.
+  - **L2 reports:**
+    - the local wall passes 51 of 51 (5024 tests), and 21 of 21 mutations are caught;
+    - each of my eight checks maps to a named test. These cover strict binding with cross-owner tests on both arms, the trap test red at base, admission (an outage defers via `dueAt`, a revoke settles as blocked), and one dev copy with no retry or duplicate app row.
+  - **L2 also reports** that the zone trade-off, the rollback's one-time loss and the production-flags residual are in the PR body. That residual: with grounded prep and follow-ups at 0, an owner on both surfaces gets no legacy event briefs.
+- **My independent review is running** (one subagent, no fan-out, at most 25 calls). Its focus:
+  - whether any pre-E15 drain check is loosened;
+  - double scheduling for owners on both surfaces;
+  - the dev copy's target and its trace row;
+  - "missing config → dormant";
+  - the restart-during-copy residual;
+  - the production-flags regression.
+- **The result can't reach L2** until the owner types here, because sends are at the cap. It goes into this log, and the owner merges #1101 anyway.
