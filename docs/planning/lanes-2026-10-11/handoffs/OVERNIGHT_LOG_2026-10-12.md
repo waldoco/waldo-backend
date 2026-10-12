@@ -1888,3 +1888,22 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **Order:** #1089 lands first. #1099 then adds `overlapped.has(day.day) ? null : physicalLoadOf(day)` plus a test, and I review #1099's delta at that head.
   - **Possible duplicate reminder.** The app turn at 18:12:33Z on `483c7475` ran `tool_set_reminder:FAIL(invalid_args:tool_result_error)`, then `tool_get_context:ok`, then `tool_set_reminder:ok` **twice**, then resolved [reported by L1, codes only]. L4 is checking the account.
     - If it's a duplicate, the set_reminder path has no guard against identical (note, time) pairs within a turn. That's a pre-existing reliability gap for L2, not caused by G1, which carries results across turns rather than within one [inference].
+- **18:17Z, E15 (app-first routing) started by L2** on `l2/e15-app-first-routing` from `5bf2857d`. Its design:
+  - "uses the app" is `appBound()`;
+  - for a Telegram-bound, app-bound, admitted owner, the alarm runs the app setup's day cards, prep, update cards, follow-ups and heartbeat;
+  - the final-outbox drain routes each record by its own address, fixing the terminal `blocked/owner_binding` trap at `telegram-final-outbox.ts:169`;
+  - directory admission is checked per app record;
+  - the Telegram dev copy is sent once, after the app row commits;
+  - no new zone hold;
+  - no schedule-row reshape.
+  - **L2's question: is it on the hold list? My answer: yes, owner-merge.** It changes the outbox's owner-binding check (user isolation and authority), the same precedent as D11's SHOULD PR. The flow is CI, then my review, then the advisor, then the owner merges; the deploy is a separate yes.
+  - **Checks sent for the build** (queued to L2):
+    - strict per-record binding, with a cross-owner test on both arms;
+    - the trap fix, red first;
+    - admission defers on an outage and is terminal on revoke;
+    - exactly one dev copy, never duplicating the app row;
+    - the zone timing trade-off stated in the body;
+    - the rollback's one-time loss of in-flight app rows documented;
+    - L4 told first if any app.v1 value changes;
+    - the hot file stays wiring only, with its lines posted on #116.
+  - The possible duplicate reminder is queued for L2 after E15, red test first.
