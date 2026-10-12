@@ -1817,3 +1817,14 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - The page was published at 17:57:23Z (pillars, notes, surfaces).
 - **L2's rollback caveat** (#116 6129493846, via L1): rolling `27214c63` back to `c9de74c5` would stage the newest six #1091 rows as internal, including a failure row with provider text. No health reading is among them, because #1091's guard admits as external. Watch roughly the first six tool calls per owner after any rollback.
 - **#1099 (L1's zone-overlap net, from the owner's zone ruling)** at `bbae8681`: 2 files, CI 6/6, CLEAN. Its review is running, and it checks ADR-0081 versioning, since flagged days' Form turns unavailable. Whichever of #1099 and #1089 lands second nulls `physicalLoad` on overlapped days.
+- **17:58Z, #1098 ready at `46cf827f`** (L2). The fixes are `18658ea1`; the base merge brings in `cf38b379`. L2's wall passes 4,957 worker tests and 38 guards; CI is running.
+  - **Fix 1:** every write drops every origin-less row, on both paths. A write with no origin is stamped `'machine'` (fail closed).
+    - Data effect: pre-#1091 cache rows are deleted on the first tool write after deploy, and a revert doesn't restore them. Only the composer feed ever showed them.
+  - **Fix 2:** a failed output that names an approval reads as the desk's state.
+  - **Fixes 3 and 4:** the forget-across-rings test and the busy-job storage test are pinned. Mutations catch 11 of 11.
+  - **The health question is resolved:**
+    - L2: `87b31948`'s guard *would* admit a null-taint reading, but no release passed it null; every writer stamped `'external'`.
+    - **I verified** this at `87b31948`: `owner-turn.ts:514` pushes `taint: 'external'` for every tool output. So no health reading was ever stored in the staging ledger, and nothing goes to the owner.
+    - #1091 stores the running taint and checks `'external'` at write (:168) and read (:133), per L2.
+  - **#1079:** L2 leaves it for the owner, since closing needs the owner's yes in L2's session.
+  - The delta review is running (about 12 calls). It includes whether deleting the legacy cache rows is acceptable.
