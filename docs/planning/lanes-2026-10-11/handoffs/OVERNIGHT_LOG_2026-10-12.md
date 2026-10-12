@@ -1484,3 +1484,9 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - #1088 has CI 6/6 at `1e1a4b39`; my delta review already passed it, and it waits for the owner's merge.
   - **#1094** (the episodes fix) is a draft at `f70c0dff` on `2d18e5e5`: `owner-turn.ts:333-342`, +6/−2. Each re-read has its own catch, and one D13 log line is added (`episode_recheck`/`episode_read_failed`, count only). The red test passes, mutations catch 4/4, and the full wall passes 51 gates. `merge-tree` is clean against the open PRs, and it is E1-eligible. I review it when L2 marks it ready.
   - **Blocked:** L2 is now free but hasn't received the #1091 findings, because of the message cap. That costs G1 time.
+
+- **14:01Z, #1092 delta review FAIL** at `fdfb23ca`. All five earlier findings are fixed, each with a test [verified by the reviewer], but CI is red.
+  - **Blocking:** `verify` fails at runtime scenarios, 1 of 144. The fake in `scenarios/run-l1.ts:82-91` lacks the new `unreadable()`, and an `as unknown as` cast hid the gap. Fix: `unreadable: () => 0` and `satisfies ReminderBook`. The PR's "all PASS" covered only the default vitest config.
+  - **MEDIUM:** the new ledger line says unreadable reminders can't be changed, but cancel-all deletes them. Fix the wording.
+  - **LOW:** the console unpin text, and the dashboard's "try again" on a permanent rejection.
+  - **Queued for L1** (message cap). L1 may see the red CI on its own.
